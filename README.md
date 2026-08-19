@@ -1,9 +1,10 @@
 # FreeSearch
 
 FreeSearch is a provider-neutral async search and document-fetching application.
-The foundation and shared adapter contracts are complete. The Stage 2 shared
-resilience layer is also implemented; the other platform worktrees and provider
-implementations in [`WORKPLAN.md`](WORKPLAN.md) remain deferred.
+The foundation, shared adapter contracts, and all Stage 2 core-platform worktrees
+(Resilience, Usage/Data persistence, Routing, MCP surface, and Provider configuration)
+are complete. Concrete provider implementations from [`WORKPLAN.md`](WORKPLAN.md)
+are the next stage.
 
 ## Local development
 
@@ -13,6 +14,7 @@ The project uses [`uv`](https://docs.astral.sh/uv/).
 uv sync
 uv run pytest
 uv run ruff check .
+uv run ruff format --check .
 uv run mypy src
 ```
 

@@ -4,8 +4,9 @@ Updated: 2026-08-19
 
 ## Scope completed
 
-Stages 0 and 1 from [`WORKPLAN.md`](WORKPLAN.md) are complete. The Stage 2
-resilience worktree is complete.
+Stages 0, 1, and 2 from [`WORKPLAN.md`](WORKPLAN.md) are complete. All Stage 2
+core-platform worktrees (Resilience, Usage/data, Routing, MCP surface, and
+Configuration) are implemented and tested.
 
 ### Stage 0 - Foundation
 
@@ -36,15 +37,16 @@ resilience worktree is complete.
 
 ### Stage 2 - Resilience
 
-- Added shared retry classification for retryable HTTP statuses, HTTPX
-  transport failures, and normalized retryable provider errors.
-- Added capped jittered backoff, `Retry-After` handling, shared provider
-  cooldowns, and a concurrency-safe circuit breaker.
-- Added defensive error sanitization for credential-shaped text, nested
-  Pydantic aliases, mappings, and serialized public error payloads.
+- Added shared retry classification for retryable HTTP statuses (429, 500, 502,
+  503, 504), HTTPX transport/timeout failures, and normalized retryable provider errors.
+- Added capped jittered backoff, `Retry-After` header parsing (seconds and HTTP dates),
+  shared per-provider cooldowns, and a concurrency-safe circuit breaker with half-open probing.
+- Added defensive error sanitization and redaction for credential-shaped text, nested
+  Pydantic models, aliases, mappings, tuples, bytes, auth schemes, and serialized error payloads.
+
 ### Stage 2 - Usage/data
 
-- Added typed SQLAlchemy async ORM models and a SQLite repository for usage
+- Added typed SQLAlchemy async ORM models and an async SQLite repository for usage
   events, quota snapshots, provider health observations, and cache metadata.
 - Added strict cache metadata that accepts only opaque SHA-256 cache keys and
   never stores response payloads.
@@ -54,6 +56,34 @@ resilience worktree is complete.
   sensitive fields and request-content values.
 - Added isolated async SQLite tests for round trips, filters, history, quota
   provenance, health, cache replacement, expiry, and privacy validation.
+
+### Stage 2 - Routing
+
+- Added provider-neutral candidate selection and ranking (`select_route`) consuming
+  `ProviderAdapter` contracts, health observations, and quota snapshots.
+- Excluded adapters without requested capability (`search` / `fetch`), unavailable
+  providers (`HealthStatus.UNAVAILABLE`), and depleted quota (`remaining == 0`).
+- Implemented deterministic health ranking (`HEALTHY` > `DEGRADED` > `UNKNOWN`),
+  user preference filtering/ordering (`PREFER`, `REQUIRE`), and fallback policy enforcement.
+- Preserved quota provenance and configured adapter tie-breaker order without mutating inputs.
+- Rejection of duplicate adapter registrations with dedicated `RoutingError`.
+
+### Stage 2 - MCP surface
+
+- Added provider-neutral `McpSurface` tool facade exposing only async `search` and `fetch`.
+- Strict input payload validation against Pydantic `SearchRequest` and `FetchRequest`
+  models before adapter delegation.
+- Capability enforcement raising typed `UnsupportedOperationError` before execution.
+- Normalized JSON-compatible dictionary response formatting matching contracts.
+
+### Stage 2 - Configuration
+
+- Added typed `ProviderConfig`, `ProviderConfigUpdate`, and `ProviderConfigSettings`
+  for non-secret runtime configuration (enablement, priorities, free-tier estimates, reset schedules).
+- Enforced strict non-negative `Decimal` parsing for estimates to avoid float precision loss.
+- Configured registry overrides via JSON environment variable (`FREESEARCH_PROVIDER_CONFIG_OVERRIDES`).
+- Provided isolated deep copies via `get_provider_configs()` with cache clearing support.
+- Linked non-secret provider registry to shared `ProviderSecretResolver`.
 
 ## Credential and dashboard findings
 
@@ -75,9 +105,9 @@ rotation/revocation requirements.
 
 ## Deliberately deferred
 
-No provider SDKs or provider modules were added, and no dashboard UI was added
-yet. Routing, SQLite repositories, the MCP surface, provider configuration,
-Docker, and the dashboard remain for later work as specified by the work plan.
+No provider SDKs or provider modules were added yet (Stage 3). The application
+composition root / integration tests (Stage 4), Docker packaging, and the
+settings dashboard (Stage 5) remain for later work as specified by the work plan.
 
 ### Deferred provider-integration resilience hardening
 
@@ -99,6 +129,7 @@ All checks pass locally:
 uv lock --check
 uv sync --locked
 uv run ruff check .
+uv run ruff format --check .
 uv run mypy src
-uv run pytest  # 93 passed
+uv run pytest  # 185 passed
 ```

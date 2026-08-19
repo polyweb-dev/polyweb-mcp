@@ -97,15 +97,13 @@ async def _schema_snapshot(repository: SQLiteRepository) -> dict:
             "tables": tables,
             "columns": {table: inspector.get_columns(table) for table in tables},
             "primary_keys": {
-                table: inspector.get_pk_constraint(table)["constrained_columns"]
-                for table in tables
+                table: inspector.get_pk_constraint(table)["constrained_columns"] for table in tables
             },
             "indexes": {table: inspector.get_indexes(table) for table in tables},
         }
 
     async with repository._engine.connect() as connection:  # inspect the DB the repo opened
         return await connection.run_sync(inspect_schema)
-
 
 
 @pytest_asyncio.fixture
@@ -294,15 +292,12 @@ async def test_cache_metadata_upserts_by_key_and_tracks_hits(
     await repository.upsert_cache_metadata(metadata)
     assert await repository.get_cache_metadata(metadata.cache_key) == metadata
 
-    updated = metadata.model_copy(
-        update={"hit_count": 3, "accessed_at": t0 + timedelta(minutes=1)}
-    )
+    updated = metadata.model_copy(update={"hit_count": 3, "accessed_at": t0 + timedelta(minutes=1)})
     await repository.upsert_cache_metadata(updated)
     assert await repository.get_cache_metadata(metadata.cache_key) == updated
 
     assert (
-        await repository.touch_cache_metadata(metadata.cache_key, t0 + timedelta(minutes=2))
-        is True
+        await repository.touch_cache_metadata(metadata.cache_key, t0 + timedelta(minutes=2)) is True
     )
     current = await repository.get_cache_metadata(metadata.cache_key)
     assert current is not None

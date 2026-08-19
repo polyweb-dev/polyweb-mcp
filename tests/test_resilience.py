@@ -1649,8 +1649,7 @@ def test_non_bearer_auth_scheme_credentials_are_redacted() -> None:
             provider="p",
             code="http_error",
             message=(
-                "refused: Authorization: Basic dXNlcjpwYXNz== and "
-                "Authorization: token abc123def456"
+                "refused: Authorization: Basic dXNlcjpwYXNz== and Authorization: token abc123def456"
             ),
         )
     )
@@ -1685,8 +1684,7 @@ def test_multi_word_dotted_and_digit_leading_credential_keys_are_redacted() -> N
             provider="p",
             code="http_error",
             message=(
-                "denied access key: AKIAIOSFODNN7EXAMPLE api.key: AKIA2EXAMPLE "
-                "2fa_token: 482913"
+                "denied access key: AKIAIOSFODNN7EXAMPLE api.key: AKIA2EXAMPLE 2fa_token: 482913"
             ),
         )
     )
