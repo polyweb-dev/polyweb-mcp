@@ -2,70 +2,31 @@
 
 import json
 import math
-import sqlite3
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Self
+from typing import Any, Self, cast, overload
 
-import aiosqlite
+from sqlalchemy import URL, Index, Text, delete, insert, select, update
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.engine import Connection, CursorResult
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from freesearch.contracts import (
     CacheMetadata,
+    HealthStatus,
     ProviderHealth,
     QuotaSnapshot,
     QuotaSource,
     UsageEvent,
     UsageOperation,
 )
-
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS usage_events (
-    id INTEGER PRIMARY KEY,
-    provider TEXT NOT NULL,
-    operation TEXT NOT NULL,
-    units TEXT NOT NULL,
-    observed_at TEXT NOT NULL,
-    request_id TEXT,
-    metadata TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS usage_events_provider_observed_at
-    ON usage_events (provider, observed_at);
-
-CREATE TABLE IF NOT EXISTS quota_snapshots (
-    id INTEGER PRIMARY KEY,
-    provider TEXT NOT NULL,
-    source TEXT NOT NULL,
-    remaining TEXT,
-    limit_units TEXT,
-    reset_at TEXT,
-    observed_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS quota_snapshots_provider_source_observed_at
-    ON quota_snapshots (provider, source, observed_at);
-
-CREATE TABLE IF NOT EXISTS provider_health (
-    id INTEGER PRIMARY KEY,
-    provider TEXT NOT NULL,
-    status TEXT NOT NULL,
-    checked_at TEXT NOT NULL,
-    message TEXT
-);
-CREATE INDEX IF NOT EXISTS provider_health_provider_checked_at
-    ON provider_health (provider, checked_at);
-
-CREATE TABLE IF NOT EXISTS cache_metadata (
-    cache_key TEXT PRIMARY KEY,
-    provider TEXT NOT NULL,
-    operation TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    expires_at TEXT NOT NULL,
-    accessed_at TEXT NOT NULL,
-    hit_count INTEGER NOT NULL,
-    size_bytes INTEGER
-);
-CREATE INDEX IF NOT EXISTS cache_metadata_expires_at ON cache_metadata (expires_at);
-"""
 
 _FORBIDDEN_METADATA_KEYS = {
     "access_token",
@@ -122,23 +83,113 @@ def _metadata_json(metadata: dict[str, object]) -> str:
     return json.dumps(metadata, separators=(",", ":"), allow_nan=False)
 
 
+class Base(DeclarativeBase):
+    """Declarative base for the SQLite persistence schema."""
+
+
+class UsageEventRow(Base):
+    """Row model for provider usage events."""
+
+    __tablename__ = "usage_events"
+    __table_args__ = (Index("usage_events_provider_observed_at", "provider", "observed_at"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True, nullable=True)
+    provider: Mapped[str] = mapped_column(Text)
+    operation: Mapped[str] = mapped_column(Text)
+    units: Mapped[str] = mapped_column(Text)
+    observed_at: Mapped[str] = mapped_column(Text)
+    request_id: Mapped[str | None] = mapped_column(Text)
+    metadata_json: Mapped[str] = mapped_column("metadata", Text)
+
+
+class QuotaSnapshotRow(Base):
+    """Row model for provider quota observations."""
+
+    __tablename__ = "quota_snapshots"
+    __table_args__ = (
+        Index("quota_snapshots_provider_source_observed_at", "provider", "source", "observed_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, nullable=True)
+    provider: Mapped[str] = mapped_column(Text)
+    source: Mapped[str] = mapped_column(Text)
+    remaining: Mapped[str | None] = mapped_column(Text)
+    limit_units: Mapped[str | None] = mapped_column(Text)
+    reset_at: Mapped[str | None] = mapped_column(Text)
+    observed_at: Mapped[str] = mapped_column(Text)
+
+
+class ProviderHealthRow(Base):
+    """Row model for provider health observations."""
+
+    __tablename__ = "provider_health"
+    __table_args__ = (Index("provider_health_provider_checked_at", "provider", "checked_at"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True, nullable=True)
+    provider: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text)
+    checked_at: Mapped[str] = mapped_column(Text)
+    message: Mapped[str | None] = mapped_column(Text)
+
+
+class CacheMetadataRow(Base):
+    """Row model for cache metadata; cached payloads are never persisted here."""
+
+    __tablename__ = "cache_metadata"
+    __table_args__ = (Index("cache_metadata_expires_at", "expires_at"),)
+
+    cache_key: Mapped[str] = mapped_column(Text, primary_key=True, nullable=True)
+    provider: Mapped[str] = mapped_column(Text)
+    operation: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[str] = mapped_column(Text)
+    expires_at: Mapped[str] = mapped_column(Text)
+    accessed_at: Mapped[str] = mapped_column(Text)
+    hit_count: Mapped[int]
+    size_bytes: Mapped[int | None]
+
+
+def _ensure_indexes(connection: Connection) -> None:
+    """Recreate any declared indexes missing from existing tables."""
+
+    for table in Base.metadata.tables.values():
+        for index in table.indexes:
+            index.create(connection, checkfirst=True)
+
+
 class SQLiteRepository:
     """Persist shared operational models without provider-specific dependencies."""
 
-    def __init__(self, connection: aiosqlite.Connection) -> None:
-        self._connection = connection
+    @overload
+    def __init__(self, engine: AsyncEngine) -> None: ...
+
+    @overload
+    def __init__(
+        self, engine: AsyncEngine, session_factory: async_sessionmaker[AsyncSession]
+    ) -> None: ...
+
+    def __init__(
+        self,
+        engine: AsyncEngine,
+        session_factory: async_sessionmaker[AsyncSession] | None = None,
+    ) -> None:
+        """Wrap an engine; the session factory defaults to one bound to it."""
+        self._engine = engine
+        self._session_factory = session_factory or async_sessionmaker(
+            engine, expire_on_commit=False
+        )
 
     @classmethod
     async def open(cls, database: str | Path) -> Self:
         """Open a database and initialize its schema."""
 
-        connection = await aiosqlite.connect(str(database))
-        connection.row_factory = sqlite3.Row
-        repository = cls(connection)
+        engine = create_async_engine(
+            URL.create(drivername="sqlite+aiosqlite", database=str(database))
+        )
+        repository = cls(engine)
         try:
             await repository.initialize()
         except BaseException:
-            await connection.close()
+            await engine.dispose()
             raise
         return repository
 
@@ -149,35 +200,32 @@ class SQLiteRepository:
         await self.close()
 
     async def initialize(self) -> None:
-        """Create the schema when it does not already exist."""
+        """Create the schema and any missing declared indexes."""
 
-        await self._connection.executescript(_SCHEMA)
-        await self._connection.commit()
+        async with self._engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+            await connection.run_sync(_ensure_indexes)
 
     async def close(self) -> None:
-        """Close the underlying database connection."""
+        """Dispose the engine, releasing pooled connections; safe to call repeatedly."""
 
-        await self._connection.close()
+        await self._engine.dispose()
 
     async def record_usage(self, event: UsageEvent) -> None:
         """Append a provider usage event."""
 
-        await self._connection.execute(
-            """
-            INSERT INTO usage_events
-                (provider, operation, units, observed_at, request_id, metadata)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (
-                event.provider,
-                event.operation.value,
-                str(event.units),
-                _timestamp(event.observed_at),
-                event.request_id,
-                _metadata_json(event.metadata),
-            ),
-        )
-        await self._connection.commit()
+        async with self._session_factory() as session:
+            await session.execute(
+                insert(UsageEventRow).values(
+                    provider=event.provider,
+                    operation=event.operation.value,
+                    units=str(event.units),
+                    observed_at=_timestamp(event.observed_at),
+                    request_id=event.request_id,
+                    metadata_json=_metadata_json(event.metadata),
+                )
+            )
+            await session.commit()
 
     async def list_usage(
         self,
@@ -188,192 +236,189 @@ class SQLiteRepository:
     ) -> list[UsageEvent]:
         """Return usage history ordered from oldest to newest."""
 
-        clauses: list[str] = []
-        parameters: list[str] = []
+        statement = select(UsageEventRow).order_by(UsageEventRow.observed_at, UsageEventRow.id)
         if provider is not None:
-            clauses.append("provider = ?")
-            parameters.append(provider)
+            statement = statement.where(UsageEventRow.provider == provider)
         if operation is not None:
-            clauses.append("operation = ?")
-            parameters.append(operation.value)
+            statement = statement.where(UsageEventRow.operation == operation.value)
         if since is not None:
-            clauses.append("observed_at >= ?")
-            parameters.append(_timestamp(since))
-
-        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
-        async with self._connection.execute(
-            f"SELECT * FROM usage_events{where} ORDER BY observed_at, id", parameters
-        ) as cursor:
-            rows = await cursor.fetchall()
+            statement = statement.where(UsageEventRow.observed_at >= _timestamp(since))
+        async with self._session_factory() as session:
+            rows = (await session.scalars(statement)).all()
         return [self._usage_from_row(row) for row in rows]
 
     async def record_quota(self, snapshot: QuotaSnapshot) -> None:
         """Append a provider quota observation."""
 
-        await self._connection.execute(
-            """
-            INSERT INTO quota_snapshots
-                (provider, source, remaining, limit_units, reset_at, observed_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (
-                snapshot.provider,
-                snapshot.source.value,
-                str(snapshot.remaining) if snapshot.remaining is not None else None,
-                str(snapshot.limit) if snapshot.limit is not None else None,
-                _timestamp(snapshot.reset_at) if snapshot.reset_at is not None else None,
-                _timestamp(snapshot.observed_at),
-            ),
-        )
-        await self._connection.commit()
+        async with self._session_factory() as session:
+            await session.execute(
+                insert(QuotaSnapshotRow).values(
+                    provider=snapshot.provider,
+                    source=snapshot.source.value,
+                    remaining=str(snapshot.remaining) if snapshot.remaining is not None else None,
+                    limit_units=str(snapshot.limit) if snapshot.limit is not None else None,
+                    reset_at=(
+                        _timestamp(snapshot.reset_at) if snapshot.reset_at is not None else None
+                    ),
+                    observed_at=_timestamp(snapshot.observed_at),
+                )
+            )
+            await session.commit()
 
     async def latest_quota(
         self, provider: str, *, source: QuotaSource | None = None
     ) -> QuotaSnapshot | None:
         """Return the newest quota snapshot for a provider and optional source."""
 
-        query = "SELECT * FROM quota_snapshots WHERE provider = ?"
-        parameters = [provider]
+        statement = (
+            select(QuotaSnapshotRow)
+            .where(QuotaSnapshotRow.provider == provider)
+            .order_by(QuotaSnapshotRow.observed_at.desc(), QuotaSnapshotRow.id.desc())
+            .limit(1)
+        )
         if source is not None:
-            query += " AND source = ?"
-            parameters.append(source.value)
-        query += " ORDER BY observed_at DESC, id DESC LIMIT 1"
-        async with self._connection.execute(query, parameters) as cursor:
-            row = await cursor.fetchone()
+            statement = statement.where(QuotaSnapshotRow.source == source.value)
+        async with self._session_factory() as session:
+            row = await session.scalar(statement)
         return self._quota_from_row(row) if row is not None else None
 
     async def record_health(self, health: ProviderHealth) -> None:
         """Append a provider health observation."""
 
-        await self._connection.execute(
-            """
-            INSERT INTO provider_health (provider, status, checked_at, message)
-            VALUES (?, ?, ?, ?)
-            """,
-            (health.provider, health.status.value, _timestamp(health.checked_at), health.message),
-        )
-        await self._connection.commit()
+        async with self._session_factory() as session:
+            await session.execute(
+                insert(ProviderHealthRow).values(
+                    provider=health.provider,
+                    status=health.status.value,
+                    checked_at=_timestamp(health.checked_at),
+                    message=health.message,
+                )
+            )
+            await session.commit()
 
     async def latest_health(self, provider: str) -> ProviderHealth | None:
         """Return the newest health observation for a provider."""
 
-        async with self._connection.execute(
-            """
-            SELECT * FROM provider_health
-            WHERE provider = ?
-            ORDER BY checked_at DESC, id DESC
-            LIMIT 1
-            """,
-            (provider,),
-        ) as cursor:
-            row = await cursor.fetchone()
+        async with self._session_factory() as session:
+            row = await session.scalar(
+                select(ProviderHealthRow)
+                .where(ProviderHealthRow.provider == provider)
+                .order_by(ProviderHealthRow.checked_at.desc(), ProviderHealthRow.id.desc())
+                .limit(1)
+            )
         return self._health_from_row(row) if row is not None else None
 
     async def upsert_cache_metadata(self, metadata: CacheMetadata) -> None:
         """Create or replace metadata for an opaque cache key; last write wins."""
 
-        await self._connection.execute(
-            """
-            INSERT INTO cache_metadata
-                (cache_key, provider, operation, created_at, expires_at, accessed_at,
-                 hit_count, size_bytes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(cache_key) DO UPDATE SET
-                provider = excluded.provider,
-                operation = excluded.operation,
-                created_at = excluded.created_at,
-                expires_at = excluded.expires_at,
-                accessed_at = excluded.accessed_at,
-                hit_count = excluded.hit_count,
-                size_bytes = excluded.size_bytes
-            """,
-            (
-                metadata.cache_key,
-                metadata.provider,
-                metadata.operation.value,
-                _timestamp(metadata.created_at),
-                _timestamp(metadata.expires_at),
-                _timestamp(metadata.accessed_at),
-                metadata.hit_count,
-                metadata.size_bytes,
-            ),
+        statement = sqlite_insert(CacheMetadataRow).values(
+            cache_key=metadata.cache_key,
+            provider=metadata.provider,
+            operation=metadata.operation.value,
+            created_at=_timestamp(metadata.created_at),
+            expires_at=_timestamp(metadata.expires_at),
+            accessed_at=_timestamp(metadata.accessed_at),
+            hit_count=metadata.hit_count,
+            size_bytes=metadata.size_bytes,
         )
-        await self._connection.commit()
+        statement = statement.on_conflict_do_update(
+            index_elements=[CacheMetadataRow.cache_key],
+            set_={
+                "provider": statement.excluded.provider,
+                "operation": statement.excluded.operation,
+                "created_at": statement.excluded.created_at,
+                "expires_at": statement.excluded.expires_at,
+                "accessed_at": statement.excluded.accessed_at,
+                "hit_count": statement.excluded.hit_count,
+                "size_bytes": statement.excluded.size_bytes,
+            },
+        )
+        async with self._session_factory() as session:
+            await session.execute(statement)
+            await session.commit()
 
     async def get_cache_metadata(self, cache_key: str) -> CacheMetadata | None:
         """Return metadata for an opaque cache key."""
 
-        async with self._connection.execute(
-            "SELECT * FROM cache_metadata WHERE cache_key = ?", (cache_key,)
-        ) as cursor:
-            row = await cursor.fetchone()
+        async with self._session_factory() as session:
+            row = await session.scalar(
+                select(CacheMetadataRow).where(CacheMetadataRow.cache_key == cache_key)
+            )
         return self._cache_from_row(row) if row is not None else None
 
     async def touch_cache_metadata(self, cache_key: str, accessed_at: datetime) -> bool:
         """Record a cache hit and update its last-accessed timestamp."""
 
-        async with self._connection.execute(
-            """
-            UPDATE cache_metadata
-            SET accessed_at = ?, hit_count = hit_count + 1
-            WHERE cache_key = ?
-            """,
-            (_timestamp(accessed_at), cache_key),
-        ) as cursor:
-            changed = cursor.rowcount > 0
-        await self._connection.commit()
+        async with self._session_factory() as session:
+            result = cast(
+                "CursorResult[Any]",
+                await session.execute(
+                    update(CacheMetadataRow)
+                    .where(CacheMetadataRow.cache_key == cache_key)
+                    .values(
+                        accessed_at=_timestamp(accessed_at),
+                        hit_count=CacheMetadataRow.hit_count + 1,
+                    )
+                ),
+            )
+            changed = result.rowcount > 0
+            await session.commit()
         return changed
 
     async def remove_expired_cache_metadata(self, now: datetime) -> int:
         """Remove cache metadata whose expiry time is at or before ``now``."""
 
-        async with self._connection.execute(
-            "DELETE FROM cache_metadata WHERE expires_at <= ?", (_timestamp(now),)
-        ) as cursor:
-            deleted = cursor.rowcount
-        await self._connection.commit()
+        async with self._session_factory() as session:
+            result = cast(
+                "CursorResult[Any]",
+                await session.execute(
+                    delete(CacheMetadataRow).where(CacheMetadataRow.expires_at <= _timestamp(now))
+                ),
+            )
+            deleted = result.rowcount
+            await session.commit()
         return deleted
 
     @staticmethod
-    def _usage_from_row(row: sqlite3.Row) -> UsageEvent:
+    def _usage_from_row(row: UsageEventRow) -> UsageEvent:
         return UsageEvent(
-            provider=row["provider"],
-            operation=row["operation"],
-            units=Decimal(row["units"]),
-            observed_at=datetime.fromisoformat(row["observed_at"]),
-            request_id=row["request_id"],
-            metadata=json.loads(row["metadata"]),
+            provider=row.provider,
+            operation=UsageOperation(row.operation),
+            units=Decimal(row.units),
+            observed_at=datetime.fromisoformat(row.observed_at),
+            request_id=row.request_id,
+            metadata=json.loads(row.metadata_json),
         )
 
     @staticmethod
-    def _quota_from_row(row: sqlite3.Row) -> QuotaSnapshot:
+    def _quota_from_row(row: QuotaSnapshotRow) -> QuotaSnapshot:
         return QuotaSnapshot(
-            provider=row["provider"],
-            source=row["source"],
-            remaining=Decimal(row["remaining"]) if row["remaining"] is not None else None,
-            limit=Decimal(row["limit_units"]) if row["limit_units"] is not None else None,
-            reset_at=datetime.fromisoformat(row["reset_at"]) if row["reset_at"] else None,
-            observed_at=datetime.fromisoformat(row["observed_at"]),
+            provider=row.provider,
+            source=QuotaSource(row.source),
+            remaining=Decimal(row.remaining) if row.remaining is not None else None,
+            limit=Decimal(row.limit_units) if row.limit_units is not None else None,
+            reset_at=datetime.fromisoformat(row.reset_at) if row.reset_at else None,
+            observed_at=datetime.fromisoformat(row.observed_at),
         )
 
     @staticmethod
-    def _health_from_row(row: sqlite3.Row) -> ProviderHealth:
+    def _health_from_row(row: ProviderHealthRow) -> ProviderHealth:
         return ProviderHealth(
-            provider=row["provider"],
-            status=row["status"],
-            checked_at=datetime.fromisoformat(row["checked_at"]),
-            message=row["message"],
+            provider=row.provider,
+            status=HealthStatus(row.status),
+            checked_at=datetime.fromisoformat(row.checked_at),
+            message=row.message,
         )
 
     @staticmethod
-    def _cache_from_row(row: sqlite3.Row) -> CacheMetadata:
+    def _cache_from_row(row: CacheMetadataRow) -> CacheMetadata:
         return CacheMetadata(
-            cache_key=row["cache_key"],
-            provider=row["provider"],
-            operation=row["operation"],
-            created_at=datetime.fromisoformat(row["created_at"]),
-            expires_at=datetime.fromisoformat(row["expires_at"]),
-            accessed_at=datetime.fromisoformat(row["accessed_at"]),
-            hit_count=row["hit_count"],
-            size_bytes=row["size_bytes"],
+            cache_key=row.cache_key,
+            provider=row.provider,
+            operation=UsageOperation(row.operation),
+            created_at=datetime.fromisoformat(row.created_at),
+            expires_at=datetime.fromisoformat(row.expires_at),
+            accessed_at=datetime.fromisoformat(row.accessed_at),
+            hit_count=row.hit_count,
+            size_bytes=row.size_bytes,
         )

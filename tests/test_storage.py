@@ -8,6 +8,9 @@ from pathlib import Path
 
 import pytest
 import pytest_asyncio
+from sqlalchemy import URL, inspect
+from sqlalchemy.engine import Connection
+from sqlalchemy.ext.asyncio import create_async_engine
 
 from freesearch.contracts import (
     CacheMetadata,
@@ -18,12 +21,91 @@ from freesearch.contracts import (
     UsageEvent,
     UsageOperation,
 )
-from freesearch.storage import SQLiteRepository
+from freesearch.storage import SQLiteRepository, UsageEventRow
 
 
 def _digest(label: str) -> str:
     """Return a valid opaque cache key: a lowercase SHA-256 digest."""
     return hashlib.sha256(label.encode()).hexdigest()
+
+
+# Baseline raw-SQL schema contract: column -> (SQLite type, PRAGMA notnull=0 -> nullable).
+_SCHEMA: dict[str, dict[str, object]] = {
+    "usage_events": {
+        "columns": {
+            "id": ("INTEGER", True),  # PRAGMA: notnull=0, pk=1
+            "provider": ("TEXT", False),
+            "operation": ("TEXT", False),
+            "units": ("TEXT", False),
+            "observed_at": ("TEXT", False),
+            "request_id": ("TEXT", True),
+            "metadata": ("TEXT", False),
+        },
+        "primary_key": ("id",),
+        "indexes": {"usage_events_provider_observed_at": ["provider", "observed_at"]},
+    },
+    "quota_snapshots": {
+        "columns": {
+            "id": ("INTEGER", True),
+            "provider": ("TEXT", False),
+            "source": ("TEXT", False),
+            "remaining": ("TEXT", True),
+            "limit_units": ("TEXT", True),
+            "reset_at": ("TEXT", True),
+            "observed_at": ("TEXT", False),
+        },
+        "primary_key": ("id",),
+        "indexes": {
+            "quota_snapshots_provider_source_observed_at": ["provider", "source", "observed_at"]
+        },
+    },
+    "provider_health": {
+        "columns": {
+            "id": ("INTEGER", True),
+            "provider": ("TEXT", False),
+            "status": ("TEXT", False),
+            "checked_at": ("TEXT", False),
+            "message": ("TEXT", True),
+        },
+        "primary_key": ("id",),
+        "indexes": {"provider_health_provider_checked_at": ["provider", "checked_at"]},
+    },
+    "cache_metadata": {
+        "columns": {
+            "cache_key": ("TEXT", True),
+            "provider": ("TEXT", False),
+            "operation": ("TEXT", False),
+            "created_at": ("TEXT", False),
+            "expires_at": ("TEXT", False),
+            "accessed_at": ("TEXT", False),
+            "hit_count": ("INTEGER", False),
+            "size_bytes": ("INTEGER", True),
+        },
+        "primary_key": ("cache_key",),
+        "indexes": {"cache_metadata_expires_at": ["expires_at"]},
+    },
+}
+
+
+async def _schema_snapshot(repository: SQLiteRepository) -> dict:
+    """Return SQLAlchemy-inspection (PRAGMA-equivalent) views of the live schema."""
+
+    def inspect_schema(connection: Connection) -> dict:
+        inspector = inspect(connection)
+        tables = inspector.get_table_names()
+        return {
+            "tables": tables,
+            "columns": {table: inspector.get_columns(table) for table in tables},
+            "primary_keys": {
+                table: inspector.get_pk_constraint(table)["constrained_columns"]
+                for table in tables
+            },
+            "indexes": {table: inspector.get_indexes(table) for table in tables},
+        }
+
+    async with repository._engine.connect() as connection:  # inspect the DB the repo opened
+        return await connection.run_sync(inspect_schema)
+
 
 
 @pytest_asyncio.fixture
@@ -352,4 +434,87 @@ async def test_close_is_safe_after_normal_use(tmp_path: Path) -> None:
         )
     )
     await repository.close()
+    await repository.close()
+
+
+@pytest.mark.parametrize("table_name", sorted(_SCHEMA))
+async def test_initialized_schema_matches_baseline_contract(
+    repository: SQLiteRepository, table_name: str
+) -> None:
+    """The initialized database must reproduce the baseline raw-SQL PRAGMA contract."""
+    snapshot = await _schema_snapshot(repository)
+    assert table_name in snapshot["tables"]
+    columns = {
+        column["name"]: (type(column["type"]).__name__, column["nullable"])
+        for column in snapshot["columns"][table_name]
+    }
+    assert columns == _SCHEMA[table_name]["columns"]
+    assert tuple(snapshot["primary_keys"][table_name]) == _SCHEMA[table_name]["primary_key"]
+    for column in snapshot["columns"][table_name]:
+        if column["name"] in _SCHEMA[table_name]["primary_key"]:
+            assert column["nullable"] is True  # baseline PRAGMA notnull=0
+            assert column["primary_key"] == 1  # baseline PRAGMA pk=1
+    indexes = {
+        index["name"]: list(index["column_names"])
+        for index in snapshot["indexes"][table_name]
+        if not index["name"].startswith("sqlite_autoindex_")
+    }
+    assert indexes == _SCHEMA[table_name]["indexes"]
+
+
+async def test_initialize_recreates_missing_declared_index(tmp_path: Path) -> None:
+    """Dropping a declared index must be repaired by a later initialize()."""
+    async with await SQLiteRepository.open(tmp_path / "repair.db") as repository:
+        usage_index = next(iter(UsageEventRow.__table__.indexes))
+        async with repository._engine.begin() as connection:
+            await connection.run_sync(usage_index.drop)
+
+        snapshot = await _schema_snapshot(repository)
+        index_names = [index["name"] for index in snapshot["indexes"]["usage_events"]]
+        assert "usage_events_provider_observed_at" not in index_names
+
+        await repository.initialize()
+
+        snapshot = await _schema_snapshot(repository)
+        indexes = {
+            index["name"]: list(index["column_names"])
+            for index in snapshot["indexes"]["usage_events"]
+            if not index["name"].startswith("sqlite_autoindex_")
+        }
+        assert indexes["usage_events_provider_observed_at"] == ["provider", "observed_at"]
+
+
+async def test_open_uses_literal_database_path_with_spaces(tmp_path: Path) -> None:
+    """open() must create and reuse the literal path, including spaces (Windows-safe)."""
+    db_path = tmp_path / "usage data with spaces" / "usage data.db"
+    db_path.parent.mkdir()
+    event = UsageEvent(
+        provider="alpha",
+        operation=UsageOperation.SEARCH,
+        units=Decimal("1"),
+        observed_at=datetime(2026, 1, 1, 0, 0, tzinfo=UTC),
+    )
+    async with await SQLiteRepository.open(db_path) as repository:
+        await repository.record_usage(event)
+    assert db_path.is_file()
+    async with await SQLiteRepository.open(db_path) as reopened:
+        assert await reopened.list_usage() == [event]
+
+
+async def test_repository_constructs_with_engine_only(tmp_path: Path) -> None:
+    """One-argument construction must bind a working default session factory."""
+    engine = create_async_engine(
+        URL.create(drivername="sqlite+aiosqlite", database=str(tmp_path / "engine-only.db"))
+    )
+    repository = SQLiteRepository(engine)
+    await repository.initialize()
+    await repository.record_usage(
+        UsageEvent(
+            provider="alpha",
+            operation=UsageOperation.SEARCH,
+            units=Decimal("1"),
+            observed_at=datetime(2026, 1, 1, 0, 0, tzinfo=UTC),
+        )
+    )
+    assert len(await repository.list_usage()) == 1
     await repository.close()

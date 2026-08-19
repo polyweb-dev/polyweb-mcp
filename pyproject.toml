@@ -10,6 +10,7 @@ dependencies = [
     "keyring>=25.0,<26.0",
     "pydantic>=2.7,<3.0",
     "pydantic-settings>=2.2,<3.0",
+    "sqlalchemy[asyncio]>=2.0,<2.1",
 ]
 
 [dependency-groups]

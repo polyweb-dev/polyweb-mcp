@@ -38,8 +38,8 @@ portion of stage 2 is complete.
 
 ### Stage 2 - Usage/data
 
-- Added an async SQLite repository for usage events, quota snapshots, provider
-  health observations, and cache metadata.
+- Added typed SQLAlchemy async ORM models and a SQLite repository for usage
+  events, quota snapshots, provider health observations, and cache metadata.
 - Added strict cache metadata that accepts only opaque SHA-256 cache keys and
   never stores response payloads.
 - Preserved decimal precision as text and normalized timezone-aware timestamps

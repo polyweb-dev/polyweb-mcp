@@ -12,8 +12,8 @@ routing, MCP tools, retries, cached response bodies, or application wiring.
 The developer must request these changes from their owners before depending on
 them. Do not edit the owned files in this worktree.
 
-- Foundation/integration: add and lock `aiosqlite` in `pyproject.toml` and
-  `uv.lock`.
+- Foundation/integration: add and lock `aiosqlite` and SQLAlchemy async ORM
+  support in `pyproject.toml` and `uv.lock`.
 - Contracts owner: add a provider-neutral `CacheMetadata` model. It needs an
   opaque cache key, provider, operation, creation/expiry/access timestamps,
   hit count, and optional size in bytes. It must never contain a response body
@@ -27,11 +27,13 @@ modify them. It must not import provider SDKs or vendor modules.
 
 ### Implementation
 
-1. Add `src/freesearch/storage.py` with one concrete `SQLiteRepository`.
-   Avoid protocols, factories, ORM layers, and separate repository classes
-   until a second implementation or a real consumer requires them.
-2. Give the repository an async open/close lifecycle around one `aiosqlite`
-   connection. Schema initialization must be safe to call repeatedly.
+1. Add `src/freesearch/storage.py` with one concrete `SQLiteRepository` and
+   typed SQLAlchemy ORM row models. Avoid protocols, factories, and separate
+   repository classes until a second implementation or a real consumer requires
+   them.
+2. Give the repository an async open/close lifecycle around a SQLAlchemy async
+   engine using `aiosqlite` as the SQLite driver. Schema initialization must be
+   safe to call repeatedly and repair declared indexes.
 3. Create four tables.
    - `usage_events`: append-only records for `UsageEvent`.
    - `quota_snapshots`: append-only records for `QuotaSnapshot`.
@@ -68,8 +70,8 @@ modify them. It must not import provider SDKs or vendor modules.
 
 ### Developer Quality Criteria
 
-- The implementation uses `aiosqlite`, is fully async, and has no vendor
-  imports.
+- The implementation uses typed SQLAlchemy async ORM models with `aiosqlite`,
+  is fully async, and has no vendor imports or handwritten DDL/DML SQL.
 - Schema initialization is idempotent and queries are parameterized.
 - Decimals, timezone-aware timestamps, enums, nullable fields, and JSON
   metadata round-trip correctly.
