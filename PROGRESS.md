@@ -4,8 +4,8 @@ Updated: 2026-08-19
 
 ## Scope completed
 
-Stages 0 and 1 from [`WORKPLAN.md`](WORKPLAN.md) are complete. Stage 2 has not
-been started.
+Stages 0 and 1 from [`WORKPLAN.md`](WORKPLAN.md) are complete. The usage/data
+portion of stage 2 is complete.
 
 ### Stage 0 - Foundation
 
@@ -36,6 +36,19 @@ been started.
 - Added contract validation tests covering normalized responses, request
   validation, routing preferences, quota provenance, usage, and errors.
 
+### Stage 2 - Usage/data
+
+- Added an async SQLite repository for usage events, quota snapshots, provider
+  health observations, and cache metadata.
+- Added strict cache metadata that accepts only opaque SHA-256 cache keys and
+  never stores response payloads.
+- Preserved decimal precision as text and normalized timezone-aware timestamps
+  to UTC for correct SQLite ordering and expiry comparisons.
+- Restricted persisted usage metadata to numeric JSON telemetry, rejecting
+  sensitive fields and request-content values.
+- Added isolated async SQLite tests for round trips, filters, history, quota
+  provenance, health, cache replacement, expiry, and privacy validation.
+
 ## Credential and dashboard findings
 
 The seven planned providers currently use API-key authentication, with
@@ -57,9 +70,9 @@ rotation/revocation requirements.
 ## Deliberately deferred
 
 No provider SDKs or provider modules were added, and no dashboard UI was added
-yet. Routing, SQLite repositories, the MCP surface, shared resilience behavior,
-provider configuration, Docker, and the dashboard remain for later work as
-specified by the work plan.
+yet. Routing, the MCP surface, shared resilience behavior, provider
+configuration, Docker, and the dashboard remain for later work as specified by
+the work plan.
 
 ## Verification
 
@@ -70,5 +83,5 @@ uv lock --check
 uv sync --locked
 uv run ruff check .
 uv run mypy src
-uv run pytest  # 12 passed
+uv run pytest  # 28 passed
 ```
