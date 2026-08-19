@@ -102,6 +102,18 @@ Every provider worktree must:
 - supply mocked contract tests; and
 - document request-cost or usage evidence it can observe.
 
+#### Deferred provider-integration resilience hardening
+
+When each provider adapter is implemented, add provider-specific tests for its
+actual error payloads and retry behavior. The shared resilience layer cannot
+know every vendor's aliases or error shapes before those adapters exist.
+
+- Verify the provider's real error payloads, field aliases, and credential
+  formats against the shared redaction layer.
+- Use `SecretStr`/`SecretBytes` for provider-internal credential models.
+- Exercise concurrent 429 responses through the provider adapter to confirm it
+  invokes the shared resilience wrapper for every request attempt.
+
 ### 4. Integration worktree - after provider branches are ready
 
 This team merges providers one at a time and owns the final dependency lockfile.
