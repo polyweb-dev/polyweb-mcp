@@ -5,10 +5,12 @@ description = "Provider-neutral search and fetch contracts for FreeSearch."
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
 dependencies = [
+    "aiosqlite>=0.20,<1.0",
     "httpx>=0.27,<1.0",
     "keyring>=25.0,<26.0",
     "pydantic>=2.7,<3.0",
     "pydantic-settings>=2.2,<3.0",
+    "sqlalchemy[asyncio]>=2.0,<2.1",
 ]
 
 [dependency-groups]

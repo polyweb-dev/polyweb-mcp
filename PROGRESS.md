@@ -5,7 +5,7 @@ Updated: 2026-08-19
 ## Scope completed
 
 Stages 0 and 1 from [`WORKPLAN.md`](WORKPLAN.md) are complete. The Stage 2
-resilience worktree is complete; the other Stage 2 worktrees have not started.
+resilience worktree is complete.
 
 ### Stage 0 - Foundation
 
@@ -44,6 +44,18 @@ resilience worktree is complete; the other Stage 2 worktrees have not started.
   cooldowns, and a concurrency-safe circuit breaker.
 - Added defensive error sanitization for credential-shaped text, nested
   Pydantic aliases, mappings, and serialized public error payloads.
+### Stage 2 - Usage/data
+
+- Added typed SQLAlchemy async ORM models and a SQLite repository for usage
+  events, quota snapshots, provider health observations, and cache metadata.
+- Added strict cache metadata that accepts only opaque SHA-256 cache keys and
+  never stores response payloads.
+- Preserved decimal precision as text and normalized timezone-aware timestamps
+  to UTC for correct SQLite ordering and expiry comparisons.
+- Restricted persisted usage metadata to numeric JSON telemetry, rejecting
+  sensitive fields and request-content values.
+- Added isolated async SQLite tests for round trips, filters, history, quota
+  provenance, health, cache replacement, expiry, and privacy validation.
 
 ## Credential and dashboard findings
 

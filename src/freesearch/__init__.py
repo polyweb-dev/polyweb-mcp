@@ -1,6 +1,7 @@
 """Shared foundation and contracts for the FreeSearch application."""
 
 from freesearch.contracts import (
+    CacheMetadata,
     CostEstimate,
     FetchedDocument,
     FetchRequest,
@@ -16,6 +17,7 @@ from freesearch.contracts import (
 )
 
 __all__ = [
+    "CacheMetadata",
     "CostEstimate",
     "FetchRequest",
     "FetchResponse",
