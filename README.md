@@ -1,10 +1,9 @@
 # FreeSearch
 
 FreeSearch is a provider-neutral async search and document-fetching application.
-The project is prepared through stages 0 and 1 of [`WORKPLAN.md`](WORKPLAN.md),
-plus the stage 2 usage/data repository. The foundation, shared contracts, and
-async SQLite persistence layer are in place; provider implementations and the
-remaining stage 2 platform work remain intentionally deferred.
+The foundation and shared adapter contracts are complete. The Stage 2 shared
+resilience layer is also implemented; the other platform worktrees and provider
+implementations in [`WORKPLAN.md`](WORKPLAN.md) remain deferred.
 
 ## Local development
 

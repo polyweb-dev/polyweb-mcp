@@ -4,8 +4,8 @@ Updated: 2026-08-19
 
 ## Scope completed
 
-Stages 0 and 1 from [`WORKPLAN.md`](WORKPLAN.md) are complete. The usage/data
-portion of stage 2 is complete.
+Stages 0 and 1 from [`WORKPLAN.md`](WORKPLAN.md) are complete. The Stage 2
+resilience worktree is complete.
 
 ### Stage 0 - Foundation
 
@@ -36,6 +36,14 @@ portion of stage 2 is complete.
 - Added contract validation tests covering normalized responses, request
   validation, routing preferences, quota provenance, usage, and errors.
 
+### Stage 2 - Resilience
+
+- Added shared retry classification for retryable HTTP statuses, HTTPX
+  transport failures, and normalized retryable provider errors.
+- Added capped jittered backoff, `Retry-After` handling, shared provider
+  cooldowns, and a concurrency-safe circuit breaker.
+- Added defensive error sanitization for credential-shaped text, nested
+  Pydantic aliases, mappings, and serialized public error payloads.
 ### Stage 2 - Usage/data
 
 - Added typed SQLAlchemy async ORM models and a SQLite repository for usage
@@ -70,9 +78,20 @@ rotation/revocation requirements.
 ## Deliberately deferred
 
 No provider SDKs or provider modules were added, and no dashboard UI was added
-yet. Routing, the MCP surface, shared resilience behavior, provider
-configuration, Docker, and the dashboard remain for later work as specified by
-the work plan.
+yet. Routing, SQLite repositories, the MCP surface, provider configuration,
+Docker, and the dashboard remain for later work as specified by the work plan.
+
+### Deferred provider-integration resilience hardening
+
+The shared resilience work identified checks that require concrete provider
+adapters and their real error shapes. They are recorded in
+[`WORKPLAN.md`](WORKPLAN.md) and must be completed with each provider:
+
+- test real provider error payloads and credential formats against shared
+  redaction;
+- use `SecretStr`/`SecretBytes` in provider-internal credential models; and
+- confirm each adapter invokes the shared resilience wrapper under concurrent
+  rate limiting.
 
 ## Verification
 
@@ -83,5 +102,5 @@ uv lock --check
 uv sync --locked
 uv run ruff check .
 uv run mypy src
-uv run pytest  # 28 passed
+uv run pytest  # 93 passed
 ```
