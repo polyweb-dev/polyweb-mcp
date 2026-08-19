@@ -22,8 +22,6 @@ resilience worktree is complete.
 - Added the provider credential map and a keyring-backed secret resolver. The
   resolver prefers environment injection for CI/deployment and falls back to
   the native OS credential manager for local use.
-- Added initial tests, a fake adapter fixture, README setup instructions, and a
-  GitHub Actions CI workflow.
 
 ### Stage 1 - Contracts
 
