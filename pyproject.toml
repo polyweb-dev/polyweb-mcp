@@ -1,0 +1,46 @@
+[project]
+name = "freesearch"
+version = "0.1.0"
+description = "Provider-neutral search and fetch contracts for FreeSearch."
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "httpx>=0.27,<1.0",
+    "keyring>=25.0,<26.0",
+    "pydantic>=2.7,<3.0",
+    "pydantic-settings>=2.2,<3.0",
+]
+
+[dependency-groups]
+dev = [
+    "mypy>=1.10,<2.0",
+    "pytest>=8.2,<9.0",
+    "pytest-asyncio>=0.23,<2.0",
+    "ruff>=0.5,<1.0",
+]
+
+[build-system]
+requires = ["hatchling>=1.24,<2.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/freesearch"]
+
+[tool.pytest.ini_options]
+addopts = "--strict-config --strict-markers"
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+packages = ["freesearch"]
+mypy_path = ["src"]
