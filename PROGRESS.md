@@ -11,7 +11,7 @@ Configuration) are implemented and tested.
 ### Stage 0 - Foundation
 
 - Added a `uv`-managed `pyproject.toml` and generated `uv.lock`.
-- Set the supported Python policy to `>=3.11,<3.14` and added `.python-version`.
+- Set the supported Python policy to `>=3.12,<3.14` and added `.python-version`.
 - Added Ruff, mypy, pytest, and pytest-asyncio configuration.
 - Created the `src/freesearch/` package with typed package metadata.
 - Added Pydantic settings loading with `FREESEARCH_` environment variables and
