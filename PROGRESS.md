@@ -109,8 +109,13 @@ implemented and tested.
 ## Credential and dashboard findings
 
 The seven planned providers currently use API-key authentication, with
-provider-specific header conventions documented in `.env.example`. Keenable
-also supports a keyless tier, so its key remains optional.
+provider-specific header conventions documented in `.env.example`. 
+
+**Keenable Free/Public Tier:**
+- Keenable provides a keyless public tier allowing search/fetch testing without an API key or upfront registration.
+- **Cost**: Free (0 credits).
+- **Public Rate Limits**: 30 requests per IP per 15 minutes.
+- When `FREESEARCH_KEENABLE_API_KEY` is not present, the Keenable adapter must operate in keyless mode without failing authentication, attaching the `X-API-Key` header only when a configured key is present.
 
 Real keys should not be written by a dashboard to `.env` or SQLite. The local
 implementation uses `keyring`, which delegates to Windows Credential Manager,
@@ -144,6 +149,11 @@ To prevent misrouting or quota exhaustion stalls under heavy burst traffic:
 The remaining Stage 3 providers, application composition root / integration
 tests (Stage 4), Docker packaging, and settings dashboard (Stage 5) remain for
 later work as specified by the work plan.
+
+- **Brave Answers API**: Brave provides separate API keys and subscriptions for
+  Search (`FREESEARCH_BRAVE_SEARCH_API_KEY`) and AI Answers (`FREESEARCH_BRAVE_ANSWERS_API_KEY`).
+  Stage 3 focuses on integrating Brave Search (declaring `fetch=False`), while
+  the generative/rich Answers endpoint is deferred to a future milestone.
 
 ### Deferred provider-integration resilience hardening
 
