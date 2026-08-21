@@ -1,13 +1,13 @@
 # FreeSearch Progress
 
-Updated: 2026-08-20
+Updated: 2026-08-21
 
 ## Scope completed
 
 Stages 0, 1, and 2 from [`WORKPLAN.md`](WORKPLAN.md) are complete. All Stage 2
 core-platform worktrees (Resilience, Usage/data, Routing, MCP surface, and
-Configuration) are implemented and tested. The Stage 3 Tavily provider is also
-implemented and tested.
+Configuration) are implemented and tested. The Stage 3 Tavily and Parallel
+providers are also implemented and tested.
 
 ### Stage 0 - Foundation
 
@@ -106,6 +106,24 @@ implemented and tested.
 - Added tagged live Behave scenarios for Tavily search, fetch, and quota, with
   shared-client lifecycle coverage and zero-credit extract usage accepted.
 
+### Stage 3 - Parallel provider
+
+- Added `ParallelAdapter`, using direct HTTPX for Parallel v1 search and URL
+  extraction while returning the shared provider-neutral response models.
+- Scoped the resolver-provided API key to per-request `x-api-key` headers on an
+  adapter-owned client, preserving caller transport policy without mutating or
+  leaking caller authentication headers.
+- Routed every operation through the shared resilience runner; normalized
+  provider payloads, observed SKU usage, HTTP failures, malformed responses,
+  and fetch truncation without exposing credentials.
+- Added mocked wire fixtures and contract coverage for request mapping,
+  response normalization, concurrent rate-limit routing, redaction, lifecycle,
+  and boundaries. Parallel has no public balance endpoint, so quota capability
+  remains disabled; local cost estimates are available for routing.
+- Added opt-in tagged live Behave scenarios for Parallel search and extraction;
+  both passed against the configured API key on 2026-08-21 with normalized
+  results, content, usage telemetry, and request identifiers.
+
 ## Credential and dashboard findings
 
 The seven planned providers currently use API-key authentication, with
@@ -177,5 +195,6 @@ uv sync --locked
 uv run ruff check .
 uv run ruff format --check .
 uv run mypy src
-uv run pytest  # 293 passed
+uv run pytest  # 371 passed
+uv run behave --tags=@live,@parallel features/parallel.feature  # 2 passed
 ```

@@ -1,0 +1,30 @@
+{
+  "search_id": "search_fcb2b4f3c75e418687bccaa1a8381331",
+  "results": [
+    {
+      "url": "https://www.example.com/guide",
+      "title": "Example Guide",
+      "publish_date": "2024-01-15",
+      "excerpts": [
+        "First relevant markdown excerpt.",
+        "Second relevant markdown excerpt."
+      ]
+    },
+    {
+      "url": "https://docs.example.org/api",
+      "title": null,
+      "publish_date": null,
+      "excerpts": [
+        "Single excerpt without a title."
+      ]
+    }
+  ],
+  "warnings": null,
+  "usage": [
+    {
+      "name": "sku_search",
+      "count": 1
+    }
+  ],
+  "session_id": "session_fcb2b4f3c75e418687bccaa1a8381331"
+}

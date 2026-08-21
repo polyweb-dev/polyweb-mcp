@@ -1,0 +1,23 @@
+{
+  "extract_id": "extract_8a911eb27c7a4afaa20d0d9dc98d07c0",
+  "results": [
+    {
+      "url": "https://www.example.com/guide",
+      "title": "Example Guide",
+      "publish_date": "2024-01-15",
+      "excerpts": [
+        "Relevant excerpt text ..."
+      ],
+      "full_content": "Full page content formatted as markdown."
+    }
+  ],
+  "errors": [],
+  "warnings": null,
+  "usage": [
+    {
+      "name": "sku_extract_excerpts",
+      "count": 1
+    }
+  ],
+  "session_id": "session_8a911eb27c7a4afaa20d0d9dc98d07c0"
+}

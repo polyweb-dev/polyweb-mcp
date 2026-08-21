@@ -5,6 +5,7 @@ from typing import Any
 
 import httpx  # noqa: F401  # kept: locked BDD tests monkeypatch environment.httpx.AsyncClient
 
+from freesearch.adapters.parallel import ParallelAdapter
 from freesearch.adapters.tavily import TavilyAdapter
 from freesearch.http import create_async_client
 from freesearch.provider_config import get_provider_secret_resolver
@@ -15,6 +16,7 @@ def before_all(context: Any) -> None:
     """Verify provider secrets availability before running feature suites."""
     resolver = get_provider_secret_resolver()
     context.has_tavily_key = resolver.get(ProviderName.TAVILY) is not None
+    context.has_parallel_key = resolver.get(ProviderName.PARALLEL) is not None
 
 
 def before_scenario(context: Any, scenario: Any) -> None:
@@ -22,7 +24,11 @@ def before_scenario(context: Any, scenario: Any) -> None:
     context.loop = asyncio.new_event_loop()
     asyncio.set_event_loop(context.loop)
     context.http_client = create_async_client()
-    context.adapter = TavilyAdapter(context.http_client)
+    tags = getattr(scenario, "effective_tags", None) or getattr(scenario, "tags", ())
+    if "parallel" in tags and context.has_parallel_key:
+        context.adapter = ParallelAdapter(context.http_client)
+    else:
+        context.adapter = TavilyAdapter(context.http_client)
     context.search_response = None
     context.fetch_response = None
     context.quota_snapshot = None
