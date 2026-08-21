@@ -12,4 +12,6 @@ dist/
 build/
 .coverage
 htmlcov/
-
+coverage/
+.gremlins*/
+.coverage*

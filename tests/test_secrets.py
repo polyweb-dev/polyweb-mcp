@@ -38,6 +38,47 @@ def test_environment_secret_takes_precedence_over_keyring() -> None:
     assert secret.get_secret_value() == "environment-value"
 
 
+def test_process_environment_overrides_dotenv_file(monkeypatch, tmp_path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"{PROVIDER_ENV_VARS[ProviderName.TAVILY]}=dotenv-value\n")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv(PROVIDER_ENV_VARS[ProviderName.TAVILY], "process-value")
+    resolver = ProviderSecretResolver(store=MemorySecretStore())
+
+    secret = resolver.get(ProviderName.TAVILY)
+
+    assert secret is not None
+    assert secret.get_secret_value() == "process-value"
+
+
+def test_default_resolver_reads_tavily_key_from_cwd_dotenv(monkeypatch, tmp_path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"{PROVIDER_ENV_VARS[ProviderName.TAVILY]}=dotenv-value\n")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv(PROVIDER_ENV_VARS[ProviderName.TAVILY], raising=False)
+    resolver = ProviderSecretResolver(store=MemorySecretStore())
+
+    secret = resolver.get(ProviderName.TAVILY)
+
+    assert secret is not None
+    assert secret.get_secret_value() == "dotenv-value"
+
+
+def test_injected_environ_skips_dotenv_and_falls_back_to_store(monkeypatch, tmp_path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"{PROVIDER_ENV_VARS[ProviderName.TAVILY]}=dotenv-value\n")
+    monkeypatch.chdir(tmp_path)
+    store = MemorySecretStore()
+    store.set(ProviderName.TAVILY.value, "store-value")
+
+    resolver = ProviderSecretResolver(store=store, environ={})
+
+    secret = resolver.get(ProviderName.TAVILY)
+
+    assert secret is not None
+    assert secret.get_secret_value() == "store-value"
+
+
 def test_keyring_secret_can_be_written_and_deleted_without_plaintext_config() -> None:
     store = MemorySecretStore()
     resolver = ProviderSecretResolver(store=store, environ={})

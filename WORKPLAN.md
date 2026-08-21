@@ -120,6 +120,9 @@ This team merges providers one at a time and owns the final dependency lockfile.
 
 - Run shared adapter contract tests against every provider.
 - Register adapters in the application factory.
+- Implement the background quota reconciliation coordinator (bridging local
+  SQLite `UsageEvent` decrementing with periodic vendor `adapter.quota()` polling
+  to eliminate provider telemetry lag).
 - Verify routing behavior with fake quota and health states.
 - Confirm `search` and `fetch` expose identical shapes regardless of provider.
 - Run opt-in smoke tests for any available provider keys.

@@ -1,10 +1,11 @@
-"""Provider credential resolution with environment and OS-keyring support.
+"""Provider credential resolution with environment, ``.env``, and OS-keyring support.
 
-Environment variables are useful for CI and deployment secret injection. For
-interactive local configuration, :class:`KeyringSecretStore` uses the native
-credential store selected by ``keyring`` (Windows Credential Manager, macOS
-Keychain, or a Linux Secret Service backend). The dashboard should write to
-this store, never to ``.env``.
+Environment variables are useful for CI and deployment secret injection, and
+``.env`` files mirror the :class:`freesearch.config.Settings` convention for
+local keys. For interactive local configuration, :class:`KeyringSecretStore`
+uses the native credential store selected by ``keyring`` (Windows Credential
+Manager, macOS Keychain, or a Linux Secret Service backend). The dashboard
+should write to this store, never to ``.env``.
 """
 
 import os
@@ -13,6 +14,7 @@ from enum import StrEnum
 from typing import Protocol
 
 import keyring
+from dotenv import dotenv_values
 from pydantic import SecretStr
 
 
@@ -70,7 +72,13 @@ class KeyringSecretStore:
 
 
 class ProviderSecretResolver:
-    """Resolve provider keys without putting them in ``Settings``."""
+    """Resolve provider keys without putting them in ``Settings``.
+
+    Lookup precedence is the process environment, then the ``.env`` file, then
+    the configured secret store. The ``.env`` file is only consulted when the
+    resolver is bound to the real process environment; injected ``environ``
+    mappings (test seams) never touch the on-disk file.
+    """
 
     def __init__(
         self,
@@ -79,13 +87,28 @@ class ProviderSecretResolver:
     ) -> None:
         self._store = store or KeyringSecretStore()
         self._environ = os.environ if environ is None else environ
+        self._read_env_file = environ is None
 
     def get(self, provider: ProviderName) -> SecretStr | None:
-        """Prefer explicit environment injection, then use the OS keyring."""
+        """Prefer the environment, then ``.env``, then the OS keyring.
 
-        environment_value = self._environ.get(PROVIDER_ENV_VARS[provider])
+        Only the requested provider's variable is read from ``.env``, and only
+        when the process environment did not already supply it. An injected
+        ``environ`` mapping disables the ``.env`` lookup entirely.
+        """
+
+        env_var = PROVIDER_ENV_VARS[provider]
+        environment_value = self._environ.get(env_var)
         if environment_value:
             return SecretStr(environment_value)
+
+        if self._read_env_file:
+            # Match Settings' ".env" convention; an unreadable or unparseable
+            # file degrades to the keyring rather than failing resolution.
+            with suppress(OSError, UnicodeDecodeError):
+                dotenv_value = dotenv_values(".env").get(env_var)
+                if dotenv_value:
+                    return SecretStr(dotenv_value)
 
         stored_value = self._store.get(provider.value)
         return SecretStr(stored_value) if stored_value else None

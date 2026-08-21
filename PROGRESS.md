@@ -1,12 +1,13 @@
 # FreeSearch Progress
 
-Updated: 2026-08-19
+Updated: 2026-08-20
 
 ## Scope completed
 
 Stages 0, 1, and 2 from [`WORKPLAN.md`](WORKPLAN.md) are complete. All Stage 2
 core-platform worktrees (Resilience, Usage/data, Routing, MCP surface, and
-Configuration) are implemented and tested.
+Configuration) are implemented and tested. The Stage 3 Tavily provider is also
+implemented and tested.
 
 ### Stage 0 - Foundation
 
@@ -85,6 +86,26 @@ Configuration) are implemented and tested.
 - Provided isolated deep copies via `get_provider_configs()` with cache clearing support.
 - Linked non-secret provider registry to shared `ProviderSecretResolver`.
 
+### Stage 3 - Tavily provider
+
+- Added `TavilyAdapter`, backed by the official async Tavily SDK, with normalized
+  search and extract-backed fetch responses under the shared adapter contract.
+- Routed every SDK operation through the shared resilience runner; normalized
+  retryable SDK failures and malformed provider responses without leaking keys.
+- Isolated Tavily authentication from caller-owned HTTP clients while preserving
+  their transport policy, timeout phases, and lifecycle ownership.
+- Added Tavily search country normalization, request-limit handling, observed
+  credit usage events, deterministic fetch truncation, and network-free credit
+  estimates (one search credit; 0.2 average extract credit per URL).
+- Added an authoritative Tavily monthly-plan quota snapshot from `/usage`, with
+  account-plan priority, bounded key fallback, rate-limit handling, and safe
+  malformed-response normalization for future routing integration.
+- Added mocked SDK, transport, concurrency, redaction, resolver, lifecycle, and
+  timeout tests. Local `.env` provider keys now resolve through the shared secret
+  resolver after process environment variables and before the OS keyring.
+- Added tagged live Behave scenarios for Tavily search, fetch, and quota, with
+  shared-client lifecycle coverage and zero-credit extract usage accepted.
+
 ## Credential and dashboard findings
 
 The seven planned providers currently use API-key authentication, with
@@ -103,11 +124,26 @@ write credentials only through the secret-store abstraction, with loopback
 defaults, CSRF/session protection, least privilege, audit events, masking, and
 rotation/revocation requirements.
 
+## Quota telemetry lag and reconciliation findings
+
+Live verification with provider endpoints (e.g. Tavily `/usage`) confirmed that
+public developer usage endpoints reflect asynchronous batch aggregation (10–15
+minute ingestion lag) rather than immediate transactional session state.
+
+To prevent misrouting or quota exhaustion stalls under heavy burst traffic:
+- Real-time routing decisions must rely on the instant local SQLite ledger
+  (`UsageEventRow` decrements) anchored against the last authoritative vendor
+  baseline (`QuotaSnapshotRow`).
+- A background reconciliation coordinator must be integrated to periodically
+  poll vendor `adapter.quota()`, re-anchor the baseline, detect external account
+  drift, and clear or offset processed local usage events without blocking active
+  search and fetch requests.
+
 ## Deliberately deferred
 
-No provider SDKs or provider modules were added yet (Stage 3). The application
-composition root / integration tests (Stage 4), Docker packaging, and the
-settings dashboard (Stage 5) remain for later work as specified by the work plan.
+The remaining Stage 3 providers, application composition root / integration
+tests (Stage 4), Docker packaging, and settings dashboard (Stage 5) remain for
+later work as specified by the work plan.
 
 ### Deferred provider-integration resilience hardening
 
@@ -131,5 +167,5 @@ uv sync --locked
 uv run ruff check .
 uv run ruff format --check .
 uv run mypy src
-uv run pytest  # 185 passed
+uv run pytest  # 293 passed
 ```

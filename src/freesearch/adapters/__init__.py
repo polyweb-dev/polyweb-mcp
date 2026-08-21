@@ -1,5 +1,6 @@
-"""Adapter interfaces; provider implementations are added after stage 1."""
+"""Adapter interfaces and provider implementations."""
 
 from freesearch.adapters.base import ProviderAdapter
+from freesearch.adapters.tavily import TavilyAdapter
 
-__all__ = ["ProviderAdapter"]
+__all__ = ["ProviderAdapter", "TavilyAdapter"]

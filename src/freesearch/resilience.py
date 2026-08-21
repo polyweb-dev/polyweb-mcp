@@ -285,7 +285,7 @@ class _Probe:
     stale generation are ignored so a late finish cannot rewrite breaker state.
     """
 
-    __slots__ = ("holds_probe", "generation")
+    __slots__ = ("generation", "holds_probe")
 
     def __init__(self, holds_probe: bool, generation: int) -> None:
         self.holds_probe = holds_probe
