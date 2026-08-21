@@ -1,13 +1,13 @@
 # FreeSearch Progress
 
-Updated: 2026-08-20
+Updated: 2026-08-21
 
 ## Scope completed
 
 Stages 0, 1, and 2 from [`WORKPLAN.md`](WORKPLAN.md) are complete. All Stage 2
 core-platform worktrees (Resilience, Usage/data, Routing, MCP surface, and
-Configuration) are implemented and tested. The Stage 3 Tavily provider is also
-implemented and tested.
+Configuration) are implemented and tested. The Stage 3 Tavily and Exa providers
+are also implemented and tested.
 
 ### Stage 0 - Foundation
 
@@ -106,6 +106,24 @@ implemented and tested.
 - Added tagged live Behave scenarios for Tavily search, fetch, and quota, with
   shared-client lifecycle coverage and zero-credit extract usage accepted.
 
+### Stage 3 - Exa provider
+
+- Added `ExaAdapter`, backed by the official `exa-py` async SDK, with normalized
+  search and URL-content fetch responses under the shared adapter contract.
+- Routed SDK requests through the shared resilience runner, resolved credentials
+  only through the shared secret resolver, and normalized SDK failures without
+  exposing response bodies or credential-shaped text.
+- Added real per-response `costDollars.total` usage telemetry when supplied by
+  Exa; estimates explicitly remain zero because Exa does not publish a stable
+  per-request price. Exa exposes no public remaining-credit endpoint, so quota
+  capability is deliberately disabled rather than inferred.
+- Added mocked SDK, wire-level, lifecycle, error-redaction, missing-key,
+  truncation, resilience, and mutation tests plus tagged live Behave search and
+  fetch scenarios. Keyless live Exa scenarios skip before client construction.
+- Live-verified both Exa Behave scenarios on 2026-08-21 with the configured
+  shared-secret credential: search returned structured results and fetch
+  returned non-empty content.
+
 ## Credential and dashboard findings
 
 The seven planned providers currently use API-key authentication, with
@@ -177,5 +195,5 @@ uv sync --locked
 uv run ruff check .
 uv run ruff format --check .
 uv run mypy src
-uv run pytest  # 293 passed
+uv run pytest  # 361 passed
 ```
