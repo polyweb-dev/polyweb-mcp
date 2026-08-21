@@ -1,13 +1,13 @@
 # FreeSearch Progress
 
-Updated: 2026-08-20
+Updated: 2026-08-21
 
 ## Scope completed
 
 Stages 0, 1, and 2 from [`WORKPLAN.md`](WORKPLAN.md) are complete. All Stage 2
 core-platform worktrees (Resilience, Usage/data, Routing, MCP surface, and
-Configuration) are implemented and tested. The Stage 3 Tavily provider is also
-implemented and tested.
+Configuration) are implemented and tested. The Stage 3 Tavily and Firecrawl
+providers are also implemented and tested.
 
 ### Stage 0 - Foundation
 
@@ -106,6 +106,26 @@ implemented and tested.
 - Added tagged live Behave scenarios for Tavily search, fetch, and quota, with
   shared-client lifecycle coverage and zero-credit extract usage accepted.
 
+### Stage 3 - Firecrawl provider
+
+- Added `FirecrawlAdapter`, backed by the official `AsyncFirecrawl` SDK, with
+  normalized web-search and scrape-backed markdown fetch responses under the
+  shared adapter contract.
+- Routed SDK requests through the shared resilience runner and normalized
+  typed SDK, HTTP, malformed-response, and status errors without exposing
+  credentials. Retryable vendor statuses are 429, 500, 502, 503, and 504.
+- Resolved Firecrawl keys exclusively through the shared secret resolver,
+  failing closed when absent; adapter-owned SDK transport lifecycle is closed
+  without affecting the caller-owned shared HTTP client.
+- Added deterministic fetch truncation, observed usage evidence when supplied,
+  and network-free zero-unit estimates because Firecrawl has no documented
+  per-request unit price.
+- Added mocked acceptance, SDK-model, error/redaction, lifecycle, and mutation
+  tests for the Firecrawl search and fetch paths.
+- Added tagged opt-in live Behave search and scrape scenarios. They select the
+  Firecrawl adapter from the bare Behave provider tag, verify normalized results
+  and bounded markdown, and were run successfully with a resolver-provided key.
+
 ## Credential and dashboard findings
 
 The seven planned providers currently use API-key authentication, with
@@ -177,5 +197,5 @@ uv sync --locked
 uv run ruff check .
 uv run ruff format --check .
 uv run mypy src
-uv run pytest  # 293 passed
+uv run pytest  # 414 passed
 ```
