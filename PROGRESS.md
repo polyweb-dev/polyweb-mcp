@@ -1,13 +1,13 @@
 # FreeSearch Progress
 
-Updated: 2026-08-20
+Updated: 2026-08-21
 
 ## Scope completed
 
 Stages 0, 1, and 2 from [`WORKPLAN.md`](WORKPLAN.md) are complete. All Stage 2
 core-platform worktrees (Resilience, Usage/data, Routing, MCP surface, and
-Configuration) are implemented and tested. The Stage 3 Tavily provider is also
-implemented and tested.
+Configuration) are implemented and tested. The Stage 3 Tavily and Keenable
+providers are implemented and tested.
 
 ### Stage 0 - Foundation
 
@@ -106,6 +106,27 @@ implemented and tested.
 - Added tagged live Behave scenarios for Tavily search, fetch, and quota, with
   shared-client lifecycle coverage and zero-credit extract usage accepted.
 
+### Stage 3 - Keenable provider
+
+- Added `KeenableAdapter`, using direct caller-owned HTTPX for native search and
+  fetch endpoints with every outbound request routed through the shared
+  resilience runner.
+- Supports the free keyless public tier: absent credentials select `/public`
+  endpoints with `X-Keenable-Title`; configured credentials select private
+  endpoints with `X-API-Key` only.
+- Normalizes search and fetch responses, free zero-unit usage/cost estimates,
+  truncation, malformed payloads, and retryable HTTP errors to shared contracts.
+- Isolates Keenable requests from caller default credential headers and HTTPX
+  client authentication without mutating or closing the caller-owned client.
+- Added 43 deterministic mocked provider tests covering public/keyed request
+  mapping, credential isolation, response/error normalization, boundaries, and
+  shared-runner routing; focused mutation score is 100%.
+- Added an opt-in live Behave scenario for one keyless search (`limit=1`). It
+  verifies the public endpoint/header, normalized result shape, and zero-unit
+  usage; `FREESEARCH_RUN_LIVE=1` is required so ordinary BDD stays offline.
+- Live verification completed successfully against Keenable's public API:
+  one scenario and seven steps passed with no API key.
+
 ## Credential and dashboard findings
 
 The seven planned providers currently use API-key authentication, with
@@ -177,5 +198,6 @@ uv sync --locked
 uv run ruff check .
 uv run ruff format --check .
 uv run mypy src
-uv run pytest  # 293 passed
+uv run pytest  # 353 passed
+FREESEARCH_RUN_LIVE=1 uv run behave --tags=@keenable --no-capture  # 1 live scenario, 7 steps passed
 ```
