@@ -1,13 +1,13 @@
 # FreeSearch Progress
 
-Updated: 2026-08-20
+Updated: 2026-08-21
 
 ## Scope completed
 
 Stages 0, 1, and 2 from [`WORKPLAN.md`](WORKPLAN.md) are complete. All Stage 2
 core-platform worktrees (Resilience, Usage/data, Routing, MCP surface, and
-Configuration) are implemented and tested. The Stage 3 Tavily provider is also
-implemented and tested.
+Configuration) are implemented and tested. The Stage 3 Tavily and You.com
+providers are also implemented and tested.
 
 ### Stage 0 - Foundation
 
@@ -105,6 +105,27 @@ implemented and tested.
   resolver after process environment variables and before the OS keyring.
 - Added tagged live Behave scenarios for Tavily search, fetch, and quota, with
   shared-client lifecycle coverage and zero-credit extract usage accepted.
+
+### Stage 3 - You.com provider
+
+- Added `YoucomAdapter`, using direct HTTPX against the You.com YDC Index API
+  for normalized web/news search and Contents API-backed Markdown fetches.
+- Scoped the resolver-only `X-API-Key` to an adapter-owned client, preserving
+  the shared transport and timeout policy while preventing caller credentials
+  and cross-origin redirects from leaking the You.com key.
+- Routed search and fetch through the shared resilience runner; normalized
+  malformed payloads and HTTP errors without exposing response secrets.
+- Added deterministic URL matching, Markdown truncation, publication-date and
+  safe result/document metadata normalization, plus network-free USD estimates
+  of $0.005/search and $0.001/fetched page.
+- Added balance-backed quota polling through You.com's account-balance endpoint.
+  The authoritative USD-credit balance is converted conservatively to
+  **estimated Web Search call equivalents** at $0.005 per call; snapshots are
+  explicitly marked `estimated`, with no claimed limit or reset schedule.
+- Added mocked adapter, error/redaction, retry, redirect-security, lifecycle,
+  quota, and BDD environment tests, plus tagged live Behave scenarios for
+  search, fetch, and balance-backed quota. The adapter tests achieved 98%
+  statement / 100% branch coverage and 100% mutation score.
 
 ## Credential and dashboard findings
 
