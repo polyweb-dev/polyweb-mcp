@@ -1,13 +1,13 @@
 # FreeSearch Progress
 
-Updated: 2026-08-20
+Updated: 2026-08-21
 
 ## Scope completed
 
 Stages 0, 1, and 2 from [`WORKPLAN.md`](WORKPLAN.md) are complete. All Stage 2
 core-platform worktrees (Resilience, Usage/data, Routing, MCP surface, and
-Configuration) are implemented and tested. The Stage 3 Tavily provider is also
-implemented and tested.
+Configuration) are implemented and tested. The Stage 3 Tavily and Brave Search
+providers are implemented and tested.
 
 ### Stage 0 - Foundation
 
@@ -106,6 +106,22 @@ implemented and tested.
 - Added tagged live Behave scenarios for Tavily search, fetch, and quota, with
   shared-client lifecycle coverage and zero-credit extract usage accepted.
 
+### Stage 3 - Brave Search provider
+
+- Added `BraveAdapter` using direct HTTPX against Brave Search, with normalized
+  web results, ISO publication dates, one-query usage events, and observed
+  rate-limit-remaining telemetry.
+- Resolved `FREESEARCH_BRAVE_SEARCH_API_KEY` only through the shared secret
+  resolver and sent it per request as `X-Subscription-Token`; caller auth,
+  API-key headers, and redirects cannot leak it to another origin.
+- Routed each search through the shared resilience runner, normalized malformed,
+  transport, and HTTP errors without exposing credentials, and declared
+  `fetch=False` with a network-free one-query search estimate.
+- Added mocked request, retry, concurrency, redaction, malformed-payload, and
+  credential-isolation tests; targeted mutation testing killed all 31 mutants.
+- Added opt-in `@live @brave` Behave scenarios that verify live normalized
+  search results and the observed one-query usage event without logging keys.
+
 ## Credential and dashboard findings
 
 The seven planned providers currently use API-key authentication, with
@@ -177,5 +193,5 @@ uv sync --locked
 uv run ruff check .
 uv run ruff format --check .
 uv run mypy src
-uv run pytest  # 293 passed
+uv run pytest  # 375 passed
 ```
