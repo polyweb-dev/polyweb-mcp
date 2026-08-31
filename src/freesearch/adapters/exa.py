@@ -1,0 +1,346 @@
+"""Exa provider adapter built on the official ``exa-py`` async SDK.
+
+The adapter wraps every SDK call in the shared :class:`ResilientRunner` and
+resolves the API key only through the process-wide provider secret resolver.
+The SDK owns its HTTPX client (``AsyncExa.client``), created lazily with the
+resolver key, so the caller's shared client is never mutated or closed; the
+adapter closes the SDK-owned client in :meth:`aclose`. Exa exposes no quota
+endpoint, so :meth:`quota` stays inherited (``None``), and request-cost
+evidence is surfaced only from the ``costDollars`` telemetry the API reports
+per response - never fabricated.
+"""
+
+import re
+from datetime import UTC, datetime
+from decimal import Decimal
+from math import isfinite
+from typing import Any, cast
+from urllib.parse import urlsplit
+
+import httpx
+from exa_py import AsyncExa
+from exa_py.api import Result
+from exa_py.api import SearchResponse as ExaSearchResponse
+from pydantic import AnyHttpUrl
+
+from freesearch.adapters.base import ProviderAdapter
+from freesearch.contracts import (
+    CostEstimate,
+    FetchedDocument,
+    FetchRequest,
+    FetchResponse,
+    ProviderCapabilities,
+    ProviderError,
+    SearchRequest,
+    SearchResponse,
+    SearchResult,
+    UsageEvent,
+    UsageOperation,
+)
+from freesearch.provider_config import get_provider_secret_resolver
+from freesearch.resilience import ProviderOperationError, ResilientRunner
+from freesearch.secrets import ProviderName
+
+__all__ = ["ExaAdapter"]
+
+_NAME = "exa"
+# Retryable set mirrors the shared runner's HTTP policy; SDK errors outside it
+# are surfaced as non-retryable.
+_RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
+# The SDK surfaces HTTP failures as ``ValueError("Request failed with status
+# code {status}: {body}")``; only the status code is parsed out - the body is
+# never included so provider text cannot leak.
+_SDK_STATUS_RE = re.compile(r"Request failed with status code (\d+)")
+
+
+def _parse_published_at(value: str | None) -> datetime | None:
+    """Parse Exa's ISO-8601 ``published_date``; unparseable values are None."""
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _same_url(left: str, right: str) -> bool:
+    """Compare URLs case-insensitively for scheme/host, path/query case preserved.
+
+    An empty path is treated as equal to ``/``: pydantic normalizes
+    ``AnyHttpUrl("https://example.com")`` to a trailing slash while the SDK
+    echoes the URL exactly as requested.
+    """
+    try:
+        left_parts, right_parts = urlsplit(left), urlsplit(right)
+    except ValueError:
+        return left == right
+    return (
+        left_parts.scheme.lower() == right_parts.scheme.lower()
+        and left_parts.netloc.lower() == right_parts.netloc.lower()
+        and _path_without_root_slash(left_parts.path) == _path_without_root_slash(right_parts.path)
+        and left_parts.query == right_parts.query
+        and left_parts.fragment == right_parts.fragment
+    )
+
+
+def _path_without_root_slash(path: str) -> str:
+    """The path with a root-only ``/`` normalized to the empty string."""
+    return "" if path == "/" else path
+
+
+class ExaAdapter(ProviderAdapter):
+    """Search, fetch, and cost operations against the Exa API."""
+
+    def __init__(
+        self,
+        client: httpx.AsyncClient | None = None,
+        *,
+        runner: ResilientRunner | None = None,
+        sdk_client: AsyncExa | None = None,
+    ) -> None:
+        """Wrap operations in the shared resilience runner.
+
+        ``client`` is the caller-owned shared HTTPX client; when omitted the
+        adapter creates a fallback client it owns and closes in
+        :meth:`aclose`. ``sdk_client`` is a test-only seam replacing the real
+        SDK client. The SDK owns its own HTTPX client carrying the resolver
+        key; the caller's client is never mutated or closed here.
+        """
+        sdk = sdk_client or self._build_sdk()
+        if client is None:
+            client = httpx.AsyncClient()
+            self._owns_client = True
+        else:
+            self._owns_client = False
+        self._client = client
+        self._runner = runner or ResilientRunner(client)
+        self._sdk = sdk
+
+    def _build_sdk(self) -> AsyncExa:
+        """Build the official SDK with the resolver key.
+
+        The key comes only from the shared resolver; absent credentials fail
+        closed rather than letting the SDK fall back to ambient ``EXA_API_KEY``
+        (the SDK raises ``ValueError`` for a missing key, which would surface
+        as a confusing provider error).
+        """
+        resolved = get_provider_secret_resolver().get(ProviderName.EXA)
+        if resolved is None:
+            raise self._error("configuration_error", "no Exa API key configured")
+        return AsyncExa(api_key=resolved.get_secret_value())
+
+    async def aclose(self) -> None:
+        """Close the SDK-owned HTTPX client and the fallback client if owned."""
+        await self._sdk.client.aclose()
+        if self._owns_client:
+            await self._client.aclose()
+
+    @property
+    def name(self) -> str:
+        return _NAME
+
+    @property
+    def capabilities(self) -> ProviderCapabilities:
+        return ProviderCapabilities(search=True, fetch=True, quota=False)
+
+    async def search(self, request: SearchRequest) -> SearchResponse:
+        response = await self._runner.run(self.name, lambda: self._search_sdk(request))
+        try:
+            results = [self._normalize_result(item) for item in response.results]
+            usage = self._usage_event(response, UsageOperation.SEARCH)
+        except ProviderOperationError:
+            raise
+        except Exception:
+            # A structurally malformed payload must not escape as a raw
+            # AttributeError/ValidationError after the call succeeded.
+            raise self._error("invalid_response", "malformed search response") from None
+        return SearchResponse(
+            query=request.query,
+            provider=self.name,
+            results=results,
+            total_results=len(results),
+            usage=usage,
+        )
+
+    async def _search_sdk(self, request: SearchRequest) -> ExaSearchResponse[Result]:
+        kwargs: dict[str, Any] = {
+            "query": request.query,
+            "num_results": request.limit,
+            "contents": {"highlights": True},
+        }
+        if request.domains:
+            kwargs["include_domains"] = list(request.domains)
+        try:
+            return await self._sdk.search(**kwargs)
+        except httpx.TransportError:
+            raise  # the shared ResilientRunner normalizes transport failures
+        except Exception as exc:
+            raise self._normalize_error(exc) from None
+
+    def _normalize_result(self, item: Result) -> SearchResult:
+        highlights = item.highlights or []
+        score = item.score
+        if not isinstance(score, (int, float)) or not 0 <= score <= 1:
+            score = None
+        metadata: dict[str, Any] = {}
+        for key in ("id", "favicon"):
+            value = getattr(item, key, None)
+            if value is not None:
+                metadata[key] = value
+        return SearchResult(
+            title=item.title or "",
+            url=cast(AnyHttpUrl, item.url),
+            snippet=highlights[0] if highlights else (item.text or ""),
+            published_at=_parse_published_at(item.published_date),
+            score=score,
+            metadata=metadata,
+        )
+
+    async def fetch(self, request: FetchRequest) -> FetchResponse:
+        response = await self._runner.run(self.name, lambda: self._fetch_sdk(request))
+        try:
+            target = str(request.url)
+            match = next(
+                (r for r in response.results if _same_url(str(r.url or ""), target)),
+                None,
+            )
+            if match is None:
+                raise self._error("fetch_failed", "no successful contents result") from None
+            # An explicit empty string is a valid (empty) document; a missing
+            # or non-string text means the payload is malformed.
+            content = match.text
+            if not isinstance(content, str):
+                raise self._error("invalid_response", "malformed fetch response")
+            truncated = False
+            if request.max_chars is not None and len(content) > request.max_chars:
+                content = content[: request.max_chars]
+                truncated = True
+            return FetchResponse(
+                provider=self.name,
+                document=FetchedDocument(
+                    url=request.url,
+                    content=content,
+                    fetched_at=datetime.now(UTC),
+                    metadata={"truncated": True} if truncated else {},
+                ),
+                usage=self._usage_event(response, UsageOperation.FETCH),
+            )
+        except ProviderOperationError:
+            raise
+        except Exception:
+            # A structurally malformed payload must not escape as a raw
+            # AttributeError/TypeError/ValidationError after the call succeeded.
+            raise self._error("invalid_response", "malformed fetch response") from None
+
+    async def _fetch_sdk(self, request: FetchRequest) -> ExaSearchResponse[Result]:
+        try:
+            # get_contents has no return annotation in the SDK, so the result
+            # is cast to the documented SearchResponse[Result] shape.
+            return cast(
+                ExaSearchResponse[Result],
+                await self._sdk.get_contents([str(request.url)], text=True),
+            )
+        except httpx.TransportError:
+            raise  # the shared ResilientRunner normalizes transport failures
+        except Exception as exc:
+            raise self._normalize_error(exc) from None
+
+    async def estimate_cost(self, request: SearchRequest | FetchRequest) -> CostEstimate:
+        operation = (
+            UsageOperation.SEARCH if isinstance(request, SearchRequest) else UsageOperation.FETCH
+        )
+        return CostEstimate(
+            provider=self.name,
+            operation=operation,
+            units=Decimal("0"),
+            currency="USD",
+            notes=(
+                "Exa does not publish a per-request price; actual cost is "
+                "reported per response in costDollars telemetry when present"
+            ),
+        )
+
+    def _usage_event(
+        self, response: ExaSearchResponse[Result], operation: UsageOperation
+    ) -> UsageEvent | None:
+        """Return an event only when the response reported real numeric cost.
+
+        Exa reports a ``costDollars.total`` dollar figure per response. A
+        malformed value (bool, non-finite, or otherwise not a real number) is
+        surfaced as the redaction-safe ``invalid_response`` error; a negative
+        figure is dropped. No cost evidence is ever fabricated.
+        """
+        cost = response.cost_dollars
+        if cost is None:
+            return None
+        total = cost.total
+        if isinstance(total, bool) or not isinstance(total, (int, float)) or not isfinite(total):
+            raise self._error("invalid_response", "malformed cost in response")
+        if total < 0:
+            return None
+        return UsageEvent(
+            provider=self.name,
+            operation=operation,
+            units=Decimal(str(total)),
+            observed_at=datetime.now(UTC),
+            metadata={"currency": "USD"},
+        )
+
+    def _normalize_error(self, exc: Exception) -> ProviderOperationError:
+        status = _sdk_status_code(exc)
+        if status is not None:
+            if status == 429:
+                return self._error(
+                    "rate_limited", "usage limit exceeded", retryable=True, status=429
+                )
+            if status == 401:
+                return self._error("invalid_api_key", "invalid API key", status=401)
+            if status == 403:
+                return self._error("forbidden", "request forbidden", status=403)
+            if status == 400:
+                return self._error("bad_request", "bad request", status=400)
+            return self._error(
+                "http_error",
+                f"HTTP {status}",
+                retryable=status in _RETRYABLE_STATUS_CODES,
+                status=status,
+            )
+        if isinstance(exc, httpx.HTTPStatusError):
+            status = exc.response.status_code
+            return self._error(
+                "http_error",
+                f"HTTP {status}",
+                retryable=status in _RETRYABLE_STATUS_CODES,
+                status=status,
+            )
+        return self._error("exa_error", type(exc).__name__)
+
+    def _error(
+        self,
+        code: str,
+        message: str,
+        *,
+        retryable: bool = False,
+        status: int | None = None,
+    ) -> ProviderOperationError:
+        return ProviderOperationError(
+            ProviderError(
+                provider=self.name,
+                code=code,
+                message=message,
+                retryable=retryable,
+                status_code=status,
+            )
+        )
+
+
+def _sdk_status_code(exc: Exception) -> int | None:
+    """The HTTP status parsed from the SDK's ``ValueError`` message, if any.
+
+    Only the status digits are extracted; the provider's message body is never
+    surfaced so it cannot leak credential-shaped text.
+    """
+    if not isinstance(exc, ValueError):
+        return None
+    match = _SDK_STATUS_RE.search(str(exc))
+    return int(match.group(1)) if match is not None else None
