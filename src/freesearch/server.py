@@ -1,8 +1,9 @@
 """Stage 4 composition root: bind the shared contracts to a runnable MCP server.
 
 Builds the enabled, key-configured adapters in priority order and exposes the
-two provider-neutral tools (``search``, ``fetch``) over MCP, routing each
-request through :func:`freesearch.routing.select_route`.
+two provider-neutral tools (``search``, ``fetch``) over MCP (streamable HTTP on
+loopback:8000), routing each request through
+:func:`freesearch.routing.select_route`.
 """
 
 from collections.abc import Callable, Sequence
@@ -80,8 +81,8 @@ def create_server(adapters: Sequence[ProviderAdapter] | None = None) -> FastMCP:
 
 
 def main() -> None:
-    """Run the MCP server over stdio (the default desktop-client transport)."""
-    create_server().run()
+    """Run the MCP server over HTTP (streamable-http on loopback:8000)."""
+    create_server().run(transport="streamable-http")
 
 
 if __name__ == "__main__":

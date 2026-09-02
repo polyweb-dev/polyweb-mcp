@@ -165,14 +165,15 @@ Exa, and You.com providers are implemented and tested.
 
 - Added `src/freesearch/server.py`: the application composition root building
   enabled, key-configured adapters in configured priority order and exposing
-  the provider-neutral `search` and `fetch` tools over MCP (FastMCP, stdio
-  transport) with per-request routing through `select_route`.
+  the provider-neutral `search` and `fetch` tools over MCP (FastMCP,
+  streamable HTTP on loopback:8000) with per-request routing through
+  `select_route`.
 - Added the `freesearch-mcp` console script; the server runs against whatever
   `FREESEARCH_*_API_KEY`s are configured and skips providers without keys.
 - Added network-free smoke tests driving the real FastMCP server with stub
   adapters (routing, capability filtering, no-provider guard).
-- Live-verified over stdio with the MCP client SDK: initialize handshake,
-  tool listing, and a routed live Brave search (HTTP 200).
+- Live-verified over streamable HTTP with the MCP client SDK: initialize
+  handshake, tool listing, and a routed live Brave search (HTTP 200).
 - Deferred: background quota reconciliation coordinator, Docker packaging
   (per the work plan), and the Stage 5 settings dashboard.
 
