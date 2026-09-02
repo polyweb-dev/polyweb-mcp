@@ -6,8 +6,8 @@ Updated: 2026-08-21
 
 Stages 0, 1, and 2 from [`WORKPLAN.md`](WORKPLAN.md) are complete. All Stage 2
 core-platform worktrees (Resilience, Usage/data, Routing, MCP surface, and
-Configuration) are implemented and tested. The Stage 3 Tavily and Keenable
-providers are implemented and tested.
+Configuration) are implemented and tested. The Stage 3 Tavily, Brave Search,
+Exa, You.com, and Keenable providers are implemented and tested.
 
 ### Stage 0 - Foundation
 
@@ -127,6 +127,82 @@ providers are implemented and tested.
 - Live verification completed successfully against Keenable's public API:
   one scenario and seven steps passed with no API key.
 
+### Stage 3 - Brave Search provider
+
+- Added `BraveAdapter` using direct HTTPX against Brave Search, with normalized
+  web results, ISO publication dates, one-query usage events, and observed
+  rate-limit-remaining telemetry.
+- Resolved `FREESEARCH_BRAVE_SEARCH_API_KEY` only through the shared secret
+  resolver and sent it per request as `X-Subscription-Token`; caller auth,
+  API-key headers, and redirects cannot leak it to another origin.
+- Routed each search through the shared resilience runner, normalized malformed,
+  transport, and HTTP errors without exposing credentials, and declared
+  `fetch=False` with a network-free one-query search estimate.
+- Added mocked request, retry, concurrency, redaction, malformed-payload, and
+  credential-isolation tests; targeted mutation testing killed all 31 mutants.
+- Added opt-in `@live @brave` Behave scenarios that verify live normalized
+  search results and the observed one-query usage event without logging keys.
+
+### Stage 3 - Exa provider
+
+- Added `ExaAdapter`, backed by the official `exa-py` async SDK, with normalized
+  search and URL-content fetch responses under the shared adapter contract.
+- Routed SDK requests through the shared resilience runner, resolved credentials
+  only through the shared secret resolver, and normalized SDK failures without
+  exposing response bodies or credential-shaped text.
+- Added real per-response `costDollars.total` usage telemetry when supplied by
+  Exa; estimates explicitly remain zero because Exa does not publish a stable
+  per-request price. Exa exposes no public remaining-credit endpoint, so quota
+  capability is deliberately disabled rather than inferred.
+- Added mocked SDK, wire-level, lifecycle, error-redaction, missing-key,
+  truncation, resilience, and mutation tests plus tagged live Behave search and
+  fetch scenarios. Keyless live Exa scenarios skip before client construction.
+- Live-verified both Exa Behave scenarios on 2026-08-21 with the configured
+  shared-secret credential: search returned structured results and fetch
+  returned non-empty content.
+
+### Stage 3 - You.com provider
+
+- Added `YoucomAdapter`, using direct HTTPX against the You.com YDC Index API
+  for normalized web/news search and Contents API-backed Markdown fetches.
+- Scoped the resolver-only `X-API-Key` to an adapter-owned client, preserving
+  the shared transport and timeout policy while preventing caller credentials
+  and cross-origin redirects from leaking the You.com key.
+- Routed search and fetch through the shared resilience runner; normalized
+  malformed payloads and HTTP errors without exposing response secrets.
+- Added deterministic URL matching, Markdown truncation, publication-date and
+  safe result/document metadata normalization, plus network-free USD estimates
+  of $0.005/search and $0.001/fetched page.
+- Added balance-backed quota polling through You.com's account-balance endpoint.
+  The authoritative USD-credit balance is converted conservatively to
+  **estimated Web Search call equivalents** at $0.005 per call; snapshots are
+  explicitly marked `estimated`, with no claimed limit or reset schedule.
+- Added mocked adapter, error/redaction, retry, redirect-security, lifecycle,
+  quota, and BDD environment tests, plus tagged live Behave scenarios for
+  search, fetch, and balance-backed quota. The adapter tests achieved 98%
+  statement / 100% branch coverage and 100% mutation score.
+
+### Stage 4 - MCP integration (composition root)
+
+- Added `src/freesearch/server.py`: the application composition root building
+  enabled, key-configured adapters in configured priority order and exposing
+  the provider-neutral `search` and `fetch` tools over MCP (FastMCP,
+  streamable HTTP on loopback:8000) with per-request routing through
+  `select_route`.
+- Added the `freesearch-mcp` console script; the server runs against whatever
+  `FREESEARCH_*_API_KEY`s are configured and skips providers without keys.
+- Added network-free smoke tests driving the real FastMCP server with stub
+  adapters (routing, capability filtering, no-provider guard).
+- Live-verified over streamable HTTP with the MCP client SDK: initialize
+  handshake, tool listing, and a routed live Brave search (HTTP 200).
+- Added `src/freesearch/api.py`: the REST API (FastAPI) with OpenAPI docs at
+  `/docs`, exposing `POST /search` and `POST /fetch` over the same
+  composition root and routing as the MCP server, via the `freesearch-api`
+  console script on loopback:8001. Dashboard routes can be added to this app
+  later without touching the MCP surface.
+- Deferred: background quota reconciliation coordinator, Docker packaging
+  (per the work plan), and the Stage 5 settings dashboard.
+
 ## Credential and dashboard findings
 
 The seven planned providers currently use API-key authentication, with
@@ -167,9 +243,9 @@ To prevent misrouting or quota exhaustion stalls under heavy burst traffic:
 
 ## Deliberately deferred
 
-The remaining Stage 3 providers, application composition root / integration
-tests (Stage 4), Docker packaging, and settings dashboard (Stage 5) remain for
-later work as specified by the work plan.
+The remaining Stage 3 providers (Parallel, Keenable, Firecrawl), Docker
+packaging, and settings dashboard (Stage 5) remain for later work as specified
+by the work plan.
 
 - **Brave Answers API**: Brave provides separate API keys and subscriptions for
   Search (`FREESEARCH_BRAVE_SEARCH_API_KEY`) and AI Answers (`FREESEARCH_BRAVE_ANSWERS_API_KEY`).
@@ -198,6 +274,6 @@ uv sync --locked
 uv run ruff check .
 uv run ruff format --check .
 uv run mypy src
-uv run pytest  # 353 passed
+uv run pytest  # 623 passed
 FREESEARCH_RUN_LIVE=1 uv run behave --tags=@keenable --no-capture  # 1 live scenario, 7 steps passed
 ```
