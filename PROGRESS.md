@@ -6,8 +6,8 @@ Updated: 2026-08-21
 
 Stages 0, 1, and 2 from [`WORKPLAN.md`](WORKPLAN.md) are complete. All Stage 2
 core-platform worktrees (Resilience, Usage/data, Routing, MCP surface, and
-Configuration) are implemented and tested. The Stage 3 Tavily and You.com
-providers are also implemented and tested.
+Configuration) are implemented and tested. The Stage 3 Tavily, Brave Search,
+Exa, and You.com providers are implemented and tested.
 
 ### Stage 0 - Foundation
 
@@ -106,6 +106,40 @@ providers are also implemented and tested.
 - Added tagged live Behave scenarios for Tavily search, fetch, and quota, with
   shared-client lifecycle coverage and zero-credit extract usage accepted.
 
+### Stage 3 - Brave Search provider
+
+- Added `BraveAdapter` using direct HTTPX against Brave Search, with normalized
+  web results, ISO publication dates, one-query usage events, and observed
+  rate-limit-remaining telemetry.
+- Resolved `FREESEARCH_BRAVE_SEARCH_API_KEY` only through the shared secret
+  resolver and sent it per request as `X-Subscription-Token`; caller auth,
+  API-key headers, and redirects cannot leak it to another origin.
+- Routed each search through the shared resilience runner, normalized malformed,
+  transport, and HTTP errors without exposing credentials, and declared
+  `fetch=False` with a network-free one-query search estimate.
+- Added mocked request, retry, concurrency, redaction, malformed-payload, and
+  credential-isolation tests; targeted mutation testing killed all 31 mutants.
+- Added opt-in `@live @brave` Behave scenarios that verify live normalized
+  search results and the observed one-query usage event without logging keys.
+
+### Stage 3 - Exa provider
+
+- Added `ExaAdapter`, backed by the official `exa-py` async SDK, with normalized
+  search and URL-content fetch responses under the shared adapter contract.
+- Routed SDK requests through the shared resilience runner, resolved credentials
+  only through the shared secret resolver, and normalized SDK failures without
+  exposing response bodies or credential-shaped text.
+- Added real per-response `costDollars.total` usage telemetry when supplied by
+  Exa; estimates explicitly remain zero because Exa does not publish a stable
+  per-request price. Exa exposes no public remaining-credit endpoint, so quota
+  capability is deliberately disabled rather than inferred.
+- Added mocked SDK, wire-level, lifecycle, error-redaction, missing-key,
+  truncation, resilience, and mutation tests plus tagged live Behave search and
+  fetch scenarios. Keyless live Exa scenarios skip before client construction.
+- Live-verified both Exa Behave scenarios on 2026-08-21 with the configured
+  shared-secret credential: search returned structured results and fetch
+  returned non-empty content.
+
 ### Stage 3 - You.com provider
 
 - Added `YoucomAdapter`, using direct HTTPX against the You.com YDC Index API
@@ -198,5 +232,5 @@ uv sync --locked
 uv run ruff check .
 uv run ruff format --check .
 uv run mypy src
-uv run pytest  # 293 passed
+uv run pytest  # 556 passed
 ```
