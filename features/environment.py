@@ -19,6 +19,7 @@ def before_all(context: Any) -> None:
     context.has_tavily_key = resolver.get(ProviderName.TAVILY) is not None
     context.has_brave_key = resolver.get(ProviderName.BRAVE) is not None
     context.has_exa_key = resolver.get(ProviderName.EXA) is not None
+    context.has_youcom_key = resolver.get(ProviderName.YOU) is not None
 
 
 def before_scenario(context: Any, scenario: Any) -> None:
@@ -29,7 +30,25 @@ def before_scenario(context: Any, scenario: Any) -> None:
     context.loop = asyncio.new_event_loop()
     asyncio.set_event_loop(context.loop)
     context.http_client = create_async_client()
-    context.adapter = _adapter_for(context.http_client, scenario)
+    context.adapter = None
+    context.youcom_adapter = None
+    # You.com live scenarios skip before any adapter is constructed: TavilyAdapter
+    # fails closed without a Tavily key, which would abort a You.com scenario
+    # (e.g. when both provider keys are absent) instead of skipping it.
+    if scenario is not None and any(tag == "youcom" for tag in scenario.tags):
+        if not context.has_youcom_key:
+            scenario.skip(
+                reason=(
+                    "FREESEARCH_YOU_API_KEY is not configured in .env or environment. "
+                    "You.com live BDD scenarios are skipped without a resolver key."
+                )
+            )
+            return
+        from freesearch.adapters.youcom import YoucomAdapter
+
+        context.youcom_adapter = YoucomAdapter(context.http_client)
+    else:
+        context.adapter = _adapter_for(context.http_client, scenario)
     context.search_response = None
     context.fetch_response = None
     context.quota_snapshot = None
@@ -55,6 +74,9 @@ def after_scenario(context: Any, scenario: Any) -> None:
     adapter = getattr(context, "adapter", None)
     if adapter is not None and callable(getattr(adapter, "aclose", None)):
         context.loop.run_until_complete(adapter.aclose())
+    youcom_adapter = getattr(context, "youcom_adapter", None)
+    if youcom_adapter is not None and callable(getattr(youcom_adapter, "aclose", None)):
+        context.loop.run_until_complete(youcom_adapter.aclose())
     if getattr(context, "http_client", None) is not None:
         context.loop.run_until_complete(context.http_client.aclose())
     if getattr(context, "loop", None) is not None:
