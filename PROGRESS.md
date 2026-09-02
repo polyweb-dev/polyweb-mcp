@@ -1,13 +1,14 @@
 # FreeSearch Progress
 
-Updated: 2026-08-21
+Updated: 2026-09-02
 
 ## Scope completed
 
 Stages 0, 1, and 2 from [`WORKPLAN.md`](WORKPLAN.md) are complete. All Stage 2
 core-platform worktrees (Resilience, Usage/data, Routing, MCP surface, and
-Configuration) are implemented and tested. The Stage 3 Tavily and Parallel
-providers are also implemented and tested.
+Configuration) are implemented and tested. The Stage 3 Tavily, Brave Search,
+Exa, You.com, Keenable, Firecrawl, and Parallel providers are implemented
+and tested.
 
 ### Stage 0 - Foundation
 
@@ -124,6 +125,181 @@ providers are also implemented and tested.
   both passed against the configured API key on 2026-08-21 with normalized
   results, content, usage telemetry, and request identifiers.
 
+### Stage 3 - Firecrawl provider
+
+- Added `FirecrawlAdapter`, backed by the official `AsyncFirecrawl` SDK, with
+  normalized web-search and scrape-backed markdown fetch responses under the
+  shared adapter contract.
+- Routed SDK requests through the shared resilience runner and normalized
+  typed SDK, HTTP, malformed-response, and status errors without exposing
+  credentials. Retryable vendor statuses are 429, 500, 502, 503, and 504.
+- Resolved Firecrawl keys exclusively through the shared secret resolver,
+  failing closed when absent; adapter-owned SDK transport lifecycle is closed
+  without affecting the caller-owned shared HTTP client.
+- Added deterministic fetch truncation, observed usage evidence when supplied,
+  and network-free zero-unit estimates because Firecrawl has no documented
+  per-request unit price.
+- Added mocked acceptance, SDK-model, error/redaction, lifecycle, and mutation
+  tests for the Firecrawl search and fetch paths.
+- Added tagged opt-in live Behave search and scrape scenarios. They select the
+  Firecrawl adapter from the bare Behave provider tag, verify normalized results
+  and bounded markdown, and were run successfully with a resolver-provided key.
+
+### Stage 3 - Keenable provider
+
+- Added `KeenableAdapter`, using direct caller-owned HTTPX for native search and
+  fetch endpoints with every outbound request routed through the shared
+  resilience runner.
+- Supports the free keyless public tier: absent credentials select `/public`
+  endpoints with `X-Keenable-Title`; configured credentials select private
+  endpoints with `X-API-Key` only.
+- Normalizes search and fetch responses, free zero-unit usage/cost estimates,
+  truncation, malformed payloads, and retryable HTTP errors to shared contracts.
+- Isolates Keenable requests from caller default credential headers and HTTPX
+  client authentication without mutating or closing the caller-owned client.
+- Added 43 deterministic mocked provider tests covering public/keyed request
+  mapping, credential isolation, response/error normalization, boundaries, and
+  shared-runner routing; focused mutation score is 100%.
+- Added an opt-in live Behave scenario for one keyless search (`limit=1`). It
+  verifies the public endpoint/header, normalized result shape, and zero-unit
+  usage; `FREESEARCH_RUN_LIVE=1` is required so ordinary BDD stays offline.
+- Live verification completed successfully against Keenable's public API:
+  one scenario and seven steps passed with no API key.
+
+### Stage 3 - Brave Search provider
+
+- Added `BraveAdapter` using direct HTTPX against Brave Search, with normalized
+  web results, ISO publication dates, one-query usage events, and observed
+  rate-limit-remaining telemetry.
+- Resolved `FREESEARCH_BRAVE_SEARCH_API_KEY` only through the shared secret
+  resolver and sent it per request as `X-Subscription-Token`; caller auth,
+  API-key headers, and redirects cannot leak it to another origin.
+- Routed each search through the shared resilience runner, normalized malformed,
+  transport, and HTTP errors without exposing credentials, and declared
+  `fetch=False` with a network-free one-query search estimate.
+- Added mocked request, retry, concurrency, redaction, malformed-payload, and
+  credential-isolation tests; targeted mutation testing killed all 31 mutants.
+- Added opt-in `@live @brave` Behave scenarios that verify live normalized
+  search results and the observed one-query usage event without logging keys.
+
+### Stage 3 - Exa provider
+
+- Added `ExaAdapter`, backed by the official `exa-py` async SDK, with normalized
+  search and URL-content fetch responses under the shared adapter contract.
+- Routed SDK requests through the shared resilience runner, resolved credentials
+  only through the shared secret resolver, and normalized SDK failures without
+  exposing response bodies or credential-shaped text.
+- Added real per-response `costDollars.total` usage telemetry when supplied by
+  Exa; estimates explicitly remain zero because Exa does not publish a stable
+  per-request price. Exa exposes no public remaining-credit endpoint, so quota
+  capability is deliberately disabled rather than inferred.
+- Added mocked SDK, wire-level, lifecycle, error-redaction, missing-key,
+  truncation, resilience, and mutation tests plus tagged live Behave search and
+  fetch scenarios. Keyless live Exa scenarios skip before client construction.
+- Live-verified both Exa Behave scenarios on 2026-08-21 with the configured
+  shared-secret credential: search returned structured results and fetch
+  returned non-empty content.
+
+### Stage 3 - You.com provider
+
+- Added `YoucomAdapter`, using direct HTTPX against the You.com YDC Index API
+  for normalized web/news search and Contents API-backed Markdown fetches.
+- Scoped the resolver-only `X-API-Key` to an adapter-owned client, preserving
+  the shared transport and timeout policy while preventing caller credentials
+  and cross-origin redirects from leaking the You.com key.
+- Routed search and fetch through the shared resilience runner; normalized
+  malformed payloads and HTTP errors without exposing response secrets.
+- Added deterministic URL matching, Markdown truncation, publication-date and
+  safe result/document metadata normalization, plus network-free USD estimates
+  of $0.005/search and $0.001/fetched page.
+- Added balance-backed quota polling through You.com's account-balance endpoint.
+  The authoritative USD-credit balance is converted conservatively to
+  **estimated Web Search call equivalents** at $0.005 per call; snapshots are
+  explicitly marked `estimated`, with no claimed limit or reset schedule.
+- Added mocked adapter, error/redaction, retry, redirect-security, lifecycle,
+  quota, and BDD environment tests, plus tagged live Behave scenarios for
+  search, fetch, and balance-backed quota. The adapter tests achieved 98%
+  statement / 100% branch coverage and 100% mutation score.
+
+### Stage 4 - MCP integration (composition root)
+
+- Added `src/freesearch/server.py`: the application composition root building
+  enabled, key-configured adapters in configured priority order and exposing
+  the provider-neutral `search` and `fetch` tools over MCP (FastMCP,
+  streamable HTTP on loopback:8000) with per-request routing through
+  `select_route`.
+- Added the `freesearch-mcp` console script; the server runs against whatever
+  `FREESEARCH_*_API_KEY`s are configured and skips providers without keys.
+- Added network-free smoke tests driving the real FastMCP server with stub
+  adapters (routing, capability filtering, no-provider guard).
+- Live-verified over streamable HTTP with the MCP client SDK: initialize
+  handshake, tool listing, and a routed live Brave search (HTTP 200).
+- Added `src/freesearch/api.py`: the REST API (FastAPI) with OpenAPI docs at
+  `/docs`, exposing `POST /search` and `POST /fetch` over the same
+  composition root and routing as the MCP server, via the `freesearch-api`
+  console script on loopback:8001. Dashboard routes can be added to this app
+  later without touching the MCP surface.
+- Deferred: background quota reconciliation coordinator, Docker packaging
+  (per the work plan), and the Stage 5 settings dashboard.
+
+## DeepSeek Harness `web_search` integration (Path B bridge)
+
+Integrated the freesearch REST API as the search backend of the DeepSeek
+Harness agent shell's built-in `web_search` tool; verified live end to end.
+
+- **Why a bridge was needed**: the harness's `web_search` executes through a
+  `ctx.web` seam with a `WebSearchProvider` registry (`{id, available(),
+  search({query, maxResults}, signal)}`). The shipped provider
+  (`deepseek-official`, id `deepseek-official`) calls DeepSeek's native search
+  over HTTP, and the seam is not an MCP client — freesearch's MCP `search`/
+  `fetch` tools cannot feed it directly. The shipped `dsh-mcp-client` bridge
+  *can* surface them as ordinary `mcp__freesearch__search`/`fetch` tools
+  (Path A), but not through `web_search`.
+- **Delivered**: a durable host-plane Cordis plugin, `freesearch-web-search`
+  at `~/.dsh/profiles/web/plugins/freesearch-web-search/`, implementing the
+  `WebSearchProvider` contract under provider id `freesearch`. It POSTs each
+  seam query to `http://127.0.0.1:8001/search` (map: `maxResults` →
+  `limit`), forwards `AbortSignal`, and maps `SearchResponse` results
+  (`title`/`url`/`snippet`/`published_at`) onto the seam's normalized
+  `sources[]` shape. The bridge holds no credentials; the API server resolves
+  the `FREESEARCH_*_API_KEY`s.
+- **Composition**: `~/.dsh/profiles/web/cordis.patch.yml` overrides the host
+  `web` row (`searchProvider: freesearch`) and inserts the plugin row. A
+  composition change requires a harness restart — `watchUserPatches` hot
+  reload is not wired in this deployment.
+- **Loader pitfall found**: a patch entry cannot create a row. A bare
+  `{id, name, config}` entry is skipped with `patch: entry <id> not found`
+  (id-targeted entries only override/disable *existing* rows); new rows must
+  come from an `insert` list. The first attempt used the wrong form: the
+  provider never registered and `web_search` failed with
+  `WEB_PROVIDER_CONFIGURED_MISSING`. Fixed with `- insert:`.
+- **Verified**: loader-parser validation of the patch; module smoke tests
+  against the live API (sources shape, `WEB_ABORTED` on pre-aborted signals);
+  and in-session `web_search` calls routed through freesearch (Brave) after
+  restart. The freesearch API must be running (`python -m freesearch.api` or
+  the `freesearch-api` console script) or `web_search` fails with a
+  descriptive `WEB_PROVIDER_ERROR`.
+- **REST API findings from live testing**:
+  - `routing.providers` are lowercase `ProviderName` strings and must be
+    JSON-quoted (`["you"]`); `[Youcoom]` is a 422 JSON decode error. Unknown
+    names pass validation silently — they never rank in `prefer`, and
+    `require` with one yields 503 `no_eligible_provider`.
+  - `mode: auto` ignores `providers` entirely; ranking consults them only in
+    `prefer`. `allow_fallback: false` restricts candidates to the single best.
+  - `language` must be a BCP-47 code: `"English"` is forwarded to Brave's
+    `search_lang`, which rejects it, and the escape produced an unhandled
+    HTTP 500 — `api.py` maps only `RoutingError` to 503, so adapter
+    exceptions surface as generic 500s. Candidate fix (not applied): catch
+    adapter errors and return 502/503 with `detail`, and validate language
+    codes in `SearchRequest`.
+- **Steering you.com from `web_search`**: not possible per query — the seam's
+  `WebSearchRequest` carries only `query`/`maxResults`. Options recorded: the
+  MCP path (Path A) exposes the full `SearchRequest` including `routing` per
+  call, and a dashboard (Stage 5) can enforce provider routing server-side
+  for every client. A bridge-level `routingMode`/`routingProviders` config
+  extension (prefer `you`) was drafted but deliberately not applied this
+  session.
+
 ## Credential and dashboard findings
 
 The seven planned providers currently use API-key authentication, with
@@ -164,9 +340,9 @@ To prevent misrouting or quota exhaustion stalls under heavy burst traffic:
 
 ## Deliberately deferred
 
-The remaining Stage 3 providers, application composition root / integration
-tests (Stage 4), Docker packaging, and settings dashboard (Stage 5) remain for
-later work as specified by the work plan.
+The remaining Stage 3 providers (Parallel, Keenable, Firecrawl), Docker
+packaging, and settings dashboard (Stage 5) remain for later work as specified
+by the work plan.
 
 - **Brave Answers API**: Brave provides separate API keys and subscriptions for
   Search (`FREESEARCH_BRAVE_SEARCH_API_KEY`) and AI Answers (`FREESEARCH_BRAVE_ANSWERS_API_KEY`).
@@ -195,6 +371,7 @@ uv sync --locked
 uv run ruff check .
 uv run ruff format --check .
 uv run mypy src
-uv run pytest  # 371 passed
+uv run pytest  # 822 passed
+FREESEARCH_RUN_LIVE=1 uv run behave --tags=@keenable --no-capture  # 1 live scenario, 7 steps passed
 uv run behave --tags=@live,@parallel features/parallel.feature  # 2 passed
 ```
