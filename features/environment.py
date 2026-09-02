@@ -10,6 +10,7 @@ from freesearch.adapters.brave import BraveAdapter
 from freesearch.adapters.exa import ExaAdapter
 from freesearch.adapters.firecrawl import FirecrawlAdapter
 from freesearch.adapters.keenable import KeenableAdapter
+from freesearch.adapters.parallel import ParallelAdapter
 from freesearch.adapters.tavily import TavilyAdapter
 from freesearch.http import create_async_client
 from freesearch.provider_config import get_provider_secret_resolver
@@ -25,6 +26,7 @@ def before_all(context: Any) -> None:
     context.has_brave_key = resolver.get(ProviderName.BRAVE) is not None
     context.has_exa_key = resolver.get(ProviderName.EXA) is not None
     context.has_firecrawl_key = resolver.get(ProviderName.FIRECRAWL) is not None
+    context.has_parallel_key = resolver.get(ProviderName.PARALLEL) is not None
     context.has_youcom_key = resolver.get(ProviderName.YOU) is not None
 
 
@@ -71,6 +73,8 @@ def before_scenario(context: Any, scenario: Any) -> None:
 
 def _adapter_for(client: Any, scenario: Any) -> Any:
     """Build the provider adapter declared by the live feature or scenario tags."""
+    if _has_parallel_tag(scenario):
+        return ParallelAdapter(client)
     if _has_firecrawl_tag(scenario):
         return FirecrawlAdapter(client)
     if _has_keenable_tag(scenario):
@@ -127,3 +131,11 @@ def _has_firecrawl_tag(scenario: Any) -> bool:
     if not tags:
         return False
     return any(getattr(tag, "name", tag) == "firecrawl" for tag in tags)
+
+
+def _has_parallel_tag(scenario: Any) -> bool:
+    """Return True when the scenario carries the bare 'parallel' tag (Behave form)."""
+    tags = getattr(scenario, "tags", None)
+    if not tags:
+        return False
+    return any(getattr(tag, "name", tag) == "parallel" for tag in tags)
