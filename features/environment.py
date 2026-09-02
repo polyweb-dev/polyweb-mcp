@@ -1,16 +1,20 @@
 """Behave environment hooks for FreeSearch BDD test execution."""
 
 import asyncio
+import os
 from typing import Any
 
 import httpx  # noqa: F401  # kept: locked BDD tests monkeypatch environment.httpx.AsyncClient
 
 from freesearch.adapters.brave import BraveAdapter
 from freesearch.adapters.exa import ExaAdapter
+from freesearch.adapters.keenable import KeenableAdapter
 from freesearch.adapters.tavily import TavilyAdapter
 from freesearch.http import create_async_client
 from freesearch.provider_config import get_provider_secret_resolver
 from freesearch.secrets import ProviderName
+
+_LIVE_GATE = "FREESEARCH_RUN_LIVE"
 
 
 def before_all(context: Any) -> None:
@@ -23,7 +27,15 @@ def before_all(context: Any) -> None:
 
 
 def before_scenario(context: Any, scenario: Any) -> None:
-    """Set up async event loop, HTTP client, and provider adapter per scenario."""
+    """Set up async event loop, HTTP client, and provider adapter per scenario.
+
+    A ``@live @keenable`` scenario runs only when ``FREESEARCH_RUN_LIVE=1``;
+    otherwise it is skipped before any resource setup, keeping offline BDD
+    runs network-safe (Keenable is keyless, so no key check can gate it).
+    """
+    if _has_keenable_tag(scenario) and os.environ.get(_LIVE_GATE) != "1":
+        scenario.mark_skipped(f"live Keenable scenario requires {_LIVE_GATE}=1")
+        return
     if _is_exa_scenario(scenario) and not context.has_exa_key:
         scenario.skip("FREESEARCH_EXA_API_KEY is not configured")
         return
@@ -57,6 +69,8 @@ def before_scenario(context: Any, scenario: Any) -> None:
 
 def _adapter_for(client: Any, scenario: Any) -> Any:
     """Build the provider adapter declared by the live feature or scenario tags."""
+    if _has_keenable_tag(scenario):
+        return KeenableAdapter(client)
     if _has_brave_tag(scenario):
         return BraveAdapter(client)
     if _is_exa_scenario(scenario):
@@ -89,3 +103,11 @@ def _has_brave_tag(scenario: Any) -> bool:
     if not tags:
         return False
     return any(getattr(tag, "name", tag) == "brave" for tag in tags)
+
+
+def _has_keenable_tag(scenario: Any) -> bool:
+    """Return True when the scenario carries the 'keenable' tag (str or Tag forms)."""
+    tags = getattr(scenario, "tags", None)
+    if not tags:
+        return False
+    return any(str(getattr(tag, "name", tag)).lstrip("@") == "keenable" for tag in tags)
