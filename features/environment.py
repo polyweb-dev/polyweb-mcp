@@ -8,6 +8,7 @@ import httpx  # noqa: F401  # kept: locked BDD tests monkeypatch environment.htt
 
 from freesearch.adapters.brave import BraveAdapter
 from freesearch.adapters.exa import ExaAdapter
+from freesearch.adapters.firecrawl import FirecrawlAdapter
 from freesearch.adapters.keenable import KeenableAdapter
 from freesearch.adapters.tavily import TavilyAdapter
 from freesearch.http import create_async_client
@@ -23,6 +24,7 @@ def before_all(context: Any) -> None:
     context.has_tavily_key = resolver.get(ProviderName.TAVILY) is not None
     context.has_brave_key = resolver.get(ProviderName.BRAVE) is not None
     context.has_exa_key = resolver.get(ProviderName.EXA) is not None
+    context.has_firecrawl_key = resolver.get(ProviderName.FIRECRAWL) is not None
     context.has_youcom_key = resolver.get(ProviderName.YOU) is not None
 
 
@@ -69,6 +71,8 @@ def before_scenario(context: Any, scenario: Any) -> None:
 
 def _adapter_for(client: Any, scenario: Any) -> Any:
     """Build the provider adapter declared by the live feature or scenario tags."""
+    if _has_firecrawl_tag(scenario):
+        return FirecrawlAdapter(client)
     if _has_keenable_tag(scenario):
         return KeenableAdapter(client)
     if _has_brave_tag(scenario):
@@ -111,3 +115,15 @@ def _has_keenable_tag(scenario: Any) -> bool:
     if not tags:
         return False
     return any(str(getattr(tag, "name", tag)).lstrip("@") == "keenable" for tag in tags)
+
+
+def _has_firecrawl_tag(scenario: Any) -> bool:
+    """Return True when the scenario carries the bare 'firecrawl' tag (Behave form).
+
+    Behave reports scenario tags as bare strings; a ``@firecrawl`` string is not
+    a valid Behave tag form and deliberately does not select the adapter.
+    """
+    tags = getattr(scenario, "tags", None)
+    if not tags:
+        return False
+    return any(getattr(tag, "name", tag) == "firecrawl" for tag in tags)

@@ -1,13 +1,13 @@
 # FreeSearch Progress
 
-Updated: 2026-08-21
+Updated: 2026-09-02
 
 ## Scope completed
 
 Stages 0, 1, and 2 from [`WORKPLAN.md`](WORKPLAN.md) are complete. All Stage 2
 core-platform worktrees (Resilience, Usage/data, Routing, MCP surface, and
 Configuration) are implemented and tested. The Stage 3 Tavily, Brave Search,
-Exa, You.com, and Keenable providers are implemented and tested.
+Exa, You.com, Keenable, and Firecrawl providers are implemented and tested.
 
 ### Stage 0 - Foundation
 
@@ -106,6 +106,26 @@ Exa, You.com, and Keenable providers are implemented and tested.
 - Added tagged live Behave scenarios for Tavily search, fetch, and quota, with
   shared-client lifecycle coverage and zero-credit extract usage accepted.
 
+### Stage 3 - Firecrawl provider
+
+- Added `FirecrawlAdapter`, backed by the official `AsyncFirecrawl` SDK, with
+  normalized web-search and scrape-backed markdown fetch responses under the
+  shared adapter contract.
+- Routed SDK requests through the shared resilience runner and normalized
+  typed SDK, HTTP, malformed-response, and status errors without exposing
+  credentials. Retryable vendor statuses are 429, 500, 502, 503, and 504.
+- Resolved Firecrawl keys exclusively through the shared secret resolver,
+  failing closed when absent; adapter-owned SDK transport lifecycle is closed
+  without affecting the caller-owned shared HTTP client.
+- Added deterministic fetch truncation, observed usage evidence when supplied,
+  and network-free zero-unit estimates because Firecrawl has no documented
+  per-request unit price.
+- Added mocked acceptance, SDK-model, error/redaction, lifecycle, and mutation
+  tests for the Firecrawl search and fetch paths.
+- Added tagged opt-in live Behave search and scrape scenarios. They select the
+  Firecrawl adapter from the bare Behave provider tag, verify normalized results
+  and bounded markdown, and were run successfully with a resolver-provided key.
+
 ### Stage 3 - Keenable provider
 
 - Added `KeenableAdapter`, using direct caller-owned HTTPX for native search and
@@ -203,6 +223,64 @@ Exa, You.com, and Keenable providers are implemented and tested.
 - Deferred: background quota reconciliation coordinator, Docker packaging
   (per the work plan), and the Stage 5 settings dashboard.
 
+## DeepSeek Harness `web_search` integration (Path B bridge)
+
+Integrated the freesearch REST API as the search backend of the DeepSeek
+Harness agent shell's built-in `web_search` tool; verified live end to end.
+
+- **Why a bridge was needed**: the harness's `web_search` executes through a
+  `ctx.web` seam with a `WebSearchProvider` registry (`{id, available(),
+  search({query, maxResults}, signal)}`). The shipped provider
+  (`deepseek-official`, id `deepseek-official`) calls DeepSeek's native search
+  over HTTP, and the seam is not an MCP client — freesearch's MCP `search`/
+  `fetch` tools cannot feed it directly. The shipped `dsh-mcp-client` bridge
+  *can* surface them as ordinary `mcp__freesearch__search`/`fetch` tools
+  (Path A), but not through `web_search`.
+- **Delivered**: a durable host-plane Cordis plugin, `freesearch-web-search`
+  at `~/.dsh/profiles/web/plugins/freesearch-web-search/`, implementing the
+  `WebSearchProvider` contract under provider id `freesearch`. It POSTs each
+  seam query to `http://127.0.0.1:8001/search` (map: `maxResults` →
+  `limit`), forwards `AbortSignal`, and maps `SearchResponse` results
+  (`title`/`url`/`snippet`/`published_at`) onto the seam's normalized
+  `sources[]` shape. The bridge holds no credentials; the API server resolves
+  the `FREESEARCH_*_API_KEY`s.
+- **Composition**: `~/.dsh/profiles/web/cordis.patch.yml` overrides the host
+  `web` row (`searchProvider: freesearch`) and inserts the plugin row. A
+  composition change requires a harness restart — `watchUserPatches` hot
+  reload is not wired in this deployment.
+- **Loader pitfall found**: a patch entry cannot create a row. A bare
+  `{id, name, config}` entry is skipped with `patch: entry <id> not found`
+  (id-targeted entries only override/disable *existing* rows); new rows must
+  come from an `insert` list. The first attempt used the wrong form: the
+  provider never registered and `web_search` failed with
+  `WEB_PROVIDER_CONFIGURED_MISSING`. Fixed with `- insert:`.
+- **Verified**: loader-parser validation of the patch; module smoke tests
+  against the live API (sources shape, `WEB_ABORTED` on pre-aborted signals);
+  and in-session `web_search` calls routed through freesearch (Brave) after
+  restart. The freesearch API must be running (`python -m freesearch.api` or
+  the `freesearch-api` console script) or `web_search` fails with a
+  descriptive `WEB_PROVIDER_ERROR`.
+- **REST API findings from live testing**:
+  - `routing.providers` are lowercase `ProviderName` strings and must be
+    JSON-quoted (`["you"]`); `[Youcoom]` is a 422 JSON decode error. Unknown
+    names pass validation silently — they never rank in `prefer`, and
+    `require` with one yields 503 `no_eligible_provider`.
+  - `mode: auto` ignores `providers` entirely; ranking consults them only in
+    `prefer`. `allow_fallback: false` restricts candidates to the single best.
+  - `language` must be a BCP-47 code: `"English"` is forwarded to Brave's
+    `search_lang`, which rejects it, and the escape produced an unhandled
+    HTTP 500 — `api.py` maps only `RoutingError` to 503, so adapter
+    exceptions surface as generic 500s. Candidate fix (not applied): catch
+    adapter errors and return 502/503 with `detail`, and validate language
+    codes in `SearchRequest`.
+- **Steering you.com from `web_search`**: not possible per query — the seam's
+  `WebSearchRequest` carries only `query`/`maxResults`. Options recorded: the
+  MCP path (Path A) exposes the full `SearchRequest` including `routing` per
+  call, and a dashboard (Stage 5) can enforce provider routing server-side
+  for every client. A bridge-level `routingMode`/`routingProviders` config
+  extension (prefer `you`) was drafted but deliberately not applied this
+  session.
+
 ## Credential and dashboard findings
 
 The seven planned providers currently use API-key authentication, with
@@ -274,6 +352,6 @@ uv sync --locked
 uv run ruff check .
 uv run ruff format --check .
 uv run mypy src
-uv run pytest  # 623 passed
+uv run pytest  # 744 passed
 FREESEARCH_RUN_LIVE=1 uv run behave --tags=@keenable --no-capture  # 1 live scenario, 7 steps passed
 ```
