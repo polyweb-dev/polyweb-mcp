@@ -1,0 +1,11 @@
+.venv/
+.git/
+.gremlins_cache/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+coverage/
+htmlcov/
+__pycache__/
+*.pyc
+.env

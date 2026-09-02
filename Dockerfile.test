@@ -1,0 +1,32 @@
+# Dockerfile for running unit tests and mutation tests in a Linux environment.
+# Solves Windows ARG_MAX/WinError 206 command-line limits and enables fast parallel execution.
+
+FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
+
+WORKDIR /app
+
+# Enable bytecode compilation and frozen sync
+ENV UV_COMPILE_BYTECODE=1
+ENV UV_LINK_MODE=copy
+# Use null keyring backend in headless container (no D-Bus/desktop keyring service)
+ENV PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring
+
+# Copy dependency specifications first for optimal Docker layer caching
+COPY pyproject.toml uv.lock ./
+
+# Install dependencies into virtual environment with persistent uv cache mount
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-install-project
+
+# Copy project source code, tests, and documentation/configs
+COPY src/ ./src/
+COPY tests/ ./tests/
+COPY features/ ./features/
+COPY README.md .env.example ./
+
+# Install the project itself
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen
+
+# Default command: run parallel mutation testing across all source code with caching & reporting
+CMD ["uv", "run", "pytest", "--gremlins", "--gremlin-workers=auto", "--gremlin-targets=src/freesearch", "--gremlin-report=console,html,json", "--gremlin-cache"]
