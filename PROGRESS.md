@@ -161,6 +161,21 @@ Exa, and You.com providers are implemented and tested.
   search, fetch, and balance-backed quota. The adapter tests achieved 98%
   statement / 100% branch coverage and 100% mutation score.
 
+### Stage 4 - MCP integration (composition root)
+
+- Added `src/freesearch/server.py`: the application composition root building
+  enabled, key-configured adapters in configured priority order and exposing
+  the provider-neutral `search` and `fetch` tools over MCP (FastMCP, stdio
+  transport) with per-request routing through `select_route`.
+- Added the `freesearch-mcp` console script; the server runs against whatever
+  `FREESEARCH_*_API_KEY`s are configured and skips providers without keys.
+- Added network-free smoke tests driving the real FastMCP server with stub
+  adapters (routing, capability filtering, no-provider guard).
+- Live-verified over stdio with the MCP client SDK: initialize handshake,
+  tool listing, and a routed live Brave search (HTTP 200).
+- Deferred: background quota reconciliation coordinator, Docker packaging
+  (per the work plan), and the Stage 5 settings dashboard.
+
 ## Credential and dashboard findings
 
 The seven planned providers currently use API-key authentication, with
@@ -201,9 +216,9 @@ To prevent misrouting or quota exhaustion stalls under heavy burst traffic:
 
 ## Deliberately deferred
 
-The remaining Stage 3 providers, application composition root / integration
-tests (Stage 4), Docker packaging, and settings dashboard (Stage 5) remain for
-later work as specified by the work plan.
+The remaining Stage 3 providers (Parallel, Keenable, Firecrawl), Docker
+packaging, and settings dashboard (Stage 5) remain for later work as specified
+by the work plan.
 
 - **Brave Answers API**: Brave provides separate API keys and subscriptions for
   Search (`FREESEARCH_BRAVE_SEARCH_API_KEY`) and AI Answers (`FREESEARCH_BRAVE_ANSWERS_API_KEY`).
@@ -232,5 +247,5 @@ uv sync --locked
 uv run ruff check .
 uv run ruff format --check .
 uv run mypy src
-uv run pytest  # 556 passed
+uv run pytest  # 559 passed
 ```
