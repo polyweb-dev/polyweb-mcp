@@ -174,6 +174,11 @@ Exa, and You.com providers are implemented and tested.
   adapters (routing, capability filtering, no-provider guard).
 - Live-verified over streamable HTTP with the MCP client SDK: initialize
   handshake, tool listing, and a routed live Brave search (HTTP 200).
+- Added `src/freesearch/api.py`: the REST API (FastAPI) with OpenAPI docs at
+  `/docs`, exposing `POST /search` and `POST /fetch` over the same
+  composition root and routing as the MCP server, via the `freesearch-api`
+  console script on loopback:8001. Dashboard routes can be added to this app
+  later without touching the MCP surface.
 - Deferred: background quota reconciliation coordinator, Docker packaging
   (per the work plan), and the Stage 5 settings dashboard.
 
