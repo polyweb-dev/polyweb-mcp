@@ -61,7 +61,7 @@ These worktrees do not implement individual providers.
 | Worktree | High-level responsibility |
 | --- | --- |
 | Routing | Select providers from user preference, operation capability, local quota, health, and fallback policy. |
-| Usage/data | Provide async SQLite repositories for usage events, quota snapshots, cache metadata, and provider health. |
+| Usage/data | Provide async SQLite repositories (SQLAlchemy 2.x ORM via the `sqlite+aiosqlite` driver; no other ORM/driver) for usage events, quota snapshots, cache metadata, and provider health. |
 | MCP surface | Expose only `search` and `fetch`; validate inputs and present normalized responses. |
 | Resilience | Provide shared HTTPX timeout, retryable-error, backoff, rate-limit, and circuit-breaker behavior. |
 | Configuration | Configure provider enablement, priorities, free-tier estimates, reset schedules, and secret references; resolve actual credentials through the shared secret layer, not ordinary settings. |
@@ -120,9 +120,9 @@ This team merges providers one at a time and owns the final dependency lockfile.
 
 - Run shared adapter contract tests against every provider.
 - Register adapters in the application factory.
-- Implement the background quota reconciliation coordinator (bridging local
-  SQLite `UsageEvent` decrementing with periodic vendor `adapter.quota()` polling
-  to eliminate provider telemetry lag).
+- Implement the background quota reconciliation coordinator (after 4.5
+  monitoring; bridging local SQLite `UsageEvent` decrementing with periodic
+  vendor `adapter.quota()` polling to eliminate provider telemetry lag).
 - Verify routing behavior with fake quota and health states.
 - Confirm `search` and `fetch` expose identical shapes regardless of provider.
 - Run opt-in smoke tests for any available provider keys.
@@ -135,8 +135,43 @@ Suggested merge order:
 3. Tavily, Firecrawl, and Exa.
 4. Brave and Keenable.
 5. Parallel and You.com.
-6. MCP end-to-end tests.
-7. Documentation and local setup guide.
+6. Basic monitoring dashboard (Stage 4.5, next - read-only, no secrets).
+7. Quota reconciliation coordinator and MCP end-to-end tests.
+8. Documentation and local setup guide.
+
+### 4.5 Basic monitoring dashboard (read-only) - next, before the coordinator
+
+The operator is already using `search` and `fetch` with no visibility into
+where usage is going. Build a minimal read-only monitoring slice first because
+it is low-risk (no secret handling) and the coordinator design depends on a
+working local ledger.
+
+Scope (lives on the existing FastAPI app in `src/freesearch/api.py`; do not
+touch the MCP surface):
+
+- Persist operational telemetry on every request: record `response.usage`
+  (`UsageEvent`) and a health observation into the existing shared async SQLite
+  repository (`SQLiteRepository` in `src/freesearch/storage.py`, SQLAlchemy 2.x
+  ORM via the `sqlite+aiosqlite` driver; no new ORM/driver). Both the REST
+  (`api.py`) and MCP (`server.py`) paths must record the same way.
+- Expose read-only monitoring reads (JSON + a small HTML page on loopback,
+  e.g. `GET /stats`, `GET /dashboard`): per-provider usage totals, recent
+  usage events, `latest_quota` snapshots, and latest health.
+- Preserve quota provenance (`authoritative` / `observed` / `estimated`) in
+  every snapshot display; never present a local estimate as a vendor-confirmed
+  balance. Until the coordinator lands, the UI must label itself local-observed
+  only (vendor `/usage` endpoints lag 10-15 minutes).
+- Reuse existing privacy rules: numeric telemetry only, no query/URL/content
+  or secret-shaped fields in persisted metadata, logs, or responses.
+
+Explicit non-goals for 4.5 (reserved for Stage 5): provider enablement /
+priority editing, secret create/replace/delete, keyring/Vault wiring,
+authentication/session/CSRF/audit machinery beyond loopback default binding,
+and rotation/revocation workflows.
+
+Acceptance: run `search`/`fetch` against configured keys, then the dashboard
+shows per-provider usage going to the right provider; mocked tests cover
+recording and the read endpoints without network or secrets.
 
 ## Ownership boundaries
 
@@ -153,10 +188,11 @@ After the MCP server works locally with `uv`, passes mocked provider tests, and
 can use configured real keys in opt-in smoke tests, create the Docker image and
 installation instructions.
 
-### 5. Settings and secrets dashboard - after local and deployment flows are stable
+### 5. Settings and secrets dashboard (full) - after monitoring and coordinator
 
-Add a lightweight authenticated settings dashboard for the operator. It should
-allow changing non-secret runtime settings such as provider enablement and
+Builds on the Stage 4.5 read-only monitoring dashboard; the full dashboard
+must not block monitoring visibility. Add a lightweight authenticated settings
+dashboard for the operator. It should allow changing non-secret runtime settings such as provider enablement and
 priority, routing defaults, free-tier estimates, reset schedules, and safe HTTP
 tuning without editing source files.
 

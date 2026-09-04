@@ -48,7 +48,8 @@ and tested.
 
 ### Stage 2 - Usage/data
 
-- Added typed SQLAlchemy async ORM models and an async SQLite repository for usage
+- Added typed SQLAlchemy 2.x async ORM models and an async SQLite repository
+  (`SQLiteRepository`, `sqlite+aiosqlite` driver) for usage
   events, quota snapshots, provider health observations, and cache metadata.
 - Added strict cache metadata that accepts only opaque SHA-256 cache keys and
   never stores response payloads.
@@ -228,6 +229,15 @@ and tested.
   the provider-neutral `search` and `fetch` tools over MCP (FastMCP,
   streamable HTTP on loopback:8000) with per-request routing through
   `select_route`.
+- Registered all 7 canonical provider adapters (`BraveAdapter`, `ExaAdapter`,
+  `FirecrawlAdapter`, `KeenableAdapter`, `ParallelAdapter`, `TavilyAdapter`,
+  `YoucomAdapter`) in the composition root's `_ADAPTERS` registry.
+- Supported Keenable's keyless public tier in `build_adapters()`: unconfigured
+  credentials fall back to keyless public mode instead of failing closed.
+- Added uniform asynchronous lifecycle cleanup (`aclose` on `ProviderAdapter`,
+  `close_adapters()` in `server.py`) and wired async `lifespan` handlers to both
+  FastMCP and FastAPI (`api.py`) to guarantee underlying HTTP clients and
+  transports are disposed cleanly.
 - Added the `freesearch-mcp` console script; the server runs against whatever
   `FREESEARCH_*_API_KEY`s are configured and skips providers without keys.
 - Added network-free smoke tests driving the real FastMCP server with stub
@@ -237,10 +247,36 @@ and tested.
 - Added `src/freesearch/api.py`: the REST API (FastAPI) with OpenAPI docs at
   `/docs`, exposing `POST /search` and `POST /fetch` over the same
   composition root and routing as the MCP server, via the `freesearch-api`
-  console script on loopback:8001. Dashboard routes can be added to this app
-  later without touching the MCP surface.
-- Deferred: background quota reconciliation coordinator, Docker packaging
-  (per the work plan), and the Stage 5 settings dashboard.
+  console script on loopback:8001. Monitoring dashboard routes will be added
+  to this app (Stage 4.5) without touching the MCP surface.
+- Status: composition root, registry, lifecycle, smoke tests, and live Brave
+  check are done. No request currently persists `response.usage` / health to
+  the SQLite repository, and `_route` still passes empty health/quota maps, so
+  there is no usage visibility yet.
+- Deferred (in planned order): Stage 4.5 basic monitoring dashboard (next,
+  read-only, no secrets), then the background quota reconciliation
+  coordinator, MCP end-to-end tests, docs/local setup guide, Docker packaging
+  (per the work plan), and the Stage 5 full settings/secrets dashboard.
+
+## Next - Stage 4.5 basic monitoring dashboard (read-only, no secrets)
+
+Planned per [`WORKPLAN.md`](WORKPLAN.md) §4.5; not yet implemented.
+
+- Wire persistence on every request: record `response.usage` and a health
+  observation to the existing shared async SQLite repository
+  (`SQLiteRepository`, SQLAlchemy 2.x ORM via `sqlite+aiosqlite`; no new
+  ORM/driver) from both `api.py` and
+  `server.py` paths.
+- Add loopback read-only monitoring reads on the existing FastAPI app
+  (`GET /stats`, `GET /dashboard`): per-provider usage totals, recent usage
+  events, `latest_quota` snapshots, latest health.
+- Keep quota provenance visible (`authoritative` / `observed` / `estimated`)
+  and label the UI local-observed only until the coordinator lands; reuse the
+  numeric-telemetry-only privacy rules (no query/URL/content or secrets).
+- Non-goals: provider enablement/priority editing, secret management,
+  keyring/Vault wiring, auth/session/CSRF/audit, rotation/revocation (all
+  Stage 5 full).
+
 
 ## DeepSeek Harness `web_search` integration (Path B bridge)
 
@@ -340,9 +376,10 @@ To prevent misrouting or quota exhaustion stalls under heavy burst traffic:
 
 ## Deliberately deferred
 
-The remaining Stage 3 providers (Parallel, Keenable, Firecrawl), Docker
-packaging, and settings dashboard (Stage 5) remain for later work as specified
-by the work plan.
+Remaining, in planned order: Stage 4.5 basic monitoring dashboard (next),
+quota reconciliation coordinator, MCP end-to-end tests, documentation/local
+setup guide, Docker packaging, and the full settings/secrets dashboard
+(Stage 5), as specified by the work plan.
 
 - **Brave Answers API**: Brave provides separate API keys and subscriptions for
   Search (`FREESEARCH_BRAVE_SEARCH_API_KEY`) and AI Answers (`FREESEARCH_BRAVE_ANSWERS_API_KEY`).

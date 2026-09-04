@@ -6,21 +6,33 @@ built in configured priority order and every request is routed through
 contract models, so the OpenAPI schema at ``/docs`` documents them directly.
 """
 
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
 
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.contracts import FetchRequest, FetchResponse, SearchRequest, SearchResponse
+from freesearch.http import create_async_client
 from freesearch.routing import RoutingError, select_route
-from freesearch.server import build_adapters
+from freesearch.server import build_adapters, close_adapters
 
 
 def create_app(adapters: Sequence[ProviderAdapter] | None = None) -> FastAPI:
     """Create the FastAPI app routing every operation to a configured adapter."""
 
-    app = FastAPI(title="FreeSearch", version="0.1.0")
-    routes = list(adapters) if adapters is not None else build_adapters()
+    owns_client = adapters is None
+    client = create_async_client() if owns_client else None
+    routes = list(adapters) if adapters is not None else build_adapters(client)
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        try:
+            yield
+        finally:
+            await close_adapters(routes, client if owns_client else None)
+
+    app = FastAPI(title="FreeSearch", version="0.1.0", lifespan=lifespan)
 
     def _route(request: SearchRequest | FetchRequest) -> ProviderAdapter:
         if not routes:

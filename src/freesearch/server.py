@@ -6,7 +6,8 @@ loopback:8000), routing each request through
 :func:`freesearch.routing.select_route`.
 """
 
-from collections.abc import Callable, Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
+from contextlib import asynccontextmanager
 from typing import Any
 
 import httpx
@@ -15,6 +16,9 @@ from mcp.server.fastmcp import FastMCP
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.adapters.brave import BraveAdapter
 from freesearch.adapters.exa import ExaAdapter
+from freesearch.adapters.firecrawl import FirecrawlAdapter
+from freesearch.adapters.keenable import KeenableAdapter
+from freesearch.adapters.parallel import ParallelAdapter
 from freesearch.adapters.tavily import TavilyAdapter
 from freesearch.adapters.youcom import YoucomAdapter
 from freesearch.contracts import FetchRequest, SearchRequest
@@ -26,20 +30,36 @@ from freesearch.secrets import ProviderName
 _ADAPTERS: dict[ProviderName, Callable[[httpx.AsyncClient], ProviderAdapter]] = {
     ProviderName.BRAVE: BraveAdapter,
     ProviderName.EXA: ExaAdapter,
+    ProviderName.FIRECRAWL: FirecrawlAdapter,
+    ProviderName.KEENABLE: KeenableAdapter,
+    ProviderName.PARALLEL: ParallelAdapter,
     ProviderName.TAVILY: TavilyAdapter,
     ProviderName.YOU: YoucomAdapter,
 }
 
 
-def build_adapters() -> list[ProviderAdapter]:
+async def close_adapters(
+    adapters: Sequence[ProviderAdapter],
+    client: httpx.AsyncClient | None = None,
+) -> None:
+    """Close all adapters and optionally the shared HTTP client."""
+
+    for adapter in adapters:
+        await adapter.aclose()
+    if client is not None:
+        await client.aclose()
+
+
+def build_adapters(client: httpx.AsyncClient | None = None) -> list[ProviderAdapter]:
     """Return enabled adapters with a resolvable key, in configured priority order.
 
     Each adapter resolves its own credential through the shared resolver at
     construction; providers without a key (or disabled by configuration) are
-    skipped so the server runs with whatever keys are present.
+    skipped so the server runs with whatever keys are present. Keenable operates
+    in keyless public mode when unconfigured.
     """
 
-    client = create_async_client()
+    http_client = client or create_async_client()
     adapters: list[ProviderAdapter] = []
     for name, record in sorted(
         get_provider_configs().items(), key=lambda item: (item[1].priority, item[0].value)
@@ -48,7 +68,7 @@ def build_adapters() -> list[ProviderAdapter]:
         if adapter_cls is None or not record.enabled:
             continue
         try:
-            adapters.append(adapter_cls(client))
+            adapters.append(adapter_cls(http_client))
         except Exception:
             continue  # provider without a configured key fails closed at construction
     return adapters
@@ -57,8 +77,18 @@ def build_adapters() -> list[ProviderAdapter]:
 def create_server(adapters: Sequence[ProviderAdapter] | None = None) -> FastMCP:
     """Create the MCP server, routing every tool call to a configured adapter."""
 
-    server = FastMCP("freesearch")
-    routes = list(adapters) if adapters is not None else build_adapters()
+    owns_client = adapters is None
+    client = create_async_client() if owns_client else None
+    routes = list(adapters) if adapters is not None else build_adapters(client)
+
+    @asynccontextmanager
+    async def lifespan(server: FastMCP) -> AsyncIterator[None]:
+        try:
+            yield
+        finally:
+            await close_adapters(routes, client if owns_client else None)
+
+    server = FastMCP("freesearch", lifespan=lifespan)
 
     def _route(request: SearchRequest | FetchRequest) -> ProviderAdapter:
         if not routes:

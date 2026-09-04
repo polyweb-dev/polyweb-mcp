@@ -105,3 +105,16 @@ def test_openapi_docs_are_served() -> None:
     paths = docs.json()["paths"]
     assert set(paths) == {"/search", "/fetch"}
     assert client.get("/docs").status_code == 200
+
+
+def test_api_lifespan_cleans_up() -> None:
+    closed: list[str] = []
+
+    class _ClosingStub(_StubAdapter):
+        async def aclose(self) -> None:
+            closed.append(self.name)
+
+    app = create_app([_ClosingStub("api_provider")])
+    with TestClient(app):
+        pass
+    assert closed == ["api_provider"]

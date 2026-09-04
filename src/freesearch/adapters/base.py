@@ -22,23 +22,28 @@ class ProviderAdapter(ABC):
     @abstractmethod
     def name(self) -> str:
         """Return the stable provider identifier."""
+        pass
 
     @property
     @abstractmethod
     def capabilities(self) -> ProviderCapabilities:
         """Describe the operations supported by this adapter."""
+        pass
 
     @abstractmethod
     async def search(self, request: SearchRequest) -> SearchResponse:
         """Search for documents matching ``request``."""
+        pass
 
     @abstractmethod
     async def fetch(self, request: FetchRequest) -> FetchResponse:
         """Fetch and normalize the document at ``request.url``."""
+        pass
 
     @abstractmethod
     async def estimate_cost(self, request: SearchRequest | FetchRequest) -> CostEstimate:
         """Estimate usage for an operation without executing it."""
+        pass
 
     async def health(self) -> ProviderHealth:
         """Return a default unknown health state until a provider overrides it."""
@@ -53,5 +58,10 @@ class ProviderAdapter(ABC):
 
     async def quota(self) -> QuotaSnapshot | None:
         """Return quota information when a provider exposes it."""
+
+        return None
+
+    async def aclose(self) -> None:
+        """Release any underlying client or network resources owned by this adapter."""
 
         return None

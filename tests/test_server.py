@@ -7,6 +7,7 @@ closed to an empty list without keys, which the no-provider guard surfaces.
 
 from datetime import UTC, datetime
 
+import httpx
 import pytest
 from mcp.server.fastmcp.exceptions import ToolError
 
@@ -22,7 +23,8 @@ from freesearch.contracts import (
     SearchResult,
     UsageOperation,
 )
-from freesearch.server import create_server
+from freesearch.secrets import ProviderName
+from freesearch.server import _ADAPTERS, build_adapters, close_adapters, create_server
 
 
 class _StubAdapter(ProviderAdapter):
@@ -95,3 +97,43 @@ async def test_search_without_any_adapter_raises() -> None:
     server = create_server([])
     with pytest.raises(ToolError, match="no provider is configured"):
         await server.call_tool("search", {"request": {"query": "anything"}})
+
+
+def test_adapters_registry_covers_all_providers() -> None:
+    assert set(_ADAPTERS.keys()) == set(ProviderName)
+
+
+async def test_close_adapters_cleans_up() -> None:
+    closed: list[str] = []
+
+    class _ClosingStub(_StubAdapter):
+        async def aclose(self) -> None:
+            closed.append(self.name)
+
+    client = httpx.AsyncClient()
+    await close_adapters([_ClosingStub("a"), _ClosingStub("b")], client)
+    assert closed == ["a", "b"]
+    assert client.is_closed
+
+
+async def test_build_adapters_includes_keyless_keenable() -> None:
+    client = httpx.AsyncClient()
+    try:
+        adapters = build_adapters(client)
+        names = [adapter.name for adapter in adapters]
+        assert "keenable" in names
+    finally:
+        await client.aclose()
+
+
+async def test_server_lifespan_cleans_up() -> None:
+    closed: list[str] = []
+
+    class _ClosingStub(_StubAdapter):
+        async def aclose(self) -> None:
+            closed.append(self.name)
+
+    server = create_server([_ClosingStub("test_provider")])
+    async with server._mcp_server.lifespan(server):
+        pass
+    assert closed == ["test_provider"]
