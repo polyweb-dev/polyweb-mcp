@@ -1,5 +1,5 @@
 ---
-name: bdd-test-skill
+name: backend-bdd-test-skill
 description: "Author, maintain, and execute Behavior-Driven Development (BDD) tests in Python using Behave and Gherkin feature files. Use when adding acceptance scenarios, writing typed step definitions, using Scenario Outlines and DataTables, managing environment.py async lifecycle hooks, generating step skeletons, or diagnosing Behave test failures."
 ---
 

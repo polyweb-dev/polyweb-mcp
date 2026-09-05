@@ -275,6 +275,15 @@ not built yet and the `freesearch-ui/` scaffold is untouched. For the future
 React consumer: Decimal-valued fields (`total_units`, `units`, quota
 `remaining`/`limit`) serialize as JSON strings in both payloads.
 
+#### Delivered Stage 4.5 Endpoints Specification
+
+| Method | Path | Request Body | Response Model | Description |
+| --- | --- | --- | --- | --- |
+| `POST` | `/search` | `SearchRequest` | `SearchResponse` | Execute search across routed adapters; records usage & health telemetry. Powers Search Playground. |
+| `POST` | `/fetch` | `FetchRequest` | `FetchResponse` | Execute document extraction across routed adapters; records telemetry. Powers Fetch Playground. |
+| `GET` | `/stats` | Query: `limit=20` | `StatsResponse` | Operational telemetry reads: totals, newest-first recent events, health, quota snapshots. |
+| `GET` | `/dashboard` | Query: `limit=20` | `DashboardResponse` | Full JSON snapshot (`StatsResponse` + `generated_at`) serving the future dashboard UI. |
+
 - **Per-request telemetry on both paths**: `POST /search`/`POST /fetch`
   (`api.py`) and the `search`/`fetch` MCP tools (`server.py`) record
   `response.usage` verbatim and one `HEALTHY` observation (`message=None`)

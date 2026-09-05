@@ -1,5 +1,5 @@
 ---
-name: code-quality
+name: backend-code-quality
 description: "Review code quality, audit changes, enforce import hygiene, check cyclomatic complexity, scan for dead code, and run static type checking with Ruff and MyPy. Use when formatting code, verifying type safety, auditing before PR submission, or fixing lint/type errors across src/freesearch, tests/, and features/."
 ---
 

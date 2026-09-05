@@ -219,3 +219,38 @@ The dashboard work must include:
   separation of development and production credentials; and
 - tests that verify secrets do not appear in responses, logs, model dumps,
   backups, or generated configuration files.
+
+#### Stage 5 Endpoints Specification (Control & Settings Surface)
+
+##### Priority 1: Core Provider Controls & Secrets (Day 1 Control Dashboard)
+
+| Method | Path | Request Body | Response Model | Description |
+| --- | --- | --- | --- | --- |
+| `GET` | `/api/v1/providers` | None | `list[ProviderStatusResponse]` | Enumerate all canonical providers with current state: enabled, priority, health, circuit breaker, latency p95, and secret presence (`configured`, `missing`, `keyless_public`). |
+| `PATCH` | `/api/v1/providers/{provider_id}` | `ProviderConfigUpdate` | `ProviderStatusResponse` | Update non-secret runtime config: toggle `enabled`, adjust `priority`, or update free-tier estimate / reset schedule. |
+| `POST` | `/api/v1/providers/{provider_id}/test` | None | `ProviderTestResponse` | Trigger a lightweight connectivity handshake/ping to verify upstream endpoint reachability and credentials. |
+| `POST` | `/api/v1/providers/{provider_id}/circuit-breaker/reset` | None | `CircuitBreakerStatusResponse` | Manually reset a tripped circuit breaker back to `closed` / `half_open`. |
+| `PUT` | `/api/v1/providers/{provider_id}/secret` | `SetSecretRequest` (`SecretStr`) | `SecretStatusResponse` | Store provider API key in native OS keyring / secret store (write-only; returns masked fingerprint; never exposes raw key). |
+| `DELETE` | `/api/v1/providers/{provider_id}/secret` | None | `SecretStatusResponse` | Delete provider API key from the secret store. |
+
+##### Priority 2: Routing Defaults & Cost Optimization Policy
+
+| Method | Path | Request Body | Response Model | Description |
+| --- | --- | --- | --- | --- |
+| `GET` | `/api/v1/routing/config` | None | `RoutingConfigResponse` | Fetch global routing defaults (fallback policy, cost optimization presets, max attempts). |
+| `PUT` | `/api/v1/routing/config` | `RoutingConfigUpdate` | `RoutingConfigResponse` | Update default routing mode (e.g. bias towards free/keyless tiers like Keenable, fallback chaining triggers). |
+
+#### UI Architectural Alignment Decisions (`freesearch-ui`)
+
+Based on FreeSearch core architecture and privacy requirements, the following UI features must be aligned or removed:
+
+1. **Remove "Add Custom Provider" Modal / Creation**:
+   - *Reasoning*: FreeSearch providers require concrete Python `ProviderAdapter` implementations (`BraveAdapter`, `KeenableAdapter`, etc.) with specialized error handling, resilience, and normalization. Arbitrary external URLs cannot function dynamically without a backend adapter.
+2. **Remove "Reveal Once" / Plaintext Key Displays (`unmaskedKeyOnce`, `burnOneTimeKey`)**:
+   - *Reasoning*: FreeSearch consumes user API keys and stores them in the OS credential manager; it is not an API key generator. Secrets must never be stored in plaintext in the frontend state or returned from the backend. The UI must provide a write-only input and show only masked status (e.g., `BSA_••••••••3f8a`).
+3. **Remove Client-Side Simulation Mocks from `freesearchApi.ts`**:
+   - *Reasoning*: The Search & Fetch Playground must call backend `POST /search` and `POST /fetch` directly rather than running client-side latency simulation and mock markdown generation.
+4. **Enforce Privacy in Activity Stream (Strip Query & URL Content)**:
+   - *Reasoning*: Telemetry in FreeSearch is strictly numeric and operational. Queries and destination URLs are never stored or exposed in read endpoints. The Activity Stream must display operational telemetry (`operation`, `provider`, `units`, `timestamp`, `latency`, `status`), not raw query text. The "Clear Log" button should be removed because local usage events are required by the quota reconciliation coordinator.
+5. **Defer / Remove Cache Purging & Cache Stats**:
+   - *Reasoning*: Full response payload caching is not currently implemented in the core pipeline (storage only maintains opaque SHA-256 metadata). Displaying mock cache hits and memory size gives a misleading impression.
