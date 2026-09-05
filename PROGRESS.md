@@ -4,7 +4,7 @@ Updated: 2026-09-05
 
 ## Scope completed
 
-Stages 0, 1, 2, 3, 4, and **Stage 4.5 (read-only monitoring dashboard)** from
+Stages 0, 1, 2, 3, 4, and **Stage 4.5 (read-only monitoring API)** from
 [`WORKPLAN.md`](WORKPLAN.md) are complete. All Stage 2 core-platform worktrees
 (Resilience, Usage/data, Routing, MCP surface, and Configuration) are
 implemented and tested. The Stage 3 Tavily, Brave Search, Exa, You.com,
@@ -261,12 +261,19 @@ the Stage 4 integration root serves them over both MCP and the REST API.
   guide, Docker packaging (per the work plan), and the Stage 5 full
   settings/secrets dashboard.
 
-## Stage 4.5 - Basic monitoring dashboard (read-only, no secrets)
+## Stage 4.5 - Basic monitoring API (read-only JSON, no secrets)
 
 Implemented per [`WORKPLAN.md`](WORKPLAN.md) §4.5; live-verified on
 2026-09-05. All non-goals respected (no enablement/priority editing, no
 secret management, no keyring/Vault wiring, no auth/session/CSRF/audit, no
 rotation/revocation).
+
+**2026-09-05 change:** `GET /dashboard` switched from stdlib-only HTML to a
+JSON `DashboardResponse` (the `StatsResponse` fields plus `generated_at`,
+UTC timezone-aware) served with `application/json`; the React dashboard UI is
+not built yet and the `freesearch-ui/` scaffold is untouched. For the future
+React consumer: Decimal-valued fields (`total_units`, `units`, quota
+`remaining`/`limit`) serialize as JSON strings in both payloads.
 
 - **Per-request telemetry on both paths**: `POST /search`/`POST /fetch`
   (`api.py`) and the `search`/`fetch` MCP tools (`server.py`) record
@@ -291,25 +298,27 @@ rotation/revocation).
   one lifespan per MCP session, concurrently (sequential and
   delayed-teardown race both pinned by tests).
 - **Read-only monitoring reads** on the FastAPI app (loopback): `GET /stats`
-  (JSON `StatsResponse`) and `GET /dashboard` (stdlib-only HTML, no template
-  engine): per-(provider, operation) usage totals, newest-first recent usage
+  (JSON `StatsResponse`) and `GET /dashboard` (JSON `DashboardResponse`: the
+  `StatsResponse` fields plus `generated_at` UTC): per-(provider, operation)
+  usage totals, newest-first recent usage
   events (`?limit`, default 20, clamped 1–100), `latest_quota` snapshots and
   latest health per provider; empty/missing repository returns 200 with empty
-  sections, never 503. Routes are `include_in_schema=False` (the existing
-  OpenAPI pin on `/search` + `/fetch` is preserved).
+  sections, never 503. Both reads use `response_model` contracts and appear
+  in OpenAPI by design; no routes are hidden with `include_in_schema=False`.
 - **Privacy**: `/stats` uses projection models (`RecentUsageEntry`,
   `LatestHealthEntry`) so `metadata`, `request_id`, and health `message`
   never leave the endpoint regardless of stored rows; write-side metadata is
   still gated by the numeric-telemetry-only `_metadata_json` rule; health
   `message` is always `None` from the new writers; Exa usage metadata was
   made numeric-only (`metadata={}` — the `CostEstimate` currency label is
-  unchanged); the dashboard renders only projected fields, every dynamic
-  value `html.escape`d, no forms/JS/external assets.
-- **Provenance + labeling**: every quota row displays its `source`
-  (`authoritative` / `observed` / `estimated`); the UI shows a persistent
-  banner "local-observed only — vendor `/usage` endpoints lag 10–15 min".
-  `latest_quota` is empty until the coordinator lands — nothing on the
-  request path calls `adapter.quota()` by design (provenance rendering is
+  unchanged); `/dashboard` reuses the same projection models, so
+  `metadata`/`request_id`/`message` never leave the endpoint; no HTML output,
+  no template engine.
+- **Provenance + labeling**: every quota entry exposes its `source`
+  (`authoritative` / `observed` / `estimated`); both payloads carry the
+  persistent notice "local-observed only — vendor `/usage` endpoints lag
+  10–15 min". `latest_quota` is empty until the coordinator lands — nothing
+  on the request path calls `adapter.quota()` by design (provenance is
   unit-tested with seeded snapshots).
 - **Storage additions** (no schema change): `usage_totals(since=None)`
   (Python `Decimal` sums grouped per provider+operation to avoid SQLite
@@ -319,17 +328,19 @@ rotation/revocation).
   keys/network; stub adapters + temp-file SQLite in the steps) guarded via a
   feature-level `@monitoring` tag and an `environment.py` check on
   `effective_tags` (feature tags are not visible through `scenario.tags`).
-- **Testing**: 27 monitoring unit tests + 2 storage-aggregate tests + 3
-  BDD-environment guard tests; full suite 859 passed; monitoring feature
-  4 scenarios / 16 steps passed.
+- **Testing**: 31 monitoring tests in `tests/test_monitoring.py` (one
+  parametrized → 32 cases) + 2 storage-aggregate tests + 3 BDD-environment
+  guard tests; full suite 864 passed; monitoring feature 4 scenarios /
+  16 steps passed.
 - **Live acceptance (2026-09-05)**: with a fresh telemetry DB, Brave search
   (`routing.mode=require`, 1 unit) and Tavily fetch (require mode, 0 units —
   a real zero-credit extract usage event) both returned 200; `/stats`
   attributed `brave/search` and `tavily/fetch` totals with `healthy`
-  observations, newest-first recent events, and the local-observed banner in
-  `/dashboard`; no `message`/`metadata`/`request_id`/`query`/`url`/`content`
-  keys anywhere in the reads (evidence: `.runtime-tmp/live-stats.json`,
-  `live-dashboard.html`).
+  observations, newest-first recent events, and the local-observed notice in
+  `/dashboard` JSON; no `message`/`metadata`/`request_id`/`query`/`url`/`content`
+  keys anywhere in the reads. The evidence files were removed with
+  `.runtime-tmp/` and are not recreated; the 2026-09-05 Brave/Tavily
+  attribution stays verified in `/stats` + `/dashboard` JSON.
 - **Findings recorded for future stages**:
   - FastMCP registers `call_tool` dynamically as the protocol handler —
     subclassing it to normalize return shapes breaks real transports
@@ -350,10 +361,10 @@ local SQLite `UsageEvent` ledger (live decrements) with periodic vendor
 10–15 minutes). It must re-anchor the authoritative baseline
 (`QuotaSnapshotRow`), detect external account drift, and clear or offset
 processed local usage events without blocking active search and fetch
-requests. The Stage 4.5 monitoring read surface (`latest_quota` with
-provenance) is already in place and will display coordinator-produced
-snapshots; routing consumption of local snapshots also lands with this
-stage.
+requests. The Stage 4.5 monitoring read surface (`/stats` + `/dashboard`
+JSON, `latest_quota` with provenance) is already in place and will carry
+coordinator-produced snapshots; routing consumption of local snapshots also
+lands with this stage.
 
 
 ## DeepSeek Harness `web_search` integration (Path B bridge)
@@ -481,16 +492,16 @@ All checks pass locally:
 
 ```text
 uv lock --check
-uv sync --locked
-uv run ruff check .
-uv run ruff format --check .
-uv run mypy src
-uv run pytest  # 859 passed
+uv sync --locked  # sandbox note: .venv prune of stray pytest_cov denied; lock verified via uv lock --check
+uv run ruff check .  # all checks passed
+uv run ruff format --check . --exclude .runtime-tmp --exclude tests/.pytest-tmp  # 84 files already formatted
+uv run mypy src  # no issues found in 25 source files
+uv run pytest  # 864 passed
 uv run behave features/monitoring.feature  # 4 scenarios, 16 steps passed (offline, no keys)
 FREESEARCH_RUN_LIVE=1 uv run behave --tags=@keenable --no-capture  # 1 live scenario, 7 steps passed
 uv run behave --tags=@live,@parallel features/parallel.feature  # 2 passed
 ```
 Live Stage 4.5 acceptance (2026-09-05): fresh `FREESEARCH_DB` + API server,
 Brave search (1 unit) and Tavily fetch (0 units) via `routing.mode=require`,
-attribution verified in `/stats` + `/dashboard` (evidence in
-`.runtime-tmp/live-stats.json` / `live-dashboard.html`).
+attribution verified in `/stats` + `/dashboard` JSON (the evidence files were
+removed with `.runtime-tmp/`).

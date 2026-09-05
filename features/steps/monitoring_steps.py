@@ -156,6 +156,14 @@ def _decimal(value: Any) -> Decimal:
     return Decimal(str(value))
 
 
+def _parse_utc_timestamp(value: Any) -> datetime:
+    assert isinstance(value, str)
+    timestamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    assert timestamp.tzinfo is not None
+    assert timestamp.utcoffset() == timedelta(0)
+    return timestamp
+
+
 @given("an offline monitoring repository and REST adapters")
 def step_given_rest_monitoring(context: Any) -> None:
     _open_repository(context)
@@ -223,15 +231,24 @@ def step_then_rest_quota_sources(context: Any) -> None:
     assert all("source" in entry for entry in quota)
 
 
-@then("REST stats and dashboard should show the local-observed notice")
+@then("REST stats and dashboard JSON should show the local-observed notice")
 def step_then_rest_notice(context: Any) -> None:
-    assert "local-observed only" in context.stats_response.json()["notice"]
-    assert "10\N{EN DASH}15 min" in context.stats_response.json()["notice"]
-    assert context.dashboard_response.status_code == 200
-    assert "local-observed only" in context.dashboard_response.text
-    assert "10\N{EN DASH}15 min" in context.dashboard_response.text
-    assert "authoritative" in context.dashboard_response.text
-    assert "observed" in context.dashboard_response.text
+    stats_body = context.stats_response.json()
+    dashboard_response = context.dashboard_response
+    assert "local-observed only" in stats_body["notice"]
+    assert "10\N{EN DASH}15 min" in stats_body["notice"]
+    assert dashboard_response.status_code == 200
+    assert "application/json" in dashboard_response.headers["content-type"]
+    assert "text/html" not in dashboard_response.headers["content-type"]
+    dashboard_body = dashboard_response.json()
+    assert "local-observed only" in dashboard_body["notice"]
+    assert "10\N{EN DASH}15 min" in dashboard_body["notice"]
+    assert {entry["source"] for entry in dashboard_body["latest_quota"]} == {
+        "authoritative",
+        "observed",
+    }
+    assert "generated_at" in dashboard_body
+    _parse_utc_timestamp(dashboard_body["generated_at"])
 
 
 @given("an offline monitoring repository and MCP adapters")
@@ -317,17 +334,23 @@ def step_then_numeric_metadata(context: Any) -> None:
         assert all(isinstance(value, (int, float)) for value in event.metadata.values())
 
 
-@then("stats and dashboard should not contain request content or secrets")
+@then("stats and dashboard JSON should not contain request content or secrets")
 def step_then_private_values_absent(context: Any) -> None:
     stats_body = context.private_stats_response.json()
-    for entry in stats_body["recent_usage"]:
-        assert "metadata" not in entry, "recent_usage entry exposes metadata"
-        assert "request_id" not in entry, "recent_usage entry exposes request_id"
-    for entry in stats_body["latest_health"]:
-        assert "message" not in entry, "latest_health entry exposes message"
+    dashboard_response = context.private_dashboard_response
+    assert dashboard_response.status_code == 200
+    assert "application/json" in dashboard_response.headers["content-type"]
+    assert "text/html" not in dashboard_response.headers["content-type"]
+    dashboard_body = dashboard_response.json()
+    for body in (stats_body, dashboard_body):
+        for entry in body["recent_usage"]:
+            assert "metadata" not in entry, "recent_usage entry exposes metadata"
+            assert "request_id" not in entry, "recent_usage entry exposes request_id"
+        for entry in body["latest_health"]:
+            assert "message" not in entry, "latest_health entry exposes message"
 
     stats_text = json.dumps(stats_body, sort_keys=True)
-    dashboard_text = context.private_dashboard_response.text
+    dashboard_text = json.dumps(dashboard_body, sort_keys=True)
     for forbidden in (
         context.private_query,
         context.private_url,

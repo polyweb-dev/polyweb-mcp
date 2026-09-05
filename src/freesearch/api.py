@@ -12,19 +12,19 @@ monitoring reads (``/stats``, ``/dashboard``) expose that telemetry.
 
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
 
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.contracts import FetchRequest, FetchResponse, SearchRequest, SearchResponse
 from freesearch.http import create_async_client
 from freesearch.monitoring import (
     MAX_RECENT_LIMIT,
+    DashboardResponse,
     StatsResponse,
     collect_stats,
-    render_dashboard,
     resolve_database_path,
     tracked_call,
 )
@@ -100,15 +100,15 @@ def create_app(
             recent_limit=_clamped_limit(limit),
         )
 
-    @app.get("/dashboard", response_class=HTMLResponse)
-    async def dashboard(limit: int = 20) -> HTMLResponse:
-        """Render the read-only, local-observed monitoring dashboard."""
+    @app.get("/dashboard", response_model=DashboardResponse)
+    async def dashboard(limit: int = 20) -> DashboardResponse:
+        """Return the JSON snapshot the future React dashboard consumes."""
         snapshot = await collect_stats(
             app.state.repository,
             adapter_names=[adapter.name for adapter in routes],
             recent_limit=_clamped_limit(limit),
         )
-        return HTMLResponse(render_dashboard(snapshot), media_type="text/html; charset=utf-8")
+        return DashboardResponse(**snapshot.model_dump(), generated_at=datetime.now(UTC))
 
     return app
 

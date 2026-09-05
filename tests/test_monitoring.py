@@ -6,8 +6,8 @@ provider network or credentials are involved.
 """
 
 import asyncio
-import html
 import inspect
+import json
 import tempfile
 from collections.abc import AsyncIterator, Sequence
 from datetime import UTC, datetime, timedelta
@@ -19,6 +19,7 @@ import pytest
 import pytest_asyncio
 from fastapi.testclient import TestClient
 from mcp.server.fastmcp.exceptions import ToolError
+from pydantic import ValidationError
 
 from freesearch import monitoring
 from freesearch.adapters.base import ProviderAdapter
@@ -223,6 +224,37 @@ def _quota(provider: str, source: QuotaSource, observed_at: datetime) -> QuotaSn
 
 def _health(provider: str, status: HealthStatus, checked_at: datetime) -> ProviderHealth:
     return ProviderHealth(provider=provider, status=status, checked_at=checked_at, message=None)
+
+
+_DASHBOARD_KEYS = {
+    "notice",
+    "usage_totals",
+    "recent_usage",
+    "latest_quota",
+    "latest_health",
+    "generated_at",
+}
+
+
+def _dashboard_response_model() -> Any:
+    """Return the planned response model, failing cleanly before implementation."""
+    model = getattr(monitoring, "DashboardResponse", None)
+    assert model is not None, "DashboardResponse has not been implemented"
+    return model
+
+
+def _parse_utc_datetime(value: Any) -> datetime:
+    assert isinstance(value, str)
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    assert parsed.tzinfo is not None
+    assert parsed.utcoffset() == timedelta(0)
+    return parsed
+
+
+def _assert_dashboard_contract_keys(body: Any) -> None:
+    assert isinstance(body, dict)
+    assert set(body) == _DASHBOARD_KEYS
+    assert body["notice"] == monitoring.MONITORING_NOTICE
 
 
 async def test_rest_search_persists_usage_and_healthy_health(
@@ -606,13 +638,22 @@ async def test_stats_endpoint_clamps_recent_limit_and_returns_contract_shape(
     )
 
 
+def test_dashboard_route_declares_pydantic_response_model() -> None:
+    app = create_app([_StubAdapter("response-model")], repository=None)
+    dashboard_route = next(route for route in app.routes if route.path == "/dashboard")
+
+    assert dashboard_route.response_model is _dashboard_response_model()
+
+
 async def test_no_repository_stats_and_dashboard_reads_are_empty_200() -> None:
     app = create_app([_StubAdapter("no-repository")], repository=None)
+    before_dashboard = datetime.now(UTC)
 
     with TestClient(app) as client:
         stats = client.get("/stats")
         dashboard = client.get("/dashboard")
 
+    after_dashboard = datetime.now(UTC)
     assert stats.status_code == 200
     assert stats.json() == {
         "notice": monitoring.MONITORING_NOTICE,
@@ -622,10 +663,19 @@ async def test_no_repository_stats_and_dashboard_reads_are_empty_200() -> None:
         "latest_health": [],
     }
     assert dashboard.status_code == 200
-    assert "No data yet." in dashboard.text
+    assert "application/json" in dashboard.headers["content-type"]
+    assert "text/html" not in dashboard.headers["content-type"]
+    dashboard_body = dashboard.json()
+    _assert_dashboard_contract_keys(dashboard_body)
+    assert dashboard_body["usage_totals"] == []
+    assert dashboard_body["recent_usage"] == []
+    assert dashboard_body["latest_quota"] == []
+    assert dashboard_body["latest_health"] == []
+    generated_at = _parse_utc_datetime(dashboard_body["generated_at"])
+    assert before_dashboard <= generated_at <= after_dashboard
 
 
-async def test_monitoring_read_failures_return_empty_stats_and_html_dashboard() -> None:
+async def test_monitoring_read_failures_return_empty_stats_and_json_dashboard() -> None:
     repository = cast(SQLiteRepository, _ReadFailingRepository())
     app = create_app([_StubAdapter("read-failure")], repository=repository)
 
@@ -642,65 +692,257 @@ async def test_monitoring_read_failures_return_empty_stats_and_html_dashboard() 
         "latest_health": [],
     }
     assert dashboard.status_code == 200
-    assert "text/html" in dashboard.headers["content-type"]
+    assert "application/json" in dashboard.headers["content-type"]
+    assert "text/html" not in dashboard.headers["content-type"]
+    dashboard_body = dashboard.json()
+    _assert_dashboard_contract_keys(dashboard_body)
+    assert dashboard_body["usage_totals"] == []
+    assert dashboard_body["recent_usage"] == []
+    assert dashboard_body["latest_quota"] == []
+    assert dashboard_body["latest_health"] == []
+    _parse_utc_datetime(dashboard_body["generated_at"])
 
 
-async def test_render_dashboard_escapes_values_shows_sources_and_has_empty_states() -> None:
-    from freesearch.monitoring import LatestHealthEntry, RecentUsageEntry
-
-    unsafe_provider = "<b>provider</b>"
-    observed_at = datetime(2026, 1, 1, tzinfo=UTC)
+def test_dashboard_response_contract_is_strict_and_decimal_round_trip() -> None:
+    dashboard_model = _dashboard_response_model()
+    observed_at = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
     stats = monitoring.StatsResponse(
         notice=monitoring.MONITORING_NOTICE,
         usage_totals=[
             monitoring.ProviderUsageTotal(
-                provider=unsafe_provider,
+                provider="contract-provider",
                 operation=UsageOperation.SEARCH,
-                total_units=Decimal("1.25"),
-                event_count=1,
+                total_units=Decimal("123.456789"),
+                event_count=7,
             )
         ],
         recent_usage=[
-            RecentUsageEntry(
-                provider=unsafe_provider,
-                operation=UsageOperation.SEARCH,
-                units=Decimal("1.25"),
+            monitoring.RecentUsageEntry(
+                provider="contract-provider",
+                operation=UsageOperation.FETCH,
+                units=Decimal("0.000001"),
                 observed_at=observed_at,
             )
         ],
-        latest_quota=[_quota(unsafe_provider, QuotaSource.ESTIMATED, observed_at)],
+        latest_quota=[_quota("contract-provider", QuotaSource.AUTHORITATIVE, observed_at)],
         latest_health=[
-            LatestHealthEntry(
-                provider=unsafe_provider,
+            monitoring.LatestHealthEntry(
+                provider="contract-provider",
                 status=HealthStatus.HEALTHY,
                 checked_at=observed_at,
             )
         ],
     )
+    payload = stats.model_dump()
+    payload["generated_at"] = observed_at
 
-    rendered = monitoring.render_dashboard(stats)
-    escaped_provider = html.escape(unsafe_provider)
-    assert rendered.lstrip().lower().startswith("<!doctype html>")
-    assert escaped_provider in rendered
-    assert unsafe_provider not in rendered
-    assert "local-observed only" in rendered
-    assert "10\N{EN DASH}15 min" in rendered
-    assert "estimated" in rendered
-    assert "<script" not in rendered.lower()
-    assert "<form" not in rendered.lower()
-    assert "<link" not in rendered.lower()
-    assert "<img" not in rendered.lower()
+    dashboard = dashboard_model.model_validate(payload)
+    assert set(dashboard_model.model_fields) == set(monitoring.StatsResponse.model_fields) | {
+        "generated_at"
+    }
+    assert dashboard_model.model_config.get("extra") == "forbid"
+    assert dashboard.model_dump() == payload
+    assert dashboard.usage_totals[0].total_units == Decimal("123.456789")
+    assert dashboard.recent_usage[0].units == Decimal("0.000001")
+    assert dashboard.latest_quota[0].remaining == Decimal("97.5")
 
-    empty = monitoring.render_dashboard(
-        monitoring.StatsResponse(
-            notice=monitoring.MONITORING_NOTICE,
-            usage_totals=[],
-            recent_usage=[],
-            latest_quota=[],
-            latest_health=[],
+    with pytest.raises(ValidationError):
+        dashboard_model.model_validate({**payload, "unexpected": "field"})
+    with pytest.raises(ValidationError):
+        dashboard_model.model_validate({**payload, "generated_at": datetime(2026, 1, 1, 12, 0)})
+
+
+async def test_dashboard_endpoint_matches_stats_and_preserves_quota_provenance(
+    repository: SQLiteRepository,
+) -> None:
+    observed_at = datetime(2026, 1, 1, tzinfo=UTC)
+    await repository.record_usage(_event("alpha", UsageOperation.SEARCH, "1.25", observed_at))
+    await repository.record_usage(
+        _event("beta", UsageOperation.FETCH, "2.5", observed_at + timedelta(seconds=1))
+    )
+    await repository.record_quota(_quota("alpha", QuotaSource.AUTHORITATIVE, observed_at))
+    await repository.record_quota(
+        _quota("beta", QuotaSource.OBSERVED, observed_at + timedelta(seconds=1))
+    )
+    await repository.record_health(_health("alpha", HealthStatus.HEALTHY, observed_at))
+    await repository.record_health(
+        _health("beta", HealthStatus.DEGRADED, observed_at + timedelta(seconds=1))
+    )
+    app = create_app(
+        [_StubAdapter("alpha"), _StubAdapter("beta")],
+        repository=repository,
+    )
+    before_dashboard = datetime.now(UTC)
+
+    with TestClient(app) as client:
+        stats_response = client.get("/stats")
+        dashboard_response = client.get("/dashboard")
+
+    after_dashboard = datetime.now(UTC)
+    assert stats_response.status_code == 200
+    assert dashboard_response.status_code == 200
+    assert "application/json" in dashboard_response.headers["content-type"]
+    assert "text/html" not in dashboard_response.headers["content-type"]
+    stats_body = stats_response.json()
+    dashboard_body = dashboard_response.json()
+    _assert_dashboard_contract_keys(dashboard_body)
+    assert {
+        key: value for key, value in dashboard_body.items() if key != "generated_at"
+    } == stats_body
+    assert {(entry["provider"], entry["source"]) for entry in dashboard_body["latest_quota"]} == {
+        ("alpha", "authoritative"),
+        ("beta", "observed"),
+    }
+    assert "local-observed only" in dashboard_body["notice"]
+    assert "10\N{EN DASH}15 min" in dashboard_body["notice"]
+    generated_at = _parse_utc_datetime(dashboard_body["generated_at"])
+    assert before_dashboard <= generated_at <= after_dashboard
+
+
+async def test_dashboard_endpoint_clamps_recent_limit_and_orders_newest_first(
+    repository: SQLiteRepository,
+) -> None:
+    observed_at = datetime(2026, 1, 1, tzinfo=UTC)
+    for index in range(monitoring.MAX_RECENT_LIMIT + 1):
+        await repository.record_usage(
+            _event(
+                "limit-provider",
+                UsageOperation.SEARCH,
+                "0.000001",
+                observed_at + timedelta(seconds=index),
+            )
+        )
+    app = create_app([_StubAdapter("limit-provider")], repository=repository)
+
+    with TestClient(app) as client:
+        low = client.get("/dashboard?limit=0")
+        high = client.get("/dashboard?limit=1000")
+
+    assert low.status_code == 200
+    assert high.status_code == 200
+    assert "application/json" in low.headers["content-type"]
+    assert "application/json" in high.headers["content-type"]
+    low_body = low.json()
+    high_body = high.json()
+    _assert_dashboard_contract_keys(low_body)
+    _assert_dashboard_contract_keys(high_body)
+    assert len(low_body["recent_usage"]) == 1
+    assert len(high_body["recent_usage"]) == monitoring.MAX_RECENT_LIMIT
+    assert (
+        high_body["recent_usage"][0]["observed_at"] > high_body["recent_usage"][-1]["observed_at"]
+    )
+    _parse_utc_datetime(low_body["generated_at"])
+    _parse_utc_datetime(high_body["generated_at"])
+
+
+async def test_dashboard_endpoint_omits_sensitive_projection_fields_and_values(
+    repository: SQLiteRepository,
+) -> None:
+    observed_at = datetime(2026, 1, 1, tzinfo=UTC)
+    private_query = "PRIVATE_QUERY_should_not_be_rendered"
+    private_url = "https://secret.example/private-document"
+    private_document = "private-provider document"
+    await repository.record_usage(
+        UsageEvent(
+            provider="privacy-provider",
+            operation=UsageOperation.SEARCH,
+            units=Decimal("1"),
+            observed_at=observed_at,
+            request_id=private_query,
+            metadata={"credits": 1},
         )
     )
-    assert empty.count("No data yet.") == 4
+    await repository.record_health(
+        ProviderHealth(
+            provider="privacy-provider",
+            status=HealthStatus.HEALTHY,
+            checked_at=observed_at,
+            message=(
+                f"{private_url} {private_document} Authorization: Bearer token "
+                "api_key=top-secret secret msg"
+            ),
+        )
+    )
+    await repository.record_quota(_quota("privacy-provider", QuotaSource.OBSERVED, observed_at))
+    app = create_app([_StubAdapter("privacy-provider")], repository=repository)
+
+    with TestClient(app) as client:
+        stats_response = client.get("/stats")
+        dashboard_response = client.get("/dashboard")
+
+    assert stats_response.status_code == 200
+    assert dashboard_response.status_code == 200
+    assert "application/json" in dashboard_response.headers["content-type"]
+    stats_body = stats_response.json()
+    dashboard_body = dashboard_response.json()
+    _assert_dashboard_contract_keys(dashboard_body)
+    for body in (stats_body, dashboard_body):
+        assert len(body["usage_totals"]) == 1
+        assert set(body["usage_totals"][0]) == {
+            "provider",
+            "operation",
+            "total_units",
+            "event_count",
+        }
+        assert len(body["recent_usage"]) == 1
+        assert len(body["latest_quota"]) == 1
+        assert set(body["latest_quota"][0]) == {
+            "provider",
+            "source",
+            "remaining",
+            "limit",
+            "reset_at",
+            "observed_at",
+        }
+        assert len(body["latest_health"]) == 1
+        assert set(body["recent_usage"][0]) == {
+            "provider",
+            "operation",
+            "units",
+            "observed_at",
+        }
+        assert set(body["latest_health"][0]) == {"provider", "status", "checked_at"}
+        for entry in body["recent_usage"] + body["latest_health"]:
+            assert "metadata" not in entry
+            assert "request_id" not in entry
+            assert "message" not in entry
+
+    for body in (stats_body, dashboard_body):
+        payload_text = json.dumps(body, sort_keys=True)
+        for forbidden in (
+            private_query,
+            private_url,
+            private_document,
+            "Authorization: Bearer",
+            "api_key",
+            "secret msg",
+        ):
+            assert forbidden not in payload_text
+
+
+async def test_dashboard_generated_at_is_utc_and_non_decreasing_on_empty_repository() -> None:
+    app = create_app([_StubAdapter("freshness-provider")], repository=None)
+
+    with TestClient(app) as client:
+        first = client.get("/dashboard")
+        second = client.get("/dashboard")
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert "application/json" in first.headers["content-type"]
+    assert "application/json" in second.headers["content-type"]
+    first_body = first.json()
+    second_body = second.json()
+    _assert_dashboard_contract_keys(first_body)
+    _assert_dashboard_contract_keys(second_body)
+    for body in (first_body, second_body):
+        assert body["usage_totals"] == []
+        assert body["recent_usage"] == []
+        assert body["latest_quota"] == []
+        assert body["latest_health"] == []
+    first_generated_at = _parse_utc_datetime(first_body["generated_at"])
+    second_generated_at = _parse_utc_datetime(second_body["generated_at"])
+    assert first_generated_at <= second_generated_at
 
 
 async def test_app_owned_repository_lifespan_creates_and_closes_database(
@@ -1104,7 +1346,14 @@ async def test_telemetry_helpers_swallow_repository_exceptions(
     assert await repository.list_usage() == []
 
 
-def test_monitoring_module_does_not_require_template_or_external_asset_runtime() -> None:
-    source = inspect.getsource(monitoring.render_dashboard)
-    assert "jinja2" not in source.lower()
-    assert "importlib" not in source.lower()
+def test_monitoring_module_contains_no_html_renderer_or_template_runtime() -> None:
+    source = inspect.getsource(monitoring).lower()
+    for forbidden in (
+        "jinja2",
+        "htmlresponse",
+        "render_dashboard",
+        "html.escape",
+        "<script",
+        "<form",
+    ):
+        assert forbidden not in source

@@ -135,11 +135,11 @@ Suggested merge order:
 3. Tavily, Firecrawl, and Exa.
 4. Brave and Keenable.
 5. Parallel and You.com.
-6. Basic monitoring dashboard (Stage 4.5, next - read-only, no secrets).
+6. Basic monitoring API (Stage 4.5, next - read-only, no secrets).
 7. Quota reconciliation coordinator and MCP end-to-end tests.
 8. Documentation and local setup guide.
 
-### 4.5 Basic monitoring dashboard (read-only) - next, before the coordinator
+### 4.5 Basic monitoring API (read-only JSON) - next, before the coordinator
 
 The operator is already using `search` and `fetch` with no visibility into
 where usage is going. Build a minimal read-only monitoring slice first because
@@ -154,13 +154,16 @@ touch the MCP surface):
   repository (`SQLiteRepository` in `src/freesearch/storage.py`, SQLAlchemy 2.x
   ORM via the `sqlite+aiosqlite` driver; no new ORM/driver). Both the REST
   (`api.py`) and MCP (`server.py`) paths must record the same way.
-- Expose read-only monitoring reads (JSON + a small HTML page on loopback,
-  e.g. `GET /stats`, `GET /dashboard`): per-provider usage totals, recent
-  usage events, `latest_quota` snapshots, and latest health.
+- Expose read-only monitoring JSON reads on loopback (`GET /stats`,
+  `GET /dashboard`): per-provider usage totals, recent usage events,
+  `latest_quota` snapshots, and latest health. No HTML/template engine;
+  `/dashboard` returns `DashboardResponse` JSON (the `StatsResponse` fields
+  plus `generated_at`) for the future React UI (built later,
+  `freesearch-ui/`); the `/stats` contract is unchanged.
 - Preserve quota provenance (`authoritative` / `observed` / `estimated`) in
   every snapshot display; never present a local estimate as a vendor-confirmed
-  balance. Until the coordinator lands, the UI must label itself local-observed
-  only (vendor `/usage` endpoints lag 10-15 minutes).
+  balance. Until the coordinator lands, both payloads carry the
+  local-observed-only notice (vendor `/usage` endpoints lag 10-15 minutes).
 - Reuse existing privacy rules: numeric telemetry only, no query/URL/content
   or secret-shaped fields in persisted metadata, logs, or responses.
 
@@ -169,9 +172,9 @@ priority editing, secret create/replace/delete, keyring/Vault wiring,
 authentication/session/CSRF/audit machinery beyond loopback default binding,
 and rotation/revocation workflows.
 
-Acceptance: run `search`/`fetch` against configured keys, then the dashboard
-shows per-provider usage going to the right provider; mocked tests cover
-recording and the read endpoints without network or secrets.
+Acceptance: run `search`/`fetch` against configured keys, then `/stats` and
+`/dashboard` JSON show per-provider usage going to the right provider; mocked
+tests cover recording and the read endpoints without network or secrets.
 
 ## Ownership boundaries
 
@@ -190,7 +193,7 @@ installation instructions.
 
 ### 5. Settings and secrets dashboard (full) - after monitoring and coordinator
 
-Builds on the Stage 4.5 read-only monitoring dashboard; the full dashboard
+Builds on the Stage 4.5 read-only monitoring API; the full dashboard
 must not block monitoring visibility. Add a lightweight authenticated settings
 dashboard for the operator. It should allow changing non-secret runtime settings such as provider enablement and
 priority, routing defaults, free-tier estimates, reset schedules, and safe HTTP

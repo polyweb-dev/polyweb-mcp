@@ -1,20 +1,23 @@
-"""Read-only monitoring telemetry: recording, stats collection, and rendering.
+"""Read-only monitoring telemetry: recording and JSON snapshot reads.
 
 Recording is best-effort by contract: a monitoring failure must never fail the
 user-facing request it observes, so every repository write is wrapped and
 swallowed with a payload-free warning. Reads assemble the ``StatsResponse``
-contract, and :func:`render_dashboard` renders it as a static HTML document
-built with the standard library only: no template runtime, no external assets,
-no scripting, and every dynamic value HTML-escaped.
+contract served by ``/stats`` and the ``DashboardResponse`` contract served by
+``/dashboard``: the same snapshot plus a ``generated_at`` instant, serialized
+as JSON for the future React dashboard. Every entry is a privacy projection,
+so request ids, metadata, query text, and diagnostic messages never leave the
+storage layer.
 """
 
-import html
 import logging
 import os
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
+
+from pydantic import AwareDatetime
 
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.contracts import (
@@ -77,6 +80,12 @@ class StatsResponse(ContractModel):
     recent_usage: list[RecentUsageEntry]
     latest_quota: list[QuotaSnapshot]
     latest_health: list[LatestHealthEntry]
+
+
+class DashboardResponse(StatsResponse):
+    """JSON dashboard snapshot: the stats read plus its generation instant."""
+
+    generated_at: AwareDatetime
 
 
 def resolve_database_path(database: str | Path | None = None) -> Path:
@@ -288,108 +297,3 @@ def _empty_stats() -> StatsResponse:
         latest_quota=[],
         latest_health=[],
     )
-
-
-def render_dashboard(stats: StatsResponse) -> str:
-    """Render the monitoring snapshot as a static, escaped HTML document."""
-
-    parts = [
-        "<!doctype html>",
-        '<html lang="en">',
-        '<head><meta charset="utf-8"><title>FreeSearch monitoring</title></head>',
-        "<body>",
-        "<h1>FreeSearch monitoring</h1>",
-        f"<p>{html.escape(stats.notice)}</p>",
-        _render_usage_totals(stats.usage_totals),
-        _render_recent_usage(stats.recent_usage),
-        _render_latest_quota(stats.latest_quota),
-        _render_latest_health(stats.latest_health),
-        "</body>",
-        "</html>",
-    ]
-    return "\n".join(parts)
-
-
-def _table(caption: str, headers: Sequence[str], rows: Sequence[Sequence[str]]) -> str:
-    """Render one monitoring section as a fully escaped HTML table."""
-
-    cells = "".join(f"<th>{html.escape(header)}</th>" for header in headers)
-    if rows:
-        body = "".join(
-            "<tr>" + "".join(f"<td>{html.escape(cell)}</td>" for cell in row) + "</tr>"
-            for row in rows
-        )
-    else:
-        body = f'<tr><td colspan="{len(headers)}">No data yet.</td></tr>'
-    return (
-        "<section>"
-        f"<h2>{html.escape(caption)}</h2>"
-        f"<table><thead><tr>{cells}</tr></thead><tbody>{body}</tbody></table>"
-        "</section>"
-    )
-
-
-def _render_usage_totals(totals: Sequence[ProviderUsageTotal]) -> str:
-    """Render per-provider usage totals."""
-
-    return _table(
-        "Usage totals",
-        ("Provider", "Operation", "Total units", "Events"),
-        [
-            (
-                total.provider,
-                total.operation.value,
-                str(total.total_units),
-                str(total.event_count),
-            )
-            for total in totals
-        ],
-    )
-
-
-def _render_recent_usage(events: Sequence[RecentUsageEntry]) -> str:
-    """Render recent usage events, newest first as provided."""
-
-    return _table(
-        "Recent usage",
-        ("Provider", "Operation", "Units", "Observed at"),
-        [
-            (event.provider, event.operation.value, str(event.units), str(event.observed_at))
-            for event in events
-        ],
-    )
-
-
-def _render_latest_quota(snapshots: Sequence[QuotaSnapshot]) -> str:
-    """Render quota snapshots with their provenance next to the numbers."""
-
-    return _table(
-        "Latest quota",
-        ("Provider", "Source", "Remaining", "Limit", "Observed at"),
-        [
-            (
-                snapshot.provider,
-                snapshot.source.value,
-                _display(snapshot.remaining),
-                _display(snapshot.limit),
-                str(snapshot.observed_at),
-            )
-            for snapshot in snapshots
-        ],
-    )
-
-
-def _render_latest_health(observations: Sequence[LatestHealthEntry]) -> str:
-    """Render the newest health observation per provider."""
-
-    return _table(
-        "Latest health",
-        ("Provider", "Status", "Checked at"),
-        [(entry.provider, entry.status.value, str(entry.checked_at)) for entry in observations],
-    )
-
-
-def _display(value: Decimal | None) -> str:
-    """Render an optional decimal, with a neutral marker for absence."""
-
-    return "—" if value is None else str(value)
