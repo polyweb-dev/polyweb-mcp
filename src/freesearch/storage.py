@@ -2,6 +2,8 @@
 
 import json
 import math
+from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -9,7 +11,7 @@ from typing import Any, Self, cast, overload
 
 from sqlalchemy import URL, Index, Text, delete, insert, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-from sqlalchemy.engine import Connection, CursorResult
+from sqlalchemy.engine import Connection, CursorResult, Row
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -156,6 +158,38 @@ def _ensure_indexes(connection: Connection) -> None:
             index.create(connection, checkfirst=True)
 
 
+@dataclass(frozen=True)
+class UsageTotal:
+    """Usage units aggregated for one provider and operation."""
+
+    provider: str
+    operation: UsageOperation
+    total_units: Decimal
+    event_count: int
+
+
+def _sum_usage_rows(rows: Sequence[Row[Any]]) -> list[UsageTotal]:
+    """Group raw usage rows by (provider, operation) with Decimal-exact sums."""
+
+    totals: dict[tuple[str, UsageOperation], UsageTotal] = {}
+    for row in rows:
+        key = (str(row.provider), UsageOperation(str(row.operation)))
+        units = Decimal(str(row.units))
+        current = totals.get(key)
+        if current is None:
+            totals[key] = UsageTotal(
+                provider=key[0], operation=key[1], total_units=units, event_count=1
+            )
+        else:
+            totals[key] = UsageTotal(
+                provider=key[0],
+                operation=key[1],
+                total_units=current.total_units + units,
+                event_count=current.event_count + 1,
+            )
+    return sorted(totals.values(), key=lambda total: (total.provider, total.operation.value))
+
+
 class SQLiteRepository:
     """Persist shared operational models without provider-specific dependencies."""
 
@@ -234,7 +268,7 @@ class SQLiteRepository:
         operation: UsageOperation | None = None,
         since: datetime | None = None,
     ) -> list[UsageEvent]:
-        """Return usage history ordered from oldest to newest."""
+        """Return the usage ledger in chronological (observed_at, id) order."""
 
         statement = select(UsageEventRow).order_by(UsageEventRow.observed_at, UsageEventRow.id)
         if provider is not None:
@@ -243,6 +277,33 @@ class SQLiteRepository:
             statement = statement.where(UsageEventRow.operation == operation.value)
         if since is not None:
             statement = statement.where(UsageEventRow.observed_at >= _timestamp(since))
+        async with self._session_factory() as session:
+            rows = (await session.scalars(statement)).all()
+        return [self._usage_from_row(row) for row in rows]
+
+    async def usage_totals(self, *, since: datetime | None = None) -> list[UsageTotal]:
+        """Return per-provider, per-operation usage totals, provider-ordered.
+
+        Units are stored as exact decimal text and summed with :class:`Decimal`
+        (never through floats); ``since`` filters on the UTC-normalized
+        ``observed_at`` instant, inclusively.
+        """
+
+        statement = select(UsageEventRow.provider, UsageEventRow.operation, UsageEventRow.units)
+        if since is not None:
+            statement = statement.where(UsageEventRow.observed_at >= _timestamp(since))
+        async with self._session_factory() as session:
+            rows = (await session.execute(statement)).all()
+        return _sum_usage_rows(rows)
+
+    async def recent_usage(self, *, limit: int = 20) -> list[UsageEvent]:
+        """Return the newest usage events first, up to ``limit`` rows."""
+
+        statement = (
+            select(UsageEventRow)
+            .order_by(UsageEventRow.observed_at.desc(), UsageEventRow.id.desc())
+            .limit(limit)
+        )
         async with self._session_factory() as session:
             rows = (await session.scalars(statement)).all()
         return [self._usage_from_row(row) for row in rows]

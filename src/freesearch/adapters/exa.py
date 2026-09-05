@@ -283,7 +283,7 @@ class ExaAdapter(ProviderAdapter):
             operation=operation,
             units=Decimal(str(total)),
             observed_at=datetime.now(UTC),
-            metadata={"currency": "USD"},
+            metadata={},
         )
 
     def _normalize_error(self, exc: Exception) -> ProviderOperationError:

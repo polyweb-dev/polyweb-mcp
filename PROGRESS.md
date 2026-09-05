@@ -1,14 +1,15 @@
 # FreeSearch Progress
 
-Updated: 2026-09-02
+Updated: 2026-09-05
 
 ## Scope completed
 
-Stages 0, 1, and 2 from [`WORKPLAN.md`](WORKPLAN.md) are complete. All Stage 2
-core-platform worktrees (Resilience, Usage/data, Routing, MCP surface, and
-Configuration) are implemented and tested. The Stage 3 Tavily, Brave Search,
-Exa, You.com, Keenable, Firecrawl, and Parallel providers are implemented
-and tested.
+Stages 0, 1, 2, 3, 4, and **Stage 4.5 (read-only monitoring dashboard)** from
+[`WORKPLAN.md`](WORKPLAN.md) are complete. All Stage 2 core-platform worktrees
+(Resilience, Usage/data, Routing, MCP surface, and Configuration) are
+implemented and tested. The Stage 3 Tavily, Brave Search, Exa, You.com,
+Keenable, Firecrawl, and Parallel providers are implemented and tested, and
+the Stage 4 integration root serves them over both MCP and the REST API.
 
 ### Stage 0 - Foundation
 
@@ -247,35 +248,112 @@ and tested.
 - Added `src/freesearch/api.py`: the REST API (FastAPI) with OpenAPI docs at
   `/docs`, exposing `POST /search` and `POST /fetch` over the same
   composition root and routing as the MCP server, via the `freesearch-api`
-  console script on loopback:8001. Monitoring dashboard routes will be added
-  to this app (Stage 4.5) without touching the MCP surface.
+  console script on loopback:8001.
 - Status: composition root, registry, lifecycle, smoke tests, and live Brave
-  check are done. No request currently persists `response.usage` / health to
-  the SQLite repository, and `_route` still passes empty health/quota maps, so
-  there is no usage visibility yet.
-- Deferred (in planned order): Stage 4.5 basic monitoring dashboard (next,
-  read-only, no secrets), then the background quota reconciliation
-  coordinator, MCP end-to-end tests, docs/local setup guide, Docker packaging
-  (per the work plan), and the Stage 5 full settings/secrets dashboard.
+  check are done. Stage 4.5 (below) wires per-request usage/health
+  persistence from both paths into the shared `SQLiteRepository` and adds the
+  read-only monitoring reads (`GET /stats`, `GET /dashboard`) on the REST app
+  without touching the MCP surface. `_route` still passes empty health/quota
+  maps by design: consuming local snapshots for routing belongs to the quota
+  reconciliation coordinator stage.
+- Deferred (in planned order): the background quota reconciliation
+  coordinator (next, per WORKPLAN §4), MCP end-to-end tests, docs/local setup
+  guide, Docker packaging (per the work plan), and the Stage 5 full
+  settings/secrets dashboard.
 
-## Next - Stage 4.5 basic monitoring dashboard (read-only, no secrets)
+## Stage 4.5 - Basic monitoring dashboard (read-only, no secrets)
 
-Planned per [`WORKPLAN.md`](WORKPLAN.md) §4.5; not yet implemented.
+Implemented per [`WORKPLAN.md`](WORKPLAN.md) §4.5; live-verified on
+2026-09-05. All non-goals respected (no enablement/priority editing, no
+secret management, no keyring/Vault wiring, no auth/session/CSRF/audit, no
+rotation/revocation).
 
-- Wire persistence on every request: record `response.usage` and a health
-  observation to the existing shared async SQLite repository
-  (`SQLiteRepository`, SQLAlchemy 2.x ORM via `sqlite+aiosqlite`; no new
-  ORM/driver) from both `api.py` and
-  `server.py` paths.
-- Add loopback read-only monitoring reads on the existing FastAPI app
-  (`GET /stats`, `GET /dashboard`): per-provider usage totals, recent usage
-  events, `latest_quota` snapshots, latest health.
-- Keep quota provenance visible (`authoritative` / `observed` / `estimated`)
-  and label the UI local-observed only until the coordinator lands; reuse the
-  numeric-telemetry-only privacy rules (no query/URL/content or secrets).
-- Non-goals: provider enablement/priority editing, secret management,
-  keyring/Vault wiring, auth/session/CSRF/audit, rotation/revocation (all
-  Stage 5 full).
+- **Per-request telemetry on both paths**: `POST /search`/`POST /fetch`
+  (`api.py`) and the `search`/`fetch` MCP tools (`server.py`) record
+  `response.usage` verbatim and one `HEALTHY` observation (`message=None`)
+  via the shared async `SQLiteRepository` (SQLAlchemy 2.x ORM,
+  `sqlite+aiosqlite`; no new ORM/driver), through one shared helper module
+  `src/freesearch/monitoring.py` (`record_response_telemetry` /
+  `record_failure_telemetry` / `tracked_call`). Adapter failures record one
+  `DEGRADED` observation (`message=None`) and re-raise unchanged (REST
+  `RoutingError`→503 and MCP `ToolError` mappings preserved); routing
+  failures record nothing. Usage and health writes are independent
+  best-effort blocks; telemetry failures are swallowed with payload-free
+  warnings and never fail the user request.
+- **Repository lifecycle**: `create_app`/`create_server` accept an optional
+  injected repository; owned repositories (`adapters is None and repository
+  is None`) are opened in the lifespan at `resolve_database_path`
+  (`FREESEARCH_DB` env → explicit `database=` argument → `freesearch.db`) and
+  closed on exit; injected repositories are never closed. The MCP owned path
+  additionally scopes resources per lifecycle **generation** (fresh HTTP
+  client + adapters + repository per refcount 0→1 under a lock; detach on
+  1→0, teardown outside the lock) because the streamable-HTTP manager runs
+  one lifespan per MCP session, concurrently (sequential and
+  delayed-teardown race both pinned by tests).
+- **Read-only monitoring reads** on the FastAPI app (loopback): `GET /stats`
+  (JSON `StatsResponse`) and `GET /dashboard` (stdlib-only HTML, no template
+  engine): per-(provider, operation) usage totals, newest-first recent usage
+  events (`?limit`, default 20, clamped 1–100), `latest_quota` snapshots and
+  latest health per provider; empty/missing repository returns 200 with empty
+  sections, never 503. Routes are `include_in_schema=False` (the existing
+  OpenAPI pin on `/search` + `/fetch` is preserved).
+- **Privacy**: `/stats` uses projection models (`RecentUsageEntry`,
+  `LatestHealthEntry`) so `metadata`, `request_id`, and health `message`
+  never leave the endpoint regardless of stored rows; write-side metadata is
+  still gated by the numeric-telemetry-only `_metadata_json` rule; health
+  `message` is always `None` from the new writers; Exa usage metadata was
+  made numeric-only (`metadata={}` — the `CostEstimate` currency label is
+  unchanged); the dashboard renders only projected fields, every dynamic
+  value `html.escape`d, no forms/JS/external assets.
+- **Provenance + labeling**: every quota row displays its `source`
+  (`authoritative` / `observed` / `estimated`); the UI shows a persistent
+  banner "local-observed only — vendor `/usage` endpoints lag 10–15 min".
+  `latest_quota` is empty until the coordinator lands — nothing on the
+  request path calls `adapter.quota()` by design (provenance rendering is
+  unit-tested with seeded snapshots).
+- **Storage additions** (no schema change): `usage_totals(since=None)`
+  (Python `Decimal` sums grouped per provider+operation to avoid SQLite
+  REAL coercion), `recent_usage(limit)` (newest-first), and a restored
+  chronological `list_usage` contract (`observed_at, id`).
+- **Offline BDD suite**: new `features/monitoring.feature` (4 scenarios, no
+  keys/network; stub adapters + temp-file SQLite in the steps) guarded via a
+  feature-level `@monitoring` tag and an `environment.py` check on
+  `effective_tags` (feature tags are not visible through `scenario.tags`).
+- **Testing**: 27 monitoring unit tests + 2 storage-aggregate tests + 3
+  BDD-environment guard tests; full suite 859 passed; monitoring feature
+  4 scenarios / 16 steps passed.
+- **Live acceptance (2026-09-05)**: with a fresh telemetry DB, Brave search
+  (`routing.mode=require`, 1 unit) and Tavily fetch (require mode, 0 units —
+  a real zero-credit extract usage event) both returned 200; `/stats`
+  attributed `brave/search` and `tavily/fetch` totals with `healthy`
+  observations, newest-first recent events, and the local-observed banner in
+  `/dashboard`; no `message`/`metadata`/`request_id`/`query`/`url`/`content`
+  keys anywhere in the reads (evidence: `.runtime-tmp/live-stats.json`,
+  `live-dashboard.html`).
+- **Findings recorded for future stages**:
+  - FastMCP registers `call_tool` dynamically as the protocol handler —
+    subclassing it to normalize return shapes breaks real transports
+    (e.g. `list(False)`); never override it.
+  - Write-side gates do not make read endpoints safe: monitoring reads must
+    project, not echo, stored models.
+  - Behave feature-level tags require `effective_tags`; scenario-level-only
+    checks silently miss them (masked locally by configured keys).
+  - The REST "unhandled adapter-error 500 / language validation" candidate
+    fix from the harness bridge notes remains open — deliberately out of
+    this stage's scope.
+
+## Next - Quota reconciliation coordinator
+
+Planned per [`WORKPLAN.md`](WORKPLAN.md) §4; not yet implemented. Bridges the
+local SQLite `UsageEvent` ledger (live decrements) with periodic vendor
+`adapter.quota()` polling to eliminate provider telemetry lag (vendors lag
+10–15 minutes). It must re-anchor the authoritative baseline
+(`QuotaSnapshotRow`), detect external account drift, and clear or offset
+processed local usage events without blocking active search and fetch
+requests. The Stage 4.5 monitoring read surface (`latest_quota` with
+provenance) is already in place and will display coordinator-produced
+snapshots; routing consumption of local snapshots also lands with this
+stage.
 
 
 ## DeepSeek Harness `web_search` integration (Path B bridge)
@@ -376,10 +454,9 @@ To prevent misrouting or quota exhaustion stalls under heavy burst traffic:
 
 ## Deliberately deferred
 
-Remaining, in planned order: Stage 4.5 basic monitoring dashboard (next),
-quota reconciliation coordinator, MCP end-to-end tests, documentation/local
-setup guide, Docker packaging, and the full settings/secrets dashboard
-(Stage 5), as specified by the work plan.
+Remaining, in planned order: quota reconciliation coordinator (next), MCP
+end-to-end tests, documentation/local setup guide, Docker packaging, and the
+full settings/secrets dashboard (Stage 5), as specified by the work plan.
 
 - **Brave Answers API**: Brave provides separate API keys and subscriptions for
   Search (`FREESEARCH_BRAVE_SEARCH_API_KEY`) and AI Answers (`FREESEARCH_BRAVE_ANSWERS_API_KEY`).
@@ -408,7 +485,12 @@ uv sync --locked
 uv run ruff check .
 uv run ruff format --check .
 uv run mypy src
-uv run pytest  # 822 passed
+uv run pytest  # 859 passed
+uv run behave features/monitoring.feature  # 4 scenarios, 16 steps passed (offline, no keys)
 FREESEARCH_RUN_LIVE=1 uv run behave --tags=@keenable --no-capture  # 1 live scenario, 7 steps passed
 uv run behave --tags=@live,@parallel features/parallel.feature  # 2 passed
 ```
+Live Stage 4.5 acceptance (2026-09-05): fresh `FREESEARCH_DB` + API server,
+Brave search (1 unit) and Tavily fetch (0 units) via `routing.mode=require`,
+attribution verified in `/stats` + `/dashboard` (evidence in
+`.runtime-tmp/live-stats.json` / `live-dashboard.html`).

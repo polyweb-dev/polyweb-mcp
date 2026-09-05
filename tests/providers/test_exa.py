@@ -536,7 +536,7 @@ async def test_search_reports_real_numeric_cost_dollars_total() -> None:
     assert response.usage is not None
     assert response.usage.operation is UsageOperation.SEARCH
     assert response.usage.units == Decimal("0.0042")
-    assert response.usage.metadata == {"currency": "USD"}
+    assert response.usage.metadata == {}
     assert response.usage.observed_at.utcoffset() == timedelta(0)
 
 
@@ -801,7 +801,7 @@ async def test_fetch_reports_only_real_usage() -> None:
     assert response.usage is not None
     assert response.usage.operation is UsageOperation.FETCH
     assert response.usage.units == Decimal("0.02")
-    assert response.usage.metadata == {"currency": "USD"}
+    assert response.usage.metadata == {}
     assert response.usage.observed_at.utcoffset() == timedelta(0)
 
 

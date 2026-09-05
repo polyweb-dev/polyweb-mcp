@@ -1,0 +1,1110 @@
+"""Stage 4.5 monitoring acceptance and boundary tests.
+
+These tests intentionally target the not-yet-implemented read-only monitoring
+surface. They use local adapters and temporary SQLite repositories only; no
+provider network or credentials are involved.
+"""
+
+import asyncio
+import html
+import inspect
+import tempfile
+from collections.abc import AsyncIterator, Sequence
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
+from pathlib import Path
+from typing import Any, cast
+
+import pytest
+import pytest_asyncio
+from fastapi.testclient import TestClient
+from mcp.server.fastmcp.exceptions import ToolError
+
+from freesearch import monitoring
+from freesearch.adapters.base import ProviderAdapter
+from freesearch.api import create_app
+from freesearch.contracts import (
+    CostEstimate,
+    FetchedDocument,
+    FetchRequest,
+    FetchResponse,
+    HealthStatus,
+    ProviderCapabilities,
+    ProviderHealth,
+    QuotaSnapshot,
+    QuotaSource,
+    SearchRequest,
+    SearchResponse,
+    SearchResult,
+    UsageEvent,
+    UsageOperation,
+)
+from freesearch.server import close_adapters, create_server
+from freesearch.storage import SQLiteRepository
+
+
+class _StubAdapter(ProviderAdapter):
+    """Deterministic adapter with independently selectable search/fetch usage."""
+
+    def __init__(
+        self,
+        name: str,
+        *,
+        search_units: Decimal | None = Decimal("1.25"),
+        fetch_units: Decimal | None = Decimal("2.50"),
+        search_at: datetime | None = None,
+        fetch_at: datetime | None = None,
+        fail_search: bool = False,
+        fail_fetch: bool = False,
+    ) -> None:
+        self._name = name
+        self._search_units = search_units
+        self._fetch_units = fetch_units
+        self.search_at = search_at or datetime(2026, 1, 1, 12, 0, 1, tzinfo=UTC)
+        self.fetch_at = fetch_at or self.search_at + timedelta(seconds=1)
+        self._fail_search = fail_search
+        self._fail_fetch = fail_fetch
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    @property
+    def capabilities(self) -> ProviderCapabilities:
+        return ProviderCapabilities(search=True, fetch=True, cost_estimate=True)
+
+    def _usage(
+        self,
+        operation: UsageOperation,
+        units: Decimal | None,
+        observed_at: datetime,
+    ) -> UsageEvent | None:
+        if units is None:
+            return None
+        return UsageEvent(
+            provider=self._name,
+            operation=operation,
+            units=units,
+            observed_at=observed_at,
+            metadata={"credits": 3, "tokens": 12, "latency_ms": 8.5},
+        )
+
+    async def search(self, request: SearchRequest) -> SearchResponse:
+        if self._fail_search:
+            raise RuntimeError("adapter exploded")
+        return SearchResponse(
+            query=request.query,
+            results=[
+                SearchResult(
+                    title=f"{self._name} result",
+                    url="https://example.com/result",
+                    snippet="offline result",
+                )
+            ],
+            provider=self._name,
+            total_results=1,
+            usage=self._usage(UsageOperation.SEARCH, self._search_units, self.search_at),
+        )
+
+    async def fetch(self, request: FetchRequest) -> FetchResponse:
+        if self._fail_fetch:
+            raise RuntimeError("adapter exploded")
+        return FetchResponse(
+            provider=self._name,
+            document=FetchedDocument(
+                url=request.url,
+                content=f"{self._name} content",
+                fetched_at=self.fetch_at,
+            ),
+            usage=self._usage(UsageOperation.FETCH, self._fetch_units, self.fetch_at),
+        )
+
+    async def estimate_cost(self, request: SearchRequest | FetchRequest) -> CostEstimate:
+        operation = (
+            UsageOperation.SEARCH if isinstance(request, SearchRequest) else UsageOperation.FETCH
+        )
+        return CostEstimate(provider=self._name, operation=operation, units=Decimal("0"))
+
+
+class _FailingTelemetryRepository:
+    """Write-only repository double that makes telemetry persistence fail."""
+
+    async def record_usage(self, event: UsageEvent) -> None:
+        raise OSError("telemetry database unavailable")
+
+    async def record_health(self, health: ProviderHealth) -> None:
+        raise OSError("telemetry database unavailable")
+
+
+class _ReadFailingRepository:
+    """Repository double whose monitoring reads consistently fail."""
+
+    async def usage_totals(self, *, since: datetime | None = None) -> list[Any]:
+        raise OSError("monitoring read unavailable")
+
+    async def recent_usage(self, *, limit: int = 20) -> list[UsageEvent]:
+        raise OSError("monitoring read unavailable")
+
+    async def latest_quota(
+        self, provider: str, *, source: QuotaSource | None = None
+    ) -> QuotaSnapshot | None:
+        raise OSError("monitoring read unavailable")
+
+    async def latest_health(self, provider: str) -> ProviderHealth | None:
+        raise OSError("monitoring read unavailable")
+
+
+class _LeakyRepository:
+    """Monitoring-read double that returns payload-bearing storage models."""
+
+    def __init__(self, event: UsageEvent, health: ProviderHealth) -> None:
+        self._event = event
+        self._health = health
+
+    async def usage_totals(self, *, since: datetime | None = None) -> list[Any]:
+        return []
+
+    async def recent_usage(self, *, limit: int = 20) -> list[UsageEvent]:
+        return [self._event]
+
+    async def latest_quota(
+        self, provider: str, *, source: QuotaSource | None = None
+    ) -> QuotaSnapshot | None:
+        return None
+
+    async def latest_health(self, provider: str) -> ProviderHealth | None:
+        return self._health if provider == self._health.provider else None
+
+
+@pytest_asyncio.fixture
+async def repository() -> AsyncIterator[SQLiteRepository]:
+    with tempfile.NamedTemporaryFile(
+        prefix="freesearch-monitoring-",
+        suffix=".db",
+        dir=Path.cwd(),
+        delete=False,
+    ) as temporary_file:
+        db_path = Path(temporary_file.name)
+    db = await SQLiteRepository.open(db_path)
+    try:
+        yield db
+    finally:
+        await db.close()
+        db_path.unlink(missing_ok=True)
+
+
+def _event(
+    provider: str,
+    operation: UsageOperation,
+    units: str,
+    observed_at: datetime,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> UsageEvent:
+    return UsageEvent(
+        provider=provider,
+        operation=operation,
+        units=Decimal(units),
+        observed_at=observed_at,
+        metadata={"tokens": 1} if metadata is None else metadata,
+    )
+
+
+def _quota(provider: str, source: QuotaSource, observed_at: datetime) -> QuotaSnapshot:
+    return QuotaSnapshot(
+        provider=provider,
+        source=source,
+        remaining=Decimal("97.5"),
+        limit=Decimal("100"),
+        reset_at=observed_at + timedelta(hours=1),
+        observed_at=observed_at,
+    )
+
+
+def _health(provider: str, status: HealthStatus, checked_at: datetime) -> ProviderHealth:
+    return ProviderHealth(provider=provider, status=status, checked_at=checked_at, message=None)
+
+
+async def test_rest_search_persists_usage_and_healthy_health(
+    repository: SQLiteRepository,
+) -> None:
+    adapter = _StubAdapter("rest-provider", fetch_units=None)
+    app = create_app([adapter], repository=repository)
+
+    with TestClient(app) as client:
+        response = client.post("/search", json={"query": "offline"})
+
+    assert response.status_code == 200
+    assert response.json()["provider"] == "rest-provider"
+    assert await repository.list_usage() == [
+        UsageEvent(
+            provider="rest-provider",
+            operation=UsageOperation.SEARCH,
+            units=Decimal("1.25"),
+            observed_at=adapter.search_at,
+            metadata={"credits": 3, "tokens": 12, "latency_ms": 8.5},
+        )
+    ]
+    assert await repository.latest_health("rest-provider") == ProviderHealth(
+        provider="rest-provider",
+        status=HealthStatus.HEALTHY,
+        checked_at=adapter.search_at,
+        message=None,
+    )
+
+
+async def test_usage_write_rejection_does_not_skip_healthy_health(
+    repository: SQLiteRepository,
+) -> None:
+    observed_at = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+    usage = UsageEvent(
+        provider="usage-rejected",
+        operation=UsageOperation.SEARCH,
+        units=Decimal("1"),
+        observed_at=observed_at,
+        metadata={"query": "x"},
+    )
+    response = SearchResponse(
+        query="not persisted",
+        results=[],
+        provider="usage-rejected",
+        usage=usage,
+    )
+
+    await monitoring.record_response_telemetry(repository, response)
+
+    assert await repository.list_usage() == []
+    assert await repository.latest_health("usage-rejected") == ProviderHealth(
+        provider="usage-rejected",
+        status=HealthStatus.HEALTHY,
+        checked_at=observed_at,
+        message=None,
+    )
+
+
+async def test_numeric_exa_usage_persists_with_healthy_health(
+    repository: SQLiteRepository,
+) -> None:
+    observed_at = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+    usage = UsageEvent(
+        provider="exa",
+        operation=UsageOperation.SEARCH,
+        units=Decimal("0.0042"),
+        observed_at=observed_at,
+        metadata={},
+    )
+    response = SearchResponse(query="exa", results=[], provider="exa", usage=usage)
+
+    await monitoring.record_response_telemetry(repository, response)
+
+    assert await repository.list_usage() == [usage]
+    assert await repository.latest_health("exa") == ProviderHealth(
+        provider="exa",
+        status=HealthStatus.HEALTHY,
+        checked_at=observed_at,
+        message=None,
+    )
+
+
+async def test_rest_fetch_and_mcp_search_fetch_persist_identical_usage(
+    repository: SQLiteRepository,
+) -> None:
+    adapter = _StubAdapter("shared-provider")
+    rest_app = create_app([adapter], repository=repository)
+    with TestClient(rest_app) as client:
+        rest_response = client.post("/fetch", json={"url": "https://example.com/rest"})
+
+    server = create_server([adapter], repository=repository)
+    mcp_search = await server.call_tool("search", {"request": {"query": "mcp"}})
+    mcp_fetch = await server.call_tool("fetch", {"request": {"url": "https://example.com/mcp"}})
+
+    assert rest_response.status_code == 200
+    assert isinstance(mcp_search[0], Sequence)
+    assert not isinstance(mcp_search[0], bool)
+    assert isinstance(mcp_fetch[0], Sequence)
+    assert not isinstance(mcp_fetch[0], bool)
+    assert mcp_search[1]["provider"] == "shared-provider"
+    assert mcp_search[1]["usage"]["operation"] == "search"
+    assert mcp_fetch[1]["usage"]["operation"] == "fetch"
+    usage_pairs = [(event.operation.value, event.units) for event in await repository.list_usage()]
+    assert sorted(usage_pairs) == sorted(
+        [
+            (UsageOperation.FETCH.value, Decimal("2.50")),
+            (UsageOperation.SEARCH.value, Decimal("1.25")),
+            (UsageOperation.FETCH.value, Decimal("2.50")),
+        ]
+    )
+    shared_health = await repository.latest_health("shared-provider")
+    assert shared_health is not None
+    assert shared_health.status is HealthStatus.HEALTHY
+
+
+async def test_usage_none_still_records_healthy_health(repository: SQLiteRepository) -> None:
+    adapter = _StubAdapter("health-only", search_units=None, fetch_units=None)
+    app = create_app([adapter], repository=repository)
+    start = datetime.now(UTC) - timedelta(seconds=1)
+
+    with TestClient(app) as client:
+        response = client.post("/search", json={"query": "no usage"})
+
+    end = datetime.now(UTC) + timedelta(seconds=1)
+    assert response.status_code == 200
+    assert await repository.list_usage() == []
+    health = await repository.latest_health("health-only")
+    assert health is not None
+    assert health.provider == "health-only"
+    assert health.status is HealthStatus.HEALTHY
+    assert health.message is None
+    assert start <= health.checked_at <= end
+
+
+async def test_fetch_without_usage_uses_document_fetched_at_for_health(
+    repository: SQLiteRepository,
+) -> None:
+    adapter = _StubAdapter("fetch-health-only", search_units=None, fetch_units=None)
+    app = create_app([adapter], repository=repository)
+
+    with TestClient(app) as client:
+        response = client.post("/fetch", json={"url": "https://example.com/no-usage"})
+
+    assert response.status_code == 200
+    assert response.json()["usage"] is None
+    assert await repository.list_usage() == []
+    assert await repository.latest_health("fetch-health-only") == ProviderHealth(
+        provider="fetch-health-only",
+        status=HealthStatus.HEALTHY,
+        checked_at=adapter.fetch_at,
+        message=None,
+    )
+
+
+async def test_adapter_failure_records_degraded_and_preserves_rest_and_mcp_errors(
+    repository: SQLiteRepository,
+) -> None:
+    rest_app = create_app(
+        [_StubAdapter("rest-failure", fail_search=True)],
+        repository=repository,
+    )
+    with TestClient(rest_app, raise_server_exceptions=False) as client:
+        rest_response = client.post("/search", json={"query": "failure"})
+
+    assert rest_response.status_code == 500
+    rest_health = await repository.latest_health("rest-failure")
+    assert rest_health is not None
+    assert rest_health.provider == "rest-failure"
+    assert rest_health.status is HealthStatus.DEGRADED
+    assert rest_health.message is None
+
+    mcp_server = create_server(
+        [_StubAdapter("mcp-failure", fail_search=True)],
+        repository=repository,
+    )
+    with pytest.raises(ToolError, match="adapter exploded"):
+        await mcp_server.call_tool("search", {"request": {"query": "failure"}})
+    mcp_health = await repository.latest_health("mcp-failure")
+    assert mcp_health is not None
+    assert mcp_health.provider == "mcp-failure"
+    assert mcp_health.status is HealthStatus.DEGRADED
+    assert mcp_health.message is None
+
+
+async def test_telemetry_failure_never_breaks_rest_request() -> None:
+    adapter = _StubAdapter("telemetry-down")
+    app = create_app([adapter], repository=_FailingTelemetryRepository())
+
+    with TestClient(app) as client:
+        response = client.post("/search", json={"query": "still works"})
+
+    assert response.status_code == 200
+    assert response.json()["provider"] == "telemetry-down"
+
+
+async def test_privacy_gate_rejects_query_url_and_string_metadata(
+    repository: SQLiteRepository,
+) -> None:
+    observed_at = datetime(2026, 1, 1, tzinfo=UTC)
+    invalid_events = [
+        _event("private", UsageOperation.SEARCH, "1", observed_at, metadata={"query": 7}),
+        _event("private", UsageOperation.SEARCH, "1", observed_at, metadata={"url": 7}),
+        _event("private", UsageOperation.SEARCH, "1", observed_at, metadata={"note": "secret"}),
+        _event("private", UsageOperation.SEARCH, "1", observed_at, metadata={"api_key": 7}),
+    ]
+
+    for invalid_event in invalid_events:
+        with pytest.raises(ValueError):
+            await repository.record_usage(invalid_event)
+        assert await repository.list_usage() == []
+
+
+async def test_collect_stats_shape_ordering_grouping_and_quota_provenance(
+    repository: SQLiteRepository,
+) -> None:
+    t0 = datetime(2026, 1, 1, tzinfo=UTC)
+    events = [
+        _event("alpha", UsageOperation.SEARCH, "123.456789", t0),
+        _event("alpha", UsageOperation.SEARCH, "0.000001", t0 + timedelta(seconds=1)),
+        _event("alpha", UsageOperation.FETCH, "2", t0 + timedelta(seconds=2)),
+        _event("beta", UsageOperation.SEARCH, "3", t0 + timedelta(seconds=3)),
+    ]
+    for event in events:
+        await repository.record_usage(event)
+    await repository.record_quota(_quota("alpha", QuotaSource.AUTHORITATIVE, t0))
+    await repository.record_quota(_quota("beta", QuotaSource.OBSERVED, t0 + timedelta(seconds=1)))
+    await repository.record_health(_health("alpha", HealthStatus.HEALTHY, t0))
+    await repository.record_health(_health("beta", HealthStatus.DEGRADED, t0))
+
+    stats = await monitoring.collect_stats(
+        repository,
+        adapter_names=("alpha", "beta", "empty"),
+        recent_limit=monitoring.DEFAULT_RECENT_LIMIT,
+    )
+
+    assert set(stats.model_dump()) == {
+        "notice",
+        "usage_totals",
+        "recent_usage",
+        "latest_quota",
+        "latest_health",
+    }
+    assert stats.notice == monitoring.MONITORING_NOTICE
+    assert [
+        (total.provider, total.operation, total.total_units, total.event_count)
+        for total in stats.usage_totals
+    ] == [
+        ("alpha", UsageOperation.FETCH, Decimal("2"), 1),
+        ("alpha", UsageOperation.SEARCH, Decimal("123.456790"), 2),
+        ("beta", UsageOperation.SEARCH, Decimal("3"), 1),
+    ]
+    assert [event.provider for event in stats.recent_usage] == [
+        "beta",
+        "alpha",
+        "alpha",
+        "alpha",
+    ]
+    assert {snapshot.provider for snapshot in stats.latest_quota} == {"alpha", "beta"}
+    assert {snapshot.source for snapshot in stats.latest_quota} == {
+        QuotaSource.AUTHORITATIVE,
+        QuotaSource.OBSERVED,
+    }
+    assert all(snapshot.source is not None for snapshot in stats.latest_quota)
+    assert {health.provider for health in stats.latest_health} == {"alpha", "beta"}
+
+
+async def test_stats_projection_strips_health_message_usage_metadata_and_request_id() -> None:
+    observed_at = datetime(2026, 1, 1, tzinfo=UTC)
+    event = UsageEvent(
+        provider="leaky",
+        operation=UsageOperation.SEARCH,
+        units=Decimal("1.5"),
+        observed_at=observed_at,
+        request_id="r-1",
+        metadata={"query": "private text"},
+    )
+    health = ProviderHealth(
+        provider="leaky",
+        status=HealthStatus.HEALTHY,
+        checked_at=observed_at,
+        message="https://secret.example/x api_key=zzz",
+    )
+    repository = cast(SQLiteRepository, _LeakyRepository(event, health))
+
+    stats = await monitoring.collect_stats(repository, adapter_names=())
+
+    recent_dump = stats.recent_usage[0].model_dump()
+    assert set(recent_dump) == {"provider", "operation", "units", "observed_at"}
+    assert "metadata" not in recent_dump
+    assert "request_id" not in recent_dump
+    assert recent_dump["provider"] == "leaky"
+    assert recent_dump["operation"] is UsageOperation.SEARCH
+    assert recent_dump["units"] == Decimal("1.5")
+    assert recent_dump["observed_at"] == observed_at
+
+    health_dump = stats.latest_health[0].model_dump()
+    assert set(health_dump) == {"provider", "status", "checked_at"}
+    assert "message" not in health_dump
+    assert health_dump["provider"] == "leaky"
+    assert health_dump["status"] is HealthStatus.HEALTHY
+    assert health_dump["checked_at"] == observed_at
+
+
+async def test_stats_endpoint_omits_sensitive_keys_end_to_end(
+    repository: SQLiteRepository,
+) -> None:
+    observed_at = datetime(2026, 1, 1, tzinfo=UTC)
+    await repository.record_health(
+        ProviderHealth(
+            provider="endpoint-provider",
+            status=HealthStatus.HEALTHY,
+            checked_at=observed_at,
+            message="secret msg",
+        )
+    )
+    await repository.record_usage(
+        UsageEvent(
+            provider="endpoint-provider",
+            operation=UsageOperation.SEARCH,
+            units=Decimal("1"),
+            observed_at=observed_at,
+            request_id="r-9",
+            metadata={"credits": 1},
+        )
+    )
+    app = create_app([], repository=repository)
+
+    with TestClient(app) as client:
+        response = client.get("/stats")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["recent_usage"]) == 1
+    assert set(body["recent_usage"][0]) == {
+        "provider",
+        "operation",
+        "units",
+        "observed_at",
+    }
+    assert "metadata" not in body["recent_usage"][0]
+    assert "request_id" not in body["recent_usage"][0]
+    assert len(body["latest_health"]) == 1
+    assert set(body["latest_health"][0]) == {"provider", "status", "checked_at"}
+    assert "message" not in body["latest_health"][0]
+
+
+async def test_stats_endpoint_clamps_recent_limit_and_returns_contract_shape(
+    repository: SQLiteRepository,
+) -> None:
+    t0 = datetime(2026, 1, 1, tzinfo=UTC)
+    for index in range(monitoring.MAX_RECENT_LIMIT + 1):
+        await repository.record_usage(
+            _event(
+                "alpha",
+                UsageOperation.SEARCH,
+                "0.000001",
+                t0 + timedelta(seconds=index),
+            )
+        )
+    app = create_app([_StubAdapter("alpha")], repository=repository)
+
+    with TestClient(app) as client:
+        low = client.get("/stats?limit=0")
+        high = client.get("/stats?limit=1000")
+
+    assert low.status_code == 200
+    assert high.status_code == 200
+    assert set(low.json()) == {
+        "notice",
+        "usage_totals",
+        "recent_usage",
+        "latest_quota",
+        "latest_health",
+    }
+    assert len(low.json()["recent_usage"]) == 1
+    assert len(high.json()["recent_usage"]) == monitoring.MAX_RECENT_LIMIT
+    assert (
+        high.json()["recent_usage"][0]["observed_at"]
+        > high.json()["recent_usage"][-1]["observed_at"]
+    )
+
+
+async def test_no_repository_stats_and_dashboard_reads_are_empty_200() -> None:
+    app = create_app([_StubAdapter("no-repository")], repository=None)
+
+    with TestClient(app) as client:
+        stats = client.get("/stats")
+        dashboard = client.get("/dashboard")
+
+    assert stats.status_code == 200
+    assert stats.json() == {
+        "notice": monitoring.MONITORING_NOTICE,
+        "usage_totals": [],
+        "recent_usage": [],
+        "latest_quota": [],
+        "latest_health": [],
+    }
+    assert dashboard.status_code == 200
+    assert "No data yet." in dashboard.text
+
+
+async def test_monitoring_read_failures_return_empty_stats_and_html_dashboard() -> None:
+    repository = cast(SQLiteRepository, _ReadFailingRepository())
+    app = create_app([_StubAdapter("read-failure")], repository=repository)
+
+    with TestClient(app) as client:
+        stats = client.get("/stats")
+        dashboard = client.get("/dashboard")
+
+    assert stats.status_code == 200
+    assert stats.json() == {
+        "notice": monitoring.MONITORING_NOTICE,
+        "usage_totals": [],
+        "recent_usage": [],
+        "latest_quota": [],
+        "latest_health": [],
+    }
+    assert dashboard.status_code == 200
+    assert "text/html" in dashboard.headers["content-type"]
+
+
+async def test_render_dashboard_escapes_values_shows_sources_and_has_empty_states() -> None:
+    from freesearch.monitoring import LatestHealthEntry, RecentUsageEntry
+
+    unsafe_provider = "<b>provider</b>"
+    observed_at = datetime(2026, 1, 1, tzinfo=UTC)
+    stats = monitoring.StatsResponse(
+        notice=monitoring.MONITORING_NOTICE,
+        usage_totals=[
+            monitoring.ProviderUsageTotal(
+                provider=unsafe_provider,
+                operation=UsageOperation.SEARCH,
+                total_units=Decimal("1.25"),
+                event_count=1,
+            )
+        ],
+        recent_usage=[
+            RecentUsageEntry(
+                provider=unsafe_provider,
+                operation=UsageOperation.SEARCH,
+                units=Decimal("1.25"),
+                observed_at=observed_at,
+            )
+        ],
+        latest_quota=[_quota(unsafe_provider, QuotaSource.ESTIMATED, observed_at)],
+        latest_health=[
+            LatestHealthEntry(
+                provider=unsafe_provider,
+                status=HealthStatus.HEALTHY,
+                checked_at=observed_at,
+            )
+        ],
+    )
+
+    rendered = monitoring.render_dashboard(stats)
+    escaped_provider = html.escape(unsafe_provider)
+    assert rendered.lstrip().lower().startswith("<!doctype html>")
+    assert escaped_provider in rendered
+    assert unsafe_provider not in rendered
+    assert "local-observed only" in rendered
+    assert "10\N{EN DASH}15 min" in rendered
+    assert "estimated" in rendered
+    assert "<script" not in rendered.lower()
+    assert "<form" not in rendered.lower()
+    assert "<link" not in rendered.lower()
+    assert "<img" not in rendered.lower()
+
+    empty = monitoring.render_dashboard(
+        monitoring.StatsResponse(
+            notice=monitoring.MONITORING_NOTICE,
+            usage_totals=[],
+            recent_usage=[],
+            latest_quota=[],
+            latest_health=[],
+        )
+    )
+    assert empty.count("No data yet.") == 4
+
+
+async def test_app_owned_repository_lifespan_creates_and_closes_database(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr("freesearch.api.build_adapters", lambda _client: [])
+    closed: list[SQLiteRepository] = []
+    real_close = SQLiteRepository.close
+
+    async def close_spy(repository: SQLiteRepository) -> None:
+        closed.append(repository)
+        await real_close(repository)
+
+    monkeypatch.setattr(SQLiteRepository, "close", close_spy)
+    database = tmp_path / "owned-app.db"
+    app = create_app(None, database=database)
+
+    with TestClient(app):
+        owned = app.state.repository
+        assert isinstance(owned, SQLiteRepository)
+        assert database.is_file()
+
+    assert app.state.repository is None
+    assert closed == [owned]
+
+
+async def test_server_owned_repository_lifespan_creates_and_closes_database(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr("freesearch.server.build_adapters", lambda _client: [])
+    closed: list[SQLiteRepository] = []
+    real_close = SQLiteRepository.close
+
+    async def close_spy(repository: SQLiteRepository) -> None:
+        closed.append(repository)
+        await real_close(repository)
+
+    monkeypatch.setattr(SQLiteRepository, "close", close_spy)
+    database = tmp_path / "owned-server.db"
+    server = create_server(None, database=database)
+
+    async with server._mcp_server.lifespan(server):
+        assert database.is_file()
+
+    assert len(closed) == 1
+    assert type(closed[0]) is SQLiteRepository
+
+
+@pytest.mark.parametrize("exit_order", [("a", "b"), ("b", "a")])
+async def test_server_owned_lifespan_refcounted_across_overlapping_sessions(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    exit_order: tuple[str, str],
+) -> None:
+    monkeypatch.setattr("freesearch.server.build_adapters", lambda _client: [_StubAdapter("x")])
+    opened: list[SQLiteRepository] = []
+    real_open = SQLiteRepository.open
+
+    async def open_spy(cls: type[SQLiteRepository], database: str | Path) -> SQLiteRepository:
+        repository = await real_open(database)
+        opened.append(repository)
+        return repository
+
+    monkeypatch.setattr(SQLiteRepository, "open", classmethod(open_spy))
+    closed: list[SQLiteRepository] = []
+    real_close = SQLiteRepository.close
+
+    async def close_spy(repository: SQLiteRepository) -> None:
+        closed.append(repository)
+        await real_close(repository)
+
+    monkeypatch.setattr(SQLiteRepository, "close", close_spy)
+    server = create_server(None, database=tmp_path / "ref.db")
+    lifespans = {
+        "a": server._mcp_server.lifespan(server),
+        "b": server._mcp_server.lifespan(server),
+    }
+    entered: set[str] = set()
+    exited: set[str] = set()
+
+    try:
+        await lifespans["a"].__aenter__()
+        entered.add("a")
+        await lifespans["b"].__aenter__()
+        entered.add("b")
+
+        assert len(opened) == 1
+        repository = opened[0]
+        first_result = await server.call_tool("search", {"request": {"query": "session a"}})
+        second_result = await server.call_tool("search", {"request": {"query": "session b"}})
+        assert first_result[1]["provider"] == "x"
+        assert second_result[1]["provider"] == "x"
+        assert [
+            (event.provider, event.operation, event.units)
+            for event in await repository.list_usage()
+        ] == [
+            ("x", UsageOperation.SEARCH, Decimal("1.25")),
+            ("x", UsageOperation.SEARCH, Decimal("1.25")),
+        ]
+
+        first_exit, second_exit = exit_order
+        await lifespans[first_exit].__aexit__(None, None, None)
+        exited.add(first_exit)
+        assert closed == []
+        between_event = UsageEvent(
+            provider="between-sessions",
+            operation=UsageOperation.FETCH,
+            units=Decimal("2"),
+            observed_at=datetime(2026, 1, 1, 12, 0, tzinfo=UTC),
+        )
+        await repository.record_usage(between_event)
+        ledger = await repository.list_usage()
+        assert len(ledger) == 3
+        assert between_event in ledger
+        assert sorted(
+            (event.provider, event.operation.value, event.units)
+            for event in ledger
+            if event.provider == "x"
+        ) == [
+            ("x", UsageOperation.SEARCH.value, Decimal("1.25")),
+            ("x", UsageOperation.SEARCH.value, Decimal("1.25")),
+        ]
+
+        await lifespans[second_exit].__aexit__(None, None, None)
+        exited.add(second_exit)
+        assert closed == [repository]
+    finally:
+        for name in ("a", "b"):
+            if name in entered and name not in exited:
+                await lifespans[name].__aexit__(None, None, None)
+        for repository in opened:
+            if repository not in closed:
+                await real_close(repository)
+
+
+async def test_server_owned_lifespan_sequential_sessions_reuse_fresh_generation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    build_count = 0
+    build_clients: list[Any] = []
+
+    def build_spy(_client: Any) -> list[ProviderAdapter]:
+        nonlocal build_count
+        build_count += 1
+        build_clients.append(_client)
+        return [_StubAdapter("x")]
+
+    monkeypatch.setattr("freesearch.server.build_adapters", build_spy)
+    opened: list[SQLiteRepository] = []
+    real_open = SQLiteRepository.open
+
+    async def open_spy(cls: type[SQLiteRepository], database: str | Path) -> SQLiteRepository:
+        repository = await real_open(database)
+        opened.append(repository)
+        return repository
+
+    monkeypatch.setattr(SQLiteRepository, "open", classmethod(open_spy))
+    closed: list[SQLiteRepository] = []
+    real_close = SQLiteRepository.close
+
+    async def close_spy(repository: SQLiteRepository) -> None:
+        closed.append(repository)
+        await real_close(repository)
+
+    monkeypatch.setattr(SQLiteRepository, "close", close_spy)
+    database = tmp_path / "seq.db"
+    server = create_server(None, database=database)
+
+    async with server._mcp_server.lifespan(server):
+        first_result = await server.call_tool("search", {"request": {"query": "session one"}})
+        assert first_result[1]["provider"] == "x"
+        assert first_result[1]["usage"]["provider"] == "x"
+        assert first_result[1]["usage"]["operation"] == "search"
+        assert first_result[1]["usage"]["units"] == "1.25"
+
+    assert len(opened) == 1
+    assert len(closed) == 1
+
+    async with server._mcp_server.lifespan(server):
+        second_result = await server.call_tool("search", {"request": {"query": "session two"}})
+        assert second_result[1]["provider"] == "x"
+        assert second_result[1]["usage"]["provider"] == "x"
+        assert second_result[1]["usage"]["operation"] == "search"
+        assert second_result[1]["usage"]["units"] == "1.25"
+
+    assert build_count == 2
+    assert build_clients[0] is not build_clients[1]
+    assert len(opened) == 2
+    assert len(closed) == 2
+    assert closed == opened
+
+    inspection_repository = await real_open(database)
+    try:
+        usage = await inspection_repository.list_usage()
+    finally:
+        await real_close(inspection_repository)
+
+    assert [(event.provider, event.operation, event.units) for event in usage] == [
+        ("x", UsageOperation.SEARCH, Decimal("1.25")),
+        ("x", UsageOperation.SEARCH, Decimal("1.25")),
+    ]
+
+
+async def test_server_owned_lifespan_delayed_teardown_does_not_close_new_session_resources(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    build_count = 0
+    build_clients: list[Any] = []
+
+    def build_spy(_client: Any) -> list[ProviderAdapter]:
+        nonlocal build_count
+        build_count += 1
+        build_clients.append(_client)
+        return [_StubAdapter("x")]
+
+    monkeypatch.setattr("freesearch.server.build_adapters", build_spy)
+    opened: list[SQLiteRepository] = []
+    real_open = SQLiteRepository.open
+
+    async def open_spy(cls: type[SQLiteRepository], database: str | Path) -> SQLiteRepository:
+        repository = await real_open(database)
+        opened.append(repository)
+        return repository
+
+    monkeypatch.setattr(SQLiteRepository, "open", classmethod(open_spy))
+    closed: list[SQLiteRepository] = []
+    real_close = SQLiteRepository.close
+
+    async def close_spy(repository: SQLiteRepository) -> None:
+        closed.append(repository)
+        await real_close(repository)
+
+    monkeypatch.setattr(SQLiteRepository, "close", close_spy)
+    real_close_adapters = close_adapters
+    teardown_gate = asyncio.Event()
+    teardown_started = asyncio.Event()
+
+    async def close_adapters_spy(adapters: Sequence[ProviderAdapter], client: Any = None) -> None:
+        teardown_started.set()
+        await teardown_gate.wait()
+        await real_close_adapters(adapters, client)
+
+    monkeypatch.setattr("freesearch.server.close_adapters", close_adapters_spy)
+    server = create_server(None, database=tmp_path / "race.db")
+    lifespans = {name: server._mcp_server.lifespan(server) for name in ("a", "b", "c")}
+    entered: set[str] = set()
+    exited: set[str] = set()
+    teardown_task: asyncio.Task[Any] | None = None
+
+    try:
+        await lifespans["a"].__aenter__()
+        entered.add("a")
+        await lifespans["b"].__aenter__()
+        entered.add("b")
+
+        first_result = await server.call_tool("search", {"request": {"query": "session a"}})
+        assert first_result[1]["provider"] == "x"
+        assert first_result[1]["usage"]["operation"] == "search"
+        assert first_result[1]["usage"]["units"] == "1.25"
+
+        await lifespans["a"].__aexit__(None, None, None)
+        exited.add("a")
+        assert closed == []
+
+        teardown_task = asyncio.create_task(lifespans["b"].__aexit__(None, None, None))
+        await teardown_started.wait()
+
+        await lifespans["c"].__aenter__()
+        entered.add("c")
+        assert build_count == 2
+        assert len(opened) == 2
+
+        teardown_gate.set()
+        await teardown_task
+        exited.add("b")
+
+        second_result = await server.call_tool("search", {"request": {"query": "session c"}})
+        assert second_result[1]["provider"] == "x"
+        assert second_result[1]["usage"]["operation"] == "search"
+        assert second_result[1]["usage"]["units"] == "1.25"
+
+        await lifespans["c"].__aexit__(None, None, None)
+        exited.add("c")
+        assert build_count == 2
+        assert len(opened) == 2
+        assert len(closed) == 2
+        assert closed == opened
+    finally:
+        teardown_gate.set()
+        if teardown_task is not None and not teardown_task.done():
+            await teardown_task
+            exited.add("b")
+        for name in ("a", "b", "c"):
+            if name in entered and name not in exited:
+                await lifespans[name].__aexit__(None, None, None)
+
+    inspection_repository = await real_open(tmp_path / "race.db")
+    try:
+        usage = await inspection_repository.list_usage()
+    finally:
+        await real_close(inspection_repository)
+
+    assert [(event.provider, event.operation, event.units) for event in usage] == [
+        ("x", UsageOperation.SEARCH, Decimal("1.25")),
+        ("x", UsageOperation.SEARCH, Decimal("1.25")),
+    ]
+
+
+async def test_injected_repository_remains_open_after_app_lifespan(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    repository = await SQLiteRepository.open(tmp_path / "injected-app.db")
+    closed: list[SQLiteRepository] = []
+    real_close = SQLiteRepository.close
+
+    async def close_spy(repository: SQLiteRepository) -> None:
+        closed.append(repository)
+        await real_close(repository)
+
+    monkeypatch.setattr(SQLiteRepository, "close", close_spy)
+    try:
+        app = create_app([], repository=repository)
+        with TestClient(app):
+            pass
+
+        assert closed == []
+        event = UsageEvent(
+            provider="injected-app",
+            operation=UsageOperation.SEARCH,
+            units=Decimal("1"),
+            observed_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+        await repository.record_usage(event)
+        assert await repository.list_usage() == [event]
+        assert closed == []
+    finally:
+        await real_close(repository)
+
+
+async def test_injected_repository_remains_open_after_server_lifespan(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    repository = await SQLiteRepository.open(tmp_path / "injected-server.db")
+    closed: list[SQLiteRepository] = []
+    real_close = SQLiteRepository.close
+
+    async def close_spy(repository: SQLiteRepository) -> None:
+        closed.append(repository)
+        await real_close(repository)
+
+    monkeypatch.setattr(SQLiteRepository, "close", close_spy)
+    try:
+        server = create_server([], repository=repository)
+        async with server._mcp_server.lifespan(server):
+            pass
+
+        assert closed == []
+        event = UsageEvent(
+            provider="injected-server",
+            operation=UsageOperation.FETCH,
+            units=Decimal("2"),
+            observed_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+        await repository.record_usage(event)
+        assert await repository.list_usage() == [event]
+        assert closed == []
+    finally:
+        await real_close(repository)
+
+
+def test_resolve_database_path_prefers_environment_then_argument_then_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    env_path = Path.cwd() / "from-env.db"
+    argument_path = Path.cwd() / "from-argument.db"
+    monkeypatch.setenv("FREESEARCH_DB", str(env_path))
+    assert monitoring.resolve_database_path(argument_path) == env_path
+
+    monkeypatch.delenv("FREESEARCH_DB")
+    assert monitoring.resolve_database_path(argument_path) == argument_path
+    assert monitoring.resolve_database_path() == Path(monitoring.DEFAULT_DB_FILENAME)
+
+
+async def test_telemetry_helpers_swallow_repository_exceptions(
+    repository: SQLiteRepository,
+) -> None:
+    adapter = _StubAdapter("helper-provider")
+    response = await adapter.search(SearchRequest(query="helper"))
+    assert response.usage is not None
+
+    class _BrokenRepository:
+        async def record_usage(self, event: UsageEvent) -> None:
+            raise RuntimeError("write failed")
+
+        async def record_health(self, health: ProviderHealth) -> None:
+            raise RuntimeError("write failed")
+
+    broken = _BrokenRepository()
+    await monitoring.record_response_telemetry(broken, response)
+    await monitoring.record_failure_telemetry(broken, provider="helper-provider")
+    assert await repository.list_usage() == []
+
+
+def test_monitoring_module_does_not_require_template_or_external_asset_runtime() -> None:
+    source = inspect.getsource(monitoring.render_dashboard)
+    assert "jinja2" not in source.lower()
+    assert "importlib" not in source.lower()

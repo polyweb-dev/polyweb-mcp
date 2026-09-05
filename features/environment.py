@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+from collections.abc import Iterable
 from typing import Any
 
 import httpx  # noqa: F401  # kept: locked BDD tests monkeypatch environment.httpx.AsyncClient
@@ -48,6 +49,14 @@ def before_scenario(context: Any, scenario: Any) -> None:
     context.http_client = create_async_client()
     context.adapter = None
     context.youcom_adapter = None
+    # Monitoring scenarios supply their own offline adapters and repository in
+    # their steps; never fall through to the default Tavily construction.
+    if _has_monitoring_tag(scenario):
+        context.search_response = None
+        context.fetch_response = None
+        context.quota_snapshot = None
+        context.last_error = None
+        return
     # You.com live scenarios skip before any adapter is constructed: TavilyAdapter
     # fails closed without a Tavily key, which would abort a You.com scenario
     # (e.g. when both provider keys are absent) instead of skipping it.
@@ -92,7 +101,11 @@ def _is_exa_scenario(scenario: Any) -> bool:
 
 
 def after_scenario(context: Any, scenario: Any) -> None:
-    """Clean up adapter resources, HTTP connections, and the async event loop."""
+    """Clean up adapter resources, test repositories, and the async event loop."""
+    repository = getattr(context, "repository", None)
+    loop = getattr(context, "loop", None)
+    if repository is not None and loop is not None and callable(getattr(repository, "close", None)):
+        loop.run_until_complete(repository.close())
     adapter = getattr(context, "adapter", None)
     if adapter is not None and callable(getattr(adapter, "aclose", None)):
         context.loop.run_until_complete(adapter.aclose())
@@ -103,6 +116,35 @@ def after_scenario(context: Any, scenario: Any) -> None:
         context.loop.run_until_complete(context.http_client.aclose())
     if getattr(context, "loop", None) is not None:
         context.loop.close()
+    temp_directory = getattr(context, "temp_directory", None)
+    if temp_directory is not None:
+        temp_directory.cleanup()
+    database_path = getattr(context, "database_path", None)
+    if database_path is not None and os.path.exists(database_path):
+        os.unlink(database_path)
+
+
+def _has_monitoring_tag(scenario: Any) -> bool:
+    """Return True for offline monitoring scenarios, including feature-level tags.
+
+    The monitoring tag sits on the feature (features/monitoring.feature), and
+    Behave gives scenarios only their direct tags, so detection also reads the
+    effective tag set. Real Behave scenarios expose ``effective_tags``; the
+    fallback to ``tags`` + ``feature.tags`` keeps duck-typed doubles working.
+    """
+
+    effective_tags = getattr(scenario, "effective_tags", None)
+    if effective_tags:
+        return _tags_include_monitoring(effective_tags)
+    tags = getattr(scenario, "tags", None) or ()
+    feature_tags = getattr(getattr(scenario, "feature", None), "tags", None) or ()
+    return _tags_include_monitoring((*tags, *feature_tags))
+
+
+def _tags_include_monitoring(tags: Iterable[Any]) -> bool:
+    """Return True when ``tags`` carries 'monitoring' (str or Tag forms)."""
+
+    return any(str(getattr(tag, "name", tag)).lstrip("@") == "monitoring" for tag in tags)
 
 
 def _has_brave_tag(scenario: Any) -> bool:
