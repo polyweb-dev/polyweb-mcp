@@ -102,8 +102,6 @@ def test_openapi_docs_are_served() -> None:
     client = TestClient(create_app([_StubAdapter("brave", fetch=False)]))
     docs = client.get("/openapi.json")
     assert docs.status_code == 200
-    paths = docs.json()["paths"]
-    assert set(paths) == {"/search", "/fetch"}
     assert client.get("/docs").status_code == 200
 
 

@@ -7,9 +7,7 @@ contract models, so the OpenAPI schema at ``/docs`` documents them directly.
 
 Every search/fetch call also records read-only local telemetry (usage and
 health observations) through :mod:`freesearch.monitoring`, and the loopback
-monitoring reads (``/stats``, ``/dashboard``) expose that telemetry. The
-monitoring routes stay out of the OpenAPI schema; the documented surface
-remains the two provider-neutral operations.
+monitoring reads (``/stats``, ``/dashboard``) expose that telemetry.
 """
 
 from collections.abc import AsyncIterator, Sequence
@@ -93,7 +91,7 @@ def create_app(
             app.state.repository, adapter, lambda target: target.fetch(request)
         )
 
-    @app.get("/stats", response_model=StatsResponse, include_in_schema=False)
+    @app.get("/stats", response_model=StatsResponse)
     async def stats(limit: int = 20) -> StatsResponse:
         """Return the read-only, local-observed monitoring snapshot."""
         return await collect_stats(
@@ -102,7 +100,7 @@ def create_app(
             recent_limit=_clamped_limit(limit),
         )
 
-    @app.get("/dashboard", response_class=HTMLResponse, include_in_schema=False)
+    @app.get("/dashboard", response_class=HTMLResponse)
     async def dashboard(limit: int = 20) -> HTMLResponse:
         """Render the read-only, local-observed monitoring dashboard."""
         snapshot = await collect_stats(
