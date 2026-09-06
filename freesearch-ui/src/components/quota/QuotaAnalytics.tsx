@@ -17,65 +17,43 @@ export const QuotaAnalytics: React.FC = () => {
       {/* Page heading */}
       <div className="flex flex-col sm:flex-row sm:items-baseline justify-between gap-2 pb-2 border-b border-[var(--border-subtle)]">
         <div>
-          <h2 className="text-xl font-medium tracking-tight text-[var(--text-strong)]">Usage</h2>
-          <p className="text-sm text-[var(--muted)] mt-0.5">
+          <h2 className="text-[var(--text-strong)]">Usage</h2>
+          <p className="text-[13px] text-[var(--muted)] mt-0.5">
             Provider quota limits, tier consumption tracking, and zero-cost savings telemetry.
           </p>
         </div>
 
-        <span className="text-sm font-mono text-emerald-400">
+        <span className="text-[13px] tnum" style={{ color: "var(--status-healthy)" }}>
           ~${estimatedSavingsUsd} saved this cycle
         </span>
       </div>
 
       {/* KPI Cards across widescreen */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-        <div className="p-3.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--elevated)] flex items-center gap-3">
-          <DollarSign className="size-4 text-emerald-400 shrink-0" />
-          <div>
-            <div className="text-xs text-[var(--muted)]">Calculated savings</div>
-            <div className="text-sm font-mono font-medium text-emerald-400">
-              ${estimatedSavingsUsd}
-            </div>
-          </div>
-        </div>
+        <KpiCard icon={<DollarSign className="size-4 shrink-0" style={{ color: "var(--status-healthy)" }} />} label="Calculated savings">
+          <span className="tnum" style={{ color: "var(--status-healthy)" }}>
+            ${estimatedSavingsUsd}
+          </span>
+        </KpiCard>
 
-        <div className="p-3.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--elevated)] flex items-center gap-3">
-          <TrendingDown className="size-4 text-blue-400 shrink-0" />
-          <div>
-            <div className="text-xs text-[var(--muted)]">Zero-cost requests</div>
-            <div className="text-sm font-mono font-medium text-[var(--text-strong)]">
-              {totalFreeReqsUsed} queries
-            </div>
-          </div>
-        </div>
+        <KpiCard icon={<TrendingDown className="size-4 text-[var(--signal)] shrink-0" />} label="Zero-cost requests">
+          <span className="tnum">{totalFreeReqsUsed} queries</span>
+        </KpiCard>
 
-        <div className="p-3.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--elevated)] flex items-center gap-3">
-          <Database className="size-4 text-purple-400 shrink-0" />
-          <div>
-            <div className="text-xs text-[var(--muted)]">Cache roundtrips saved</div>
-            <div className="text-sm font-mono font-medium text-[var(--text-strong)]">
-              {cacheHits} hits
-            </div>
-          </div>
-        </div>
+        <KpiCard icon={<Database className="size-4 shrink-0" style={{ color: "var(--signal)" }} />} label="Cache roundtrips saved">
+          <span className="tnum">{cacheHits} hits</span>
+        </KpiCard>
 
-        <div className="p-3.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--elevated)] flex items-center gap-3">
-          <Clock className="size-4 text-amber-400 shrink-0" />
-          <div>
-            <div className="text-xs text-[var(--muted)]">Monitored windows</div>
-            <div className="text-sm font-mono font-medium text-[var(--text-strong)]">
-              {providers.length} provider quotas
-            </div>
-          </div>
-        </div>
+        <KpiCard icon={<Clock className="size-4 text-[var(--status-warning)] shrink-0" />} label="Monitored windows">
+          <span className="tnum">{providers.length} provider quotas</span>
+        </KpiCard>
       </div>
 
       {/* Consumption Table */}
       <div className="border border-[var(--border-subtle)] rounded-lg overflow-hidden">
         {/* Table header */}
         <div
-          className="grid items-center text-xs font-medium py-2.5 px-4 bg-[var(--elevated)] border-b border-[var(--border-subtle)] text-[var(--muted)]"
+          className="grid items-center text-[13px] font-medium py-2.5 px-4 bg-[var(--elevated)] border-b border-[var(--border-subtle)] text-[var(--muted)]"
           style={{
             gridTemplateColumns: "220px 140px 1fr 140px 140px",
           }}
@@ -104,25 +82,31 @@ export const QuotaAnalytics: React.FC = () => {
           return (
             <div
               key={p.id}
-              className="grid items-center py-3.5 px-4 border-b last:border-b-0 border-[var(--border-subtle)] hover:bg-[var(--elevated)] transition-colors text-xs"
+              className="grid items-center py-3.5 px-4 border-b last:border-b-0 border-[var(--border-subtle)] hover:bg-[var(--elevated)] transition-colors"
               style={{
                 gridTemplateColumns: "220px 140px 1fr 140px 140px",
               }}
             >
               {/* Provider name */}
               <div className="flex items-center gap-2">
-                <span className="text-sm font-medium text-[var(--text-strong)]">
+                <span className="text-[13px] font-medium text-[var(--text-strong)]">
                   {p.name}
                 </span>
                 {p.capabilities.includes("keyless_tier") && (
-                  <span className="text-[10px] px-1 rounded bg-emerald-500/10 text-emerald-400 font-mono">
+                  <span
+                    className="text-[12px] px-1 rounded"
+                    style={{
+                      background: "rgba(34, 197, 94, 0.1)",
+                      color: "var(--status-healthy)",
+                    }}
+                  >
                     free
                   </span>
                 )}
               </div>
 
               {/* Reset period */}
-              <span className="text-[var(--muted)]">
+              <span className="text-[13px] text-[var(--muted)]">
                 {quota.resetPeriod}
               </span>
 
@@ -139,18 +123,18 @@ export const QuotaAnalytics: React.FC = () => {
                     }}
                   />
                 </div>
-                <span className="font-mono text-[11px] text-[var(--text)] shrink-0">
+                <span className="text-[13px] text-[var(--text)] tnum shrink-0">
                   {quota.used}/{quota.limit || "∞"} {quota.unit}
                 </span>
               </div>
 
               {/* Confidence */}
-              <span className="text-right font-mono text-[11px] text-[var(--muted)]">
+              <span className="text-right text-[13px] text-[var(--muted)]">
                 {quota.confidence}
               </span>
 
               {/* Next reset */}
-              <span className="text-right font-mono text-[11px] text-[var(--text)]">
+              <span className="text-right text-[13px] text-[var(--text)] tnum">
                 {quota.nextReset}
               </span>
             </div>
@@ -160,3 +144,17 @@ export const QuotaAnalytics: React.FC = () => {
     </div>
   )
 }
+
+const KpiCard: React.FC<{
+  icon: React.ReactNode
+  label: string
+  children: React.ReactNode
+}> = ({ icon, label, children }) => (
+  <div className="p-3.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--elevated)] flex items-center gap-3">
+    {icon}
+    <div>
+      <div className="text-[12px] text-[var(--muted)]">{label}</div>
+      <div className="text-[14px] font-medium text-[var(--text-strong)]">{children}</div>
+    </div>
+  </div>
+)

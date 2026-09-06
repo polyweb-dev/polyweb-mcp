@@ -9,7 +9,8 @@ export interface SwitchProps {
   disabled?: boolean
   label?: string
   description?: string
-  size?: "sm" | "default"
+  /** Explicit accessible name for switches without a visible label. */
+  ariaLabel?: string
 }
 
 export const Switch: React.FC<SwitchProps> = ({
@@ -19,7 +20,7 @@ export const Switch: React.FC<SwitchProps> = ({
   disabled = false,
   label,
   description,
-  size = "default",
+  ariaLabel,
 }) => {
   const generatedId = useId()
   const switchId = id || generatedId
@@ -27,7 +28,7 @@ export const Switch: React.FC<SwitchProps> = ({
   return (
     <div
       className={cn(
-        "inline-flex items-center gap-2.5 select-none group",
+        "inline-flex items-center gap-3 select-none group",
         disabled && "cursor-not-allowed opacity-45"
       )}
     >
@@ -38,7 +39,7 @@ export const Switch: React.FC<SwitchProps> = ({
           if (!disabled) onChange(newChecked)
         }}
         disabled={disabled}
-        size={size === "sm" ? "sm" : "default"}
+        aria-label={ariaLabel}
       />
       {(label || description) && (
         <label
@@ -46,12 +47,14 @@ export const Switch: React.FC<SwitchProps> = ({
           className={cn("flex flex-col", !disabled && "cursor-pointer")}
         >
           {label && (
-            <span className="text-xs font-medium text-slate-200 group-hover:text-white transition-colors">
+            <span className="text-[13px] font-medium text-[var(--text-strong)] group-hover:text-white transition-colors">
               {label}
             </span>
           )}
           {description && (
-            <span className="text-[11px] text-slate-400 leading-tight">{description}</span>
+            <span className="text-[13px] text-[var(--muted)] leading-snug">
+              {description}
+            </span>
           )}
         </label>
       )}

@@ -1,51 +1,47 @@
 import React from "react"
-import { describe, it, expect } from "vitest"
-import { renderHook, act } from "@testing-library/react"
+import { describe, expect, it } from "vitest"
+import { act, renderHook } from "@testing-library/react"
 import { FreeSearchProvider } from "./FreeSearchContext"
 import { useFreeSearch } from "./useFreeSearch"
 
-describe("FreeSearchContext", () => {
-  const wrapper = ({ children }: { children: React.ReactNode }) => (
-    <FreeSearchProvider>{children}</FreeSearchProvider>
-  )
+const wrapper = ({ children }: { children: React.ReactNode }) => (
+  <FreeSearchProvider>{children}</FreeSearchProvider>
+)
 
+describe("FreeSearchContext", () => {
   it("toggles global enablement of a provider", () => {
     const { result } = renderHook(() => useFreeSearch(), { wrapper })
 
-    const braveBefore = result.current.providers.find((p) => p.id === "brave")!
-    expect(braveBefore.globalEnabled).toBe(true)
+    expect(result.current.providers.find((provider) => provider.id === "brave")?.globalEnabled).toBe(true)
 
     act(() => {
       result.current.toggleProvider("brave", false)
     })
 
-    const braveAfter = result.current.providers.find((p) => p.id === "brave")!
-    expect(braveAfter.globalEnabled).toBe(false)
+    expect(result.current.providers.find((provider) => provider.id === "brave")?.globalEnabled).toBe(false)
   })
 
   it("toggles granular search and fetch capabilities independently", () => {
     const { result } = renderHook(() => useFreeSearch(), { wrapper })
 
-    // Keenable supports both search and fetch
     act(() => {
       result.current.toggleProviderSearch("keenable", false)
     })
-    let keenable = result.current.providers.find((p) => p.id === "keenable")!
+    let keenable = result.current.providers.find((provider) => provider.id === "keenable")!
     expect(keenable.searchEnabled).toBe(false)
     expect(keenable.fetchEnabled).toBe(true)
 
     act(() => {
       result.current.toggleProviderFetch("keenable", false)
     })
-    keenable = result.current.providers.find((p) => p.id === "keenable")!
+    keenable = result.current.providers.find((provider) => provider.id === "keenable")!
     expect(keenable.fetchEnabled).toBe(false)
   })
 
-  it("prevents enabling operations that a provider does not support", () => {
+  it("does not enable an operation unsupported by the provider", () => {
     const { result } = renderHook(() => useFreeSearch(), { wrapper })
 
-    // Brave does not support fetch
-    const braveBefore = result.current.providers.find((p) => p.id === "brave")!
+    const braveBefore = result.current.providers.find((provider) => provider.id === "brave")!
     expect(braveBefore.capabilities).not.toContain("fetch")
     expect(braveBefore.fetchEnabled).toBe(false)
 
@@ -53,88 +49,79 @@ describe("FreeSearchContext", () => {
       result.current.toggleProviderFetch("brave", true)
     })
 
-    const braveAfter = result.current.providers.find((p) => p.id === "brave")!
-    expect(braveAfter.fetchEnabled).toBe(false)
+    expect(result.current.providers.find((provider) => provider.id === "brave")?.fetchEnabled).toBe(false)
   })
 
-  it("handles one-time view API keys and burns plaintext upon request", () => {
+  it("saves only a trimmed masked key and marks the vault configured", () => {
     const { result } = renderHook(() => useFreeSearch(), { wrapper })
 
     act(() => {
-      result.current.saveProviderKey("youcom", "yc_live_secret_key_123456789")
+      result.current.saveProviderKey("youcom", "  yc_live_secret_key_6789  ")
     })
 
-    let youcom = result.current.providers.find((p) => p.id === "youcom")!
+    const youcom = result.current.providers.find((provider) => provider.id === "youcom")!
     expect(youcom.hasKey).toBe(true)
-    expect(youcom.keyVaultStatus).toBe("revealed_once")
-    expect(youcom.unmaskedKeyOnce).toBe("yc_live_secret_key_123456789")
-    expect(youcom.keyMasked).toContain("••••••••")
-
-    // Burn the one-time key view
-    act(() => {
-      result.current.burnOneTimeKey("youcom")
-    })
-
-    youcom = result.current.providers.find((p) => p.id === "youcom")!
     expect(youcom.keyVaultStatus).toBe("configured")
-    expect(youcom.unmaskedKeyOnce).toBeUndefined()
+    expect(youcom.keyMasked).toBe("yc_l_••••••••6789")
+    expect("unmaskedKeyOnce" in youcom).toBe(false)
   })
 
-  it("allows adding and removing custom providers dynamically", () => {
+  it("ignores blank credentials without changing an existing vault state", () => {
+    const { result } = renderHook(() => useFreeSearch(), { wrapper })
+    const before = result.current.providers.find((provider) => provider.id === "youcom")!
+
+    act(() => {
+      result.current.saveProviderKey("youcom", "   ")
+    })
+
+    const after = result.current.providers.find((provider) => provider.id === "youcom")!
+    expect(after.hasKey).toBe(before.hasKey)
+    expect(after.keyVaultStatus).toBe(before.keyVaultStatus)
+    expect(after.keyMasked).toBe(before.keyMasked)
+  })
+
+  it("updates the selected routing preset", () => {
     const { result } = renderHook(() => useFreeSearch(), { wrapper })
 
+    act(() => {
+      result.current.setRoutingPreset("quality_first")
+    })
+
+    expect(result.current.routingPreset).toBe("quality_first")
+  })
+
+  it("updates fallback configuration without dropping other policies", () => {
+    const { result } = renderHook(() => useFreeSearch(), { wrapper })
+    expect(result.current.fallbackConfig).toMatchObject({
+      enabled: true,
+      maxAttempts: 3,
+      fallbackOnRateLimit: true,
+      fallbackOnTimeout: true,
+      fallbackOnServerError: true,
+    })
+
+    act(() => {
+      result.current.updateFallbackConfig({ enabled: false, maxAttempts: 5 })
+    })
+
+    expect(result.current.fallbackConfig).toEqual({
+      enabled: false,
+      maxAttempts: 5,
+      fallbackOnRateLimit: true,
+      fallbackOnTimeout: true,
+      fallbackOnServerError: true,
+    })
+  })
+
+  it("removes a provider through the retained removeProvider API", () => {
+    const { result } = renderHook(() => useFreeSearch(), { wrapper })
     const initialCount = result.current.providers.length
 
     act(() => {
-      result.current.addProvider({
-        id: "searxng-local",
-        name: "SearXNG Local",
-        description: "Local metasearch engine instance",
-        baseUrl: "http://localhost:8888",
-        capabilities: ["search"],
-        globalEnabled: true,
-        searchEnabled: true,
-        fetchEnabled: false,
-        priority: initialCount + 1,
-        healthStatus: "healthy",
-        circuitBreaker: "closed",
-        consecutiveFailures: 0,
-        latencyP95Ms: 120,
-        hasKey: false,
-        keyMasked: "Keyless Local",
-        keyVaultStatus: "keyless_public",
-        quota: {
-          used: 0,
-          limit: null,
-          unit: "queries",
-          confidence: "authoritative",
-          resetPeriod: "Unlimited",
-          nextReset: "None",
-        },
-      })
+      result.current.removeProvider("parallel")
     })
 
-    expect(result.current.providers.length).toBe(initialCount + 1)
-    const added = result.current.providers.find((p) => p.id === "searxng-local")!
-    expect(added).toBeDefined()
-    expect(added.isCustom).toBe(true)
-
-    // Now remove it
-    act(() => {
-      result.current.removeProvider("searxng-local")
-    })
-    expect(result.current.providers.length).toBe(initialCount)
-  })
-
-  it("updates fallback configuration", () => {
-    const { result } = renderHook(() => useFreeSearch(), { wrapper })
-
-    expect(result.current.fallbackConfig.enabled).toBe(true)
-
-    act(() => {
-      result.current.updateFallbackConfig({ enabled: false })
-    })
-
-    expect(result.current.fallbackConfig.enabled).toBe(false)
+    expect(result.current.providers).toHaveLength(initialCount - 1)
+    expect(result.current.providers.some((provider) => provider.id === "parallel")).toBe(false)
   })
 })

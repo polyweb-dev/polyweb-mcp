@@ -4,9 +4,9 @@ import re
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, field_validator
+from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, SecretStr, field_validator
 
 
 class ContractModel(BaseModel):
@@ -90,6 +90,13 @@ class UsageOperation(StrEnum):
     COST_ESTIMATE = "cost_estimate"
 
 
+class UsageStatus(StrEnum):
+    """Outcome recorded alongside a usage event's measured latency."""
+
+    SUCCESS = "success"
+    FAILURE = "failure"
+
+
 class UsageEvent(ContractModel):
     provider: str
     operation: UsageOperation
@@ -97,6 +104,8 @@ class UsageEvent(ContractModel):
     observed_at: datetime
     request_id: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+    latency_ms: int | None = Field(default=None, ge=0)
+    status: UsageStatus = UsageStatus.SUCCESS
 
 
 class QuotaSource(StrEnum):
@@ -171,6 +180,108 @@ class ProviderError(ContractModel):
     retryable: bool = False
     status_code: int | None = Field(default=None, ge=100, le=599)
     details: dict[str, Any] = Field(default_factory=dict)
+
+
+class SecretPresence(StrEnum):
+    """Resolved credential presence for a provider."""
+
+    CONFIGURED = "configured"
+    MISSING = "missing"
+    KEYLESS_PUBLIC = "keyless_public"
+
+
+class BreakerState(StrEnum):
+    """Persisted circuit-breaker state shown on the control surface."""
+
+    CLOSED = "closed"
+    OPEN = "open"
+    HALF_OPEN = "half_open"
+
+
+class CircuitBreakerState(ContractModel):
+    """Nested breaker state inside a provider status entry."""
+
+    state: BreakerState = BreakerState.CLOSED
+    updated_at: datetime
+
+
+class CircuitBreakerStatusResponse(ContractModel):
+    """Result of a manual circuit-breaker reset."""
+
+    provider: str
+    state: BreakerState = BreakerState.CLOSED
+    updated_at: datetime
+
+
+class ProviderStatusResponse(ContractModel):
+    """One canonical provider's control-plane status entry."""
+
+    provider_id: str
+    enabled: bool
+    priority: int
+    health: HealthStatus | None = None
+    circuit_breaker: CircuitBreakerState
+    latency_p95_ms: int | None = Field(default=None, ge=0)
+    secret_presence: SecretPresence
+    free_tier_estimates: dict[UsageOperation, Decimal] = Field(default_factory=dict)
+    reset_schedule: str | None = None
+
+
+class ProviderTestResponse(ContractModel):
+    """Result of a timed provider health probe."""
+
+    provider: str
+    ok: bool
+    status: HealthStatus
+    latency_ms: int = Field(ge=0)
+    detail: str | None = None
+    checked_at: datetime
+
+
+class SetSecretRequest(ContractModel):
+    """Write-only key payload; the raw value is never echoed or logged."""
+
+    key: SecretStr = Field(min_length=1)
+
+
+class SecretStatusResponse(ContractModel):
+    """Masked secret status: presence plus a stable fingerprint, never the key."""
+
+    provider: str
+    presence: SecretPresence
+    fingerprint: str | None = None
+    updated_at: datetime | None = None
+    source: Literal["environment", "dotenv", "keyring", "none"]
+
+
+class FallbackPolicy(StrEnum):
+    """Global routing fallback policy."""
+
+    CHAINED = "chained"
+    FIRST_ONLY = "first_only"
+
+
+class CostPreset(StrEnum):
+    """Global cost-optimization preset applied to candidate ordering."""
+
+    BALANCED = "balanced"
+    FREE_FIRST = "free_first"
+
+
+class RoutingConfigResponse(ContractModel):
+    """Persisted global routing defaults."""
+
+    fallback_policy: FallbackPolicy = FallbackPolicy.CHAINED
+    cost_optimization_preset: CostPreset = CostPreset.BALANCED
+    max_attempts: int = Field(default=3, ge=1)
+
+
+class RoutingConfigUpdate(ContractModel):
+    """Partial routing-policy update merged onto the persisted record."""
+
+    fallback_policy: FallbackPolicy | None = None
+    cost_optimization_preset: CostPreset | None = None
+    max_attempts: int | None = Field(default=None, ge=1)
 
 
 SearchResponse.model_rebuild()

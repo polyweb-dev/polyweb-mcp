@@ -9,7 +9,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, Self, cast, overload
 
-from sqlalchemy import URL, Index, Text, delete, insert, select, update
+from sqlalchemy import URL, Index, Integer, Text, delete, insert, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Connection, CursorResult, Row
 from sqlalchemy.ext.asyncio import (
@@ -28,6 +28,7 @@ from freesearch.contracts import (
     QuotaSource,
     UsageEvent,
     UsageOperation,
+    UsageStatus,
 )
 
 _FORBIDDEN_METADATA_KEYS = {
@@ -102,6 +103,17 @@ class UsageEventRow(Base):
     observed_at: Mapped[str] = mapped_column(Text)
     request_id: Mapped[str | None] = mapped_column(Text)
     metadata_json: Mapped[str] = mapped_column("metadata", Text)
+    latency_ms: Mapped[int | None] = mapped_column(Integer)
+    status: Mapped[str | None] = mapped_column(Text)
+
+
+class RuntimeSettingRow(Base):
+    """Row model for persisted runtime settings (providers, secrets, routing)."""
+
+    __tablename__ = "runtime_settings"
+
+    key: Mapped[str] = mapped_column(Text, primary_key=True, nullable=True)
+    value_json: Mapped[str] = mapped_column(Text)
 
 
 class QuotaSnapshotRow(Base):
@@ -156,6 +168,26 @@ def _ensure_indexes(connection: Connection) -> None:
     for table in Base.metadata.tables.values():
         for index in table.indexes:
             index.create(connection, checkfirst=True)
+
+
+def _add_missing_column(connection: Connection, table: str, column: str, column_type: str) -> None:
+    """Add ``column`` to ``table`` when an older schema predates it."""
+
+    result = connection.exec_driver_sql(f"PRAGMA table_info({table})")
+    existing = {row[1] for row in result.fetchall()}
+    if column not in existing:
+        connection.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {column} {column_type}")
+
+
+def _migrate_usage_events(connection: Connection) -> None:
+    """Upgrade a legacy ``usage_events`` table additively, preserving all rows.
+
+    Missing columns are added as nullable: legacy rows read back with
+    ``latency_ms=None`` and ``status=success`` compatibility defaults.
+    """
+
+    _add_missing_column(connection, "usage_events", "latency_ms", "INTEGER")
+    _add_missing_column(connection, "usage_events", "status", "TEXT")
 
 
 @dataclass(frozen=True)
@@ -234,11 +266,12 @@ class SQLiteRepository:
         await self.close()
 
     async def initialize(self) -> None:
-        """Create the schema and any missing declared indexes."""
+        """Create the schema, missing indexes, and any missing usage columns."""
 
         async with self._engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
             await connection.run_sync(_ensure_indexes)
+            await connection.run_sync(_migrate_usage_events)
 
     async def close(self) -> None:
         """Dispose the engine, releasing pooled connections; safe to call repeatedly."""
@@ -257,6 +290,8 @@ class SQLiteRepository:
                     observed_at=_timestamp(event.observed_at),
                     request_id=event.request_id,
                     metadata_json=_metadata_json(event.metadata),
+                    latency_ms=event.latency_ms,
+                    status=event.status.value,
                 )
             )
             await session.commit()
@@ -307,6 +342,26 @@ class SQLiteRepository:
         async with self._session_factory() as session:
             rows = (await session.scalars(statement)).all()
         return [self._usage_from_row(row) for row in rows]
+
+    async def recent_latencies(self, provider: str, *, limit: int = 100) -> list[int]:
+        """Return the newest measured latencies for ``provider``, newest first.
+
+        Rows without a measured latency (legacy or unmeasured events) are
+        excluded so latency statistics only see real samples.
+        """
+
+        statement = (
+            select(UsageEventRow.latency_ms)
+            .where(
+                UsageEventRow.provider == provider,
+                UsageEventRow.latency_ms.is_not(None),
+            )
+            .order_by(UsageEventRow.observed_at.desc(), UsageEventRow.id.desc())
+            .limit(limit)
+        )
+        async with self._session_factory() as session:
+            values = (await session.scalars(statement)).all()
+        return [int(value) for value in values if value is not None]
 
     async def record_quota(self, snapshot: QuotaSnapshot) -> None:
         """Append a provider quota observation."""
@@ -440,6 +495,26 @@ class SQLiteRepository:
             await session.commit()
         return deleted
 
+    async def get_runtime_setting(self, key: str) -> Any:
+        """Return the JSON-decoded runtime setting stored under ``key``."""
+
+        async with self._session_factory() as session:
+            row = await session.get(RuntimeSettingRow, key)
+        return json.loads(row.value_json) if row is not None else None
+
+    async def set_runtime_setting(self, key: str, value: Any) -> None:
+        """Create or replace the JSON-encoded runtime setting under ``key``."""
+
+        payload = json.dumps(value, separators=(",", ":"), allow_nan=False)
+        statement = sqlite_insert(RuntimeSettingRow).values(key=key, value_json=payload)
+        statement = statement.on_conflict_do_update(
+            index_elements=[RuntimeSettingRow.key],
+            set_={"value_json": statement.excluded.value_json},
+        )
+        async with self._session_factory() as session:
+            await session.execute(statement)
+            await session.commit()
+
     @staticmethod
     def _usage_from_row(row: UsageEventRow) -> UsageEvent:
         return UsageEvent(
@@ -449,6 +524,8 @@ class SQLiteRepository:
             observed_at=datetime.fromisoformat(row.observed_at),
             request_id=row.request_id,
             metadata=json.loads(row.metadata_json),
+            latency_ms=row.latency_ms,
+            status=UsageStatus(row.status) if row.status else UsageStatus.SUCCESS,
         )
 
     @staticmethod

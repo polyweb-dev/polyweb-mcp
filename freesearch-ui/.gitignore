@@ -22,3 +22,10 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Playwright BDD
+.features-gen/
+tests/features-gen/
+test-results/
+playwright-report/
+playwright/.cache/

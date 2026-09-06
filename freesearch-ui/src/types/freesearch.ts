@@ -48,11 +48,9 @@ export interface ProviderConfig {
   latencyP95Ms: number
   hasKey: boolean
   keyMasked: string
-  keyVaultStatus: "configured" | "missing" | "keyless_public" | "revealed_once"
+  keyVaultStatus: "configured" | "missing" | "keyless_public"
   authHeaderName?: string
   quota: ProviderQuota
-  /** Transient field: only populated right when user inputs/generates a key until burned */
-  unmaskedKeyOnce?: string
 }
 
 export interface FallbackConfig {

@@ -39,19 +39,21 @@ export const ProviderMatrix: React.FC = () => {
       <div className="space-y-4 pb-2 border-b border-[var(--border-subtle)]">
         <div className="flex flex-col sm:flex-row sm:items-baseline justify-between gap-2">
           <div>
-            <h2 className="text-xl font-medium tracking-tight text-[var(--text-strong)]">Providers</h2>
-            <p className="text-sm text-[var(--muted)] mt-0.5">
+            <h2 className="text-[var(--text-strong)]">Providers</h2>
+            <p className="text-[13px] text-[var(--muted)] mt-0.5">
               Live status, upstream endpoints, telemetry, and circuit breaker trip switches.
             </p>
           </div>
 
-          {/* Quick filter tabs */}
-          <div className="flex items-center gap-1 text-xs">
+          {/* Quick filter segments */}
+          <div className="flex items-center gap-1">
             {(["all", "search", "fetch", "keyless"] as const).map((f) => (
               <button
                 key={f}
+                type="button"
                 onClick={() => setFilter(f)}
-                className="px-3 py-1 rounded font-medium capitalize transition-colors"
+                aria-pressed={filter === f}
+                className="px-3 py-1 rounded text-[13px] font-medium capitalize transition-colors"
                 style={{
                   background: filter === f ? "var(--signal-muted)" : "var(--elevated)",
                   color: filter === f ? "var(--signal)" : "var(--muted)",
@@ -66,46 +68,31 @@ export const ProviderMatrix: React.FC = () => {
 
         {/* Summary metric ribbon across widescreen */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 pt-2">
-          <div className="p-3.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--elevated)] flex items-center gap-3">
-            <Server className="size-4 text-blue-400 shrink-0" />
-            <div>
-              <div className="text-xs text-[var(--muted)]">Total fleet</div>
-              <div className="text-sm font-mono font-medium text-[var(--text-strong)]">
-                {providers.length} registered
-              </div>
-            </div>
-          </div>
+          <MetricCard icon={<Server className="size-4 text-[var(--signal)] shrink-0" />} label="Total fleet">
+            <span className="tnum">{providers.length}</span> registered
+          </MetricCard>
 
-          <div className="p-3.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--elevated)] flex items-center gap-3">
-            <ShieldCheck className="size-4 text-emerald-400 shrink-0" />
-            <div>
-              <div className="text-xs text-[var(--muted)]">Health status</div>
-              <div className="text-sm font-mono font-medium text-[var(--text-strong)]">
-                <span className="text-emerald-400">{healthyCount} healthy</span>
-                {brokenCount > 0 && <span className="text-rose-400"> · {brokenCount} open</span>}
-              </div>
-            </div>
-          </div>
+          <MetricCard icon={<ShieldCheck className="size-4 shrink-0" style={{ color: "var(--status-healthy)" }} />} label="Health status">
+            <span style={{ color: "var(--status-healthy)" }}>
+              <span className="tnum">{healthyCount}</span> healthy
+            </span>
+            {brokenCount > 0 && (
+              <span style={{ color: "var(--status-danger)" }}>
+                {" "}
+                <span className="tnum">{brokenCount}</span> open
+              </span>
+            )}
+          </MetricCard>
 
-          <div className="p-3.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--elevated)] flex items-center gap-3">
-            <Key className="size-4 text-amber-400 shrink-0" />
-            <div>
-              <div className="text-xs text-[var(--muted)]">Zero-key tiers</div>
-              <div className="text-sm font-mono font-medium text-[var(--text-strong)]">
-                {keylessCount} provider{keylessCount === 1 ? "" : "s"}
-              </div>
-            </div>
-          </div>
+          <MetricCard icon={<Key className="size-4 text-[var(--status-warning)] shrink-0" />} label="Zero-key tiers">
+            <span className="tnum">
+              {keylessCount} provider{keylessCount === 1 ? "" : "s"}
+            </span>
+          </MetricCard>
 
-          <div className="p-3.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--elevated)] flex items-center gap-3">
-            <Zap className="size-4 text-purple-400 shrink-0" />
-            <div>
-              <div className="text-xs text-[var(--muted)]">Fleet avg latency</div>
-              <div className="text-sm font-mono font-medium text-[var(--text-strong)]">
-                {avgLatency}ms p95
-              </div>
-            </div>
-          </div>
+          <MetricCard icon={<Zap className="size-4 text-[var(--status-warning)] shrink-0" />} label="Fleet avg latency">
+            <span className="tnum">{avgLatency}ms</span> p95
+          </MetricCard>
         </div>
       </div>
 
@@ -113,9 +100,9 @@ export const ProviderMatrix: React.FC = () => {
       <div className="border border-[var(--border-subtle)] rounded-lg overflow-hidden">
         {/* Table header */}
         <div
-          className="grid items-center text-xs font-medium py-2.5 px-4 bg-[var(--elevated)] border-b border-[var(--border-subtle)] text-[var(--muted)]"
+          className="grid items-center text-[13px] font-medium py-2.5 px-4 bg-[var(--elevated)] border-b border-[var(--border-subtle)] text-[var(--muted)]"
           style={{
-            gridTemplateColumns: "220px 1fr 200px 90px 90px 140px 110px",
+            gridTemplateColumns: "220px 1fr 200px 110px 90px 140px 110px",
           }}
         >
           <span>Provider</span>
@@ -147,31 +134,31 @@ export const ProviderMatrix: React.FC = () => {
               key={p.id}
               className="grid items-center py-3.5 px-4 border-b last:border-b-0 border-[var(--border-subtle)] hover:bg-[var(--elevated)] transition-colors"
               style={{
-                gridTemplateColumns: "220px 1fr 200px 90px 90px 140px 110px",
+                gridTemplateColumns: "220px 1fr 200px 110px 90px 140px 110px",
                 opacity: p.globalEnabled ? 1 : 0.45,
               }}
             >
               {/* Name + Priority */}
               <div className="min-w-0 pr-2">
                 <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium text-[var(--text-strong)] truncate">
+                  <span className="text-[13px] font-medium text-[var(--text-strong)] truncate">
                     {p.name}
                   </span>
-                  <span className="text-[11px] px-1.5 py-0.2 rounded bg-[var(--elevated)] text-[var(--muted)] font-mono">
+                  <span className="text-[12px] px-1.5 py-0.5 rounded bg-[var(--elevated)] text-[var(--muted)] tnum">
                     P{p.priority}
                   </span>
                 </div>
                 {p.capabilities.includes("keyless_tier") && (
-                  <span className="text-[11px] text-emerald-400 font-mono">
+                  <span className="text-[12px]" style={{ color: "var(--status-healthy)" }}>
                     keyless tier
                   </span>
                 )}
               </div>
 
-              {/* Endpoint */}
+              {/* Endpoint — raw baseUrl stays monospace */}
               <div className="min-w-0 pr-4">
                 <span
-                  className="text-xs text-[var(--muted)] font-mono truncate block"
+                  className="text-[12px] text-[var(--muted)] font-mono truncate block"
                   title={p.baseUrl}
                 >
                   {p.baseUrl.replace(/^https?:\/\//, "")}
@@ -183,7 +170,7 @@ export const ProviderMatrix: React.FC = () => {
                 {p.capabilities.map((cap) => (
                   <span
                     key={cap}
-                    className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--elevated)] text-[var(--muted)] font-mono border border-[var(--border-subtle)]"
+                    className="text-[12px] px-1.5 py-0.5 rounded bg-[var(--elevated)] text-[var(--muted)] border border-[var(--border-subtle)]"
                   >
                     {cap}
                   </span>
@@ -196,19 +183,19 @@ export const ProviderMatrix: React.FC = () => {
                   className="inline-block w-2 h-2 rounded-full"
                   style={{ background: healthColor }}
                 />
-                <span className="text-[11px] font-mono text-[var(--muted)]">
+                <span className="text-[12px] text-[var(--muted)]">
                   {isCircuitOpen ? "open" : p.healthStatus}
                 </span>
               </div>
 
               {/* Latency */}
-              <span className="text-xs text-right font-mono text-[var(--text)]">
+              <span className="text-[13px] text-right text-[var(--text)] tnum">
                 {p.latencyP95Ms}ms
               </span>
 
               {/* Quota */}
               <div className="text-right">
-                <span className="text-xs font-mono text-[var(--text)]">
+                <span className="text-[13px] text-[var(--text)] tnum">
                   {p.quota.used}/{p.quota.limit || "∞"}
                 </span>
                 {p.quota.limit && (
@@ -235,8 +222,9 @@ export const ProviderMatrix: React.FC = () => {
               {/* Actions */}
               <div className="flex items-center justify-end gap-2">
                 <button
+                  type="button"
                   onClick={() => handleToggleCircuitBreaker(p)}
-                  className="text-xs px-2.5 py-1 rounded transition-colors"
+                  className="text-[12px] px-2.5 py-1 rounded transition-colors"
                   style={{
                     color: isCircuitOpen ? "var(--status-danger)" : "var(--muted)",
                     border: `1px solid ${
@@ -249,6 +237,7 @@ export const ProviderMatrix: React.FC = () => {
                 </button>
 
                 <button
+                  type="button"
                   onClick={() => handleTest(p.id)}
                   disabled={testingId === p.id}
                   className="p-1 text-[var(--muted)] hover:text-[var(--text-strong)] transition-colors"
@@ -264,3 +253,17 @@ export const ProviderMatrix: React.FC = () => {
     </div>
   )
 }
+
+const MetricCard: React.FC<{
+  icon: React.ReactNode
+  label: string
+  children: React.ReactNode
+}> = ({ icon, label, children }) => (
+  <div className="p-3.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--elevated)] flex items-center gap-3">
+    {icon}
+    <div>
+      <div className="text-[12px] text-[var(--muted)]">{label}</div>
+      <div className="text-[14px] font-medium text-[var(--text-strong)]">{children}</div>
+    </div>
+  </div>
+)

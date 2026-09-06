@@ -40,6 +40,8 @@ _SCHEMA: dict[str, dict[str, object]] = {
             "observed_at": ("TEXT", False),
             "request_id": ("TEXT", True),
             "metadata": ("TEXT", False),
+            "latency_ms": ("INTEGER", True),
+            "status": ("TEXT", True),
         },
         "primary_key": ("id",),
         "indexes": {"usage_events_provider_observed_at": ["provider", "observed_at"]},

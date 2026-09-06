@@ -14,6 +14,7 @@ dependencies = [
     "mcp>=1.0,<2.0",
     "pydantic>=2.7,<3.0",
     "pydantic-settings>=2.2,<3.0",
+    "python-dotenv>=1.0,<2.0",
     "sqlalchemy[asyncio]>=2.0,<2.1",
     "tavily-python>=0.7.27,<0.8",
 ]
@@ -48,6 +49,9 @@ testpaths = ["tests"]
 line-length = 100
 target-version = "py312"
 src = ["src", "tests", "features"]
+# Runtime-only debris from the constrained-sandbox BDD runs (scenario working
+# directories that the harness cannot list or delete); never source code.
+extend-exclude = ["freesearch-control-cwd-*"]
 
 [tool.ruff.lint]
 select = [

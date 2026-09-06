@@ -25,7 +25,7 @@ from freesearch.adapters.keenable import KeenableAdapter
 from freesearch.adapters.parallel import ParallelAdapter
 from freesearch.adapters.tavily import TavilyAdapter
 from freesearch.adapters.youcom import YoucomAdapter
-from freesearch.contracts import FetchRequest, SearchRequest
+from freesearch.contracts import FetchRequest, SearchRequest, UsageOperation
 from freesearch.http import create_async_client
 from freesearch.monitoring import resolve_database_path, tracked_call
 from freesearch.provider_config import get_provider_configs
@@ -42,6 +42,23 @@ _ADAPTERS: dict[ProviderName, Callable[[httpx.AsyncClient], ProviderAdapter]] = 
     ProviderName.TAVILY: TavilyAdapter,
     ProviderName.YOU: YoucomAdapter,
 }
+
+
+def adapter_factory(
+    name: str,
+) -> Callable[[httpx.AsyncClient], ProviderAdapter] | None:
+    """Return the public constructor for a canonical provider, or ``None``.
+
+    This is the control plane's construction seam: ``api.py`` uses it to build
+    an adapter on demand without importing the private ``_ADAPTERS`` registry.
+    An unknown provider name yields ``None``.
+    """
+
+    try:
+        provider = ProviderName(name)
+    except ValueError:
+        return None
+    return _ADAPTERS.get(provider)
 
 
 class _ServerState(TypedDict):
@@ -195,7 +212,10 @@ def create_server(
         """Search the web through the best available provider."""
         adapter = _route(request)
         response = await tracked_call(
-            state["repository"], adapter, lambda target: target.search(request)
+            state["repository"],
+            adapter,
+            lambda target: target.search(request),
+            operation=UsageOperation.SEARCH,
         )
         return response.model_dump(mode="json")
 
@@ -204,7 +224,10 @@ def create_server(
         """Fetch a URL's content through the best available provider."""
         adapter = _route(request)
         response = await tracked_call(
-            state["repository"], adapter, lambda target: target.fetch(request)
+            state["repository"],
+            adapter,
+            lambda target: target.fetch(request),
+            operation=UsageOperation.FETCH,
         )
         return response.model_dump(mode="json")
 

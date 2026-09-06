@@ -71,6 +71,27 @@ class KeyringSecretStore:
             keyring.delete_password(self._service_name, name)
 
 
+class MemorySecretStore(SecretStore):
+    """Dict-backed in-process store mirroring the OS keyring for tests and tools.
+
+    Implements the same :class:`SecretStore` protocol as
+    :class:`KeyringSecretStore` without touching the platform credential
+    manager, so offline callers can inject it where the keyring would be used.
+    """
+
+    def __init__(self) -> None:
+        self.values: dict[str, str] = {}
+
+    def get(self, name: str) -> str | None:
+        return self.values.get(name)
+
+    def set(self, name: str, value: str) -> None:
+        self.values[name] = value
+
+    def delete(self, name: str) -> None:
+        self.values.pop(name, None)
+
+
 class ProviderSecretResolver:
     """Resolve provider keys without putting them in ``Settings``.
 

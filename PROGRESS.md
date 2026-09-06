@@ -1,6 +1,6 @@
 # FreeSearch Progress
 
-Updated: 2026-09-05
+Updated: 2026-09-06
 
 ## Scope completed
 
@@ -362,18 +362,134 @@ React consumer: Decimal-valued fields (`total_units`, `units`, quota
     fix from the harness bridge notes remains open — deliberately out of
     this stage's scope.
 
+## Stage 5 - Provider control plane, secrets, and routing policy (ahead of the coordinator)
+
+Implemented on 2026-09-06 per the Stage 5 endpoint specification in
+[`WORKPLAN.md`](WORKPLAN.md); ordering deviation (control surface before the
+quota reconciliation coordinator) recorded there per operator decision. The
+full authenticated dashboard UI, CSRF/session/audit machinery, hosted vault
+adapters, and rotation/revocation workflows remain deferred non-goals — this
+round delivers the backend control API only.
+
+- **Contract models** (`src/freesearch/contracts.py`, all `extra="forbid"`):
+  `UsageStatus` (`success`/`failure`), `UsageEvent.latency_ms` (`int | None`,
+  `ge=0`) and `UsageEvent.status` (default `success` — keyword defaults keep
+  every existing constructor green), `SecretPresence`, `BreakerState`,
+  `CircuitBreakerState`, `CircuitBreakerStatusResponse`, `ProviderStatusResponse`,
+  `ProviderTestResponse`, `SetSecretRequest` (`SecretStr(min_length=1)`),
+  `SecretStatusResponse` (source literal `environment`/`dotenv`/`keyring`/`none`),
+  `FallbackPolicy`, `CostPreset`, `RoutingConfigResponse`, and
+  `RoutingConfigUpdate`. `ProviderConfigUpdate` is reused verbatim as the
+  PATCH body. `GET /api/v1/providers` entries carry exactly
+  `provider_id, enabled, priority, health, circuit_breaker, latency_p95_ms,
+  secret_presence, free_tier_estimates, reset_schedule`.
+- **Persistence** (`src/freesearch/storage.py`): `UsageEventRow` gained
+  nullable `latency_ms`/`status` with full round-trip (`record_usage` writes
+  them; legacy rows read back as `None`/`success`). `initialize()` now runs an
+  idempotent, data-preserving additive migration (`PRAGMA table_info`
+  + `ALTER TABLE ADD COLUMN latency_ms INTEGER` / `status TEXT`) so legacy
+  databases self-upgrade on open. New `runtime_settings` key/value table
+  (create_all self-heals it on old databases) stores: `provider.{name}` (merged
+  config as strict JSON, estimates as exact decimal strings),
+  `provider.{name}.breaker`, `secret.{name}` (masked fingerprint + timestamp
+  only), and `routing`. Added `recent_latencies(provider, limit)` for p95
+  sampling.
+- **Telemetry** (`src/freesearch/monitoring.py`): `tracked_call` measures
+  wall-clock milliseconds around the adapter call, attaches
+  `{latency_ms, status=success}` to stored success usage via `model_copy` (only
+  when usage is present), and on failure records a zero-unit
+  `status=failure` usage row (new private `_record_failure_usage`) plus the
+  unchanged degraded health row, then re-raises. `record_response_telemetry`
+  gained keyword-only `latency_ms`/`status` (direct callers unchanged).
+  `RecentUsageEntry` now projects `latency_ms` + `status`; the failure path
+  still records health only (`record_failure_telemetry` unchanged).
+  `latency_p95_ms(repository, provider, *, window=100)` computes the
+  nearest-rank 95th percentile over the last ≤100 non-null samples (`None`
+  when empty). Measured latency attaches only on the canonical provider
+  surface (`ProviderName` members) through `tracked_call`; synthetic adapter
+  names and direct `record_response_telemetry` callers keep the verbatim
+  Stage 4.5 usage contract.
+- **Control service + routes** (`src/freesearch/control.py`, new): the
+  `/api/v1` endpoints are registered directly on the FastAPI app (so every
+  `app.routes` entry keeps a `path` attribute). Effective provider config
+  resolves defaults ← env JSON (`get_provider_configs`) ← persisted record
+  (persisted wins; `ProviderConfigUpdate.apply_to` performs the merge), and a
+  strict-invalid persisted payload self-heals to the defaults at every read
+  seam (item GET, list GET, and the `/search` request path) instead of
+  surfacing 500s. The fingerprint `AAA_••••••••xxxx` (SHA-256 last 4) is
+  derived in memory and is the only secret-adjacent value ever persisted.
+  Secret presence resolves **environment → `.env` → store** (parity with
+  `ProviderSecretResolver`, so presence matches actual adapter construction);
+  `.env` is read-only for the control plane, and `PUT .../secret` reports the
+  **effective** source and fingerprint, so a higher-precedence key that
+  shadows the stored write stays visible. Keenable with no key reports
+  `keyless_public`; a `DELETE` that leaves nothing resolvable reports
+  `source="none"` with no fingerprint. `POST /test` runs a timed
+  `adapter.health()` probe: `ok = status != unavailable` with explanatory
+  detail for `unknown`, an actionable 503 "restart" hint when the provider is
+  absent and unconstructible, and on-demand adapter construction under
+  `app.state._control_lock` (construct-once via the public
+  `server.adapter_factory`, appended to the live routes, MCP refcount
+  untouched). Circuit-breaker reset persists `closed` + timestamp for the
+  control surface only — the live per-runner breakers self-recover through
+  cooldown/half-open probing, and a runner-level reset API is a documented
+  follow-up. Routing config GET/PUT persist
+  `fallback_policy`/`cost_optimization_preset`/`max_attempts`;
+  **`max_attempts` and breaker state remain staged out of `select_route`**
+  (signature and semantics unchanged); `max_attempts` is
+  stored-validated-deferred (validated `ge=1`, persisted, resilience runner
+  construction untouched this round).
+- **Routing policy on the request path** (`src/freesearch/api.py`):
+  `create_app(..., secret_store=None)` defaults to the OS keyring bound to
+  `Settings.secret_service_name` (`KeyringSecretStore(get_settings().secret_service_name)`),
+  keeping control-plane secret writes and the adapters' own credential
+  resolution on the same service; an injected `secret_store` is a test-only
+  seam. Per request, in-memory routes are enabled-filtered, stably sorted by
+  persisted priority (injected/startup order is the tie-break, preserving the
+  pinned single-candidate contracts), pinned for `free_first` (Keenable
+  first — visible in both the provider list and `/search`), and truncated to
+  one candidate under `first_only`. Adapter failures propagate unchanged
+  (REST 500 / MCP `ToolError`, no cross-adapter retry, pinned by the offline
+  BDD failure scenario); on-demand construction failures degrade to 503. MCP
+  (`server.py`) gains telemetry parity (`operation=` through `tracked_call`)
+  and the public `adapter_factory` construction seam; no new tools,
+  `select_route` signature unchanged.
+- **Secrets** (`src/freesearch/secrets.py`): added `MemorySecretStore`, the
+  dict-backed `SecretStore` implementation mirroring the tests' double.
+  `python-dotenv` is now a declared dependency (was imported undeclared).
+- **Offline BDD**: `features/control.feature` (6 scenarios) + 
+  `features/steps/control_steps.py` run fully offline (temp-file SQLite +
+  stub adapters), guarded by the feature-level `@control` tag check in
+  `features/environment.py`.
+- **Deviations (all test-driven, recorded deliberately)**:
+  - Control-plane secret presence keeps full `ProviderSecretResolver`
+    precedence (environment > `.env` > store) so presence matches actual
+    adapter construction; the `.env` leg is read-only, `PUT .../secret`
+    reports the effective source/fingerprint rather than assuming the stored
+    write won, and a delete that leaves nothing resolvable reports
+    `source="none"` (with no fingerprint) rather than naming the store it
+    emptied.
+  - The `PATCH` body is optional so `PATCH`/`GET` on an unknown provider id
+    always yields 404 even with no JSON body.
+  - `GET /api/v1/providers` entries serialize `health` only (no
+    `health_checked_at` key), matching the pinned response key set.
+- **Verification (2026-09-06, finalize)**: full suite green — see the
+  Verification section for the exact per-item commands, counts, and the
+  sandbox accommodations.
+
 ## Next - Quota reconciliation coordinator
 
-Planned per [`WORKPLAN.md`](WORKPLAN.md) §4; not yet implemented. Bridges the
-local SQLite `UsageEvent` ledger (live decrements) with periodic vendor
-`adapter.quota()` polling to eliminate provider telemetry lag (vendors lag
-10–15 minutes). It must re-anchor the authoritative baseline
-(`QuotaSnapshotRow`), detect external account drift, and clear or offset
-processed local usage events without blocking active search and fetch
-requests. The Stage 4.5 monitoring read surface (`/stats` + `/dashboard`
-JSON, `latest_quota` with provenance) is already in place and will carry
-coordinator-produced snapshots; routing consumption of local snapshots also
-lands with this stage.
+Planned per [`WORKPLAN.md`](WORKPLAN.md) §4; not yet implemented — it remains
+next after the Stage 5 control plane, which landed early per operator decision.
+It bridges the local SQLite `UsageEvent` ledger (live decrements, now carrying
+measured latency and status) with periodic vendor `adapter.quota()` polling to
+eliminate provider telemetry lag (vendors lag 10–15 minutes). It must
+re-anchor the authoritative baseline (`QuotaSnapshotRow`), detect external
+account drift, and clear or offset processed local usage events without
+blocking active search and fetch requests. The Stage 4.5 monitoring read
+surface (`/stats` + `/dashboard` JSON, `latest_quota` with provenance) and the
+Stage 5 control surface (`/api/v1` provider/secret/routing endpoints) are in
+place; routing consumption of local snapshots also lands with this stage.
 
 
 ## DeepSeek Harness `web_search` integration (Path B bridge)
@@ -475,8 +591,12 @@ To prevent misrouting or quota exhaustion stalls under heavy burst traffic:
 ## Deliberately deferred
 
 Remaining, in planned order: quota reconciliation coordinator (next), MCP
-end-to-end tests, documentation/local setup guide, Docker packaging, and the
-full settings/secrets dashboard (Stage 5), as specified by the work plan.
+end-to-end tests, documentation/local setup guide, and Docker packaging, as
+specified by the work plan. The Stage 5 backend control API (provider
+controls, secrets, routing policy) landed early on 2026-09-06 (see the Stage 5
+section); still deferred are the authenticated dashboard UI itself,
+CSRF/session/audit machinery beyond loopback binding, hosted vault adapters,
+and rotation/revocation workflows.
 
 - **Brave Answers API**: Brave provides separate API keys and subscriptions for
   Search (`FREESEARCH_BRAVE_SEARCH_API_KEY`) and AI Answers (`FREESEARCH_BRAVE_ANSWERS_API_KEY`).
@@ -497,20 +617,37 @@ adapters and their real error shapes. They are recorded in
 
 ## Verification
 
-All checks pass locally:
+All checks pass locally (2026-09-06, finalize battery — 100% green):
 
 ```text
-uv lock --check
-uv sync --locked  # sandbox note: .venv prune of stray pytest_cov denied; lock verified via uv lock --check
-uv run ruff check .  # all checks passed
-uv run ruff format --check . --exclude .runtime-tmp --exclude tests/.pytest-tmp  # 84 files already formatted
-uv run mypy src  # no issues found in 25 source files
-uv run pytest  # 864 passed
-uv run behave features/monitoring.feature  # 4 scenarios, 16 steps passed (offline, no keys)
-FREESEARCH_RUN_LIVE=1 uv run behave --tags=@keenable --no-capture  # 1 live scenario, 7 steps passed
-uv run behave --tags=@live,@parallel features/parallel.feature  # 2 passed
+uv lock --check   # via `uv lock --check --no-cache` in this sandbox: lock is consistent
+uv run ruff check .  # all checks passed (via `uv run --no-sync --no-cache`)
+uv run ruff format --check . --exclude .runtime-tmp --exclude tests/.pytest-tmp  # 93 files already formatted
+uv run mypy src  # Success: no issues found in 26 source files
+uv run pytest -p pytest_tmp_mode_fix --basetemp .runtime-tmp/pt-dev-finalize -q  # 907 passed, 0 failed
+uv run behave features/control.feature --no-capture    # 6 scenarios, 23 steps passed (offline, no keys)
+uv run behave features/monitoring.feature --no-capture # 4 scenarios, 16 steps passed (offline, no keys)
+uv run behave --dry-run 2>$null                        # 0 undefined steps (9 features / 25 scenarios / 109 steps untested as expected)
 ```
-Live Stage 4.5 acceptance (2026-09-05): fresh `FREESEARCH_DB` + API server,
-Brave search (1 unit) and Tavily fetch (0 units) via `routing.mode=require`,
-attribution verified in `/stats` + `/dashboard` JSON (the evidence files were
-removed with `.runtime-tmp/`).
+
+- The finalize round flipped the last items green: corrupt persisted provider
+  config self-heals to defaults at every read seam (B1), control-plane secret
+  presence gained the `.env` leg with effective-source reporting on PUT/DELETE
+  (B2-B4), and the app default store is bound to
+  `Settings.secret_service_name` (B5). The earlier round-1 schema contradiction
+  was resolved by the Tester's `_SCHEMA` update in `tests/test_storage.py`;
+  one whitespace-only reformat (`ruff format`) was applied to
+  `tests/test_control_api.py` to satisfy the format gate.
+- **Sandbox accommodations (this constrained harness session)**: `uv`'s cache
+  directory and directory-listing of `mode=0o700` temp dirs are denied by the
+  file sandbox, and the project's console-script exe is held by the running
+  API server, so the battery ran with `uv run --no-sync --no-cache`; pytest
+  tmp handling uses the Tester's refreshed `.runtime-tmp/pytest_tmp_mode_fix.py`
+  (readable-mode `os.mkdir` patch) with an explicit `--basetemp`, and scenario
+  debris directories (`freesearch-control-cwd-*`, never source) are excluded
+  from ruff via `pyproject.toml` because the harness cannot list or delete
+  them. `uv lock --check` runs directly with `--no-cache` (the `uv run` form
+  re-reads the denied cache path). No test or source semantics were changed by
+  these; without the sandbox the verbatim battery commands apply.
+- **Prior Stage 4.5 record (unchanged)**: 864 passed suite; live 2026-09-05
+  Brave/Tavily attribution stays verified in `/stats` + `/dashboard` JSON.

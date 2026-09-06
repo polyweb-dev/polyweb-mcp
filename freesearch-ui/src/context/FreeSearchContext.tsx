@@ -13,6 +13,7 @@ import type {
 } from "@/types/freesearch"
 import { DEFAULT_PROVIDERS } from "@/services/api/defaultProviders"
 import { apiService } from "@/services/api/freesearchApi"
+import { formatMaskedKey } from "@/lib/maskKey"
 import { FreeSearchContext, type ToastNotification } from "./context"
 
 const INITIAL_FALLBACK_CONFIG: FallbackConfig = {
@@ -77,7 +78,8 @@ export const FreeSearchProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
   const [usageEvents, setUsageEvents] = useState<UsageEvent[]>(INITIAL_USAGE_EVENTS)
 
-  const [cacheStats, setCacheStats] = useState<CacheStats>(INITIAL_CACHE_STATS)
+  // Cache statistics are read-only telemetry in this build; no purge action.
+  const [cacheStats] = useState<CacheStats>(INITIAL_CACHE_STATS)
   const [toasts, setToasts] = useState<ToastNotification[]>([])
 
   const showToast = useCallback((message: string, type: ToastNotification["type"] = "info") => {
@@ -167,36 +169,10 @@ export const FreeSearchProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     []
   )
 
-  const addProvider = useCallback(
-    (newProviderData: Omit<ProviderConfig, "isCustom">) => {
-      const newProvider: ProviderConfig = {
-        ...newProviderData,
-        isCustom: true,
-        priority: providers.length + 1,
-        consecutiveFailures: 0,
-        latencyP95Ms: 250,
-        quota: newProviderData.quota || {
-          used: 0,
-          limit: 1000,
-          unit: "requests",
-          confidence: "estimated",
-          resetPeriod: "Monthly",
-          nextReset: "30 days",
-        },
-      }
-      setProviders((prev) => [...prev, newProvider].sort((a, b) => a.priority - b.priority))
-      showToast(`Custom provider "${newProvider.name}" added successfully`, "success")
-    },
-    [providers.length, showToast]
-  )
-
-  const removeProvider = useCallback(
-    (id: string) => {
-      setProviders((prev) => prev.filter((p) => p.id !== id))
-      showToast(`Provider "${id}" removed`, "info")
-    },
-    [showToast]
-  )
+  const removeProvider = useCallback((id: string) => {
+    setProviders((prev) => prev.filter((p) => p.id !== id))
+    showToast(`Provider "${id}" removed`, "info")
+  }, [showToast])
 
   const setCircuitBreaker = useCallback(
     (id: string, status: CircuitBreakerStatus) => {
@@ -232,16 +208,14 @@ export const FreeSearchProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     [providers, showToast]
   )
 
-  // One-time view API Key mechanics
+  // Key Vault: write-only. The raw secret is never stored on the provider —
+  // only its masked fingerprint — so it can never be rendered back.
   const saveProviderKey = useCallback(
     (id: string, rawKey: string) => {
       const trimmed = rawKey.trim()
       if (!trimmed) return
 
-      const prefix = trimmed.slice(0, 4)
-      const suffix = trimmed.slice(-4)
-      const masked = `${prefix}_••••••••${suffix}`
-
+      const masked = formatMaskedKey(trimmed)
       setProviders((prev) =>
         prev.map((p) => {
           if (p.id !== id) return p
@@ -249,33 +223,14 @@ export const FreeSearchProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             ...p,
             hasKey: true,
             keyMasked: masked,
-            unmaskedKeyOnce: trimmed,
-            keyVaultStatus: "revealed_once",
-          }
-        })
-      )
-      showToast(
-        `API Key saved for "${id}". It is now revealed once; burn or dismiss after copying.`,
-        "success"
-      )
-    },
-    [showToast]
-  )
-
-  const burnOneTimeKey = useCallback(
-    (id: string) => {
-      setProviders((prev) =>
-        prev.map((p) => {
-          if (p.id !== id) return p
-          const updated = { ...p }
-          delete updated.unmaskedKeyOnce
-          return {
-            ...updated,
             keyVaultStatus: "configured" as const,
           }
         })
       )
-      showToast(`One-time key view burned for "${id}". Plaintext purged from memory.`, "info")
+      showToast(
+        `API key stored for "${id}". Credentials are write-only and never displayed.`,
+        "success"
+      )
     },
     [showToast]
   )
@@ -401,27 +356,6 @@ export const FreeSearchProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     setFetchError(null)
   }, [])
 
-  const purgeCache = useCallback(
-    (providerId?: string) => {
-      setCacheStats((prev) => ({
-        ...prev,
-        totalEntries: providerId ? Math.max(0, prev.totalEntries - 45) : 0,
-        sizeKb: providerId ? Math.max(0, prev.sizeKb - 250) : 0,
-        lastPurged: new Date().toLocaleTimeString(),
-      }))
-      showToast(
-        providerId ? `Purged cache entries for ${providerId}` : "All cache entries successfully purged",
-        "info"
-      )
-    },
-    [showToast]
-  )
-
-  const clearUsageEvents = useCallback(() => {
-    setUsageEvents([])
-    showToast("Audit logs cleared", "info")
-  }, [showToast])
-
   const value = useMemo(
     () => ({
       providers,
@@ -441,19 +375,15 @@ export const FreeSearchProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       toggleProviderFetch,
       updateProviderPriority,
       moveProviderPriority,
-      addProvider,
       removeProvider,
       setCircuitBreaker,
       testProviderConnection,
       saveProviderKey,
-      burnOneTimeKey,
       updateFallbackConfig,
       setRoutingPreset,
       runSearch,
       runFetch,
       clearActiveResults,
-      purgeCache,
-      clearUsageEvents,
       showToast,
       dismissToast,
     }),
@@ -475,19 +405,15 @@ export const FreeSearchProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       toggleProviderFetch,
       updateProviderPriority,
       moveProviderPriority,
-      addProvider,
       removeProvider,
       setCircuitBreaker,
       testProviderConnection,
       saveProviderKey,
-      burnOneTimeKey,
       updateFallbackConfig,
       setRoutingPreset,
       runSearch,
       runFetch,
       clearActiveResults,
-      purgeCache,
-      clearUsageEvents,
       showToast,
       dismissToast,
     ]

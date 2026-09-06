@@ -37,13 +37,11 @@ export interface FreeSearchContextType {
   toggleProviderFetch: (id: string, enabled: boolean) => void
   updateProviderPriority: (id: string, newPriority: number) => void
   moveProviderPriority: (id: string, direction: "up" | "down") => void
-  addProvider: (provider: Omit<ProviderConfig, "isCustom">) => void
   removeProvider: (id: string) => void
   setCircuitBreaker: (id: string, status: CircuitBreakerStatus) => void
   testProviderConnection: (id: string) => Promise<{ success: boolean; latencyMs: number; message: string }>
-  // Key Vault & One-time view
+  // Key Vault — write-only, masked-only
   saveProviderKey: (id: string, rawKey: string) => void
-  burnOneTimeKey: (id: string) => void
   // Fallback and routing configuration
   updateFallbackConfig: (partial: Partial<FallbackConfig>) => void
   setRoutingPreset: (preset: RoutingPreset) => void
@@ -51,9 +49,6 @@ export interface FreeSearchContextType {
   runSearch: (request: SearchRequest) => Promise<SearchResponse | null>
   runFetch: (request: FetchRequest) => Promise<FetchResponse | null>
   clearActiveResults: () => void
-  // Cache & events
-  purgeCache: (providerId?: string) => void
-  clearUsageEvents: () => void
   // Toast
   showToast: (message: string, type?: ToastNotification["type"]) => void
   dismissToast: (id: string) => void

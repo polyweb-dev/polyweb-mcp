@@ -16,3 +16,5 @@ coverage/
 .gremlins*/
 .coverage*
 *.db
+*.pnpm-store/
+.runtime-tmp/

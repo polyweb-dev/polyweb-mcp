@@ -435,6 +435,7 @@ dependencies = [
     { name = "mcp" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
+    { name = "python-dotenv" },
     { name = "sqlalchemy", extra = ["asyncio"] },
     { name = "tavily-python" },
 ]
@@ -460,6 +461,7 @@ requires-dist = [
     { name = "mcp", specifier = ">=1.0,<2.0" },
     { name = "pydantic", specifier = ">=2.7,<3.0" },
     { name = "pydantic-settings", specifier = ">=2.2,<3.0" },
+    { name = "python-dotenv", specifier = ">=1.0,<2.0" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0,<2.1" },
     { name = "tavily-python", specifier = ">=0.7.27,<0.8" },
 ]

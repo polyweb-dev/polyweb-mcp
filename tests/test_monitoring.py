@@ -543,7 +543,14 @@ async def test_stats_projection_strips_health_message_usage_metadata_and_request
     stats = await monitoring.collect_stats(repository, adapter_names=())
 
     recent_dump = stats.recent_usage[0].model_dump()
-    assert set(recent_dump) == {"provider", "operation", "units", "observed_at"}
+    assert set(recent_dump) == {
+        "provider",
+        "operation",
+        "units",
+        "observed_at",
+        "latency_ms",
+        "status",
+    }
     assert "metadata" not in recent_dump
     assert "request_id" not in recent_dump
     assert recent_dump["provider"] == "leaky"
@@ -594,6 +601,8 @@ async def test_stats_endpoint_omits_sensitive_keys_end_to_end(
         "operation",
         "units",
         "observed_at",
+        "latency_ms",
+        "status",
     }
     assert "metadata" not in body["recent_usage"][0]
     assert "request_id" not in body["recent_usage"][0]
@@ -900,6 +909,8 @@ async def test_dashboard_endpoint_omits_sensitive_projection_fields_and_values(
             "operation",
             "units",
             "observed_at",
+            "latency_ms",
+            "status",
         }
         assert set(body["latest_health"][0]) == {"provider", "status", "checked_at"}
         for entry in body["recent_usage"] + body["latest_health"]:

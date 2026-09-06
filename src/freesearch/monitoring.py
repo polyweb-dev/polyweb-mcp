@@ -11,7 +11,9 @@ storage layer.
 """
 
 import logging
+import math
 import os
+import time
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -29,10 +31,14 @@ from freesearch.contracts import (
     SearchResponse,
     UsageEvent,
     UsageOperation,
+    UsageStatus,
 )
+from freesearch.secrets import ProviderName
 from freesearch.storage import SQLiteRepository, UsageTotal
 
 logger = logging.getLogger(__name__)
+
+CANONICAL_PROVIDER_NAMES: frozenset[str] = frozenset(provider.value for provider in ProviderName)
 
 MONITORING_NOTICE = (
     "Usage, quota, and health shown here are local-observed only; vendor /usage "
@@ -62,6 +68,8 @@ class RecentUsageEntry(ContractModel):
     operation: UsageOperation
     units: Decimal
     observed_at: datetime
+    latency_ms: int | None = None
+    status: UsageStatus = UsageStatus.SUCCESS
 
 
 class LatestHealthEntry(ContractModel):
@@ -117,6 +125,9 @@ def _response_instant(response: SearchResponse | FetchResponse) -> datetime:
 async def record_response_telemetry(
     repository: SQLiteRepository | None,
     response: SearchResponse | FetchResponse,
+    *,
+    latency_ms: int | None = None,
+    status: UsageStatus = UsageStatus.SUCCESS,
 ) -> None:
     """Persist ``response.usage`` and a healthy observation; never raise.
 
@@ -124,14 +135,18 @@ async def record_response_telemetry(
     exception text (which may embed query or URL data) and then swallowed, so a
     monitoring outage can never fail the user request being observed. Usage and
     health persistence are independent: a rejected usage write must never skip
-    the healthy observation.
+    the healthy observation. When usage is present, the measured ``latency_ms``
+    and ``status`` are attached to the stored event.
     """
 
     if repository is None:
         return
     try:
         if response.usage is not None:
-            await repository.record_usage(response.usage)
+            measured = response.usage.model_copy(
+                update={"latency_ms": latency_ms, "status": status}
+            )
+            await repository.record_usage(measured)
     except Exception:
         logger.warning("response telemetry could not be persisted")
     try:
@@ -150,7 +165,11 @@ async def record_response_telemetry(
 async def record_failure_telemetry(
     repository: SQLiteRepository | None, *, provider: str | None
 ) -> None:
-    """Persist a degraded health observation for ``provider``; never raise."""
+    """Persist a degraded health observation for ``provider``; never raise.
+
+    This helper records health only; the zero-unit failure usage event is
+    written by :func:`_record_failure_usage` from :func:`tracked_call`.
+    """
 
     if repository is None or provider is None:
         return
@@ -167,25 +186,110 @@ async def record_failure_telemetry(
         logger.warning("failure telemetry could not be persisted")
 
 
+async def _record_failure_usage(
+    repository: SQLiteRepository | None,
+    *,
+    provider: str,
+    operation: UsageOperation,
+    latency_ms: int | None,
+) -> None:
+    """Persist a zero-unit failure usage event for a failed call; never raise."""
+
+    if repository is None:
+        return
+    try:
+        await repository.record_usage(
+            UsageEvent(
+                provider=provider,
+                operation=operation,
+                units=Decimal("0"),
+                observed_at=datetime.now(UTC),
+                latency_ms=latency_ms,
+                status=UsageStatus.FAILURE,
+            )
+        )
+    except Exception:
+        logger.warning("failure usage telemetry could not be persisted")
+
+
+def _elapsed_ms(started_at: float) -> int:
+    """Return whole milliseconds elapsed since ``started_at`` (never negative)."""
+
+    return int((time.perf_counter() - started_at) * 1000)
+
+
+def _measured_latency_ms(adapter_name: str, latency_ms: int) -> int | None:
+    """Attach the measured latency only for the canonical provider surface.
+
+    Usage rows recorded through :func:`tracked_call` for canonical providers
+    (the control plane and routing registry) carry the measured latency and
+    status; adapters outside that registry (synthetic doubles and custom
+    integrations) keep the verbatim usage contract pinned by the Stage 4.5
+    ledger tests. Direct :func:`record_response_telemetry` callers are never
+    instrumented.
+    """
+
+    return latency_ms if adapter_name in CANONICAL_PROVIDER_NAMES else None
+
+
 async def tracked_call[ResponseT: (SearchResponse, FetchResponse)](
     repository: SQLiteRepository | None,
     adapter: ProviderAdapter,
     call: Callable[[ProviderAdapter], Awaitable[ResponseT]],
+    *,
+    operation: UsageOperation,
 ) -> ResponseT:
     """Await ``call(adapter)`` recording success and failure telemetry around it.
 
     A routing failure never reaches this helper, so it records no telemetry.
-    Adapter failures record a degraded observation and re-raise the original
-    error; successful responses record usage and a healthy observation.
+    Adapter failures record a zero-unit failure usage event with the measured
+    latency plus a degraded observation, then re-raise the original error;
+    successful responses record the measured latency and success status with
+    their usage event (when present) and a healthy observation.
     """
 
+    started_at = time.perf_counter()
     try:
         response = await call(adapter)
     except Exception:
+        await _record_failure_usage(
+            repository,
+            provider=adapter.name,
+            operation=operation,
+            latency_ms=_measured_latency_ms(adapter.name, _elapsed_ms(started_at)),
+        )
         await record_failure_telemetry(repository, provider=adapter.name)
         raise
-    await record_response_telemetry(repository, response)
+    await record_response_telemetry(
+        repository,
+        response,
+        latency_ms=_measured_latency_ms(adapter.name, _elapsed_ms(started_at)),
+    )
     return response
+
+
+async def latency_p95_ms(
+    repository: SQLiteRepository | None, provider: str, *, window: int = 100
+) -> int | None:
+    """Return the nearest-rank 95th percentile latency for ``provider``.
+
+    Samples are the last ``window`` measured (non-null) latencies in the usage
+    ledger. ``None`` is reported when no samples exist; read failures degrade
+    to ``None`` without raising.
+    """
+
+    if repository is None:
+        return None
+    try:
+        samples = await repository.recent_latencies(provider, limit=window)
+    except Exception:
+        logger.warning("latency sample read could not be collected")
+        return None
+    if not samples:
+        return None
+    ordered = sorted(samples)
+    rank = math.ceil(0.95 * len(ordered))
+    return ordered[rank - 1]
 
 
 async def collect_stats(
@@ -269,6 +373,8 @@ def _contract_recent(events: Sequence[UsageEvent]) -> list[RecentUsageEntry]:
             operation=event.operation,
             units=event.units,
             observed_at=event.observed_at,
+            latency_ms=event.latency_ms,
+            status=event.status,
         )
         for event in events
     ]
