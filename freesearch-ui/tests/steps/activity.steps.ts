@@ -33,6 +33,28 @@ Then("the activity document should not contain seeded query or URL values", asyn
   expect(body).not.toContain("http")
 })
 
+Then(
+  "the activity view should show telemetry columns or an empty state",
+  async ({ page }) => {
+    // Against the live backend the ledger may be empty: accept either the
+    // six telemetry columns (Time/Operation/Provider/Status/Latency/Units)
+    // or the exact ActivityStream empty-state copy.
+    const table = page.getByRole("table")
+    const emptyState = page.getByText(/No events recorded yet/)
+    if ((await table.count()) > 0) {
+      const headers = table.getByRole("columnheader")
+      await expect(headers).toHaveCount(6)
+      for (const columnName of ["Time", "Operation", "Provider", "Status", "Latency", "Units"]) {
+        await expect(
+          table.getByRole("columnheader", { name: columnName, exact: true })
+        ).toBeVisible()
+      }
+    } else {
+      await expect(emptyState).toBeVisible()
+    }
+  }
+)
+
 Then("the activity page should not expose a {string} button", async ({ page }, buttonLabel: string) => {
   await expect(page.getByRole("button", { name: buttonLabel, exact: true })).toHaveCount(0)
 })

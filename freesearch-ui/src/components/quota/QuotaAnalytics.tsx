@@ -1,155 +1,156 @@
 import React from "react"
-import { DollarSign, Database, TrendingDown, Clock } from "lucide-react"
+import { Clock, Database, Gauge } from "lucide-react"
 import { useFreeSearch } from "@/context/useFreeSearch"
+import { catalogNameOf } from "@/services/api/providerCatalog"
+import type { DashboardQuota, ProviderConfig } from "@/types/freesearch"
 
 export const QuotaAnalytics: React.FC = () => {
-  const { providers, cacheStats } = useFreeSearch()
-
-  const totalFreeReqsUsed = providers
-    .filter((p) => p.capabilities.includes("keyless_tier"))
-    .reduce((acc, p) => acc + p.quota.used, 0)
-
-  const cacheHits = cacheStats.searchHits + cacheStats.fetchHits
-  const estimatedSavingsUsd = (totalFreeReqsUsed * 0.015 + cacheHits * 0.02).toFixed(2)
+  const {
+    providers,
+    usageTotals,
+    dashboardQuotas,
+    quotaAvailable,
+    dashboardNotice,
+    usageLoading,
+    usageError,
+  } = useFreeSearch()
 
   return (
     <div className="space-y-8">
-      {/* Page heading */}
-      <div className="flex flex-col sm:flex-row sm:items-baseline justify-between gap-2 pb-2 border-b border-[var(--border-subtle)]">
+      <div className="flex flex-col gap-2 pb-2 border-b border-[var(--border-subtle)]">
+        <h2 className="text-[var(--text-strong)]">Usage</h2>
+        <p className="text-[13px] text-[var(--muted)]">
+          Recorded provider usage and quota signals reported by the backend.
+        </p>
+        {dashboardNotice && <p className="text-[12px] text-[var(--muted)]">{dashboardNotice}</p>}
+      </div>
+
+      {usageError && (
+        <p
+          role="alert"
+          className="p-3 rounded border border-[var(--status-danger)]/40 bg-[var(--elevated)] text-[13px]"
+          style={{ color: "var(--status-danger)" }}
+        >
+          Usage data unavailable — {usageError}
+        </p>
+      )}
+
+      {usageLoading && (
+        <p className="text-[13px] text-[var(--muted)]" role="status">Loading usage telemetry...</p>
+      )}
+      {!usageLoading && (
+        // GAP: 7 — the dashboard can have no authoritative quota records.
+        // GAP: 8 — cache telemetry is not part of the backend dashboard contract.
+        <p className="p-3 rounded border border-[var(--border-subtle)] bg-[var(--elevated)] text-[13px] text-[var(--muted)]">
+          {quotaAvailable
+            ? "Quota data available; cache telemetry unavailable."
+            : "Quota unavailable from the backend; cache telemetry unavailable."}
+        </p>
+      )}
+
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <KpiCard icon={<Gauge className="size-4 text-[var(--signal)] shrink-0" />} label="Recorded aggregates">
+          <span className="tnum">{usageTotals.length}</span> provider operations
+        </KpiCard>
+        <KpiCard icon={<Clock className="size-4 text-[var(--status-warning)] shrink-0" />} label="Quota signal">
+          {quotaAvailable ? "Available" : "No quota source"}
+        </KpiCard>
+        <KpiCard icon={<Database className="size-4 text-[var(--muted)] shrink-0" />} label="Cache telemetry">
+          No cache signal
+        </KpiCard>
+      </div>
+
+      <section className="space-y-3">
         <div>
-          <h2 className="text-[var(--text-strong)]">Usage</h2>
+          <h3 className="text-[var(--text-strong)]">Usage totals</h3>
           <p className="text-[13px] text-[var(--muted)] mt-0.5">
-            Provider quota limits, tier consumption tracking, and zero-cost savings telemetry.
+            Units and event counts are shown exactly as recorded.
           </p>
         </div>
-
-        <span className="text-[13px] tnum" style={{ color: "var(--status-healthy)" }}>
-          ~${estimatedSavingsUsd} saved this cycle
-        </span>
-      </div>
-
-      {/* KPI Cards across widescreen */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-        <KpiCard icon={<DollarSign className="size-4 shrink-0" style={{ color: "var(--status-healthy)" }} />} label="Calculated savings">
-          <span className="tnum" style={{ color: "var(--status-healthy)" }}>
-            ${estimatedSavingsUsd}
-          </span>
-        </KpiCard>
-
-        <KpiCard icon={<TrendingDown className="size-4 text-[var(--signal)] shrink-0" />} label="Zero-cost requests">
-          <span className="tnum">{totalFreeReqsUsed} queries</span>
-        </KpiCard>
-
-        <KpiCard icon={<Database className="size-4 shrink-0" style={{ color: "var(--signal)" }} />} label="Cache roundtrips saved">
-          <span className="tnum">{cacheHits} hits</span>
-        </KpiCard>
-
-        <KpiCard icon={<Clock className="size-4 text-[var(--status-warning)] shrink-0" />} label="Monitored windows">
-          <span className="tnum">{providers.length} provider quotas</span>
-        </KpiCard>
-      </div>
-
-      {/* Consumption Table */}
-      <div className="border border-[var(--border-subtle)] rounded-lg overflow-hidden">
-        {/* Table header */}
-        <div
-          className="grid items-center text-[13px] font-medium py-2.5 px-4 bg-[var(--elevated)] border-b border-[var(--border-subtle)] text-[var(--muted)]"
-          style={{
-            gridTemplateColumns: "220px 140px 1fr 140px 140px",
-          }}
-        >
-          <span>Provider</span>
-          <span>Window</span>
-          <span>Consumption</span>
-          <span className="text-right">Confidence</span>
-          <span className="text-right">Resets</span>
-        </div>
-
-        {/* Provider quota rows */}
-        {providers.map((p) => {
-          const quota = p.quota
-          const percentUsed = quota.limit
-            ? Math.min(100, Math.round((quota.used / quota.limit) * 100))
-            : 0
-
-          const barColor =
-            percentUsed > 80
-              ? "var(--status-danger)"
-              : percentUsed > 50
-              ? "var(--status-warning)"
-              : "var(--signal)"
-
-          return (
-            <div
-              key={p.id}
-              className="grid items-center py-3.5 px-4 border-b last:border-b-0 border-[var(--border-subtle)] hover:bg-[var(--elevated)] transition-colors"
-              style={{
-                gridTemplateColumns: "220px 140px 1fr 140px 140px",
-              }}
-            >
-              {/* Provider name */}
-              <div className="flex items-center gap-2">
-                <span className="text-[13px] font-medium text-[var(--text-strong)]">
-                  {p.name}
-                </span>
-                {p.capabilities.includes("keyless_tier") && (
-                  <span
-                    className="text-[12px] px-1 rounded"
-                    style={{
-                      background: "rgba(34, 197, 94, 0.1)",
-                      color: "var(--status-healthy)",
-                    }}
-                  >
-                    free
-                  </span>
-                )}
-              </div>
-
-              {/* Reset period */}
-              <span className="text-[13px] text-[var(--muted)]">
-                {quota.resetPeriod}
-              </span>
-
-              {/* Progress bar + numbers */}
-              <div className="flex items-center gap-3 pr-6">
-                <div
-                  className="flex-1 h-1.5 rounded-full bg-[var(--border-subtle)] overflow-hidden"
-                >
-                  <div
-                    className="h-full rounded-full transition-all"
-                    style={{
-                      width: `${percentUsed}%`,
-                      background: barColor,
-                    }}
-                  />
-                </div>
-                <span className="text-[13px] text-[var(--text)] tnum shrink-0">
-                  {quota.used}/{quota.limit || "∞"} {quota.unit}
-                </span>
-              </div>
-
-              {/* Confidence */}
-              <span className="text-right text-[13px] text-[var(--muted)]">
-                {quota.confidence}
-              </span>
-
-              {/* Next reset */}
-              <span className="text-right text-[13px] text-[var(--text)] tnum">
-                {quota.nextReset}
-              </span>
+        {usageTotals.length === 0 ? (
+          <p className="p-8 text-center border border-[var(--border-subtle)] rounded-lg bg-[var(--elevated)] text-[13px] text-[var(--muted)]">
+            No usage totals recorded yet.
+          </p>
+        ) : (
+          <div className="border border-[var(--border-subtle)] rounded-lg overflow-hidden">
+            <div className="grid grid-cols-[1fr_1fr_1fr] items-center py-2.5 px-4 bg-[var(--elevated)] border-b border-[var(--border-subtle)] text-[12px] text-[var(--muted)]">
+              <span>Provider</span>
+              <span>Operation</span>
+              <span className="text-right">Total units</span>
             </div>
-          )
-        })}
+            {usageTotals.map((total) => (
+              <div
+                key={`${total.provider}-${total.operation}`}
+                className="grid grid-cols-[1fr_1fr_1fr] items-center py-3 px-4 border-b last:border-b-0 border-[var(--border-subtle)]"
+              >
+                <span className="text-[13px] font-medium text-[var(--text-strong)]">
+                  {catalogNameOf(total.provider) ?? total.provider}
+                </span>
+                <span className="text-[13px] capitalize text-[var(--muted)]">{total.operation}</span>
+                <span className="text-right text-[13px] tnum text-[var(--text)]">{total.total_units}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <section className="space-y-3">
+        <div>
+          <h3 className="text-[var(--text-strong)]">Provider quota view</h3>
+          <p className="text-[13px] text-[var(--muted)] mt-0.5">
+            Limits remain blank when the backend has no quota source.
+          </p>
+        </div>
+        <div className="border border-[var(--border-subtle)] rounded-lg overflow-hidden">
+          {providers.map((provider) => (
+             <QuotaRow
+               key={provider.id}
+               provider={provider}
+               latestQuota={dashboardQuotas.find((quota) => quota.provider === provider.id)}
+             />
+           ))}
+        </div>
+      </section>
+    </div>
+  )
+}
+
+interface QuotaRowProps {
+  provider: ProviderConfig
+  latestQuota: DashboardQuota | undefined
+}
+
+const QuotaRow: React.FC<QuotaRowProps> = ({ provider, latestQuota }) => {
+  const { quota } = provider
+  const remaining = latestQuota?.remaining ?? null
+  const limit = latestQuota?.limit ?? null
+  const hasValues = remaining !== null && limit !== null
+  const percent = hasValues
+    ? Math.min(100, Math.round((Number(remaining) / Number(limit)) * 100))
+    : 0
+  return (
+    <div className="grid grid-cols-[1fr_1fr_1.5fr] items-center gap-4 py-3 px-4 border-b last:border-b-0 border-[var(--border-subtle)]">
+      <span className="text-[13px] font-medium text-[var(--text-strong)]">{provider.name} quota</span>
+      <span className="text-[13px] text-[var(--muted)]">{quota.resetPeriod ?? "—"}</span>
+      <div className="flex items-center gap-3">
+        {hasValues && (
+          <div className="flex-1 h-1.5 rounded-full bg-[var(--border-subtle)] overflow-hidden">
+            <div className="h-full rounded-full bg-[var(--signal)]" style={{ width: `${percent}%` }} />
+          </div>
+        )}
+        <span className="text-[13px] text-[var(--text)] tnum shrink-0">
+          {remaining ?? "—"}/{limit ?? "∞"} {quota.unit}
+        </span>
       </div>
     </div>
   )
 }
 
-const KpiCard: React.FC<{
-  icon: React.ReactNode
-  label: string
-  children: React.ReactNode
-}> = ({ icon, label, children }) => (
+const KpiCard: React.FC<{ icon: React.ReactNode; label: string; children: React.ReactNode }> = ({
+  icon,
+  label,
+  children,
+}) => (
   <div className="p-3.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--elevated)] flex items-center gap-3">
     {icon}
     <div>

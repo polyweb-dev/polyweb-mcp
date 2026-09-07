@@ -8,6 +8,16 @@ import { useFreeSearch } from "@/context/useFreeSearch"
 import { Button } from "@/components/ui/button"
 import type { SearchResult } from "@/types/freesearch"
 
+function isEligibleForOperation(
+  provider: ReturnType<typeof useFreeSearch>["providers"][number],
+  operation: "search" | "fetch"
+): boolean {
+  if (!provider.globalEnabled) return false
+  return operation === "search"
+    ? provider.searchEnabled && provider.capabilities.includes("search")
+    : provider.fetchEnabled && provider.capabilities.includes("fetch")
+}
+
 export const SearchPlayground: React.FC = () => {
   const {
     providers,
@@ -31,22 +41,24 @@ export const SearchPlayground: React.FC = () => {
   const [showJsonInspector, setShowJsonInspector] = useState(false)
   const [copied, setCopied] = useState(false)
 
-  const eligibleProviders = providers.filter((p) => {
-    if (!p.globalEnabled) return false
-    return mode === "search"
-      ? p.searchEnabled && p.capabilities.includes("search")
-      : p.fetchEnabled && p.capabilities.includes("fetch")
-  })
+  const eligibleProviders = providers.filter((provider) =>
+    isEligibleForOperation(provider, mode)
+  )
 
   const handleExecute = async (e?: React.FormEvent) => {
     if (e) e.preventDefault()
 
+    const selectedProvider =
+      selectedProviderId !== "auto" &&
+      eligibleProviders.some((provider) => provider.id === selectedProviderId)
+        ? selectedProviderId
+        : undefined
+
     if (mode === "search") {
       if (!query.trim()) return
-      const targetIds = selectedProviderId === "auto" ? undefined : [selectedProviderId]
       const res = await runSearch({
         query: query.trim(),
-        providerIds: targetIds,
+        providerIds: selectedProvider ? [selectedProvider] : undefined,
         mode: searchDepth,
         maxResults: 6,
         timeoutMs: 3000,
@@ -56,7 +68,7 @@ export const SearchPlayground: React.FC = () => {
       if (!fetchUrl.trim()) return
       await runFetch({
         url: fetchUrl.trim(),
-        providerId: selectedProviderId === "auto" ? undefined : selectedProviderId,
+        providerId: selectedProvider,
         format: "markdown",
         timeoutMs: 4000,
       })
@@ -65,6 +77,14 @@ export const SearchPlayground: React.FC = () => {
   }
 
   const switchMode = (next: "search" | "fetch") => {
+    if (
+      selectedProviderId !== "auto" &&
+      !providers.some((provider) =>
+        provider.id === selectedProviderId && isEligibleForOperation(provider, next)
+      )
+    ) {
+      setSelectedProviderId("auto")
+    }
     setMode(next)
     setSelectedResultForPreview(null)
   }
@@ -98,6 +118,7 @@ export const SearchPlayground: React.FC = () => {
             <button
               type="button"
               onClick={() => switchMode("search")}
+              aria-label="Search mode"
               aria-pressed={mode === "search"}
               className="text-[13px] font-medium pb-1 transition-colors"
               style={{
@@ -251,7 +272,7 @@ export const SearchPlayground: React.FC = () => {
                 Latency <span className="text-[var(--text-strong)]">{activeSearch.executionTimeMs}ms</span>
               </span>
               <span>
-                Cost <span className="text-[var(--text-strong)]">{activeSearch.costEstimateCredits} credits</span>
+                Units <span className="text-[var(--text-strong)]">{activeSearch.costEstimateCredits}</span>
               </span>
               <span>
                 Resolved by <span className="text-[var(--signal)] font-medium">{activeSearch.selectedProviderId}</span>
@@ -360,7 +381,7 @@ export const SearchPlayground: React.FC = () => {
                         Result Inspector
                       </span>
                       <h3 className="text-[16px] font-medium text-[var(--text-strong)] leading-snug">
-                        {selectedResultForPreview.title}
+                        Selected result
                       </h3>
                     </div>
 
@@ -390,24 +411,6 @@ export const SearchPlayground: React.FC = () => {
                       </p>
                     </div>
 
-                    {selectedResultForPreview.contentPreview && (
-                      <div>
-                        <div className="flex items-center justify-between mb-1">
-                          <span className="text-[12px] text-[var(--muted)]">Extracted document preview</span>
-                          <button
-                            type="button"
-                            onClick={() => copyToClipboard(selectedResultForPreview.contentPreview || "")}
-                            className="text-[12px] text-[var(--signal)] hover:underline"
-                          >
-                            {copied ? "Copied" : "Copy text"}
-                          </button>
-                        </div>
-                        <pre className="p-3 rounded bg-[var(--surface)] border border-[var(--border-subtle)] text-[12px] text-[var(--text)] leading-relaxed max-h-56 overflow-auto whitespace-pre-wrap">
-                          {selectedResultForPreview.contentPreview}
-                        </pre>
-                      </div>
-                    )}
-
                     <div className="pt-2 border-t border-[var(--border-subtle)] flex items-center justify-between text-[12px] text-[var(--muted)] tnum">
                       <span>Attributed: {selectedResultForPreview.providerName}</span>
                       <span>Score: {Math.round(selectedResultForPreview.relevanceScore * 100)}%</span>
@@ -425,9 +428,7 @@ export const SearchPlayground: React.FC = () => {
                 <div className="p-4 rounded-lg border border-[var(--border-subtle)] bg-[var(--elevated)] space-y-3">
                   <div className="flex items-center justify-between text-[13px]">
                     <span className="font-medium text-[var(--text-strong)]">Execution waterfall</span>
-                    <span className="text-[12px] text-[var(--muted)] tnum">
-                      {activeSearch.waterfall.length} hops evaluated
-                    </span>
+                    <span className="text-[12px] text-[var(--muted)]">Trace unavailable from backend</span>
                   </div>
 
                   <div className="space-y-2">
@@ -493,15 +494,15 @@ export const SearchPlayground: React.FC = () => {
 
               <div className="flex items-center justify-between py-1.5 border-b border-[var(--border-subtle)]">
                 <span>Status code</span>
-                <span className="tnum" style={{ color: "var(--status-healthy)" }}>
-                  {activeFetch.document.statusCode}
+                <span className="tnum" style={{ color: "var(--status-healthy)" }} title="HTTP status not exposed by backend">
+                  {activeFetch.document.statusCode ?? "—"}
                 </span>
               </div>
 
               <div className="flex items-center justify-between py-1.5 border-b border-[var(--border-subtle)]">
                 <span>Content length</span>
                 <span className="text-[var(--text)] tnum">
-                  {activeFetch.document.contentLength} bytes
+                  {new TextEncoder().encode(activeFetch.document.content).length} bytes
                 </span>
               </div>
 

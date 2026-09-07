@@ -25,8 +25,8 @@ export const SettingsFailover: React.FC = () => {
           label="Fallback chaining"
           description={
             fallbackConfig.enabled
-              ? "Cascades to the next ranked provider when the primary fails."
-              : "Requests run single-shot against the selected provider."
+              ? "Persisted backend policy. Current backend dispatch performs a single attempt per request (no cross-provider retry)."
+              : "Persisted backend policy: single-attempt dispatch against the selected provider."
           }
         />
 
@@ -41,7 +41,7 @@ export const SettingsFailover: React.FC = () => {
             checked={fallbackConfig.fallbackOnTimeout}
             onChange={(checked) => updateFallbackConfig({ fallbackOnTimeout: checked })}
             label="Failover on timeout"
-            description="Moves on when a provider exceeds its hop time budget."
+            description="Moves on when a provider exceeds its local timeout."
           />
           <Switch
             checked={fallbackConfig.fallbackOnServerError}
@@ -51,6 +51,10 @@ export const SettingsFailover: React.FC = () => {
           />
         </div>
       </div>
+
+      <p className="text-[12px] text-[var(--muted)]">
+        Backend dispatch currently makes a single attempt per request; it does not retry across providers. Per-condition switches are session-only — not enforced by the backend.
+      </p>
 
       <div className="rounded-lg border border-[var(--border-subtle)] px-4 divide-y divide-[var(--border-subtle)]">
         <div className="flex items-center justify-between py-3 gap-4">
@@ -64,7 +68,8 @@ export const SettingsFailover: React.FC = () => {
 
         <div className="flex items-center justify-between py-3 gap-4">
           <span className="text-[13px] text-[var(--muted)]">Timeout budget</span>
-          <span className="text-[13px] text-[var(--text)] tnum">3,000 ms</span>
+          {/* GAP: 10 — the backend does not expose a timeout budget. */}
+          <span className="text-[13px] text-[var(--muted)]">Timeout budget not exposed by backend</span>
         </div>
       </div>
     </section>

@@ -1,5 +1,4 @@
 import React, { useId } from "react"
-import { Switch as ShadcnSwitch } from "@/components/ui/switch"
 import { cn } from "@/lib/utils"
 
 export interface SwitchProps {
@@ -9,7 +8,6 @@ export interface SwitchProps {
   disabled?: boolean
   label?: string
   description?: string
-  /** Explicit accessible name for switches without a visible label. */
   ariaLabel?: string
 }
 
@@ -32,15 +30,32 @@ export const Switch: React.FC<SwitchProps> = ({
         disabled && "cursor-not-allowed opacity-45"
       )}
     >
-      <ShadcnSwitch
+      <button
+        type="button"
         id={switchId}
-        checked={checked}
-        onCheckedChange={(newChecked) => {
-          if (!disabled) onChange(newChecked)
-        }}
+        role="switch"
+        aria-checked={checked}
+        aria-label={ariaLabel ?? label}
         disabled={disabled}
-        aria-label={ariaLabel}
-      />
+        onClick={() => onChange(!checked)}
+        className={cn(
+          "relative inline-flex h-5 w-9 shrink-0 items-center rounded-full border p-0.5 transition-all duration-200 ease-in-out outline-none motion-reduce:transition-none",
+          "before:absolute before:-inset-2 before:content-['']",
+          "focus-visible:border-[var(--signal)] focus-visible:ring-2 focus-visible:ring-[var(--signal)]/40",
+          checked
+            ? "border-transparent bg-[var(--signal)]"
+            : "border-[var(--border-subtle)] bg-transparent",
+          "disabled:cursor-not-allowed disabled:opacity-50"
+        )}
+      >
+        <span
+          aria-hidden="true"
+          className={cn(
+            "pointer-events-none block h-4 w-4 rounded-full bg-[var(--text-strong)] shadow-sm transition-transform duration-200 ease-in-out motion-reduce:transition-none",
+            checked && "translate-x-[14px]"
+          )}
+        />
+      </button>
       {(label || description) && (
         <label
           htmlFor={switchId}
@@ -52,9 +67,7 @@ export const Switch: React.FC<SwitchProps> = ({
             </span>
           )}
           {description && (
-            <span className="text-[13px] text-[var(--muted)] leading-snug">
-              {description}
-            </span>
+            <span className="text-[13px] text-[var(--muted)] leading-snug">{description}</span>
           )}
         </label>
       )}

@@ -1,6 +1,6 @@
 # FreeSearch Progress
 
-Updated: 2026-09-06
+Updated: 2026-09-06 (Stage 6 — frontend live-API integration)
 
 ## Scope completed
 
@@ -270,8 +270,8 @@ rotation/revocation).
 
 **2026-09-05 change:** `GET /dashboard` switched from stdlib-only HTML to a
 JSON `DashboardResponse` (the `StatsResponse` fields plus `generated_at`,
-UTC timezone-aware) served with `application/json`; the React dashboard UI is
-not built yet and the `freesearch-ui/` scaffold is untouched. For the future
+UTC timezone-aware) served with `application/json`. (Superseded 2026-09-06:
+the React dashboard/UI consumer is now live — see **Stage 6** below.) For the
 React consumer: Decimal-valued fields (`total_units`, `units`, quota
 `remaining`/`limit`) serialize as JSON strings in both payloads.
 
@@ -476,6 +476,139 @@ round delivers the backend control API only.
 - **Verification (2026-09-06, finalize)**: full suite green — see the
   Verification section for the exact per-item commands, counts, and the
   sandbox accommodations.
+
+## Stage 6 - Frontend live-API integration (`freesearch-ui`)
+
+Delivered 2026-09-06 by the frontend team: the React app's fully **mocked** API
+layer (generated results, simulated latency, invented provider telemetry) was
+replaced with live calls to the FastAPI backend (`freesearch-api` on
+loopback:8001) through a **same-origin Vite dev+preview proxy** (the backend
+sends no CORS headers — mitigation is frontend-only; see backend feedback).
+All edits confined to `freesearch-ui/`; backend sources read-only reference.
+
+### Delivered (frontend-only)
+
+- **Service layer**: new `services/api/backendTypes.ts` (snake_case wire DTOs),
+  `httpErrors.ts` (`ApiError{status,detail,raw}`, `parseDetail`, friendly
+  `statusMessage` incl. abort/timeout branch — `DOMException` is not
+  `instanceof Error`), `providerCatalog.ts` (static UI metadata for the 7
+  canonical providers; `youcom`↔`you` id seam), `mappers.ts` (pure wire→UI
+  mappers, deterministic ids, decimal-string parsing), and a rewritten
+  `freesearchApi.ts` — plain `fetch`, relative URLs
+  (`import.meta.env.VITE_API_URL ?? ""`), all 9 routes
+  (`/search`, `/fetch`, `/dashboard`, `/api/v1/providers*`,
+  `.../test`, `.../circuit-breaker/reset`, `.../secret`, `/api/v1/routing/config`).
+  Mock generators, latency `setTimeout` simulation, and `defaultProviders.ts`
+  telemetry are gone (`maskKey.ts` deleted; `ui/switch.tsx` deleted).
+- **Context** (`FreeSearchContext.tsx` + `context.ts`): parallel fail-soft
+  mount loads (`providers` + `routing/config` + `dashboard?limit=50`);
+  pessimistic persisted mutations (PATCH `{enabled}`/`{priority}` strict
+  bodies, sequential priority swaps with compensating PATCH + authoritative
+  refresh on failure, breaker reset POSTs / trip is local-only and labeled,
+  write-only keys via PUT/DELETE `secret` with server fingerprint + env-shadow
+  note, fallback config full-body PUT with authoritative re-GET on failure,
+  `costOptimizationPreset` ↔ `free_first` wired); `runSearch`/`runFetch` map
+  the UI request exactly (`limit` clamp 1–100, `mode`→`prefer/require/auto`
+  with explicit provider ids, `allow_fallback`, `AbortSignal.timeout`
+  client-side), report the backend winner **verbatim** (no fabricated
+  provider/waterfall — single-entry waterfall + honest "trace unavailable"
+  notice), keep last-good results on error, and fire-and-forget dashboard
+  refresh; `latest_quota` records mapped + rendered when present;
+  `dashboardNotice` surfaced; `providersError`/`routingError`/`usageError`
+  rendered persistently in their views.
+- **Components**: SearchPlayground (live results, Units label, real UTF-8 byte
+  length, `statusCode` honestly "—" — not exposed by backend), ProviderMatrix
+  (trip/reset split, healthy count uses `healthStatus`, null-safe latency
+  "—"), QuotaAnalytics (usage_totals + latest_quota verbatim + "quota
+  unavailable" degrade; invented savings/cache numbers removed), ActivityStream
+  (dashboard-fed; `queryOrUrl` never rendered; loading/error/empty states),
+  Routing (strategy cards: only Cost-optimized persists `free_first`, others
+  "simulation view only"; failover copy discloses single-attempt dispatch;
+  sync simulator; auto-bypass row deleted), Settings (async persisted
+  switches, opaque-bullet key drafts, "Delete key", failover honesty).
+- **Tests**: 155 unit/component tests (fetch-mocked, exact wire-body
+  assertions, zero-fetch counters, timeout/abort path, privacy + no-fabrication
+  negative guards); unit-test typecheck restored (`tsconfig.vitest.json` +
+  `pnpm typecheck`); Playwright-BDD **22/22** — `@visual`/`@stub` scenarios run
+  against a deterministic `page.route` backend stub (`tests/steps/backendStub.ts`)
+  so the suite is **state-neutral and non-destructive** to the live backend,
+  while playground live-search and activity-privacy remain real integration
+  scenarios.
+
+### Verification battery (frontend, 2026-09-06, final)
+
+```text
+cd freesearch-ui
+node_modules\.bin\vitest run --configLoader native   # 12 files, 155 passed
+node_modules\.bin\eslint .                           # 0 errors
+node_modules\.bin\tsc -b                             # clean
+node_modules\.bin\tsc -p tsconfig.vitest.json --noEmit  # clean (unit typecheck)
+node_modules\.bin\tsc -p tests/tsconfig.json --noEmit   # clean (E2E typecheck)
+node_modules\.bin\bddgen                             # features-gen regenerated
+node_modules\.bin\playwright test --reporter=line    # 22/22 passed (stub + live)
+```
+
+Grep guards empty in `src/`: `generateMock|simulatedLatency|setTimeout.*latency|
+Math.random.*latency|INITIAL_CACHE_STATS|INITIAL_USAGE_EVENTS|BSA_live|tvly-prod|
+formatMaskedKey`. Working tree confined to `freesearch-ui/`. Backend state
+hygiene after the pre-stub suite runs: routing config restored to the contract
+default (`chained/balanced/3`), one test-written You.com keyring entry deleted
+(presence `configured` via `.env`, `source=dotenv`).
+
+### Backend feedback (gaps hit by the frontend; partial integrations marked)
+
+1. **No CORS headers** — browser cross-origin to :8001 blocked; frontend
+   mitigates with the Vite proxy + relative URLs. Ask: add CORS for hosted UIs
+   or document the proxy as the permanent contract.
+2. **Winner-only `/search`/`/fetch` (no waterfall/fallback trace)** — partial:
+   single-entry waterfall + "trace unavailable" notice; per-attempt latency/
+   errors would need a new response field.
+3. **No provider display metadata** (names/descriptions/capabilities) — partial:
+   frontend-owned static catalog; backend `ProviderCapabilities` exists but is
+   not exposed on `ProviderStatusResponse`.
+4. **No per-operation enablement** (only global `enabled`) — per-op switches
+   are session-only display filters; ask: per-op flags or confirm global-only
+   is permanent.
+5. **No breaker "trip" endpoint** (reset only) — frontend trip is local-only and
+   labeled; ask: trip/half-open endpoints or confirm reset-only.
+6. **No provider delete** — `removeProvider` removed from UI; fleet is fixed at
+   the 7 canonical ids.
+7. **`latest_quota` chronically empty** (vendors lag 10–15 min) — Usage view
+   renders `usage_totals` + a "quota unavailable" notice until the coordinator
+   lands; real snapshots render verbatim when present.
+8. **No cache telemetry surfaced** — cache card replaced with "unavailable".
+9. **`recent_usage` intentionally carries no query/URL** — Activity never
+   renders it (privacy invariant kept). Ask: confirm omission is permanent.
+10. **Routing vocab mismatch** — `fallback_policy`/`max_attempts` persist but
+    dispatch is single-attempt (stored-validated-deferred); `fallbackOnRateLimit/
+    Timeout/ServerError` UI flags are session-only; UI preset vocabulary
+    (`priority|cost_optimized|latency_optimized|quality_first`) has no backend
+    counterpart except `cost_optimization_preset` (`balanced|free_first`, wired
+    to the Cost-optimized card); the other preset cards are labeled
+    "simulation view only".
+11. **No `mode`/`timeoutMs`/`format`/`includeRawHtml` wire fields** — partial:
+    `fast→prefer`, `balanced|deep→require`, no ids→`auto`; timeout is
+    client-side `AbortSignal`; fetch always returns markdown.
+12. **Secret fingerprint only on write; no GET secret (405)** — key card shows
+    a placeholder until first save; presence is live. Ask: optionally include
+    `fingerprint` in `ProviderStatusResponse`.
+13. **PUT secret shadowing** (environment/.env wins) — surfaced as a subtle
+    "env key shadows vault" note.
+14. **Decimal-as-string + strict PATCH** — frontend parses with
+    `parseFloat(...)||0` and sends minimal exact-typed bodies.
+15. **Health vocab** (`healthy|degraded|unavailable|unknown`) vs UI —
+    `unavailable|unknown→degraded`, `null→offline` (breaker-open overrides).
+
+### Documented residuals (non-blocking)
+
+- E2E real-backend PUT paths (routing toggle, secret save) are exercised by
+  unit tests; E2E proves UI behavior against the stub (state-neutrality trade).
+- `statusMessage`'s 404/422/503/500 branches are unit-tested but the live HTTP
+  path flows raw `parseDetail` through (honest, but the per-status framing is
+  dead code in the live path).
+- RoutingStrategy dual-highlight when the backend preset is `free_first` while
+  a non-cost card is selected (labeled "simulation view only").
+- Minor `act(...)` warnings in unit-test stderr.
 
 ## Next - Quota reconciliation coordinator
 

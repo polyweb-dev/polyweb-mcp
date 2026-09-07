@@ -1,62 +1,236 @@
-import { describe, it, expect } from "vitest"
+import React from "react"
+import { describe, it, expect, afterEach, vi } from "vitest"
 import { render, screen, fireEvent, waitFor } from "@testing-library/react"
 import { FreeSearchProvider } from "@/context/FreeSearchContext"
 import { SearchPlayground } from "./SearchPlayground"
+import { installFetchStub, ok, err } from "@/test/fetchMock"
+import {
+  allProvidersFixture,
+  routingConfigFixture,
+  dashboardFixture,
+  searchResponseFixture,
+  fetchResponseFixture,
+} from "@/test/backendFixtures"
 
-describe("SearchPlayground", () => {
-  const renderPlayground = () =>
-    render(
-      <FreeSearchProvider>
-        <SearchPlayground />
-      </FreeSearchProvider>
-    )
+/**
+ * RED update: search now flows through the live backend (mocked fetch).
+ * Results show real mapped fixture titles with a SINGLE-entry waterfall plus
+ * an honest per-attempt-trace-unavailable note; failures show a banner while
+ * keeping the last-good results.
+ */
+function renderWithBackend(
+  searchHandler?: (req: { url: string }) => Response,
+  fetchHandler?: (req: { url: string }) => Response
+) {
+  const stub = installFetchStub((req) => {
+    if (req.url === "/api/v1/providers" && req.method === "GET") {
+      return ok(allProvidersFixture())
+    }
+    if (req.url === "/api/v1/routing/config" && req.method === "GET") {
+      return ok(routingConfigFixture())
+    }
+    if (req.url.startsWith("/dashboard")) return ok(dashboardFixture())
+    if (req.url === "/search" && req.method === "POST") {
+      return searchHandler ? searchHandler(req) : ok(searchResponseFixture())
+    }
+    if (req.url === "/fetch" && req.method === "POST") {
+      return fetchHandler ? fetchHandler(req) : ok(fetchResponseFixture())
+    }
+    return err(404, { detail: "unhandled test route" })
+  })
+  const view = render(
+    <FreeSearchProvider>
+      <SearchPlayground />
+    </FreeSearchProvider>
+  )
+  return { stub, ...view }
+}
 
-  it("renders mode toggles and search form", () => {
-    renderPlayground()
+async function submitQuery(query: string) {
+  const input = screen.getByPlaceholderText(
+    /Search across all providers/i
+  ) as HTMLInputElement
+  fireEvent.change(input, { target: { value: query } })
+  fireEvent.submit(input.closest("form")!)
+}
 
-    // "Search" appears as both the mode toggle and the submit button
+describe("SearchPlayground (live backend)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it("renders mode toggles and search form", async () => {
+    renderWithBackend()
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText(/Search across all providers/i)).toBeInTheDocument()
+    })
     expect(screen.getAllByText("Search").length).toBeGreaterThanOrEqual(1)
     expect(screen.getByText("Fetch")).toBeInTheDocument()
-    expect(screen.getByPlaceholderText(/Search across all providers/i)).toBeInTheDocument()
   })
 
-  it("switches to fetch mode when clicking Fetch", () => {
-    renderPlayground()
+  it("executes search and displays the real mapped results", async () => {
+    renderWithBackend()
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText(/Search across all providers/i)).toBeInTheDocument()
+    })
 
-    const fetchModeBtn = screen.getByText("Fetch")
-    fireEvent.click(fetchModeBtn)
+    await submitQuery("live backend query")
 
-    expect(
-      screen.getByPlaceholderText(/Enter a URL to fetch and convert/i)
-    ).toBeInTheDocument()
+    await waitFor(() => {
+      expect(screen.getByText("Live backend result one")).toBeInTheDocument()
+    })
+    expect(screen.getByText("Live backend result two")).toBeInTheDocument()
+    // Mock-template copy must never appear for live results
+    expect(document.body.textContent).not.toContain("Comprehensive Architecture")
   })
 
-  it("populates query when clicking a quick suggestion", () => {
-    renderPlayground()
+  it("renders exactly ONE waterfall entry plus a trace-unavailable note", async () => {
+    renderWithBackend()
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText(/Search across all providers/i)).toBeInTheDocument()
+    })
 
-    const pill = screen.getByText("keenable keyless free tier")
-    fireEvent.click(pill)
+    await submitQuery("live backend query")
 
-    const input = screen.getByPlaceholderText(/Search across all providers/i) as HTMLInputElement
-    expect(input.value).toBe("keenable keyless free tier")
+    await waitFor(() => {
+      expect(screen.getByText("Live backend result one")).toBeInTheDocument()
+    })
+    // Single-entry waterfall: the raw JSON inspector carries exactly one entry
+    const inspectorToggle = screen.getByText(/Inspect raw JSON/i)
+    fireEvent.click(inspectorToggle)
+    await waitFor(() => {
+      const occurrences = (document.body.textContent?.match(/resultsCount/g) ?? []).length
+      expect(occurrences).toBe(1)
+    })
+    // Honest note: per-attempt fallback trace is unavailable from the backend
+    expect(screen.getByText(/trace (is )?unavailable|waterfall unavailable/i)).toBeInTheDocument()
+    // Never fake multi-hop cascade text for a single-attempt response
+    expect(document.body.textContent).not.toMatch(/[2-9]\d* hops evaluated/)
   })
 
-  it("executes search and displays results upon submission", async () => {
-    renderPlayground()
+  it("shows an error banner on search failure", async () => {
+    renderWithBackend(() => err(503, { detail: "no provider is configured" }))
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText(/Search across all providers/i)).toBeInTheDocument()
+    })
 
-    // Type a query first since the input starts empty now
-    const input = screen.getByPlaceholderText(/Search across all providers/i) as HTMLInputElement
-    fireEvent.change(input, { target: { value: "test query" } })
+    await submitQuery("live backend query")
 
-    const form = input.closest("form")!
-    fireEvent.submit(form)
+    await waitFor(() => {
+      expect(screen.getByText(/no provider is configured/i)).toBeInTheDocument()
+    })
+    expect(screen.queryByText("Live backend result one")).not.toBeInTheDocument()
+  })
 
-    await waitFor(
-      () => {
-        // Results now display as flat list with "match" text inline
-        expect(screen.getAllByText(/match/i).length).toBeGreaterThan(0)
-      },
-      { timeout: 4000 }
+  it("keeps the last-good results visible when a later search fails", async () => {
+    let shouldFail = false
+    renderWithBackend(() =>
+      shouldFail ? err(503, { detail: "backend went away" }) : ok(searchResponseFixture())
     )
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText(/Search across all providers/i)).toBeInTheDocument()
+    })
+
+    await submitQuery("first query")
+    await waitFor(() => {
+      expect(screen.getByText("Live backend result one")).toBeInTheDocument()
+    })
+
+    shouldFail = true
+    await submitQuery("second query")
+
+    await waitFor(() => {
+      expect(screen.getByText(/backend went away/i)).toBeInTheDocument()
+    })
+    expect(screen.getByText("Live backend result one")).toBeInTheDocument()
+  })
+
+  it("resets an ineligible search-only provider when switching to Fetch", async () => {
+    const { stub } = renderWithBackend()
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText(/Search across all providers/i)).toBeInTheDocument()
+    })
+
+    // Brave is search-only: pick it in the search provider filter.
+    const searchSelect = screen.getByRole("combobox") as HTMLSelectElement
+    fireEvent.change(searchSelect, { target: { value: "brave" } })
+    expect(searchSelect.value).toBe("brave")
+
+    // Switching operations must clear the selected-provider state because
+    // Brave cannot serve fetches.
+    fireEvent.click(screen.getByRole("button", { name: "Fetch", exact: true }))
+
+    const fetchSelect = screen.getByRole("combobox") as HTMLSelectElement
+    expect(fetchSelect).toHaveValue("auto")
+
+    const urlInput = screen.getByPlaceholderText(
+      /Enter a URL to fetch/i
+    ) as HTMLInputElement
+    fireEvent.change(urlInput, { target: { value: "https://example.com/doc" } })
+    fireEvent.submit(urlInput.closest("form")!)
+
+    await waitFor(() => {
+      expect(stub.requestsTo("/fetch")).toHaveLength(1)
+    })
+    expect(stub.requestsTo("/fetch")[0].body).toEqual({
+      url: "https://example.com/doc",
+      max_chars: null,
+      routing: { mode: "auto", providers: [], allow_fallback: true },
+    })
+  })
+
+  it("labels telemetry in Units, never Cost/credits", async () => {
+    renderWithBackend()
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText(/Search across all providers/i)).toBeInTheDocument()
+    })
+
+    await submitQuery("live backend query")
+
+    await waitFor(() => {
+      expect(screen.getByText("Live backend result one")).toBeInTheDocument()
+    })
+    expect(screen.getByText(/Units/i)).toBeInTheDocument()
+    expect(document.body.textContent).not.toMatch(/Cost|credits/i)
+  })
+
+  it("renders fetch content length as UTF-8 bytes, not JS chars", async () => {
+    const content = "héllo 日本語 world"
+    const expectedBytes = new TextEncoder().encode(content).length
+    // Sanity: the fixture is genuinely multi-byte (bytes > chars).
+    expect(expectedBytes).toBeGreaterThan(content.length)
+
+    renderWithBackend(
+      undefined,
+      () =>
+        ok(
+          fetchResponseFixture({
+            document: {
+              url: "https://example.com/doc",
+              content,
+              title: "Byte doc",
+              content_type: "text/markdown",
+              fetched_at: "2026-09-06T10:03:00Z",
+              metadata: {},
+            },
+          })
+        )
+    )
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText(/Search across all providers/i)).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole("button", { name: "Fetch", exact: true }))
+
+    const urlInput = screen.getByPlaceholderText(
+      /Enter a URL to fetch/i
+    ) as HTMLInputElement
+    fireEvent.change(urlInput, { target: { value: "https://example.com/doc" } })
+    fireEvent.submit(urlInput.closest("form")!)
+
+    await waitFor(() => {
+      expect(screen.getByText("Byte doc")).toBeInTheDocument()
+    })
+    expect(screen.getByText(`${expectedBytes} bytes`)).toBeInTheDocument()
   })
 })

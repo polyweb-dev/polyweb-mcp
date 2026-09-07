@@ -1,6 +1,5 @@
 /**
- * FreeSearch Domain & API Types
- * Provider-neutral models matching FreeSearch core architecture.
+ * UI-facing domain models. Backend DTOs stay snake_case in services/api.
  */
 
 export type Capability =
@@ -19,16 +18,16 @@ export type ProviderHealthStatus =
   | "offline"
 
 export type CircuitBreakerStatus = "closed" | "open" | "half_open"
-
 export type QuotaConfidence = "authoritative" | "observed" | "estimated"
+export type KeySource = "environment" | "dotenv" | "keyring" | "none"
 
 export interface ProviderQuota {
-  used: number
+  used: number | null
   limit: number | null
   unit: string
   confidence: QuotaConfidence
-  resetPeriod: string
-  nextReset: string
+  resetPeriod: string | null
+  nextReset: string | null
 }
 
 export interface ProviderConfig {
@@ -41,14 +40,15 @@ export interface ProviderConfig {
   globalEnabled: boolean
   searchEnabled: boolean
   fetchEnabled: boolean
-  priority: number // 1 is highest priority
+  priority: number
   healthStatus: ProviderHealthStatus
   circuitBreaker: CircuitBreakerStatus
   consecutiveFailures: number
-  latencyP95Ms: number
+  latencyP95Ms: number | null
   hasKey: boolean
   keyMasked: string
   keyVaultStatus: "configured" | "missing" | "keyless_public"
+  keySource?: KeySource
   authHeaderName?: string
   quota: ProviderQuota
 }
@@ -85,8 +85,6 @@ export interface SearchResult {
   snippet: string
   relevanceScore: number
   publishedDate?: string
-  author?: string
-  contentPreview?: string
   rawMetadata?: Record<string, unknown>
 }
 
@@ -125,11 +123,9 @@ export interface FetchedDocument {
   title: string
   content: string
   markdown: string
-  extractedAuthor?: string
-  extractedDate?: string
   providerId: string
   providerName: string
-  statusCode: number
+  statusCode: number | null
   contentLength: number
   executionTimeMs: number
 }
@@ -150,27 +146,23 @@ export interface UsageEvent {
   queryOrUrl: string
   providerId: string
   providerName: string
-  latencyMs: number
+  latencyMs: number | null
   costCredits: number
   status: "success" | "error" | "fallback_recovered"
   routeReason: string
   fallbackChain: string[]
 }
 
-export interface CacheStats {
-  totalEntries: number
-  searchHits: number
-  fetchHits: number
-  hitRatio: number
-  sizeKb: number
-  lastPurged: string
+export interface UsageTotal {
+  provider: string
+  operation: string
+  total_units: string
 }
 
-export interface SystemMetrics {
-  totalSearches: number
-  totalFetches: number
-  avgLatencyMs: number
-  estimatedCostSavedUsd: number
-  activeProvidersCount: number
-  circuitBreakersTripped: number
+export interface DashboardQuota {
+  provider: string
+  remaining: string | null
+  limit: string | null
+  observed_at: string
+  source: QuotaConfidence
 }

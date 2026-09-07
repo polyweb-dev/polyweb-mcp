@@ -43,13 +43,28 @@ const STRATEGY_CARDS: StrategyCard[] = [
  * provider the active strategy would promote to primary.
  */
 export const RoutingStrategy: React.FC = () => {
-  const { providers, routingPreset, setRoutingPreset } = useFreeSearch()
+  const {
+    providers,
+    routingPreset,
+    costOptimizationPreset,
+    setRoutingPreset,
+    updateCostPreset,
+  } = useFreeSearch()
+
+  const handleSelect = (card: StrategyCard) => {
+    if (card.id === "cost_optimized") {
+      const nextPreset = costOptimizationPreset === "free_first" ? "balanced" : "free_first"
+      setRoutingPreset(nextPreset === "free_first" ? card.id : "priority")
+      void updateCostPreset(nextPreset)
+      return
+    }
+    setRoutingPreset(card.id)
+  }
 
   return (
     <section className="space-y-3 max-w-3xl">
       <div className="flex items-center justify-between">
         <h3 className="text-[var(--text-strong)]">Active algorithm</h3>
-        <span className="text-[13px] text-[var(--muted)]">Applies to every resolved route</span>
       </div>
 
       <div className="space-y-2">
@@ -57,8 +72,12 @@ export const RoutingStrategy: React.FC = () => {
           <StrategyCardButton
             key={card.id}
             card={card}
-            isSelected={routingPreset === card.id}
-            onSelect={() => setRoutingPreset(card.id)}
+            isSelected={
+               card.id === "cost_optimized"
+                 ? costOptimizationPreset === "free_first"
+                 : routingPreset === card.id
+             }
+            onSelect={() => handleSelect(card)}
             providers={providers}
           />
         ))}
@@ -118,7 +137,13 @@ const StrategyCardButton: React.FC<StrategyCardButtonProps> = ({
           </span>
           <span className="text-[12px] px-2 py-0.5 rounded text-[var(--muted)] bg-[var(--elevated)] whitespace-nowrap">
             {card.badge}
-          </span>
+           </span>
+           {card.id !== "cost_optimized" && (
+             <span className="text-[12px] px-2 py-0.5 rounded text-[var(--muted)] bg-[var(--elevated)] whitespace-nowrap">
+               Simulation view only
+             </span>
+           )}
+
         </div>
         <p className="text-[13px] mt-1 text-[var(--muted)] leading-relaxed">
           {card.description}
@@ -131,7 +156,7 @@ const StrategyCardButton: React.FC<StrategyCardButtonProps> = ({
             </span>
             <span className="text-[13px] text-[var(--text-strong)]">{primary.name}</span>
             <span className="text-[13px] text-[var(--muted)] tnum ml-auto">
-              {primary.latencyP95Ms} ms p95
+              {primary.latencyP95Ms === null ? "—" : `${primary.latencyP95Ms} ms`} p95
             </span>
           </div>
         )}

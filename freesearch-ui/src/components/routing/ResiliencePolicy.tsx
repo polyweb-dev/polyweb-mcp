@@ -4,11 +4,8 @@ import { useFreeSearch } from "@/context/useFreeSearch"
 
 const MIN_DEPTH = 1
 const MAX_DEPTH = 5
-const HOP_TIMEOUT_BUDGET_MS = "3,000 ms"
-
 /**
- * Resilience policy rows: cascade depth stepper, hop timeout budget, and the
- * circuit breaker auto-bypass state.
+ * Resilience policy rows: persisted max-attempts depth and backend timeout disclosure.
  */
 export const ResiliencePolicy: React.FC = () => {
   const { fallbackConfig, updateFallbackConfig } = useFreeSearch()
@@ -28,7 +25,12 @@ export const ResiliencePolicy: React.FC = () => {
 
       <div className="rounded-lg border border-[var(--border-subtle)] px-4 divide-y divide-[var(--border-subtle)]">
         <div className="flex items-center justify-between py-3 gap-4">
-          <span className="text-[13px] text-[var(--muted)]">Cascade depth</span>
+          <div className="flex flex-col gap-0.5">
+            <span className="text-[13px] text-[var(--muted)]">Cascade depth</span>
+            <span className="text-[12px] text-[var(--muted)]">
+              Max attempts are persisted for backend use; dispatch is currently single-attempt.
+            </span>
+          </div>
           <div className="flex items-center gap-2">
             <button
               type="button"
@@ -58,15 +60,10 @@ export const ResiliencePolicy: React.FC = () => {
 
         <div className="flex items-center justify-between py-3 gap-4">
           <span className="text-[13px] text-[var(--muted)]">Hop timeout budget</span>
-          <span className="text-[13px] text-[var(--text)] tnum">{HOP_TIMEOUT_BUDGET_MS}</span>
+          {/* GAP: 10 — the backend does not expose a per-hop timeout budget. */}
+          <span className="text-[13px] text-[var(--muted)]">Timeout budget not exposed by backend</span>
         </div>
 
-        <div className="flex items-center justify-between py-3 gap-4">
-          <span className="text-[13px] text-[var(--muted)]">Circuit breaker auto-bypass</span>
-          <span className="text-[13px] font-medium" style={{ color: "var(--status-healthy)" }}>
-            Enabled
-          </span>
-        </div>
       </div>
     </section>
   )

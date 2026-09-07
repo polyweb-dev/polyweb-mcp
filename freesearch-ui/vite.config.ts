@@ -16,5 +16,23 @@ export default defineConfig({
       "@": path.resolve(import.meta.dirname, "./src"),
     },
   },
+  server: {
+    proxy: {
+      "/search": "http://127.0.0.1:8001",
+      "/fetch": "http://127.0.0.1:8001",
+      "/stats": "http://127.0.0.1:8001",
+      "/dashboard": "http://127.0.0.1:8001",
+      "/api": "http://127.0.0.1:8001",
+    },
+  },
+  preview: {
+    proxy: {
+      "/search": "http://127.0.0.1:8001",
+      "/fetch": "http://127.0.0.1:8001",
+      "/stats": "http://127.0.0.1:8001",
+      "/dashboard": "http://127.0.0.1:8001",
+      "/api": "http://127.0.0.1:8001",
+    },
+  },
 })
 

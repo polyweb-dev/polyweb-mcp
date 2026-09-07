@@ -23,6 +23,7 @@ Given(
 )
 
 Then("the visual page screenshot {string} should match", async ({ page }, snapshotName: string) => {
+  await waitForDeterministicData(page)
   await expect(page).toHaveScreenshot(snapshotName, {
     animations: "disabled",
     maxDiffPixelRatio: 0.01,
@@ -33,6 +34,7 @@ Then("the visual page screenshot {string} should match", async ({ page }, snapsh
 Then(
   "the focused-control screenshot {string} should match",
   async ({ page }, snapshotName: string) => {
+    await waitForDeterministicData(page)
     const focusedControl = page.locator(":focus")
     await expect(focusedControl).toHaveCount(1)
     await expect(focusedControl).toBeFocused()
@@ -191,8 +193,23 @@ async function openVisualApp(
   await expect(page.getByText("FreeSearch", { exact: true })).toBeVisible()
 }
 
-function dynamicRegions(page: Page): Locator[] {
-  return [
+/**
+ * Settle gate for screenshots: the shell logo (awaited in openVisualApp)
+ * paints before backend data resolves, so screenshots must additionally await
+ * a data-loaded signal. Under the deterministic stub the Routing workbench
+ * always renders the failover status, the Settings Providers/Keys tabs render
+ * the stub catalog names, and the Failover tab renders its master switch —
+ * whichever settles first proves the view is data-complete.
+ */
+async function waitForDeterministicData(page: Page): Promise<void> {
+  const dataSignal = page
+    .getByText(/^Failover (active|inactive)$/)
+    .or(page.getByText("Brave Search", { exact: true }))
+    .or(page.getByText("Fallback chaining", { exact: true }))
+  await expect(dataSignal.first()).toBeVisible({ timeout: 15_000 })
+}
+
+function dynamicRegions(page: Page): Locator[] {  return [
     page.locator("time"),
     page.locator(".tnum"),
     page.locator("div.fixed.bottom-4.right-4.z-50"),

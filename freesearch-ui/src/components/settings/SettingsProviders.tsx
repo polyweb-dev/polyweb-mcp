@@ -20,6 +20,16 @@ export const SettingsProviders: React.FC = () => {
     testProviderConnection,
   } = useFreeSearch()
   const [testingId, setTestingId] = useState<string | null>(null)
+  const [pendingGlobalId, setPendingGlobalId] = useState<string | null>(null)
+
+  const handleGlobalToggle = async (id: string, enabled: boolean) => {
+    setPendingGlobalId(id)
+    try {
+      await toggleProvider(id, enabled)
+    } finally {
+      setPendingGlobalId(null)
+    }
+  }
 
   // Priority boundaries come from the sorted order, not the render order.
   const sortedByPriority = [...providers].sort((a, b) => a.priority - b.priority)
@@ -51,10 +61,11 @@ export const SettingsProviders: React.FC = () => {
             key={provider.id}
             provider={provider}
             testing={testingId === provider.id}
+            globalPending={pendingGlobalId === provider.id}
             canMoveUp={!singleRow && provider.id !== firstPriorityId}
             canMoveDown={!singleRow && provider.id !== lastPriorityId}
             onMovePriority={(direction) => moveProviderPriority(provider.id, direction)}
-            onToggleGlobal={(enabled) => toggleProvider(provider.id, enabled)}
+            onToggleGlobal={(enabled) => void handleGlobalToggle(provider.id, enabled)}
             onToggleSearch={(enabled) => toggleProviderSearch(provider.id, enabled)}
             onToggleFetch={(enabled) => toggleProviderFetch(provider.id, enabled)}
             onTest={() => handleTest(provider.id)}
@@ -68,6 +79,7 @@ export const SettingsProviders: React.FC = () => {
 interface ProviderRegistryRowProps {
   provider: ProviderConfig
   testing: boolean
+  globalPending: boolean
   canMoveUp: boolean
   canMoveDown: boolean
   onMovePriority: (direction: "up" | "down") => void
@@ -80,6 +92,7 @@ interface ProviderRegistryRowProps {
 const ProviderRegistryRow: React.FC<ProviderRegistryRowProps> = ({
   provider,
   testing,
+  globalPending,
   canMoveUp,
   canMoveDown,
   onMovePriority,
@@ -122,6 +135,7 @@ const ProviderRegistryRow: React.FC<ProviderRegistryRowProps> = ({
             <Switch
               checked={provider.globalEnabled}
               onChange={onToggleGlobal}
+              disabled={globalPending}
               ariaLabel={`${provider.name} global routing`}
             />
           </div>
@@ -230,7 +244,10 @@ const OperationControl: React.FC<OperationControlProps> = ({
   }
 
   return (
-    <div className="flex items-center gap-1.5">
+    <div
+      className="flex items-center gap-1.5"
+      title="Session-only — backend has global enable only"
+    >
       <span className="text-[13px] text-[var(--muted)]">{label}</span>
       <fieldset disabled={globallyDisabled} className="min-w-0 border-0 p-0 m-0">
         <SegmentedControl

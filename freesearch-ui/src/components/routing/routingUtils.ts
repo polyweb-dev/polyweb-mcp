@@ -25,6 +25,9 @@ function compareForPreset(preset: RoutingPreset) {
       if (aFree !== bFree) return aFree - bFree
     }
     if (preset === "latency_optimized") {
+      if (a.latencyP95Ms === null && b.latencyP95Ms === null) return a.priority - b.priority
+      if (a.latencyP95Ms === null) return 1
+      if (b.latencyP95Ms === null) return -1
       return a.latencyP95Ms - b.latencyP95Ms
     }
     if (preset === "quality_first") {
@@ -47,7 +50,9 @@ export function getProviderReason(
       return "Ranked #1 for keyless free tier"
     }
     if (preset === "latency_optimized") {
-      return `Fastest p95 roundtrip (${provider.latencyP95Ms}ms)`
+      return provider.latencyP95Ms === null
+        ? "Latency p95 unavailable"
+        : `Fastest p95 roundtrip (${provider.latencyP95Ms}ms)`
     }
     if (
       preset === "quality_first" &&

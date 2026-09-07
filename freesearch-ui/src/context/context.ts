@@ -1,7 +1,7 @@
 import { createContext } from "react"
 import type {
-  CacheStats,
   CircuitBreakerStatus,
+  DashboardQuota,
   FallbackConfig,
   FetchRequest,
   FetchResponse,
@@ -10,6 +10,7 @@ import type {
   SearchRequest,
   SearchResponse,
   UsageEvent,
+  UsageTotal,
 } from "@/types/freesearch"
 
 export interface ToastNotification {
@@ -20,8 +21,13 @@ export interface ToastNotification {
 
 export interface FreeSearchContextType {
   providers: ProviderConfig[]
+  providersLoading: boolean
+  providersError: string | null
   fallbackConfig: FallbackConfig
+  routingLoading: boolean
+  routingError: string | null
   routingPreset: RoutingPreset
+  costOptimizationPreset: "balanced" | "free_first"
   activeSearch: SearchResponse | null
   activeFetch: FetchResponse | null
   isSearching: boolean
@@ -29,27 +35,34 @@ export interface FreeSearchContextType {
   searchError: string | null
   fetchError: string | null
   usageEvents: UsageEvent[]
-  cacheStats: CacheStats
+  usageLoading: boolean
+  usageError: string | null
+  usageTotals: UsageTotal[]
+  dashboardQuotas: DashboardQuota[]
+  quotaAvailable: boolean
+  dashboardNotice: string | null
   toasts: ToastNotification[]
-  // Provider operations
-  toggleProvider: (id: string, enabled: boolean) => void
+  toggleProvider: (id: string, enabled: boolean) => Promise<void>
   toggleProviderSearch: (id: string, enabled: boolean) => void
   toggleProviderFetch: (id: string, enabled: boolean) => void
-  updateProviderPriority: (id: string, newPriority: number) => void
-  moveProviderPriority: (id: string, direction: "up" | "down") => void
-  removeProvider: (id: string) => void
-  setCircuitBreaker: (id: string, status: CircuitBreakerStatus) => void
-  testProviderConnection: (id: string) => Promise<{ success: boolean; latencyMs: number; message: string }>
-  // Key Vault — write-only, masked-only
-  saveProviderKey: (id: string, rawKey: string) => void
-  // Fallback and routing configuration
-  updateFallbackConfig: (partial: Partial<FallbackConfig>) => void
+  updateProviderPriority: (id: string, newPriority: number) => Promise<boolean>
+  moveProviderPriority: (id: string, direction: "up" | "down") => Promise<void>
+  setCircuitBreaker: (id: string, status: CircuitBreakerStatus) => Promise<void>
+  testProviderConnection: (id: string) => Promise<{
+    success: boolean
+    latencyMs: number
+    message: string
+  }>
+  saveProviderKey: (id: string, rawKey: string) => Promise<boolean>
+  deleteProviderKey: (id: string) => Promise<boolean>
+  updateFallbackConfig: (partial: Partial<FallbackConfig>) => Promise<void>
+  updateCostPreset: (preset: "balanced" | "free_first") => Promise<void>
   setRoutingPreset: (preset: RoutingPreset) => void
-  // Search & Fetch actions
   runSearch: (request: SearchRequest) => Promise<SearchResponse | null>
   runFetch: (request: FetchRequest) => Promise<FetchResponse | null>
   clearActiveResults: () => void
-  // Toast
+  refreshProviders: () => Promise<void>
+  refreshDashboard: () => Promise<void>
   showToast: (message: string, type?: ToastNotification["type"]) => void
   dismissToast: (id: string) => void
 }

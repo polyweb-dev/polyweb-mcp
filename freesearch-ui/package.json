@@ -9,6 +9,7 @@
     "lint": "eslint .",
     "preview": "vite preview --configLoader native",
     "test": "vitest run --configLoader native",
+    "typecheck": "tsc -p tsconfig.vitest.json --noEmit",
     "test:watch": "vitest --configLoader native",
     "typecheck:e2e": "tsc -p tests/tsconfig.json --noEmit",
     "bddgen": "bddgen",

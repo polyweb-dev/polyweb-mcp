@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { DEFAULT_PROVIDERS } from "@/services/api/defaultProviders"
+import { DEFAULT_PROVIDERS } from "@/test/defaultProviders"
 import type { ProviderConfig, RoutingPreset } from "@/types/freesearch"
 import { getEligibleProviders, getProviderReason } from "./routingUtils"
 

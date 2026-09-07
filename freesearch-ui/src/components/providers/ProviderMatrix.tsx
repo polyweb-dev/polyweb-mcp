@@ -4,7 +4,7 @@ import { useFreeSearch } from "@/context/useFreeSearch"
 import type { CircuitBreakerStatus, ProviderConfig } from "@/types/freesearch"
 
 export const ProviderMatrix: React.FC = () => {
-  const { providers, setCircuitBreaker, testProviderConnection } = useFreeSearch()
+  const { providers, providersError, setCircuitBreaker, testProviderConnection } = useFreeSearch()
   const [testingId, setTestingId] = useState<string | null>(null)
   const [filter, setFilter] = useState<"all" | "search" | "fetch" | "keyless">("all")
 
@@ -19,12 +19,18 @@ export const ProviderMatrix: React.FC = () => {
     setCircuitBreaker(p.id, nextStatus)
   }
 
-  const healthyCount = providers.filter((p) => p.circuitBreaker === "closed" && p.globalEnabled).length
+  const healthyCount = providers.filter(
+    (p) =>
+      p.globalEnabled &&
+      p.circuitBreaker !== "open" &&
+      p.healthStatus === "healthy"
+  ).length
   const brokenCount = providers.filter((p) => p.circuitBreaker === "open").length
   const keylessCount = providers.filter((p) => p.capabilities.includes("keyless_tier")).length
-  const avgLatency = Math.round(
-    providers.reduce((acc, p) => acc + p.latencyP95Ms, 0) / (providers.length || 1)
-  )
+  const hasCompleteLatency = providers.length > 0 && providers.every((p) => p.latencyP95Ms !== null)
+  const avgLatency = hasCompleteLatency
+    ? Math.round(providers.reduce((acc, p) => acc + (p.latencyP95Ms ?? 0), 0) / providers.length)
+    : null
 
   const filteredProviders = providers.filter((p) => {
     if (filter === "search") return p.capabilities.includes("search")
@@ -91,13 +97,23 @@ export const ProviderMatrix: React.FC = () => {
           </MetricCard>
 
           <MetricCard icon={<Zap className="size-4 text-[var(--status-warning)] shrink-0" />} label="Fleet avg latency">
-            <span className="tnum">{avgLatency}ms</span> p95
+            <span className="tnum">{avgLatency === null ? "—" : `${avgLatency}ms`}</span> p95
           </MetricCard>
         </div>
       </div>
 
+      {providersError && (
+        <p
+          role="alert"
+          className="p-3 rounded border border-[var(--status-danger)]/40 bg-[var(--elevated)] text-[13px]"
+          style={{ color: "var(--status-danger)" }}
+        >
+          Provider data unavailable — {providersError}
+        </p>
+      )}
+
       {/* Full-width balanced table */}
-      <div className="border border-[var(--border-subtle)] rounded-lg overflow-hidden">
+       <div className="border border-[var(--border-subtle)] rounded-lg overflow-hidden">
         {/* Table header */}
         <div
           className="grid items-center text-[13px] font-medium py-2.5 px-4 bg-[var(--elevated)] border-b border-[var(--border-subtle)] text-[var(--muted)]"
@@ -125,7 +141,7 @@ export const ProviderMatrix: React.FC = () => {
             ? "var(--status-healthy)"
             : "var(--status-warning)"
 
-          const quotaPercent = p.quota.limit
+          const quotaPercent = p.quota.limit !== null && p.quota.used !== null
             ? Math.round((p.quota.used / p.quota.limit) * 100)
             : 0
 
@@ -190,15 +206,15 @@ export const ProviderMatrix: React.FC = () => {
 
               {/* Latency */}
               <span className="text-[13px] text-right text-[var(--text)] tnum">
-                {p.latencyP95Ms}ms
+                {p.latencyP95Ms === null ? "—" : `${p.latencyP95Ms}ms`}
               </span>
 
               {/* Quota */}
               <div className="text-right">
                 <span className="text-[13px] text-[var(--text)] tnum">
-                  {p.quota.used}/{p.quota.limit || "∞"}
+                  {p.quota.used ?? "—"}/{p.quota.limit ?? "∞"}
                 </span>
-                {p.quota.limit && (
+                {p.quota.limit !== null && p.quota.used !== null && (
                   <div
                     className="h-1 rounded-full mt-1 ml-auto bg-[var(--border-subtle)]"
                     style={{ width: "80px" }}

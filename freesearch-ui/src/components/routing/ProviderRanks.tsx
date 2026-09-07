@@ -144,10 +144,10 @@ const RankRow: React.FC<{ provider: ProviderConfig; rank: number; role: string }
       </div>
     </TableCell>
     <TableCell className="px-3 py-2.5 text-right text-[var(--text)] tnum">
-      {provider.latencyP95Ms}ms
+      {provider.latencyP95Ms === null ? "—" : `${provider.latencyP95Ms}ms`}
     </TableCell>
     <TableCell className="px-3 py-2.5 text-right text-[var(--muted)] tnum">
-      {provider.quota.used}/{provider.quota.limit ?? "∞"}
+      {provider.quota.used ?? "—"}/{provider.quota.limit ?? "∞"}
     </TableCell>
     <TableCell className="px-3 py-2.5 text-right">
       <span

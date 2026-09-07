@@ -12,7 +12,13 @@ import { ResiliencePolicy } from "./ResiliencePolicy"
  * sub-workspaces (strategy, simulator, ranks, resilience).
  */
 export const RoutingEngine: React.FC = () => {
-  const { providers, fallbackConfig, routingPreset } = useFreeSearch()
+  const {
+    providers,
+    fallbackConfig,
+    routingPreset,
+    routingLoading,
+    routingError,
+  } = useFreeSearch()
   const eligible = getEligibleProviders(providers, "search", routingPreset)
 
   return (
@@ -21,7 +27,7 @@ export const RoutingEngine: React.FC = () => {
         <div>
           <h2 className="text-[var(--text-strong)]">Routing</h2>
           <p className="text-[13px] text-[var(--muted)] mt-0.5">
-            Dynamic provider arbitration, priority ranking, and multi-hop resilience cascading.
+            Dynamic provider arbitration, priority ranking, and resilience controls.
           </p>
         </div>
 
@@ -30,7 +36,9 @@ export const RoutingEngine: React.FC = () => {
             className="font-medium"
             style={{ color: fallbackConfig.enabled ? "var(--status-healthy)" : "var(--muted)" }}
           >
-            Failover {fallbackConfig.enabled ? "active" : "inactive"}
+            {!routingLoading && !routingError
+               ? `Failover ${fallbackConfig.enabled ? "active" : "inactive"}`
+               : null}
           </span>
           <span className="text-[var(--muted)] tnum">
             {eligible.length} of {providers.length} providers eligible
@@ -38,7 +46,17 @@ export const RoutingEngine: React.FC = () => {
         </div>
       </div>
 
-      <Tabs defaultValue="strategy">
+      {routingError && (
+         <p
+           role="alert"
+           className="p-3 rounded border border-[var(--status-danger)]/40 bg-[var(--elevated)] text-[13px]"
+           style={{ color: "var(--status-danger)" }}
+         >
+           Routing configuration unavailable — {routingError}
+         </p>
+       )}
+
+       <Tabs defaultValue="strategy">
         <TabsList variant="line">
           <TabsTrigger value="strategy" className="text-[13px]">Strategy</TabsTrigger>
           <TabsTrigger value="simulator" className="text-[13px]">Simulator</TabsTrigger>

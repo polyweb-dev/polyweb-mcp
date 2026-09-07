@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react"
+import React, { useState } from "react"
 import { useFreeSearch } from "@/context/useFreeSearch"
 import { SegmentedControl } from "@/components/common/SegmentedControl"
 import type { ProviderConfig } from "@/types/freesearch"
@@ -18,15 +18,7 @@ export const RouteSimulator: React.FC = () => {
   // Operation captured when a run starts; a mid-run switch must not repaint the pipeline.
   const [submittedOp, setSubmittedOp] = useState<SimulatorOperation>("Search")
   const [requestInput, setRequestInput] = useState("")
-  const [isSimulating, setIsSimulating] = useState(false)
   const [hasSimulated, setHasSimulated] = useState(false)
-  const resolveTimer = useRef<number | null>(null)
-
-  useEffect(() => {
-    return () => {
-      if (resolveTimer.current !== null) window.clearTimeout(resolveTimer.current)
-    }
-  }, [])
 
   const op: "search" | "fetch" = operation === "Fetch" ? "fetch" : "search"
   const eligible = getEligibleProviders(providers, op, routingPreset)
@@ -45,12 +37,7 @@ export const RouteSimulator: React.FC = () => {
 
   const handleSimulate = () => {
     setSubmittedOp(operation)
-    setIsSimulating(true)
-    setHasSimulated(false)
-    resolveTimer.current = window.setTimeout(() => {
-      setIsSimulating(false)
-      setHasSimulated(true)
-    }, 250)
+    setHasSimulated(true)
   }
 
   return (
@@ -67,7 +54,6 @@ export const RouteSimulator: React.FC = () => {
           value={operation}
           onChange={handleOperationChange}
           ariaLabel="Simulator operation"
-          disabled={isSimulating}
         />
       </div>
 
@@ -84,11 +70,10 @@ export const RouteSimulator: React.FC = () => {
         <button
           type="button"
           onClick={handleSimulate}
-          disabled={isSimulating}
           className="px-4 py-2 text-[13px] font-medium rounded-md text-white transition-opacity shrink-0 disabled:opacity-70 motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--signal)]/40"
           style={{ background: "var(--signal)" }}
         >
-          {isSimulating ? "Resolving..." : "Simulate route"}
+          Simulate route
         </button>
       </div>
 
@@ -195,12 +180,19 @@ const ProviderStep: React.FC<{
         <span className="text-[13px] font-semibold text-[var(--text-strong)]">
           {provider.name}
         </span>
-        <span className="text-[13px] text-[var(--text)] tnum">{provider.latencyP95Ms} ms p95</span>
+        {highlight && (
+          <span className="text-[12px] px-1.5 py-0.5 rounded bg-[var(--signal-muted)] text-[var(--signal)] font-medium">
+            Primary
+          </span>
+        )}
+        <span className="text-[13px] text-[var(--text)] tnum">
+          {provider.latencyP95Ms === null ? "—" : `${provider.latencyP95Ms} ms`} p95
+        </span>
       </div>
       <div className="flex items-center justify-between gap-2 mt-0.5 text-[13px] text-[var(--muted)]">
         <span>{reason}</span>
         <span className="tnum shrink-0">
-          Quota {provider.quota.used}/{provider.quota.limit ?? "∞"}
+          Quota {provider.quota.used ?? "—"}/{provider.quota.limit ?? "∞"}
         </span>
       </div>
     </div>
@@ -232,9 +224,9 @@ const FallbackCascade: React.FC<{
           </span>
         </div>
         <div className="flex items-center gap-3 text-[12px] text-[var(--muted)] tnum shrink-0">
-          <span>{fallback.latencyP95Ms}ms</span>
+          <span>{fallback.latencyP95Ms === null ? "—" : `${fallback.latencyP95Ms}ms`}</span>
           <span>
-            {fallback.quota.used}/{fallback.quota.limit ?? "∞"}
+            {fallback.quota.used ?? "—"}/{fallback.quota.limit ?? "∞"}
           </span>
           <span className="hidden sm:inline">{getProviderReason(fallback, idx + 1, preset)}</span>
         </div>
