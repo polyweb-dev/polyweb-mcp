@@ -22,7 +22,7 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, onSelectTab }) => {
     <header
       className="sticky top-0 z-40 w-full backdrop-blur-sm"
       style={{
-        background: "rgba(13, 16, 23, 0.85)",
+        background: "rgba(37, 37, 38, 0.85)",
         borderBottom: "1px solid var(--border-subtle)",
       }}
     >
