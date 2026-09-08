@@ -8,6 +8,7 @@ import {
   cleanup,
 } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
+import { MemoryRouter, useLocation } from "react-router"
 import { FreeSearchProvider } from "@/context/FreeSearchContext"
 import { Header } from "@/components/layout/Header"
 import { SearchPlayground } from "@/components/search/SearchPlayground"
@@ -410,11 +411,19 @@ describe("C2-REWORK AC-C2R-4: no filter/Header regression", () => {
     expect(screen.queryByText("Brave Search", { exact: true })).not.toBeInTheDocument()
   })
 
-  it("Header stays six plain buttons: zero tab roles, no URL change", async () => {
-    const onSelectTab = vi.fn()
+  it("Header compatibility shim exposes six router links and zero tab roles", async () => {
     const user = userEvent.setup()
-    render(<Header activeTab="playground" onSelectTab={onSelectTab} />)
-    const before = window.location.href
+
+    function LocationProbe() {
+      return <output data-testid="header-route">{useLocation().pathname}</output>
+    }
+
+    render(
+      <MemoryRouter initialEntries={["/playground"]}>
+        <Header />
+        <LocationProbe />
+      </MemoryRouter>
+    )
 
     for (const label of [
       "Playground",
@@ -424,20 +433,15 @@ describe("C2-REWORK AC-C2R-4: no filter/Header regression", () => {
       "Activity",
       "Settings",
     ]) {
-      expect(
-        screen.getByRole("button", { name: label, exact: true })
-      ).toBeInTheDocument()
+      expect(screen.getByRole("link", { name: label, exact: true })).toBeInTheDocument()
     }
     expect(screen.queryByRole("tab")).not.toBeInTheDocument()
     expect(screen.queryByRole("tablist")).not.toBeInTheDocument()
     expect(screen.queryByRole("tabpanel")).not.toBeInTheDocument()
 
-    await user.click(screen.getByRole("button", { name: "Routing" }))
-    await user.click(screen.getByRole("button", { name: "Settings" }))
-
-    expect(onSelectTab).toHaveBeenNthCalledWith(1, "routing")
-    expect(onSelectTab).toHaveBeenNthCalledWith(2, "settings")
-    expect(window.location.href).toBe(before)
-    expect(window.location.pathname).toBe("/")
+    await user.click(screen.getByRole("link", { name: "Routing" }))
+    expect(screen.getByTestId("header-route")).toHaveTextContent("/routing")
+    await user.click(screen.getByRole("link", { name: "Settings" }))
+    expect(screen.getByTestId("header-route")).toHaveTextContent("/settings")
   })
 })

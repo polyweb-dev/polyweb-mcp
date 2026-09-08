@@ -2,7 +2,7 @@ import { expect } from "@playwright/test"
 import { Given, When, Then } from "./fixtures"
 
 Given("I am on the Activity view", async ({ page }) => {
-  await page.getByRole("button", { name: "Activity", exact: true }).click()
+  await page.getByRole("link", { name: "Activity", exact: true }).click()
   await expect(page.getByRole("heading", { name: "Activity", exact: true })).toBeVisible()
 })
 

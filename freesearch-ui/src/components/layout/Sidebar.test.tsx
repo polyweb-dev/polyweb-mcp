@@ -4,60 +4,29 @@ import path from "node:path"
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
 import { render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
+import { MemoryRouter, useLocation } from "react-router"
 import { Sidebar } from "./Sidebar"
 import type { TabId } from "./Sidebar"
 
 /**
- * C3-REWORK collapsible sidebar — BDD Acceptance (Red phase).
+ * C4 URL routing — collapsible sidebar over router links (REWRITTEN, Red phase).
  *
- * User verdict: replace the 2010 topbar with a ChatGPT-inspired collapsible
- * sidebar (prior topbar consensus VOID). Feedback grounding (read-only):
- * .agents/FEEDBACK/UI/feedback.md L12 ("This topbar/navbar feels like 2010").
- * Reference images (seen): ChatGPT EXPANDED rail (brand + labeled nav list)
- * and ChatGPT COLLAPSED rail (w-16 icon-only rail).
+ * Blessed churn (NOT weakening): the C3-REWORK AC-SB-2 no-router/button-only
+ * pins are VOID. Sidebar nav items are NavLinks (role=link) bound to the
+ * route table; navigation changes the URL; react-router is a dependency.
+ *   - `getByRole("button")` -> `getByRole("link")` for the six nav items;
+ *   - nav controls (Collapse/Expand/Open/Close) stay plain buttons;
+ *   - aria-current=page preserved (exactly one, router-driven);
+ *   - drawer closes on navigate; collapse/drawer/persistence untouched.
  *
- * Plan scope: NEW layout/Sidebar.tsx + App.tsx flex-row shell. Keep
- * PillTabs/views/theme intact; no router/<a>/tab roles. freesearch-ui/ ONLY.
- * Stale suites (Header.c3, C2Contracts top-nav pins) go red by design.
+ * Preserved from C3-REWORK: AC-SB-1 (module contract, TabId verbatim incl
+ * "quotas"), AC-SB-3 (single aria-current), AC-SB-4 (focus ring +
+ * reduced-motion), AC-SB-5 (collapsed rail), AC-SB-6 (collapse toggle),
+ * AC-SB-7 (drawer + scrim + Esc + focus return), AC-SB-8 (token purity),
+ * AC-SB-9 (persistence). "TabId unchanged" — quotas still renders at /usage.
  *
- * AC mapping:
- *   AC-SB-1  Sidebar module contract — TabId verbatim incl "quotas",
- *            navItems 6, SidebarProps (collapsed/defaultCollapsed/
- *            onCollapsedChange), icons from lucide/hugeicons existing deps.
- *   AC-SB-2  Landmark + navigation — <aside> sticky full-height,
- *            <nav aria-label="Primary">, exactly 6 type=button buttons with
- *            exact accessible names, onSelectTab exact TabId, zero tab roles,
- *            no <a>, no router, URL untouched.
- *   AC-SB-3  Active state — exactly one aria-current=page tracking activeTab,
- *            signal wash/spine on the active button.
- *   AC-SB-4  Keyboard + motion — focus-visible signal ring on every nav
- *            button, motion-reduce handling, plain keyboard-focusable buttons.
- *   AC-SB-5  Collapsed rail — collapsed renders w-16 icon rail; every button
- *            keeps exact aria-label + title.
- *   AC-SB-6  Collapse control — "Collapse sidebar"/"Expand sidebar" toggle;
- *            controlled collapsed + onCollapsedChange exact payload;
- *            uncontrolled defaultCollapsed works.
- *   AC-SB-7  Responsive drawer (<md) — overlay drawer (role=dialog) + scrim
- *            (data-testid="sidebar-scrim") + Escape closes + focus returns to
- *            the "Open navigation" opener. Drawer nav is conditionally mounted:
- *            exactly one Primary nav exists while the drawer is closed.
- *   AC-SB-8  Guard — Sidebar introduces zero hex/oklch/gradient literals
- *            (Carbon Black theme tokens only).
- *   AC-SB-9  Persistence — localStorage key freesearch.sidebar.collapsed with
- *            "0"/"1", every access in try/catch; uncontrolled default reads
- *            storage, corrupt storage falls back to defaultCollapsed, toggle
- *            writes best-effort (UI collapses + notifies despite denial),
- *            controlled prop wins, throwing storage never throws.
- *
- * Contract notes for the implementer (asserted below, by accessible name —
- * never icon snapshots):
- *   - Collapse toggle is an aside-level control OUTSIDE the Primary nav
- *     (the nav holds exactly 6 buttons), named "Collapse sidebar" when
- *     expanded and "Expand sidebar" when collapsed.
- *   - Mobile opener is named "Open navigation"; drawer closer is named
- *     "Close navigation"; the drawer container uses role="dialog".
- *   - Escape handling is global (document/window keydown) and closing the
- *     drawer moves focus back to the opener via .focus().
+ * Route table (App.tsx): / -> /playground, /playground, /providers,
+ * /routing, /usage (quotas), /activity, /settings, * -> /playground.
  */
 
 const testDir = import.meta.dirname
@@ -73,16 +42,25 @@ const packageJson = JSON.parse(packageJsonRaw) as {
 
 const norm = (value: string): string => value.toLowerCase().replace(/\s+/g, "")
 
-const EXPECTED_NAV: Array<{ label: string; id: TabId }> = [
-  { label: "Playground", id: "playground" },
-  { label: "Providers", id: "providers" },
-  { label: "Routing", id: "routing" },
-  { label: "Usage", id: "quotas" },
-  { label: "Activity", id: "activity" },
-  { label: "Settings", id: "settings" },
+const EXPECTED_NAV: Array<{ label: string; id: TabId; href: string }> = [
+  { label: "Playground", id: "playground", href: "/playground" },
+  { label: "Providers", id: "providers", href: "/providers" },
+  { label: "Routing", id: "routing", href: "/routing" },
+  { label: "Usage", id: "quotas", href: "/usage" },
+  { label: "Activity", id: "activity", href: "/activity" },
+  { label: "Settings", id: "settings", href: "/settings" },
 ]
 
 const STORAGE_KEY = "freesearch.sidebar.collapsed"
+
+function LocationProbe() {
+  const location = useLocation()
+  return <div data-testid="test-location">{location.pathname}</div>
+}
+
+function testPath(): string {
+  return screen.getByTestId("test-location").textContent ?? ""
+}
 
 function stubMatchMedia(matches: boolean): void {
   const mql = {
@@ -99,14 +77,15 @@ function stubMatchMedia(matches: boolean): void {
 }
 
 function renderSidebar(
-  props: Partial<React.ComponentProps<typeof Sidebar>> = {}
+  props: Partial<React.ComponentProps<typeof Sidebar>> = {},
+  route = "/playground"
 ) {
-  const onSelectTab = vi.fn()
-  const onCollapsedChange = vi.fn()
-  const view = render(
-    <Sidebar activeTab="playground" onSelectTab={onSelectTab} {...props} />
+  return render(
+    <MemoryRouter initialEntries={[route]}>
+      <Sidebar {...props} />
+      <LocationProbe />
+    </MemoryRouter>
   )
-  return { onSelectTab, onCollapsedChange, ...view }
 }
 
 function asideEl(): HTMLElement {
@@ -151,10 +130,10 @@ describe("AC-SB-1: Sidebar module contract", () => {
     }
   })
 
-  it("declares SidebarProps with collapsed/defaultCollapsed/onCollapsedChange", () => {
+  it("declares prop-less routing with optional collapse controls", () => {
     expect(sidebarSource).toMatch(/SidebarProps/)
-    expect(sidebarSource).toContain("activeTab")
-    expect(sidebarSource).toContain("onSelectTab")
+    expect(sidebarSource).not.toContain("activeTab")
+    expect(sidebarSource).not.toContain("onSelectTab")
     expect(sidebarSource).toContain("collapsed")
     expect(sidebarSource).toContain("defaultCollapsed")
     expect(sidebarSource).toContain("onCollapsedChange")
@@ -173,17 +152,17 @@ describe("AC-SB-1: Sidebar module contract", () => {
     expect(Object.keys(allDeps)).toContain("@hugeicons/react")
   })
 
-  it("renders a vector icon inside every nav button (asserted structurally, never by snapshot)", () => {
+  it("renders a vector icon inside every nav link (asserted structurally, never by snapshot)", () => {
     renderSidebar()
-    const buttons = within(primaryNav()).getAllByRole("button")
-    expect(buttons).toHaveLength(6)
-    for (const button of buttons) {
-      expect(button.querySelector("svg")).not.toBeNull()
+    const links = within(primaryNav()).getAllByRole("link")
+    expect(links).toHaveLength(6)
+    for (const link of links) {
+      expect(link.querySelector("svg")).not.toBeNull()
     }
   })
 })
 
-describe("AC-SB-2: landmark + six plain buttons, no router", () => {
+describe("AC-SB-2 (C4): landmark + six router links, URL changes on nav", () => {
   it("renders a sticky full-height aside landmark", () => {
     renderSidebar()
     const aside = asideEl()
@@ -201,98 +180,114 @@ describe("AC-SB-2: landmark + six plain buttons, no router", () => {
     ).toHaveLength(1)
   })
 
-  it("renders exactly six type=button nav buttons in order with exact accessible names", () => {
+  it("renders exactly six nav links in order with exact accessible names", () => {
     renderSidebar()
-    const buttons = within(primaryNav()).getAllByRole("button")
-    expect(buttons).toHaveLength(6)
+    const links = within(primaryNav()).getAllByRole("link")
+    expect(links).toHaveLength(6)
     expect(
-      buttons.map((b) => b.getAttribute("aria-label") ?? b.textContent?.trim())
+      links.map((l) => l.getAttribute("aria-label") ?? l.textContent?.trim())
     ).toEqual(["Playground", "Providers", "Routing", "Usage", "Activity", "Settings"])
-    for (const button of buttons) {
-      expect(button.tagName).toBe("BUTTON")
-      expect(button.getAttribute("type")).toBe("button")
+    for (const link of links) {
+      expect(link.tagName).toBe("A")
+      expect(link.getAttribute("href")).toMatch(/^\//)
     }
   })
 
-  it("every nav button is reachable by accessible name (never icon-only query)", () => {
+  it("every nav link carries its exact route href (quotas maps to /usage)", () => {
+    renderSidebar()
+    for (const { label, href } of EXPECTED_NAV) {
+      expect(
+        within(primaryNav()).getByRole("link", { name: label, exact: true })
+      ).toHaveAttribute("href", href)
+    }
+    // No legacy /quotas route leaks into the sidebar.
+    expect(asideEl().querySelector('a[href="/quotas"]')).toBeNull()
+  })
+
+  it("every nav link is reachable by accessible name (never icon-only query)", () => {
     renderSidebar()
     for (const { label } of EXPECTED_NAV) {
       expect(
-        within(primaryNav()).getByRole("button", { name: label, exact: true })
+        within(primaryNav()).getByRole("link", { name: label, exact: true })
       ).toBeInTheDocument()
     }
   })
 
   it.each(EXPECTED_NAV)(
-    "clicking $label fires onSelectTab with $id exactly once",
-    async ({ label, id }) => {
+    "clicking $label navigates to $href",
+    async ({ label, href }) => {
       const user = userEvent.setup()
-      const { onSelectTab } = renderSidebar()
+      renderSidebar()
       await user.click(
-        within(primaryNav()).getByRole("button", { name: label, exact: true })
+        within(primaryNav()).getByRole("link", { name: label, exact: true })
       )
-      expect(onSelectTab).toHaveBeenCalledTimes(1)
-      expect(onSelectTab).toHaveBeenCalledWith(id)
+      expect(testPath()).toBe(href)
     }
   )
 
-  it("exposes zero tab roles — sidebar nav stays plain buttons", () => {
+  it("exposes zero tab roles — sidebar nav stays plain links", () => {
     renderSidebar()
     expect(screen.queryByRole("tab")).not.toBeInTheDocument()
     expect(screen.queryByRole("tablist")).not.toBeInTheDocument()
     expect(screen.queryByRole("tabpanel")).not.toBeInTheDocument()
   })
 
-  it("renders no anchor navigation inside the aside", () => {
+  it("primary nav contains links, not buttons (controls stay buttons)", () => {
     renderSidebar()
-    expect(asideEl().querySelector("a")).toBeNull()
-    expect(within(asideEl()).queryByRole("link")).not.toBeInTheDocument()
+    const nav = primaryNav()
+    expect(within(nav).getAllByRole("link")).toHaveLength(6)
+    expect(within(nav).queryByRole("button")).not.toBeInTheDocument()
+    // Aside-level controls remain plain buttons outside the Primary nav.
+    expect(
+      screen.getByRole("button", { name: "Collapse sidebar", exact: true })
+    ).toBeInTheDocument()
   })
 
-  it("clicking every nav button never changes the URL", async () => {
+  it("clicking every nav link moves the router location through the route table", async () => {
     const user = userEvent.setup()
-    const { onSelectTab } = renderSidebar()
-    const before = window.location.href
-    for (const { label } of EXPECTED_NAV) {
+    renderSidebar({}, "/playground")
+    expect(testPath()).toBe("/playground")
+    const seen: string[] = []
+    for (const { label, href } of EXPECTED_NAV) {
       await user.click(
-        within(primaryNav()).getByRole("button", { name: label, exact: true })
+        within(primaryNav()).getByRole("link", { name: label, exact: true })
       )
+      expect(testPath()).toBe(href)
+      seen.push(href)
     }
-    expect(window.location.href).toBe(before)
-    expect(window.location.pathname).toBe("/")
-    expect(onSelectTab).toHaveBeenCalledTimes(6)
-    expect(onSelectTab).toHaveBeenNthCalledWith(1, "playground")
-    expect(onSelectTab).toHaveBeenNthCalledWith(4, "quotas")
-    expect(onSelectTab).toHaveBeenNthCalledWith(6, "settings")
+    expect(seen).toEqual([
+      "/playground",
+      "/providers",
+      "/routing",
+      "/usage",
+      "/activity",
+      "/settings",
+    ])
   })
 
-  it("declares no router dependency and imports none in Sidebar source", () => {
+  it("declares the react-router dependency and renders NavLinks in Sidebar source", () => {
     const allDeps = {
       ...(packageJson.dependencies ?? {}),
       ...(packageJson.devDependencies ?? {}),
     }
-    expect(
-      Object.keys(allDeps).filter((name) => /router|wouter/i.test(name))
-    ).toEqual([])
-    expect(sidebarSource).not.toMatch(/react-router|wouter/i)
-    expect(sidebarSource).not.toMatch(/tanstack.*router/i)
-    expect(sidebarSource.includes("<Link")).toBe(false)
-    expect(sidebarSource.includes("<NavLink")).toBe(false)
+    expect(Object.keys(allDeps)).toContain("react-router")
+    expect(sidebarSource).toMatch(/react-router/i)
+    expect(sidebarSource.includes("<NavLink")).toBe(true)
   })
 })
 
-describe("AC-SB-3: single active indicator tracks activeTab", () => {
-  it("exactly one button carries aria-current=page, on the active tab", () => {
-    renderSidebar({ activeTab: "playground" })
+describe("AC-SB-3: single active indicator tracks the router", () => {
+  it("exactly one link carries aria-current=page, on the active route", () => {
+    renderSidebar()
     expect(
-      within(primaryNav()).getByRole("button", {
+      within(primaryNav()).getByRole("link", {
         name: "Playground",
         exact: true,
       })
     ).toHaveAttribute("aria-current", "page")
     for (const label of ["Providers", "Routing", "Usage", "Activity", "Settings"]) {
       expect(
-        within(primaryNav()).getByRole("button", { name: label, exact: true })
+        within(primaryNav()).getByRole("link", { name: label, exact: true })
       ).not.toHaveAttribute("aria-current")
     }
     expect(
@@ -300,24 +295,25 @@ describe("AC-SB-3: single active indicator tracks activeTab", () => {
     ).toHaveLength(1)
   })
 
-  it("aria-current moves when activeTab changes, including the quotas id", () => {
-    const { rerender } = render(
-      <Sidebar activeTab="playground" onSelectTab={() => {}} />
-    )
+  it("aria-current moves when the route changes, including /usage", async () => {
+    const user = userEvent.setup()
+    renderSidebar()
     expect(
-      within(primaryNav()).getByRole("button", {
+      within(primaryNav()).getByRole("link", {
         name: "Playground",
         exact: true,
       })
     ).toHaveAttribute("aria-current", "page")
 
-    rerender(<Sidebar activeTab="quotas" onSelectTab={() => {}} />)
+    await user.click(
+      within(primaryNav()).getByRole("link", { name: "Usage", exact: true })
+    )
 
     expect(
-      within(primaryNav()).getByRole("button", { name: "Usage", exact: true })
+      within(primaryNav()).getByRole("link", { name: "Usage", exact: true })
     ).toHaveAttribute("aria-current", "page")
     expect(
-      within(primaryNav()).getByRole("button", {
+      within(primaryNav()).getByRole("link", {
         name: "Playground",
         exact: true,
       })
@@ -327,9 +323,9 @@ describe("AC-SB-3: single active indicator tracks activeTab", () => {
     ).toHaveLength(1)
   })
 
-  it("active button carries the signal wash/spine token", () => {
-    renderSidebar({ activeTab: "routing" })
-    const active = within(primaryNav()).getByRole("button", {
+  it("active link carries the signal wash/spine token", () => {
+    renderSidebar({}, "/routing")
+    const active = within(primaryNav()).getByRole("link", {
       name: "Routing",
       exact: true,
     })
@@ -345,13 +341,13 @@ describe("AC-SB-3: single active indicator tracks activeTab", () => {
 })
 
 describe("AC-SB-4: keyboard focus ring + reduced-motion", () => {
-  it("every nav button exposes a signal focus ring", () => {
+  it("every nav link exposes a signal focus ring", () => {
     renderSidebar()
-    const buttons = within(primaryNav()).getAllByRole("button")
-    expect(buttons).toHaveLength(6)
-    for (const button of buttons) {
-      expect(button.className).toMatch(/focus-visible:/)
-      expect(button.className.toLowerCase()).toMatch(/signal|ring/)
+    const links = within(primaryNav()).getAllByRole("link")
+    expect(links).toHaveLength(6)
+    for (const link of links) {
+      expect(link.className).toMatch(/focus-visible:/)
+      expect(link.className.toLowerCase()).toMatch(/signal|ring/)
     }
   })
 
@@ -364,16 +360,16 @@ describe("AC-SB-4: keyboard focus ring + reduced-motion", () => {
     expect(asideEl().outerHTML.includes("motion-reduce:")).toBe(true)
   })
 
-  it("nav buttons stay keyboard-focusable plain buttons", () => {
+  it("nav links stay keyboard-focusable", () => {
     renderSidebar()
-    const buttons = within(primaryNav()).getAllByRole("button")
-    expect(buttons).toHaveLength(6)
-    for (const button of buttons) {
-      expect(button.tagName).toBe("BUTTON")
-      expect(button.hasAttribute("disabled")).toBe(false)
-      expect(button.getAttribute("tabindex")).not.toBe("-1")
+    const links = within(primaryNav()).getAllByRole("link")
+    expect(links).toHaveLength(6)
+    for (const link of links) {
+      expect(link.tagName).toBe("A")
+      expect(link.hasAttribute("disabled")).toBe(false)
+      expect(link.getAttribute("tabindex")).not.toBe("-1")
     }
-    const first = buttons[0] as HTMLButtonElement
+    const first = links[0] as HTMLAnchorElement
     first.focus()
     expect(document.activeElement).toBe(first)
   })
@@ -390,18 +386,18 @@ describe("AC-SB-5: collapsed w-16 icon rail", () => {
     expect(asideEl().className).not.toMatch(/w-16/)
   })
 
-  it("collapsed buttons keep exact aria-label + title accessible names", () => {
+  it("collapsed links keep exact aria-label + title accessible names", () => {
     renderSidebar({ collapsed: true, onCollapsedChange: () => {} })
-    const buttons = within(primaryNav()).getAllByRole("button")
-    expect(buttons).toHaveLength(6)
+    const links = within(primaryNav()).getAllByRole("link")
+    expect(links).toHaveLength(6)
     const seen: string[] = []
     for (const { label } of EXPECTED_NAV) {
-      const button = within(primaryNav()).getByRole("button", {
+      const link = within(primaryNav()).getByRole("link", {
         name: label,
         exact: true,
       })
-      expect(button.getAttribute("aria-label")).toBe(label)
-      expect(button.getAttribute("title")).toBe(label)
+      expect(link.getAttribute("aria-label")).toBe(label)
+      expect(link.getAttribute("title")).toBe(label)
       seen.push(label)
     }
     expect(seen).toEqual([
@@ -414,17 +410,13 @@ describe("AC-SB-5: collapsed w-16 icon rail", () => {
     ])
   })
 
-  it("collapsed nav selection still fires the exact TabId", async () => {
+  it("collapsed nav selection still navigates to the usage route", async () => {
     const user = userEvent.setup()
-    const { onSelectTab } = renderSidebar({
-      collapsed: true,
-      onCollapsedChange: () => {},
-    })
+    renderSidebar({ collapsed: true, onCollapsedChange: () => {} })
     await user.click(
-      within(primaryNav()).getByRole("button", { name: "Usage", exact: true })
+      within(primaryNav()).getByRole("link", { name: "Usage", exact: true })
     )
-    expect(onSelectTab).toHaveBeenCalledTimes(1)
-    expect(onSelectTab).toHaveBeenCalledWith("quotas")
+    expect(testPath()).toBe("/usage")
   })
 })
 
@@ -433,12 +425,12 @@ describe("AC-SB-6: collapse toggle — controlled + uncontrolled", () => {
     const user = userEvent.setup()
     const onCollapsedChange = vi.fn()
     const { rerender } = render(
-      <Sidebar
-        activeTab="playground"
-        onSelectTab={() => {}}
-        collapsed={false}
-        onCollapsedChange={onCollapsedChange}
-      />
+      <MemoryRouter initialEntries={["/playground"]}>
+        <Sidebar
+          collapsed={false}
+          onCollapsedChange={onCollapsedChange}
+        />
+      </MemoryRouter>
     )
     await user.click(
       screen.getByRole("button", { name: "Collapse sidebar", exact: true })
@@ -447,12 +439,12 @@ describe("AC-SB-6: collapse toggle — controlled + uncontrolled", () => {
     expect(onCollapsedChange).toHaveBeenCalledWith(true)
     // Controlled: DOM follows the prop, not the click.
     rerender(
-      <Sidebar
-        activeTab="playground"
-        onSelectTab={() => {}}
-        collapsed={false}
-        onCollapsedChange={onCollapsedChange}
-      />
+      <MemoryRouter initialEntries={["/playground"]}>
+        <Sidebar
+          collapsed={false}
+          onCollapsedChange={onCollapsedChange}
+        />
+      </MemoryRouter>
     )
     expect(asideEl().className).not.toMatch(/w-16/)
   })
@@ -461,12 +453,12 @@ describe("AC-SB-6: collapse toggle — controlled + uncontrolled", () => {
     const user = userEvent.setup()
     const onCollapsedChange = vi.fn()
     render(
-      <Sidebar
-        activeTab="playground"
-        onSelectTab={() => {}}
-        collapsed
-        onCollapsedChange={onCollapsedChange}
-      />
+      <MemoryRouter initialEntries={["/playground"]}>
+        <Sidebar
+          collapsed
+          onCollapsedChange={onCollapsedChange}
+        />
+      </MemoryRouter>
     )
     await user.click(
       screen.getByRole("button", { name: "Expand sidebar", exact: true })
@@ -477,7 +469,11 @@ describe("AC-SB-6: collapse toggle — controlled + uncontrolled", () => {
 
   it("uncontrolled defaultCollapsed starts collapsed and toggles without props", async () => {
     const user = userEvent.setup()
-    render(<Sidebar activeTab="playground" onSelectTab={() => {}} defaultCollapsed />)
+    render(
+      <MemoryRouter initialEntries={["/playground"]}>
+        <Sidebar defaultCollapsed />
+      </MemoryRouter>
+    )
     expect(asideEl().className).toMatch(/w-16/)
 
     await user.click(
@@ -495,7 +491,7 @@ describe("AC-SB-6: collapse toggle — controlled + uncontrolled", () => {
   })
 
   it("omitting defaultCollapsed starts expanded", () => {
-    render(<Sidebar activeTab="playground" onSelectTab={() => {}} />)
+    renderSidebar()
     expect(asideEl().className).not.toMatch(/w-16/)
     expect(
       screen.getByRole("button", { name: "Collapse sidebar", exact: true })
@@ -522,18 +518,17 @@ describe("AC-SB-7: responsive <md overlay drawer + scrim + Esc + focus return", 
     expect(screen.getByRole("dialog")).toBeInTheDocument()
   })
 
-  it("selecting a drawer item fires onSelectTab and closes the drawer", async () => {
+  it("selecting a drawer item navigates and closes the drawer", async () => {
     const user = userEvent.setup()
-    const { onSelectTab } = renderSidebar()
+    renderSidebar()
     await user.click(
       screen.getByRole("button", { name: "Open navigation", exact: true })
     )
     const dialog = screen.getByRole("dialog")
     await user.click(
-      within(dialog).getByRole("button", { name: "Routing", exact: true })
+      within(dialog).getByRole("link", { name: "Routing", exact: true })
     )
-    expect(onSelectTab).toHaveBeenCalledTimes(1)
-    expect(onSelectTab).toHaveBeenCalledWith("routing")
+    expect(testPath()).toBe("/routing")
     expect(screen.queryByTestId("sidebar-scrim")).not.toBeInTheDocument()
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
   })
@@ -595,27 +590,43 @@ describe("AC-SB-9: persistence in freesearch.sidebar.collapsed", () => {
 
   it("stored '1' starts the uncontrolled sidebar collapsed", () => {
     window.localStorage.setItem(STORAGE_KEY, "1")
-    render(<Sidebar activeTab="playground" onSelectTab={() => {}} />)
+    render(
+      <MemoryRouter initialEntries={["/playground"]}>
+        <Sidebar />
+      </MemoryRouter>
+    )
     expect(asideEl().className).toMatch(/w-16/)
   })
 
   it("stored '0' starts the uncontrolled sidebar expanded", () => {
     window.localStorage.setItem(STORAGE_KEY, "0")
-    render(<Sidebar activeTab="playground" onSelectTab={() => {}} />)
+    render(
+      <MemoryRouter initialEntries={["/playground"]}>
+        <Sidebar />
+      </MemoryRouter>
+    )
     expect(asideEl().className).not.toMatch(/w-16/)
   })
 
   it("a corrupt stored value falls back to expanded without throwing", () => {
     window.localStorage.setItem(STORAGE_KEY, "banana")
     expect(() =>
-      render(<Sidebar activeTab="playground" onSelectTab={() => {}} />)
+      render(
+        <MemoryRouter initialEntries={["/playground"]}>
+          <Sidebar />
+        </MemoryRouter>
+      )
     ).not.toThrow()
     expect(asideEl().className).not.toMatch(/w-16/)
   })
 
   it("uncontrolled toggle writes '1' then '0' through localStorage", async () => {
     const user = userEvent.setup()
-    render(<Sidebar activeTab="playground" onSelectTab={() => {}} />)
+    render(
+      <MemoryRouter initialEntries={["/playground"]}>
+        <Sidebar />
+      </MemoryRouter>
+    )
     expect(window.localStorage.getItem(STORAGE_KEY)).toBeNull()
 
     await user.click(
@@ -632,11 +643,11 @@ describe("AC-SB-9: persistence in freesearch.sidebar.collapsed", () => {
   it("a corrupt stored value falls back to defaultCollapsed", () => {
     window.localStorage.setItem(STORAGE_KEY, "banana")
     render(
-      <Sidebar
-        activeTab="playground"
-        onSelectTab={() => {}}
-        defaultCollapsed
-      />
+      <MemoryRouter initialEntries={["/playground"]}>
+        <Sidebar
+          defaultCollapsed
+        />
+      </MemoryRouter>
     )
     expect(asideEl().className).toMatch(/w-16/)
   })
@@ -644,12 +655,12 @@ describe("AC-SB-9: persistence in freesearch.sidebar.collapsed", () => {
   it("controlled collapsed prop wins over a stored '1'", () => {
     window.localStorage.setItem(STORAGE_KEY, "1")
     render(
-      <Sidebar
-        activeTab="playground"
-        onSelectTab={() => {}}
-        collapsed={false}
-        onCollapsedChange={() => {}}
-      />
+      <MemoryRouter initialEntries={["/playground"]}>
+        <Sidebar
+          collapsed={false}
+          onCollapsedChange={() => {}}
+        />
+      </MemoryRouter>
     )
     expect(asideEl().className).not.toMatch(/w-16/)
   })
@@ -659,7 +670,11 @@ describe("AC-SB-9: persistence in freesearch.sidebar.collapsed", () => {
       throw new Error("storage denied")
     })
     expect(() =>
-      render(<Sidebar activeTab="playground" onSelectTab={() => {}} />)
+      render(
+        <MemoryRouter initialEntries={["/playground"]}>
+          <Sidebar />
+        </MemoryRouter>
+      )
     ).not.toThrow()
     expect(asideEl()).toBeInTheDocument()
   })
@@ -671,11 +686,11 @@ describe("AC-SB-9: persistence in freesearch.sidebar.collapsed", () => {
       throw new Error("storage denied")
     })
     render(
-      <Sidebar
-        activeTab="playground"
-        onSelectTab={() => {}}
-        onCollapsedChange={onCollapsedChange}
-      />
+      <MemoryRouter initialEntries={["/playground"]}>
+        <Sidebar
+          onCollapsedChange={onCollapsedChange}
+        />
+      </MemoryRouter>
     )
     await user.click(
       screen.getByRole("button", { name: "Collapse sidebar", exact: true })

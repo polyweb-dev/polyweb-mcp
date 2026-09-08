@@ -1,4 +1,5 @@
-import { useState } from "react"
+import type { ReactNode } from "react"
+import { Navigate, Route, Routes } from "react-router"
 import { FreeSearchProvider } from "@/context/FreeSearchContext"
 import { Sidebar, type TabId } from "@/components/layout/Sidebar"
 import { SearchPlayground } from "@/components/search/SearchPlayground"
@@ -9,23 +10,35 @@ import { ActivityStream } from "@/components/activity/ActivityStream"
 import { SettingsView } from "@/components/settings/SettingsView"
 import { ToastContainer } from "@/components/common/ToastContainer"
 
-function DashboardContent() {
-  const [activeTab, setActiveTab] = useState<TabId>("playground")
+const workspaceRoutes: Array<{
+  id: TabId
+  path: string
+  element: ReactNode
+}> = [
+  { id: "playground", path: "/playground", element: <SearchPlayground /> },
+  { id: "providers", path: "/providers", element: <ProviderMatrix /> },
+  { id: "routing", path: "/routing", element: <RoutingEngine /> },
+  { id: "quotas", path: "/usage", element: <QuotaAnalytics /> },
+  { id: "activity", path: "/activity", element: <ActivityStream /> },
+  { id: "settings", path: "/settings", element: <SettingsView /> },
+]
 
+function DashboardContent() {
   return (
     <div
       className="flex min-h-screen flex-row font-sans"
       style={{ background: "var(--surface)", color: "var(--text)" }}
     >
-      <Sidebar activeTab={activeTab} onSelectTab={setActiveTab} />
+      <Sidebar />
 
       <main className="min-w-0 flex-1 px-6 py-8 pt-16 sm:px-8 md:pt-8 lg:px-12">
-        {activeTab === "playground" && <SearchPlayground />}
-        {activeTab === "providers" && <ProviderMatrix />}
-        {activeTab === "routing" && <RoutingEngine />}
-        {activeTab === "quotas" && <QuotaAnalytics />}
-        {activeTab === "activity" && <ActivityStream />}
-        {activeTab === "settings" && <SettingsView />}
+        <Routes>
+          <Route path="/" element={<Navigate to="/playground" replace />} />
+          {workspaceRoutes.map(({ id, path, element }) => (
+            <Route key={id} path={path} element={element} />
+          ))}
+          <Route path="*" element={<Navigate to="/playground" replace />} />
+        </Routes>
       </main>
 
       <ToastContainer />

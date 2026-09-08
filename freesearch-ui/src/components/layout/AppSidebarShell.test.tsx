@@ -4,6 +4,7 @@ import path from "node:path"
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
 import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
+import { MemoryRouter, useLocation } from "react-router"
 import App from "@/App"
 import { installFetchStub, ok, err } from "@/test/fetchMock"
 import {
@@ -13,21 +14,19 @@ import {
 } from "@/test/backendFixtures"
 
 /**
- * C3-REWORK App shell — BDD Acceptance (Red phase) for AC-SB-8.
+ * C4 URL routing — App shell over the route table (REWRITTEN, Red phase).
  *
- * Plan: App.tsx becomes a flex-row shell (Sidebar + main). Sidebar owns the
- * six workspaces; PillTabs/views/theme stay intact; no router/<a>/tab roles.
+ * Blessed churn (NOT weakening): the C3-REWORK AC-SB-8d plain-button pin is
+ * VOID. The shell keeps the flex-row aside+main layout, but workspace
+ * switching is router navigation:
+ *   - sidebar nav items are links (getByRole button->link) with exact hrefs;
+ *   - switching views changes the URL through the route table;
+ *   - react-router is a dependency; App source declares Routes.
  *
- * AC mapping (all AC-SB-8):
- *   AC-SB-8a  App renders a flex-row shell holding <aside> + <main>.
- *   AC-SB-8b  The legacy <header> topbar is gone.
- *   AC-SB-8c  All six sidebar buttons (by accessible name) swap the main view
- *             to its exact heading — views stay intact.
- *   AC-SB-8d  Shell keeps the plain-button contract: no links, no tab roles,
- *             no router dependency, URL never changes.
- *   AC-SB-8e  PillTabs gold standard untouched (Routing + Settings pill tabs).
- *   AC-SB-8f  App source wires the Sidebar into a flex-row shell and exposes
- *             the collapse toggle.
+ * Preserved: AC-SB-8a (flex-row aside+main), AC-SB-8b (no legacy header),
+ * AC-SB-8c (six links swap intact views — now link queries + URL asserts),
+ * AC-SB-8e (PillTabs gold standard untouched), AC-SB-8f (Sidebar wiring +
+ * collapse toggle). TabId unchanged — quotas renders at /usage.
  */
 
 const testDir = import.meta.dirname
@@ -41,7 +40,12 @@ const packageJson = JSON.parse(packageJsonRaw) as {
   devDependencies?: Record<string, string>
 }
 
-function renderApp() {
+function LocationProbe() {
+  const location = useLocation()
+  return <div data-testid="test-location">{location.pathname}</div>
+}
+
+function renderApp(route = "/playground") {
   installFetchStub((req) => {
     if (req.url === "/api/v1/providers" && req.method === "GET") {
       return ok(allProvidersFixture())
@@ -52,16 +56,25 @@ function renderApp() {
     if (req.url.startsWith("/dashboard")) return ok(dashboardFixture())
     return err(404, { detail: "unhandled test route" })
   })
-  return render(<App />)
+  return render(
+    <MemoryRouter initialEntries={[route]}>
+      <App />
+      <LocationProbe />
+    </MemoryRouter>
+  )
 }
 
-const EXPECTED_VIEWS: Array<{ button: string; heading: string }> = [
-  { button: "Playground", heading: "Search Playground" },
-  { button: "Providers", heading: "Providers" },
-  { button: "Routing", heading: "Routing" },
-  { button: "Usage", heading: "Usage" },
-  { button: "Activity", heading: "Activity" },
-  { button: "Settings", heading: "Settings" },
+function testPath(): string {
+  return screen.getByTestId("test-location").textContent ?? ""
+}
+
+const EXPECTED_VIEWS: Array<{ link: string; heading: string; path: string }> = [
+  { link: "Playground", heading: "Search Playground", path: "/playground" },
+  { link: "Providers", heading: "Providers", path: "/providers" },
+  { link: "Routing", heading: "Routing", path: "/routing" },
+  { link: "Usage", heading: "Usage", path: "/usage" },
+  { link: "Activity", heading: "Activity", path: "/activity" },
+  { link: "Settings", heading: "Settings", path: "/settings" },
 ]
 
 beforeEach(() => {
@@ -116,26 +129,26 @@ describe("AC-SB-8b: legacy header topbar is gone", () => {
   })
 })
 
-describe("AC-SB-8c: six sidebar buttons swap intact views", () => {
-  it("sidebar exposes all six workspaces by accessible name", () => {
+describe("AC-SB-8c (C4): six sidebar links swap intact views via the URL", () => {
+  it("sidebar exposes all six workspaces as links with exact route hrefs", () => {
     renderApp()
     const nav = screen.getByRole("navigation", { name: "Primary" })
-    for (const { button } of EXPECTED_VIEWS) {
+    for (const { link, path } of EXPECTED_VIEWS) {
       expect(
-        within(nav).getByRole("button", { name: button, exact: true })
-      ).toBeInTheDocument()
+        within(nav).getByRole("link", { name: link, exact: true })
+      ).toHaveAttribute("href", path)
     }
   })
 
   it.each(EXPECTED_VIEWS)(
-    "sidebar '$button' shows the '$heading' view",
-    async ({ button, heading }) => {
+    "sidebar '$link' navigates to '$path' showing the '$heading' view",
+    async ({ link, heading, path }) => {
       const user = userEvent.setup()
-      renderApp()
+      renderApp("/playground")
       await user.click(
         within(screen.getByRole("navigation", { name: "Primary" })).getByRole(
-          "button",
-          { name: button, exact: true }
+          "link",
+          { name: link, exact: true }
         )
       )
       await waitFor(() => {
@@ -145,17 +158,18 @@ describe("AC-SB-8c: six sidebar buttons swap intact views", () => {
           })
         ).toBeInTheDocument()
       })
+      expect(testPath()).toBe(path)
     }
   )
 
   it("full click-through visits every view with exactly one active marker", async () => {
     const user = userEvent.setup()
-    renderApp()
-    for (const { button, heading } of EXPECTED_VIEWS) {
+    renderApp("/playground")
+    for (const { link, heading, path } of EXPECTED_VIEWS) {
       await user.click(
         within(screen.getByRole("navigation", { name: "Primary" })).getByRole(
-          "button",
-          { name: button, exact: true }
+          "link",
+          { name: link, exact: true }
         )
       )
       await waitFor(() => {
@@ -163,6 +177,7 @@ describe("AC-SB-8c: six sidebar buttons swap intact views", () => {
           screen.getByRole("heading", { name: heading })
         ).toBeInTheDocument()
       })
+      expect(testPath()).toBe(path)
       expect(
         document.querySelectorAll('aside [aria-current="page"]')
       ).toHaveLength(1)
@@ -170,49 +185,65 @@ describe("AC-SB-8c: six sidebar buttons swap intact views", () => {
   })
 })
 
-describe("AC-SB-8d: shell keeps the plain-button contract", () => {
-  it("sidebar has no links and no tab roles", () => {
+describe("AC-SB-8d (C4): shell keeps the link+router contract", () => {
+  it("sidebar nav has links with hrefs and no button nav items", () => {
     renderApp()
     const aside = document.querySelector("aside") as HTMLElement
-    expect(within(aside).queryByRole("link")).not.toBeInTheDocument()
-    expect(aside.querySelector("a")).toBeNull()
+    const nav = within(aside).getByRole("navigation", { name: "Primary" })
+    expect(within(nav).getAllByRole("link")).toHaveLength(6)
+    expect(within(nav).queryByRole("button")).not.toBeInTheDocument()
     expect(within(aside).queryByRole("tab")).not.toBeInTheDocument()
     expect(within(aside).queryByRole("tablist")).not.toBeInTheDocument()
     expect(within(aside).queryByRole("tabpanel")).not.toBeInTheDocument()
   })
 
-  it("switching views never changes the URL and adds no router", async () => {
+  it("switching views changes the URL through the route table", async () => {
     const user = userEvent.setup()
-    renderApp()
-    const before = window.location.href
-    for (const { button } of EXPECTED_VIEWS) {
+    renderApp("/playground")
+    expect(testPath()).toBe("/playground")
+    for (const { link, path } of EXPECTED_VIEWS) {
       await user.click(
         within(screen.getByRole("navigation", { name: "Primary" })).getByRole(
-          "button",
-          { name: button, exact: true }
+          "link",
+          { name: link, exact: true }
         )
       )
+      expect(testPath()).toBe(path)
     }
-    expect(window.location.href).toBe(before)
-    expect(window.location.pathname).toBe("/")
     const allDeps = {
       ...(packageJson.dependencies ?? {}),
       ...(packageJson.devDependencies ?? {}),
     }
-    expect(
-      Object.keys(allDeps).filter((name) => /router|wouter/i.test(name))
-    ).toEqual([])
-    expect(appSource).not.toMatch(/react-router|wouter/i)
+    expect(Object.keys(allDeps)).toContain("react-router")
+    expect(appSource).toMatch(/react-router/i)
+  })
+
+  it("App source declares the Routes table with redirect + catch-all", () => {
+    expect(appSource).toMatch(/<Routes/)
+    expect(appSource).toMatch(/<Route/)
+    for (const routePath of [
+      "/playground",
+      "/providers",
+      "/routing",
+      "/usage",
+      "/activity",
+      "/settings",
+    ]) {
+      expect(appSource).toContain(`"${routePath}"`)
+    }
+    // Root redirect and unknown-path fallback both land on the playground.
+    expect(appSource).toMatch(/<Navigate/)
+    expect(appSource).toContain('"/playground"')
   })
 })
 
 describe("AC-SB-8e: PillTabs gold standard untouched", () => {
   it("Routing view still exposes Strategy/Simulator/Ranks/Resilience pill tabs", async () => {
     const user = userEvent.setup()
-    renderApp()
+    renderApp("/playground")
     await user.click(
       within(screen.getByRole("navigation", { name: "Primary" })).getByRole(
-        "button",
+        "link",
         { name: "Routing", exact: true }
       )
     )
@@ -234,10 +265,10 @@ describe("AC-SB-8e: PillTabs gold standard untouched", () => {
 
   it("Settings view still exposes Providers/Keys/Failover pill tabs", async () => {
     const user = userEvent.setup()
-    renderApp()
+    renderApp("/playground")
     await user.click(
       within(screen.getByRole("navigation", { name: "Primary" })).getByRole(
-        "button",
+        "link",
         { name: "Settings", exact: true }
       )
     )

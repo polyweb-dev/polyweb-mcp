@@ -3,7 +3,7 @@ import type { Page } from "@playwright/test"
 import { Given, When, Then } from "./fixtures"
 
 Given("I am on the Routing view", async ({ page }) => {
-  await page.getByRole("button", { name: "Routing", exact: true }).click()
+  await page.getByRole("link", { name: "Routing", exact: true }).click()
   await expect(page.getByRole("heading", { name: "Routing", exact: true })).toBeVisible()
 })
 

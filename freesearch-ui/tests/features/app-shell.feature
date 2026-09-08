@@ -1,20 +1,29 @@
 Feature: Dashboard application shell
-  The dashboard keeps its primary workspaces reachable from the global header.
+  The dashboard keeps its primary workspaces reachable from the sidebar.
+  C4 URL routing: every workspace is a router link (NavLink) and the URL
+  tracks the active view. TabId is unchanged — the "quotas" tab renders at
+  the "/usage" path.
 
   Background:
     Given I navigate to the web application
 
-  @smoke
-  Scenario: Navigate through every dashboard workspace
-    When I select the "Playground" header tab
+  @smoke @stub
+  Scenario: Navigate through every dashboard workspace via sidebar links
+    When I follow the "Playground" sidebar link
     Then I should see the "Search Playground" heading
-    When I select the "Providers" header tab
+    And the page URL path should be "/playground"
+    When I follow the "Providers" sidebar link
     Then I should see the "Providers" heading
-    When I select the "Routing" header tab
+    And the page URL path should be "/providers"
+    When I follow the "Routing" sidebar link
     Then I should see the "Routing" heading
-    When I select the "Usage" header tab
+    And the page URL path should be "/routing"
+    When I follow the "Usage" sidebar link
     Then I should see the "Usage" heading
-    When I select the "Activity" header tab
+    And the page URL path should be "/usage"
+    When I follow the "Activity" sidebar link
     Then I should see the "Activity" heading
-    When I select the "Settings" header tab
+    And the page URL path should be "/activity"
+    When I follow the "Settings" sidebar link
     Then I should see the "Settings" heading
+    And the page URL path should be "/settings"

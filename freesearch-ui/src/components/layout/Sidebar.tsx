@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import type { LucideIcon } from "lucide-react"
+import { NavLink } from "react-router"
 import {
   Activity,
   Boxes,
@@ -24,8 +25,6 @@ export type TabId =
   | "settings"
 
 export interface SidebarProps {
-  activeTab: TabId
-  onSelectTab: (tab: TabId) => void
   collapsed?: boolean
   defaultCollapsed?: boolean
   onCollapsedChange?: (collapsed: boolean) => void
@@ -46,6 +45,15 @@ const navItems: NavItem[] = [
   { id: "settings", label: "Settings", icon: Settings },
 ]
 
+const TAB_PATHS: Record<TabId, string> = {
+  playground: "/playground",
+  providers: "/providers",
+  routing: "/routing",
+  quotas: "/usage",
+  activity: "/activity",
+  settings: "/settings",
+}
+
 const STORAGE_KEY = "freesearch.sidebar.collapsed"
 
 function readStoredCollapsed(defaultValue: boolean): boolean {
@@ -61,37 +69,34 @@ function readStoredCollapsed(defaultValue: boolean): boolean {
 }
 
 interface NavListProps {
-  activeTab: TabId
   collapsed: boolean
-  onSelect: (tab: TabId) => void
+  onNavigate?: () => void
 }
 
-function NavList({ activeTab, collapsed, onSelect }: NavListProps) {
+function NavList({ collapsed, onNavigate }: NavListProps) {
   return (
     <nav aria-label="Primary" className="flex flex-1 flex-col gap-1 px-2 py-3">
-      {navItems.map(({ id, label, icon: Icon }) => {
-        const isActive = activeTab === id
-        return (
-          <button
-            key={id}
-            type="button"
-            aria-label={label}
-            aria-current={isActive ? "page" : undefined}
-            title={collapsed ? label : undefined}
-            onClick={() => onSelect(id)}
-            className={cn(
+      {navItems.map(({ id, label, icon: Icon }) => (
+        <NavLink
+          key={id}
+          to={TAB_PATHS[id]}
+          aria-label={label}
+          title={collapsed ? label : undefined}
+          onClick={onNavigate}
+          className={({ isActive }) =>
+            cn(
               "relative flex h-10 w-full items-center rounded-md text-[13px] font-medium transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--signal)] focus-visible:ring-inset motion-reduce:transition-none",
               collapsed ? "justify-center px-0" : "gap-3 px-3",
               isActive
                 ? "bg-[var(--signal-muted)] text-[var(--text-strong)] before:absolute before:inset-y-2 before:left-0 before:w-0.5 before:rounded-r before:bg-[var(--signal)]"
                 : "text-[var(--muted)] hover:bg-[var(--secondary)] hover:text-[var(--text-strong)]"
-            )}
-          >
-            <Icon aria-hidden="true" className="size-[18px] shrink-0" strokeWidth={1.8} />
-            {!collapsed && <span>{label}</span>}
-          </button>
-        )
-      })}
+            )
+          }
+        >
+          <Icon aria-hidden="true" className="size-[18px] shrink-0" strokeWidth={1.8} />
+          {!collapsed && <span>{label}</span>}
+        </NavLink>
+      ))}
     </nav>
   )
 }
@@ -116,8 +121,6 @@ function Brand({ collapsed = false }: BrandProps) {
 }
 
 export function Sidebar({
-  activeTab,
-  onSelectTab,
   collapsed,
   defaultCollapsed = false,
   onCollapsedChange,
@@ -157,11 +160,6 @@ export function Sidebar({
     onCollapsedChange?.(next)
   }
 
-  const selectFromDrawer = (tab: TabId) => {
-    onSelectTab(tab)
-    closeDrawer()
-  }
-
   return (
     <>
       <button
@@ -182,11 +180,7 @@ export function Sidebar({
         )}
       >
         <Brand collapsed={isCollapsed} />
-        <NavList
-          activeTab={activeTab}
-          collapsed={isCollapsed}
-          onSelect={onSelectTab}
-        />
+        <NavList collapsed={isCollapsed} />
         <button
           type="button"
           aria-label={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
@@ -235,7 +229,7 @@ export function Sidebar({
                 <X aria-hidden="true" className="size-5" />
               </button>
             </div>
-            <NavList activeTab={activeTab} collapsed={false} onSelect={selectFromDrawer} />
+            <NavList collapsed={false} onNavigate={() => closeDrawer()} />
           </div>
         </div>
       )}

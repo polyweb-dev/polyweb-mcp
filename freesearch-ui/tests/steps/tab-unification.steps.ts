@@ -302,14 +302,13 @@ Then("every playground filter toggle should live inside a group", async ({ page 
 })
 
 Then("the header navigation should expose zero tab roles", async ({ page }) => {
-  const header = page.locator("header")
-  await expect(header.getByRole("tab")).toHaveCount(0)
-  await expect(header.getByRole("tablist")).toHaveCount(0)
-  await expect(header.getByRole("button")).toHaveCount(6)
+  const navigation = page.getByRole("navigation", { name: "Primary" })
+  await expect(navigation.getByRole("tab")).toHaveCount(0)
+  await expect(navigation.getByRole("tablist")).toHaveCount(0)
+  await expect(navigation.getByRole("link")).toHaveCount(6)
 })
 
 Then("the page URL should be unchanged", async ({ page }) => {
-  // No router is introduced by C2-REWORK: view tab switches keep path + query stable.
   expect(page.url()).not.toMatch(/[?#]/)
-  expect(new URL(page.url()).pathname).toBe("/")
+  expect(new URL(page.url()).pathname).toBe("/playground")
 })

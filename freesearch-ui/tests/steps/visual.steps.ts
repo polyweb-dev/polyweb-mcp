@@ -71,18 +71,25 @@ When("I walk from the header through Routing with keyboard only", async ({ page 
   const headerLabels = ["Playground", "Providers", "Routing"]
   for (const label of headerLabels) {
     await page.keyboard.press("Tab")
-    await expectFocusVisible(page.getByRole("button", { name: label, exact: true }))
+    await expectFocusVisible(page.getByRole("link", { name: label, exact: true }))
   }
 
-  const routingButton = page.getByRole("button", { name: "Routing", exact: true })
+  const routingLink = page.getByRole("link", { name: "Routing", exact: true })
   await page.keyboard.press("Enter")
   await expect(page.getByRole("heading", { name: "Routing", exact: true })).toBeVisible()
-  await expectFocusVisible(routingButton)
+  await expectFocusVisible(routingLink)
 
   for (const label of ["Usage", "Activity", "Settings"]) {
     await page.keyboard.press("Tab")
-    await expectFocusVisible(page.getByRole("button", { name: label, exact: true }))
+    await expectFocusVisible(page.getByRole("link", { name: label, exact: true }))
   }
+
+  const collapseButton = page.getByRole("button", {
+    name: "Collapse sidebar",
+    exact: true,
+  })
+  await page.keyboard.press("Tab")
+  await expectFocusVisible(collapseButton)
 
   const strategyTab = page.getByRole("tab", { name: "Strategy", exact: true })
   await page.keyboard.press("Tab")
@@ -98,9 +105,17 @@ When("I walk from the header through Routing with keyboard only", async ({ page 
 })
 
 When("I move to the {string} view using keyboard only", async ({ page }, view: string) => {
-  const navigationButton = page.getByRole("button", { name: view, exact: true })
-  await navigationButton.focus()
-  await expectFocusVisible(navigationButton)
+  let navigationLink = page.getByRole("link", { name: view, exact: true })
+  if (!(await navigationLink.isVisible())) {
+    await page.getByRole("button", { name: "Open navigation", exact: true }).click()
+    navigationLink = page
+      .getByRole("dialog", { name: "Navigation" })
+      .getByRole("link", { name: view, exact: true })
+  }
+  await navigationLink.focus()
+  await page.keyboard.press("Tab")
+  await page.keyboard.press("Shift+Tab")
+  await expectFocusVisible(navigationLink)
   await page.keyboard.press("Enter")
   await expect(page.getByRole("heading", { name: view, exact: true })).toBeVisible()
 })
@@ -190,7 +205,11 @@ async function openVisualApp(
   await page.goto("/")
   await page.addStyleTag({ content: DETERMINISTIC_VISUAL_CSS })
   await page.evaluate(() => document.fonts.ready)
-  await expect(page.getByText("FreeSearch", { exact: true })).toBeVisible()
+  const shellMarker =
+    width < 768
+      ? page.getByRole("button", { name: "Open navigation", exact: true })
+      : page.getByText("FreeSearch", { exact: true })
+  await expect(shellMarker).toBeVisible()
 }
 
 /**
