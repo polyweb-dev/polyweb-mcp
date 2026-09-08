@@ -1,12 +1,17 @@
 import React, { useState } from "react"
 import { RefreshCw, Server, ShieldCheck, Zap, Key } from "lucide-react"
+import { SegmentedControl } from "@/components/common/SegmentedControl"
 import { useFreeSearch } from "@/context/useFreeSearch"
 import type { CircuitBreakerStatus, ProviderConfig } from "@/types/freesearch"
+
+type ProviderFilter = "all" | "search" | "fetch" | "keyless"
+
+const PROVIDER_FILTER_OPTIONS = ["All", "Search", "Fetch", "Keyless"] as const
 
 export const ProviderMatrix: React.FC = () => {
   const { providers, providersError, setCircuitBreaker, testProviderConnection } = useFreeSearch()
   const [testingId, setTestingId] = useState<string | null>(null)
-  const [filter, setFilter] = useState<"all" | "search" | "fetch" | "keyless">("all")
+  const [filter, setFilter] = useState<ProviderFilter>("all")
 
   const handleTest = async (id: string) => {
     setTestingId(id)
@@ -51,25 +56,14 @@ export const ProviderMatrix: React.FC = () => {
             </p>
           </div>
 
-          {/* Quick filter segments */}
-          <div className="flex items-center gap-1">
-            {(["all", "search", "fetch", "keyless"] as const).map((f) => (
-              <button
-                key={f}
-                type="button"
-                onClick={() => setFilter(f)}
-                aria-pressed={filter === f}
-                className="px-3 py-1 rounded text-[13px] font-medium capitalize transition-colors"
-                style={{
-                  background: filter === f ? "var(--signal-muted)" : "var(--elevated)",
-                  color: filter === f ? "var(--signal)" : "var(--muted)",
-                  border: `1px solid ${filter === f ? "var(--signal)" : "var(--border-subtle)"}`,
-                }}
-              >
-                {f}
-              </button>
-            ))}
-          </div>
+          <SegmentedControl
+            options={PROVIDER_FILTER_OPTIONS}
+            value={filter[0].toUpperCase() + filter.slice(1)}
+            onChange={(value) =>
+              setFilter(value.toLowerCase() as ProviderFilter)
+            }
+            ariaLabel="Provider filter"
+          />
         </div>
 
         {/* Summary metric ribbon across widescreen */}

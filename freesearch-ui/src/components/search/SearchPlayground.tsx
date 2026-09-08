@@ -5,8 +5,19 @@ import {
   ExternalLink,
 } from "lucide-react"
 import { useFreeSearch } from "@/context/useFreeSearch"
+import { SegmentedControl } from "@/components/common/SegmentedControl"
 import { Button } from "@/components/ui/button"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import type { SearchResult } from "@/types/freesearch"
+
+const SEARCH_DEPTH_OPTIONS = ["Fast", "Balanced", "Deep"] as const
+type SearchDepth = Lowercase<(typeof SEARCH_DEPTH_OPTIONS)[number]>
+
+const SEARCH_DEPTH_LABELS: Record<SearchDepth, (typeof SEARCH_DEPTH_OPTIONS)[number]> = {
+  fast: "Fast",
+  balanced: "Balanced",
+  deep: "Deep",
+}
 
 function isEligibleForOperation(
   provider: ReturnType<typeof useFreeSearch>["providers"][number],
@@ -36,7 +47,7 @@ export const SearchPlayground: React.FC = () => {
   const [query, setQuery] = useState("")
   const [fetchUrl, setFetchUrl] = useState("")
   const [selectedProviderId, setSelectedProviderId] = useState<string>("auto")
-  const [searchDepth, setSearchDepth] = useState<"fast" | "balanced" | "deep">("balanced")
+  const [searchDepth, setSearchDepth] = useState<SearchDepth>("balanced")
   const [selectedResultForPreview, setSelectedResultForPreview] = useState<SearchResult | null>(null)
   const [showJsonInspector, setShowJsonInspector] = useState(false)
   const [copied, setCopied] = useState(false)
@@ -102,8 +113,101 @@ export const SearchPlayground: React.FC = () => {
     "react server components streaming",
   ]
 
+  const requestForm = (
+    <form onSubmit={handleExecute}>
+      <div className="relative">
+        <div
+          className="absolute left-0 top-1/2 -translate-y-1/2 pl-1"
+          style={{ color: "var(--muted)" }}
+        >
+          {mode === "search" ? <Search className="size-5" /> : <FileText className="size-5" />}
+        </div>
+        <input
+          type={mode === "search" ? "text" : "url"}
+          value={mode === "search" ? query : fetchUrl}
+          onChange={(e) =>
+            mode === "search" ? setQuery(e.target.value) : setFetchUrl(e.target.value)
+          }
+          placeholder={
+            mode === "search"
+              ? "Search across all providers..."
+              : "Enter a URL to fetch and convert..."
+          }
+          className="w-full bg-transparent py-3 pl-9 pr-28 text-[15px] font-mono outline-none placeholder:text-[var(--muted)]"
+          style={{
+            color: "var(--text-strong)",
+            borderBottom: "1px solid var(--border-subtle)",
+          }}
+        />
+        <div className="absolute right-0 top-1/2 -translate-y-1/2">
+          <Button
+            type="submit"
+            disabled={isSearching || isFetching}
+            className="rounded-md px-4 py-1.5 text-[13px] font-medium text-white"
+            style={{ background: "var(--signal)" }}
+          >
+            {isSearching || isFetching ? "Executing..." : mode === "search" ? "Search" : "Fetch"}
+          </Button>
+        </div>
+      </div>
+
+      {mode === "search" && (
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-3 text-[13px] text-[var(--muted)]">
+          <span className="text-[var(--muted)]">Suggestions:</span>
+          {quickQueries.map((q, idx) => (
+            <button
+              key={idx}
+              type="button"
+              onClick={() => setQuery(q)}
+              className="hover:underline transition-colors hover:text-[var(--text-strong)]"
+            >
+              {q}
+            </button>
+          ))}
+        </div>
+      )}
+
+      <div className="flex flex-wrap items-center gap-4 mt-3 text-[13px] text-[var(--muted)]">
+        <div className="flex items-center gap-2">
+          <span>Provider:</span>
+          <select
+            value={selectedProviderId}
+            onChange={(e) => setSelectedProviderId(e.target.value)}
+            className="rounded px-2.5 py-1 text-[13px] outline-none bg-[var(--elevated)] text-[var(--text)] border border-[var(--border-subtle)]"
+          >
+            <option value="auto">Auto arbitration</option>
+            {eligibleProviders.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {mode === "search" && (
+          <div className="flex items-center gap-2">
+            <span>Depth:</span>
+            <SegmentedControl
+              options={SEARCH_DEPTH_OPTIONS}
+              value={SEARCH_DEPTH_LABELS[searchDepth]}
+              onChange={(value) =>
+                setSearchDepth(value.toLowerCase() as SearchDepth)
+              }
+              ariaLabel="Search depth"
+              minColumnWidth="72px"
+            />
+          </div>
+        )}
+      </div>
+    </form>
+  )
+
   return (
-    <div className="space-y-8">
+    <Tabs
+      value={mode}
+      onValueChange={(value) => switchMode(value as "search" | "fetch")}
+      className="block space-y-8"
+    >
       {/* Page heading + mode toggle */}
       <div className="flex flex-col sm:flex-row sm:items-baseline justify-between gap-4 pb-2 border-b border-[var(--border-subtle)]">
         <div>
@@ -114,33 +218,24 @@ export const SearchPlayground: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-4">
-          <div className="flex items-center gap-4">
-            <button
-              type="button"
-              onClick={() => switchMode("search")}
-              aria-label="Search mode"
-              aria-pressed={mode === "search"}
-              className="text-[13px] font-medium pb-1 transition-colors"
-              style={{
-                color: mode === "search" ? "var(--text-strong)" : "var(--muted)",
-                borderBottom: mode === "search" ? "2px solid var(--signal)" : "2px solid transparent",
-              }}
+          <TabsList variant="line">
+            <TabsTrigger
+              value="search"
+              id="playground-tab-search"
+              aria-controls="playground-panel-search"
+              className="text-[13px]"
             >
               Search
-            </button>
-            <button
-              type="button"
-              onClick={() => switchMode("fetch")}
-              aria-pressed={mode === "fetch"}
-              className="text-[13px] font-medium pb-1 transition-colors"
-              style={{
-                color: mode === "fetch" ? "var(--text-strong)" : "var(--muted)",
-                borderBottom: mode === "fetch" ? "2px solid var(--signal)" : "2px solid transparent",
-              }}
+            </TabsTrigger>
+            <TabsTrigger
+              value="fetch"
+              id="playground-tab-fetch"
+              aria-controls="playground-panel-fetch"
+              className="text-[13px]"
             >
               Fetch
-            </button>
-          </div>
+            </TabsTrigger>
+          </TabsList>
 
           <div className="flex items-center gap-4 text-[13px] text-[var(--muted)]">
             <span className="flex items-center gap-1.5">
@@ -157,113 +252,22 @@ export const SearchPlayground: React.FC = () => {
         </div>
       </div>
 
-      {/* Search input — Hero element */}
-      <form onSubmit={handleExecute}>
-        <div className="relative">
-          <div
-            className="absolute left-0 top-1/2 -translate-y-1/2 pl-1"
-            style={{ color: "var(--muted)" }}
-          >
-            {mode === "search" ? <Search className="size-5" /> : <FileText className="size-5" />}
-          </div>
-          <input
-            type={mode === "search" ? "text" : "url"}
-            value={mode === "search" ? query : fetchUrl}
-            onChange={(e) =>
-              mode === "search" ? setQuery(e.target.value) : setFetchUrl(e.target.value)
-            }
-            placeholder={
-              mode === "search"
-                ? "Search across all providers..."
-                : "Enter a URL to fetch and convert..."
-            }
-            className="w-full bg-transparent py-3 pl-9 pr-28 text-[15px] font-mono outline-none placeholder:text-[var(--muted)]"
-            style={{
-              color: "var(--text-strong)",
-              borderBottom: "1px solid var(--border-subtle)",
-            }}
-          />
-          <div className="absolute right-0 top-1/2 -translate-y-1/2">
-            <Button
-              type="submit"
-              disabled={isSearching || isFetching}
-              className="rounded-md px-4 py-1.5 text-[13px] font-medium text-white"
-              style={{ background: "var(--signal)" }}
-            >
-              {isSearching || isFetching ? "Executing..." : mode === "search" ? "Search" : "Fetch"}
-            </Button>
-          </div>
-        </div>
+      <TabsContent
+        value="search"
+        id="playground-panel-search"
+        aria-labelledby="playground-tab-search"
+        className="space-y-8"
+      >
+        {requestForm}
 
-        {/* Quick queries */}
-        {mode === "search" && (
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-3 text-[13px] text-[var(--muted)]">
-            <span className="text-[var(--muted)]">Suggestions:</span>
-            {quickQueries.map((q, idx) => (
-              <button
-                key={idx}
-                type="button"
-                onClick={() => setQuery(q)}
-                className="hover:underline transition-colors hover:text-[var(--text-strong)]"
-              >
-                {q}
-              </button>
-            ))}
-          </div>
+        {searchError && (
+          <p className="text-[13px]" style={{ color: "var(--status-danger)" }}>
+            {searchError}
+          </p>
         )}
 
-        {/* Controls row */}
-        <div className="flex flex-wrap items-center gap-4 mt-3 text-[13px] text-[var(--muted)]">
-          <div className="flex items-center gap-2">
-            <span>Provider:</span>
-            <select
-              value={selectedProviderId}
-              onChange={(e) => setSelectedProviderId(e.target.value)}
-              className="rounded px-2.5 py-1 text-[13px] outline-none bg-[var(--elevated)] text-[var(--text)] border border-[var(--border-subtle)]"
-            >
-              <option value="auto">Auto arbitration</option>
-              {eligibleProviders.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {mode === "search" && (
-            <div className="flex items-center gap-2">
-              <span>Depth:</span>
-              <div className="inline-flex rounded border border-[var(--border-subtle)] overflow-hidden">
-                {(["fast", "balanced", "deep"] as const).map((d) => (
-                  <button
-                    key={d}
-                    type="button"
-                    onClick={() => setSearchDepth(d)}
-                    aria-pressed={searchDepth === d}
-                    className="px-2.5 py-1 text-[13px] capitalize transition-colors"
-                    style={{
-                      background: searchDepth === d ? "var(--signal-muted)" : "transparent",
-                      color: searchDepth === d ? "var(--signal)" : "var(--muted)",
-                    }}
-                  >
-                    {d}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-      </form>
-
-      {/* Error display */}
-      {(searchError || fetchError) && (
-        <p className="text-[13px]" style={{ color: "var(--status-danger)" }}>
-          {searchError || fetchError}
-        </p>
-      )}
-
-      {/* Widescreen Results Layout: Results List + Inspector Pane */}
-      {mode === "search" && activeSearch && (
+        {/* Widescreen Results Layout: Results List + Inspector Pane */}
+        {activeSearch && (
         <div className="space-y-6 pt-2">
           {/* Telemetry bar */}
           <div className="flex flex-wrap items-center justify-between gap-4 text-[13px] py-2.5 px-3 rounded-lg bg-[var(--elevated)] border border-[var(--border-subtle)] text-[var(--muted)]">
@@ -463,10 +467,24 @@ export const SearchPlayground: React.FC = () => {
             </div>
           </div>
         </div>
-      )}
+        )}
+      </TabsContent>
 
-      {/* Fetch result — Widescreen 2-column layout */}
-      {mode === "fetch" && activeFetch && (
+      <TabsContent
+        value="fetch"
+        id="playground-panel-fetch"
+        aria-labelledby="playground-tab-fetch"
+        className="space-y-8"
+      >
+        {requestForm}
+        {fetchError && (
+          <p className="text-[13px]" style={{ color: "var(--status-danger)" }}>
+            {fetchError}
+          </p>
+        )}
+
+        {/* Fetch result — Widescreen 2-column layout */}
+        {activeFetch && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start pt-2">
           {/* Left Column: Metadata & Outline */}
           <div className="lg:col-span-4 p-4 rounded-lg border border-[var(--border-subtle)] bg-[var(--elevated)] space-y-4">
@@ -531,7 +549,8 @@ export const SearchPlayground: React.FC = () => {
             </pre>
           </div>
         </div>
-      )}
-    </div>
+        )}
+      </TabsContent>
+    </Tabs>
   )
 }

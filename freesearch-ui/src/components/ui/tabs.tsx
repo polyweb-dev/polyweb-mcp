@@ -2,7 +2,7 @@
 
 import { Tabs as TabsPrimitive } from "@base-ui/react/tabs"
 import { cva, type VariantProps } from "class-variance-authority"
-import { cn } from "cn"
+import { cn } from "@/lib/utils"
 
 function Tabs({
   className,
@@ -28,6 +28,7 @@ const tabsListVariants = cva(
     variants: {
       variant: {
         default: "bg-muted",
+        // Canonical variant for controls that switch between content views.
         line: "gap-1 bg-transparent",
       },
     },

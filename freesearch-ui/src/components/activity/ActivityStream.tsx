@@ -1,6 +1,7 @@
 import React, { useState } from "react"
 import { useFreeSearch } from "@/context/useFreeSearch"
 import { Modal } from "@/components/common/Modal"
+import { SegmentedControl } from "@/components/common/SegmentedControl"
 import {
   Table,
   TableBody,
@@ -13,7 +14,7 @@ import type { UsageEvent } from "@/types/freesearch"
 
 type OperationFilter = "all" | "search" | "fetch"
 
-const FILTERS: readonly OperationFilter[] = ["all", "search", "fetch"]
+const FILTER_OPTIONS = ["All", "Search", "Fetch"] as const
 
 /**
  * Operational activity telemetry. Request targets (queries and URLs) are never
@@ -38,24 +39,14 @@ export const ActivityStream: React.FC = () => {
           </p>
         </div>
 
-        <div className="flex items-center gap-1">
-          {FILTERS.map((op) => (
-            <button
-              key={op}
-              type="button"
-              onClick={() => setFilterOp(op)}
-              aria-pressed={filterOp === op}
-              className="px-3 py-1 rounded text-[13px] capitalize font-medium transition-colors"
-              style={{
-                background: filterOp === op ? "var(--signal-muted)" : "var(--elevated)",
-                color: filterOp === op ? "var(--signal)" : "var(--muted)",
-                border: `1px solid ${filterOp === op ? "var(--signal)" : "var(--border-subtle)"}`,
-              }}
-            >
-              {op}
-            </button>
-          ))}
-        </div>
+        <SegmentedControl
+          options={FILTER_OPTIONS}
+          value={filterOp[0].toUpperCase() + filterOp.slice(1)}
+          onChange={(value) =>
+            setFilterOp(value.toLowerCase() as OperationFilter)
+          }
+          ariaLabel="Activity operation filter"
+        />
       </div>
 
       {usageLoading ? (
