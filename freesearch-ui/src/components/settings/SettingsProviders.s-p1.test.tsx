@@ -94,13 +94,13 @@ const FETCH_SUPPORTED = ["Keenable", "Tavily", "Firecrawl", "You.com"] as const
 const EXPECTED_HEADERS = [
   "Provider",
   "Endpoint",
-  "Global",
+  "Health",
+  "Quota",
+  "p95",
+  "Test",
   "Search",
   "Fetch",
-  "Health",
-  "p95",
-  "Quota",
-  "Test",
+  "Global",
 ] as const
 
 let patchGate: Promise<Response> | null = null

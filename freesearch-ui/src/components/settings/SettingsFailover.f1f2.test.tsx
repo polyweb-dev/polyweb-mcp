@@ -378,7 +378,7 @@ describe("F1-2: cards stay stacked full-column with no caps of their own", () =>
       `Failover section must stay single-column; got ${JSON.stringify(sectionTokens)}`
     ).toEqual([])
 
-    const cards = [...section.querySelectorAll("div.rounded-lg.border")] as HTMLElement[]
+    const cards = Array.from(section.querySelectorAll("div.rounded-lg.border")) as HTMLElement[]
     expect(cards).toHaveLength(2)
     for (const card of cards) {
       expect(
@@ -441,7 +441,7 @@ describe("F1-4: 375px viewport has no horizontal overflow hazards", () => {
     await waitForProviders()
     await openFailover()
     const section = failoverSection()
-    const descendants = [section, ...[...section.querySelectorAll("*")]] as Element[]
+    const descendants = [section, ...Array.from(section.querySelectorAll("*"))] as Element[]
     const tokenList = descendants.flatMap((el) => classTokens(el))
     expect(
       tokenList.filter((t) => /^min-w-\[/.test(t)),
@@ -561,7 +561,7 @@ describe("F2-4: Cascade/Timeout card rows are untouched", () => {
     await openFailover()
     const card = cascadeCard()
     expect(classTokens(card)).toContain("divide-y")
-    const rows = [...card.children].filter((el) => el.textContent?.includes("Cascade depth") || el.textContent?.includes("Timeout budget"))
+    const rows = Array.from(card.children).filter((el) => el.textContent?.includes("Cascade depth") || el.textContent?.includes("Timeout budget"))
     expect(rows).toHaveLength(2)
     for (const row of rows) {
       const tokens = classTokens(row)
@@ -735,13 +735,13 @@ describe("G-1: Providers P1-FINAL merged table (inverted — 9 cols, min-w-1280)
     ).toEqual([
       "Provider",
       "Endpoint",
-      "Global",
+      "Health",
+      "Quota",
+      "p95",
+      "Test",
       "Search",
       "Fetch",
-      "Health",
-      "p95",
-      "Quota",
-      "Test",
+      "Global",
     ])
     const section = table.closest("section") as HTMLElement
     const sectionTokens = classTokens(section)

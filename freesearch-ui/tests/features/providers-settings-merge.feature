@@ -21,7 +21,7 @@ Feature: Providers settings merge (P1-FINAL)
   Scenario: Settings registry is one merged table with fleet columns
     When I navigate directly to "/settings"
     Then I should see the "Provider registry" heading
-    And the merged provider table should expose headers "Provider, Endpoint, Global, Search, Fetch, Health, p95, Quota, Test"
+    And the merged provider table should expose headers "Provider, Endpoint, Health, Quota, p95, Test, Search, Fetch, Global"
     And the merged provider table should show the "api.search.brave.com" endpoint
 
   Scenario: Fleet stat cards and capability filter are gone

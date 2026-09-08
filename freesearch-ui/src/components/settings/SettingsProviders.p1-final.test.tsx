@@ -90,13 +90,13 @@ const SEED_PROVIDER_NAMES = [
 const EXPECTED_MERGED_HEADERS = [
   "Provider",
   "Endpoint",
-  "Global",
+  "Health",
+  "Quota",
+  "p95",
+  "Test",
   "Search",
   "Fetch",
-  "Health",
-  "p95",
-  "Quota",
-  "Test",
+  "Global",
 ] as const
 
 let testGate: Promise<Response> | null = null

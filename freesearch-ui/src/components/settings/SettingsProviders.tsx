@@ -124,13 +124,13 @@ export const SettingsProviders: React.FC = () => {
 const MERGED_HEADERS = [
   "Provider",
   "Endpoint",
-  "Global",
+  "Health",
+  "Quota",
+  "p95",
+  "Test",
   "Search",
   "Fetch",
-  "Health",
-  "p95",
-  "Quota",
-  "Test",
+  "Global",
 ] as const
 
 interface ProviderRegistryRowProps {
@@ -191,13 +191,26 @@ const ProviderRegistryRow: React.FC<ProviderRegistryRowProps> = ({
         </span>
       </TableCell>
       <TableCell className="whitespace-nowrap px-3 py-2.5">
-        <span className="sr-only">Global</span>
-        <Switch
-          checked={provider.globalEnabled}
-          onChange={onToggleGlobal}
-          disabled={globalPending}
-          ariaLabel={`${provider.name} global routing`}
-        />
+        <HealthStatus status={health} />
+      </TableCell>
+      <TableCell className="whitespace-nowrap px-3 py-2.5 tnum">
+        {formatQuota(provider)}
+      </TableCell>
+      <TableCell className="whitespace-nowrap px-3 py-2.5 tnum">
+        {formatLatency(provider.latencyP95Ms)}
+      </TableCell>
+      <TableCell className="whitespace-nowrap px-3 py-2.5">
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          type="button"
+          onClick={onOpenTest}
+          disabled={testing}
+          aria-label={`${provider.name} test connection`}
+          title={`Test ${provider.name} connection`}
+        >
+          <RefreshCw aria-hidden="true" className={`size-3.5 ${testing ? "animate-spin" : ""}`} />
+        </Button>
       </TableCell>
       <TableCell className="whitespace-nowrap px-3 py-2.5">
         <OperationControl
@@ -220,26 +233,13 @@ const ProviderRegistryRow: React.FC<ProviderRegistryRowProps> = ({
         />
       </TableCell>
       <TableCell className="whitespace-nowrap px-3 py-2.5">
-        <HealthStatus status={health} />
-      </TableCell>
-      <TableCell className="whitespace-nowrap px-3 py-2.5 tnum">
-        {formatLatency(provider.latencyP95Ms)}
-      </TableCell>
-      <TableCell className="whitespace-nowrap px-3 py-2.5 tnum">
-        {formatQuota(provider)}
-      </TableCell>
-      <TableCell className="whitespace-nowrap px-3 py-2.5">
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          type="button"
-          onClick={onOpenTest}
-          disabled={testing}
-          aria-label={`${provider.name} test connection`}
-          title={`Test ${provider.name} connection`}
-        >
-          <RefreshCw aria-hidden="true" className={`size-3.5 ${testing ? "animate-spin" : ""}`} />
-        </Button>
+        <span className="sr-only">Global</span>
+        <Switch
+          checked={provider.globalEnabled}
+          onChange={onToggleGlobal}
+          disabled={globalPending}
+          ariaLabel={`${provider.name} global routing`}
+        />
       </TableCell>
     </TableRow>
   )

@@ -78,13 +78,13 @@ const SEED_PROVIDER_NAMES = [
 const EXPECTED_HEADERS = [
   "Provider",
   "Endpoint",
-  "Global",
+  "Health",
+  "Quota",
+  "p95",
+  "Test",
   "Search",
   "Fetch",
-  "Health",
-  "p95",
-  "Quota",
-  "Test",
+  "Global",
 ] as const
 const EXPECTED_RANKS = ["P1", "P2", "P3", "P4", "P5", "P6", "P7"] as const
 
