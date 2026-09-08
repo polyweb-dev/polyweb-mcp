@@ -59,7 +59,7 @@ export const SettingsProviders: React.FC = () => {
   }
 
   return (
-    <section className="space-y-4 max-w-4xl">
+    <section className="space-y-4 w-full max-w-none">
       <div>
         <h3 className="text-[var(--text-strong)]">Provider registry</h3>
         <p className="text-[13px] text-[var(--muted)] mt-0.5">
@@ -67,7 +67,7 @@ export const SettingsProviders: React.FC = () => {
         </p>
       </div>
 
-      <div className="overflow-hidden rounded-lg border border-[var(--border-subtle)]">
+      <div className="w-full max-w-none overflow-hidden rounded-lg border border-[var(--border-subtle)]">
         <Table className="min-w-[880px] text-[13px]">
           <TableHeader>
             <TableRow className="border-b border-[var(--border-subtle)] bg-[var(--elevated)] hover:bg-[var(--elevated)]">
