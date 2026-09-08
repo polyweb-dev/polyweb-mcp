@@ -18,3 +18,4 @@ coverage/
 *.db
 *.pnpm-store/
 .runtime-tmp/
+FEEDBACK/
