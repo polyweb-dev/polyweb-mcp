@@ -63,6 +63,8 @@ export const SearchPlayground: React.FC = () => {
   const eligibleProviders = providers.filter((provider) =>
     isEligibleForOperation(provider, mode)
   )
+  const hasSearchContent =
+    activeSearch !== null || isSearching || searchError !== null
 
   const handleExecute = async (e?: React.FormEvent) => {
     if (e) e.preventDefault()
@@ -250,7 +252,17 @@ export const SearchPlayground: React.FC = () => {
       </div>
 
       <PillTabsPanel value="search" className="space-y-8">
-        {requestForm}
+        <div
+          data-testid="search-layout"
+          data-state={hasSearchContent ? "docked" : "hero"}
+          className={`transition-all duration-300 ease-out motion-reduce:transition-none ${
+            hasSearchContent
+              ? "top-docked"
+              : "mx-auto flex min-h-[55vh] max-w-3xl flex-col justify-center"
+          }`}
+        >
+          {requestForm}
+        </div>
 
         {searchError && (
           <p className="text-[13px]" style={{ color: "var(--status-danger)" }}>
