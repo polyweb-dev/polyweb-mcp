@@ -143,7 +143,7 @@ export const SearchPlayground: React.FC = () => {
               ? "Search across all providers..."
               : "Enter a URL to fetch and convert..."
           }
-          className="w-full bg-transparent py-3 pl-9 pr-28 text-[15px] font-mono outline-none placeholder:text-[var(--muted)]"
+          className="w-full bg-transparent py-3 pl-9 pr-32 text-[15px] font-mono outline-none placeholder:text-[var(--muted)]"
           style={{
             color: "var(--text-strong)",
             borderBottom: "1px solid var(--border-subtle)",
@@ -153,9 +153,10 @@ export const SearchPlayground: React.FC = () => {
           <Button
             type="submit"
             disabled={isSearching || isFetching}
-            className="rounded-md px-4 py-1.5 text-[13px] font-medium text-white"
+            className="inline-flex items-center gap-2 rounded-md px-5 py-2 text-[13px] font-medium text-white"
             style={{ background: "var(--signal)" }}
           >
+            {mode === "search" && <Search aria-hidden="true" className="size-3.5" />}
             {isSearching || isFetching ? "Executing..." : mode === "search" ? "Search" : "Fetch"}
           </Button>
         </div>
