@@ -72,15 +72,17 @@ describe("RoutingEngine (live backend)", () => {
     }
   })
 
-  it("reports eligibility with backend-tolerant counts", async () => {
+  it("R1: header cluster deleted — no page-level failover/count claims (bar owns status)", async () => {
     renderRouting()
+    // Wait for a loaded proof (strategy cards need providers + routing config)
+    // so absence is a real deletion signal, not a loading artifact.
     await waitFor(() => {
-      expect(screen.getByText(/Failover active/)).toBeInTheDocument()
+      expect(screen.getByRole("button", { name: /^Strict priority/ })).toBeInTheDocument()
     })
-    expect(screen.getByText(/\d+ of \d+ providers eligible/)).toBeInTheDocument()
-    const activeStatus = screen.getByText("Failover active", { exact: true })
-    const statusRegion = activeStatus.parentElement?.parentElement ?? activeStatus
-    expect(statusRegion.textContent).not.toContain("·")
+    expect(screen.queryByText("Failover active", { exact: true })).toBeNull()
+    expect(screen.queryByText("Failover inactive", { exact: true })).toBeNull()
+    expect(screen.queryByText(/\d+ of \d+ providers eligible/)).toBeNull()
+    expect(screen.queryByText(/Fallback/)).toBeNull()
   })
 
   it("updates the routing preset when a strategy card is selected", async () => {
@@ -265,8 +267,13 @@ describe("RoutingEngine (live backend)", () => {
     await act(async () => {
       gate.resolve(ok(routingConfigFixture()))
     })
+    // R1: header cluster deleted — claims stay absent after resolve too.
+    // Status lives in the bottom StatusBar (covered by StatusBar.r1).
     await waitFor(() => {
-      expect(screen.getByText("Failover active", { exact: true })).toBeInTheDocument()
+      expect(screen.getByRole("button", { name: /^Strict priority/ })).toBeInTheDocument()
     })
+    expect(screen.queryByText("Failover active", { exact: true })).toBeNull()
+    expect(screen.queryByText("Failover inactive", { exact: true })).toBeNull()
+    expect(screen.queryByText(/\d+ of \d+ providers eligible/)).toBeNull()
   })
 })

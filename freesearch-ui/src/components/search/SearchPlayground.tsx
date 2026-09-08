@@ -31,7 +31,6 @@ function isEligibleForOperation(
 export const SearchPlayground: React.FC = () => {
   const {
     providers,
-    fallbackConfig,
     activeSearch,
     activeFetch,
     isSearching,
@@ -304,25 +303,7 @@ export const SearchPlayground: React.FC = () => {
           </p>
         </div>
 
-        <div className="ml-auto flex flex-wrap items-center justify-end gap-4">
-          <div className="flex items-center gap-4 text-[13px] text-[var(--muted)]">
-            <span className="flex items-center gap-1.5">
-              <span
-                className="inline-block w-1.5 h-1.5 rounded-full"
-                style={{ background: "var(--status-healthy)" }}
-              />
-              <span className="tnum">{eligibleProviders.length} providers</span>
-            </span>
-            <span>
-              Fallback {fallbackConfig.enabled ? "active" : "disabled"}
-            </span>
-          </div>
-          <span
-            aria-hidden="true"
-            className="hidden h-5 w-px bg-[var(--border-subtle)] sm:block"
-          />
-          <PillTabsList className="ml-auto" />
-        </div>
+        <PillTabsList className="ml-auto" />
       </div>
 
       <PillTabsPanel value="search" className="space-y-8">

@@ -2,6 +2,7 @@ import type { ReactNode } from "react"
 import { Navigate, Route, Routes } from "react-router"
 import { FreeSearchProvider } from "@/context/FreeSearchContext"
 import { Sidebar, type TabId } from "@/components/layout/Sidebar"
+import { StatusBar } from "@/components/layout/StatusBar"
 import { SearchPlayground } from "@/components/search/SearchPlayground"
 import { ProviderMatrix } from "@/components/providers/ProviderMatrix"
 import { RoutingEngine } from "@/components/routing/RoutingEngine"
@@ -31,15 +32,19 @@ function DashboardContent() {
     >
       <Sidebar />
 
-      <main className="min-w-0 flex-1 px-6 py-8 pt-16 sm:px-8 md:pt-8 lg:px-12">
-        <Routes>
-          <Route path="/" element={<Navigate to="/playground" replace />} />
-          {workspaceRoutes.map(({ id, path, element }) => (
-            <Route key={id} path={path} element={element} />
-          ))}
-          <Route path="*" element={<Navigate to="/playground" replace />} />
-        </Routes>
-      </main>
+      <div className="flex min-w-0 flex-1 flex-col">
+        <main className="min-w-0 flex-1 px-6 py-8 pt-16 sm:px-8 md:pt-8 lg:px-12">
+          <Routes>
+            <Route path="/" element={<Navigate to="/playground" replace />} />
+            {workspaceRoutes.map(({ id, path, element }) => (
+              <Route key={id} path={path} element={element} />
+            ))}
+            <Route path="*" element={<Navigate to="/playground" replace />} />
+          </Routes>
+        </main>
+        {/* StatusBar owns its sticky bottom-0 in-flow placement. */}
+        <StatusBar />
+      </div>
 
       <ToastContainer />
     </div>

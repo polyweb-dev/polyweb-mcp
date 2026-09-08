@@ -9,7 +9,6 @@ import { ProviderRanks } from "./ProviderRanks"
 import { ResiliencePolicy } from "./ResiliencePolicy"
 import { RouteSimulator } from "./RouteSimulator"
 import { RoutingStrategy } from "./RoutingStrategy"
-import { getEligibleProviders } from "./routingUtils"
 
 const ROUTING_VIEW_OPTIONS = [
   { value: "strategy", label: "Strategy" },
@@ -20,14 +19,7 @@ const ROUTING_VIEW_OPTIONS = [
 
 /** Routing workbench shell for arbitration and resilience controls. */
 export const RoutingEngine: React.FC = () => {
-  const {
-    providers,
-    fallbackConfig,
-    routingPreset,
-    routingLoading,
-    routingError,
-  } = useFreeSearch()
-  const eligible = getEligibleProviders(providers, "search", routingPreset)
+  const { routingError } = useFreeSearch()
 
   return (
     <PillTabs
@@ -45,30 +37,7 @@ export const RoutingEngine: React.FC = () => {
           </p>
         </div>
 
-        <div className="ml-auto flex flex-wrap items-center justify-end gap-4">
-          <div className="flex items-center gap-4 text-[13px]">
-            <span
-              className="font-medium"
-              style={{
-                color: fallbackConfig.enabled
-                  ? "var(--status-healthy)"
-                  : "var(--muted)",
-              }}
-            >
-              {!routingLoading && !routingError
-                ? `Failover ${fallbackConfig.enabled ? "active" : "inactive"}`
-                : null}
-            </span>
-            <span className="tnum text-[var(--muted)]">
-              {eligible.length} of {providers.length} providers eligible
-            </span>
-          </div>
-          <span
-            aria-hidden="true"
-            className="hidden h-5 w-px bg-[var(--border-subtle)] lg:block"
-          />
-          <PillTabsList className="ml-auto" />
-        </div>
+        <PillTabsList className="ml-auto" />
       </div>
 
       {routingError && (
