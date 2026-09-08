@@ -46,7 +46,7 @@ export const SettingsKeyVault: React.FC = () => {
   }
 
   return (
-    <section className="space-y-4 max-w-4xl">
+    <section className="space-y-4 w-full max-w-none">
       <div>
         <h3 className="text-[var(--text-strong)]">Key vault</h3>
         <p className="text-[13px] text-[var(--muted)] mt-0.5">
@@ -54,7 +54,7 @@ export const SettingsKeyVault: React.FC = () => {
         </p>
       </div>
 
-      <div className="grid gap-3">
+      <div className="grid gap-3 sm:grid-cols-2 items-start">
         {providersLoading && providers.length === 0 ? (
           <div
             className="p-4 rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] flex items-center justify-between gap-3"

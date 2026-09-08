@@ -512,8 +512,10 @@ describe("S-P4-5: no regression — S-P1 table, S-P2 ranks, S-P3 buttons, Settin
     expect(norm(indexCssSource).includes("oklch(")).toBe(false)
   })
 
-  it("scope: sibling settings sections keep their caps (Keys/Failover untouched)", () => {
-    expect(keyVaultSource).toMatch(/max-w-4xl/)
+  it("scope: Keys spans full width (K1) while Failover keeps its cap", () => {
+    expect(keyVaultSource).not.toMatch(/max-w-4xl/)
+    expect(keyVaultSource).toMatch(/w-full/)
+    expect(keyVaultSource).toMatch(/max-w-none/)
     expect(failoverSource).toMatch(/max-w-3xl/)
   })
 
