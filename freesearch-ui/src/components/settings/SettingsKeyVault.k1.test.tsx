@@ -84,10 +84,9 @@ const keyVaultSource = readFileSync(path.resolve(testDir, "./SettingsKeyVault.ts
 const providersSource = readFileSync(path.resolve(testDir, "./SettingsProviders.tsx"), "utf8")
 const failoverSource = readFileSync(path.resolve(testDir, "./SettingsFailover.tsx"), "utf8")
 const indexCssSource = readFileSync(path.resolve(testDir, "../../index.css"), "utf8")
-const providerMatrixSource = readFileSync(
-  path.resolve(testDir, "../providers/ProviderMatrix.tsx"),
-  "utf8"
-)
+// P1-FINAL (DELETE collateral, NOT a regression): ProviderMatrix.tsx is
+// DELETED by the merge, so no test may read it at module scope (the read
+// would throw Green and fail the whole file on collection).
 
 const norm = (value: string): string => value.toLowerCase().replace(/\s+/g, "")
 
@@ -609,7 +608,7 @@ describe("K1-5: key vault behavior contract", () => {
 // ---------------------------------------------------------------------------
 
 describe("K1-6: no regression — Providers S-P4, Failover cap, pills, theme, scope", () => {
-  it("Providers S-P4 intact: registry section + frame keep w-full max-w-none with overflow-hidden", async () => {
+  it("Providers P1-FINAL intact: merged registry section + frame keep w-full max-w-none with overflow-hidden", async () => {
     renderSettings()
     await waitForProviders()
     const table = screen.getByRole("table")
@@ -624,7 +623,7 @@ describe("K1-6: no regression — Providers S-P4, Failover cap, pills, theme, sc
     expect(frameTokens).toContain("w-full")
     expect(frameTokens).toContain("max-w-none")
     expect(frameTokens).toContain("overflow-hidden")
-    expect(table.className).toMatch(/min-w-\[880px\]/)
+    expect(table.className).toMatch(/min-w-\[1280px\]/)
     expect(providersSource).toContain("w-full max-w-none")
   })
 
@@ -671,11 +670,10 @@ describe("K1-6: no regression — Providers S-P4, Failover cap, pills, theme, sc
     expect(norm(indexCssSource).includes("oklch(")).toBe(false)
   })
 
-  it("NO page merge: SettingsKeyVault never imports ProviderMatrix or sibling sections", () => {
+  it("P1-FINAL scope: SettingsKeyVault never imports the retired ProviderMatrix or sibling sections", () => {
     expect(keyVaultSource).not.toMatch(/ProviderMatrix/)
     expect(keyVaultSource).not.toMatch(/SettingsProviders/)
     expect(keyVaultSource).not.toMatch(/SettingsFailover/)
-    expect(providerMatrixSource).not.toContain("SettingsKeyVault")
   })
 
   it("freesearch-ui ONLY: SettingsKeyVault imports no backend/python paths or absolute backend literals", () => {

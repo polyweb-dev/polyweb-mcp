@@ -14,7 +14,7 @@ import type { TabId } from "./Sidebar"
  * Blessed churn (NOT weakening): the C3-REWORK AC-SB-2 no-router/button-only
  * pins are VOID. Sidebar nav items are NavLinks (role=link) bound to the
  * route table; navigation changes the URL; react-router is a dependency.
- *   - `getByRole("button")` -> `getByRole("link")` for the six nav items;
+ *   - `getByRole("button")` -> `getByRole("link")` for the five nav items;
  *   - nav controls (Collapse/Expand/Open/Close) stay plain buttons;
  *   - aria-current=page preserved (exactly one, router-driven);
  *   - drawer closes on navigate; collapse/drawer/persistence untouched.
@@ -25,8 +25,17 @@ import type { TabId } from "./Sidebar"
  * AC-SB-7 (drawer + scrim + Esc + focus return), AC-SB-8 (token purity),
  * AC-SB-9 (persistence). "TabId unchanged" — quotas still renders at /usage.
  *
- * Route table (App.tsx): / -> /playground, /playground, /providers,
- * /routing, /usage (quotas), /activity, /settings, * -> /playground.
+ * P1-FINAL (blessed inversion, NOT a regression): the standalone Providers
+ * page is retired into the Settings Providers tab. The sidebar exposes FIVE
+ * workspace links (Playground/Routing/Usage/Activity/Settings); the
+ * "providers" TabId, nav item, TAB_PATHS entry, and /providers href are gone;
+ * /providers redirects to /settings (pinned in UrlRouting.test.tsx,
+ * UrlRoutingContract.test.ts, AppSidebarShell.test.tsx, and
+ * SettingsProviders.p1-final.test.tsx).
+ *
+ * Route table (App.tsx): / -> /playground, /playground,
+ * /routing, /usage (quotas), /activity, /settings, /providers -> /settings
+ * redirect, * -> /playground.
  */
 
 const testDir = import.meta.dirname
@@ -44,7 +53,6 @@ const norm = (value: string): string => value.toLowerCase().replace(/\s+/g, "")
 
 const EXPECTED_NAV: Array<{ label: string; id: TabId; href: string }> = [
   { label: "Playground", id: "playground", href: "/playground" },
-  { label: "Providers", id: "providers", href: "/providers" },
   { label: "Routing", id: "routing", href: "/routing" },
   { label: "Usage", id: "quotas", href: "/usage" },
   { label: "Activity", id: "activity", href: "/activity" },
@@ -113,7 +121,6 @@ describe("AC-SB-1: Sidebar module contract", () => {
     expect(sidebarSource).toMatch(/export\s+(type|interface)\s+TabId/)
     for (const id of [
       "playground",
-      "providers",
       "routing",
       "quotas",
       "activity",
@@ -123,11 +130,16 @@ describe("AC-SB-1: Sidebar module contract", () => {
     }
   })
 
-  it("declares navItems with all six tab ids", () => {
+  it("declares navItems with all five tab ids (P1-FINAL: no providers)", () => {
     expect(sidebarSource).toMatch(/navItems/)
     for (const { id } of EXPECTED_NAV) {
       expect(sidebarSource).toContain(`"${id}"`)
     }
+  })
+
+  it("P1-FINAL: drops the providers TabId entirely (page retired)", () => {
+    expect(sidebarSource).not.toContain('"providers"')
+    expect(sidebarSource).not.toContain('"/providers"')
   })
 
   it("declares prop-less routing with optional collapse controls", () => {
@@ -155,14 +167,14 @@ describe("AC-SB-1: Sidebar module contract", () => {
   it("renders a vector icon inside every nav link (asserted structurally, never by snapshot)", () => {
     renderSidebar()
     const links = within(primaryNav()).getAllByRole("link")
-    expect(links).toHaveLength(6)
+    expect(links).toHaveLength(5)
     for (const link of links) {
       expect(link.querySelector("svg")).not.toBeNull()
     }
   })
 })
 
-describe("AC-SB-2 (C4): landmark + six router links, URL changes on nav", () => {
+describe("AC-SB-2 (C4, P1-FINAL): landmark + five router links, URL changes on nav", () => {
   it("renders a sticky full-height aside landmark", () => {
     renderSidebar()
     const aside = asideEl()
@@ -180,13 +192,13 @@ describe("AC-SB-2 (C4): landmark + six router links, URL changes on nav", () => 
     ).toHaveLength(1)
   })
 
-  it("renders exactly six nav links in order with exact accessible names", () => {
+  it("renders exactly five nav links in order with exact accessible names", () => {
     renderSidebar()
     const links = within(primaryNav()).getAllByRole("link")
-    expect(links).toHaveLength(6)
+    expect(links).toHaveLength(5)
     expect(
       links.map((l) => l.getAttribute("aria-label") ?? l.textContent?.trim())
-    ).toEqual(["Playground", "Providers", "Routing", "Usage", "Activity", "Settings"])
+    ).toEqual(["Playground", "Routing", "Usage", "Activity", "Settings"])
     for (const link of links) {
       expect(link.tagName).toBe("A")
       expect(link.getAttribute("href")).toMatch(/^\//)
@@ -200,8 +212,9 @@ describe("AC-SB-2 (C4): landmark + six router links, URL changes on nav", () => 
         within(primaryNav()).getByRole("link", { name: label, exact: true })
       ).toHaveAttribute("href", href)
     }
-    // No legacy /quotas route leaks into the sidebar.
+    // No legacy /quotas or retired /providers route leaks into the sidebar.
     expect(asideEl().querySelector('a[href="/quotas"]')).toBeNull()
+    expect(asideEl().querySelector('a[href="/providers"]')).toBeNull()
   })
 
   it("every nav link is reachable by accessible name (never icon-only query)", () => {
@@ -235,7 +248,7 @@ describe("AC-SB-2 (C4): landmark + six router links, URL changes on nav", () => 
   it("primary nav contains links, not buttons (controls stay buttons)", () => {
     renderSidebar()
     const nav = primaryNav()
-    expect(within(nav).getAllByRole("link")).toHaveLength(6)
+    expect(within(nav).getAllByRole("link")).toHaveLength(5)
     expect(within(nav).queryByRole("button")).not.toBeInTheDocument()
     // Aside-level controls remain plain buttons outside the Primary nav.
     expect(
@@ -257,7 +270,6 @@ describe("AC-SB-2 (C4): landmark + six router links, URL changes on nav", () => 
     }
     expect(seen).toEqual([
       "/playground",
-      "/providers",
       "/routing",
       "/usage",
       "/activity",
@@ -285,7 +297,7 @@ describe("AC-SB-3: single active indicator tracks the router", () => {
         exact: true,
       })
     ).toHaveAttribute("aria-current", "page")
-    for (const label of ["Providers", "Routing", "Usage", "Activity", "Settings"]) {
+    for (const label of ["Routing", "Usage", "Activity", "Settings"]) {
       expect(
         within(primaryNav()).getByRole("link", { name: label, exact: true })
       ).not.toHaveAttribute("aria-current")
@@ -344,7 +356,7 @@ describe("AC-SB-4: keyboard focus ring + reduced-motion", () => {
   it("every nav link exposes a signal focus ring", () => {
     renderSidebar()
     const links = within(primaryNav()).getAllByRole("link")
-    expect(links).toHaveLength(6)
+    expect(links).toHaveLength(5)
     for (const link of links) {
       expect(link.className).toMatch(/focus-visible:/)
       expect(link.className.toLowerCase()).toMatch(/signal|ring/)
@@ -363,7 +375,7 @@ describe("AC-SB-4: keyboard focus ring + reduced-motion", () => {
   it("nav links stay keyboard-focusable", () => {
     renderSidebar()
     const links = within(primaryNav()).getAllByRole("link")
-    expect(links).toHaveLength(6)
+    expect(links).toHaveLength(5)
     for (const link of links) {
       expect(link.tagName).toBe("A")
       expect(link.hasAttribute("disabled")).toBe(false)
@@ -389,7 +401,7 @@ describe("AC-SB-5: collapsed w-16 icon rail", () => {
   it("collapsed links keep exact aria-label + title accessible names", () => {
     renderSidebar({ collapsed: true, onCollapsedChange: () => {} })
     const links = within(primaryNav()).getAllByRole("link")
-    expect(links).toHaveLength(6)
+    expect(links).toHaveLength(5)
     const seen: string[] = []
     for (const { label } of EXPECTED_NAV) {
       const link = within(primaryNav()).getByRole("link", {
@@ -402,7 +414,6 @@ describe("AC-SB-5: collapsed w-16 icon rail", () => {
     }
     expect(seen).toEqual([
       "Playground",
-      "Providers",
       "Routing",
       "Usage",
       "Activity",

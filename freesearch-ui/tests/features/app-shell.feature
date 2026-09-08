@@ -12,9 +12,6 @@ Feature: Dashboard application shell
     When I follow the "Playground" sidebar link
     Then I should see the "Search Playground" heading
     And the page URL path should be "/playground"
-    When I follow the "Providers" sidebar link
-    Then I should see the "Providers" heading
-    And the page URL path should be "/providers"
     When I follow the "Routing" sidebar link
     Then I should see the "Routing" heading
     And the page URL path should be "/routing"

@@ -14,7 +14,6 @@ import { Header } from "@/components/layout/Header"
 import { SearchPlayground } from "@/components/search/SearchPlayground"
 import { RoutingEngine } from "@/components/routing/RoutingEngine"
 import { SettingsView } from "@/components/settings/SettingsView"
-import { ProviderMatrix } from "@/components/providers/ProviderMatrix"
 import { tabsListVariants } from "@/components/ui/tabs"
 import { installFetchStub, ok, err } from "@/test/fetchMock"
 import {
@@ -374,44 +373,13 @@ describe("C2-REWORK AC-C2R-4: no filter/Header regression", () => {
     ).toHaveLength(0)
   })
 
-  it("ProviderMatrix filter stays a SegmentedControl group (untouched)", async () => {
-    const user = userEvent.setup()
-    renderWithBackend(<ProviderMatrix />)
-    await waitFor(() => {
-      expect(screen.getByText("Brave Search", { exact: true })).toBeInTheDocument()
-    })
+  // P1-FINAL (blessed inversion, NOT a regression): the fleet capability
+  // filter (All/Search/Fetch/Keyless) is DROPPED with the Providers page
+  // merge — its SegmentedControl group no longer exists anywhere, so the
+  // filter-preservation case is RETIRED. Filter narrowing is covered by the
+  // merged Settings registry suite (SettingsProviders.p1-final.test.tsx).
 
-    const group = screen
-      .getAllByRole("group")
-      .find(
-        (g) =>
-          within(g).queryByRole("button", { name: /^all$/i }) &&
-          within(g).queryByRole("button", { name: /^keyless$/i })
-      )
-    expect(group, "provider filter group must exist").toBeDefined()
-    expect(group).toHaveAccessibleName()
-    expect(
-      ["all", "search", "fetch", "keyless"].map(
-        (label) =>
-          within(group!).getByRole("button", {
-            name: new RegExp(`^${label}$`, "i"),
-          }).getAttribute("aria-pressed")
-      )
-    ).toEqual(["true", "false", "false", "false"])
-    expect(within(group!).queryByRole("tab")).not.toBeInTheDocument()
-
-    await user.click(
-      within(group!).getByRole("button", { name: /^fetch$/i })
-    )
-    await waitFor(() => {
-      expect(
-        screen.getAllByRole("button", { name: /^(Trip|Reset)$/ })
-      ).toHaveLength(4)
-    })
-    expect(screen.queryByText("Brave Search", { exact: true })).not.toBeInTheDocument()
-  })
-
-  it("Header compatibility shim exposes six router links and zero tab roles", async () => {
+  it("Header compatibility shim exposes five router links and zero tab roles", async () => {
     const user = userEvent.setup()
 
     function LocationProbe() {
@@ -425,14 +393,13 @@ describe("C2-REWORK AC-C2R-4: no filter/Header regression", () => {
       </MemoryRouter>
     )
 
-    for (const label of [
-      "Playground",
-      "Providers",
-      "Routing",
-      "Usage",
-      "Activity",
-      "Settings",
-    ]) {
+    // P1-FINAL: standalone Providers page retired — five workspace links.
+    const headerNav = screen.getByRole("navigation", { name: "Primary" })
+    expect(within(headerNav).getAllByRole("link")).toHaveLength(5)
+    expect(
+      within(headerNav).queryByRole("link", { name: "Providers", exact: true })
+    ).not.toBeInTheDocument()
+    for (const label of ["Playground", "Routing", "Usage", "Activity", "Settings"]) {
       expect(screen.getByRole("link", { name: label, exact: true })).toBeInTheDocument()
     }
     expect(screen.queryByRole("tab")).not.toBeInTheDocument()

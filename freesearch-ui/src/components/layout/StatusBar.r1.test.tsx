@@ -735,7 +735,7 @@ describe("AC-R1-10 regressions: ComposerShell, layouts, fetching, shell", () => 
     expect(playgroundSource).toContain("runFetch")
   })
 
-  it("app shell intact: aside + main, six links, no legacy header", () => {
+  it("app shell intact: aside + main, five links (P1-FINAL: no providers page), no legacy header", () => {
     renderAppAt("/playground")
     expect(screen.getByTestId("status-bar")).toBeInTheDocument()
     expect(document.querySelector("aside")).not.toBeNull()
@@ -743,6 +743,6 @@ describe("AC-R1-10 regressions: ComposerShell, layouts, fetching, shell", () => 
     expect(document.querySelector("header")).toBeNull()
     expect(
       within(screen.getByRole("navigation", { name: "Primary" })).getAllByRole("link")
-    ).toHaveLength(6)
+    ).toHaveLength(5)
   })
 })

@@ -16,11 +16,16 @@ import {
  *
  * Component-level contract for the approved plan:
  *   main.tsx BrowserRouter; App.tsx Routes table
- *   (/ /playground /providers /routing /usage /activity /settings
- *   + * catch-all -> /playground; quotas maps to /usage, TabId unchanged);
+ *   (/ /playground /routing /usage /activity /settings
+ *   + /providers -> /settings redirect + * catch-all -> /playground;
+ *   quotas maps to /usage, TabId unchanged, providers TabId retired);
  *   Sidebar NavLink (role link, aria-current preserved, drawer-close on
  *   navigate, active from router). PillTabs + views + persistence + theme
  *   untouched. freesearch-ui/ ONLY.
+ *
+ * P1-FINAL (blessed inversion, NOT a regression): the standalone Providers
+ * page is retired into the Settings Providers tab — five workspace routes,
+ * no /providers view, legacy /providers redirects to /settings.
  *
  * AC mapping:
  *   C4-1  router install + URL changes on nav (link click moves location).
@@ -95,7 +100,6 @@ async function expectView(label: string, heading: string, path: string) {
 
 const ROUTE_TABLE: Array<{ link: string; heading: string; path: string }> = [
   { link: "Playground", heading: "Search Playground", path: "/playground" },
-  { link: "Providers", heading: "Providers", path: "/providers" },
   { link: "Routing", heading: "Routing", path: "/routing" },
   { link: "Usage", heading: "Usage", path: "/usage" },
   { link: "Activity", heading: "Activity", path: "/activity" },
@@ -115,8 +119,8 @@ describe("C4-1: router install + URL changes on nav", () => {
   it("clicking a sidebar link moves the router location and swaps the view", async () => {
     renderAt("/playground")
     await expectView("Playground", "Search Playground", "/playground")
-    await followLink("Providers")
-    await expectView("Providers", "Providers", "/providers")
+    await followLink("Routing")
+    await expectView("Routing", "Routing", "/routing")
   })
 
   it("every sidebar link advertises its exact route href", () => {
@@ -151,6 +155,16 @@ describe("C4-2: route table + / redirect + catch-all", () => {
     expect(testPath()).toBe("/playground")
   })
 
+  it("legacy /providers redirects to the merged Settings registry", async () => {
+    renderAt("/providers")
+    await waitFor(() => {
+      expect(
+        screen.getByRole("heading", { name: "Settings" })
+      ).toBeInTheDocument()
+    })
+    expect(testPath()).toBe("/settings")
+  })
+
   it("there is no /quotas route — quotas renders at /usage", async () => {
     renderAt("/quotas")
     await waitFor(() => {
@@ -174,14 +188,14 @@ describe("C4-3: deep links render their view", () => {
 
 describe("C4-4: navigation restores view + exactly one current marker", () => {
   it("sequential navigation keeps view, URL, and marker in sync", async () => {
-    renderAt("/providers")
-    await expectView("Providers", "Providers", "/providers")
+    renderAt("/settings")
+    await expectView("Settings", "Settings", "/settings")
     await followLink("Routing")
     await expectView("Routing", "Routing", "/routing")
     await followLink("Usage")
     await expectView("Usage", "Usage", "/usage")
-    await followLink("Providers")
-    await expectView("Providers", "Providers", "/providers")
+    await followLink("Settings")
+    await expectView("Settings", "Settings", "/settings")
   })
 })
 
@@ -303,9 +317,9 @@ describe("C4-7: no regression — shell, providers, views", () => {
     expect(document.querySelector("header")).toBeNull()
   })
 
-  it("Providers view still renders provider rows from the stubbed backend", async () => {
+  it("legacy /providers URL redirects into the merged Settings registry", async () => {
     renderAt("/providers")
-    await expectView("Providers", "Providers", "/providers")
+    await expectView("Settings", "Settings", "/settings")
     await waitFor(() => {
       expect(screen.getByText("Brave Search")).toBeInTheDocument()
     })

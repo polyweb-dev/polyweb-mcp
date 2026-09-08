@@ -29,25 +29,27 @@ import {
  *   all contracts preserved (priority, Switch, SegmentedControl On/Off,
  *   Not-supported, Test states). NO page merge (P1 separate). freesearch-ui/ ONLY.
  *
- * AC mapping:
+ * AC mapping (P1-FINAL: merged 10-column table):
  *   S-P1-1  registry renders as ui/table with columns
- *           Provider|Global|Search|Fetch|Test in order (Table/Header/Body/Row/
- *           Head/Cell reuse as-is; flex-wrap list gone).
+ *           Provider|Endpoint|Global|Search|Fetch|Health|p95|Quota|Breaker|Test
+ *           in order (Table/Header/Body/Row/Head/Cell reuse as-is;
+ *           flex-wrap list gone).
  *   S-P1-2  per-column x-position equality across 7 rows (<=1px): single shared
- *           <table>, uniform 5-cell rows, nowrap cells. jsdom has no layout
+ *           <table>, uniform 10-cell rows, nowrap cells. jsdom has no layout
  *           engine so getBoundingClientRect() is 0 there; the executable proxy
  *           is the structural invariant (shared table + identical column index
  *           + whitespace-nowrap) PLUS a literal left-delta measurement gated on
  *           the table existing. Real sub-pixel proof needs a browser (Playwright).
  *   S-P1-3  Global-off placeholder no-shift: OperationControl never returns
  *           null — unsupported+globally-disabled renders a placeholder cell so
- *           Search/Fetch/Test columns never collapse (Brave/Exa/Parallel fetch).
+ *           Search/Fetch columns never collapse (Brave/Exa/Parallel fetch).
  *   S-P1-4  375px scroll-no-wrap: table container scrolls horizontally
  *           (overflow-x-auto) with nowrap cells; no wrapping, no flex-wrap.
  *   S-P1-5  contracts preserved: priority P1..P7 + up/down boundaries, global
  *           Switch (aria-label + PATCH + pending disabled), SegmentedControl
  *           On/Off (aria-label + aria-pressed + local-only), Not-supported guard,
- *           Test states (Test/Testing... + aria-label + POST).
+ *           icon test button per row (aria-label + modal open, zero fetch) +
+ *           modal Test states (Test/Testing... + POST).
  *   S-P1-6  regression guards (must stay GREEN before and after): Settings
  *           pills (Providers/Keys/Failover, pill variant, no line), URL/sidebar/
  *           theme (C1/C2R/C3R/C4 baseline), ProviderMatrix untouched, NO page
@@ -58,20 +60,18 @@ import {
  *   S-P1-1..S-P1-5 FAIL cleanly (no <table>, no <tr>, bare `return null`,
  *   flex-wrap still present). S-P1-6 PASSES (baseline intact).
  *
- * Row helper note: the legacy SettingsView.test.tsx findProviderRow walks
- * <div>s looking for Global/Search labels. After the S-P1 migration every
- * provider row is a <tr>, so the traversal MUST become tr-first
- * (`nameEl.closest("tr")`). This file uses the tr-strict helper on purpose:
- * it FAILS Red (no <tr> exists) and PASSES Green, proving the required update.
+ * P1-FINAL sweep: the registry is now the merged 10-column table
+ *   Provider|Endpoint|Global|Search|Fetch|Health|p95|Quota|Breaker|Test
+ *   (registry controls + fleet telemetry, min-w-1280 scroll) with an
+ *   icon-opened ProviderTestModal. All counts/headers below track FINAL.
  */
 
 const testDir = import.meta.dirname
 const settingsSource = readFileSync(path.resolve(testDir, "./SettingsProviders.tsx"), "utf8")
 const tableSource = readFileSync(path.resolve(testDir, "../ui/table.tsx"), "utf8")
-const providerMatrixSource = readFileSync(
-  path.resolve(testDir, "../providers/ProviderMatrix.tsx"),
-  "utf8"
-)
+// P1-FINAL (blessed inversion): ProviderMatrix.tsx is DELETED by the merge —
+// no test may read it (the file is gone Green). Fleet-telemetry pins live in
+// SettingsProviders.p1-final.test.tsx.
 const appSource = readFileSync(path.resolve(testDir, "../../App.tsx"), "utf8")
 const sidebarSource = readFileSync(path.resolve(testDir, "../layout/Sidebar.tsx"), "utf8")
 const indexCssSource = readFileSync(path.resolve(testDir, "../../index.css"), "utf8")
@@ -91,7 +91,18 @@ const SEED_PROVIDER_NAMES = [
 const FETCH_UNSUPPORTED = ["Brave Search", "Exa", "Parallel"] as const
 const FETCH_SUPPORTED = ["Keenable", "Tavily", "Firecrawl", "You.com"] as const
 
-const EXPECTED_HEADERS = ["Provider", "Global", "Search", "Fetch", "Test"] as const
+const EXPECTED_HEADERS = [
+  "Provider",
+  "Endpoint",
+  "Global",
+  "Search",
+  "Fetch",
+  "Health",
+  "p95",
+  "Quota",
+  "Breaker",
+  "Test",
+] as const
 
 let patchGate: Promise<Response> | null = null
 let testGate: Promise<Response> | null = null
@@ -197,7 +208,7 @@ afterEach(() => {
 // S-P1-1: table structure + ui/table reuse
 // ---------------------------------------------------------------------------
 
-describe("S-P1-1: registry is a ui/table with Provider|Global|Search|Fetch|Test", () => {
+describe("S-P1-1: registry is a ui/table with the merged 10 columns", () => {
   it("reuses ui/table primitives as-is (Table/Header/Body/Row/Head/Cell import)", () => {
     expect(settingsSource).toContain('from "@/components/ui/table"')
     for (const symbol of [
@@ -236,7 +247,7 @@ describe("S-P1-1: registry is a ui/table with Provider|Global|Search|Fetch|Test"
     expect(screen.getAllByRole("table")).toHaveLength(1)
   })
 
-  it("exposes the five headers in exact order Provider|Global|Search|Fetch|Test", async () => {
+  it("exposes the ten merged headers in exact order", async () => {
     renderSettings()
     await waitForProviders()
     expect(headerNames()).toEqual([...EXPECTED_HEADERS])
@@ -252,13 +263,13 @@ describe("S-P1-1: registry is a ui/table with Provider|Global|Search|Fetch|Test"
     }
   })
 
-  it("gives every body row exactly 5 cells (columns never collapse)", async () => {
+  it("gives every body row exactly 10 cells (columns never collapse)", async () => {
     renderSettings()
     await waitForProviders()
     const rows = Array.from(providerTable().querySelectorAll("tbody tr"))
     expect(rows).toHaveLength(7)
     for (const row of rows) {
-      expect(row.children).toHaveLength(5)
+      expect(row.children).toHaveLength(10)
     }
   })
 })
@@ -277,11 +288,11 @@ describe("S-P1-2: per-column x-position equality across 7 rows (<=1px)", () => {
     // Every row lives in the SAME table/tbody (single column grid).
     for (const row of rows) {
       expect(row.closest("table")).toBe(table)
-      expect(row.children).toHaveLength(5)
+      expect(row.children).toHaveLength(10)
     }
     // Nowrap cells: ui/table TableHead/TableCell carry whitespace-nowrap.
     const cells = Array.from(table.querySelectorAll("th, td")) as HTMLElement[]
-    expect(cells.length).toBe(5 + 7 * 5)
+    expect(cells.length).toBe(10 + 7 * 10)
     for (const cell of cells) {
       expect(cell.className).toMatch(/whitespace-nowrap/)
     }
@@ -291,7 +302,7 @@ describe("S-P1-2: per-column x-position equality across 7 rows (<=1px)", () => {
     renderSettings()
     await waitForProviders()
     const table = providerTable()
-    for (let col = 0; col < 5; col += 1) {
+    for (let col = 0; col < 10; col += 1) {
       const lefts = columnLefts(table, col)
       expect(lefts).toHaveLength(7)
       for (const left of lefts) {
@@ -333,7 +344,7 @@ describe("S-P1-3: Global-off placeholder keeps columns from collapsing", () => {
     }
   })
 
-  it("toggling Global off keeps all 5 cells with a non-empty Fetch placeholder (no-shift)", async () => {
+  it("toggling Global off keeps all 10 cells with a non-empty Fetch placeholder (no-shift)", async () => {
     const user = userEvent.setup()
     const stub = renderSettings()
     await waitForProviders()
@@ -354,9 +365,9 @@ describe("S-P1-3: Global-off placeholder keeps columns from collapsing", () => {
     expect(patches).toHaveLength(1)
     expect(patches[0].body).toEqual({ enabled: false })
 
-    // Columns never collapse: still 5 cells, Fetch still occupied.
+    // Columns never collapse: still 10 cells, Fetch still occupied.
     const row = findProviderRowTr("Brave Search")
-    expect(row.children).toHaveLength(5)
+    expect(row.children).toHaveLength(10)
     const fetchCell = cellFor("Brave Search", "Fetch")
     expect(fetchCell.textContent?.trim().length).toBeGreaterThan(0)
     // Placeholder is either the dimmed guard or an em-dash — never empty.
@@ -391,7 +402,7 @@ describe("S-P1-4: 375px viewport scrolls horizontally without wrapping", () => {
     const container = table.closest('[data-slot="table-container"]') as HTMLElement
     expect(container.className).toMatch(/overflow-x-auto/)
     const cells = Array.from(table.querySelectorAll("th, td")) as HTMLElement[]
-    expect(cells.length).toBe(5 + 7 * 5)
+    expect(cells.length).toBe(10 + 7 * 10)
     for (const cell of cells) {
       expect(cell.className).toMatch(/whitespace-nowrap/)
     }
@@ -511,30 +522,38 @@ describe("S-P1-5: all SettingsProviders contracts preserved in the table", () =>
     expect(stub.requests.filter((r) => r.method === "PATCH")).toHaveLength(0)
   })
 
-  it("exposes a Test button per row with Testing... pending state", async () => {
+  it("exposes an icon test button per row that opens the modal; modal Test runs handleTest (Testing... + POST)", async () => {
     const user = userEvent.setup()
     const gate = deferred<Response>()
     const stub = renderSettings()
     await waitForProviders()
     testGate = gate.promise
 
+    // P1-FINAL: per-row Test affordance is an icon button that opens the
+    // ProviderTestModal (never fetches on open).
     for (const name of SEED_PROVIDER_NAMES) {
+      const row = findProviderRowTr(name)
+      const testCell = row.children[columnIndex("Test")] as HTMLElement
       expect(
-        screen.getByRole("button", { name: `${name} connection` })
+        within(testCell).getByRole("button", { name: `${name} test connection` })
       ).toBeInTheDocument()
     }
-    const braveTest = screen.getByRole("button", { name: "Brave Search connection" })
-    expect(braveTest).toHaveTextContent("Test")
+    const callsBefore = stub.requests.length
+    await user.click(
+      screen.getByRole("button", { name: "Brave Search test connection" })
+    )
+    const dialog = await screen.findByRole("dialog")
+    expect(stub.requests.length).toBe(callsBefore)
+    expect(stub.requestsTo("/api/v1/providers/brave/test")).toHaveLength(0)
 
-    await user.click(braveTest)
+    const modalTest = within(dialog).getByRole("button", { name: /test/i })
+    expect(modalTest).toHaveTextContent("Test")
+    await user.click(modalTest)
     await waitFor(() => {
       expect(
-        screen.getByRole("button", { name: "Brave Search connection" })
-      ).toHaveTextContent("Testing...")
+        within(screen.getByRole("dialog")).getByRole("button", { name: /testing/i })
+      ).toBeInTheDocument()
     })
-    expect(
-      screen.getByRole("button", { name: "Brave Search connection" })
-    ).toBeDisabled()
 
     gate.resolve(
       ok({
@@ -547,9 +566,7 @@ describe("S-P1-5: all SettingsProviders contracts preserved in the table", () =>
       })
     )
     await waitFor(() => {
-      expect(
-        screen.getByRole("button", { name: "Brave Search connection" })
-      ).toHaveTextContent("Test")
+      expect(screen.getByRole("dialog").textContent).toMatch(/142ms|healthy/)
     })
     const tests = stub.requestsTo("/api/v1/providers/brave/test")
     expect(tests).toHaveLength(1)
@@ -561,7 +578,7 @@ describe("S-P1-5: all SettingsProviders contracts preserved in the table", () =>
 // S-P1-6: regression guards (baseline must not regress — GREEN in Red phase)
 // ---------------------------------------------------------------------------
 
-describe("S-P1-6: no regression — pills, URL/sidebar/theme, ProviderMatrix, no page merge", () => {
+describe("S-P1-6: P1-FINAL merge guards (inverted — page merged, RED)", () => {
   it("Settings pills stay Providers/Keys/Failover on the pill variant", async () => {
     renderSettings()
     await waitForProviders()
@@ -589,10 +606,9 @@ describe("S-P1-6: no regression — pills, URL/sidebar/theme, ProviderMatrix, no
     expect(norm(indexCssSource).includes("oklch(")).toBe(false)
   })
 
-  it("URL route table + sidebar contract are untouched (C4 baseline)", () => {
+  it("P1-FINAL route table: five workspace routes + /providers -> /settings redirect", () => {
     for (const routePath of [
       "/playground",
-      "/providers",
       "/routing",
       "/usage",
       "/activity",
@@ -601,11 +617,19 @@ describe("S-P1-6: no regression — pills, URL/sidebar/theme, ProviderMatrix, no
       expect(appSource).toContain(`"${routePath}"`)
     }
     expect(appSource).toMatch(/<Routes/)
+    expect(appSource).not.toMatch(/ProviderMatrix/)
+    // Legacy path survives ONLY as a redirect into Settings.
+    expect(appSource).toContain('"/providers"')
+    const idx = appSource.indexOf('"/providers"')
+    const window_ = appSource.slice(Math.max(0, idx - 120), idx + 300)
+    expect(window_).toMatch(/Navigate/)
+    expect(window_).toContain('"/settings"')
     expect(sidebarSource).toMatch(/export\s+(type|interface)\s+TabId/)
     expect(sidebarSource.includes("<NavLink")).toBe(true)
+    expect(sidebarSource).not.toContain('"providers"')
+    expect(sidebarSource).not.toContain('"/providers"')
     for (const href of [
       "/playground",
-      "/providers",
       "/routing",
       "/usage",
       "/activity",
@@ -615,16 +639,14 @@ describe("S-P1-6: no regression — pills, URL/sidebar/theme, ProviderMatrix, no
     }
   })
 
-  it("ProviderMatrix is untouched (filter group + Trip/Reset contract intact)", () => {
-    expect(providerMatrixSource).toContain("Trip")
-    expect(providerMatrixSource).toContain("Provider filter")
-    expect(providerMatrixSource).not.toContain("SettingsProviders")
-    expect(providerMatrixSource).not.toContain("@/components/ui/table")
-  })
-
-  it("NO page merge: SettingsProviders never imports ProviderMatrix (P1 separate)", () => {
-    expect(settingsSource).not.toMatch(/ProviderMatrix/)
-    expect(settingsSource).not.toMatch(/from\s+["']@\/components\/providers\/ProviderMatrix["']/)
+  it("P1-FINAL page merge: ProviderMatrix retired, fleet telemetry merged into SettingsProviders", () => {
+    // Standalone fleet page is gone: no Trip/Reset matrix, no fleet filter,
+    // no stat cards in a separate page — the merged registry carries them.
+    for (const marker of ["Endpoint", "Health", "Breaker", "Quota", "p95", "ProviderTestModal"]) {
+      expect(settingsSource, `merged registry must carry ${marker}`).toContain(marker)
+    }
+    expect(settingsSource).not.toMatch(/Total fleet/)
+    expect(settingsSource).not.toMatch(/Provider filter/)
   })
 
   it("freesearch-ui ONLY: SettingsProviders imports no backend/python paths", () => {

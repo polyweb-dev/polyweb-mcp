@@ -67,11 +67,13 @@ Then("the shell should expose no header element", async ({ page }) => {
   await expect(page.locator("header")).toHaveCount(0)
 })
 
-Then("the sidebar navigation should expose six links", async ({ page }) => {
+Then("the sidebar navigation should expose five links", async ({ page }) => {
   const nav = page.getByRole("navigation", { name: "Primary" })
   await expect(nav).toBeVisible()
-  await expect(nav.getByRole("link")).toHaveCount(6)
-  for (const label of ["Playground", "Providers", "Routing", "Usage", "Activity", "Settings"]) {
+  await expect(nav.getByRole("link")).toHaveCount(5)
+  // P1-FINAL: standalone Providers page retired into Settings — no link.
+  await expect(nav.getByRole("link", { name: "Providers", exact: true })).toHaveCount(0)
+  for (const label of ["Playground", "Routing", "Usage", "Activity", "Settings"]) {
     await expect(nav.getByRole("link", { name: label, exact: true })).toHaveCount(1)
   }
 })

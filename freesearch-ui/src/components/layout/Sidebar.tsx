@@ -3,7 +3,6 @@ import type { LucideIcon } from "lucide-react"
 import { NavLink } from "react-router"
 import {
   Activity,
-  Boxes,
   Gauge,
   Menu,
   PanelLeftClose,
@@ -18,7 +17,6 @@ import { cn } from "@/lib/utils"
 
 export type TabId =
   | "playground"
-  | "providers"
   | "routing"
   | "quotas"
   | "activity"
@@ -38,7 +36,6 @@ interface NavItem {
 
 const navItems: NavItem[] = [
   { id: "playground", label: "Playground", icon: Search },
-  { id: "providers", label: "Providers", icon: Boxes },
   { id: "routing", label: "Routing", icon: Route },
   { id: "quotas", label: "Usage", icon: Gauge },
   { id: "activity", label: "Activity", icon: Activity },
@@ -47,7 +44,6 @@ const navItems: NavItem[] = [
 
 const TAB_PATHS: Record<TabId, string> = {
   playground: "/playground",
-  providers: "/providers",
   routing: "/routing",
   quotas: "/usage",
   activity: "/activity",

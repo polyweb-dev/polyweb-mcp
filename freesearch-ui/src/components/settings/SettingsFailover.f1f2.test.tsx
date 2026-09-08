@@ -104,13 +104,12 @@ import {
 const testDir = import.meta.dirname
 const failoverSource = readFileSync(path.resolve(testDir, "./SettingsFailover.tsx"), "utf8")
 const settingsSource = readFileSync(path.resolve(testDir, "./SettingsProviders.tsx"), "utf8")
+// P1-FINAL (blessed inversion): ProviderMatrix.tsx is DELETED by the merge —
+// no test may read it (the file is gone Green). The G-5 guard below now pins
+// the merged end-state instead of the retired split.
 const keyVaultSource = readFileSync(path.resolve(testDir, "./SettingsKeyVault.tsx"), "utf8")
 const settingsViewSource = readFileSync(path.resolve(testDir, "./SettingsView.tsx"), "utf8")
 const indexCssSource = readFileSync(path.resolve(testDir, "../../index.css"), "utf8")
-const providerMatrixSource = readFileSync(
-  path.resolve(testDir, "../providers/ProviderMatrix.tsx"),
-  "utf8"
-)
 
 const norm = (value: string): string => value.toLowerCase().replace(/\s+/g, "")
 
@@ -726,11 +725,25 @@ describe("B-4: all four switches are keyboard-operable", () => {
 // G-1: Providers S-P4 intact (GREEN guard)
 // ---------------------------------------------------------------------------
 
-describe("G-1: Providers S-P4 stays full-width", () => {
-  it("registry section + frame keep w-full max-w-none with overflow-hidden and min-w-[880px] table", async () => {
+describe("G-1: Providers P1-FINAL merged table (inverted — 10 cols, min-w-1280)", () => {
+  it("registry section + frame keep w-full max-w-none with overflow-hidden and min-w-[1280px] merged table", async () => {
     renderSettings()
     await waitForProviders()
     const table = screen.getByRole("table")
+    expect(
+      Array.from(table.querySelectorAll("thead th")).map((th) => th.textContent?.trim() ?? "")
+    ).toEqual([
+      "Provider",
+      "Endpoint",
+      "Global",
+      "Search",
+      "Fetch",
+      "Health",
+      "p95",
+      "Quota",
+      "Breaker",
+      "Test",
+    ])
     const section = table.closest("section") as HTMLElement
     const sectionTokens = classTokens(section)
     expect(sectionTokens).toContain("w-full")
@@ -742,7 +755,7 @@ describe("G-1: Providers S-P4 stays full-width", () => {
     expect(frameTokens).toContain("w-full")
     expect(frameTokens).toContain("max-w-none")
     expect(frameTokens).toContain("overflow-hidden")
-    expect(table.className).toMatch(/min-w-\[880px\]/)
+    expect(table.className).toMatch(/min-w-\[1280px\]/)
     expect(settingsSource).toContain("w-full max-w-none")
   })
 })
@@ -821,15 +834,18 @@ describe("G-4: Carbon Black theme tokens untouched", () => {
 // G-5: no merge + freesearch-ui ONLY (GREEN guard)
 // ---------------------------------------------------------------------------
 
-describe("G-5: no page merge, freesearch-ui ONLY", () => {
-  it("Failover never imports sibling sections or ProviderMatrix; shell composition stays intact", () => {
+describe("G-5: P1-FINAL page merge (inverted — fleet merged, matrix retired)", () => {
+  it("Failover never imports sibling sections; shell composition keeps the merged registry", () => {
     expect(failoverSource).not.toMatch(/SettingsProviders/)
     expect(failoverSource).not.toMatch(/SettingsKeyVault/)
     expect(failoverSource).not.toMatch(/ProviderMatrix/)
+    expect(failoverSource).not.toMatch(/ProviderTestModal/)
     expect(settingsViewSource).toContain("SettingsProviders")
     expect(settingsViewSource).toContain("SettingsKeyVault")
     expect(settingsViewSource).toContain("SettingsFailover")
-    expect(providerMatrixSource).not.toContain("SettingsFailover")
+    for (const marker of ["Endpoint", "Health", "Breaker", "Quota", "p95", "ProviderTestModal"]) {
+      expect(settingsSource, `merged registry must carry ${marker}`).toContain(marker)
+    }
   })
 
   it("Failover imports no backend/python paths and no absolute backend literals", () => {

@@ -16,6 +16,10 @@ import { describe, it, expect } from "vitest"
  *         unknown-path catch-all to /playground; quotas maps to /usage.
  *   C4-5  Sidebar renders NavLink (role link) with exact `to` targets and
  *         no plain-button nav items.
+ *
+ * P1-FINAL (blessed inversion, NOT a regression): the standalone Providers
+ * page is retired — five workspace routes, no /providers view, legacy
+ * /providers redirects to /settings, providers TabId retired.
  */
 
 const layoutDir = import.meta.dirname
@@ -32,7 +36,6 @@ const packageJson = JSON.parse(
 
 const ROUTE_PATHS = [
   "/playground",
-  "/providers",
   "/routing",
   "/usage",
   "/activity",
@@ -78,6 +81,18 @@ describe("C4-2: App.tsx Routes table + redirects", () => {
     expect(appSource).not.toContain('"/quotas"')
     expect(appSource).toContain('"quotas"')
   })
+
+  it("P1-FINAL: retires the providers view — no ProviderMatrix route", () => {
+    expect(appSource).not.toMatch(/ProviderMatrix/)
+  })
+
+  it("P1-FINAL: redirects the legacy /providers path to /settings", () => {
+    expect(appSource).toContain('"/providers"')
+    const idx = appSource.indexOf('"/providers"')
+    const window_ = appSource.slice(Math.max(0, idx - 120), idx + 300)
+    expect(window_).toMatch(/Navigate/)
+    expect(window_).toContain('"/settings"')
+  })
 })
 
 describe("C4-5: Sidebar NavLink contract in source", () => {
@@ -90,6 +105,11 @@ describe("C4-5: Sidebar NavLink contract in source", () => {
     for (const routePath of ROUTE_PATHS) {
       expect(sidebarSource).toContain(`"${routePath}"`)
     }
+  })
+
+  it("P1-FINAL: sidebar drops the retired /providers target", () => {
+    expect(sidebarSource).not.toContain('"/providers"')
+    expect(sidebarSource).not.toContain('"providers"')
   })
 
   it("renders no plain-button nav items (controls stay buttons)", () => {

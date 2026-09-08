@@ -17,7 +17,9 @@ Feature: Routing workbench
   @stub
   Scenario: Show routing eligibility status as separate text segments
     Then the routing status should show "Failover active"
-    And the routing eligibility should match "\d+ of \d+ providers eligible"
+    # R1 StatusBar contract: the bar trigger reads "N of M providers" (no
+    # "eligible" word, no middle-dot separator) — separate text segments.
+    And the routing eligibility should match "\d+ of \d+ providers"
     And the routing status should not use a middle-dot separator
 
   @smoke @stub

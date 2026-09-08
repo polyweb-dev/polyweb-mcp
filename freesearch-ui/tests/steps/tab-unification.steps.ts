@@ -163,6 +163,31 @@ When("I choose {string} in the depth filter", async ({ page }, label: string) =>
 })
 
 Then(
+  "the results count should be a number input defaulting to {string}",
+  async ({ page }, expected: string) => {
+    // PG-S5: the Depth SegmentedControl is replaced by a labeled number
+    // input (min 1, max 100, step 1, default 6).
+    const input = main(page).getByRole("spinbutton", {
+      name: "Number of results",
+      exact: true,
+    })
+    await expect(input).toBeVisible()
+    await expect(input).toHaveValue(expected)
+  }
+)
+
+Then("the playground should expose no depth filter", async ({ page }) => {
+  await expect(
+    main(page).getByRole("group", { name: /search depth/i })
+  ).toHaveCount(0)
+  for (const label of ["Fast", "Balanced", "Deep"]) {
+    await expect(
+      main(page).getByRole("button", { name: new RegExp(`^${label}$`) })
+    ).toHaveCount(0)
+  }
+})
+
+Then(
   "the providers filter should be an exclusive group of {string}, {string}, {string} and {string} with {string} pressed",
   async (
     { page },
@@ -305,7 +330,8 @@ Then("the header navigation should expose zero tab roles", async ({ page }) => {
   const navigation = page.getByRole("navigation", { name: "Primary" })
   await expect(navigation.getByRole("tab")).toHaveCount(0)
   await expect(navigation.getByRole("tablist")).toHaveCount(0)
-  await expect(navigation.getByRole("link")).toHaveCount(6)
+  // P1-FINAL: standalone Providers page retired — five workspace links.
+  await expect(navigation.getByRole("link")).toHaveCount(5)
 })
 
 Then("the page URL should be unchanged", async ({ page }) => {

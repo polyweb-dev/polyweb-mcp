@@ -10,15 +10,17 @@ Feature: App-shell URL routing (C4)
 
   @smoke
   Scenario: C4-1 sidebar links change the URL on navigation
-    When I follow the "Providers" sidebar link
-    Then I should see the "Providers" heading
-    And the page URL path should be "/providers"
     When I follow the "Routing" sidebar link
     Then I should see the "Routing" heading
     And the page URL path should be "/routing"
     When I follow the "Usage" sidebar link
     Then I should see the "Usage" heading
     And the page URL path should be "/usage"
+
+  Scenario: P1-FINAL legacy providers path redirects to settings
+    When I navigate directly to "/providers"
+    Then the page URL path should be "/settings"
+    And I should see the "Settings" heading
 
   Scenario: C4-2 root path redirects to the playground
     When I navigate directly to "/"
@@ -39,7 +41,6 @@ Feature: App-shell URL routing (C4)
     Examples:
       | path        | heading           | link       |
       | /playground | Search Playground | Playground |
-      | /providers  | Providers         | Providers  |
       | /routing    | Routing           | Routing    |
       | /usage      | Usage             | Usage      |
       | /activity   | Activity          | Activity   |
@@ -47,15 +48,15 @@ Feature: App-shell URL routing (C4)
 
   @smoke
   Scenario: C4-4 back and forward restore the view and the current marker
-    When I navigate directly to "/providers"
-    Then I should see the "Providers" heading
+    When I navigate directly to "/settings"
+    Then I should see the "Settings" heading
     When I follow the "Routing" sidebar link
     Then the page URL path should be "/routing"
     And I should see the "Routing" heading
     When I go back in history
-    Then the page URL path should be "/providers"
-    And I should see the "Providers" heading
-    And the "Providers" sidebar link should be marked current
+    Then the page URL path should be "/settings"
+    And I should see the "Settings" heading
+    And the "Settings" sidebar link should be marked current
     When I go forward in history
     Then the page URL path should be "/routing"
     And I should see the "Routing" heading
@@ -75,7 +76,7 @@ Feature: App-shell URL routing (C4)
     And I should see the "Usage" heading
     And the "Usage" sidebar link should be marked current
     And the "Usage" sidebar link should point to "/usage"
-    And the sidebar navigation should expose six links
+    And the sidebar navigation should expose five links
 
   Scenario: C4-6 routing pill tabs leave the URL unchanged
     When I navigate directly to "/routing"
@@ -97,7 +98,7 @@ Feature: App-shell URL routing (C4)
 
   Scenario: C4-7 shell keeps the sidebar shell with no legacy header topbar
     Then the shell should expose no header element
-    And the sidebar navigation should expose six links
+    And the sidebar navigation should expose five links
     When I navigate directly to "/activity"
     Then I should see the "Activity" heading
     And the page URL path should be "/activity"

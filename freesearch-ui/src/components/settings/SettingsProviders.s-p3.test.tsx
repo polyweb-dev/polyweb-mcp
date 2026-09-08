@@ -52,18 +52,16 @@ import {
  *           the ArrowUp/ArrowDown arrows — this file MUST NOT assert no
  *           Button in file (Green adds ui/Button to the Test cell).
  *
- * RED expectation:
- *   S-P3-1 FAILS cleanly (no data-slot, no border/rounded/padding on the
- *   Test buttons). S-P3-2 + S-P3-3 PASS (baseline intact).
+ * P1-FINAL sweep: per-row Test affordance is now an icon button
+ * (ui/button ghost icon-sm, aria-label "{name} test connection") that opens
+ * the ProviderTestModal (zero fetch on open). The modal Test button runs the
+ * existing handleTest (Test/Testing... + exactly one POST). Table is the
+ * merged 10-column registry.
  */
 
 const testDir = import.meta.dirname
 const settingsSource = readFileSync(path.resolve(testDir, "./SettingsProviders.tsx"), "utf8")
 const indexCssSource = readFileSync(path.resolve(testDir, "../../index.css"), "utf8")
-const providerMatrixSource = readFileSync(
-  path.resolve(testDir, "../providers/ProviderMatrix.tsx"),
-  "utf8"
-)
 
 const norm = (value: string): string => value.toLowerCase().replace(/\s+/g, "")
 
@@ -77,7 +75,18 @@ const SEED_PROVIDER_NAMES = [
   "Parallel",
 ] as const
 
-const EXPECTED_HEADERS = ["Provider", "Global", "Search", "Fetch", "Test"] as const
+const EXPECTED_HEADERS = [
+  "Provider",
+  "Endpoint",
+  "Global",
+  "Search",
+  "Fetch",
+  "Health",
+  "p95",
+  "Quota",
+  "Breaker",
+  "Test",
+] as const
 const EXPECTED_RANKS = ["P1", "P2", "P3", "P4", "P5", "P6", "P7"] as const
 
 let testGate: Promise<Response> | null = null
@@ -125,32 +134,27 @@ async function waitForProviders() {
 }
 
 function testButtonFor(provider: string): HTMLElement {
-  return screen.getByRole("button", { name: `${provider} connection` })
+  return screen.getByRole("button", { name: `${provider} test connection` })
 }
 
-/**
- * Button-affordance predicate (accepts EITHER Green implementation):
- *   A) ui/button outline sm -> data-slot="button" + outline border, OR
- *   B) Carbon button-like -> border + rounded + padding.
- * Current bare Test cell has neither (muted text only), so this is false Red.
- */
-function hasButtonAffordance(btn: HTMLElement): boolean {
+/** Icon-only affordance: ui/button ghost icon-sm with an svg icon, never bare text. */
+function hasIconAffordance(btn: HTMLElement): boolean {
   const dataSlot = btn.getAttribute("data-slot")
   const cls = btn.className ?? ""
-  const hasDataSlotButton = dataSlot === "button"
-  const hasBorder = /border/.test(cls)
-  const hasRounded = /rounded/.test(cls)
-  const hasPadding = /px-\d|py-\d/.test(cls)
-  const uiButtonOutline = hasDataSlotButton && hasBorder
-  const carbonButton = hasBorder && hasRounded && hasPadding
-  return uiButtonOutline || carbonButton
+  const text = btn.textContent?.trim() ?? ""
+  return (
+    dataSlot === "button" &&
+    text === "" &&
+    btn.querySelector("svg") !== null &&
+    /rounded/.test(cls)
+  )
 }
 
-/** Narrow source window around the Test-cell aria-label (stays inside the row). */
+/** Narrow source window around the icon test aria-label (stays inside the row). */
 function testCellWindow(): string {
-  const marker = "${provider.name} connection"
+  const marker = "${provider.name} test connection"
   const idx = settingsSource.indexOf(marker)
-  if (idx < 0) throw new Error("Test cell aria-label marker not found in SettingsProviders.tsx")
+  if (idx < 0) throw new Error("Icon test aria-label marker not found in SettingsProviders.tsx")
   return settingsSource.slice(Math.max(0, idx - 600), idx + 600)
 }
 
@@ -171,102 +175,100 @@ afterEach(() => {
 })
 
 // ---------------------------------------------------------------------------
-// S-P3-1: affordance — Test looks like an actual button (RED)
+// S-P3-1: affordance — icon test button per row (P1-FINAL)
 // ---------------------------------------------------------------------------
 
-describe("S-P3-1: Test buttons look like actual buttons (affordance)", () => {
-  it("every Test button exposes ui/button OR Carbon button box (not plain text)", async () => {
+describe("S-P3-1: icon test buttons open the ProviderTestModal (affordance)", () => {
+  it("every row exposes exactly one icon test button (ui/button, svg, no text)", async () => {
     renderSettings()
     await waitForProviders()
     for (const name of SEED_PROVIDER_NAMES) {
       const btn = testButtonFor(name)
       expect(
-        hasButtonAffordance(btn),
-        `${name} Test must look like a button: ` +
-          `(data-slot="button" + outline border) OR (border+rounded+padding); ` +
-          `got data-slot=${JSON.stringify(btn.getAttribute("data-slot"))} class=${JSON.stringify(btn.className)}`
+        hasIconAffordance(btn),
+        `${name} Test must be an icon-only ui/button: ` +
+          `data-slot="button" + svg + empty text; ` +
+          `got data-slot=${JSON.stringify(btn.getAttribute("data-slot"))} text=${JSON.stringify(btn.textContent)} class=${JSON.stringify(btn.className)}`
       ).toBe(true)
     }
   })
 
-  it("Test buttons carry a visible border (not bare muted text)", async () => {
+  it("icon test buttons are ghost icon-sm buttons (never the old outline text box)", async () => {
     renderSettings()
     await waitForProviders()
     for (const name of SEED_PROVIDER_NAMES) {
       const btn = testButtonFor(name)
-      expect(
-        btn.className,
-        `${name} Test class must contain a visible border (got ${JSON.stringify(btn.className)})`
-      ).toMatch(/border/)
+      expect(btn.getAttribute("type")).toBe("button")
+      expect(btn).not.toBeDisabled()
+      // Icon-only: no visible "Test" text on the row button itself.
+      expect(btn.textContent?.trim()).toBe("")
+      expect(btn.querySelector("svg")).not.toBeNull()
     }
   })
 
-  it("Test buttons carry a rounded box with padding (not bare text)", async () => {
-    renderSettings()
+  it("icon opens the modal with zero fetch (never probes on open)", async () => {
+    const user = userEvent.setup()
+    const stub = renderSettings()
     await waitForProviders()
-    for (const name of SEED_PROVIDER_NAMES) {
-      const btn = testButtonFor(name)
-      expect(btn.className, `${name} Test must be rounded`).toMatch(/rounded/)
-      expect(
-        btn.className,
-        `${name} Test must carry button padding (got ${JSON.stringify(btn.className)})`
-      ).toMatch(/px-\d|py-\d/)
-    }
+    const callsBefore = stub.requests.length
+    await user.click(testButtonFor("Brave Search"))
+    const dialog = await screen.findByRole("dialog")
+    expect(stub.requests.length).toBe(callsBefore)
+    expect(stub.requestsTo("/api/v1/providers/brave/test")).toHaveLength(0)
+    expect(dialog.textContent).toContain("Brave Search")
   })
 
-  it("Test cell source uses ui/button outline OR Carbon border+rounded+padding", () => {
+  it("Test cell source uses ghost icon-sm Button wired to onOpenTest; modal Test uses handleTest", () => {
     const window_ = testCellWindow()
-    const usesUiButton =
-      window_.includes("<Button") && settingsSource.includes("@/components/ui/button")
-    const hasCarbonBox =
-      /border/.test(window_) && /rounded/.test(window_) && /px-/.test(window_)
-    expect(
-      usesUiButton || hasCarbonBox,
-      `Test cell must use <Button> (ui/button outline sm) OR Carbon border+rounded+padding; ` +
-        `got window ${JSON.stringify(window_.slice(0, 240))}...`
-    ).toBe(true)
+    expect(window_).toContain("<Button")
+    expect(window_).toMatch(/ghost/)
+    expect(window_).toMatch(/icon-sm/)
+    expect(window_).toMatch(/onOpenTest/)
+    expect(settingsSource).toContain("@/components/ui/button")
+    expect(settingsSource).toMatch(/onTest\(provider\.id\)/)
+    expect(settingsSource).toContain("handleTest")
   })
 })
 
 // ---------------------------------------------------------------------------
-// S-P3-2: states preserved — Test/Testing...+disabled, one POST, label stable
+// S-P3-2: modal Test states — Testing...+disabled, one POST, last-result
 // ---------------------------------------------------------------------------
 
-describe("S-P3-2: Test interaction states preserved (Test/Testing... + POST)", () => {
-  it("all 7 Test buttons start as Test with type=button and exact aria-label", async () => {
+describe("S-P3-2: modal Test interaction states (Test/Testing... + POST)", () => {
+  it("modal opens Not tested with a Test button (type=button, enabled)", async () => {
+    const user = userEvent.setup()
     renderSettings()
     await waitForProviders()
-    for (const name of SEED_PROVIDER_NAMES) {
-      const btn = testButtonFor(name)
-      expect(btn).toHaveTextContent("Test")
-      expect(btn.textContent?.trim()).toBe("Test")
-      expect(btn.getAttribute("type")).toBe("button")
-      expect(btn.getAttribute("aria-label")).toBe(`${name} connection`)
-      expect(btn).not.toBeDisabled()
-    }
+
+    await user.click(testButtonFor("Brave Search"))
+    const dialog = await screen.findByRole("dialog")
+    expect(dialog.textContent).toContain("Not tested")
+    const modalTest = within(dialog).getByRole("button", { name: /^Test$/ })
+    expect(modalTest.getAttribute("type")).toBe("button")
+    expect(modalTest).not.toBeDisabled()
   })
 
-  it("click flips to Testing... + disabled with aria-label and type stable", async () => {
+  it("modal Test click flips to Testing... + disabled, then records the last result", async () => {
     const user = userEvent.setup()
     const gate = deferred<Response>()
     renderSettings()
     await waitForProviders()
     testGate = gate.promise
 
-    const before = testButtonFor("Brave Search")
-    expect(before).toHaveTextContent("Test")
-    expect(before.getAttribute("aria-label")).toBe("Brave Search connection")
-    expect(before.getAttribute("type")).toBe("button")
-
-    await user.click(before)
+    await user.click(testButtonFor("Brave Search"))
+    const dialog = await screen.findByRole("dialog")
+    await user.click(within(dialog).getByRole("button", { name: /^Test$/ }))
 
     await waitFor(() => {
-      expect(testButtonFor("Brave Search")).toHaveTextContent("Testing...")
+      expect(
+        within(screen.getByRole("dialog")).getByRole("button", { name: /testing/i })
+      ).toBeInTheDocument()
     })
-    const pending = testButtonFor("Brave Search")
+    const pending = within(screen.getByRole("dialog")).getByRole("button", {
+      name: /testing/i,
+    })
     expect(pending.textContent?.trim()).toBe("Testing...")
     expect(pending).toBeDisabled()
-    expect(pending.getAttribute("aria-label")).toBe("Brave Search connection")
     expect(pending.getAttribute("type")).toBe("button")
 
     gate.resolve(
@@ -279,12 +281,13 @@ describe("S-P3-2: Test interaction states preserved (Test/Testing... + POST)", (
         detail: null,
       })
     )
+    // Last result lands in the modal (status + latency of the probe).
     await waitFor(() => {
-      expect(testButtonFor("Brave Search")).toHaveTextContent("Test")
+      expect(screen.getByRole("dialog").textContent).toMatch(/142ms|healthy/)
     })
   })
 
-  it("emits exactly one POST to /api/v1/providers/brave/test then flips back enabled", async () => {
+  it("emits exactly one POST to /api/v1/providers/brave/test via the modal", async () => {
     const user = userEvent.setup()
     const gate = deferred<Response>()
     const stub = renderSettings()
@@ -292,8 +295,12 @@ describe("S-P3-2: Test interaction states preserved (Test/Testing... + POST)", (
     testGate = gate.promise
 
     await user.click(testButtonFor("Brave Search"))
+    const dialog = await screen.findByRole("dialog")
+    await user.click(within(dialog).getByRole("button", { name: /^Test$/ }))
     await waitFor(() => {
-      expect(testButtonFor("Brave Search")).toHaveTextContent("Testing...")
+      expect(
+        within(screen.getByRole("dialog")).getByRole("button", { name: /testing/i })
+      ).toBeInTheDocument()
     })
 
     gate.resolve(
@@ -307,20 +314,13 @@ describe("S-P3-2: Test interaction states preserved (Test/Testing... + POST)", (
       })
     )
     await waitFor(() => {
-      expect(testButtonFor("Brave Search")).toHaveTextContent("Test")
+      const tests = stub.requestsTo("/api/v1/providers/brave/test")
+      expect(tests).toHaveLength(1)
+      expect(tests[0].method).toBe("POST")
     })
-    const done = testButtonFor("Brave Search")
-    expect(done.textContent?.trim()).toBe("Test")
-    expect(done).not.toBeDisabled()
-    expect(done.getAttribute("aria-label")).toBe("Brave Search connection")
-    expect(done.getAttribute("type")).toBe("button")
-
-    const tests = stub.requestsTo("/api/v1/providers/brave/test")
-    expect(tests).toHaveLength(1)
-    expect(tests[0].method).toBe("POST")
   })
 
-  it("Test column keeps 7 labelled buttons inside the Test cells (label stable)", async () => {
+  it("Test column keeps 7 icon buttons inside the Test cells (label stable)", async () => {
     renderSettings()
     await waitForProviders()
     const table = screen.getByRole("table")
@@ -328,15 +328,15 @@ describe("S-P3-2: Test interaction states preserved (Test/Testing... + POST)", (
       (th) => th.textContent?.trim() ?? ""
     )
     const testIdx = headers.indexOf("Test")
-    expect(testIdx).toBe(4)
+    expect(testIdx).toBe(9)
     const rows = Array.from(table.querySelectorAll("tbody tr"))
     expect(rows).toHaveLength(7)
     for (const name of SEED_PROVIDER_NAMES) {
       const row = findProviderRowTr(name)
       const cell = row.children[testIdx] as HTMLElement
-      const btn = within(cell).getByRole("button", { name: `${name} connection` })
+      const btn = within(cell).getByRole("button", { name: `${name} test connection` })
       expect(btn.getAttribute("type")).toBe("button")
-      expect(btn.textContent?.trim()).toBe("Test")
+      expect(btn.textContent?.trim()).toBe("")
     }
   })
 })
@@ -345,8 +345,8 @@ describe("S-P3-2: Test interaction states preserved (Test/Testing... + POST)", (
 // S-P3-3: no-regression — S-P1 table, S-P2 ranks, tokens, no merge
 // ---------------------------------------------------------------------------
 
-describe("S-P3-3: no regression — S-P1 table, S-P2 ranks, tokens, no merge", () => {
-  it("S-P1 table invariant: single table, Provider|Global|Search|Fetch|Test, 7x5, scroller, nowrap", async () => {
+describe("S-P3-3: no regression — S-P1 table, S-P2 ranks, tokens, merge", () => {
+  it("S-P1 table invariant: single merged table, 10 headers, 7x10, scroller, nowrap", async () => {
     renderSettings()
     await waitForProviders()
     expect(screen.getAllByRole("table")).toHaveLength(1)
@@ -357,13 +357,13 @@ describe("S-P3-3: no regression — S-P1 table, S-P2 ranks, tokens, no merge", (
     const rows = Array.from(table.querySelectorAll("tbody tr"))
     expect(rows).toHaveLength(7)
     for (const row of rows) {
-      expect(row.children).toHaveLength(5)
+      expect(row.children).toHaveLength(10)
     }
     const container = table.closest('[data-slot="table-container"]') as HTMLElement | null
     expect(container, "ui/table scroller must wrap the table").not.toBeNull()
     expect(container!.className).toMatch(/overflow-x-auto/)
     const cells = Array.from(table.querySelectorAll("th, td")) as HTMLElement[]
-    expect(cells.length).toBe(5 + 7 * 5)
+    expect(cells.length).toBe(10 + 7 * 10)
     for (const cell of cells) {
       expect(cell.className).toMatch(/whitespace-nowrap/)
     }
@@ -428,9 +428,10 @@ describe("S-P3-3: no regression — S-P1 table, S-P2 ranks, tokens, no merge", (
     expect(norm(indexCssSource).includes("oklch(")).toBe(false)
   })
 
-  it("NO page merge: SettingsProviders never imports ProviderMatrix", () => {
-    expect(settingsSource).not.toMatch(/ProviderMatrix/)
-    expect(providerMatrixSource).not.toContain("SettingsProviders")
+  it("P1-FINAL page merge: fleet telemetry merged into SettingsProviders (ProviderMatrix retired)", () => {
+    for (const marker of ["Endpoint", "Health", "Breaker", "Quota", "p95", "ProviderTestModal"]) {
+      expect(settingsSource, `merged registry must carry ${marker}`).toContain(marker)
+    }
   })
 
   it("freesearch-ui ONLY: SettingsProviders imports no backend/python paths", () => {

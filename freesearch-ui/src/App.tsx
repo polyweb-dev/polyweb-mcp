@@ -4,7 +4,6 @@ import { FreeSearchProvider } from "@/context/FreeSearchContext"
 import { Sidebar, type TabId } from "@/components/layout/Sidebar"
 import { StatusBar } from "@/components/layout/StatusBar"
 import { SearchPlayground } from "@/components/search/SearchPlayground"
-import { ProviderMatrix } from "@/components/providers/ProviderMatrix"
 import { RoutingEngine } from "@/components/routing/RoutingEngine"
 import { QuotaAnalytics } from "@/components/quota/QuotaAnalytics"
 import { ActivityStream } from "@/components/activity/ActivityStream"
@@ -17,7 +16,6 @@ const workspaceRoutes: Array<{
   element: ReactNode
 }> = [
   { id: "playground", path: "/playground", element: <SearchPlayground /> },
-  { id: "providers", path: "/providers", element: <ProviderMatrix /> },
   { id: "routing", path: "/routing", element: <RoutingEngine /> },
   { id: "quotas", path: "/usage", element: <QuotaAnalytics /> },
   { id: "activity", path: "/activity", element: <ActivityStream /> },
@@ -36,6 +34,7 @@ function DashboardContent() {
         <main className="min-w-0 flex-1 px-6 py-8 pt-16 sm:px-8 md:pt-8 lg:px-12">
           <Routes>
             <Route path="/" element={<Navigate to="/playground" replace />} />
+            <Route path="/providers" element={<Navigate to="/settings" replace />} />
             {workspaceRoutes.map(({ id, path, element }) => (
               <Route key={id} path={path} element={element} />
             ))}

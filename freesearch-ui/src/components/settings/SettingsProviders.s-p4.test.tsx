@@ -75,10 +75,8 @@ import {
 const testDir = import.meta.dirname
 const settingsSource = readFileSync(path.resolve(testDir, "./SettingsProviders.tsx"), "utf8")
 const indexCssSource = readFileSync(path.resolve(testDir, "../../index.css"), "utf8")
-const providerMatrixSource = readFileSync(
-  path.resolve(testDir, "../providers/ProviderMatrix.tsx"),
-  "utf8"
-)
+// P1-FINAL (blessed inversion): ProviderMatrix.tsx is DELETED by the merge —
+// no test may read it (the file is gone Green).
 const keyVaultSource = readFileSync(path.resolve(testDir, "./SettingsKeyVault.tsx"), "utf8")
 const failoverSource = readFileSync(path.resolve(testDir, "./SettingsFailover.tsx"), "utf8")
 
@@ -94,7 +92,18 @@ const SEED_PROVIDER_NAMES = [
   "Parallel",
 ] as const
 
-const EXPECTED_HEADERS = ["Provider", "Global", "Search", "Fetch", "Test"] as const
+const EXPECTED_HEADERS = [
+  "Provider",
+  "Endpoint",
+  "Global",
+  "Search",
+  "Fetch",
+  "Health",
+  "p95",
+  "Quota",
+  "Breaker",
+  "Test",
+] as const
 const EXPECTED_RANKS = ["P1", "P2", "P3", "P4", "P5", "P6", "P7"] as const
 
 const ORIGINAL_INNER_WIDTH = window.innerWidth
@@ -327,7 +336,7 @@ describe("S-P4-3: 1440px viewport fills the Settings main column", () => {
     ).toContain("max-w-none")
   })
 
-  it("at 1440px the single 7-row table with min-w-[880px] sits inside the w-full scroller", async () => {
+  it("at 1440px the single 7-row merged table with min-w-[1280px] sits inside the w-full scroller", async () => {
     ;(window.innerWidth as number) = 1440
     window.dispatchEvent(new Event("resize"))
     renderSettings()
@@ -335,7 +344,7 @@ describe("S-P4-3: 1440px viewport fills the Settings main column", () => {
     expect(screen.getAllByRole("table")).toHaveLength(1)
     const table = screen.getByRole("table")
     expect(table.querySelectorAll("tbody tr")).toHaveLength(7)
-    expect(table.className).toMatch(/min-w-\[880px\]/)
+    expect(table.className).toMatch(/min-w-\[1280px\]/)
     const container = table.closest('[data-slot="table-container"]') as HTMLElement | null
     expect(container, "ui/table scroller must wrap the table at 1440px").not.toBeNull()
     expect(container!.className).toMatch(/w-full/)
@@ -359,11 +368,11 @@ describe("S-P4-4: responsive horizontal scroll preserved (no wrap, 375px scrolls
     expect(table.className).toMatch(/w-full/)
   })
 
-  it("Table keeps min-w-[880px] in source and in the DOM", async () => {
-    expect(settingsSource).toMatch(/min-w-\[880px\]/)
+  it("Table keeps min-w-[1280px] in source and in the DOM", async () => {
+    expect(settingsSource).toMatch(/min-w-\[1280px\]/)
     renderSettings()
     await waitForProviders()
-    expect(screen.getByRole("table").className).toMatch(/min-w-\[880px\]/)
+    expect(screen.getByRole("table").className).toMatch(/min-w-\[1280px\]/)
   })
 
   it("all header and body cells keep whitespace-nowrap (no wrapping)", async () => {
@@ -371,7 +380,7 @@ describe("S-P4-4: responsive horizontal scroll preserved (no wrap, 375px scrolls
     await waitForProviders()
     const table = screen.getByRole("table")
     const cells = Array.from(table.querySelectorAll("th, td")) as HTMLElement[]
-    expect(cells.length).toBe(5 + 7 * 5)
+    expect(cells.length).toBe(10 + 7 * 10)
     for (const cell of cells) {
       expect(cell.className).toMatch(/whitespace-nowrap/)
     }
@@ -385,9 +394,9 @@ describe("S-P4-4: responsive horizontal scroll preserved (no wrap, 375px scrolls
     const table = screen.getByRole("table")
     const container = table.closest('[data-slot="table-container"]') as HTMLElement
     expect(container.className).toMatch(/overflow-x-auto/)
-    expect(table.className).toMatch(/min-w-\[880px\]/)
+    expect(table.className).toMatch(/min-w-\[1280px\]/)
     const cells = Array.from(table.querySelectorAll("th, td")) as HTMLElement[]
-    expect(cells.length).toBe(5 + 7 * 5)
+    expect(cells.length).toBe(10 + 7 * 10)
     for (const cell of cells) {
       expect(cell.className).toMatch(/whitespace-nowrap/)
     }
@@ -400,7 +409,7 @@ describe("S-P4-4: responsive horizontal scroll preserved (no wrap, 375px scrolls
 // ---------------------------------------------------------------------------
 
 describe("S-P4-5: no regression — S-P1 table, S-P2 ranks, S-P3 buttons, SettingsView", () => {
-  it("S-P1 table invariant: single table, Provider|Global|Search|Fetch|Test, 7x5, scroller, nowrap", async () => {
+  it("S-P1 table invariant: single merged table, 10 headers, 7x10, scroller, nowrap", async () => {
     renderSettings()
     await waitForProviders()
     expect(screen.getAllByRole("table")).toHaveLength(1)
@@ -411,13 +420,13 @@ describe("S-P4-5: no regression — S-P1 table, S-P2 ranks, S-P3 buttons, Settin
     const rows = Array.from(table.querySelectorAll("tbody tr"))
     expect(rows).toHaveLength(7)
     for (const row of rows) {
-      expect(row.children).toHaveLength(5)
+      expect(row.children).toHaveLength(10)
     }
     const container = table.closest('[data-slot="table-container"]') as HTMLElement | null
     expect(container, "ui/table scroller must wrap the table").not.toBeNull()
     expect(container!.className).toMatch(/overflow-x-auto/)
     const cells = Array.from(table.querySelectorAll("th, td")) as HTMLElement[]
-    expect(cells.length).toBe(5 + 7 * 5)
+    expect(cells.length).toBe(10 + 7 * 10)
     for (const cell of cells) {
       expect(cell.className).toMatch(/whitespace-nowrap/)
     }
@@ -469,18 +478,16 @@ describe("S-P4-5: no regression — S-P1 table, S-P2 ranks, S-P3 buttons, Settin
     expect(screen.getAllByText([...EXPECTED_RANKS][0], { exact: true })).toHaveLength(1)
   })
 
-  it("S-P3 Test buttons keep the ui/button outline affordance with exact labels", async () => {
+  it("S-P3 Test affordance: icon buttons per row open the modal (ghost icon-sm, exact labels)", async () => {
     renderSettings()
     await waitForProviders()
     for (const name of SEED_PROVIDER_NAMES) {
-      const btn = screen.getByRole("button", { name: `${name} connection` })
+      const btn = screen.getByRole("button", { name: `${name} test connection` })
       expect(btn.getAttribute("data-slot")).toBe("button")
-      expect(btn.className).toMatch(/border/)
-      expect(btn.className).toMatch(/rounded/)
-      expect(btn.className).toMatch(/px-\d|py-\d/)
-      expect(btn.textContent?.trim()).toBe("Test")
       expect(btn.getAttribute("type")).toBe("button")
-      expect(btn.getAttribute("aria-label")).toBe(`${name} connection`)
+      expect(btn.getAttribute("aria-label")).toBe(`${name} test connection`)
+      expect(btn.textContent?.trim()).toBe("")
+      expect(btn.querySelector("svg")).not.toBeNull()
     }
     expect(settingsSource).toContain("@/components/ui/button")
   })
@@ -521,9 +528,10 @@ describe("S-P4-5: no regression — S-P1 table, S-P2 ranks, S-P3 buttons, Settin
     expect(failoverSource).toMatch(/max-w-none/)
   })
 
-  it("NO page merge: SettingsProviders never imports ProviderMatrix", () => {
-    expect(settingsSource).not.toMatch(/ProviderMatrix/)
-    expect(providerMatrixSource).not.toContain("SettingsProviders")
+  it("P1-FINAL page merge: fleet telemetry merged into SettingsProviders (ProviderMatrix retired)", () => {
+    for (const marker of ["Endpoint", "Health", "Breaker", "Quota", "p95", "ProviderTestModal"]) {
+      expect(settingsSource, `merged registry must carry ${marker}`).toContain(marker)
+    }
   })
 
   it("freesearch-ui ONLY: SettingsProviders imports no backend/python paths", () => {

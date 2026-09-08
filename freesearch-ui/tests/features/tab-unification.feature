@@ -33,24 +33,38 @@ Feature: C2 tab unification
     When I activate the focused playground tab
     Then the playground tab "Fetch" should be selected
 
-  Scenario: Depth filter is an exclusive segmented group
+  # PG-S5 RETIRED (number-of-results contract): the Depth Fast/Balanced/Deep
+  # SegmentedControl is deleted from the playground — a labeled
+  # "Number of results" number input (default 6) replaces it. The two
+  # scenarios below asserted the deleted Depth group and cannot survive.
+  # Scenario: Depth filter is an exclusive segmented group
+  #   When I select the "Playground" header tab
+  #   Then the depth filter should be an exclusive group of "Fast", "Balanced" and "Deep" with "Balanced" pressed
+  #
+  # Scenario: Depth selection moves exclusive pressed state
+  #   When I select the "Playground" header tab
+  #   And I choose "Deep" in the depth filter
+  #   Then the depth filter should be an exclusive group of "Fast", "Balanced" and "Deep" with "Deep" pressed
+
+  Scenario: Results count is a number input and no Depth filter remains
     When I select the "Playground" header tab
-    Then the depth filter should be an exclusive group of "Fast", "Balanced" and "Deep" with "Balanced" pressed
+    Then the results count should be a number input defaulting to "6"
+    And the playground should expose no depth filter
 
-  Scenario: Depth selection moves exclusive pressed state
-    When I select the "Playground" header tab
-    And I choose "Deep" in the depth filter
-    Then the depth filter should be an exclusive group of "Fast", "Balanced" and "Deep" with "Deep" pressed
-
-  Scenario: Providers filter is an exclusive segmented group
-    When I select the "Providers" header tab
-    Then the providers filter should be an exclusive group of "All", "Search", "Fetch" and "Keyless" with "All" pressed
-
-  Scenario: Providers Fetch filter narrows the matrix
-    When I select the "Providers" header tab
-    And I choose "Fetch" in the providers filter
-    Then the providers matrix should show 4 provider rows
-    And the providers matrix should not contain "Brave Search"
+  # P1-FINAL RETIRED (DROP fleet filter ruling + PillTabs.c2r filter-case
+  # retirement): the standalone Providers page and its All/Search/Fetch/
+  # Keyless capability filter are gone — the Settings Providers tab holds ONE
+  # merged table with no filter. The two scenarios below asserted the dropped
+  # filter and cannot survive the merge.
+  # Scenario: Providers filter is an exclusive segmented group
+  #   When I select the "Providers" header tab
+  #   Then the providers filter should be an exclusive group of "All", "Search", "Fetch" and "Keyless" with "All" pressed
+  #
+  # Scenario: Providers Fetch filter narrows the matrix
+  #   When I select the "Providers" header tab
+  #   And I choose "Fetch" in the providers filter
+  #   Then the providers matrix should show 4 provider rows
+  #   And the providers matrix should not contain "Brave Search"
 
   Scenario: Activity filter is an exclusive segmented group
     When I select the "Activity" header tab

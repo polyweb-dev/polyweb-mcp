@@ -24,9 +24,13 @@ import {
  *   - react-router is a dependency; App source declares Routes.
  *
  * Preserved: AC-SB-8a (flex-row aside+main), AC-SB-8b (no legacy header),
- * AC-SB-8c (six links swap intact views — now link queries + URL asserts),
+ * AC-SB-8c (five links swap intact views — now link queries + URL asserts),
  * AC-SB-8e (PillTabs gold standard untouched), AC-SB-8f (Sidebar wiring +
  * collapse toggle). TabId unchanged — quotas renders at /usage.
+ *
+ * P1-FINAL (blessed inversion, NOT a regression): the standalone Providers
+ * page is retired into the Settings Providers tab — five workspace links,
+ * no /providers view, legacy /providers redirects to /settings.
  */
 
 const testDir = import.meta.dirname
@@ -70,7 +74,6 @@ function testPath(): string {
 
 const EXPECTED_VIEWS: Array<{ link: string; heading: string; path: string }> = [
   { link: "Playground", heading: "Search Playground", path: "/playground" },
-  { link: "Providers", heading: "Providers", path: "/providers" },
   { link: "Routing", heading: "Routing", path: "/routing" },
   { link: "Usage", heading: "Usage", path: "/usage" },
   { link: "Activity", heading: "Activity", path: "/activity" },
@@ -129,7 +132,7 @@ describe("AC-SB-8b: legacy header topbar is gone", () => {
   })
 })
 
-describe("AC-SB-8c (C4): six sidebar links swap intact views via the URL", () => {
+describe("AC-SB-8c (C4, P1-FINAL): five sidebar links swap intact views via the URL", () => {
   it("sidebar exposes all six workspaces as links with exact route hrefs", () => {
     renderApp()
     const nav = screen.getByRole("navigation", { name: "Primary" })
@@ -190,7 +193,7 @@ describe("AC-SB-8d (C4): shell keeps the link+router contract", () => {
     renderApp()
     const aside = document.querySelector("aside") as HTMLElement
     const nav = within(aside).getByRole("navigation", { name: "Primary" })
-    expect(within(nav).getAllByRole("link")).toHaveLength(6)
+    expect(within(nav).getAllByRole("link")).toHaveLength(5)
     expect(within(nav).queryByRole("button")).not.toBeInTheDocument()
     expect(within(aside).queryByRole("tab")).not.toBeInTheDocument()
     expect(within(aside).queryByRole("tablist")).not.toBeInTheDocument()
@@ -218,12 +221,23 @@ describe("AC-SB-8d (C4): shell keeps the link+router contract", () => {
     expect(appSource).toMatch(/react-router/i)
   })
 
+  it("P1-FINAL: legacy /providers redirects to the merged Settings registry", async () => {
+    renderApp("/providers")
+    await waitFor(() => {
+      expect(
+        within(screen.getByRole("main")).getByRole("heading", {
+          name: "Settings",
+        })
+      ).toBeInTheDocument()
+    })
+    expect(testPath()).toBe("/settings")
+  })
+
   it("App source declares the Routes table with redirect + catch-all", () => {
     expect(appSource).toMatch(/<Routes/)
     expect(appSource).toMatch(/<Route/)
     for (const routePath of [
       "/playground",
-      "/providers",
       "/routing",
       "/usage",
       "/activity",

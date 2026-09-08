@@ -68,7 +68,9 @@ Then("reduced-motion transitions should be disabled", async ({ page }) => {
 })
 
 When("I walk from the header through Routing with keyboard only", async ({ page }) => {
-  const headerLabels = ["Playground", "Providers", "Routing"]
+  // P1-FINAL: standalone Providers page retired — tab order is now
+  // Playground, Routing, Usage, Activity, Settings.
+  const headerLabels = ["Playground", "Routing"]
   for (const label of headerLabels) {
     await page.keyboard.press("Tab")
     await expectFocusVisible(page.getByRole("link", { name: label, exact: true }))
