@@ -41,15 +41,6 @@ Then(
   }
 )
 
-Then(
-  "the merged provider table should show a {string} breaker action",
-  async ({ page }, label: string) => {
-    const table = page.getByRole("table").first()
-    await expect(
-      table.getByRole("button", { name: label, exact: true }).first()
-    ).toBeVisible()
-  }
-)
 
 Then("the page should not contain {string}", async ({ page }, text: string) => {
   await expect(page.locator("body")).not.toContainText(text)

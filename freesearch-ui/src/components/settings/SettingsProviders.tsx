@@ -26,7 +26,6 @@ export const SettingsProviders: React.FC = () => {
     toggleProviderSearch,
     toggleProviderFetch,
     moveProviderPriority,
-    setCircuitBreaker,
     testProviderConnection,
   } = useFreeSearch()
   const [testingId, setTestingId] = useState<string | null>(null)
@@ -104,12 +103,6 @@ export const SettingsProviders: React.FC = () => {
                 onToggleGlobal={(enabled) => void handleGlobalToggle(provider.id, enabled)}
                 onToggleSearch={(enabled) => toggleProviderSearch(provider.id, enabled)}
                 onToggleFetch={(enabled) => toggleProviderFetch(provider.id, enabled)}
-                onToggleBreaker={() =>
-                  void setCircuitBreaker(
-                    provider.id,
-                    provider.circuitBreaker === "open" ? "closed" : "open"
-                  )
-                }
                 onOpenTest={() => setSelectedTestId(provider.id)}
               />
             ))}
@@ -137,7 +130,6 @@ const MERGED_HEADERS = [
   "Health",
   "p95",
   "Quota",
-  "Breaker",
   "Test",
 ] as const
 
@@ -153,7 +145,6 @@ interface ProviderRegistryRowProps {
   onToggleGlobal: (enabled: boolean) => void
   onToggleSearch: (enabled: boolean) => void
   onToggleFetch: (enabled: boolean) => void
-  onToggleBreaker: () => void
   onOpenTest: () => void
 }
 
@@ -169,7 +160,6 @@ const ProviderRegistryRow: React.FC<ProviderRegistryRowProps> = ({
   onToggleGlobal,
   onToggleSearch,
   onToggleFetch,
-  onToggleBreaker,
   onOpenTest,
 }) => {
   const health = provider.circuitBreaker === "open" ? "open" : provider.healthStatus
@@ -232,16 +222,11 @@ const ProviderRegistryRow: React.FC<ProviderRegistryRowProps> = ({
       <TableCell className="whitespace-nowrap px-3 py-2.5">
         <HealthStatus status={health} />
       </TableCell>
-      <TableCell className="whitespace-nowrap px-3 py-2.5 text-right tnum">
+      <TableCell className="whitespace-nowrap px-3 py-2.5 tnum">
         {formatLatency(provider.latencyP95Ms)}
       </TableCell>
-      <TableCell className="whitespace-nowrap px-3 py-2.5 text-right tnum">
+      <TableCell className="whitespace-nowrap px-3 py-2.5 tnum">
         {formatQuota(provider)}
-      </TableCell>
-      <TableCell className="whitespace-nowrap px-3 py-2.5">
-        <Button variant="outline" size="sm" type="button" onClick={onToggleBreaker}>
-          {provider.circuitBreaker === "open" ? "Reset" : "Trip"}
-        </Button>
       </TableCell>
       <TableCell className="whitespace-nowrap px-3 py-2.5">
         <Button

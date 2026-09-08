@@ -725,7 +725,7 @@ describe("B-4: all four switches are keyboard-operable", () => {
 // G-1: Providers S-P4 intact (GREEN guard)
 // ---------------------------------------------------------------------------
 
-describe("G-1: Providers P1-FINAL merged table (inverted — 10 cols, min-w-1280)", () => {
+describe("G-1: Providers P1-FINAL merged table (inverted — 9 cols, min-w-1280)", () => {
   it("registry section + frame keep w-full max-w-none with overflow-hidden and min-w-[1280px] merged table", async () => {
     renderSettings()
     await waitForProviders()
@@ -741,7 +741,6 @@ describe("G-1: Providers P1-FINAL merged table (inverted — 10 cols, min-w-1280
       "Health",
       "p95",
       "Quota",
-      "Breaker",
       "Test",
     ])
     const section = table.closest("section") as HTMLElement
@@ -843,7 +842,7 @@ describe("G-5: P1-FINAL page merge (inverted — fleet merged, matrix retired)",
     expect(settingsViewSource).toContain("SettingsProviders")
     expect(settingsViewSource).toContain("SettingsKeyVault")
     expect(settingsViewSource).toContain("SettingsFailover")
-    for (const marker of ["Endpoint", "Health", "Breaker", "Quota", "p95", "ProviderTestModal"]) {
+    for (const marker of ["Endpoint", "Health", "Quota", "p95", "ProviderTestModal"]) {
       expect(settingsSource, `merged registry must carry ${marker}`).toContain(marker)
     }
   })

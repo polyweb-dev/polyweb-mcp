@@ -96,7 +96,6 @@ const EXPECTED_MERGED_HEADERS = [
   "Health",
   "p95",
   "Quota",
-  "Breaker",
   "Test",
 ] as const
 
@@ -228,7 +227,7 @@ afterEach(() => {
 // P1F-1: ONE merged table with the exact 10 headers
 // ---------------------------------------------------------------------------
 
-describe("P1F-1: Settings registry is ONE merged table with 10 columns", () => {
+describe("P1F-1: Settings registry is ONE merged table with 9 columns", () => {
   it("exposes the exact merged headers in order", async () => {
     renderSettings()
     await waitForProviders()
@@ -245,13 +244,13 @@ describe("P1F-1: Settings registry is ONE merged table with 10 columns", () => {
     }
   })
 
-  it("gives every body row exactly 10 cells (merged columns never collapse)", async () => {
+  it("gives every body row exactly 9 cells (merged columns never collapse)", async () => {
     renderSettings()
     await waitForProviders()
     const rows = Array.from(mergedTable().querySelectorAll("tbody tr"))
     expect(rows).toHaveLength(7)
     for (const row of rows) {
-      expect(row.children).toHaveLength(10)
+      expect(row.children).toHaveLength(EXPECTED_MERGED_HEADERS.length)
     }
   })
 
@@ -359,44 +358,21 @@ describe("P1F-3: fleet telemetry rides in the merged row", () => {
     expect(cellFor("Brave Search", "Quota").textContent).toContain("—/∞")
   })
 
-  it("exposes a Trip breaker button per row (closed breakers)", async () => {
+  it("does not expose a Breaker column or Trip/Reset buttons", async () => {
     renderSettings()
     await waitForProviders()
-    for (const name of SEED_PROVIDER_NAMES) {
-      const breaker = cellFor(name, "Breaker")
-      expect(
-        within(breaker).getByRole("button", { name: /^(Trip|Reset)$/ })
-      ).toBeInTheDocument()
-    }
-    expect(
-      within(cellFor("Brave Search", "Breaker")).getByRole("button", { name: "Trip" })
-    ).toBeInTheDocument()
+    expect(screen.queryByText("Breaker")).not.toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "Trip" })).not.toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "Reset" })).not.toBeInTheDocument()
   })
 
-  it("trips a breaker locally with ZERO fetch, then resets via POST .../circuit-breaker/reset", async () => {
-    const user = userEvent.setup()
-    const stub = renderSettings()
+  it("aligns p95 and quota fields with column header (left-aligned)", async () => {
+    renderSettings()
     await waitForProviders()
-    const callsBefore = stub.requests.length
-    await user.click(
-      within(cellFor("Brave Search", "Breaker")).getByRole("button", { name: "Trip" })
-    )
-    await waitFor(() => {
-      expect(
-        within(cellFor("Brave Search", "Breaker")).getByRole("button", { name: "Reset" })
-      ).toBeInTheDocument()
-    })
-    // Local-only trip: the backend exposes reset only, so no fetch fires.
-    expect(stub.requests.length).toBe(callsBefore)
-
-    await user.click(
-      within(cellFor("Brave Search", "Breaker")).getByRole("button", { name: "Reset" })
-    )
-    await waitFor(() => {
-      const resets = stub.requestsTo("/api/v1/providers/brave/circuit-breaker/reset")
-      expect(resets).toHaveLength(1)
-      expect(resets[0].method).toBe("POST")
-    })
+    const p95 = cellFor("Brave Search", "p95")
+    const quota = cellFor("Brave Search", "Quota")
+    expect(p95.className).not.toContain("text-right")
+    expect(quota.className).not.toContain("text-right")
   })
 })
 
@@ -563,7 +539,7 @@ describe("P1F-6: Providers page retired — redirect + no providers nav", () => 
   })
 
   it("SettingsProviders carries the fleet merge markers", () => {
-    for (const marker of ["Endpoint", "Health", "Breaker", "Quota", "p95", "ProviderTestModal"]) {
+    for (const marker of ["Endpoint", "Health", "Quota", "p95", "ProviderTestModal"]) {
       expect(settingsSource, `merged table must carry ${marker}`).toContain(marker)
     }
   })
@@ -588,7 +564,7 @@ describe("P1F-7: merged table scrolls horizontally from 1280px", () => {
     renderSettings()
     await waitForProviders()
     const cells = Array.from(mergedTable().querySelectorAll("th, td")) as HTMLElement[]
-    expect(cells.length).toBe(10 + 7 * 10)
+    expect(cells.length).toBe(EXPECTED_MERGED_HEADERS.length + 7 * EXPECTED_MERGED_HEADERS.length)
     for (const cell of cells) {
       expect(cell.className).toMatch(/whitespace-nowrap/)
     }
@@ -608,7 +584,7 @@ describe("P1F-8: legacy /providers URL renders the merged Settings registry", ()
     expect(screen.getByTestId("test-location").textContent).toBe("/settings")
   })
 
-  it("the redirect target shows the merged registry (10 headers, no Providers view)", async () => {
+  it("the redirect target shows the merged registry (9 headers, no Providers view)", async () => {
     renderAppAt("/providers")
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: "Settings" })).toBeInTheDocument()

@@ -390,20 +390,20 @@ describe("S-P2-3: priority indicator never clips at the card edge", () => {
     }
   })
 
-  it("table + scroller stay intact: single 7x10 merged table, overflow-x-auto, nowrap", async () => {
+  it("table + scroller stay intact: single 7x9 merged table, overflow-x-auto, nowrap", async () => {
     renderSettingsWith(all100Fixture())
     await waitForProviders()
     expect(screen.getAllByRole("table")).toHaveLength(1)
     const table = screen.getByRole("table")
     expect(table.querySelectorAll("tbody tr")).toHaveLength(7)
     for (const row of Array.from(table.querySelectorAll("tbody tr"))) {
-      expect(row.children).toHaveLength(10)
+      expect(row.children).toHaveLength(9)
     }
     const container = table.closest('[data-slot="table-container"]') as HTMLElement | null
     expect(container, "ui/table scroller must wrap the table").not.toBeNull()
     expect(container!.className).toMatch(/overflow-x-auto/)
     const cells = Array.from(table.querySelectorAll("th, td")) as HTMLElement[]
-    expect(cells.length).toBe(10 + 7 * 10)
+    expect(cells.length).toBe(9 + 7 * 9)
     for (const cell of cells) {
       expect(cell.className).toMatch(/whitespace-nowrap/)
     }
@@ -640,7 +640,7 @@ describe("S-P2-5: no restyle, no merge, freesearch-ui only (stays green)", () =>
   })
 
   it("P1-FINAL page merge: fleet telemetry merged into SettingsProviders (ProviderMatrix retired)", () => {
-    for (const marker of ["Endpoint", "Health", "Breaker", "Quota", "p95", "ProviderTestModal"]) {
+    for (const marker of ["Endpoint", "Health", "Quota", "p95", "ProviderTestModal"]) {
       expect(settingsSource, `merged registry must carry ${marker}`).toContain(marker)
     }
   })

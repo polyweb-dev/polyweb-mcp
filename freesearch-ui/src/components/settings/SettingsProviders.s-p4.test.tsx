@@ -101,7 +101,6 @@ const EXPECTED_HEADERS = [
   "Health",
   "p95",
   "Quota",
-  "Breaker",
   "Test",
 ] as const
 const EXPECTED_RANKS = ["P1", "P2", "P3", "P4", "P5", "P6", "P7"] as const
@@ -380,7 +379,7 @@ describe("S-P4-4: responsive horizontal scroll preserved (no wrap, 375px scrolls
     await waitForProviders()
     const table = screen.getByRole("table")
     const cells = Array.from(table.querySelectorAll("th, td")) as HTMLElement[]
-    expect(cells.length).toBe(10 + 7 * 10)
+    expect(cells.length).toBe(EXPECTED_HEADERS.length + 7 * EXPECTED_HEADERS.length)
     for (const cell of cells) {
       expect(cell.className).toMatch(/whitespace-nowrap/)
     }
@@ -396,7 +395,7 @@ describe("S-P4-4: responsive horizontal scroll preserved (no wrap, 375px scrolls
     expect(container.className).toMatch(/overflow-x-auto/)
     expect(table.className).toMatch(/min-w-\[1280px\]/)
     const cells = Array.from(table.querySelectorAll("th, td")) as HTMLElement[]
-    expect(cells.length).toBe(10 + 7 * 10)
+    expect(cells.length).toBe(EXPECTED_HEADERS.length + 7 * EXPECTED_HEADERS.length)
     for (const cell of cells) {
       expect(cell.className).toMatch(/whitespace-nowrap/)
     }
@@ -409,7 +408,7 @@ describe("S-P4-4: responsive horizontal scroll preserved (no wrap, 375px scrolls
 // ---------------------------------------------------------------------------
 
 describe("S-P4-5: no regression — S-P1 table, S-P2 ranks, S-P3 buttons, SettingsView", () => {
-  it("S-P1 table invariant: single merged table, 10 headers, 7x10, scroller, nowrap", async () => {
+  it("S-P1 table invariant: single merged table, 9 headers, 7x9, scroller, nowrap", async () => {
     renderSettings()
     await waitForProviders()
     expect(screen.getAllByRole("table")).toHaveLength(1)
@@ -420,13 +419,13 @@ describe("S-P4-5: no regression — S-P1 table, S-P2 ranks, S-P3 buttons, Settin
     const rows = Array.from(table.querySelectorAll("tbody tr"))
     expect(rows).toHaveLength(7)
     for (const row of rows) {
-      expect(row.children).toHaveLength(10)
+      expect(row.children).toHaveLength(EXPECTED_HEADERS.length)
     }
     const container = table.closest('[data-slot="table-container"]') as HTMLElement | null
     expect(container, "ui/table scroller must wrap the table").not.toBeNull()
     expect(container!.className).toMatch(/overflow-x-auto/)
     const cells = Array.from(table.querySelectorAll("th, td")) as HTMLElement[]
-    expect(cells.length).toBe(10 + 7 * 10)
+    expect(cells.length).toBe(EXPECTED_HEADERS.length + 7 * EXPECTED_HEADERS.length)
     for (const cell of cells) {
       expect(cell.className).toMatch(/whitespace-nowrap/)
     }
@@ -529,7 +528,7 @@ describe("S-P4-5: no regression — S-P1 table, S-P2 ranks, S-P3 buttons, Settin
   })
 
   it("P1-FINAL page merge: fleet telemetry merged into SettingsProviders (ProviderMatrix retired)", () => {
-    for (const marker of ["Endpoint", "Health", "Breaker", "Quota", "p95", "ProviderTestModal"]) {
+    for (const marker of ["Endpoint", "Health", "Quota", "p95", "ProviderTestModal"]) {
       expect(settingsSource, `merged registry must carry ${marker}`).toContain(marker)
     }
   })

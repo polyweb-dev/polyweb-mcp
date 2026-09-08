@@ -100,7 +100,6 @@ const EXPECTED_HEADERS = [
   "Health",
   "p95",
   "Quota",
-  "Breaker",
   "Test",
 ] as const
 
@@ -263,13 +262,13 @@ describe("S-P1-1: registry is a ui/table with the merged 10 columns", () => {
     }
   })
 
-  it("gives every body row exactly 10 cells (columns never collapse)", async () => {
+  it("gives every body row exactly 9 cells (columns never collapse)", async () => {
     renderSettings()
     await waitForProviders()
     const rows = Array.from(providerTable().querySelectorAll("tbody tr"))
     expect(rows).toHaveLength(7)
     for (const row of rows) {
-      expect(row.children).toHaveLength(10)
+      expect(row.children).toHaveLength(EXPECTED_HEADERS.length)
     }
   })
 })
@@ -288,11 +287,11 @@ describe("S-P1-2: per-column x-position equality across 7 rows (<=1px)", () => {
     // Every row lives in the SAME table/tbody (single column grid).
     for (const row of rows) {
       expect(row.closest("table")).toBe(table)
-      expect(row.children).toHaveLength(10)
+      expect(row.children).toHaveLength(EXPECTED_HEADERS.length)
     }
     // Nowrap cells: ui/table TableHead/TableCell carry whitespace-nowrap.
     const cells = Array.from(table.querySelectorAll("th, td")) as HTMLElement[]
-    expect(cells.length).toBe(10 + 7 * 10)
+    expect(cells.length).toBe(EXPECTED_HEADERS.length + 7 * EXPECTED_HEADERS.length)
     for (const cell of cells) {
       expect(cell.className).toMatch(/whitespace-nowrap/)
     }
@@ -302,7 +301,7 @@ describe("S-P1-2: per-column x-position equality across 7 rows (<=1px)", () => {
     renderSettings()
     await waitForProviders()
     const table = providerTable()
-    for (let col = 0; col < 10; col += 1) {
+    for (let col = 0; col < EXPECTED_HEADERS.length; col += 1) {
       const lefts = columnLefts(table, col)
       expect(lefts).toHaveLength(7)
       for (const left of lefts) {
@@ -365,9 +364,9 @@ describe("S-P1-3: Global-off placeholder keeps columns from collapsing", () => {
     expect(patches).toHaveLength(1)
     expect(patches[0].body).toEqual({ enabled: false })
 
-    // Columns never collapse: still 10 cells, Fetch still occupied.
+    // Columns never collapse: still 9 cells, Fetch still occupied.
     const row = findProviderRowTr("Brave Search")
-    expect(row.children).toHaveLength(10)
+    expect(row.children).toHaveLength(EXPECTED_HEADERS.length)
     const fetchCell = cellFor("Brave Search", "Fetch")
     expect(fetchCell.textContent?.trim().length).toBeGreaterThan(0)
     // Placeholder is either the dimmed guard or an em-dash — never empty.
@@ -402,7 +401,7 @@ describe("S-P1-4: 375px viewport scrolls horizontally without wrapping", () => {
     const container = table.closest('[data-slot="table-container"]') as HTMLElement
     expect(container.className).toMatch(/overflow-x-auto/)
     const cells = Array.from(table.querySelectorAll("th, td")) as HTMLElement[]
-    expect(cells.length).toBe(10 + 7 * 10)
+    expect(cells.length).toBe(EXPECTED_HEADERS.length + 7 * EXPECTED_HEADERS.length)
     for (const cell of cells) {
       expect(cell.className).toMatch(/whitespace-nowrap/)
     }
@@ -642,7 +641,7 @@ describe("S-P1-6: P1-FINAL merge guards (inverted — page merged, RED)", () => 
   it("P1-FINAL page merge: ProviderMatrix retired, fleet telemetry merged into SettingsProviders", () => {
     // Standalone fleet page is gone: no Trip/Reset matrix, no fleet filter,
     // no stat cards in a separate page — the merged registry carries them.
-    for (const marker of ["Endpoint", "Health", "Breaker", "Quota", "p95", "ProviderTestModal"]) {
+    for (const marker of ["Endpoint", "Health", "Quota", "p95", "ProviderTestModal"]) {
       expect(settingsSource, `merged registry must carry ${marker}`).toContain(marker)
     }
     expect(settingsSource).not.toMatch(/Total fleet/)

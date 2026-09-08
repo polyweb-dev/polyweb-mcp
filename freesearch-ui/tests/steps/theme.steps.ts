@@ -33,43 +33,43 @@ Given("the Carbon Black theme files", async () => {
   expect(() => readFileSync(headerPath, "utf8")).not.toThrow()
 })
 
-Then("the {string} token should be exactly {string}", async (_, token: string, expected: string) => {
+Then("the {string} token should be exactly {string}", async ({}, token: string, expected: string) => {
   await Promise.resolve()
   const name = token.replace(/^--/, "")
   expect(tokenValueNorm(readIndexCss(), name)).toBe(norm(expected))
 })
 
-Then("index.css should contain no {string} references", async (_, ref: string) => {
+Then("index.css should contain no {string} references", async ({}, ref: string) => {
   await Promise.resolve()
   expect(norm(readIndexCss()).includes(norm(ref))).toBe(false)
 })
 
-Then("index.css should not contain legacy hex {string}", async (_, hex: string) => {
+Then("index.css should not contain legacy hex {string}", async ({}, hex: string) => {
   await Promise.resolve()
   expect(norm(readIndexCss()).includes(norm(hex))).toBe(false)
 })
 
 Then(
   "index.css should not reference the legacy signal tint {string}",
-  async (_, tint: string) => {
+  async ({}, tint: string) => {
     await Promise.resolve()
     expect(norm(readIndexCss()).includes(norm(tint))).toBe(false)
   }
 )
 
-Then("Header.tsx should use {string} as its backdrop", async (_, expected: string) => {
+Then("Header.tsx should use {string} as its backdrop", async ({}, expected: string) => {
   await Promise.resolve()
   expect(norm(readHeader()).includes(norm(expected))).toBe(true)
 })
 
-Then("Header.tsx should not reference the legacy tint {string}", async (_, tint: string) => {
+Then("Header.tsx should not reference the legacy tint {string}", async ({}, tint: string) => {
   await Promise.resolve()
   expect(norm(readHeader()).includes(norm(tint))).toBe(false)
 })
 
 Then(
   "the shadcn {string} and {string} tokens should be {string}",
-  async (_, first: string, second: string, expected: string) => {
+  async ({}, first: string, second: string, expected: string) => {
     await Promise.resolve()
     const css = readIndexCss()
     expect(tokenValueNorm(css, first.replace(/^--/, ""))).toBe(norm(expected))
@@ -77,7 +77,7 @@ Then(
   }
 )
 
-Then("the shadcn {string} token should be {string}", async (_, token: string, expected: string) => {
+Then("the shadcn {string} token should be {string}", async ({}, token: string, expected: string) => {
   await Promise.resolve()
   expect(tokenValueNorm(readIndexCss(), token.replace(/^--/, ""))).toBe(norm(expected))
 })
@@ -104,7 +104,7 @@ Then(
   }
 )
 
-Then("no shadcn token should use {string}", async (_, ref: string) => {
+Then("no shadcn token should use {string}", async ({}, ref: string) => {
   await Promise.resolve()
   const css = readIndexCss()
   const shadcnBlock = css.slice(css.indexOf("shadcn token mappings"))
