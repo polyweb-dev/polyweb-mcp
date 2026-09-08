@@ -31,7 +31,7 @@ import {
  *
  * Plan under test (CONFIRMED, freesearch-ui/ ONLY):
  *   - search-composer box (elevated + border + rounded-xl + padding + shadow
- *     + focus-within signal, Search-mode ONLY, Fetch bare);
+ *     + focus-within signal, Search-mode ONLY, Fetch bare at PG-S3 time);
  *   - division idle + docked (results render AFTER the composer);
  *   - internal divider + footer tray (suggestions + provider + depth INSIDE
  *     the box, muted 13px);
@@ -39,15 +39,19 @@ import {
  *   - docked-top + same-form + PG-S1 contract intact;
  *   - PG-S2 button lock intact.
  *   - reusable pattern across three (Search now; Fetch/Simulator later --
- *     name seams only, do NOT build shared file).
+ *     name seams only at PG-S3 time, NO shared file).
+ *   - PG-F1 SUPERSEDES the no-shared-file rule: Fetch now goes via shared
+ *     common/ComposerShell.tsx (testIdPrefix=fetch); Search stays the inline
+ *     reference shape with zero migration.
  *
  * AC mapping:
  *   AC-PG-S3-1  Search-mode composer box: data-testid="search-composer"
  *               present ONLY in Search mode; carries elevated bg + border +
  *               rounded-xl + padding + shadow + focus-within signal; input
  *               inside is borderless (no bare underline); Fetch mode is bare
- *               (no composer). Seam named in source, gated on
- *               mode === "search", with NO shared composer file.
+ *               of search-composer at PG-S3 time (PG-F1 later owns the shared
+ *               ComposerShell extraction for Fetch; Search stays inline).
+ *               Seam named in source, gated on mode === "search".
  *   AC-PG-S3-2  Division idle + docked: composer present in both states;
  *               after search, results render AFTER the composer in document
  *               order (clear division, ours stays docked-top per bullet).
@@ -85,7 +89,6 @@ const playgroundSource = readFileSync(
   "utf8"
 )
 const searchDir = testDir
-const commonDir = path.resolve(testDir, "../common")
 
 function renderWithBackend(
   searchHandler?: (req: { url: string }) => Response | Promise<Response>,
@@ -196,25 +199,15 @@ describe("PG-S3 AC-PG-S3-1: Search-mode composer box, Fetch stays bare, seams na
     expect(fetchButton.querySelector("svg")).toBeNull()
   })
 
-  it("names the search seam in SearchPlayground source gated on Search mode with NO shared composer file", () => {
-    // Seam names only -- Search now, Fetch/Simulator later.
+  it("names the search seam in SearchPlayground source gated on Search mode (shared shell owned by PG-F1)", () => {
+    // Seam names: Search inline reference; Fetch extraction owned by PG-F1.
     expect(playgroundSource).toContain("search-composer")
     expect(playgroundSource).toContain("search-composer-footer")
     expect(playgroundSource).toContain("search-composer-divider")
-    // Gated on Search mode only (Fetch stays bare by construction).
+    // Gated on Search mode only.
     expect(playgroundSource).toMatch(/mode\s*===\s*["']search["']/)
-    // NO shared component extraction in this bullet.
-    const bannedImport =
-      /from\s+["'][^"']*[Cc]omposer[^"']*["']|import\s+[^;]*Composer/.test(
-        playgroundSource
-      )
-    expect(bannedImport).toBe(false)
-    const commonFiles: string[] = existsSync(commonDir)
-      ? readdirSync(commonDir)
-      : []
-    expect(
-      commonFiles.filter((f) => /composer/i.test(f))
-    ).toEqual([])
+    // PG-F1 owns common/ComposerShell.tsx — no PG-S3 ban. Search itself
+    // must not be extracted into a separate file.
     const searchFiles: string[] = existsSync(searchDir)
       ? readdirSync(searchDir)
       : []

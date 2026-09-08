@@ -11,6 +11,7 @@ import {
   PillTabsPanel,
 } from "@/components/common/PillTabs"
 import { Button } from "@/components/ui/button"
+import { ComposerShell } from "@/components/common/ComposerShell"
 import type { SearchResult } from "@/types/freesearch"
 
 const PLAYGROUND_VIEW_OPTIONS = [
@@ -55,6 +56,7 @@ export const SearchPlayground: React.FC = () => {
   )
   const hasSearchContent =
     activeSearch !== null || isSearching || searchError !== null
+  const hasFetchContent = activeFetch !== null || isFetching || fetchError !== null
 
   const handleExecute = async (e?: React.FormEvent) => {
     if (e) e.preventDefault()
@@ -230,55 +232,56 @@ export const SearchPlayground: React.FC = () => {
           </div>
         </div>
       ) : (
-        <>
-          <div className="relative">
-            <div
-              className="absolute left-0 top-1/2 -translate-y-1/2 pl-1"
-              style={{ color: "var(--muted)" }}
-            >
-              <FileText className="size-5" />
-            </div>
-            <input
-              type="url"
-              value={fetchUrl}
-              onChange={(e) => setFetchUrl(e.target.value)}
-              placeholder="Enter a URL to fetch and convert..."
-              className="w-full bg-transparent py-3 pl-9 pr-32 text-[15px] font-mono outline-none placeholder:text-[var(--muted)]"
-              style={{
-                color: "var(--text-strong)",
-                borderBottom: "1px solid var(--border-subtle)",
-              }}
-            />
-            <div className="absolute right-0 top-1/2 -translate-y-1/2">
-              <Button
-                type="submit"
-                disabled={isSearching || isFetching}
-                className="inline-flex items-center gap-2 rounded-md px-5 py-2 text-[13px] font-medium text-white"
-                style={{ background: "var(--signal)" }}
+        <ComposerShell
+          testIdPrefix="fetch"
+          inputRow={
+            <div className="relative">
+              <div
+                className="absolute left-0 top-1/2 -translate-y-1/2 pl-1"
+                style={{ color: "var(--muted)" }}
               >
-                {isSearching || isFetching ? "Executing..." : "Fetch"}
-              </Button>
+                <FileText className="size-5" />
+              </div>
+              <input
+                type="url"
+                value={fetchUrl}
+                onChange={(e) => setFetchUrl(e.target.value)}
+                placeholder="Enter a URL to fetch and convert..."
+                className="w-full bg-transparent py-3 pl-9 pr-32 text-[15px] font-mono outline-none placeholder:text-[var(--muted)]"
+                style={{ color: "var(--text-strong)" }}
+              />
+              <div className="absolute right-0 top-1/2 -translate-y-1/2">
+                <Button
+                  type="submit"
+                  disabled={isSearching || isFetching}
+                  className="inline-flex items-center gap-2 rounded-md px-5 py-2 text-[13px] font-medium text-white"
+                  style={{ background: "var(--signal)" }}
+                >
+                  {isSearching || isFetching ? "Executing..." : "Fetch"}
+                </Button>
+              </div>
             </div>
-          </div>
-
-          <div className="mt-3 flex flex-wrap items-center gap-4 text-[13px] text-[var(--muted)]">
-            <div className="flex items-center gap-2">
-              <span>Provider:</span>
-              <select
-                value={selectedProviderId}
-                onChange={(e) => setSelectedProviderId(e.target.value)}
-                className="rounded border border-[var(--border-subtle)] bg-[var(--elevated)] px-2.5 py-1 text-[13px] text-[var(--text)] outline-none"
-              >
-                <option value="auto">Auto arbitration</option>
-                {eligibleProviders.map((provider) => (
-                  <option key={provider.id} value={provider.id}>
-                    {provider.name}
-                  </option>
-                ))}
-              </select>
+          }
+          footer={
+            <div className="flex flex-wrap items-center gap-4">
+              <div className="flex items-center gap-2">
+                <span>Provider:</span>
+                <select
+                  value={selectedProviderId}
+                  onChange={(e) => setSelectedProviderId(e.target.value)}
+                  className="rounded border border-[var(--border-subtle)] bg-[var(--elevated)] px-2.5 py-1 text-[13px] text-[var(--text)] outline-none"
+                >
+                  <option value="auto">Auto arbitration</option>
+                  {eligibleProviders.map((provider) => (
+                    <option key={provider.id} value={provider.id}>
+                      {provider.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
-          </div>
-        </>
+          }
+        />
       )}
     </form>
   )
@@ -563,7 +566,17 @@ export const SearchPlayground: React.FC = () => {
       </PillTabsPanel>
 
       <PillTabsPanel value="fetch" className="space-y-8">
-        {requestForm}
+        <div
+          data-testid="fetch-layout"
+          data-state={hasFetchContent ? "docked" : "hero"}
+          className={`transition-all duration-300 ease-out motion-reduce:transition-none ${
+            hasFetchContent
+              ? "top-docked"
+              : "mx-auto flex min-h-[55vh] max-w-3xl flex-col justify-center"
+          }`}
+        >
+          {requestForm}
+        </div>
         {fetchError && (
           <p className="text-[13px]" style={{ color: "var(--status-danger)" }}>
             {fetchError}

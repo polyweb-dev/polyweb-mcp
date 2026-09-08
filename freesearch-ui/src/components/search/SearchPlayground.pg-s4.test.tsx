@@ -61,8 +61,9 @@ import {
  *               fetch-eligible selection is inherited (require), ineligible
  *               resets to auto; runFetch uses format markdown + timeout 4000ms.
  *   AC-PG-S4-7  Regressions GREEN before/after: PG-S1 hero/docked + same-form,
- *               PG-S2 button lock, PG-S3 composer box + gating, no shared
- *               Composer file, SearchPlayground-only diff.
+ *               PG-S2 button lock, PG-S3 composer box + gating, shared
+ *               ComposerShell owned by PG-F1 (no PG-S4 ban),
+ *               SearchPlayground-only diff.
  *
  * RED expectation: AC-PG-S4-1..S4-6 FAIL cleanly against the current codebase
  * (zero fetch-result-* testids, single FileText usage, no handleFetchResult).
@@ -802,21 +803,13 @@ describe("PG-S4 AC-PG-S4-7 regressions: PG-S1/S2/S3 guards + composer gating + f
     expect(screen.queryByTestId("search-composer-footer")).toBeNull()
   })
 
-  it("names seams with NO shared Composer file and Fetch flow untouched", async () => {
-    // Seam names only -- Search now, Fetch/Simulator later.
+  it("names seams (shared shell owned by PG-F1) and Fetch flow untouched", async () => {
+    // Seam names: Search inline reference; Fetch extraction owned by PG-F1.
     expect(playgroundSource).toContain("search-composer")
     expect(playgroundSource).toContain("search-composer-footer")
     expect(playgroundSource).toContain("search-composer-divider")
     expect(playgroundSource).toMatch(/mode\s*===\s*["']search["']/)
-    const bannedImport =
-      /from\s+["'][^"']*[Cc]omposer[^"']*["']|import\s+[^;]*Composer/.test(
-        playgroundSource
-      )
-    expect(bannedImport).toBe(false)
-    const commonFiles: string[] = existsSync(commonDir)
-      ? readdirSync(commonDir)
-      : []
-    expect(commonFiles.filter((f) => /composer/i.test(f))).toEqual([])
+    // PG-F1 owns common/ComposerShell.tsx — no PG-S4 ban.
     const searchFiles: string[] = existsSync(searchDir)
       ? readdirSync(searchDir)
       : []
