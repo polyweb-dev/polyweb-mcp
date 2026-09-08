@@ -62,7 +62,7 @@ export const RoutingStrategy: React.FC = () => {
   }
 
   return (
-    <section className="space-y-3 max-w-3xl">
+    <section className="space-y-3 w-full max-w-none">
       <div className="flex items-center justify-between">
         <h3 className="text-[var(--text-strong)]">Active algorithm</h3>
       </div>

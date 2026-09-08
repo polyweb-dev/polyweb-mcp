@@ -1,5 +1,7 @@
 import React, { useState } from "react"
+import { Search } from "lucide-react"
 import { useFreeSearch } from "@/context/useFreeSearch"
+import { ComposerShell } from "@/components/common/ComposerShell"
 import { SegmentedControl } from "@/components/common/SegmentedControl"
 import type { ProviderConfig } from "@/types/freesearch"
 import { getEligibleProviders, getProviderReason } from "./routingUtils"
@@ -41,7 +43,7 @@ export const RouteSimulator: React.FC = () => {
   }
 
   return (
-    <section className="space-y-5 max-w-3xl">
+    <section className="space-y-5">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h3 className="text-[var(--text-strong)]">Route simulator</h3>
@@ -57,24 +59,50 @@ export const RouteSimulator: React.FC = () => {
         />
       </div>
 
-      <div className="flex items-center gap-2">
-        <input
-          type="text"
-          value={requestInput}
-          onChange={(e) => setRequestInput(e.target.value)}
-          placeholder={
-            operation === "Search" ? "Type simulated query..." : "Type simulated URL..."
+      <div
+        data-testid="simulator-layout"
+        data-state={hasSimulated ? "docked" : "hero"}
+        className={`transition-all duration-300 ease-out motion-reduce:transition-none ${
+          hasSimulated
+            ? "top-docked"
+            : "mx-auto flex min-h-[55vh] max-w-3xl flex-col justify-center"
+        }`}
+      >
+        <ComposerShell
+          testIdPrefix="simulator"
+          inputRow={
+            <div className="relative">
+              <div
+                className="absolute left-0 top-1/2 -translate-y-1/2 pl-1"
+                style={{ color: "var(--muted)" }}
+              >
+                <Search className="size-5" />
+              </div>
+              <input
+                type="text"
+                value={requestInput}
+                onChange={(e) => setRequestInput(e.target.value)}
+                placeholder={
+                  operation === "Search"
+                    ? "Type simulated query..."
+                    : "Type simulated URL..."
+                }
+                className="w-full bg-transparent py-3 pl-9 pr-36 text-[15px] font-mono outline-none placeholder:text-[var(--muted)]"
+                style={{ color: "var(--text-strong)" }}
+              />
+              <div className="absolute right-0 top-1/2 -translate-y-1/2">
+                <button
+                  type="button"
+                  onClick={handleSimulate}
+                  className="rounded-md px-5 py-2 text-[13px] font-medium text-white transition-opacity motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--signal)]/40"
+                  style={{ background: "var(--signal)" }}
+                >
+                  Simulate route
+                </button>
+              </div>
+            </div>
           }
-          className="flex-1 rounded-md border border-[var(--border-subtle)] bg-[var(--surface)] px-3 py-2 text-[13px] text-[var(--text)] font-mono placeholder:text-[var(--muted)] outline-none focus:border-[var(--signal)]"
         />
-        <button
-          type="button"
-          onClick={handleSimulate}
-          className="px-4 py-2 text-[13px] font-medium rounded-md text-white transition-opacity shrink-0 disabled:opacity-70 motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--signal)]/40"
-          style={{ background: "var(--signal)" }}
-        >
-          Simulate route
-        </button>
       </div>
 
       {eligible.length === 0 ? (

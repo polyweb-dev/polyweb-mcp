@@ -799,10 +799,13 @@ describe("PG-F1 AC-PG-F1-6 regressions: PG-S1..S5 + header + Simulator + logic u
       screen.getByRole("heading", { name: "Search Playground" })
     ).toBeInTheDocument()
 
-    // Simulator keeps its own pattern: no ComposerShell/fetch seams.
+    // R-Strategy + R-Sim (blessed churn, NOT a regression): the Simulator
+    // now composes via the shared ComposerShell inside a simulator-layout
+    // hero/dock wrapper (Search/Fetch Tab pattern).
     expect(simulatorSource).toContain("SegmentedControl")
     expect(simulatorSource).toContain("Simulate route")
-    expect(simulatorSource).not.toContain("ComposerShell")
+    expect(simulatorSource).toContain("ComposerShell")
+    expect(simulatorSource).toContain("simulator-layout")
     expect(simulatorSource).not.toContain("fetch-layout")
     expect(simulatorSource).not.toContain("fetch-composer")
     expect(simulatorSource).not.toContain("search-composer")
