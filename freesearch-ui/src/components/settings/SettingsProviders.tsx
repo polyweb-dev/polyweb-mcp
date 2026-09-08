@@ -3,6 +3,7 @@ import { ArrowDown, ArrowUp } from "lucide-react"
 import { useFreeSearch } from "@/context/useFreeSearch"
 import { Switch } from "@/components/common/Switch"
 import { SegmentedControl } from "@/components/common/SegmentedControl"
+import { Button } from "@/components/ui/button"
 import {
   Table,
   TableBody,
@@ -198,15 +199,16 @@ const ProviderRegistryRow: React.FC<ProviderRegistryRowProps> = ({
         />
       </TableCell>
       <TableCell className="w-20 px-3 py-2.5">
-        <button
+        <Button
+          variant="outline"
+          size="sm"
           type="button"
           onClick={onTest}
           disabled={testing}
           aria-label={`${provider.name} connection`}
-          className="text-[13px] text-[var(--muted)] hover:text-white transition-colors motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--signal)]/40"
         >
           {testing ? "Testing..." : "Test"}
-        </button>
+        </Button>
       </TableCell>
     </TableRow>
   )
