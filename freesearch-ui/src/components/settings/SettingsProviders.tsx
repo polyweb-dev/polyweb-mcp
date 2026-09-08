@@ -3,6 +3,14 @@ import { ArrowDown, ArrowUp } from "lucide-react"
 import { useFreeSearch } from "@/context/useFreeSearch"
 import { Switch } from "@/components/common/Switch"
 import { SegmentedControl } from "@/components/common/SegmentedControl"
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
 import type { ProviderConfig } from "@/types/freesearch"
 
 /**
@@ -55,22 +63,43 @@ export const SettingsProviders: React.FC = () => {
         </p>
       </div>
 
-      <div className="border border-[var(--border-subtle)] rounded-lg overflow-hidden">
-        {providers.map((provider) => (
-          <ProviderRegistryRow
-            key={provider.id}
-            provider={provider}
-            testing={testingId === provider.id}
-            globalPending={pendingGlobalId === provider.id}
-            canMoveUp={!singleRow && provider.id !== firstPriorityId}
-            canMoveDown={!singleRow && provider.id !== lastPriorityId}
-            onMovePriority={(direction) => moveProviderPriority(provider.id, direction)}
-            onToggleGlobal={(enabled) => void handleGlobalToggle(provider.id, enabled)}
-            onToggleSearch={(enabled) => toggleProviderSearch(provider.id, enabled)}
-            onToggleFetch={(enabled) => toggleProviderFetch(provider.id, enabled)}
-            onTest={() => handleTest(provider.id)}
-          />
-        ))}
+      <div className="overflow-hidden rounded-lg border border-[var(--border-subtle)]">
+        <Table className="min-w-[880px] text-[13px]">
+          <TableHeader>
+            <TableRow className="border-b border-[var(--border-subtle)] bg-[var(--elevated)] hover:bg-[var(--elevated)]">
+              <TableHead className="h-9 px-3 text-[12px] text-[var(--muted)]">Provider</TableHead>
+              <TableHead className="h-9 w-[110px] px-3 text-[12px] text-[var(--muted)]">
+                Global
+              </TableHead>
+              <TableHead className="h-9 w-[170px] px-3 text-[12px] text-[var(--muted)]">
+                Search
+              </TableHead>
+              <TableHead className="h-9 w-[170px] px-3 text-[12px] text-[var(--muted)]">
+                Fetch
+              </TableHead>
+              <TableHead className="h-9 w-20 px-3 text-[12px] text-[var(--muted)]">
+                Test
+              </TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {providers.map((provider) => (
+              <ProviderRegistryRow
+                key={provider.id}
+                provider={provider}
+                testing={testingId === provider.id}
+                globalPending={pendingGlobalId === provider.id}
+                canMoveUp={!singleRow && provider.id !== firstPriorityId}
+                canMoveDown={!singleRow && provider.id !== lastPriorityId}
+                onMovePriority={(direction) => moveProviderPriority(provider.id, direction)}
+                onToggleGlobal={(enabled) => void handleGlobalToggle(provider.id, enabled)}
+                onToggleSearch={(enabled) => toggleProviderSearch(provider.id, enabled)}
+                onToggleFetch={(enabled) => toggleProviderFetch(provider.id, enabled)}
+                onTest={() => handleTest(provider.id)}
+              />
+            ))}
+          </TableBody>
+        </Table>
       </div>
     </section>
   )
@@ -105,70 +134,70 @@ const ProviderRegistryRow: React.FC<ProviderRegistryRowProps> = ({
   const supportsFetch = provider.capabilities.includes("fetch")
 
   return (
-    <div className="p-3 border-b last:border-b-0 border-[var(--border-subtle)] hover:bg-[var(--elevated)] transition-colors">
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
-        <PriorityIndicator
-          provider={provider}
-          canMoveUp={canMoveUp}
-          canMoveDown={canMoveDown}
-          onMovePriority={onMovePriority}
-        />
-
-        <div className="min-w-0 flex-1 basis-48">
-          <div className="flex items-center gap-2">
-            <span className="text-[13px] font-medium text-[var(--text-strong)]">
-              {provider.name}
+    <TableRow className="border-b border-[var(--border-subtle)] last:border-b-0 hover:bg-[var(--elevated)]">
+      <TableCell className="px-3 py-2.5">
+        <div className="flex items-center gap-3">
+          <PriorityIndicator
+            provider={provider}
+            canMoveUp={canMoveUp}
+            canMoveDown={canMoveDown}
+            onMovePriority={onMovePriority}
+          />
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="font-medium text-[var(--text-strong)]">{provider.name}</span>
+              {provider.isCustom && <RowPill tone="signal">custom</RowPill>}
+              {provider.capabilities.includes("keyless_tier") && (
+                <RowPill tone="healthy">keyless</RowPill>
+              )}
+            </div>
+            <span className="block truncate text-[12px] text-[var(--muted)]">
+              {provider.capabilities.join(", ")}
             </span>
-            {provider.isCustom && <RowPill tone="signal">custom</RowPill>}
-            {provider.capabilities.includes("keyless_tier") && (
-              <RowPill tone="healthy">keyless</RowPill>
-            )}
           </div>
-          <span className="text-[12px] text-[var(--muted)] block truncate">
-            {provider.capabilities.join(", ")}
-          </span>
         </div>
-
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-          <div className="flex items-center gap-1.5">
-            <span className="text-[13px] text-[var(--muted)]">Global</span>
-            <Switch
-              checked={provider.globalEnabled}
-              onChange={onToggleGlobal}
-              disabled={globalPending}
-              ariaLabel={`${provider.name} global routing`}
-            />
-          </div>
-
-          <OperationControl
-            label="Search"
-            providerName={provider.name}
-            supported={supportsSearch}
-            enabled={provider.searchEnabled}
-            globallyDisabled={!provider.globalEnabled}
-            onToggle={onToggleSearch}
-          />
-          <OperationControl
-            label="Fetch"
-            providerName={provider.name}
-            supported={supportsFetch}
-            enabled={provider.fetchEnabled}
-            globallyDisabled={!provider.globalEnabled}
-            onToggle={onToggleFetch}
-          />
-
-          <button
-            type="button"
-            onClick={onTest}
-            disabled={testing}
-            aria-label={`${provider.name} connection`}
-            className="text-[13px] text-[var(--muted)] hover:text-white transition-colors motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--signal)]/40"
-          >
-            {testing ? "Testing..." : "Test"}
-          </button>
-        </div>
-      </div>
-    </div>
+      </TableCell>
+      <TableCell className="w-[110px] px-3 py-2.5">
+        <span className="sr-only">Global</span>
+        <Switch
+          checked={provider.globalEnabled}
+          onChange={onToggleGlobal}
+          disabled={globalPending}
+          ariaLabel={`${provider.name} global routing`}
+        />
+      </TableCell>
+      <TableCell className="w-[170px] px-3 py-2.5">
+        <OperationControl
+          label="Search"
+          providerName={provider.name}
+          supported={supportsSearch}
+          enabled={provider.searchEnabled}
+          globallyDisabled={!provider.globalEnabled}
+          onToggle={onToggleSearch}
+        />
+      </TableCell>
+      <TableCell className="w-[170px] px-3 py-2.5">
+        <OperationControl
+          label="Fetch"
+          providerName={provider.name}
+          supported={supportsFetch}
+          enabled={provider.fetchEnabled}
+          globallyDisabled={!provider.globalEnabled}
+          onToggle={onToggleFetch}
+        />
+      </TableCell>
+      <TableCell className="w-20 px-3 py-2.5">
+        <button
+          type="button"
+          onClick={onTest}
+          disabled={testing}
+          aria-label={`${provider.name} connection`}
+          className="text-[13px] text-[var(--muted)] hover:text-white transition-colors motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--signal)]/40"
+        >
+          {testing ? "Testing..." : "Test"}
+        </button>
+      </TableCell>
+    </TableRow>
   )
 }
 
@@ -234,22 +263,20 @@ const OperationControl: React.FC<OperationControlProps> = ({
   onToggle,
 }) => {
   if (!supported) {
-    // An unsupported operation is only actionable while global routing is on.
-    if (globallyDisabled) return null
+    if (globallyDisabled) {
+      return <span className="inline-flex min-w-[110px] text-[var(--muted)] opacity-60">—</span>
+    }
     return (
-      <span className="text-[12px] px-1.5 py-0.5 rounded border border-[var(--border-subtle)] text-[var(--muted)]">
+      <span className="inline-flex min-w-[110px] justify-center rounded border border-[var(--border-subtle)] px-1.5 py-0.5 text-[12px] text-[var(--muted)]">
         Not supported
       </span>
     )
   }
 
   return (
-    <div
-      className="flex items-center gap-1.5"
-      title="Session-only — backend has global enable only"
-    >
-      <span className="text-[13px] text-[var(--muted)]">{label}</span>
-      <fieldset disabled={globallyDisabled} className="min-w-0 border-0 p-0 m-0">
+    <div className="min-w-[110px]" title="Session-only — backend has global enable only">
+      <span className="sr-only">{label}</span>
+      <fieldset disabled={globallyDisabled} className="m-0 border-0 p-0">
         <SegmentedControl
           options={["On", "Off"] as const}
           value={enabled ? "On" : "Off"}
