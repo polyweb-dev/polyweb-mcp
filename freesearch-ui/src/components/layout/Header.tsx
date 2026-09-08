@@ -26,31 +26,47 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, onSelectTab }) => {
         borderBottom: "1px solid var(--border-subtle)",
       }}
     >
-      <div className="w-full max-w-[1600px] mx-auto px-6 sm:px-8 lg:px-12 flex items-center justify-between h-14">
-        {/* Brand */}
-        <span
-          className="text-[15px] font-semibold tracking-tight"
-          style={{ color: "var(--text-strong)" }}
-        >
-          FreeSearch
-        </span>
+      <div className="mx-auto flex h-14 w-full max-w-[1600px] min-w-0 items-center justify-between gap-4 px-6 sm:px-8 lg:px-12">
+        <div className="flex shrink-0 items-center gap-3">
+          <span
+            className="text-[15px] font-semibold tracking-tight"
+            style={{ color: "var(--text-strong)" }}
+          >
+            FreeSearch
+          </span>
+          <span
+            aria-hidden="true"
+            className="size-2 rounded-full bg-[var(--signal)]"
+          />
+          <span
+            aria-hidden="true"
+            className="h-5 w-px bg-[var(--border-subtle)]"
+          />
+        </div>
 
-        {/* Navigation — plain text links with bottom-border active indicator */}
-        <nav className="flex items-center gap-1">
+        <nav className="flex max-w-full items-center gap-1 overflow-x-auto rounded-full border border-[var(--border-subtle)] bg-[var(--secondary)] p-1">
           {navItems.map((item) => {
             const isActive = activeTab === item.id
             return (
               <button
                 key={item.id}
+                type="button"
+                aria-current={isActive ? "page" : undefined}
                 onClick={() => onSelectTab(item.id)}
                 className={cn(
-                  "px-3 py-1 text-[13px] font-medium rounded-md transition-colors",
+                  "relative shrink-0 rounded-full px-3 py-1 text-[13px] font-medium transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--signal)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--elevated)] motion-reduce:transition-none",
                   isActive
-                    ? "text-white bg-white/[0.07]"
+                    ? "bg-[var(--signal-muted)] text-white"
                     : "text-[var(--muted)] hover:text-[var(--text-strong)]"
                 )}
               >
                 {item.label}
+                {isActive && (
+                  <span
+                    aria-hidden="true"
+                    className="absolute inset-x-3 bottom-0 h-0.5 rounded-full bg-[var(--signal)]"
+                  />
+                )}
               </button>
             )
           })}
