@@ -62,7 +62,7 @@ import {
  *           S-P3 Test affordance (ui/button outline sm box, states, one
  *           POST), SettingsView pills (Providers/Keys/Failover pill
  *           variant), Carbon Black tokens, NO ProviderMatrix merge,
- *           sibling sections untouched (KeyVault/Failover keep their caps),
+ *           sibling sections follow suit (KeyVault full width per K1, Failover per F1),
  *           freesearch-ui ONLY (no backend/python imports).
  *
  * RED expectation:
@@ -512,11 +512,13 @@ describe("S-P4-5: no regression — S-P1 table, S-P2 ranks, S-P3 buttons, Settin
     expect(norm(indexCssSource).includes("oklch(")).toBe(false)
   })
 
-  it("scope: Keys spans full width (K1) while Failover keeps its cap", () => {
+  it("scope: Keys spans full width (K1) and Failover spans full width (F1)", () => {
     expect(keyVaultSource).not.toMatch(/max-w-4xl/)
     expect(keyVaultSource).toMatch(/w-full/)
     expect(keyVaultSource).toMatch(/max-w-none/)
-    expect(failoverSource).toMatch(/max-w-3xl/)
+    expect(failoverSource).not.toMatch(/max-w-3xl/)
+    expect(failoverSource).toMatch(/w-full/)
+    expect(failoverSource).toMatch(/max-w-none/)
   })
 
   it("NO page merge: SettingsProviders never imports ProviderMatrix", () => {

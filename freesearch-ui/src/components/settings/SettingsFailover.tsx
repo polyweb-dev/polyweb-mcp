@@ -10,7 +10,7 @@ export const SettingsFailover: React.FC = () => {
   const { fallbackConfig, updateFallbackConfig } = useFreeSearch()
 
   return (
-    <section className="space-y-4 max-w-3xl">
+    <section className="space-y-4 w-full max-w-none">
       <div>
         <h3 className="text-[var(--text-strong)]">Failover policy</h3>
         <p className="text-[13px] text-[var(--muted)] mt-0.5">
@@ -52,7 +52,7 @@ export const SettingsFailover: React.FC = () => {
         </div>
       </div>
 
-      <p className="text-[12px] text-[var(--muted)]">
+      <p className="text-[12px] text-[var(--muted)] mb-2">
         Backend dispatch currently makes a single attempt per request; it does not retry across providers. Per-condition switches are session-only — not enforced by the backend.
       </p>
 

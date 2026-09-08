@@ -66,7 +66,7 @@ import {
  *   K1-6  regression guards (must stay GREEN before and after):
  *           Providers S-P4 intact (section w-full max-w-none, frame w-full
  *           max-w-none + overflow-hidden, table min-w-[880px]), Failover
- *           keeps max-w-3xl, SettingsView pills
+ *           Failover spans full width (F1), SettingsView pills
  *           (Providers/Keys/Failover pill variant), Carbon Black tokens, NO
  *           ProviderMatrix merge, freesearch-ui ONLY (no backend/python
  *           imports, no absolute backend literals).
@@ -628,19 +628,20 @@ describe("K1-6: no regression — Providers S-P4, Failover cap, pills, theme, sc
     expect(providersSource).toContain("w-full max-w-none")
   })
 
-  it("Failover keeps its max-w-3xl cap (K1 must not touch it)", () => {
+  it("Failover spans full width like Providers/Keys (F1 overrides the old max-w-3xl cap)", () => {
     const match = failoverSource.match(/<section\s+className="([^"]*)"/)
     if (!match) throw new Error("<section className> not found in SettingsFailover.tsx")
     const tokens = match[1].split(/\s+/).filter(Boolean)
-    expect(tokens, `Failover section must keep max-w-3xl; got ${JSON.stringify(tokens)}`).toContain(
-      "max-w-3xl"
-    )
-    expect(tokens, `Failover section must not gain w-full; got ${JSON.stringify(tokens)}`).not.toContain(
+    expect(tokens, `Failover section must gain w-full; got ${JSON.stringify(tokens)}`).toContain(
       "w-full"
     )
-    expect(tokens, `Failover section must not gain max-w-none; got ${JSON.stringify(tokens)}`).not.toContain(
+    expect(tokens, `Failover section must gain max-w-none; got ${JSON.stringify(tokens)}`).toContain(
       "max-w-none"
     )
+    expect(
+      tokens.filter((t) => /^max-w-/.test(t) && t !== "max-w-none"),
+      `Failover section must drop max-w-3xl; got ${JSON.stringify(tokens)}`
+    ).toEqual([])
   })
 
   it("SettingsView pills stay Providers/Keys/Failover on the pill variant", async () => {
