@@ -158,7 +158,7 @@ describe("SearchPlayground (live backend)", () => {
 
     // Switching operations must clear the selected-provider state because
     // Brave cannot serve fetches.
-    fireEvent.click(screen.getByRole("button", { name: "Fetch", exact: true }))
+    fireEvent.click(screen.getByRole("tab", { name: "Fetch", exact: true }))
 
     const fetchSelect = screen.getByRole("combobox") as HTMLSelectElement
     expect(fetchSelect).toHaveValue("auto")
@@ -220,7 +220,7 @@ describe("SearchPlayground (live backend)", () => {
       expect(screen.getByPlaceholderText(/Search across all providers/i)).toBeInTheDocument()
     })
 
-    fireEvent.click(screen.getByRole("button", { name: "Fetch", exact: true }))
+    fireEvent.click(screen.getByRole("tab", { name: "Fetch", exact: true }))
 
     const urlInput = screen.getByPlaceholderText(
       /Enter a URL to fetch/i

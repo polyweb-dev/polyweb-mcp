@@ -15,11 +15,15 @@ import {
 } from "@/test/backendFixtures"
 
 /**
- * C2 canonical contracts + scope guards.
+ * C2-REWORK canonical contracts + scope guards.
  *
- * - SegmentedControl and Tabs(line) (as used by RoutingEngine/SettingsView)
- *   are the GOLD STANDARD: these assertions pass before and after C2 and pin
- *   the exact contract the migrated slots must adopt.
+ * - PillTabs (ui/tabs `pill` variant, as used by SearchPlayground /
+ *   RoutingEngine / SettingsView) is the GOLD STANDARD: these assertions pin
+ *   the exact contract the migrated slots must adopt — provider-page pill
+ *   look, always top-right in the page header. The prior Tabs(line) consensus
+ *   is VOID.
+ * - SegmentedControl stays the single filter contract (ProviderMatrix,
+ *   Ranks/Simulator operation, Depth): role=group, exclusive aria-pressed.
  * - Header scope (AC-C2-5): the top nav stays plain buttons — never role=tab —
  *   and switching views must not touch the URL (no router is introduced;
  *   package.json was verified to contain no react-router/wouter dependency).
@@ -85,12 +89,12 @@ describe("C2 gold: SegmentedControl filter contract", () => {
   })
 })
 
-describe("C2 gold: RoutingEngine + SettingsView stay canonical Tabs(line)", () => {
+describe("C2-REWORK gold: RoutingEngine + SettingsView are canonical Tabs(pill)", () => {
   afterEach(() => {
     vi.unstubAllGlobals()
   })
 
-  it("RoutingEngine exposes Strategy/Simulator/Ranks/Resilience as line tabs", async () => {
+  it("RoutingEngine exposes Strategy/Simulator/Ranks/Resilience as pill tabs", async () => {
     renderWithBackend(<RoutingEngine />)
     await waitFor(() => {
       expect(
@@ -98,11 +102,11 @@ describe("C2 gold: RoutingEngine + SettingsView stay canonical Tabs(line)", () =
       ).toBeInTheDocument()
     })
 
-    const lineList = document.querySelector(
-      '[data-slot="tabs-list"][data-variant="line"]'
+    const pillList = document.querySelector(
+      '[data-slot="tabs-list"][data-variant="pill"]'
     )
-    expect(lineList).not.toBeNull()
-    const tabs = within(lineList as HTMLElement).getAllByRole("tab")
+    expect(pillList).not.toBeNull()
+    const tabs = within(pillList as HTMLElement).getAllByRole("tab")
     expect(tabs.map((t) => t.textContent)).toEqual([
       "Strategy",
       "Simulator",
@@ -132,7 +136,7 @@ describe("C2 gold: RoutingEngine + SettingsView stay canonical Tabs(line)", () =
     ).toBeInTheDocument()
   })
 
-  it("SettingsView exposes Providers/Keys/Failover as line tabs", async () => {
+  it("SettingsView exposes Providers/Keys/Failover as pill tabs", async () => {
     renderWithBackend(<SettingsView />)
     await waitFor(() => {
       expect(
@@ -140,11 +144,11 @@ describe("C2 gold: RoutingEngine + SettingsView stay canonical Tabs(line)", () =
       ).toBeInTheDocument()
     })
 
-    const lineList = document.querySelector(
-      '[data-slot="tabs-list"][data-variant="line"]'
+    const pillList = document.querySelector(
+      '[data-slot="tabs-list"][data-variant="pill"]'
     )
-    expect(lineList).not.toBeNull()
-    const tabs = within(lineList as HTMLElement).getAllByRole("tab")
+    expect(pillList).not.toBeNull()
+    const tabs = within(pillList as HTMLElement).getAllByRole("tab")
     expect(tabs.map((t) => t.textContent)).toEqual([
       "Providers",
       "Keys",

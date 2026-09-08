@@ -14,15 +14,16 @@ import {
 } from "@/test/backendFixtures"
 
 /**
- * C2 tab unification (RED): the Search/Fetch view-switcher must be the single
- * canonical Tabs(line) control (`ui/tabs`, role=tab/aria-selected/tabpanel),
- * and the Depth selector must be the single canonical SegmentedControl
- * (role=group, exclusive aria-pressed). The current hand-rolled underline
- * buttons (SearchPlayground L116-158, aria-pressed mimics) and the bespoke
- * Depth button group (L233-254, no group role) fail every assertion below.
+ * C2-REWORK tab contract (RED): the Search/Fetch view-switcher must be the
+ * single canonical Tabs(pill) control (`ui/tabs` pill variant, provider-page
+ * pill look, always top-right in the page header: role=tab/aria-selected/
+ * tabpanel), and the Depth selector must be the single canonical
+ * SegmentedControl (role=group, exclusive aria-pressed). The current
+ * Tabs(line) view-switcher fails every pill assertion below; the prior
+ * line-tab consensus is VOID.
  *
- * Expected churn note: Fetch switches from `button` to `tab` queries — every
- * step below addresses the switcher as role=tab on purpose.
+ * Expected churn note: the switcher stays role=tab — every step below
+ * addresses it as role=tab inside a pill tablist on purpose.
  */
 function renderPlayground() {
   installFetchStub((req) => {
@@ -56,7 +57,7 @@ async function ready() {
   })
 }
 
-describe("C2 AC-C2-1: SearchPlayground view-switcher is canonical Tabs(line)", () => {
+describe("C2-REWORK AC-C2R-1/AC-C2R-3: SearchPlayground view-switcher is canonical Tabs(pill)", () => {
   afterEach(() => {
     vi.unstubAllGlobals()
   })
@@ -82,16 +83,20 @@ describe("C2 AC-C2-1: SearchPlayground view-switcher is canonical Tabs(line)", (
     expect(panels[0]).toHaveAttribute("aria-labelledby", searchId!)
   })
 
-  it("uses the ui/tabs line variant for the view-switcher", async () => {
+  it("uses the ui/tabs pill variant for the view-switcher", async () => {
     renderPlayground()
     await ready()
 
-    const lineList = document.querySelector(
-      '[data-slot="tabs-list"][data-variant="line"]'
+    const pillList = document.querySelector(
+      '[data-slot="tabs-list"][data-variant="pill"]'
     )
-    expect(lineList).not.toBeNull()
-    expect(lineList!.contains(screen.getByRole("tab", { name: "Search" }))).toBe(true)
-    expect(lineList!.contains(screen.getByRole("tab", { name: "Fetch" }))).toBe(true)
+    expect(pillList).not.toBeNull()
+    expect(pillList!.contains(screen.getByRole("tab", { name: "Search" }))).toBe(true)
+    expect(pillList!.contains(screen.getByRole("tab", { name: "Fetch" }))).toBe(true)
+    // The VOID line variant is gone from the playground switcher slot.
+    expect(
+      document.querySelector('[data-slot="tabs-list"][data-variant="line"]')
+    ).toBeNull()
   })
 
   it("marks Search aria-selected=true and Fetch aria-selected=false initially", async () => {

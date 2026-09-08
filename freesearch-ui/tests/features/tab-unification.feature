@@ -1,22 +1,22 @@
 @c2 @stub
 Feature: C2 tab unification
-  View-switching uses one canonical Tabs(line) control and every filter uses
-  one canonical SegmentedControl, so the fleet no longer mixes underline tabs
-  with boxed pills. Scope is freesearch-ui/ only: the Header nav stays plain
+  View-switching uses one canonical Tabs(pill) control and every filter uses
+  one canonical SegmentedControl, so the fleet shares the provider-page pill
+  look for view-switching. Scope is freesearch-ui/ only: the Header nav stays plain
   buttons and no router is introduced.
 
   Background:
     Given I navigate to the web application
 
-  Scenario: Playground Search/Fetch switcher uses canonical line tabs
+  Scenario: Playground Search/Fetch switcher uses canonical pill tabs
     When I select the "Playground" header tab
-    Then the playground view tabs should be canonical line tabs "Search" and "Fetch"
+    Then the playground view tabs should be canonical pill tabs "Search" and "Fetch"
     And the playground tab "Search" should be selected
     And the playground tab "Fetch" should not be selected
     And the playground tabs should be linked to their panels
     And the playground should show the "Search" panel
 
-  Scenario: Fetch tab swaps the playground hero input (button-to-tab churn)
+  Scenario: Fetch tab swaps the playground hero input (pill switcher)
     When I select the "Playground" header tab
     And I open the playground tab "Fetch"
     Then the playground tab "Fetch" should be selected
@@ -62,11 +62,11 @@ Feature: C2 tab unification
     Then the activity list should contain provider "Keenable"
     And the activity list should not contain provider "Brave Search"
 
-  Scenario: Routing and Settings tabs stay canonical line tabs
+  Scenario: Routing and Settings tabs stay canonical pill tabs
     When I select the "Routing" header tab
-    Then the routing tabs should remain canonical line tabs "Strategy", "Simulator", "Ranks" and "Resilience"
+    Then the routing tabs should remain canonical pill tabs "Strategy", "Simulator", "Ranks" and "Resilience"
     When I select the "Settings" header tab
-    Then the settings tabs should remain canonical line tabs "Providers", "Keys" and "Failover"
+    Then the settings tabs should remain canonical pill tabs "Providers", "Keys" and "Failover"
 
   Scenario: No hand-rolled mimics in tab and filter slots
     When I select the "Playground" header tab

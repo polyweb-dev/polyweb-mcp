@@ -1,16 +1,24 @@
 import React from "react"
+import {
+  PillTabs,
+  PillTabsList,
+  PillTabsPanel,
+} from "@/components/common/PillTabs"
 import { useFreeSearch } from "@/context/useFreeSearch"
-import { getEligibleProviders } from "./routingUtils"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { RoutingStrategy } from "./RoutingStrategy"
-import { RouteSimulator } from "./RouteSimulator"
 import { ProviderRanks } from "./ProviderRanks"
 import { ResiliencePolicy } from "./ResiliencePolicy"
+import { RouteSimulator } from "./RouteSimulator"
+import { RoutingStrategy } from "./RoutingStrategy"
+import { getEligibleProviders } from "./routingUtils"
 
-/**
- * Routing workbench shell: live arbitration status plus the four routing
- * sub-workspaces (strategy, simulator, ranks, resilience).
- */
+const ROUTING_VIEW_OPTIONS = [
+  { value: "strategy", label: "Strategy" },
+  { value: "simulator", label: "Simulator" },
+  { value: "ranks", label: "Ranks" },
+  { value: "resilience", label: "Resilience" },
+] as const
+
+/** Routing workbench shell for arbitration and resilience controls. */
 export const RoutingEngine: React.FC = () => {
   const {
     providers,
@@ -22,61 +30,69 @@ export const RoutingEngine: React.FC = () => {
   const eligible = getEligibleProviders(providers, "search", routingPreset)
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-baseline justify-between gap-4 pb-2 border-b border-[var(--border-subtle)]">
+    <PillTabs
+      options={ROUTING_VIEW_OPTIONS}
+      defaultValue="strategy"
+      ariaLabel="Routing view"
+      idPrefix="routing"
+      className="space-y-6"
+    >
+      <div className="flex flex-col justify-between gap-4 border-b border-[var(--border-subtle)] pb-2 sm:flex-row sm:items-center">
         <div>
           <h2 className="text-[var(--text-strong)]">Routing</h2>
-          <p className="text-[13px] text-[var(--muted)] mt-0.5">
+          <p className="mt-0.5 text-[13px] text-[var(--muted)]">
             Dynamic provider arbitration, priority ranking, and resilience controls.
           </p>
         </div>
 
-        <div className="flex items-center gap-4 text-[13px]">
+        <div className="ml-auto flex flex-wrap items-center justify-end gap-4">
+          <div className="flex items-center gap-4 text-[13px]">
+            <span
+              className="font-medium"
+              style={{
+                color: fallbackConfig.enabled
+                  ? "var(--status-healthy)"
+                  : "var(--muted)",
+              }}
+            >
+              {!routingLoading && !routingError
+                ? `Failover ${fallbackConfig.enabled ? "active" : "inactive"}`
+                : null}
+            </span>
+            <span className="tnum text-[var(--muted)]">
+              {eligible.length} of {providers.length} providers eligible
+            </span>
+          </div>
           <span
-            className="font-medium"
-            style={{ color: fallbackConfig.enabled ? "var(--status-healthy)" : "var(--muted)" }}
-          >
-            {!routingLoading && !routingError
-               ? `Failover ${fallbackConfig.enabled ? "active" : "inactive"}`
-               : null}
-          </span>
-          <span className="text-[var(--muted)] tnum">
-            {eligible.length} of {providers.length} providers eligible
-          </span>
+            aria-hidden="true"
+            className="hidden h-5 w-px bg-[var(--border-subtle)] lg:block"
+          />
+          <PillTabsList className="ml-auto" />
         </div>
       </div>
 
       {routingError && (
-         <p
-           role="alert"
-           className="p-3 rounded border border-[var(--status-danger)]/40 bg-[var(--elevated)] text-[13px]"
-           style={{ color: "var(--status-danger)" }}
-         >
-           Routing configuration unavailable — {routingError}
-         </p>
-       )}
+        <p
+          role="alert"
+          className="rounded border border-[var(--status-danger)]/40 bg-[var(--elevated)] p-3 text-[13px]"
+          style={{ color: "var(--status-danger)" }}
+        >
+          Routing configuration unavailable — {routingError}
+        </p>
+      )}
 
-       <Tabs defaultValue="strategy">
-        <TabsList variant="line">
-          <TabsTrigger value="strategy" className="text-[13px]">Strategy</TabsTrigger>
-          <TabsTrigger value="simulator" className="text-[13px]">Simulator</TabsTrigger>
-          <TabsTrigger value="ranks" className="text-[13px]">Ranks</TabsTrigger>
-          <TabsTrigger value="resilience" className="text-[13px]">Resilience</TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="strategy" className="pt-5">
-          <RoutingStrategy />
-        </TabsContent>
-        <TabsContent value="simulator" className="pt-5">
-          <RouteSimulator />
-        </TabsContent>
-        <TabsContent value="ranks" className="pt-5">
-          <ProviderRanks />
-        </TabsContent>
-        <TabsContent value="resilience" className="pt-5">
-          <ResiliencePolicy />
-        </TabsContent>
-      </Tabs>
-    </div>
+      <PillTabsPanel value="strategy" className="pt-5">
+        <RoutingStrategy />
+      </PillTabsPanel>
+      <PillTabsPanel value="simulator" className="pt-5">
+        <RouteSimulator />
+      </PillTabsPanel>
+      <PillTabsPanel value="ranks" className="pt-5">
+        <ProviderRanks />
+      </PillTabsPanel>
+      <PillTabsPanel value="resilience" className="pt-5">
+        <ResiliencePolicy />
+      </PillTabsPanel>
+    </PillTabs>
   )
 }

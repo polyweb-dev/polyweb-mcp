@@ -3,13 +3,13 @@ import type { Locator, Page } from "@playwright/test"
 import { When, Then } from "./fixtures"
 
 /**
- * C2 tab unification (RED): view-switching must be canonical Tabs(line)
- * (role=tab, aria-selected, line variant) and every filter must be a
- * SegmentedControl (role=group, exclusive aria-pressed).
+ * C2-REWORK tab unification: view-switching must be canonical Tabs(pill)
+ * (role=tab, aria-selected, pill variant, docked top-right) and every filter
+ * must be a SegmentedControl (role=group, exclusive aria-pressed).
  *
  * Churn note: the playground switcher is addressed as role=tab throughout —
- * the pre-C2 Fetch *button* query is gone on purpose, so these steps fail
- * until SearchPlayground migrates to ui/tabs.
+ * the pre-C2 Fetch *button* query is gone on purpose, and the VOID line
+ * variant selectors are gone with it.
  */
 
 function main(page: Page): Locator {
@@ -62,18 +62,18 @@ When("I arrow right from the playground tab {string}", async ({ page }, label: s
 })
 
 Then(
-  "the playground view tabs should be canonical line tabs {string} and {string}",
+  "the playground view tabs should be canonical pill tabs {string} and {string}",
   async ({ page }, first: string, second: string) => {
-    const lineList = main(page).locator(
-      '[data-slot="tabs-list"][data-variant="line"]'
+    const pillList = main(page).locator(
+      '[data-slot="tabs-list"][data-variant="pill"]'
     )
-    await expect(lineList).toBeVisible()
+    await expect(pillList).toBeVisible()
     for (const label of [first, second]) {
       await expect(
-        lineList.getByRole("tab", { name: label, exact: true })
+        pillList.getByRole("tab", { name: label, exact: true })
       ).toHaveCount(1)
     }
-    await expect(lineList.getByRole("tab")).toHaveCount(2)
+    await expect(pillList.getByRole("tab")).toHaveCount(2)
   }
 )
 
@@ -241,7 +241,7 @@ Then(
 )
 
 Then(
-  "the routing tabs should remain canonical line tabs {string}, {string}, {string} and {string}",
+  "the routing tabs should remain canonical pill tabs {string}, {string}, {string} and {string}",
   async (
     { page },
     a: string,
@@ -249,28 +249,28 @@ Then(
     c: string,
     d: string
   ) => {
-    const lineList = main(page).locator(
-      '[data-slot="tabs-list"][data-variant="line"]'
+    const pillList = main(page).locator(
+      '[data-slot="tabs-list"][data-variant="pill"]'
     )
-    await expect(lineList).toBeVisible()
+    await expect(pillList).toBeVisible()
     for (const label of [a, b, c, d]) {
       await expect(
-        lineList.getByRole("tab", { name: label, exact: true })
+        pillList.getByRole("tab", { name: label, exact: true })
       ).toHaveCount(1)
     }
   }
 )
 
 Then(
-  "the settings tabs should remain canonical line tabs {string}, {string} and {string}",
+  "the settings tabs should remain canonical pill tabs {string}, {string} and {string}",
   async ({ page }, a: string, b: string, c: string) => {
-    const lineList = main(page).locator(
-      '[data-slot="tabs-list"][data-variant="line"]'
+    const pillList = main(page).locator(
+      '[data-slot="tabs-list"][data-variant="pill"]'
     )
-    await expect(lineList).toBeVisible()
+    await expect(pillList).toBeVisible()
     for (const label of [a, b, c]) {
       await expect(
-        lineList.getByRole("tab", { name: label, exact: true })
+        pillList.getByRole("tab", { name: label, exact: true })
       ).toHaveCount(1)
     }
   }
@@ -309,7 +309,7 @@ Then("the header navigation should expose zero tab roles", async ({ page }) => {
 })
 
 Then("the page URL should be unchanged", async ({ page }) => {
-  // No router is introduced by C2: view tab switches keep path + query stable.
+  // No router is introduced by C2-REWORK: view tab switches keep path + query stable.
   expect(page.url()).not.toMatch(/[?#]/)
   expect(new URL(page.url()).pathname).toBe("/")
 })

@@ -6,11 +6,19 @@ import {
 } from "lucide-react"
 import { useFreeSearch } from "@/context/useFreeSearch"
 import { SegmentedControl } from "@/components/common/SegmentedControl"
+import {
+  PillTabs,
+  PillTabsList,
+  PillTabsPanel,
+} from "@/components/common/PillTabs"
 import { Button } from "@/components/ui/button"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import type { SearchResult } from "@/types/freesearch"
 
 const SEARCH_DEPTH_OPTIONS = ["Fast", "Balanced", "Deep"] as const
+const PLAYGROUND_VIEW_OPTIONS = [
+  { value: "search", label: "Search" },
+  { value: "fetch", label: "Fetch" },
+] as const
 type SearchDepth = Lowercase<(typeof SEARCH_DEPTH_OPTIONS)[number]>
 
 const SEARCH_DEPTH_LABELS: Record<SearchDepth, (typeof SEARCH_DEPTH_OPTIONS)[number]> = {
@@ -203,13 +211,16 @@ export const SearchPlayground: React.FC = () => {
   )
 
   return (
-    <Tabs
+    <PillTabs
+      options={PLAYGROUND_VIEW_OPTIONS}
       value={mode}
       onValueChange={(value) => switchMode(value as "search" | "fetch")}
+      ariaLabel="Playground view"
+      idPrefix="playground"
       className="block space-y-8"
     >
       {/* Page heading + mode toggle */}
-      <div className="flex flex-col sm:flex-row sm:items-baseline justify-between gap-4 pb-2 border-b border-[var(--border-subtle)]">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-2 border-b border-[var(--border-subtle)]">
         <div>
           <h2 className="text-[var(--text-strong)]">Search Playground</h2>
           <p className="text-[13px] text-[var(--muted)] mt-0.5">
@@ -217,26 +228,7 @@ export const SearchPlayground: React.FC = () => {
           </p>
         </div>
 
-        <div className="flex items-center gap-4">
-          <TabsList variant="line">
-            <TabsTrigger
-              value="search"
-              id="playground-tab-search"
-              aria-controls="playground-panel-search"
-              className="text-[13px]"
-            >
-              Search
-            </TabsTrigger>
-            <TabsTrigger
-              value="fetch"
-              id="playground-tab-fetch"
-              aria-controls="playground-panel-fetch"
-              className="text-[13px]"
-            >
-              Fetch
-            </TabsTrigger>
-          </TabsList>
-
+        <div className="ml-auto flex flex-wrap items-center justify-end gap-4">
           <div className="flex items-center gap-4 text-[13px] text-[var(--muted)]">
             <span className="flex items-center gap-1.5">
               <span
@@ -249,15 +241,15 @@ export const SearchPlayground: React.FC = () => {
               Fallback {fallbackConfig.enabled ? "active" : "disabled"}
             </span>
           </div>
+          <span
+            aria-hidden="true"
+            className="hidden h-5 w-px bg-[var(--border-subtle)] sm:block"
+          />
+          <PillTabsList className="ml-auto" />
         </div>
       </div>
 
-      <TabsContent
-        value="search"
-        id="playground-panel-search"
-        aria-labelledby="playground-tab-search"
-        className="space-y-8"
-      >
+      <PillTabsPanel value="search" className="space-y-8">
         {requestForm}
 
         {searchError && (
@@ -468,14 +460,9 @@ export const SearchPlayground: React.FC = () => {
           </div>
         </div>
         )}
-      </TabsContent>
+      </PillTabsPanel>
 
-      <TabsContent
-        value="fetch"
-        id="playground-panel-fetch"
-        aria-labelledby="playground-tab-fetch"
-        className="space-y-8"
-      >
+      <PillTabsPanel value="fetch" className="space-y-8">
         {requestForm}
         {fetchError && (
           <p className="text-[13px]" style={{ color: "var(--status-danger)" }}>
@@ -550,7 +537,7 @@ export const SearchPlayground: React.FC = () => {
           </div>
         </div>
         )}
-      </TabsContent>
-    </Tabs>
+      </PillTabsPanel>
+    </PillTabs>
   )
 }
