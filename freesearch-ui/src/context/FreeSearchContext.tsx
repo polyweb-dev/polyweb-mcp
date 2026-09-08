@@ -619,6 +619,7 @@ export const FreeSearchProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     async (request: FetchRequest): Promise<FetchResponse | null> => {
       setIsFetching(true)
       setFetchError(null)
+      setActiveFetch(null)
       const startedAt = performance.now()
       const providerIds = request.providerId ? [toBackendId(request.providerId)] : []
       const body = {

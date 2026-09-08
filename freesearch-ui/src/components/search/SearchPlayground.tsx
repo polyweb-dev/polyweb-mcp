@@ -110,6 +110,31 @@ export const SearchPlayground: React.FC = () => {
     setSelectedResultForPreview(null)
   }
 
+  const handleFetchResult = async (result: SearchResult) => {
+    const url = result.url.trim()
+    if (isSearching || isFetching || !url) return
+
+    const providerId =
+      selectedProviderId !== "auto" &&
+      providers.some(
+        (provider) =>
+          provider.id === selectedProviderId &&
+          isEligibleForOperation(provider, "fetch")
+      )
+        ? selectedProviderId
+        : undefined
+
+    if (!providerId) setSelectedProviderId("auto")
+    setFetchUrl(url)
+    switchMode("fetch")
+    await runFetch({
+      url,
+      providerId,
+      format: "markdown",
+      timeoutMs: 4000,
+    })
+  }
+
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text)
     setCopied(true)
@@ -417,16 +442,33 @@ export const SearchPlayground: React.FC = () => {
                           </div>
                         </div>
 
-                        <a
-                          href={res.url}
-                          target="_blank"
-                          rel="noreferrer"
-                          onClick={(e) => e.stopPropagation()}
-                          className="p-1 text-[var(--muted)] hover:text-[var(--text-strong)] transition-colors shrink-0"
-                          title="Open external link"
-                        >
-                          <ExternalLink className="size-3.5" />
-                        </a>
+                        <div className="flex shrink-0 items-center gap-1">
+                          <button
+                            type="button"
+                            data-testid={`fetch-result-${res.id}`}
+                            title="Fetch this page"
+                            aria-label={`Fetch ${res.title}`}
+                            disabled={isSearching || isFetching}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              void handleFetchResult(res)
+                            }}
+                            className="p-1 text-[var(--muted)] transition-colors hover:text-[var(--text-strong)] disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            <FileText className="size-3.5" />
+                          </button>
+
+                          <a
+                            href={res.url}
+                            target="_blank"
+                            rel="noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            className="p-1 text-[var(--muted)] hover:text-[var(--text-strong)] transition-colors shrink-0"
+                            title="Open external link"
+                          >
+                            <ExternalLink className="size-3.5" />
+                          </a>
+                        </div>
                       </div>
                     </div>
                   )
