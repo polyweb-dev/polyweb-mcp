@@ -448,22 +448,18 @@ describe("FreeSearchContext (live backend)", () => {
     })
   })
 
-  it.each([
-    ["fast", ["tavily"], "prefer"],
-    ["balanced", ["tavily"], "require"],
-    ["deep", ["tavily"], "require"],
-    ["balanced", undefined, "auto"],
-  ] as const)(
-    "runSearch maps mode %j to routing mode %j",
-    async (mode, providerIds, routingMode) => {
+  // PG-S5: SearchRequest drops mode; pinned providers route require,
+  // otherwise auto (prefer is dead).
+  it.each([[["tavily"], "require"], [undefined, "auto"], [[], "auto"]] as const)(
+    "runSearch maps providerIds %j to routing mode %j",
+    async (providerIds, routingMode) => {
       const { stub, result } = await mountLoaded()
 
       let response!: unknown
       await act(async () => {
         response = await result.current.runSearch({
           query: "  live backend query  ",
-          providerIds: providerIds as string[] | undefined,
-          mode,
+          providerIds: providerIds as unknown as string[] | undefined,
           maxResults: 6,
           timeoutMs: 3000,
         })
@@ -517,7 +513,6 @@ describe("FreeSearchContext (live backend)", () => {
       await result.current.runSearch({
         query: "q",
         providerIds: ["youcom"],
-        mode: "balanced",
         maxResults: 500,
         timeoutMs: 3000,
       })
@@ -530,45 +525,8 @@ describe("FreeSearchContext (live backend)", () => {
     expect(result.current.activeSearch?.selectedProviderId).toBe("youcom")
   })
 
-  it("runSearch is honest on prefer fallback: an ineligible preferred provider is NOT selected", async () => {
-    const server = createServer()
-    // Contract-valid: prefer:["you"] was ineligible upstream, so the backend
-    // resolved a different provider ("brave"). The UI must surface the
-    // backend's winner — never fabricate "youcom" as selected.
-    server.searchResponse = searchResponseFixture({
-      provider: "brave",
-      usage: {
-        provider: "brave",
-        operation: "search",
-        units: "1",
-        observed_at: "2026-09-06T10:02:00Z",
-        request_id: "req-123",
-        metadata: {},
-        latency_ms: 187,
-        status: "success",
-      },
-    })
-    const { stub, result } = await mountLoaded(server)
-
-    await act(async () => {
-      await result.current.runSearch({
-        query: "q",
-        providerIds: ["youcom"],
-        mode: "fast",
-        maxResults: 6,
-        timeoutMs: 3000,
-      })
-    })
-
-    expect(stub.requestsTo("/search")[0].body).toMatchObject({
-      routing: { mode: "prefer", providers: ["you"], allow_fallback: true },
-    })
-    expect(result.current.activeSearch?.selectedProviderId).toBe("brave")
-    expect(result.current.activeSearch?.selectedProviderId).not.toBe("youcom")
-    expect(result.current.activeSearch?.fallbackChain).toEqual(["brave"])
-    expect(result.current.activeSearch?.waterfall).toHaveLength(1)
-    expect(result.current.activeSearch?.waterfall[0].providerName).toBe("Brave Search")
-  })
+  // PG-S5: prefer is dead (deleted with the Depth→number contract) — no
+  // prefer-fallback test remains.
 
   it("runSearch failure keeps the last-good response and surfaces searchError", async () => {
     const server = createServer()
@@ -577,7 +535,6 @@ describe("FreeSearchContext (live backend)", () => {
     await act(async () => {
       await result.current.runSearch({
         query: "first",
-        mode: "balanced",
         maxResults: 6,
         timeoutMs: 3000,
       })
@@ -597,7 +554,6 @@ describe("FreeSearchContext (live backend)", () => {
     await act(async () => {
       const response = await result.current.runSearch({
         query: "second",
-        mode: "balanced",
         maxResults: 6,
         timeoutMs: 3000,
       })
@@ -800,7 +756,6 @@ describe("FreeSearchContext (live backend)", () => {
     await act(async () => {
       response = await result.current.runSearch({
         query: "hung query",
-        mode: "balanced",
         maxResults: 6,
         timeoutMs: 100,
       })

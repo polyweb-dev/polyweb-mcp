@@ -271,7 +271,7 @@ describe("PG-S3 AC-PG-S3-2: clear division idle + docked, results after the comp
   })
 })
 
-describe("PG-S3 AC-PG-S3-3: internal divider + footer tray owns suggestions/provider/depth at muted 13px", () => {
+describe("PG-S3 AC-PG-S3-3: internal divider + footer tray owns suggestions/provider/number at muted 13px", () => {
   afterEach(() => {
     vi.unstubAllGlobals()
   })
@@ -293,7 +293,7 @@ describe("PG-S3 AC-PG-S3-3: internal divider + footer tray owns suggestions/prov
     expect(isDividerSeam).toBe(true)
   })
 
-  it("nests suggestions + provider + depth INSIDE the footer tray at muted 13px", async () => {
+  it("nests suggestions + provider + number INSIDE the footer tray at muted 13px", async () => {
     renderWithBackend()
     await readyForSearch()
 
@@ -304,6 +304,7 @@ describe("PG-S3 AC-PG-S3-3: internal divider + footer tray owns suggestions/prov
     expect(composer!.contains(footer!)).toBe(true)
 
     // All three controls live INSIDE the footer (ChatGPT tray aesthetic).
+    // PG-S5: Depth SegmentedControl replaced by the Results number input.
     const suggestions = within(footer!).getByText(/Suggestions:/i)
     expect(suggestions).toBeInTheDocument()
     const suggestionBtn = within(footer!).getByRole("button", {
@@ -312,13 +313,18 @@ describe("PG-S3 AC-PG-S3-3: internal divider + footer tray owns suggestions/prov
     expect(suggestionBtn).toBeInTheDocument()
     const provider = within(footer!).getByRole("combobox")
     expect(provider).toBeInTheDocument()
-    const depthGroup = within(footer!).getByRole("group", {
-      name: /search depth/i,
-    })
-    expect(depthGroup).toBeInTheDocument()
+    const count = within(footer!).getByRole("spinbutton", {
+      name: "Number of results",
+    }) as HTMLInputElement
+    expect(count.getAttribute("type")).toBe("number")
+    expect(count).toHaveAttribute("min", "1")
+    expect(count).toHaveAttribute("max", "100")
+    expect(count).toHaveAttribute("step", "1")
+    expect(count).toHaveValue(6)
+    expect(footer!.textContent).toMatch(/Results:/)
     expect(
-      within(depthGroup).getByRole("button", { name: "Balanced" })
-    ).toBeInTheDocument()
+      within(footer!).queryByRole("group", { name: /search depth/i })
+    ).toBeNull()
 
     // Footer tray is muted 13px (secondary controls, not body copy).
     expect(footer!.className).toContain("text-[13px]")

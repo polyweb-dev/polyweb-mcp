@@ -587,7 +587,7 @@ export const FreeSearchProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         country_code: null,
         domains: [],
         routing: {
-          mode: providerIds.length > 0 ? (request.mode === "fast" ? "prefer" : "require") : "auto",
+          mode: providerIds.length > 0 ? "require" : "auto",
           providers: providerIds.map(toBackendId),
           allow_fallback: fallbackConfig.enabled,
         },

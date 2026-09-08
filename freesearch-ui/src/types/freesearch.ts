@@ -71,7 +71,6 @@ export type RoutingPreset =
 export interface SearchRequest {
   query: string
   providerIds?: string[]
-  mode: "fast" | "balanced" | "deep"
   maxResults: number
   timeoutMs: number
 }

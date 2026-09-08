@@ -24,6 +24,12 @@ import {
  *
  * Expected churn note: the switcher stays role=tab — every step below
  * addresses it as role=tab inside a pill tablist on purpose.
+ *
+ * PG-S5 AMENDMENT (number-of-results): the Depth SegmentedControl is
+ * DELETED and replaced by a labeled Results number input (spinbutton
+ * "Number of results", type number, min 1, max 100, step 1, default 6).
+ * The two Depth-group tests below now assert the spinbutton contract;
+ * the aria-pressed test asserts zero pressed toggles remain.
  */
 function renderPlayground() {
   installFetchStub((req) => {
@@ -198,50 +204,54 @@ describe("C2-REWORK AC-C2R-1/AC-C2R-3: SearchPlayground view-switcher is canonic
   })
 })
 
-describe("C2 AC-C2-2/AC-C2-4: Depth selector is a SegmentedControl group", () => {
+describe("C2 PG-S5: Results count replaces the Depth SegmentedControl", () => {
   afterEach(() => {
     vi.unstubAllGlobals()
   })
 
-  it("exposes Fast/Balanced/Deep in a named group with exclusive aria-pressed", async () => {
+  it("exposes a labeled Results number input (min1 max100 step1 default 6, no Depth group)", async () => {
     renderPlayground()
     await ready()
 
-    const groups = screen.getAllByRole("group")
-    const depthGroup = groups.find(
-      (g) =>
-        within(g).queryByRole("button", { name: "Fast" }) &&
-        within(g).queryByRole("button", { name: "Deep" })
-    )
-    expect(depthGroup).toBeDefined()
-    expect(depthGroup).toHaveAccessibleName()
+    // PG-S5: the Depth group is gone entirely.
+    expect(
+      screen.queryByRole("group", { name: /search depth/i })
+    ).toBeNull()
+    expect(
+      screen.queryByRole("button", { name: "Fast", exact: true })
+    ).toBeNull()
+    expect(
+      screen.queryByRole("button", { name: "Balanced", exact: true })
+    ).toBeNull()
+    expect(
+      screen.queryByRole("button", { name: "Deep", exact: true })
+    ).toBeNull()
 
-    const pressed = ["Fast", "Balanced", "Deep"].map(
-      (label) =>
-        within(depthGroup!).getByRole("button", { name: label }).getAttribute(
-          "aria-pressed"
-        )
-    )
-    expect(pressed).toEqual(["false", "true", "false"])
+    const footer = screen.getByTestId("search-composer-footer")
+    const spin = within(footer).getByRole("spinbutton", {
+      name: "Number of results",
+    }) as HTMLInputElement
+    expect(spin.getAttribute("type")).toBe("number")
+    expect(spin).toHaveAttribute("min", "1")
+    expect(spin).toHaveAttribute("max", "100")
+    expect(spin).toHaveAttribute("step", "1")
+    expect(spin).toHaveValue(6)
+    expect(footer.textContent).toMatch(/Results:/)
   })
 
-  it("clicking Deep moves the single aria-pressed=true inside the group", async () => {
+  it("editing the count updates the field value (user-typed 25)", async () => {
     const user = userEvent.setup()
     renderPlayground()
     await ready()
 
-    const depthGroup = screen
-      .getAllByRole("group")
-      .find((g) => within(g).queryByRole("button", { name: "Deep" }))!
-    await user.click(within(depthGroup).getByRole("button", { name: "Deep" }))
-
-    const pressed = ["Fast", "Balanced", "Deep"].map(
-      (label) =>
-        within(depthGroup).getByRole("button", { name: label }).getAttribute(
-          "aria-pressed"
-        )
-    )
-    expect(pressed).toEqual(["false", "false", "true"])
+    const spin = within(
+      screen.getByTestId("search-composer-footer")
+    ).getByRole("spinbutton", {
+      name: "Number of results",
+    }) as HTMLInputElement
+    await user.clear(spin)
+    await user.type(spin, "25")
+    expect(spin).toHaveValue(25)
   })
 })
 
@@ -262,17 +272,14 @@ describe("C2 AC-C2-3: no hand-rolled mimics in the playground tab/filter slots",
     ).toBeInTheDocument()
   })
 
-  it("every aria-pressed toggle lives inside a role=group", async () => {
+  it("no aria-pressed toggles remain in the playground (Depth control deleted by PG-S5)", async () => {
     renderPlayground()
     await ready()
 
     const toggles = screen
       .getAllByRole("button")
       .filter((b) => b.hasAttribute("aria-pressed"))
-    expect(toggles.length).toBeGreaterThan(0)
-    for (const toggle of toggles) {
-      expect(toggle.closest('[role="group"]')).not.toBeNull()
-    }
+    expect(toggles).toHaveLength(0)
   })
 
   it("no tab carries the filter contract (aria-pressed)", async () => {

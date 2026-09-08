@@ -5,7 +5,6 @@ import {
   ExternalLink,
 } from "lucide-react"
 import { useFreeSearch } from "@/context/useFreeSearch"
-import { SegmentedControl } from "@/components/common/SegmentedControl"
 import {
   PillTabs,
   PillTabsList,
@@ -14,19 +13,10 @@ import {
 import { Button } from "@/components/ui/button"
 import type { SearchResult } from "@/types/freesearch"
 
-const SEARCH_DEPTH_OPTIONS = ["Fast", "Balanced", "Deep"] as const
 const PLAYGROUND_VIEW_OPTIONS = [
   { value: "search", label: "Search" },
   { value: "fetch", label: "Fetch" },
 ] as const
-type SearchDepth = Lowercase<(typeof SEARCH_DEPTH_OPTIONS)[number]>
-
-const SEARCH_DEPTH_LABELS: Record<SearchDepth, (typeof SEARCH_DEPTH_OPTIONS)[number]> = {
-  fast: "Fast",
-  balanced: "Balanced",
-  deep: "Deep",
-}
-
 function isEligibleForOperation(
   provider: ReturnType<typeof useFreeSearch>["providers"][number],
   operation: "search" | "fetch"
@@ -55,7 +45,7 @@ export const SearchPlayground: React.FC = () => {
   const [query, setQuery] = useState("")
   const [fetchUrl, setFetchUrl] = useState("")
   const [selectedProviderId, setSelectedProviderId] = useState<string>("auto")
-  const [searchDepth, setSearchDepth] = useState<SearchDepth>("balanced")
+  const [resultCount, setResultCount] = useState(6)
   const [selectedResultForPreview, setSelectedResultForPreview] = useState<SearchResult | null>(null)
   const [showJsonInspector, setShowJsonInspector] = useState(false)
   const [copied, setCopied] = useState(false)
@@ -80,8 +70,7 @@ export const SearchPlayground: React.FC = () => {
       const res = await runSearch({
         query: query.trim(),
         providerIds: selectedProvider ? [selectedProvider] : undefined,
-        mode: searchDepth,
-        maxResults: 6,
+        maxResults: resultCount,
         timeoutMs: 3000,
       })
       setSelectedResultForPreview(res?.results[0] ?? null)
@@ -149,7 +138,7 @@ export const SearchPlayground: React.FC = () => {
   ]
 
   const requestForm = (
-    <form onSubmit={handleExecute}>
+    <form onSubmit={handleExecute} noValidate={mode === "search"}>
       {mode === "search" ? (
         // Search composer seam; Fetch and Simulator can adopt the pattern later.
         <div
@@ -174,6 +163,7 @@ export const SearchPlayground: React.FC = () => {
             <div className="absolute right-0 top-1/2 -translate-y-1/2">
               <Button
                 type="submit"
+                formNoValidate
                 disabled={isSearching || isFetching}
                 className="inline-flex items-center gap-2 rounded-md px-5 py-2 text-[13px] font-medium text-white"
                 style={{ background: "var(--signal)" }}
@@ -223,18 +213,19 @@ export const SearchPlayground: React.FC = () => {
                 </select>
               </div>
 
-              <div className="flex items-center gap-2">
-                <span>Depth:</span>
-                <SegmentedControl
-                  options={SEARCH_DEPTH_OPTIONS}
-                  value={SEARCH_DEPTH_LABELS[searchDepth]}
-                  onChange={(value) =>
-                    setSearchDepth(value.toLowerCase() as SearchDepth)
-                  }
-                  ariaLabel="Search depth"
-                  minColumnWidth="72px"
+              <label className="flex items-center gap-2">
+                <span>Results:</span>
+                <input
+                  type="number"
+                  aria-label="Number of results"
+                  min="1"
+                  max="100"
+                  step="1"
+                  value={resultCount}
+                  onChange={(e) => setResultCount(Number(e.target.value))}
+                  className="w-16 rounded border border-[var(--border-subtle)] bg-[var(--elevated)] px-2.5 py-1 text-[13px] text-[var(--text)] outline-none tnum"
                 />
-              </div>
+              </label>
             </div>
           </div>
         </div>

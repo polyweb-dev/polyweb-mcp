@@ -780,9 +780,19 @@ describe("PG-S4 AC-PG-S4-7 regressions: PG-S1/S2/S3 guards + composer gating + f
       })
     ).toBeInTheDocument()
     expect(within(footer!).getByRole("combobox")).toBeInTheDocument()
+    // PG-S5: Depth SegmentedControl replaced by the Results number input.
+    const count = within(footer!).getByRole("spinbutton", {
+      name: "Number of results",
+    }) as HTMLInputElement
+    expect(count.getAttribute("type")).toBe("number")
+    expect(count).toHaveAttribute("min", "1")
+    expect(count).toHaveAttribute("max", "100")
+    expect(count).toHaveAttribute("step", "1")
+    expect(count).toHaveValue(6)
+    expect(footer!.textContent).toMatch(/Results:/)
     expect(
-      within(footer!).getByRole("group", { name: /search depth/i })
-    ).toBeInTheDocument()
+      within(footer!).queryByRole("group", { name: /search depth/i })
+    ).toBeNull()
     expect(screen.queryByTestId("search-composer-divider")).not.toBeNull()
 
     // Fetch mode stays bare (reusable pattern later, no composer now).
