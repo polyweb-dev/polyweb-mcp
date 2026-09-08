@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { FreeSearchProvider } from "@/context/FreeSearchContext"
-import { Header, type TabId } from "@/components/layout/Header"
+import { Sidebar, type TabId } from "@/components/layout/Sidebar"
 import { SearchPlayground } from "@/components/search/SearchPlayground"
 import { ProviderMatrix } from "@/components/providers/ProviderMatrix"
 import { RoutingEngine } from "@/components/routing/RoutingEngine"
@@ -14,12 +14,12 @@ function DashboardContent() {
 
   return (
     <div
-      className="min-h-screen flex flex-col font-sans"
+      className="flex min-h-screen flex-row font-sans"
       style={{ background: "var(--surface)", color: "var(--text)" }}
     >
-      <Header activeTab={activeTab} onSelectTab={setActiveTab} />
+      <Sidebar activeTab={activeTab} onSelectTab={setActiveTab} />
 
-      <main className="flex-1 w-full max-w-[1600px] mx-auto px-6 sm:px-8 lg:px-12 py-8">
+      <main className="min-w-0 flex-1 px-6 py-8 pt-16 sm:px-8 md:pt-8 lg:px-12">
         {activeTab === "playground" && <SearchPlayground />}
         {activeTab === "providers" && <ProviderMatrix />}
         {activeTab === "routing" && <RoutingEngine />}
