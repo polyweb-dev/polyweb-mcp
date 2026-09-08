@@ -168,7 +168,7 @@ describe("PG-S1 AC-PG-S1-2: submit docks the form and keeps it docked while load
       .closest("form")!
     const firstResult = screen.getByText("Live backend result one")
     expect(
-      // eslint-disable-next-line no-bitwise
+       
       form.compareDocumentPosition(firstResult) &
         Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy()

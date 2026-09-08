@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json.schemastore.org/stryker.json",
+  "testRunner": "vitest",
+  "plugins": ["@stryker-mutator/vitest-runner"],
+  "vitest": { "configFile": "vitest.mutate.config.ts" },
+  "mutate": ["src/model/adapters.ts", "src/api/sessions.ts", "src/hooks/useMonitor.ts"],
+  "concurrency": 4,
+  "tempDirName": ".stryker-tmp",
+  "cleanTempDir": "always"
+}

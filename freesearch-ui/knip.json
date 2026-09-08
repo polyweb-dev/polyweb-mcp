@@ -1,0 +1,26 @@
+{
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+  "entry": [
+    "index.html",
+    "tests/steps/**/*.steps.ts"
+  ],
+  "project": [
+    "src/**/*.{ts,tsx}"
+  ],
+  "ignore": [
+    "src/components/ui/**"
+  ],
+  "ignoreDependencies": [
+    "@fontsource-variable/jetbrains-mono",
+    "@fontsource-variable/plus-jakarta-sans",
+    "shadcn",
+    "tailwindcss",
+    "tw-animate-css",
+    "@stryker-mutator/core",
+    "@stryker-mutator/vitest-runner"
+  ],
+  "ignoreExportsUsedInFile": true,
+  "rules": {
+    "types": "off"
+  }
+}

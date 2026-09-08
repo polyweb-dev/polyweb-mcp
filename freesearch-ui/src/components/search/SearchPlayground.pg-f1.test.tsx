@@ -284,7 +284,7 @@ describe("PG-F1 AC-PG-F1-2: submit docks Fetch and keeps it docked while loading
       .getByPlaceholderText(/Enter a URL to fetch/i)
       .closest("form")!
     const docTitle = screen.getByText("Live document title")
-    // eslint-disable-next-line no-bitwise
+     
     expect(form.compareDocumentPosition(docTitle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 

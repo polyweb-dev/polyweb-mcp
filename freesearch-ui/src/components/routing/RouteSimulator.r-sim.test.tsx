@@ -258,7 +258,7 @@ describe("R-SIM AC-R-SIM-2: Simulate docks the layout, results render after the 
     // Results live below the docked composer, never inside it.
     expect(docked.contains(ingress)).toBe(false)
     const composer = screen.getByTestId("simulator-composer")
-    // eslint-disable-next-line no-bitwise
+     
     expect(composer.compareDocumentPosition(ingress) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 })

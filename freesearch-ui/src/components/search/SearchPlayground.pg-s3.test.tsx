@@ -259,7 +259,7 @@ describe("PG-S3 AC-PG-S3-2: clear division idle + docked, results after the comp
     const firstResult = screen.getByText("Live backend result one")
     expect(composer!.compareDocumentPosition(firstResult)).toBeTruthy()
     // Results FOLLOW the composer in document order (clear division).
-    // eslint-disable-next-line no-bitwise
+     
     expect(composer!.compareDocumentPosition(firstResult) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 })

@@ -200,7 +200,9 @@ export const FreeSearchProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       const id = `toast-${toastSequence}`
       setToasts((previous) => [...previous, { id, message, type }])
       setTimeout(() => {
-        setToasts((previous) => previous.filter((toast) => toast.id !== id))
+        if (typeof window !== "undefined") {
+          setToasts((previous) => previous.filter((toast) => toast.id !== id))
+        }
       }, 4500)
     },
     []
