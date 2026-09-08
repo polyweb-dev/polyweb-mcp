@@ -149,11 +149,11 @@ function barEl(): HTMLElement {
   return screen.getByTestId("status-bar") as HTMLElement
 }
 
-/** The single popover trigger: either the bar root itself or its only button. */
-function triggerEl(): HTMLElement {
+/** Popover trigger button by accessible name. */
+function triggerEl(name: RegExp | string = /providers/i): HTMLElement {
   const bar = barEl()
   if (bar.tagName === "BUTTON") return bar
-  return within(bar).getByRole("button") as HTMLElement
+  return within(bar).getByRole("button", { name }) as HTMLElement
 }
 
 beforeEach(() => {
@@ -416,27 +416,34 @@ describe("AC-R1-5: placement (right column, borders, shell intact)", () => {
 })
 
 describe("AC-R1-6: popover opens with context-only detail rows", () => {
-  it("exposes exactly one button trigger starting collapsed with aria controls", async () => {
+  it("exposes two button triggers starting collapsed with aria controls", async () => {
     await renderAppReady("/playground")
     const bar = barEl()
     const inner = within(bar).queryAllByRole("button")
     if (bar.tagName === "BUTTON") {
       expect(inner).toHaveLength(0)
     } else {
-      expect(inner).toHaveLength(1)
+      expect(inner).toHaveLength(2)
     }
-    const trigger = triggerEl()
+    const trigger = triggerEl(/providers/i)
     expect(trigger.getAttribute("aria-expanded")).toBe("false")
     const controlsId = trigger.getAttribute("aria-controls") ?? ""
     expect(controlsId.length).toBeGreaterThan(0)
     expect(document.getElementById(controlsId)).toBeNull()
-    expect(trigger.textContent).toMatch(/providers|Failover/)
+    expect(trigger.textContent).toMatch(/providers/)
+
+    const failoverTrigger = triggerEl(/failover/i)
+    expect(failoverTrigger.getAttribute("aria-expanded")).toBe("false")
+    const failoverControlsId = failoverTrigger.getAttribute("aria-controls") ?? ""
+    expect(failoverControlsId.length).toBeGreaterThan(0)
+    expect(document.getElementById(failoverControlsId)).toBeNull()
+    expect(failoverTrigger.textContent).toMatch(/failover/i)
   })
 
   it("click opens the popover with matching id and role dialog/status", async () => {
     const user = userEvent.setup()
     await renderAppReady("/playground")
-    const trigger = triggerEl()
+    const trigger = triggerEl(/providers/i)
     const controlsId = trigger.getAttribute("aria-controls") as string
 
     await user.click(trigger)
@@ -451,7 +458,7 @@ describe("AC-R1-6: popover opens with context-only detail rows", () => {
     const user = userEvent.setup()
     await renderAppReady("/playground")
     const bar = barEl()
-    const trigger = triggerEl()
+    const trigger = triggerEl(/providers/i)
     await user.click(trigger)
     const popover = document.getElementById(
       trigger.getAttribute("aria-controls") as string
@@ -467,15 +474,22 @@ describe("AC-R1-6: popover opens with context-only detail rows", () => {
   it("popover detail rows come from context (provider names + Failover + counts)", async () => {
     const user = userEvent.setup()
     await renderAppReady("/playground")
-    const trigger = triggerEl()
+    const trigger = triggerEl(/providers/i)
     await user.click(trigger)
     const popover = document.getElementById(
       trigger.getAttribute("aria-controls") as string
     ) as HTMLElement
     expect(popover.textContent).toContain("Brave Search")
     expect(popover.textContent).toContain("Keenable")
-    expect(popover.textContent).toContain("Failover active")
     expect(popover.textContent).toContain("7 of 7 providers")
+
+    const failoverTrigger = triggerEl(/failover/i)
+    await user.click(failoverTrigger)
+    const failoverPopover = document.getElementById(
+      failoverTrigger.getAttribute("aria-controls") as string
+    ) as HTMLElement
+    expect(failoverPopover.textContent).toContain("Failover active")
+    expect(failoverPopover.textContent).toContain("Fallback chaining")
   })
 
   it("popover is display-only: zero links or anchors", async () => {
