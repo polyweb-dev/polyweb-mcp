@@ -41,6 +41,9 @@ export const SettingsProviders: React.FC = () => {
 
   // Priority boundaries come from the sorted order, not the render order.
   const sortedByPriority = [...providers].sort((a, b) => a.priority - b.priority)
+  const rankById = new Map(
+    sortedByPriority.map((provider, index) => [provider.id, index + 1])
+  )
   const firstPriorityId = sortedByPriority[0]?.id ?? null
   const lastPriorityId = sortedByPriority[sortedByPriority.length - 1]?.id ?? null
   const singleRow = providers.length < 2
@@ -87,6 +90,8 @@ export const SettingsProviders: React.FC = () => {
               <ProviderRegistryRow
                 key={provider.id}
                 provider={provider}
+                rank={rankById.get(provider.id) ?? 0}
+                providerCount={providers.length}
                 testing={testingId === provider.id}
                 globalPending={pendingGlobalId === provider.id}
                 canMoveUp={!singleRow && provider.id !== firstPriorityId}
@@ -107,6 +112,8 @@ export const SettingsProviders: React.FC = () => {
 
 interface ProviderRegistryRowProps {
   provider: ProviderConfig
+  rank: number
+  providerCount: number
   testing: boolean
   globalPending: boolean
   canMoveUp: boolean
@@ -120,6 +127,8 @@ interface ProviderRegistryRowProps {
 
 const ProviderRegistryRow: React.FC<ProviderRegistryRowProps> = ({
   provider,
+  rank,
+  providerCount,
   testing,
   globalPending,
   canMoveUp,
@@ -139,6 +148,8 @@ const ProviderRegistryRow: React.FC<ProviderRegistryRowProps> = ({
         <div className="flex items-center gap-3">
           <PriorityIndicator
             provider={provider}
+            rank={rank}
+            providerCount={providerCount}
             canMoveUp={canMoveUp}
             canMoveDown={canMoveDown}
             onMovePriority={onMovePriority}
@@ -203,11 +214,13 @@ const ProviderRegistryRow: React.FC<ProviderRegistryRowProps> = ({
 
 const PriorityIndicator: React.FC<{
   provider: ProviderConfig
+  rank: number
+  providerCount: number
   canMoveUp: boolean
   canMoveDown: boolean
   onMovePriority: (direction: "up" | "down") => void
-}> = ({ provider, canMoveUp, canMoveDown, onMovePriority }) => (
-  <div className="flex flex-col items-center gap-0.5 shrink-0">
+}> = ({ provider, rank, providerCount, canMoveUp, canMoveDown, onMovePriority }) => (
+  <div className="flex min-w-6 shrink-0 flex-col items-center gap-0.5">
     <button
       type="button"
       aria-label={`Move ${provider.name} priority up`}
@@ -217,7 +230,12 @@ const PriorityIndicator: React.FC<{
     >
       <ArrowUp className="size-3" />
     </button>
-    <span className="text-[12px] text-[var(--muted)] tnum leading-none">P{provider.priority}</span>
+    <span
+      className="text-[12px] text-[var(--muted)] tnum leading-none"
+      title={`Dispatch order ${rank} of ${providerCount}`}
+    >
+      P{rank}
+    </span>
     <button
       type="button"
       aria-label={`Move ${provider.name} priority down`}

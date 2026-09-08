@@ -134,6 +134,38 @@ function clampLimit(value: number): number {
   return Math.min(100, Math.max(1, Math.trunc(value)))
 }
 
+interface ProviderPriorityPatch {
+  provider: ProviderConfig
+  priority: number
+}
+
+function priorityPatchesForMove(
+  sorted: ProviderConfig[],
+  index: number,
+  targetIndex: number
+): ProviderPriorityPatch[] {
+  const reordered = [...sorted]
+  const moving = reordered[index]
+  reordered[index] = reordered[targetIndex]
+  reordered[targetIndex] = moving
+  return reordered
+    .map((provider, rankIndex) => {
+      const priority = rankIndex + 1
+      return provider.priority === priority ? null : { provider, priority }
+    })
+    .filter((patch): patch is ProviderPriorityPatch => patch !== null)
+}
+
+async function restoreProviderPriorities(completed: ProviderPriorityPatch[]): Promise<void> {
+  for (const { provider } of [...completed].reverse()) {
+    try {
+      await apiService.patchProvider(toBackendId(provider.id), { priority: provider.priority })
+    } catch {
+      // The authoritative refresh remains the fallback if compensation fails.
+    }
+  }
+}
+
 export const FreeSearchProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [providers, setProviders] = useState<ProviderConfig[]>([])
   const [providersLoading, setProvidersLoading] = useState(true)
@@ -342,33 +374,22 @@ export const FreeSearchProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       const targetIndex = direction === "up" ? index - 1 : index + 1
       if (index < 0 || targetIndex < 0 || targetIndex >= sorted.length) return
 
-      const moving = sorted[index]
-      const neighbor = sorted[targetIndex]
-      let firstPatchCompleted = false
+      const patches = priorityPatchesForMove(sorted, index, targetIndex)
+      const completed: ProviderPriorityPatch[] = []
       priorityMoveInFlight.current = true
 
       try {
-        const moved = await apiService.patchProvider(toBackendId(moving.id), {
-          priority: neighbor.priority,
-        })
-        firstPatchCompleted = true
-        setProviders((previous) => updateProviderFromWire(previous, moved))
-        const shifted = await apiService.patchProvider(toBackendId(neighbor.id), {
-          priority: moving.priority,
-        })
-        setProviders((previous) => updateProviderFromWire(previous, shifted))
+        for (const patch of patches) {
+          const wire = await apiService.patchProvider(toBackendId(patch.provider.id), {
+            priority: patch.priority,
+          })
+          completed.push(patch)
+          setProviders((previous) => updateProviderFromWire(previous, wire))
+        }
         await refreshProviders()
       } catch (error) {
-        if (firstPatchCompleted) {
-          try {
-            await apiService.patchProvider(toBackendId(moving.id), {
-              priority: moving.priority,
-            })
-          } catch {
-            // Refresh below remains authoritative if compensation also fails.
-          }
-          await refreshProviders()
-        }
+        await restoreProviderPriorities(completed)
+        await refreshProviders()
         showToast(errorMessage(error, "Unable to move provider priority"), "error")
       } finally {
         priorityMoveInFlight.current = false
