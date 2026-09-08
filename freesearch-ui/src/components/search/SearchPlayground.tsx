@@ -125,91 +125,145 @@ export const SearchPlayground: React.FC = () => {
 
   const requestForm = (
     <form onSubmit={handleExecute}>
-      <div className="relative">
+      {mode === "search" ? (
+        // Search composer seam; Fetch and Simulator can adopt the pattern later.
         <div
-          className="absolute left-0 top-1/2 -translate-y-1/2 pl-1"
-          style={{ color: "var(--muted)" }}
+          data-testid="search-composer"
+          className="rounded-xl border border-[var(--border-subtle)] bg-[var(--elevated)] p-4 shadow-lg transition-all transition-colors focus-within:border-[var(--signal)]/60 motion-reduce:transition-none"
         >
-          {mode === "search" ? <Search className="size-5" /> : <FileText className="size-5" />}
-        </div>
-        <input
-          type={mode === "search" ? "text" : "url"}
-          value={mode === "search" ? query : fetchUrl}
-          onChange={(e) =>
-            mode === "search" ? setQuery(e.target.value) : setFetchUrl(e.target.value)
-          }
-          placeholder={
-            mode === "search"
-              ? "Search across all providers..."
-              : "Enter a URL to fetch and convert..."
-          }
-          className="w-full bg-transparent py-3 pl-9 pr-32 text-[15px] font-mono outline-none placeholder:text-[var(--muted)]"
-          style={{
-            color: "var(--text-strong)",
-            borderBottom: "1px solid var(--border-subtle)",
-          }}
-        />
-        <div className="absolute right-0 top-1/2 -translate-y-1/2">
-          <Button
-            type="submit"
-            disabled={isSearching || isFetching}
-            className="inline-flex items-center gap-2 rounded-md px-5 py-2 text-[13px] font-medium text-white"
-            style={{ background: "var(--signal)" }}
-          >
-            {mode === "search" && <Search aria-hidden="true" className="size-3.5" />}
-            {isSearching || isFetching ? "Executing..." : mode === "search" ? "Search" : "Fetch"}
-          </Button>
-        </div>
-      </div>
-
-      {mode === "search" && (
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-3 text-[13px] text-[var(--muted)]">
-          <span className="text-[var(--muted)]">Suggestions:</span>
-          {quickQueries.map((q, idx) => (
-            <button
-              key={idx}
-              type="button"
-              onClick={() => setQuery(q)}
-              className="hover:underline transition-colors hover:text-[var(--text-strong)]"
+          <div className="relative">
+            <div
+              className="absolute left-0 top-1/2 -translate-y-1/2 pl-1"
+              style={{ color: "var(--muted)" }}
             >
-              {q}
-            </button>
-          ))}
-        </div>
-      )}
-
-      <div className="flex flex-wrap items-center gap-4 mt-3 text-[13px] text-[var(--muted)]">
-        <div className="flex items-center gap-2">
-          <span>Provider:</span>
-          <select
-            value={selectedProviderId}
-            onChange={(e) => setSelectedProviderId(e.target.value)}
-            className="rounded px-2.5 py-1 text-[13px] outline-none bg-[var(--elevated)] text-[var(--text)] border border-[var(--border-subtle)]"
-          >
-            <option value="auto">Auto arbitration</option>
-            {eligibleProviders.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        {mode === "search" && (
-          <div className="flex items-center gap-2">
-            <span>Depth:</span>
-            <SegmentedControl
-              options={SEARCH_DEPTH_OPTIONS}
-              value={SEARCH_DEPTH_LABELS[searchDepth]}
-              onChange={(value) =>
-                setSearchDepth(value.toLowerCase() as SearchDepth)
-              }
-              ariaLabel="Search depth"
-              minColumnWidth="72px"
+              <Search className="size-5" />
+            </div>
+            <input
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search across all providers..."
+              className="w-full bg-transparent py-3 pl-9 pr-32 text-[15px] font-mono outline-none placeholder:text-[var(--muted)]"
+              style={{ color: "var(--text-strong)" }}
             />
+            <div className="absolute right-0 top-1/2 -translate-y-1/2">
+              <Button
+                type="submit"
+                disabled={isSearching || isFetching}
+                className="inline-flex items-center gap-2 rounded-md px-5 py-2 text-[13px] font-medium text-white"
+                style={{ background: "var(--signal)" }}
+              >
+                <Search aria-hidden="true" className="size-3.5" />
+                {isSearching || isFetching ? "Executing..." : "Search"}
+              </Button>
+            </div>
           </div>
-        )}
-      </div>
+
+          <hr
+            data-testid="search-composer-divider"
+            className="mt-3 border-0 border-t border-[var(--border-subtle)] pt-3"
+          />
+          <div
+            data-testid="search-composer-footer"
+            className="space-y-3 text-[13px] text-[var(--muted)]"
+          >
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+              <span>Suggestions:</span>
+              {quickQueries.map((quickQuery) => (
+                <button
+                  key={quickQuery}
+                  type="button"
+                  onClick={() => setQuery(quickQuery)}
+                  className="transition-colors hover:text-[var(--text-strong)] hover:underline"
+                >
+                  {quickQuery}
+                </button>
+              ))}
+            </div>
+
+            <div className="flex flex-wrap items-center gap-4">
+              <div className="flex items-center gap-2">
+                <span>Provider:</span>
+                <select
+                  value={selectedProviderId}
+                  onChange={(e) => setSelectedProviderId(e.target.value)}
+                  className="rounded border border-[var(--border-subtle)] bg-[var(--elevated)] px-2.5 py-1 text-[13px] text-[var(--text)] outline-none"
+                >
+                  <option value="auto">Auto arbitration</option>
+                  {eligibleProviders.map((provider) => (
+                    <option key={provider.id} value={provider.id}>
+                      {provider.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <span>Depth:</span>
+                <SegmentedControl
+                  options={SEARCH_DEPTH_OPTIONS}
+                  value={SEARCH_DEPTH_LABELS[searchDepth]}
+                  onChange={(value) =>
+                    setSearchDepth(value.toLowerCase() as SearchDepth)
+                  }
+                  ariaLabel="Search depth"
+                  minColumnWidth="72px"
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <>
+          <div className="relative">
+            <div
+              className="absolute left-0 top-1/2 -translate-y-1/2 pl-1"
+              style={{ color: "var(--muted)" }}
+            >
+              <FileText className="size-5" />
+            </div>
+            <input
+              type="url"
+              value={fetchUrl}
+              onChange={(e) => setFetchUrl(e.target.value)}
+              placeholder="Enter a URL to fetch and convert..."
+              className="w-full bg-transparent py-3 pl-9 pr-32 text-[15px] font-mono outline-none placeholder:text-[var(--muted)]"
+              style={{
+                color: "var(--text-strong)",
+                borderBottom: "1px solid var(--border-subtle)",
+              }}
+            />
+            <div className="absolute right-0 top-1/2 -translate-y-1/2">
+              <Button
+                type="submit"
+                disabled={isSearching || isFetching}
+                className="inline-flex items-center gap-2 rounded-md px-5 py-2 text-[13px] font-medium text-white"
+                style={{ background: "var(--signal)" }}
+              >
+                {isSearching || isFetching ? "Executing..." : "Fetch"}
+              </Button>
+            </div>
+          </div>
+
+          <div className="mt-3 flex flex-wrap items-center gap-4 text-[13px] text-[var(--muted)]">
+            <div className="flex items-center gap-2">
+              <span>Provider:</span>
+              <select
+                value={selectedProviderId}
+                onChange={(e) => setSelectedProviderId(e.target.value)}
+                className="rounded border border-[var(--border-subtle)] bg-[var(--elevated)] px-2.5 py-1 text-[13px] text-[var(--text)] outline-none"
+              >
+                <option value="auto">Auto arbitration</option>
+                {eligibleProviders.map((provider) => (
+                  <option key={provider.id} value={provider.id}>
+                    {provider.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+        </>
+      )}
     </form>
   )
 
