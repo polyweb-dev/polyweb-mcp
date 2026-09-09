@@ -40,10 +40,10 @@ import {
  */
 
 const testDir = import.meta.dirname
-const strategySource = readFileSync(
-  path.resolve(testDir, "./RoutingStrategy.tsx"),
-  "utf8"
-)
+const strategySource =
+  readFileSync(path.resolve(testDir, "./RoutingStrategy.tsx"), "utf8") +
+  "\n" +
+  readFileSync(path.resolve(testDir, "./StrategyCardButton.tsx"), "utf8")
 
 function renderRouting() {
   const stub = installFetchStub((req) => {
