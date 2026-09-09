@@ -75,6 +75,11 @@ import {
 
 const testDir = import.meta.dirname
 const statusBarPath = path.resolve(testDir, "./StatusBar.tsx")
+const statusBarChildPaths = [
+  path.resolve(testDir, "./statusBar/usePopoverDismiss.ts"),
+  path.resolve(testDir, "./statusBar/ProviderStatusPopover.tsx"),
+  path.resolve(testDir, "./statusBar/FailoverPopover.tsx"),
+]
 const appPath = path.resolve(testDir, "../../App.tsx")
 const playgroundPath = path.resolve(testDir, "../search/SearchPlayground.tsx")
 const routingPath = path.resolve(testDir, "../routing/RoutingEngine.tsx")
@@ -94,7 +99,9 @@ const indexCssSource = readFileSync(indexCssPath, "utf8")
 
 function statusBarSource(): string {
   try {
-    return readFileSync(statusBarPath, "utf8")
+    return [statusBarPath, ...statusBarChildPaths]
+      .map((sourcePath) => readFileSync(sourcePath, "utf8"))
+      .join("\n")
   } catch {
     return ""
   }
