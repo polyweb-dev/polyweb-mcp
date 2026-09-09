@@ -1,25 +1,18 @@
 import React, { useState } from "react"
-import { ArrowDown, ArrowUp, RefreshCw } from "lucide-react"
+import { ArrowDown, ArrowUp } from "lucide-react"
 import { useFreeSearch } from "@/context/useFreeSearch"
 import { Modal } from "@/components/common/Modal"
-import { ProviderLogo } from "@/components/common/ProviderLogo"
-import { Switch } from "@/components/common/Switch"
 import { Button } from "@/components/ui/button"
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip"
+import { TooltipProvider } from "@/components/ui/tooltip"
 import {
   Table,
   TableBody,
-  TableCell,
   TableHead,
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
 import type { ProviderConfig } from "@/types/freesearch"
+import { ProviderRegistryRow } from "./providers/ProviderRegistryRow"
 
 type TestResult = Awaited<ReturnType<ReturnType<typeof useFreeSearch>["testProviderConnection"]>>
 
@@ -127,6 +120,14 @@ export const SettingsProviders: React.FC = () => {
                   onToggleSearch={(enabled) => toggleProviderSearch(provider.id, enabled)}
                   onToggleFetch={(enabled) => toggleProviderFetch(provider.id, enabled)}
                   onOpenTest={() => setSelectedTestId(provider.id)}
+                  components={{
+                    PriorityIndicator,
+                    HealthStatus,
+                    RowPill,
+                    stripProtocol,
+                    formatLatency,
+                    formatQuota,
+                  }}
                 />
               ))}
             </TableBody>
@@ -156,119 +157,6 @@ const MERGED_HEADERS = [
   "Fetch",
   "Global",
 ] as const
-
-interface ProviderRegistryRowProps {
-  provider: ProviderConfig
-  rank: number
-  providerCount: number
-  testing: boolean
-  globalPending: boolean
-  canMoveUp: boolean
-  canMoveDown: boolean
-  onMovePriority: (direction: "up" | "down") => void
-  onToggleGlobal: (enabled: boolean) => void
-  onToggleSearch: (enabled: boolean) => void
-  onToggleFetch: (enabled: boolean) => void
-  onOpenTest: () => void
-}
-
-const ProviderRegistryRow: React.FC<ProviderRegistryRowProps> = ({
-  provider,
-  rank,
-  providerCount,
-  testing,
-  globalPending,
-  canMoveUp,
-  canMoveDown,
-  onMovePriority,
-  onToggleGlobal,
-  onToggleSearch,
-  onToggleFetch,
-  onOpenTest,
-}) => {
-  const health = provider.circuitBreaker === "open" ? "open" : provider.healthStatus
-
-  return (
-    <TableRow className="border-b border-[var(--border-subtle)] last:border-b-0 hover:bg-[var(--elevated)]">
-      <TableCell className="whitespace-nowrap px-3 py-2.5">
-        <div className="flex items-center gap-3">
-          <PriorityIndicator
-            provider={provider}
-            rank={rank}
-            providerCount={providerCount}
-            canMoveUp={canMoveUp}
-            canMoveDown={canMoveDown}
-            onMovePriority={onMovePriority}
-          />
-          <div className="flex items-center gap-2">
-            <ProviderLogo providerId={provider.id} />
-            <span className="font-medium text-[var(--text-strong)]">{provider.name}</span>
-            {provider.isCustom && <RowPill tone="signal">custom</RowPill>}
-            {provider.capabilities.includes("keyless_tier") && (
-              <RowPill tone="healthy">keyless</RowPill>
-            )}
-          </div>
-        </div>
-      </TableCell>
-      <TableCell className="max-w-[250px] whitespace-nowrap px-3 py-2.5">
-        <span className="block truncate font-mono text-[12px] text-[var(--muted)]" title={provider.baseUrl}>
-          {stripProtocol(provider.baseUrl)}
-        </span>
-      </TableCell>
-      <TableCell className="whitespace-nowrap px-3 py-2.5">
-        <HealthStatus status={health} />
-      </TableCell>
-      <TableCell className="whitespace-nowrap px-3 py-2.5 tnum">
-        {formatQuota(provider)}
-      </TableCell>
-      <TableCell className="whitespace-nowrap px-3 py-2.5 tnum">
-        {formatLatency(provider.latencyP95Ms)}
-      </TableCell>
-      <TableCell className="whitespace-nowrap px-3 py-2.5">
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          type="button"
-          onClick={onOpenTest}
-          disabled={testing}
-          aria-label={`${provider.name} test connection`}
-          title={`Test ${provider.name} connection`}
-        >
-          <RefreshCw aria-hidden="true" className={`size-3.5 ${testing ? "animate-spin" : ""}`} />
-        </Button>
-      </TableCell>
-      <TableCell className="whitespace-nowrap px-3 py-2.5">
-        <OperationControl
-          label="Search"
-          providerName={provider.name}
-          supported={provider.capabilities.includes("search")}
-          enabled={provider.searchEnabled}
-          globallyDisabled={!provider.globalEnabled}
-          onToggle={onToggleSearch}
-        />
-      </TableCell>
-      <TableCell className="whitespace-nowrap px-3 py-2.5">
-        <OperationControl
-          label="Fetch"
-          providerName={provider.name}
-          supported={provider.capabilities.includes("fetch")}
-          enabled={provider.fetchEnabled}
-          globallyDisabled={!provider.globalEnabled}
-          onToggle={onToggleFetch}
-        />
-      </TableCell>
-      <TableCell className="whitespace-nowrap px-3 py-2.5">
-        <span className="sr-only">Global</span>
-        <Switch
-          checked={provider.globalEnabled}
-          onChange={onToggleGlobal}
-          disabled={globalPending}
-          ariaLabel={`${provider.name} global routing`}
-        />
-      </TableCell>
-    </TableRow>
-  )
-}
 
 export const ProviderTestModal: React.FC<{
   provider: ProviderConfig | null
@@ -429,51 +317,5 @@ const RowPill: React.FC<{ tone: "signal" | "healthy"; children: React.ReactNode 
   </span>
 )
 
-interface OperationControlProps {
-  label: "Search" | "Fetch"
-  providerName: string
-  supported: boolean
-  enabled: boolean
-  globallyDisabled: boolean
-  onToggle: (enabled: boolean) => void
-}
-
-const OperationControl: React.FC<OperationControlProps> = ({
-  label,
-  providerName,
-  supported,
-  enabled,
-  globallyDisabled,
-  onToggle,
-}) => {
-  if (!supported) {
-    return (
-      <Tooltip>
-        <TooltipTrigger
-          render={<span className="inline-flex cursor-not-allowed" />}
-        >
-          <Switch
-            checked={false}
-            onChange={() => {}}
-            disabled
-            ariaLabel={`${providerName} ${label.toLowerCase()} routing (not supported)`}
-          />
-        </TooltipTrigger>
-        <TooltipContent>
-          {providerName} does not support {label.toLowerCase()}
-        </TooltipContent>
-      </Tooltip>
-    )
-  }
-
-  return (
-    <div title="Session-only — backend has global enable only">
-      <Switch
-        checked={enabled}
-        onChange={onToggle}
-        disabled={globallyDisabled}
-        ariaLabel={`${providerName} ${label.toLowerCase()} routing`}
-      />
-    </div>
-  )
-}
+export { ProviderRegistryRow } from "./providers/ProviderRegistryRow"
+export { OperationControl } from "./providers/OperationControl"

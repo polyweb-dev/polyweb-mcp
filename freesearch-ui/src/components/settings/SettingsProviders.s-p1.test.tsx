@@ -67,7 +67,12 @@ import {
  */
 
 const testDir = import.meta.dirname
-const settingsSource = readFileSync(path.resolve(testDir, "./SettingsProviders.tsx"), "utf8")
+const settingsSource =
+  readFileSync(path.resolve(testDir, "./SettingsProviders.tsx"), "utf8") +
+  "\n" +
+  readFileSync(path.resolve(testDir, "./providers/ProviderRegistryRow.tsx"), "utf8") +
+  "\n" +
+  readFileSync(path.resolve(testDir, "./providers/OperationControl.tsx"), "utf8")
 const tableSource = readFileSync(path.resolve(testDir, "../ui/table.tsx"), "utf8")
 // P1-FINAL (blessed inversion): ProviderMatrix.tsx is DELETED by the merge —
 // no test may read it (the file is gone Green). Fleet-telemetry pins live in
