@@ -52,6 +52,15 @@ Then("the last provider row downward priority arrow should be disabled", async (
 When(
   "I turn the {string} {string} operation off",
   async ({ page }, provider: string, operation: string) => {
+    const sw = page.getByRole("switch", {
+      name: new RegExp(`${escapeRegExp(provider)} ${escapeRegExp(operation)} routing`, "i"),
+    })
+    if (await sw.count()) {
+      if ((await sw.getAttribute("aria-checked")) === "true") {
+        await sw.click()
+      }
+      return
+    }
     await getSegmentButton(page, provider, operation, "Off").click()
   }
 )
@@ -59,6 +68,13 @@ When(
 Then(
   "the {string} {string} operation should be off",
   async ({ page }, provider: string, operation: string) => {
+    const sw = page.getByRole("switch", {
+      name: new RegExp(`${escapeRegExp(provider)} ${escapeRegExp(operation)} routing`, "i"),
+    })
+    if (await sw.count()) {
+      await expect(sw).toHaveAttribute("aria-checked", "false")
+      return
+    }
     await expect(getSegmentButton(page, provider, operation, "Off")).toHaveAttribute(
       "aria-pressed",
       "true"
@@ -69,6 +85,13 @@ Then(
 Then(
   "the {string} {string} operation should remain off",
   async ({ page }, provider: string, operation: string) => {
+    const sw = page.getByRole("switch", {
+      name: new RegExp(`${escapeRegExp(provider)} ${escapeRegExp(operation)} routing`, "i"),
+    })
+    if (await sw.count()) {
+      await expect(sw).toHaveAttribute("aria-checked", "false")
+      return
+    }
     await expect(getSegmentButton(page, provider, operation, "Off")).toHaveAttribute(
       "aria-pressed",
       "true"
@@ -207,10 +230,8 @@ Then("the failover row {string} should be visible", async ({ page }, label: stri
 })
 
 function getProviderRow(page: Page, provider: string) {
-  return page
-    .getByText(provider, { exact: true })
-    .first()
-    .locator("xpath=ancestor::*[.//*[normalize-space()='Global']][1]")
+  const cell = page.getByText(provider, { exact: true }).first()
+  return cell.locator("xpath=ancestor-or-self::tr | ancestor::*[.//*[normalize-space()='Global']][1]").first()
 }
 
 function getSegmentButton(
