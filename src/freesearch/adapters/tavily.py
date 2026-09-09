@@ -50,6 +50,7 @@ from freesearch.contracts import (
     SearchRequest,
     SearchResponse,
     SearchResult,
+    UnitKind,
     UsageEvent,
     UsageOperation,
 )
@@ -593,6 +594,8 @@ class TavilyAdapter(ProviderAdapter):
                     limit=plan_limit,
                     reset_at=None,
                     observed_at=observed_at,
+                    unit_kind=UnitKind.CREDIT,
+                    display_unit="credits",
                 )
             # Incomplete plan figures: validate any present value so a
             # malformed one still errors, then fall back to the key figures.
@@ -614,6 +617,8 @@ class TavilyAdapter(ProviderAdapter):
                 limit=None,
                 reset_at=None,
                 observed_at=observed_at,
+                unit_kind=UnitKind.CREDIT,
+                display_unit="credits",
             )
         assert key_usage is not None
         return QuotaSnapshot(
@@ -623,6 +628,8 @@ class TavilyAdapter(ProviderAdapter):
             limit=key_limit,
             reset_at=None,
             observed_at=observed_at,
+            unit_kind=UnitKind.CREDIT,
+            display_unit="credits",
         )
 
     def _quota_number(self, value: Any) -> Decimal | None:
@@ -672,6 +679,8 @@ class TavilyAdapter(ProviderAdapter):
             provider=self.name,
             operation=operation,
             units=Decimal(str(credits)),
+            unit_kind=UnitKind.CREDIT,
+            display_unit="credits",
             observed_at=datetime.now(UTC),
             request_id=response.get("request_id"),
         )

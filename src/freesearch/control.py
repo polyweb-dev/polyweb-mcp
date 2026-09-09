@@ -381,6 +381,11 @@ async def persist_provider_config(
                 for operation, units in config.free_tier_estimates.items()
             },
             "reset_schedule": config.reset_schedule,
+            "parallel_free_seed_usd": (
+                str(config.parallel_free_seed_usd)
+                if config.parallel_free_seed_usd is not None
+                else None
+            ),
         }
     }
     await repository.set_runtime_setting(_provider_key(provider), payload)

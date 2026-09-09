@@ -19,6 +19,7 @@ from freesearch.contracts import (
     RoutingMode,
     RoutingPreference,
     SearchRequest,
+    is_soft_quota_zero,
 )
 
 _HEALTH_ORDER = (HealthStatus.HEALTHY, HealthStatus.DEGRADED, HealthStatus.UNKNOWN)
@@ -127,10 +128,16 @@ def _eligible(
         )
 
     quota = quota_snapshots.get(adapter.name)
-    if quota is not None and quota.remaining == 0:
+    if quota is not None and quota.remaining == 0 and _hard_quota_exhaustion(adapter.name, quota):
         return None
 
     return RouteCandidate(adapter=adapter, health=health, quota=quota)
+
+
+def _hard_quota_exhaustion(name: str, quota: QuotaSnapshot) -> bool:
+    """Distinguish a marked Parallel 402 soft zero from genuine depletion."""
+
+    return not is_soft_quota_zero(name, quota)
 
 
 def _preference_rank(name: str, preference: RoutingPreference) -> int:

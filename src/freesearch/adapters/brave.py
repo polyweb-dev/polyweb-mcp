@@ -1,6 +1,6 @@
 """Brave Search API adapter using the shared HTTP and resilience contracts."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -14,9 +14,12 @@ from freesearch.contracts import (
     FetchResponse,
     ProviderCapabilities,
     ProviderError,
+    QuotaSnapshot,
+    QuotaSource,
     SearchRequest,
     SearchResponse,
     SearchResult,
+    UnitKind,
     UsageEvent,
     UsageOperation,
 )
@@ -30,6 +33,27 @@ _MAX_SEARCH_RESULTS = 20
 _RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
 
 
+def monthly_header_value(value: str | None) -> int | None:
+    """Return the non-negative monthly element from a Brave comma pair."""
+
+    if value is None:
+        return None
+    parts = value.split(",")
+    if len(parts) < 2:
+        return None
+    raw = parts[1].strip()
+    if not raw:
+        return None
+    try:
+        parsed = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed >= 0 else None
+
+
+parse_monthly_element = monthly_header_value
+
+
 class BraveAdapter(ProviderAdapter):
     """Normalize Brave web search responses without owning client lifecycle."""
 
@@ -40,6 +64,7 @@ class BraveAdapter(ProviderAdapter):
         self._client = client
         self._runner = runner or ResilientRunner(client)
         self._api_key: SecretStr = resolved
+        self._last_quota = self._empty_quota()
 
     @property
     def name(self) -> str:
@@ -117,13 +142,21 @@ class BraveAdapter(ProviderAdapter):
         if not isinstance(web, dict) or not isinstance(results, list):
             raise TypeError("missing web results")
         normalized = [self._normalize_result(result) for result in results]
+        snapshot = self._quota_snapshot(response)
+        self._last_quota = snapshot
         return SearchResponse(
             query=request.query,
             provider=self.name,
             results=normalized,
             total_results=len(normalized),
             usage=self._usage_event(response),
+            quota_snapshot=snapshot,
         )
+
+    def quota_after_success(self, response: SearchResponse) -> QuotaSnapshot:
+        """Project monthly rate-limit headers observed on a successful search."""
+
+        return response.quota_snapshot or self._last_quota
 
     @staticmethod
     def _normalize_result(result: Any) -> SearchResult:
@@ -149,8 +182,38 @@ class BraveAdapter(ProviderAdapter):
             provider=self.name,
             operation=UsageOperation.SEARCH,
             units=Decimal("1"),
+            unit_kind=UnitKind.REQUEST,
+            display_unit="requests",
             observed_at=datetime.now(UTC),
             metadata=metadata,
+        )
+
+    def _quota_snapshot(self, response: httpx.Response) -> QuotaSnapshot:
+        observed_at = datetime.now(UTC)
+        remaining = monthly_header_value(response.headers.get("X-RateLimit-Remaining"))
+        limit = monthly_header_value(response.headers.get("X-RateLimit-Limit"))
+        reset = monthly_header_value(response.headers.get("X-RateLimit-Reset"))
+        return QuotaSnapshot(
+            provider=self.name,
+            source=QuotaSource.OBSERVED,
+            remaining=Decimal(remaining) if remaining is not None else None,
+            limit=Decimal(limit) if limit is not None else None,
+            reset_at=observed_at + timedelta(seconds=reset) if reset is not None else None,
+            observed_at=observed_at,
+            unit_kind=UnitKind.REQUEST,
+            display_unit="requests",
+        )
+
+    def _empty_quota(self) -> QuotaSnapshot:
+        return QuotaSnapshot(
+            provider=self.name,
+            source=QuotaSource.OBSERVED,
+            remaining=None,
+            limit=None,
+            reset_at=None,
+            observed_at=datetime.now(UTC),
+            unit_kind=UnitKind.REQUEST,
+            display_unit="requests",
         )
 
     @staticmethod

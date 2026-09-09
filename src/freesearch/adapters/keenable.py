@@ -22,9 +22,12 @@ from freesearch.contracts import (
     FetchResponse,
     ProviderCapabilities,
     ProviderError,
+    QuotaSnapshot,
+    QuotaSource,
     SearchRequest,
     SearchResponse,
     SearchResult,
+    UnitKind,
     UsageEvent,
     UsageOperation,
 )
@@ -51,6 +54,16 @@ _PATHS = {
 }
 
 
+def _month_start(value: datetime) -> datetime:
+    return datetime(value.year, value.month, 1, tzinfo=UTC)
+
+
+def _next_month_start(value: datetime) -> datetime:
+    if value.month == 12:
+        return datetime(value.year + 1, 1, 1, tzinfo=UTC)
+    return datetime(value.year, value.month + 1, 1, tzinfo=UTC)
+
+
 def _parse_published_at(value: Any) -> datetime | None:
     """Parse an ISO-8601 timestamp; unparseable values are None."""
     if not isinstance(value, str):
@@ -73,6 +86,13 @@ class KeenableAdapter(ProviderAdapter):
         """Wrap the caller-owned ``client`` in the shared resilience runner."""
         self._client = client
         self._runner = runner or ResilientRunner(client)
+        self._allowance_limit = Decimal("100000")
+        self._allowance_spend = Decimal("0")
+        self._paid_spend = Decimal("0")
+        self._paid_usage_seen = False
+        self._hard_exhausted = False
+        self._ledger_month = _month_start(datetime.now(UTC))
+        self._hydrated_month: datetime | None = None
 
     @property
     def name(self) -> str:
@@ -80,7 +100,10 @@ class KeenableAdapter(ProviderAdapter):
 
     @property
     def capabilities(self) -> ProviderCapabilities:
-        return ProviderCapabilities(search=True, fetch=True, cost_estimate=True, quota=False)
+        keyed, _headers = self._auth()
+        return ProviderCapabilities(
+            search=True, fetch=True, cost_estimate=True, quota=keyed == _KEYED
+        )
 
     def _auth(self) -> tuple[str, dict[str, str]]:
         """Resolve the API key lazily; absent or blank keys select keyless mode."""
@@ -123,7 +146,7 @@ class KeenableAdapter(ProviderAdapter):
                 provider=self.name,
                 results=results,
                 total_results=len(results),
-                usage=self._usage_event(UsageOperation.SEARCH),
+                usage=self._usage_event(UsageOperation.SEARCH, payload),
             )
         except ProviderOperationError:
             raise
@@ -179,7 +202,7 @@ class KeenableAdapter(ProviderAdapter):
                     fetched_at=datetime.now(UTC),
                     metadata={"truncated": True} if truncated else {},
                 ),
-                usage=self._usage_event(UsageOperation.FETCH),
+                usage=self._usage_event(UsageOperation.FETCH, payload),
             )
         except ProviderOperationError:
             raise
@@ -201,25 +224,184 @@ class KeenableAdapter(ProviderAdapter):
         operation = (
             UsageOperation.SEARCH if isinstance(request, SearchRequest) else UsageOperation.FETCH
         )
+        keyed, _headers = self._auth()
+        amount = Decimal("0.004") if keyed == _KEYED else Decimal("0")
         return CostEstimate(
             provider=self.name,
             operation=operation,
-            units=Decimal("0"),
-            notes="Keenable free tier is zero cost",
+            units=amount,
+            currency="USD",
+            notes="estimated keyed cloud request price" if amount else "keyless public tier",
         )
 
-    def _usage_event(self, operation: UsageOperation) -> UsageEvent:
+    def _usage_event(
+        self, operation: UsageOperation, payload: dict[str, Any] | None = None
+    ) -> UsageEvent:
+        mode, _headers = self._auth()
+        if mode != _KEYED:
+            return UsageEvent(
+                provider=self.name,
+                operation=operation,
+                units=Decimal("0"),
+                unit_kind=UnitKind.FREE,
+                display_unit="free",
+                observed_at=datetime.now(UTC),
+                metadata={"mode": mode},
+            )
+        credits, paid, metadata = self._reported_usage(payload)
+        self.apply_usage(credits=credits, paid=paid)
         return UsageEvent(
             provider=self.name,
             operation=operation,
-            units=Decimal("0"),
+            units=credits,
+            unit_kind=UnitKind.CREDIT,
+            display_unit="credits",
             observed_at=datetime.now(UTC),
+            metadata={"mode": mode, **metadata},
+        )
+
+    @staticmethod
+    def _reported_usage(payload: dict[str, Any] | None) -> tuple[Decimal, bool, dict[str, Any]]:
+        raw = payload.get("_meta", {}).get("keenable/usage") if payload else None
+        if not isinstance(raw, dict):
+            return Decimal("1"), False, {}
+        credits = raw.get("credits", raw.get("amount", 1))
+        if isinstance(credits, bool):
+            raise ValueError("malformed Keenable usage")
+        try:
+            parsed = Decimal(str(credits))
+        except (ArithmeticError, ValueError):
+            raise ValueError("malformed Keenable usage") from None
+        if not parsed.is_finite() or parsed < 0:
+            raise ValueError("malformed Keenable usage")
+        paid = raw.get("paid", False)
+        if not isinstance(paid, bool):
+            raise ValueError("malformed Keenable usage")
+        metadata = {key: raw[key] for key in ("sku", "paid") if key in raw}
+        return parsed, paid, metadata
+
+    async def hydrate_quota(self, repository: Any) -> QuotaSnapshot | None:
+        """Restore keyed allowance counters from the current month's ledger."""
+
+        mode, _headers = self._auth()
+        if mode != _KEYED:
+            return None
+        now = datetime.now(UTC)
+        month_start = _month_start(now)
+        self._rollover_if_needed(now)
+        if self._hydrated_month == month_start:
+            return None
+        latest = await repository.latest_quota(self.name)
+        events = await repository.list_usage(provider=self.name)
+        current = [
+            event
+            for event in events
+            if event.observed_at >= month_start
+            and event.status.value == "success"
+            and event.unit_kind is UnitKind.CREDIT
+        ]
+        self._allowance_spend = sum(
+            (event.units for event in current if event.metadata.get("paid") is not True),
+            Decimal("0"),
+        )
+        self._paid_spend = sum(
+            (event.units for event in current if event.metadata.get("paid") is True),
+            Decimal("0"),
+        )
+        self._paid_usage_seen = any(event.metadata.get("paid") is True for event in current)
+        later_success = any(
+            event.observed_at > latest.observed_at for event in current if latest is not None
+        )
+        self._hard_exhausted = bool(
+            latest is not None
+            and latest.remaining == Decimal("0")
+            and not later_success
+            and latest.observed_at >= month_start
+        )
+        self._hydrated_month = month_start
+        return self._snapshot_sync()
+
+    async def quota(self) -> QuotaSnapshot | None:
+        """Return the keyed local monthly allowance; keyless has no quota."""
+
+        mode, _headers = self._auth()
+        if mode != _KEYED:
+            return None
+        self._rollover_if_needed(datetime.now(UTC))
+        return self._snapshot_sync()
+
+    async def quota_after_success(self, response: object) -> QuotaSnapshot | None:
+        del response
+        return await self.quota()
+
+    async def quota_after_error(self, status: int | None) -> QuotaSnapshot | None:
+        if status == 402 and self._auth()[0] == _KEYED:
+            self._hard_exhausted = True
+            return await self.quota()
+        return None
+
+    def apply_usage(self, *, credits: Decimal, paid: bool = False) -> QuotaSnapshot | None:
+        """Apply a reported paid/free usage detail without mixing counters."""
+
+        mode, _headers = self._auth()
+        if mode != _KEYED:
+            return None
+        self._rollover_if_needed(datetime.now(UTC))
+        if credits < 0:
+            raise ValueError("usage credits must be non-negative")
+        if paid:
+            self._paid_spend += credits
+            self._paid_usage_seen = True
+        else:
+            self._allowance_spend += credits
+        return self._snapshot_sync()
+
+    def _rollover_if_needed(self, now: datetime) -> None:
+        month = _month_start(now)
+        if month == self._ledger_month:
+            return
+        self._ledger_month = month
+        self._allowance_spend = Decimal("0")
+        self._paid_spend = Decimal("0")
+        self._paid_usage_seen = False
+        self._hard_exhausted = False
+        self._hydrated_month = None
+
+    def _snapshot_sync(self) -> QuotaSnapshot:
+        remaining = (
+            None
+            if self._paid_usage_seen
+            else (
+                Decimal("0")
+                if self._hard_exhausted
+                else max(Decimal("0"), self._allowance_limit - self._allowance_spend)
+            )
+        )
+        observed_at = datetime.now(UTC)
+        metadata: dict[str, object] = {
+            "free": max(Decimal("0"), self._allowance_limit - self._allowance_spend),
+            "free_spend": self._allowance_spend,
+            "soft_zero": False,
+        }
+        if self._paid_usage_seen:
+            metadata["paid"] = self._paid_spend
+            metadata["paid_spend"] = self._paid_spend
+        return QuotaSnapshot(
+            provider=self.name,
+            source=QuotaSource.OBSERVED,
+            remaining=remaining,
+            limit=self._allowance_limit,
+            reset_at=_next_month_start(observed_at),
+            observed_at=observed_at,
+            unit_kind=UnitKind.CREDIT,
+            display_unit="credits",
+            metadata=metadata,
         )
 
     def _http_error(self, response: httpx.Response) -> ProviderOperationError:
         status = response.status_code
         return self._error(
-            "http_error",
+            "quota_exhausted" if status == 402 else "http_error",
             f"HTTP {status}",
             retryable=status in _RETRYABLE_STATUS_CODES,
             status=status,

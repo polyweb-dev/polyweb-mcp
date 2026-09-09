@@ -10,16 +10,19 @@ so request ids, metadata, query text, and diagnostic messages never leave the
 storage layer.
 """
 
+import asyncio
+import inspect
 import logging
 import math
 import os
 import time
 from collections.abc import Awaitable, Callable, Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
-from pydantic import AwareDatetime
+from pydantic import AwareDatetime, model_serializer
 
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.contracts import (
@@ -29,12 +32,14 @@ from freesearch.contracts import (
     ProviderHealth,
     QuotaSnapshot,
     SearchResponse,
+    UnitKind,
     UsageEvent,
     UsageOperation,
     UsageStatus,
+    is_soft_quota_zero,
 )
 from freesearch.secrets import ProviderName
-from freesearch.storage import SQLiteRepository, UsageTotal
+from freesearch.storage import LegacyUsageTotal, SQLiteRepository, UsageTotal
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +55,56 @@ DEFAULT_RECENT_LIMIT: int = 20
 MAX_RECENT_LIMIT: int = 100
 DEFAULT_DB_FILENAME: str = "freesearch.db"
 DB_ENV_VAR: str = "FREESEARCH_DB"
+# Vendor quota endpoints are account reads, not request instrumentation.
+QUOTA_POLL_TTL_SECONDS: int = 120
+QUOTA_FAILURE_BACKOFF_SECONDS: int = 5
+_quota_poll_cache: dict[tuple[int, int], datetime] = {}
+_quota_failure_cache: dict[tuple[int, int], datetime] = {}
+_quota_poll_locks: dict[tuple[int, int], asyncio.Lock] = {}
+
+
+def _quota_ttl_seconds() -> int:
+    raw = os.environ.get("FREESEARCH_QUOTA_POLL_TTL_SECONDS")
+    try:
+        configured = int(raw) if raw is not None else QUOTA_POLL_TTL_SECONDS
+    except ValueError:
+        configured = QUOTA_POLL_TTL_SECONDS
+    return max(60, min(300, configured))
+
+
+def _quota_failure_backoff_seconds() -> int:
+    raw = os.environ.get("FREESEARCH_QUOTA_FAILURE_BACKOFF_SECONDS")
+    try:
+        configured = int(raw) if raw is not None else QUOTA_FAILURE_BACKOFF_SECONDS
+    except ValueError:
+        configured = QUOTA_FAILURE_BACKOFF_SECONDS
+    return max(1, min(30, configured))
+
+
+def clear_quota_poll_cache(
+    repository: SQLiteRepository | None = None,
+    adapters: Sequence[ProviderAdapter] = (),
+) -> None:
+    """Evict bounded-poll state when a repository or adapter generation closes."""
+
+    if repository is None and not adapters:
+        _quota_poll_cache.clear()
+        _quota_failure_cache.clear()
+        _quota_poll_locks.clear()
+        return
+    repository_id = id(repository) if repository is not None else None
+    adapter_ids = {id(adapter) for adapter in adapters}
+    all_keys = set(_quota_poll_cache) | set(_quota_failure_cache) | set(_quota_poll_locks)
+    keys = [
+        key
+        for key in all_keys
+        if (repository_id is None or key[0] == repository_id)
+        and (not adapter_ids or key[1] in adapter_ids)
+    ]
+    for key in keys:
+        _quota_poll_cache.pop(key, None)
+        _quota_failure_cache.pop(key, None)
+        _quota_poll_locks.pop(key, None)
 
 
 class ProviderUsageTotal(ContractModel):
@@ -59,6 +114,13 @@ class ProviderUsageTotal(ContractModel):
     operation: UsageOperation
     total_units: Decimal
     event_count: int
+    unit_kind: UnitKind | None = None
+
+    @model_serializer(mode="wrap")
+    def _serialize_compat(self, handler: Any) -> Any:
+        payload = handler(self)
+        _drop_unknown_units(payload)
+        return payload
 
 
 class RecentUsageEntry(ContractModel):
@@ -70,6 +132,14 @@ class RecentUsageEntry(ContractModel):
     observed_at: datetime
     latency_ms: int | None = None
     status: UsageStatus = UsageStatus.SUCCESS
+    unit_kind: UnitKind | None = None
+    display_unit: str | None = None
+
+    @model_serializer(mode="wrap")
+    def _serialize_compat(self, handler: Any) -> Any:
+        payload = handler(self)
+        _drop_unknown_units(payload)
+        return payload
 
 
 class LatestHealthEntry(ContractModel):
@@ -80,6 +150,12 @@ class LatestHealthEntry(ContractModel):
     checked_at: datetime
 
 
+def _drop_unknown_units(payload: dict[str, Any]) -> None:
+    if payload.get("unit_kind") is None:
+        payload.pop("unit_kind", None)
+        payload.pop("display_unit", None)
+
+
 class StatsResponse(ContractModel):
     """Read-only monitoring snapshot served by the stats and dashboard reads."""
 
@@ -88,6 +164,17 @@ class StatsResponse(ContractModel):
     recent_usage: list[RecentUsageEntry]
     latest_quota: list[QuotaSnapshot]
     latest_health: list[LatestHealthEntry]
+
+    @model_serializer(mode="wrap")
+    def _serialize_compat(self, handler: Any) -> Any:
+        payload = handler(self)
+        for snapshot in payload.get("latest_quota", []):
+            _drop_unknown_units(snapshot)
+        for total in payload.get("usage_totals", []):
+            _drop_unknown_units(total)
+        for event in payload.get("recent_usage", []):
+            _drop_unknown_units(event)
+        return payload
 
 
 class DashboardResponse(StatsResponse):
@@ -122,6 +209,33 @@ def _response_instant(response: SearchResponse | FetchResponse) -> datetime:
     return datetime.now(UTC)
 
 
+def _estimated_gap_event(response: SearchResponse | FetchResponse) -> UsageEvent | None:
+    """Turn an explicit vendor-metering gap into a local estimated event."""
+
+    gap = response.usage_gap
+    if not isinstance(gap, dict):
+        return None
+    raw_units = gap.get("units")
+    try:
+        units = raw_units if isinstance(raw_units, Decimal) else Decimal(str(raw_units))
+    except (ArithmeticError, TypeError, ValueError):
+        return None
+    if not units.is_finite() or units < 0:
+        return None
+    operation = (
+        UsageOperation.SEARCH if isinstance(response, SearchResponse) else UsageOperation.FETCH
+    )
+    return UsageEvent(
+        provider=response.provider,
+        operation=operation,
+        units=units,
+        unit_kind=UnitKind.USD,
+        display_unit="USD",
+        observed_at=_response_instant(response),
+        metadata={"estimated": True, "metering_gap": True},
+    )
+
+
 async def record_response_telemetry(
     repository: SQLiteRepository | None,
     response: SearchResponse | FetchResponse,
@@ -142,10 +256,9 @@ async def record_response_telemetry(
     if repository is None:
         return
     try:
-        if response.usage is not None:
-            measured = response.usage.model_copy(
-                update={"latency_ms": latency_ms, "status": status}
-            )
+        usage = response.usage or _estimated_gap_event(response)
+        if usage is not None:
+            measured = usage.model_copy(update={"latency_ms": latency_ms, "status": status})
             await repository.record_usage(measured)
     except Exception:
         logger.warning("response telemetry could not be persisted")
@@ -251,7 +364,7 @@ async def tracked_call[ResponseT: (SearchResponse, FetchResponse)](
     started_at = time.perf_counter()
     try:
         response = await call(adapter)
-    except Exception:
+    except Exception as exc:
         await _record_failure_usage(
             repository,
             provider=adapter.name,
@@ -259,13 +372,154 @@ async def tracked_call[ResponseT: (SearchResponse, FetchResponse)](
             latency_ms=_measured_latency_ms(adapter.name, _elapsed_ms(started_at)),
         )
         await record_failure_telemetry(repository, provider=adapter.name)
+        status = getattr(getattr(exc, "error", None), "status_code", None)
+        await _record_adapter_quota(
+            repository, adapter, "quota_after_error", status, operation=operation
+        )
         raise
     await record_response_telemetry(
         repository,
         response,
         latency_ms=_measured_latency_ms(adapter.name, _elapsed_ms(started_at)),
     )
+    await _record_adapter_quota(
+        repository, adapter, "quota_after_success", response, operation=operation
+    )
     return response
+
+
+async def refresh_quotas(
+    repository: SQLiteRepository | None,
+    adapters: Sequence[ProviderAdapter],
+    *,
+    force: bool = False,
+    now: datetime | None = None,
+) -> list[QuotaSnapshot]:
+    """Poll quota-capable adapters once per bounded TTL and persist snapshots."""
+
+    if repository is None:
+        return []
+    observed_at = now or datetime.now(UTC)
+    snapshots: list[QuotaSnapshot] = []
+    for adapter in adapters:
+        try:
+            if not adapter.capabilities.quota:
+                continue
+            snapshot = await _poll_one_quota(repository, adapter, force, observed_at)
+        except Exception:
+            logger.warning("quota poll could not be completed")
+            continue
+        if snapshot is not None:
+            snapshots.append(snapshot)
+    return snapshots
+
+
+async def _poll_one_quota(
+    repository: SQLiteRepository,
+    adapter: ProviderAdapter,
+    force: bool,
+    observed_at: datetime,
+) -> QuotaSnapshot | None:
+    cache_key = (id(repository), id(adapter))
+    lock = _quota_poll_locks.setdefault(cache_key, asyncio.Lock())
+    was_running = lock.locked()
+    async with lock:
+        failure_at = _quota_failure_cache.get(cache_key)
+        if failure_at is not None:
+            backoff = timedelta(seconds=_quota_failure_backoff_seconds())
+            if observed_at - failure_at < backoff:
+                try:
+                    return await repository.latest_quota(adapter.name)
+                except Exception:
+                    return None
+            _quota_failure_cache.pop(cache_key, None)
+        cached_at = _quota_poll_cache.get(cache_key)
+        ttl = _quota_ttl_seconds()
+        within_ttl = cached_at is not None and observed_at - cached_at < timedelta(seconds=ttl)
+        if within_ttl and (not force or was_running):
+            try:
+                return await repository.latest_quota(adapter.name)
+            except Exception:
+                return None
+        try:
+            snapshot = await adapter.quota()
+        except Exception:
+            _quota_failure_cache[cache_key] = observed_at
+            return None
+        if snapshot is None:
+            return None
+        try:
+            await repository.record_quota(snapshot)
+        except Exception:
+            _quota_failure_cache[cache_key] = observed_at
+            return None
+        _quota_failure_cache.pop(cache_key, None)
+        _quota_poll_cache[cache_key] = observed_at
+        return snapshot
+
+
+async def effective_quota(
+    repository: SQLiteRepository | None, provider: str
+) -> QuotaSnapshot | None:
+    """Return the routable quota view, expiring Parallel's soft zero on success."""
+
+    if repository is None:
+        return None
+    snapshot = await repository.latest_quota(provider)
+    if (
+        snapshot is None
+        or snapshot.remaining != Decimal("0")
+        or not is_soft_quota_zero(provider, snapshot)
+    ):
+        return snapshot
+    try:
+        events = await repository.list_usage(provider=provider)
+    except Exception:
+        return snapshot
+    successful = [
+        event
+        for event in events
+        if event.status is UsageStatus.SUCCESS and event.observed_at > snapshot.observed_at
+    ]
+    if successful:
+        cleared = snapshot.model_copy(
+            update={
+                "remaining": None,
+                "observed_at": max(event.observed_at for event in successful),
+                "metadata": {**snapshot.metadata, "soft_zero": False},
+            }
+        )
+        await repository.record_quota(cleared)
+        return cleared
+    return snapshot
+
+
+async def _record_adapter_quota(
+    repository: SQLiteRepository | None,
+    adapter: ProviderAdapter,
+    method_name: str,
+    argument: object,
+    *,
+    operation: UsageOperation | None = None,
+) -> None:
+    """Persist local quota state exposed by an adapter without vendor polling."""
+
+    if repository is None:
+        return
+    method = getattr(adapter, method_name, None)
+    if not callable(method):
+        return
+    try:
+        parameters = inspect.signature(method).parameters
+        if operation is not None and "operation" in parameters:
+            result = method(argument, operation=operation)
+        else:
+            result = method(argument)
+        snapshot = await result if inspect.isawaitable(result) else result
+        if isinstance(snapshot, QuotaSnapshot):
+            await repository.record_quota(snapshot)
+    except Exception:
+        logger.warning("local quota state could not be persisted")
 
 
 async def latency_p95_ms(
@@ -350,7 +604,9 @@ async def _latest_health(
     return observations
 
 
-def _contract_totals(totals: Sequence[UsageTotal]) -> list[ProviderUsageTotal]:
+def _contract_totals(
+    totals: Sequence[UsageTotal | LegacyUsageTotal],
+) -> list[ProviderUsageTotal]:
     """Convert storage usage totals into their contract model."""
 
     return [
@@ -359,6 +615,7 @@ def _contract_totals(totals: Sequence[UsageTotal]) -> list[ProviderUsageTotal]:
             operation=total.operation,
             total_units=total.total_units,
             event_count=total.event_count,
+            unit_kind=getattr(total, "unit_kind", None),
         )
         for total in totals
     ]
@@ -375,6 +632,8 @@ def _contract_recent(events: Sequence[UsageEvent]) -> list[RecentUsageEntry]:
             observed_at=event.observed_at,
             latency_ms=event.latency_ms,
             status=event.status,
+            unit_kind=event.unit_kind,
+            display_unit=event.display_unit,
         )
         for event in events
     ]

@@ -451,20 +451,78 @@ async def test_telemetry_failure_never_breaks_rest_request() -> None:
     assert response.json()["provider"] == "telemetry-down"
 
 
-async def test_privacy_gate_rejects_query_url_and_string_metadata(
+async def test_privacy_gate_blocks_sensitive_keys_allows_benign_telemetry(
     repository: SQLiteRepository,
 ) -> None:
+    """Pin the approved metadata blocklist through the telemetry write path.
+
+    Sensitive keys are rejected for any value type (proving key-based, not
+    value-based, blocking); benign telemetry — including plain strings and
+    substring lookalikes such as url_count — persists and round-trips.
+    """
     observed_at = datetime(2026, 1, 1, tzinfo=UTC)
     invalid_events = [
         _event("private", UsageOperation.SEARCH, "1", observed_at, metadata={"query": 7}),
         _event("private", UsageOperation.SEARCH, "1", observed_at, metadata={"url": 7}),
-        _event("private", UsageOperation.SEARCH, "1", observed_at, metadata={"note": "secret"}),
         _event("private", UsageOperation.SEARCH, "1", observed_at, metadata={"api_key": 7}),
+        _event(
+            "private", UsageOperation.SEARCH, "1", observed_at, metadata={"token": "x"}
+        ),
+        _event(
+            "private", UsageOperation.SEARCH, "1", observed_at, metadata={"session": "abc"}
+        ),
+        _event(
+            "private", UsageOperation.SEARCH, "1", observed_at, metadata={"content": "doc"}
+        ),
     ]
 
     for invalid_event in invalid_events:
         with pytest.raises(ValueError):
             await repository.record_usage(invalid_event)
+        assert await repository.list_usage() == []
+    benign = _event(
+        "private",
+        UsageOperation.SEARCH,
+        "1",
+        observed_at,
+        metadata={"note": "secret-free note", "url_count": 4},
+    )
+    await repository.record_usage(benign)
+    assert await repository.list_usage() == [benign]
+
+
+async def test_privacy_gate_rejects_credential_aliases(
+    repository: SQLiteRepository,
+) -> None:
+    """Critic OBJECT-1 through the telemetry write path: credential aliases.
+
+    passwd, private_key, client_secret, x-api-key, and id_token — in every
+    case/separator spelling, for string and non-string values — must be
+    rejected exactly like their canonical keys.
+    """
+    observed_at = datetime(2026, 1, 1, tzinfo=UTC)
+    invalid_metadatas = [
+        {"passwd": "x"},
+        {"PASSWD": "x"},
+        {"private_key": "sek"},
+        {"Private-Key": "sek"},
+        {"client_secret": "s"},
+        {"CLIENT-SECRET": "s"},
+        {"x-api-key": "sk"},
+        {"X-Api-Key": "sk"},
+        {"id_token": "t"},
+        {"ID-TOKEN": "t"},
+        {"passwd": 12345},
+        {"private_key": ["a", "b"]},
+        {"client_secret": {"nested": 1}},
+        {"x-api-key": 7},
+        {"id_token": True},
+    ]
+    for metadata in invalid_metadatas:
+        with pytest.raises(ValueError):
+            await repository.record_usage(
+                _event("private", UsageOperation.SEARCH, "1", observed_at, metadata=metadata)
+            )
         assert await repository.list_usage() == []
 
 

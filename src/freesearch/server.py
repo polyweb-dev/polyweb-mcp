@@ -10,7 +10,7 @@ local telemetry (usage and health observations) through
 
 import asyncio
 from collections.abc import AsyncIterator, Callable, Sequence
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any, TypedDict
 
@@ -25,9 +25,21 @@ from freesearch.adapters.keenable import KeenableAdapter
 from freesearch.adapters.parallel import ParallelAdapter
 from freesearch.adapters.tavily import TavilyAdapter
 from freesearch.adapters.youcom import YoucomAdapter
-from freesearch.contracts import FetchRequest, SearchRequest, UsageOperation
+from freesearch.contracts import (
+    FetchRequest,
+    ProviderHealth,
+    QuotaSnapshot,
+    SearchRequest,
+    UsageOperation,
+)
 from freesearch.http import create_async_client
-from freesearch.monitoring import resolve_database_path, tracked_call
+from freesearch.monitoring import (
+    clear_quota_poll_cache,
+    effective_quota,
+    refresh_quotas,
+    resolve_database_path,
+    tracked_call,
+)
 from freesearch.provider_config import get_provider_configs
 from freesearch.routing import select_route
 from freesearch.secrets import ProviderName
@@ -81,6 +93,43 @@ async def close_adapters(
         await client.aclose()
 
 
+def _quota_state_changed(current: QuotaSnapshot | None, projected: QuotaSnapshot) -> bool:
+    if current is None:
+        return True
+    return any(
+        getattr(current, field, None) != getattr(projected, field, None)
+        for field in ("remaining", "limit", "unit_kind", "display_unit", "metadata")
+    )
+
+
+async def _apply_parallel_seed(
+    routes: Sequence[ProviderAdapter], repository: SQLiteRepository | None
+) -> None:
+    """Apply persisted Parallel seed state after the repository is available."""
+
+    if repository is None:
+        return
+    from freesearch.control import effective_config_for_name
+
+    for adapter in routes:
+        try:
+            if adapter.name == "parallel":
+                config = await effective_config_for_name(repository, adapter.name)
+                setter = getattr(adapter, "set_free_seed", None)
+                if callable(setter):
+                    setter(config.parallel_free_seed_usd)
+            hydrator = getattr(adapter, "hydrate_quota", None)
+            if not callable(hydrator):
+                continue
+            snapshot = await hydrator(repository)
+            if snapshot is not None:
+                latest = await repository.latest_quota(adapter.name)
+                if _quota_state_changed(latest, snapshot):
+                    await repository.record_quota(snapshot)
+        except Exception:
+            continue
+
+
 def build_adapters(client: httpx.AsyncClient | None = None) -> list[ProviderAdapter]:
     """Return enabled adapters with a resolvable key, in configured priority order.
 
@@ -99,7 +148,12 @@ def build_adapters(client: httpx.AsyncClient | None = None) -> list[ProviderAdap
         if adapter_cls is None or not record.enabled:
             continue
         try:
-            adapters.append(adapter_cls(http_client))
+            if name is ProviderName.PARALLEL:
+                adapters.append(
+                    ParallelAdapter(http_client, free_seed=record.parallel_free_seed_usd)
+                )
+            else:
+                adapters.append(adapter_cls(http_client))
         except Exception:
             continue  # provider without a configured key fails closed at construction
     return adapters
@@ -119,6 +173,7 @@ async def _build_generation(
         owned_routes = build_adapters(client)
         if owns_repository:
             state["repository"] = await SQLiteRepository.open(resolve_database_path(database))
+        await _apply_parallel_seed(owned_routes, state["repository"])
     except BaseException:
         # A failed enter never increments: close the freshly built client and
         # adapters so a failed open cannot leak a partial generation.
@@ -137,9 +192,34 @@ async def _detach_generation(state: _ServerState, *, owns_repository: bool) -> N
     state["client"] = None
     state["routes"] = None
     if owned_repo is not None:
+        clear_quota_poll_cache(owned_repo, owned_routes or [])
         state["repository"] = None
         await owned_repo.close()
     await close_adapters(owned_routes or [], client)
+
+
+async def _route_state(
+    repository: SQLiteRepository | None, active: Sequence[ProviderAdapter]
+) -> tuple[dict[str, ProviderHealth], dict[str, QuotaSnapshot]]:
+    """Collect routing state while degrading quota failures to unknown."""
+
+    with suppress(Exception):
+        await refresh_quotas(repository, active)
+    health: dict[str, ProviderHealth] = {}
+    quotas: dict[str, QuotaSnapshot] = {}
+    if repository is None:
+        return health, quotas
+    for candidate in active:
+        try:
+            observation = await repository.latest_health(candidate.name)
+            if observation is not None:
+                health[candidate.name] = observation
+            snapshot = await effective_quota(repository, candidate.name)
+            if snapshot is not None:
+                quotas[candidate.name] = snapshot
+        except Exception:
+            continue
+    return health, quotas
 
 
 def create_server(
@@ -194,23 +274,27 @@ def create_server(
                 if last_exit:
                     await _detach_generation(state, owns_repository=owns_repository)
             else:
+                clear_quota_poll_cache(repository, routes or [])
                 await close_adapters(routes or [], None)
 
     server = FastMCP("freesearch", lifespan=lifespan)
 
-    def _route(request: SearchRequest | FetchRequest) -> ProviderAdapter:
+    async def _route(request: SearchRequest | FetchRequest) -> ProviderAdapter:
         # The owned path routes through the current generation's adapters; the
         # injected path keeps the caller's eager list. An owned server that has
         # not entered a lifespan yet has no generation, hence no provider.
         active = state["routes"] if owns_client else routes
         if not active:
             raise RuntimeError("no provider is configured: set a FREESEARCH_*_API_KEY")
-        return select_route(request, active, {}, {})[0].adapter
+        repository = state["repository"]
+        await _apply_parallel_seed(active, repository)
+        health, quotas = await _route_state(repository, active)
+        return select_route(request, active, health, quotas)[0].adapter
 
     @server.tool()
     async def search(request: SearchRequest) -> dict[str, Any]:
         """Search the web through the best available provider."""
-        adapter = _route(request)
+        adapter = await _route(request)
         response = await tracked_call(
             state["repository"],
             adapter,
@@ -222,7 +306,7 @@ def create_server(
     @server.tool()
     async def fetch(request: FetchRequest) -> dict[str, Any]:
         """Fetch a URL's content through the best available provider."""
-        adapter = _route(request)
+        adapter = await _route(request)
         response = await tracked_call(
             state["repository"],
             adapter,

@@ -397,9 +397,19 @@ async def test_cache_expiration_uses_utc_instants(repository: SQLiteRepository) 
     assert await repository.get_cache_metadata(live.cache_key) == live
 
 
-async def test_usage_metadata_rejects_strings_secrets_and_non_json(
+async def test_usage_metadata_blocklist_contract(
     repository: SQLiteRepository,
 ) -> None:
+    """Pin the approved metadata blocklist: exact-canonical key matching.
+
+    Canonicalization is case- and separator-insensitive, so every spelling of
+    one logical key behaves identically. Blocked: the bare tokens
+    (token/auth/key/bearer/credentials/session), api_key in any spelling, any
+    auth-prefixed key, and the query/url/content credential-content set (plus
+    the pre-existing secret set), at any nesting depth and for any value type.
+    Benign telemetry — including plain strings and the url_count-style keys
+    that substring matching used to misfire on — persists and round-trips.
+    """
     base = {
         "provider": "alpha",
         "operation": UsageOperation.SEARCH,
@@ -407,17 +417,110 @@ async def test_usage_metadata_rejects_strings_secrets_and_non_json(
         "observed_at": datetime(2026, 1, 1, 0, 0, tzinfo=UTC),
     }
     invalid = [
-        {"note": "string telemetry"},
-        {"api_key": 1},
-        {"API-Key": 1},
+        {"api_key": "sk-live"},
+        {"API-Key": "sk-live"},
+        {"ApiKey": "sk-live"},
+        {"api-key": "sk-live"},
+        {"authorization": "Bearer x"},
+        {"authentication": "x"},
+        {"auth": "x"},
+        {"token": "x"},
+        {"key": "x"},
+        {"bearer": "x"},
+        {"credentials": "x"},
+        {"session": "abc"},
+        {"query": "q"},
+        {"url": "https://example.com"},
+        {"content": "doc"},
+        {"password": "hunter2"},
+        {"secret": "s"},
+        {"access_token": "t"},
+        {"refresh_token": "t"},
+        {"cookie": "c"},
+        {"body": "b"},
+        {"document": "d"},
+        {"request": "r"},
+        {"audit": {"key": "nested-secret"}},
         {"x": float("nan")},
-        {"x": {"y": "nested string"}},
+        {"x": float("inf")},
         {"x": {1, 2}},
+        {"x": object()},
     ]
     for metadata in invalid:
         with pytest.raises(ValueError):
             await repository.record_usage(UsageEvent(metadata=metadata, **base))
         assert await repository.list_usage() == []
+    valid = [
+        {"note": "string telemetry"},
+        {"mode": "keyed", "sku": "search.pro", "paid": True},
+        {"url_count": 4},
+        {"content_type": "text/markdown"},
+        {"skus": [{"sku": "a", "count": 1}]},
+        {"x": {"y": "nested benign string"}},
+    ]
+    for metadata in valid:
+        await repository.record_usage(UsageEvent(metadata=metadata, **base))
+    events = await repository.list_usage()
+    assert [event.metadata for event in events] == valid
+
+
+async def test_usage_metadata_alias_blocklist(
+    repository: SQLiteRepository,
+) -> None:
+    """Critic OBJECT-1: credential aliases must be rejected like canonical keys.
+
+    passwd, private_key, client_secret, x-api-key, and id_token are real-world
+    spellings of password/key/secret/api_key/token material. Every
+    case/separator variant behaves identically under exact-canonical matching,
+    for string AND non-string values (a key-based blocklist never depends on
+    the value type). The url_count/content_type lookalikes must still pass —
+    no substring regression may ride along with the alias expansion.
+    """
+    base = {
+        "provider": "alpha",
+        "operation": UsageOperation.SEARCH,
+        "units": Decimal("1"),
+        "observed_at": datetime(2026, 1, 1, 0, 0, tzinfo=UTC),
+    }
+    invalid = [
+        {"passwd": "x"},
+        {"PASSWD": "x"},
+        {"Passwd": "x"},
+        {"private_key": "sek"},
+        {"Private-Key": "sek"},
+        {"PrivateKey": "sek"},
+        {"PRIVATE_KEY": "sek"},
+        {"client_secret": "s"},
+        {"CLIENT-SECRET": "s"},
+        {"ClientSecret": "s"},
+        {"clientSecret": "s"},
+        {"x-api-key": "sk"},
+        {"X-Api-Key": "sk"},
+        {"x_api_key": "sk"},
+        {"XAPIKEY": "sk"},
+        {"id_token": "t"},
+        {"ID-TOKEN": "t"},
+        {"IdToken": "t"},
+        {"ID_TOKEN": "t"},
+        # Non-string values smuggle nothing past a key-based blocklist.
+        {"passwd": 12345},
+        {"private_key": ["a", "b"]},
+        {"client_secret": {"nested": 1}},
+        {"x-api-key": 7},
+        {"id_token": True},
+        {"audit": {"client_secret": "nested-secret"}},
+        {"audit": {"id_token": "nested-token"}},
+    ]
+    for metadata in invalid:
+        with pytest.raises(ValueError):
+            await repository.record_usage(UsageEvent(metadata=metadata, **base))
+        assert await repository.list_usage() == []
+    # Lookalikes that merely resemble blocked keys keep working.
+    await repository.record_usage(
+        UsageEvent(metadata={"url_count": 4, "content_type": "text/markdown"}, **base)
+    )
+    (event,) = await repository.list_usage()
+    assert event.metadata == {"url_count": 4, "content_type": "text/markdown"}
 
 
 async def test_close_is_safe_after_normal_use(tmp_path: Path) -> None:

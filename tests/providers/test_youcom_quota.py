@@ -3,11 +3,12 @@
 Locks the quota contract: a GET on the exact balance URL over the borrowed
 transport with resolver-only auth (never caller credentials, never followed
 redirects, shared timeout) and exactly one shared-runner entry; an ESTIMATED
-snapshot with no limit/reset and a UTC timestamp whose remaining is the floor
-of balance-in-cents to Web Search call equivalents at the shared 0.005
-USD/call price (zero and sub-call balances map to zero); safe suppressed
-``invalid_response`` for malformed or secret-bearing payloads; and the shared
-runner's HTTP-status, Retry-After, and rate-limit cooldown behavior.
+USD snapshot with no limit/reset and a UTC timestamp whose remaining is the
+authoritative balance in USD dollars, with floored Web Search and contents
+call equivalents carried alongside in metadata (never a second spendable
+pool); safe suppressed ``invalid_response`` for malformed or secret-bearing
+payloads; and the shared runner's HTTP-status, Retry-After, and rate-limit
+cooldown behavior.
 """
 
 from datetime import timedelta
@@ -48,7 +49,13 @@ async def test_capability_quota_enabled_and_price_matches_estimate() -> None:
         await caller.aclose()
 
     assert estimate.units == Decimal("0.005")  # shared documented search price
-    assert snapshot.remaining == Decimal("100")  # 50 cents at 0.005 USD/call
+    # D-1: remaining is the authoritative USD balance; call counts ride along.
+    assert snapshot.remaining == Decimal("0.50")  # 50 cents persist as USD 0.50
+    assert snapshot.unit_kind is not None and snapshot.unit_kind.value == "USD"
+    assert snapshot.display_unit == "USD"
+    assert snapshot.metadata["balance_usd"] == Decimal("0.50")
+    assert snapshot.metadata["search_calls"] == Decimal("100")  # floor(0.50 / 0.005)
+    assert snapshot.metadata["fetch_calls"] == Decimal("500")  # floor(0.50 / 0.001)
     assert runner.entries == ["you"]  # estimate is free; only quota hits the network
 
 
@@ -70,7 +77,9 @@ async def test_quota_get_uses_balance_url_resolver_auth_and_shared_timeout() -> 
     _assert_wire_auth_and_timeout(recorder.requests, "sk-you-test-secret-1", _WIRE_TIMEOUT)
     assert adapter._owned_http.follow_redirects is False
     assert runner.entries == ["you"]
-    assert snapshot.remaining == Decimal("100")
+    assert snapshot.remaining == Decimal("0.50")
+    assert snapshot.metadata["search_calls"] == Decimal("100")
+    assert snapshot.metadata["fetch_calls"] == Decimal("500")
 
 
 async def test_quota_snapshot_is_estimated_utc_with_no_limit_or_reset() -> None:
@@ -80,7 +89,12 @@ async def test_quota_snapshot_is_estimated_utc_with_no_limit_or_reset() -> None:
 
     assert snapshot.provider == "you"
     assert snapshot.source is QuotaSource.ESTIMATED
-    assert snapshot.remaining == Decimal("200")
+    assert snapshot.remaining == Decimal("1.00")
+    assert snapshot.unit_kind is not None and snapshot.unit_kind.value == "USD"
+    assert snapshot.display_unit == "USD"
+    assert snapshot.metadata["balance_usd"] == Decimal("1.00")
+    assert snapshot.metadata["search_calls"] == Decimal("200")
+    assert snapshot.metadata["fetch_calls"] == Decimal("1000")
     assert snapshot.limit is None
     assert snapshot.reset_at is None
     assert snapshot.observed_at.utcoffset() == timedelta(0)
@@ -88,25 +102,28 @@ async def test_quota_snapshot_is_estimated_utc_with_no_limit_or_reset() -> None:
 
 
 @pytest.mark.parametrize(
-    ("balance_cents", "expected_calls"),
+    ("balance_cents", "balance_usd", "search_calls", "fetch_calls"),
     [
-        (0, Decimal("0")),
-        (0.3, Decimal("0")),  # positive but below one call -> zero
-        (1, Decimal("2")),
-        (2.5, Decimal("5")),
-        (50, Decimal("100")),
-        (100, Decimal("200")),
-        (123.75, Decimal("247")),  # 1.2375 USD / 0.005 -> floor 247
+        (0, Decimal("0"), Decimal("0"), Decimal("0")),
+        (0.3, Decimal("0.003"), Decimal("0"), Decimal("3")),  # sub-call: calls floor, USD exact
+        (1, Decimal("0.01"), Decimal("2"), Decimal("10")),
+        (2.5, Decimal("0.025"), Decimal("5"), Decimal("25")),
+        (50, Decimal("0.50"), Decimal("100"), Decimal("500")),
+        (100, Decimal("1.00"), Decimal("200"), Decimal("1000")),
+        (123.75, Decimal("1.2375"), Decimal("247"), Decimal("1237")),
     ],
 )
-async def test_quota_balance_cents_floor_to_conservative_search_calls(
-    balance_cents: object, expected_calls: Decimal
+async def test_quota_balance_persists_as_usd_with_call_equivalents(
+    balance_cents: object, balance_usd: Decimal, search_calls: Decimal, fetch_calls: Decimal
 ) -> None:
     recorder = _WireRecorder(balance=balance_cents)
     async with _wired(recorder) as adapter:
         snapshot = await adapter.quota()
 
-    assert snapshot.remaining == expected_calls
+    assert snapshot.remaining == balance_usd
+    assert snapshot.metadata["balance_usd"] == balance_usd
+    assert snapshot.metadata["search_calls"] == search_calls
+    assert snapshot.metadata["fetch_calls"] == fetch_calls
 
 
 @pytest.mark.parametrize(
@@ -244,7 +261,9 @@ async def test_quota_retry_after_and_rate_limit_cooldown_waited_out_by_later_cal
         first = await adapter.quota()  # 429 Retry-After 5 -> retry -> success
         second = await adapter.quota()  # shared cooldown must be waited out
 
-    assert first.remaining == Decimal("100")
-    assert second.remaining == Decimal("100")
+    assert first.remaining == Decimal("0.50")
+    assert first.metadata["search_calls"] == Decimal("100")
+    assert second.remaining == Decimal("0.50")
+    assert second.metadata["search_calls"] == Decimal("100")
     # Retry-After 5 overrides the 1.0 backoff; the cooldown is slept again.
     assert sleeper.sleeps == [5.0, 5.0]

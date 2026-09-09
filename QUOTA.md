@@ -498,6 +498,7 @@ The historical migration adds exactly these nullable columns:
 | `usage_events` | `unit_kind` | `TEXT NULL` |
 | `quota_snapshots` | `unit_kind` | `TEXT NULL` |
 | `quota_snapshots` | `display_unit` | `TEXT NULL` |
+| `quota_snapshots` | `metadata` | `TEXT NULL` |
 
 The script must use the same introspection pattern as `storage.py::_add_missing_column`: read `PRAGMA table_info(<table>)`, and run `ALTER TABLE ... ADD COLUMN ... TEXT` only when the named column is absent. SQLite's added `TEXT` column is nullable unless constrained otherwise. In equivalent SQL:
 
@@ -505,9 +506,10 @@ The script must use the same introspection pattern as `storage.py::_add_missing_
 ALTER TABLE usage_events ADD COLUMN unit_kind TEXT;
 ALTER TABLE quota_snapshots ADD COLUMN unit_kind TEXT;
 ALTER TABLE quota_snapshots ADD COLUMN display_unit TEXT;
+ALTER TABLE quota_snapshots ADD COLUMN metadata TEXT;
 ```
 
-These statements are examples, not an unconditional batch: each is guarded by the column-existence check. Re-running the migration must be safe. Backfill updates must likewise target only rows that are unclassified or carry this migration's prior classification, and the migration ledger version must prevent duplicate work. Do not rebuild either table, drop columns, renumber IDs, alter raw `units`, or coerce decimal text through floating point. This migration does not add `usage_events.display_unit`; historical usage labels are derived from `unit_kind` unless the approved implementation schema later explicitly expands this migration.
+These statements are examples, not an unconditional batch: each is guarded by the column-existence check. Re-running the migration must be safe. Backfill updates must likewise target only rows that are unclassified or carry this migration's prior classification, and the migration ledger version must prevent duplicate work. Do not rebuild either table, drop columns, renumber IDs, alter raw `units`, or coerce decimal text through floating point. This migration does not add `usage_events.display_unit`; historical usage labels are derived from `unit_kind` unless the approved implementation schema later explicitly expands this migration. Quota routing metadata is the approved fourth additive nullable column on `quota_snapshots`; it is JSON text, restored through the public `record_quota`/`latest_quota` path, excluded from wire serialization, and validated by the same credential/request-content blocklist as usage metadata. Decimal metadata values use an explicit tagged representation so ordinary numeric-looking strings remain strings on round-trip. This fourth-column addition and the guarded lazy-DDL boundary are explicitly user-authorized for this implementation: runtime checks may add these nullable columns to a fresh or legacy local database, but they do not perform historical backfill or rewrite active data. Any production historical migration remains gated behind the copy-migrate-verify-swap procedure in §§7.2–7.7, with quiescence, integrity checks, reconciliation, and explicit approval.
 
 Create an index only when the approved query plan demonstrates a need—for example, a guarded index over `usage_events(provider, operation, unit_kind, observed_at)`. Use `CREATE INDEX IF NOT EXISTS` and verify the query plan before retaining it.
 

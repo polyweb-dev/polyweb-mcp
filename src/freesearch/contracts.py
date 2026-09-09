@@ -9,6 +9,22 @@ from typing import Any, Literal
 from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, SecretStr, field_validator
 
 
+def parse_decimal(value: object, *, allow_negative: bool = False) -> Decimal:
+    """Parse a finite, non-negative Decimal without passing through float."""
+
+    if value is None or isinstance(value, (bool, float)):
+        raise TypeError("decimal inputs must be finite integers, strings, or Decimals")
+    try:
+        parsed = value if isinstance(value, Decimal) else Decimal(value)  # type: ignore[arg-type]
+    except (ArithmeticError, TypeError, ValueError) as exc:
+        raise ValueError("value is not a valid Decimal") from exc
+    if not parsed.is_finite():
+        raise ValueError("Decimal must be finite")
+    if not allow_negative and parsed < 0:
+        raise ValueError("Decimal must be non-negative")
+    return parsed
+
+
 class ContractModel(BaseModel):
     """Base model used to keep contract payloads strict and serializable."""
 
@@ -39,6 +55,8 @@ class RoutingPreference(ContractModel):
 class SearchRequest(ContractModel):
     query: str = Field(min_length=1, max_length=2_000)
     limit: int = Field(default=10, ge=1, le=100)
+    mode: Literal["turbo", "basic", "advanced"] | None = None
+    extra_bundles: int = Field(default=0, ge=0, le=10_000)
     language: str | None = Field(default=None, min_length=2, max_length=16)
     country_code: str | None = Field(default=None, min_length=2, max_length=2)
     domains: tuple[str, ...] = ()
@@ -61,11 +79,20 @@ class SearchResponse(ContractModel):
     provider: str
     total_results: int | None = Field(default=None, ge=0)
     usage: "UsageEvent | None" = None
+    quota_snapshot: "QuotaSnapshot | None" = Field(default=None, exclude=True)
+    # Internal marker for a successful response whose vendor omitted metering.
+    # It is intentionally excluded from wire serialization for compatibility.
+    usage_gap: dict[str, Any] | None = Field(default=None, exclude=True)
 
 
 class FetchRequest(ContractModel):
     url: AnyHttpUrl
     max_chars: int | None = Field(default=None, ge=1, le=2_000_000)
+    url_count: int = Field(default=1, ge=1, le=10_000)
+    pdf_pages: int = Field(default=0, ge=0, le=10_000)
+    json_extract: bool = False
+    enhanced: bool = False
+    zero_data_retention: bool = False
     routing: RoutingPreference = Field(default_factory=RoutingPreference)
 
 
@@ -82,6 +109,7 @@ class FetchResponse(ContractModel):
     provider: str
     document: FetchedDocument
     usage: "UsageEvent | None" = None
+    usage_gap: dict[str, Any] | None = Field(default=None, exclude=True)
 
 
 class UsageOperation(StrEnum):
@@ -97,15 +125,31 @@ class UsageStatus(StrEnum):
     FAILURE = "failure"
 
 
+class UnitKind(StrEnum):
+    """Dimension used when aggregating raw usage units."""
+
+    REQUEST = "REQUEST"
+    CREDIT = "CREDIT"
+    USD = "USD"
+    FREE = "FREE"
+
+
 class UsageEvent(ContractModel):
     provider: str
     operation: UsageOperation
     units: Decimal = Field(ge=0)
+    unit_kind: UnitKind | None = None
+    display_unit: str | None = None
     observed_at: datetime
     request_id: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     latency_ms: int | None = Field(default=None, ge=0)
     status: UsageStatus = UsageStatus.SUCCESS
+
+    @field_validator("units", mode="before")
+    @classmethod
+    def validate_units(cls, value: object) -> Decimal:
+        return parse_decimal(value)
 
 
 class QuotaSource(StrEnum):
@@ -119,8 +163,29 @@ class QuotaSnapshot(ContractModel):
     source: QuotaSource
     remaining: Decimal | None = Field(default=None, ge=0)
     limit: Decimal | None = Field(default=None, ge=0)
+    unit_kind: UnitKind | None = None
+    display_unit: str | None = None
     reset_at: datetime | None = None
     observed_at: datetime
+    # Local routing state is not a vendor payload and is never serialized.
+    metadata: dict[str, Any] = Field(default_factory=dict, exclude=True)
+
+    @field_validator("remaining", "limit", mode="before")
+    @classmethod
+    def validate_quota_number(cls, value: object) -> Decimal | None:
+        if value is None:
+            return None
+        return parse_decimal(value)
+
+
+def is_soft_quota_zero(provider: str, snapshot: QuotaSnapshot) -> bool:
+    """Identify a temporary estimated zero without weakening hard exhaustion."""
+
+    return (
+        provider == "parallel"
+        and snapshot.source is QuotaSource.ESTIMATED
+        and (snapshot.metadata.get("soft_zero") is not False)
+    )
 
 
 class CostEstimate(ContractModel):
@@ -129,6 +194,11 @@ class CostEstimate(ContractModel):
     units: Decimal = Field(ge=0)
     currency: str = "USD"
     notes: str | None = None
+
+    @field_validator("units", mode="before")
+    @classmethod
+    def validate_units(cls, value: object) -> Decimal:
+        return parse_decimal(value)
 
 
 class ProviderCapabilities(ContractModel):

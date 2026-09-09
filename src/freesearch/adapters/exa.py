@@ -34,6 +34,7 @@ from freesearch.contracts import (
     SearchRequest,
     SearchResponse,
     SearchResult,
+    UnitKind,
     UsageEvent,
     UsageOperation,
 )
@@ -282,6 +283,8 @@ class ExaAdapter(ProviderAdapter):
             provider=self.name,
             operation=operation,
             units=Decimal(str(total)),
+            unit_kind=UnitKind.USD,
+            display_unit="USD",
             observed_at=datetime.now(UTC),
             metadata={},
         )
