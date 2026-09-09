@@ -38,19 +38,17 @@ export interface FetchStub {
   requestsTo(urlMatch: string | RegExp): RecordedRequest[]
 }
 
-function toRecordedRequest(input: unknown, init?: RequestInit): RecordedRequest {
-  const url = typeof input === "string" ? input : String(input)
-  const bodyText = typeof init?.body === "string" ? init.body : undefined
-  let body: unknown
-  if (bodyText !== undefined) {
-    try {
-      body = JSON.parse(bodyText)
-    } catch {
-      body = bodyText
-    }
+function parseJsonBody(bodyText: string | undefined): unknown {
+  if (bodyText === undefined) return undefined
+  try {
+    return JSON.parse(bodyText)
+  } catch {
+    return bodyText
   }
+}
+
+function headersToRecord(raw: RequestInit["headers"]): Record<string, string> {
   const headers: Record<string, string> = {}
-  const raw = init?.headers
   if (raw instanceof Headers) {
     raw.forEach((value, key) => {
       headers[key] = value
@@ -60,12 +58,28 @@ function toRecordedRequest(input: unknown, init?: RequestInit): RecordedRequest 
   } else if (raw) {
     Object.assign(headers, raw)
   }
+  return headers
+}
+
+function extractUrlAndMethod(
+  input: unknown,
+  init?: RequestInit
+): { url: string; method: string } {
+  return {
+    url: typeof input === "string" ? input : String(input),
+    method: (init?.method ?? "GET").toUpperCase(),
+  }
+}
+
+function toRecordedRequest(input: unknown, init?: RequestInit): RecordedRequest {
+  const { url, method } = extractUrlAndMethod(input, init)
+  const bodyText = typeof init?.body === "string" ? init.body : undefined
   return {
     url,
-    method: (init?.method ?? "GET").toUpperCase(),
-    headers,
+    method,
+    headers: headersToRecord(init?.headers),
     bodyText,
-    body,
+    body: parseJsonBody(bodyText),
     signal: (init?.signal as AbortSignal | null | undefined) ?? null,
   }
 }
