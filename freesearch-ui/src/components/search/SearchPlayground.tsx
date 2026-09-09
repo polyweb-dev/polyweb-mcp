@@ -356,26 +356,33 @@ export const SearchPlayground: React.FC = () => {
         {activeSearch && (
         <div className="space-y-6 pt-2">
           {/* Telemetry bar */}
-          <div className="flex flex-wrap items-center justify-between gap-4 text-[13px] py-2.5 px-3 rounded-lg bg-[var(--elevated)] border border-[var(--border-subtle)] text-[var(--muted)]">
-            <div className="flex items-center gap-6 tnum">
-              <span>
-                Latency <span className="text-[var(--text-strong)]">{activeSearch.executionTimeMs}ms</span>
-              </span>
-              <span>
-                Units <span className="text-[var(--text-strong)]">{activeSearch.costEstimateCredits}</span>
-              </span>
-              <span>
-                Resolved by <span className="text-[var(--signal)] font-medium">{activeSearch.selectedProviderId}</span>
-              </span>
-              <span>
-                Results <span className="text-[var(--text-strong)]">{activeSearch.results.length}</span>
-              </span>
+          <div className="flex flex-wrap items-center justify-between gap-4 text-[13px] py-3.5 px-4.5 rounded-xl bg-[var(--elevated)] border border-[var(--border-subtle)] text-[var(--muted)]">
+            <div className="flex flex-wrap items-center gap-6 sm:gap-8 tnum">
+              <div className="flex items-center gap-2">
+                <span>Latency</span>
+                <span className="font-medium text-[var(--text-strong)]">{activeSearch.executionTimeMs}ms</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span>Units</span>
+                <span className="font-medium text-[var(--text-strong)]">{activeSearch.costEstimateCredits}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span>Resolved by</span>
+                <span className="inline-flex items-center gap-1.5 font-medium text-[var(--signal)]">
+                  <ProviderLogo providerId={activeSearch.selectedProviderId} className="size-3.5" />
+                  {activeSearch.selectedProviderId}
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span>Results</span>
+                <span className="font-medium text-[var(--text-strong)]">{activeSearch.results.length}</span>
+              </div>
             </div>
 
             <button
               type="button"
               onClick={() => setShowJsonInspector(!showJsonInspector)}
-              className="text-[13px] text-[var(--signal)] hover:underline"
+              className="text-[13px] font-medium text-[var(--signal)] hover:underline transition-colors"
             >
               {showJsonInspector ? "Hide raw JSON" : "Inspect raw JSON"}
             </button>
@@ -618,7 +625,10 @@ export const SearchPlayground: React.FC = () => {
 
               <div className="flex items-center justify-between py-1.5 border-b border-[var(--border-subtle)]">
                 <span>Provider</span>
-                <span className="text-[var(--text)]">{activeFetch.document.providerName}</span>
+                <span className="inline-flex items-center gap-1.5 text-[var(--text)]">
+                  <ProviderLogo providerId={activeFetch.document.providerId} name={activeFetch.document.providerName} className="size-3.5" />
+                  {activeFetch.document.providerName}
+                </span>
               </div>
 
               <div className="flex items-center justify-between py-1.5 border-b border-[var(--border-subtle)]">
