@@ -85,7 +85,16 @@ const appPath = path.resolve(testDir, "../../App.tsx")
 const statusBarPath = path.resolve(testDir, "../layout/StatusBar.tsx")
 const pgf1Path = path.resolve(testDir, "../search/SearchPlayground.pg-f1.test.tsx")
 
-const simulatorSource = readFileSync(simulatorPath, "utf8")
+const simulatorSource =
+  readFileSync(simulatorPath, "utf8") +
+  "\n" +
+  readFileSync(path.resolve(testDir, "./simulator/ExecutionPipeline.tsx"), "utf8") +
+  "\n" +
+  readFileSync(path.resolve(testDir, "./simulator/PipelineStep.tsx"), "utf8") +
+  "\n" +
+  readFileSync(path.resolve(testDir, "./simulator/ProviderStep.tsx"), "utf8") +
+  "\n" +
+  readFileSync(path.resolve(testDir, "./simulator/FallbackCascade.tsx"), "utf8")
 const strategySource = readFileSync(strategyPath, "utf8")
 const playgroundSource = readFileSync(playgroundPath, "utf8")
 const appSource =

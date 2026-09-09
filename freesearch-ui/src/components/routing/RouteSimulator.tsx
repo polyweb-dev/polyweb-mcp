@@ -2,10 +2,9 @@ import React, { useState } from "react"
 import { Search } from "lucide-react"
 import { useFreeSearch } from "@/context/useFreeSearch"
 import { ComposerShell } from "@/components/common/ComposerShell"
-import { ProviderLogo } from "@/components/common/ProviderLogo"
 import { SegmentedControl } from "@/components/common/SegmentedControl"
-import type { ProviderConfig } from "@/types/freesearch"
-import { getEligibleProviders, getProviderReason } from "./routingUtils"
+import { getEligibleProviders } from "./routingUtils"
+import { ExecutionPipeline } from "./simulator/ExecutionPipeline"
 
 type SimulatorOperation = "Search" | "Fetch"
 
@@ -126,146 +125,7 @@ export const RouteSimulator: React.FC = () => {
   )
 }
 
-interface ExecutionPipelineProps {
-  operation: "search" | "fetch"
-  preset: ReturnType<typeof useFreeSearch>["routingPreset"]
-  primary: ProviderConfig | null
-  fallbacks: ProviderConfig[]
-  failoverEnabled: boolean
-}
-
-const ExecutionPipeline: React.FC<ExecutionPipelineProps> = ({
-  operation,
-  preset,
-  primary,
-  fallbacks,
-  failoverEnabled,
-}) => {
-  return (
-    <div className="p-4 rounded-lg border border-[var(--border-subtle)] bg-[var(--elevated)] space-y-4">
-      <PipelineStep
-        index="0"
-        title="Client Ingress"
-        detail={`Incoming ${operation} request`}
-      />
-
-      {primary && (
-        <ProviderStep
-          index="1"
-          provider={primary}
-          reason={getProviderReason(primary, 0, preset)}
-          highlight
-        />
-      )}
-
-      {failoverEnabled && fallbacks.length > 0 && (
-        <FallbackCascade fallbacks={fallbacks} preset={preset} />
-      )}
-
-      {!failoverEnabled && (
-        <div className="p-2.5 rounded bg-[var(--surface)] border border-[var(--border-subtle)] text-[13px] text-[var(--muted)]">
-          <span className="font-medium text-[var(--text)]">Single-shot mode active</span>
-          <span className="ml-1.5">Fallback cascade is disabled in settings.</span>
-        </div>
-      )}
-    </div>
-  )
-}
-
-const PipelineStep: React.FC<{ index: string; title: string; detail: string }> = ({
-  index,
-  title,
-  detail,
-}) => (
-  <div className="flex items-start gap-3">
-    <span className="mt-0.5 w-6 h-6 rounded-full bg-[var(--signal-muted)] border border-[var(--signal)]/40 flex items-center justify-center shrink-0 text-[12px] font-medium text-[var(--signal)] tnum">
-      {index}
-    </span>
-    <div className="flex-1 min-w-0">
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-[13px] font-medium text-[var(--text-strong)]">{title}</span>
-        <span className="text-[13px] text-[var(--muted)]">{detail}</span>
-      </div>
-    </div>
-  </div>
-)
-
-const ProviderStep: React.FC<{
-  index: string
-  provider: ProviderConfig
-  reason: string
-  highlight?: boolean
-}> = ({ index, provider, reason, highlight }) => (
-  <div
-    className={`flex items-start gap-3 p-3 rounded-md border transition-all ${
-      highlight
-        ? "bg-[var(--surface)] border-[var(--signal)]/40"
-        : "bg-[var(--surface)] border-[var(--border-subtle)]"
-    }`}
-  >
-    <span className="mt-0.5 w-6 h-6 rounded-full bg-[var(--signal-muted)] border border-[var(--signal)]/40 flex items-center justify-center shrink-0 text-[12px] font-medium text-[var(--signal)] tnum">
-      {index}
-    </span>
-    <div className="flex-1 min-w-0">
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2 min-w-0">
-          <ProviderLogo providerId={provider.id} />
-          <span className="text-[13px] font-semibold text-[var(--text-strong)] truncate">
-            {provider.name}
-          </span>
-        </div>
-        {highlight && (
-          <span className="text-[12px] px-1.5 py-0.5 rounded bg-[var(--signal-muted)] text-[var(--signal)] font-medium">
-            Primary
-          </span>
-        )}
-        <span className="text-[13px] text-[var(--text)] tnum">
-          {provider.latencyP95Ms === null ? "—" : `${provider.latencyP95Ms} ms`} p95
-        </span>
-      </div>
-      <div className="flex items-center justify-between gap-2 mt-0.5 text-[13px] text-[var(--muted)]">
-        <span>{reason}</span>
-        <span className="tnum shrink-0">
-          Quota {provider.quota.used ?? "—"}/{provider.quota.limit ?? "∞"}
-        </span>
-      </div>
-    </div>
-  </div>
-)
-
-const FallbackCascade: React.FC<{
-  fallbacks: ProviderConfig[]
-  preset: ReturnType<typeof useFreeSearch>["routingPreset"]
-}> = ({ fallbacks, preset }) => (
-  <div className="space-y-2">
-    <div className="flex items-center justify-between text-[13px] text-[var(--muted)]">
-      <span className="font-medium text-[var(--text)]">Failover cascade</span>
-      <span className="tnum">{fallbacks.length} fallbacks ready</span>
-    </div>
-
-    {fallbacks.map((fallback, idx) => (
-      <div
-        key={fallback.id}
-        className="flex items-center justify-between p-2.5 rounded bg-[var(--surface)] border border-[var(--border-subtle)]"
-      >
-        <div className="flex items-center gap-2.5 min-w-0">
-          <span className="text-[12px] text-[var(--muted)] tnum">#{idx + 2}</span>
-          <ProviderLogo providerId={fallback.id} />
-          <span className="text-[13px] font-medium text-[var(--text)] truncate">
-            {fallback.name}
-          </span>
-          <span className="text-[12px] text-[var(--muted)]">
-            {fallback.capabilities.includes("keyless_tier") ? "Keyless free tier" : `P${fallback.priority}`}
-          </span>
-        </div>
-        <div className="flex items-center gap-3 text-[12px] text-[var(--muted)] tnum shrink-0">
-          <span>{fallback.latencyP95Ms === null ? "—" : `${fallback.latencyP95Ms}ms`}</span>
-          <span>
-            {fallback.quota.used ?? "—"}/{fallback.quota.limit ?? "∞"}
-          </span>
-          <span className="hidden sm:inline">{getProviderReason(fallback, idx + 1, preset)}</span>
-        </div>
-      </div>
-    ))}
-  </div>
-)
+export { ExecutionPipeline } from "./simulator/ExecutionPipeline"
+export { PipelineStep } from "./simulator/PipelineStep"
+export { ProviderStep } from "./simulator/ProviderStep"
+export { FallbackCascade } from "./simulator/FallbackCascade"
