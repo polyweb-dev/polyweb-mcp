@@ -17,26 +17,41 @@ export function getEligibleProviders(
   return [...eligible].sort(compareForPreset(preset))
 }
 
-function compareForPreset(preset: RoutingPreset) {
-  return (a: ProviderConfig, b: ProviderConfig): number => {
-    if (preset === "cost_optimized") {
-      const aFree = a.capabilities.includes("keyless_tier") ? 0 : 1
-      const bFree = b.capabilities.includes("keyless_tier") ? 0 : 1
-      if (aFree !== bFree) return aFree - bFree
-    }
-    if (preset === "latency_optimized") {
-      if (a.latencyP95Ms === null && b.latencyP95Ms === null) return a.priority - b.priority
-      if (a.latencyP95Ms === null) return 1
-      if (b.latencyP95Ms === null) return -1
-      return a.latencyP95Ms - b.latencyP95Ms
-    }
-    if (preset === "quality_first") {
-      const aScore = a.capabilities.includes("neural_search") ? 1 : 0
-      const bScore = b.capabilities.includes("neural_search") ? 1 : 0
-      if (aScore !== bScore) return bScore - aScore
-    }
-    return a.priority - b.priority
-  }
+type PresetComparator = (a: ProviderConfig, b: ProviderConfig) => number
+
+function comparePriority(a: ProviderConfig, b: ProviderConfig): number {
+  return a.priority - b.priority
+}
+
+function compareCost(a: ProviderConfig, b: ProviderConfig): number {
+  const aFree = a.capabilities.includes("keyless_tier") ? 0 : 1
+  const bFree = b.capabilities.includes("keyless_tier") ? 0 : 1
+  return aFree - bFree
+}
+
+function compareLatency(a: ProviderConfig, b: ProviderConfig): number {
+  if (a.latencyP95Ms === null && b.latencyP95Ms === null) return comparePriority(a, b)
+  if (a.latencyP95Ms === null) return 1
+  if (b.latencyP95Ms === null) return -1
+  return a.latencyP95Ms - b.latencyP95Ms
+}
+
+function compareQuality(a: ProviderConfig, b: ProviderConfig): number {
+  const aScore = a.capabilities.includes("neural_search") ? 1 : 0
+  const bScore = b.capabilities.includes("neural_search") ? 1 : 0
+  return bScore - aScore
+}
+
+const PRESET_COMPARATORS: Record<RoutingPreset, PresetComparator> = {
+  priority: comparePriority,
+  round_robin: comparePriority,
+  cost_optimized: (a, b) => compareCost(a, b) || comparePriority(a, b),
+  quality_first: (a, b) => compareQuality(a, b) || comparePriority(a, b),
+  latency_optimized: compareLatency,
+}
+
+function compareForPreset(preset: RoutingPreset): PresetComparator {
+  return PRESET_COMPARATORS[preset]
 }
 
 /** Human-readable reason the provider sits at its evaluated rank position. */
