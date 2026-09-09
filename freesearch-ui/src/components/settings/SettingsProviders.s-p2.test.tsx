@@ -65,7 +65,24 @@ import {
  */
 
 const testDir = import.meta.dirname
-const settingsSource = readFileSync(path.resolve(testDir, "./SettingsProviders.tsx"), "utf8")
+const settingsSource =
+  readFileSync(path.resolve(testDir, "./SettingsProviders.tsx"), "utf8") +
+  "\n" +
+  readFileSync(path.resolve(testDir, "./providers/ProviderRegistryRow.tsx"), "utf8") +
+  "\n" +
+  readFileSync(path.resolve(testDir, "./providers/OperationControl.tsx"), "utf8") +
+  "\n" +
+  readFileSync(path.resolve(testDir, "./providers/ProviderTestModal.tsx"), "utf8") +
+  "\n" +
+  readFileSync(path.resolve(testDir, "./providers/ModalDetail.tsx"), "utf8") +
+  "\n" +
+  readFileSync(path.resolve(testDir, "./providers/HealthStatus.tsx"), "utf8") +
+  "\n" +
+  readFileSync(path.resolve(testDir, "./providers/PriorityIndicator.tsx"), "utf8") +
+  "\n" +
+  readFileSync(path.resolve(testDir, "./providers/RowPill.tsx"), "utf8") +
+  "\n" +
+  readFileSync(path.resolve(testDir, "./providers/shared.ts"), "utf8")
 
 const indicatorSource = (() => {
   const start = settingsSource.indexOf("const PriorityIndicator")

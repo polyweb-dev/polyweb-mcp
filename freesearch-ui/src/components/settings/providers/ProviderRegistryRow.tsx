@@ -3,31 +3,13 @@ import { RefreshCw } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { ProviderLogo } from "@/components/common/ProviderLogo"
 import { Switch } from "@/components/common/Switch"
-import {
-  TableCell,
-  TableRow,
-} from "@/components/ui/table"
+import { TableCell, TableRow } from "@/components/ui/table"
 import type { ProviderConfig } from "@/types/freesearch"
+import { HealthStatus } from "./HealthStatus"
 import { OperationControl } from "./OperationControl"
-
-interface ProviderRegistryRowComponents {
-  PriorityIndicator: React.ComponentType<{
-    provider: ProviderConfig
-    rank: number
-    providerCount: number
-    canMoveUp: boolean
-    canMoveDown: boolean
-    onMovePriority: (direction: "up" | "down") => void
-  }>
-  HealthStatus: React.ComponentType<{ status: string }>
-  RowPill: React.ComponentType<{
-    tone: "signal" | "healthy"
-    children: React.ReactNode
-  }>
-  stripProtocol: (url: string) => string
-  formatLatency: (latency: number | null) => string
-  formatQuota: (provider: ProviderConfig) => string
-}
+import { PriorityIndicator } from "./PriorityIndicator"
+import { RowPill } from "./RowPill"
+import { formatLatency, formatQuota, stripProtocol } from "./shared"
 
 interface ProviderRegistryRowProps {
   provider: ProviderConfig
@@ -42,7 +24,6 @@ interface ProviderRegistryRowProps {
   onToggleSearch: (enabled: boolean) => void
   onToggleFetch: (enabled: boolean) => void
   onOpenTest: () => void
-  components: ProviderRegistryRowComponents
 }
 
 export const ProviderRegistryRow: React.FC<ProviderRegistryRowProps> = ({
@@ -58,16 +39,7 @@ export const ProviderRegistryRow: React.FC<ProviderRegistryRowProps> = ({
   onToggleSearch,
   onToggleFetch,
   onOpenTest,
-  components,
 }) => {
-  const {
-    PriorityIndicator,
-    HealthStatus,
-    RowPill,
-    stripProtocol,
-    formatLatency,
-    formatQuota,
-  } = components
   const health = provider.circuitBreaker === "open" ? "open" : provider.healthStatus
 
   return (

@@ -1,8 +1,5 @@
 import React, { useState } from "react"
-import { ArrowDown, ArrowUp } from "lucide-react"
 import { useFreeSearch } from "@/context/useFreeSearch"
-import { Modal } from "@/components/common/Modal"
-import { Button } from "@/components/ui/button"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import {
   Table,
@@ -11,10 +8,9 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import type { ProviderConfig } from "@/types/freesearch"
+import type { TestResult } from "./providers/shared"
 import { ProviderRegistryRow } from "./providers/ProviderRegistryRow"
-
-type TestResult = Awaited<ReturnType<ReturnType<typeof useFreeSearch>["testProviderConnection"]>>
+import { ProviderTestModal } from "./providers/ProviderTestModal"
 
 /** Registry controls and live fleet telemetry in one operational table. */
 export const SettingsProviders: React.FC = () => {
@@ -120,14 +116,6 @@ export const SettingsProviders: React.FC = () => {
                   onToggleSearch={(enabled) => toggleProviderSearch(provider.id, enabled)}
                   onToggleFetch={(enabled) => toggleProviderFetch(provider.id, enabled)}
                   onOpenTest={() => setSelectedTestId(provider.id)}
-                  components={{
-                    PriorityIndicator,
-                    HealthStatus,
-                    RowPill,
-                    stripProtocol,
-                    formatLatency,
-                    formatQuota,
-                  }}
                 />
               ))}
             </TableBody>
@@ -158,164 +146,10 @@ const MERGED_HEADERS = [
   "Global",
 ] as const
 
-export const ProviderTestModal: React.FC<{
-  provider: ProviderConfig | null
-  testing: boolean
-  lastResult?: TestResult
-  onClose: () => void
-  onTest: (id: string) => void
-}> = ({ provider, testing, lastResult, onClose, onTest }) => (
-  <Modal
-    isOpen={provider !== null}
-    onClose={onClose}
-    title={provider ? `Test ${provider.name}` : "Test provider"}
-    subtitle="Inspect the current provider state before running a connection probe."
-    maxWidth="lg"
-  >
-    {provider && (
-      <div className="space-y-4">
-        <dl className="grid grid-cols-[110px_minmax(0,1fr)] gap-x-4 gap-y-2 text-[13px]">
-          <ModalDetail label="Endpoint" value={stripProtocol(provider.baseUrl)} mono />
-          <ModalDetail label="Capabilities" value={provider.capabilities.join(", ")} />
-          <ModalDetail label="Health" value={provider.circuitBreaker === "open" ? "open" : provider.healthStatus} />
-          <ModalDetail label="p95" value={formatLatency(provider.latencyP95Ms)} />
-          <ModalDetail label="Quota" value={formatQuota(provider)} />
-          <ModalDetail
-            label="Last result"
-            value={lastResult ? `${lastResult.success ? "healthy" : lastResult.message} · ${lastResult.latencyMs}ms` : "Not tested"}
-          />
-        </dl>
-        <div className="flex justify-end border-t border-[var(--border-subtle)] pt-4">
-          <Button type="button" onClick={() => onTest(provider.id)} disabled={testing}>
-            {testing ? "Testing..." : "Test"}
-          </Button>
-        </div>
-      </div>
-    )}
-  </Modal>
-)
-
-const ModalDetail: React.FC<{ label: string; value: string; mono?: boolean }> = ({
-  label,
-  value,
-  mono = false,
-}) => (
-  <>
-    <dt className="text-[var(--muted)]">{label}</dt>
-    <dd className={`min-w-0 break-words text-[var(--text-strong)] ${mono ? "font-mono text-[12px]" : ""}`}>
-      {value}
-    </dd>
-  </>
-)
-
-const HEALTH_CONFIG: Record<
-  string,
-  { label: string; dotClass: string; textClass: string; bgClass: string }
-> = {
-  healthy: {
-    label: "Healthy",
-    dotClass: "bg-[#22c55e]",
-    textClass: "text-[#22c55e]",
-    bgClass: "bg-[#22c55e]/15",
-  },
-  offline: {
-    label: "Offline",
-    dotClass: "bg-[#eab308]",
-    textClass: "text-[#eab308]",
-    bgClass: "bg-[#eab308]/15",
-  },
-  degraded: {
-    label: "Degraded",
-    dotClass: "bg-[#f59e0b]",
-    textClass: "text-[#f59e0b]",
-    bgClass: "bg-[#f59e0b]/15",
-  },
-  rate_limited: {
-    label: "Rate limited",
-    dotClass: "bg-[#f97316]",
-    textClass: "text-[#f97316]",
-    bgClass: "bg-[#f97316]/15",
-  },
-  circuit_broken: {
-    label: "Circuit broken",
-    dotClass: "bg-[#ef4444]",
-    textClass: "text-[#ef4444]",
-    bgClass: "bg-[#ef4444]/15",
-  },
-  open: {
-    label: "Open",
-    dotClass: "bg-[#ef4444]",
-    textClass: "text-[#ef4444]",
-    bgClass: "bg-[#ef4444]/15",
-  },
-}
-
-const HealthStatus: React.FC<{ status: string }> = ({ status }) => {
-  const config = HEALTH_CONFIG[status] ?? {
-    label: status.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
-    dotClass: "bg-[var(--muted)]",
-    textClass: "text-[var(--muted)]",
-    bgClass: "bg-white/[0.06]",
-  }
-
-  return (
-    <span
-      className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-medium ${config.bgClass} ${config.textClass}`}
-    >
-      <span aria-hidden="true" className={`size-2 rounded-full ${config.dotClass}`} />
-      <span>{config.label}</span>
-    </span>
-  )
-}
-
-const stripProtocol = (url: string) => url.replace(/^https?:\/\//, "")
-const formatLatency = (latency: number | null) => latency === null ? "—" : `${latency}ms`
-const formatQuota = (provider: ProviderConfig) => `${provider.quota.used ?? "—"}/${provider.quota.limit ?? "∞"}`
-
-const PriorityIndicator: React.FC<{
-  provider: ProviderConfig
-  rank: number
-  providerCount: number
-  canMoveUp: boolean
-  canMoveDown: boolean
-  onMovePriority: (direction: "up" | "down") => void
-}> = ({ provider, rank, providerCount, canMoveUp, canMoveDown, onMovePriority }) => (
-  <div className="flex min-w-6 shrink-0 flex-col items-center gap-0.5">
-    <button
-      type="button"
-      aria-label={`Move ${provider.name} priority up`}
-      onClick={() => onMovePriority("up")}
-      disabled={!canMoveUp}
-      className="text-[var(--muted)] transition-colors hover:text-[var(--text-strong)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--signal)]/40 disabled:cursor-not-allowed disabled:opacity-30 motion-reduce:transition-none"
-    >
-      <ArrowUp className="size-3" />
-    </button>
-    <span className="text-[12px] leading-none text-[var(--muted)] tnum" title={`Dispatch order ${rank} of ${providerCount}`}>
-      P{rank}
-    </span>
-    <button
-      type="button"
-      aria-label={`Move ${provider.name} priority down`}
-      onClick={() => onMovePriority("down")}
-      disabled={!canMoveDown}
-      className="text-[var(--muted)] transition-colors hover:text-[var(--text-strong)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--signal)]/40 disabled:cursor-not-allowed disabled:opacity-30 motion-reduce:transition-none"
-    >
-      <ArrowDown className="size-3" />
-    </button>
-  </div>
-)
-
-const RowPill: React.FC<{ tone: "signal" | "healthy"; children: React.ReactNode }> = ({ tone, children }) => (
-  <span
-    className="whitespace-nowrap rounded px-1.5 py-0.5 text-[12px]"
-    style={{
-      background: tone === "signal" ? "var(--signal-muted)" : "rgba(34, 197, 94, 0.1)",
-      color: tone === "signal" ? "var(--signal)" : "var(--status-healthy)",
-    }}
-  >
-    {children}
-  </span>
-)
-
 export { ProviderRegistryRow } from "./providers/ProviderRegistryRow"
 export { OperationControl } from "./providers/OperationControl"
+export { ProviderTestModal } from "./providers/ProviderTestModal"
+export { ModalDetail } from "./providers/ModalDetail"
+export { HealthStatus } from "./providers/HealthStatus"
+export { PriorityIndicator } from "./providers/PriorityIndicator"
+export { RowPill } from "./providers/RowPill"

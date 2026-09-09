@@ -65,7 +65,19 @@ const settingsSource =
   "\n" +
   readFileSync(path.resolve(testDir, "./providers/ProviderRegistryRow.tsx"), "utf8") +
   "\n" +
-  readFileSync(path.resolve(testDir, "./providers/OperationControl.tsx"), "utf8")
+  readFileSync(path.resolve(testDir, "./providers/OperationControl.tsx"), "utf8") +
+  "\n" +
+  readFileSync(path.resolve(testDir, "./providers/ProviderTestModal.tsx"), "utf8") +
+  "\n" +
+  readFileSync(path.resolve(testDir, "./providers/ModalDetail.tsx"), "utf8") +
+  "\n" +
+  readFileSync(path.resolve(testDir, "./providers/HealthStatus.tsx"), "utf8") +
+  "\n" +
+  readFileSync(path.resolve(testDir, "./providers/PriorityIndicator.tsx"), "utf8") +
+  "\n" +
+  readFileSync(path.resolve(testDir, "./providers/RowPill.tsx"), "utf8") +
+  "\n" +
+  readFileSync(path.resolve(testDir, "./providers/shared.ts"), "utf8")
 const indexCssSource = readFileSync(path.resolve(testDir, "../../index.css"), "utf8")
 
 const norm = (value: string): string => value.toLowerCase().replace(/\s+/g, "")
