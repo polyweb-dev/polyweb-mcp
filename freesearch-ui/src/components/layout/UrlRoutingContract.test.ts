@@ -32,10 +32,21 @@ const appSource =
     "utf8"
   )
 const mainSource = readFileSync(path.join(uiRoot, "src/main.tsx"), "utf8")
-const sidebarSource = readFileSync(
-  path.join(uiRoot, "src/components/layout/Sidebar.tsx"),
-  "utf8"
-)
+const sidebarSource =
+  readFileSync(
+    path.join(uiRoot, "src/components/layout/Sidebar.tsx"),
+    "utf8"
+  ) +
+  "\n" +
+  readFileSync(
+    path.join(uiRoot, "src/components/layout/NavList.tsx"),
+    "utf8"
+  ) +
+  "\n" +
+  readFileSync(
+    path.join(uiRoot, "src/components/layout/Brand.tsx"),
+    "utf8"
+  )
 const packageJson = JSON.parse(
   readFileSync(path.join(uiRoot, "package.json"), "utf8")
 ) as { dependencies?: Record<string, string>; devDependencies?: Record<string, string> }

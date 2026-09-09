@@ -39,7 +39,12 @@ import type { TabId } from "./Sidebar"
  */
 
 const testDir = import.meta.dirname
-const sidebarSource = readFileSync(path.resolve(testDir, "./Sidebar.tsx"), "utf8")
+const sidebarSource =
+  readFileSync(path.resolve(testDir, "./Sidebar.tsx"), "utf8") +
+  "\n" +
+  readFileSync(path.resolve(testDir, "./NavList.tsx"), "utf8") +
+  "\n" +
+  readFileSync(path.resolve(testDir, "./Brand.tsx"), "utf8")
 const packageJsonRaw = readFileSync(
   path.resolve(testDir, "../../../package.json"),
   "utf8"

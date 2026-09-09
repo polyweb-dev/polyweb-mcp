@@ -79,7 +79,12 @@ const appSource =
     path.resolve(testDir, "../layout/DashboardContent.tsx"),
     "utf8"
   )
-const sidebarSource = readFileSync(path.resolve(testDir, "../layout/Sidebar.tsx"), "utf8")
+const sidebarSource =
+  readFileSync(path.resolve(testDir, "../layout/Sidebar.tsx"), "utf8") +
+  "\n" +
+  readFileSync(path.resolve(testDir, "../layout/NavList.tsx"), "utf8") +
+  "\n" +
+  readFileSync(path.resolve(testDir, "../layout/Brand.tsx"), "utf8")
 const indexCssSource = readFileSync(path.resolve(testDir, "../../index.css"), "utf8")
 
 const norm = (value: string): string => value.toLowerCase().replace(/\s+/g, "")
