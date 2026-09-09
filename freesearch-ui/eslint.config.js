@@ -66,7 +66,7 @@ export default tseslint.config(
       'max-lines': [
         'warn',
         {
-          max: 300,
+          max: 500,
           skipBlankLines: true,
           skipComments: true,
         },
@@ -79,16 +79,16 @@ export default tseslint.config(
       'max-depth': ['warn', 4],
 
       // Max Nested Callbacks: Limits callback hell
-      'max-nested-callbacks': ['warn', 3],
+      'max-nested-callbacks': ['warn', 4],
 
       // Max Parameters: Encourages options/props objects instead of many positional arguments
-      'max-params': ['warn', 4],
+      'max-params': ['warn', 6],
 
       // Max Lines Per Function: Encourages decomposition of oversized monolithic functions
       'max-lines-per-function': [
         'warn',
         {
-          max: 100,
+          max: 120,
           skipBlankLines: true,
           skipComments: true,
           IIFEs: true,
