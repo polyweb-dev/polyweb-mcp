@@ -102,10 +102,12 @@ const typesSource = readFileSync(
   path.resolve(testDir, "../../types/freesearch.ts"),
   "utf8"
 )
-const contextSource = readFileSync(
+const contextSource = [
   path.resolve(testDir, "../../context/FreeSearchContext.tsx"),
-  "utf8"
-)
+  path.resolve(testDir, "../../context/useSearchRunner.ts"),
+]
+  .map((sourcePath) => readFileSync(sourcePath, "utf8"))
+  .join("\n")
 const segmentedPath = path.resolve(testDir, "../common/SegmentedControl.tsx")
 
 function renderWithBackend(

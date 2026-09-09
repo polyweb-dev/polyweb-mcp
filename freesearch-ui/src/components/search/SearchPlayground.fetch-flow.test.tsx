@@ -91,10 +91,12 @@ const playgroundSource = [
 ]
   .map((sourcePath) => readFileSync(path.resolve(testDir, sourcePath), "utf8"))
   .join("\n")
-const contextSource = readFileSync(
+const contextSource = [
   path.resolve(testDir, "../../context/FreeSearchContext.tsx"),
-  "utf8"
-)
+  path.resolve(testDir, "../../context/useSearchRunner.ts"),
+]
+  .map((sourcePath) => readFileSync(sourcePath, "utf8"))
+  .join("\n")
 const simulatorSource = readFileSync(
   path.resolve(testDir, "../routing/RouteSimulator.tsx"),
   "utf8"
