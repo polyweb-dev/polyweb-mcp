@@ -83,7 +83,7 @@ const strategyPath = path.resolve(testDir, "./RoutingStrategy.tsx")
 const playgroundPath = path.resolve(testDir, "../search/SearchPlayground.tsx")
 const appPath = path.resolve(testDir, "../../App.tsx")
 const statusBarPath = path.resolve(testDir, "../layout/StatusBar.tsx")
-const pgf1Path = path.resolve(testDir, "../search/SearchPlayground.pg-f1.test.tsx")
+const pgf1Path = path.resolve(testDir, "../search/SearchPlayground.fetch-flow.test.tsx")
 
 const simulatorSource =
   readFileSync(simulatorPath, "utf8") +
