@@ -329,7 +329,7 @@ describe("R-SIM AC-R-SIM-4: Simulate composer via shared ComposerShell (no foote
     expect(composer.querySelector("svg")).not.toBeNull()
   })
 
-  it("keeps the submit button text-only inside the composer (icon never inside the button)", async () => {
+  it("keeps the submit button with search icon inside the composer", async () => {
     renderRouting()
     await openSimulator()
 
@@ -337,19 +337,19 @@ describe("R-SIM AC-R-SIM-4: Simulate composer via shared ComposerShell (no foote
     const button = screen.getByRole("button", { name: /^Simulate route$/ })
     expect(composer.contains(button)).toBe(true)
     expect(button.textContent?.trim()).toBe("Simulate route")
-    expect(button.querySelector("svg")).toBeNull()
+    expect(button.querySelector("svg")).not.toBeNull()
   })
 
-  it("renders NO divider/footer inside the Simulator shell", async () => {
+  it("renders divider and footer inside the Simulator shell", async () => {
     renderRouting()
     await openSimulator()
 
     expect(screen.getByTestId("simulator-composer")).toBeInTheDocument()
-    expect(screen.queryByTestId("simulator-composer-divider")).toBeNull()
-    expect(screen.queryByTestId("simulator-composer-footer")).toBeNull()
+    expect(screen.getByTestId("simulator-composer-divider")).toBeInTheDocument()
+    expect(screen.getByTestId("simulator-composer-footer")).toBeInTheDocument()
   })
 
-  it("keeps the header SegmentedControl above the composer", async () => {
+  it("keeps the SegmentedControl inside the composer footer", async () => {
     renderRouting()
     await openSimulator()
 
@@ -365,18 +365,13 @@ describe("R-SIM AC-R-SIM-4: Simulate composer via shared ComposerShell (no foote
     ).toBeInTheDocument()
   })
 
-  it("wires the shell via ComposerShell testIdPrefix=simulator with no footer prop (source)", () => {
+  it("wires the shell via ComposerShell testIdPrefix=simulator with footer prop (source)", () => {
     expect(simulatorSource).toMatch(
       /from\s+["']@\/components\/common\/ComposerShell["']/
     )
     expect(simulatorSource).toContain("ComposerShell")
     expect(simulatorSource).toMatch(/testIdPrefix\s*=\s*("simulator"|\{"simulator"\})/)
-    // NO footer: the simulator shell carries inputRow only (prop-level
-    // guard — prose comments may still mention the word "footer").
-    expect(simulatorSource).not.toMatch(/footer\s*[=:{]/)
-    expect(simulatorSource).not.toContain("simulator-composer-footer")
-    expect(simulatorSource).not.toContain("simulator-composer-divider")
-    // Header control stays on the simulator.
+    expect(simulatorSource).toMatch(/footer\s*[=:{]/)
     expect(simulatorSource).toContain("SegmentedControl")
     expect(simulatorSource).toContain("Simulator operation")
   })

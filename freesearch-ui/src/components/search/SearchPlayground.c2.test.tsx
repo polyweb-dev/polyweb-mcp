@@ -198,9 +198,9 @@ describe("C2-REWORK AC-C2R-1/AC-C2R-3: SearchPlayground view-switcher is canonic
     await user.keyboard("{Enter}")
 
     await waitFor(() => {
-      expect(fetchTab).toHaveAttribute("aria-selected", "true")
+      expect(screen.getByRole("tab", { name: "Fetch" })).toHaveAttribute("aria-selected", "true")
     })
-    expect(searchTab).toHaveAttribute("aria-selected", "false")
+    expect(screen.getByRole("tab", { name: "Search" })).toHaveAttribute("aria-selected", "false")
   })
 })
 

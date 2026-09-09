@@ -528,7 +528,7 @@ describe("PG-F1 AC-PG-F1-5: Fetch composer via shared ComposerShell (Fetch ONLY)
     const button = screen.getByRole("button", { name: "Fetch", exact: true })
     expect(composer.contains(button)).toBe(true)
     expect(button.textContent?.trim()).toBe("Fetch")
-    expect(button.querySelector("svg")).toBeNull()
+    expect(button.querySelector("svg")).not.toBeNull()
     // Spacing/input-floor contract matches the Search reference.
     expect(tokens(button.className)).toContain("px-5")
     expect(tokens(button.className)).toContain("py-2")
@@ -670,7 +670,7 @@ describe("PG-F1 AC-PG-F1-6 regressions: PG-S1..S5 + header + Simulator + logic u
       name: "Fetch",
       exact: true,
     })
-    expect(fetchButton.querySelector("svg")).toBeNull()
+    expect(fetchButton.querySelector("svg")).not.toBeNull()
     expect(fetchButton.textContent?.trim()).toBe("Fetch")
   })
 

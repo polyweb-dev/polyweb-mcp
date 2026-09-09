@@ -164,9 +164,11 @@ describe("C2-REWORK AC-C2R-1/2/3: SearchPlayground pill switcher", () => {
     expectPillList(["Search", "Fetch"])
   })
 
-  it("docks the pill top-right in the page header", async () => {
+  it("docks the pill tabs inside the composer island footer", async () => {
     await ready()
-    expectTopRight("Search Playground", expectPillList(["Search", "Fetch"]))
+    const pill = expectPillList(["Search", "Fetch"])
+    const footer = screen.getByTestId("search-composer-footer")
+    expect(footer.contains(pill)).toBe(true)
   })
 
   it("keeps exclusive aria-selected with tab/panel linkage", async () => {

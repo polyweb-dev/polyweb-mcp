@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from "react"
+import { Search } from "lucide-react"
 import { useFreeSearch } from "@/context/useFreeSearch"
 import { SegmentedControl } from "@/components/common/SegmentedControl"
 import {
@@ -54,38 +55,43 @@ export const ProviderRanks: React.FC = () => {
     : ranked
 
   return (
-    <section className="space-y-4 max-w-4xl">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div>
-          <h3 className="text-[var(--text-strong)]">Evaluated rank</h3>
-          <p className="text-[13px] text-[var(--muted)] mt-0.5">
-            Recomputed ordering the resolver would follow for this operation.
-          </p>
+    <section className="space-y-4 w-full max-w-none">
+      <div className="border border-[var(--border-subtle)] rounded-lg overflow-hidden w-full">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[var(--border-subtle)] bg-[var(--elevated)] px-4 py-2.5">
+          <div className="flex items-center gap-2.5">
+            <h3 className="text-[13px] font-semibold text-[var(--text-strong)]">Evaluated rank</h3>
+            <span className="rounded-full border border-[var(--border-subtle)] bg-[var(--surface)] px-2 py-0.5 text-[11px] text-[var(--muted)] tnum">
+              {eligible.length} active
+            </span>
+            <span className="hidden sm:inline text-[12px] text-[var(--muted)]">
+              Primary: <strong className="text-[var(--text-strong)] font-medium">{ranked[0]?.provider.name ?? "None"}</strong>
+            </span>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <SegmentedControl
+              options={RANKS_OPERATIONS}
+              value={operation}
+              onChange={(next) => setOperation(next as RanksOperation)}
+              ariaLabel="Ranks operation"
+            />
+            <div className="relative flex items-center">
+              <Search
+                aria-hidden="true"
+                className="pointer-events-none absolute left-2.5 size-3.5 text-[var(--muted)]"
+              />
+              <input
+                type="text"
+                value={filterText}
+                onChange={(e) => setFilterText(e.target.value)}
+                placeholder="Filter providers..."
+                aria-label="Filter providers by name"
+                className="w-48 rounded-md border border-[var(--border-subtle)] bg-[var(--surface)] pl-8 pr-3 py-1.5 text-[12px] text-[var(--text)] placeholder:text-[var(--muted)] outline-none focus:border-[var(--signal)]"
+              />
+            </div>
+          </div>
         </div>
 
-        <div className="flex items-center gap-3">
-          <SegmentedControl
-            options={RANKS_OPERATIONS}
-            value={operation}
-            onChange={(next) => setOperation(next as RanksOperation)}
-            ariaLabel="Ranks operation"
-          />
-          <input
-            type="text"
-            value={filterText}
-            onChange={(e) => setFilterText(e.target.value)}
-            placeholder="Filter providers..."
-            aria-label="Filter providers by name"
-            className="w-44 rounded-md border border-[var(--border-subtle)] bg-[var(--surface)] px-3 py-1.5 text-[13px] text-[var(--text)] placeholder:text-[var(--muted)] outline-none focus:border-[var(--signal)]"
-          />
-        </div>
-      </div>
-
-      <h4 className="text-[14px] text-[var(--text-strong)]">
-        Evaluated provider rank ({eligible.length} active)
-      </h4>
-
-      <div className="border border-[var(--border-subtle)] rounded-lg overflow-hidden">
         <Table className="text-[13px]">
           <TableHeader>
             <TableRow className="bg-[var(--elevated)] hover:bg-[var(--elevated)] border-b border-[var(--border-subtle)]">

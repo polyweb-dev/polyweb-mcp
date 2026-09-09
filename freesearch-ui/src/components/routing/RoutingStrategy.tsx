@@ -135,15 +135,16 @@ const StrategyCardButton: React.FC<StrategyCardButtonProps> = ({
           >
             {card.label}
           </span>
-          <span className="text-[12px] px-2 py-0.5 rounded text-[var(--muted)] bg-[var(--elevated)] whitespace-nowrap">
-            {card.badge}
-           </span>
-           {card.id !== "cost_optimized" && (
-             <span className="text-[12px] px-2 py-0.5 rounded text-[var(--muted)] bg-[var(--elevated)] whitespace-nowrap">
-               Simulation view only
-             </span>
-           )}
-
+          <div className="flex items-center gap-2">
+            <span className="text-[12px] px-2 py-0.5 rounded text-[var(--muted)] bg-[var(--elevated)] whitespace-nowrap">
+              {card.badge}
+            </span>
+            {card.id !== "cost_optimized" && (
+              <span className="text-[12px] px-2 py-0.5 rounded text-[var(--muted)] bg-[var(--elevated)] whitespace-nowrap">
+                Simulation view only
+              </span>
+            )}
+          </div>
         </div>
         <p className="text-[13px] mt-1 text-[var(--muted)] leading-relaxed">
           {card.description}

@@ -11,9 +11,22 @@ export const SettingsFailover: React.FC = () => {
 
   return (
     <section className="space-y-4 w-full max-w-none">
-      <div>
-        <h3 className="text-[var(--text-strong)]">Failover policy</h3>
-        <p className="text-[13px] text-[var(--muted)] mt-0.5">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 rounded-md border border-[var(--border-subtle)] bg-[var(--elevated)] px-4 py-3">
+        <div className="flex items-center gap-2.5">
+          <h3 className="text-[13px] font-semibold text-[var(--text-strong)]">
+            Failover policy
+          </h3>
+          <span
+            className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${
+              fallbackConfig.enabled
+                ? "border-emerald-500/20 bg-emerald-500/10 text-[#22c55e]"
+                : "border-[var(--border-subtle)] bg-[var(--surface)] text-[var(--muted)]"
+            }`}
+          >
+            {fallbackConfig.enabled ? "Active" : "Single-shot"}
+          </span>
+        </div>
+        <p className="text-[12px] text-[var(--muted)]">
           How the resolver reacts when a selected provider fails.
         </p>
       </div>

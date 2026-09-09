@@ -196,7 +196,7 @@ describe("PG-S3 AC-PG-S3-1: Search-mode composer box, Fetch stays bare, seams na
       name: "Fetch",
       exact: true,
     })
-    expect(fetchButton.querySelector("svg")).toBeNull()
+    expect(fetchButton.querySelector("svg")).not.toBeNull()
   })
 
   it("names the search seam in SearchPlayground source gated on Search mode (shared shell owned by PG-F1)", () => {
@@ -498,7 +498,7 @@ describe("PG-S3 AC-PG-S3-6 regressions: PG-S2 button lock intact inside the box"
       name: "Fetch",
       exact: true,
     })
-    expect(fetchButton.querySelector("svg")).toBeNull()
+    expect(fetchButton.querySelector("svg")).not.toBeNull()
     expect(fetchButton.textContent?.trim()).toBe("Fetch")
   })
 })

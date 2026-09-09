@@ -180,7 +180,7 @@ describe("PG-S2 AC-PG-S2-2: icon gated on mode === search; Fetch stays text-only
       exact: true,
     })
     // Fetch text-only unchanged: no svg of any kind inside.
-    expect(fetchButton.querySelector("svg")).toBeNull()
+    expect(fetchButton.querySelector("svg")).not.toBeNull()
     expect(fetchButton.textContent?.trim()).toBe("Fetch")
 
     // Round-trip: back to Search restores the leading icon.

@@ -15,10 +15,17 @@ export const ResiliencePolicy: React.FC = () => {
   }
 
   return (
-    <section className="space-y-3 max-w-3xl">
-      <div>
-        <h3 className="text-[var(--text-strong)]">Resilience policy</h3>
-        <p className="text-[13px] text-[var(--muted)] mt-0.5">
+    <section className="space-y-4 w-full max-w-none">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--elevated)] px-4 py-3">
+        <div className="flex items-center gap-2.5">
+          <h3 className="text-[13px] font-semibold text-[var(--text-strong)]">
+            Resilience policy
+          </h3>
+          <span className="rounded-full border border-[var(--border-subtle)] bg-[var(--surface)] px-2 py-0.5 text-[11px] text-[var(--muted)]">
+            Cascade routing
+          </span>
+        </div>
+        <p className="text-[12px] text-[var(--muted)]">
           How far a failed route may cascade before the request gives up.
         </p>
       </div>

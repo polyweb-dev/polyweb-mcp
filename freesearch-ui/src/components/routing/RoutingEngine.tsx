@@ -27,7 +27,7 @@ export const RoutingEngine: React.FC = () => {
       defaultValue="strategy"
       ariaLabel="Routing view"
       idPrefix="routing"
-      className="space-y-6"
+      className="flex flex-1 flex-col space-y-6"
     >
       <div className="flex flex-col justify-between gap-4 border-b border-[var(--border-subtle)] pb-2 sm:flex-row sm:items-center">
         <div>
@@ -53,7 +53,7 @@ export const RoutingEngine: React.FC = () => {
       <PillTabsPanel value="strategy" className="pt-5">
         <RoutingStrategy />
       </PillTabsPanel>
-      <PillTabsPanel value="simulator" className="pt-5">
+      <PillTabsPanel value="simulator" className="flex flex-1 flex-col pt-5">
         <RouteSimulator />
       </PillTabsPanel>
       <PillTabsPanel value="ranks" className="pt-5">

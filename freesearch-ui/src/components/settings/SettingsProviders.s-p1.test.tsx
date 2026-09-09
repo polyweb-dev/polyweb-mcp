@@ -322,23 +322,28 @@ describe("S-P1-3: Global-off placeholder keeps columns from collapsing", () => {
     expect(settingsSource).not.toMatch(/if\s*\(\s*globallyDisabled\s*\)\s*return\s+null/)
   })
 
-  it("unsupported fetch shows a guard cell while Global is on (Brave/Exa/Parallel)", async () => {
+  it("unsupported fetch shows a disabled switch with tooltip while Global is on (Brave/Exa/Parallel)", async () => {
     renderSettings()
     await waitForProviders()
     for (const name of FETCH_UNSUPPORTED) {
       const fetchCell = cellFor(name, "Fetch")
-      expect(fetchCell.textContent?.trim().length).toBeGreaterThan(0)
-      expect(within(fetchCell).getByText("Not supported", { exact: true })).toBeInTheDocument()
+      const switchEl = within(fetchCell).getByRole("switch")
+      expect(switchEl).toBeDisabled()
+      expect(switchEl).toHaveAttribute("aria-checked", "false")
+      expect(switchEl).toHaveAttribute(
+        "aria-label",
+        `${name} fetch routing (not supported)`
+      )
     }
   })
 
-  it("supported fetch shows an On/Off group while Global is on", async () => {
+  it("supported fetch shows an active switch while Global is on", async () => {
     renderSettings()
     await waitForProviders()
     for (const name of FETCH_SUPPORTED) {
       const fetchCell = cellFor(name, "Fetch")
       expect(
-        within(fetchCell).getByRole("group", { name: `${name} fetch routing` })
+        within(fetchCell).getByRole("switch", { name: `${name} fetch routing` })
       ).toBeInTheDocument()
     }
   })
@@ -368,9 +373,7 @@ describe("S-P1-3: Global-off placeholder keeps columns from collapsing", () => {
     const row = findProviderRowTr("Brave Search")
     expect(row.children).toHaveLength(EXPECTED_HEADERS.length)
     const fetchCell = cellFor("Brave Search", "Fetch")
-    expect(fetchCell.textContent?.trim().length).toBeGreaterThan(0)
-    // Placeholder is either the dimmed guard or an em-dash — never empty.
-    expect(fetchCell.textContent).toMatch(/not supported|—/i)
+    expect(within(fetchCell).getByRole("switch")).toBeDisabled()
     const afterLeft = fetchCell.getBoundingClientRect().left
     expect(Math.abs(afterLeft - beforeLeft)).toBeLessThanOrEqual(1)
   })
@@ -447,7 +450,6 @@ describe("S-P1-5: all SettingsProviders contracts preserved in the table", () =>
   it("keeps 7 global Switches with provider-qualified labels", async () => {
     renderSettings()
     await waitForProviders()
-    expect(screen.getAllByRole("switch")).toHaveLength(7)
     for (const name of SEED_PROVIDER_NAMES) {
       expect(
         screen.getByRole("switch", { name: `${name} global routing` })
@@ -479,45 +481,33 @@ describe("S-P1-5: all SettingsProviders contracts preserved in the table", () =>
     expect(patches[0].body).toEqual({ enabled: false })
   })
 
-  it("keeps Search segments local-only with exclusive aria-pressed", async () => {
+  it("keeps Search switch local-only with exclusive aria-checked", async () => {
     const user = userEvent.setup()
     const stub = renderSettings()
     await waitForProviders()
 
     const searchCell = cellFor("Brave Search", "Search")
-    const group = within(searchCell).getByRole("group", {
+    const searchSwitch = within(searchCell).getByRole("switch", {
       name: "Brave Search search routing",
     })
-    expect(within(group).getByRole("button", { name: /^On$/ })).toHaveAttribute(
-      "aria-pressed",
-      "true"
-    )
-    await user.click(within(group).getByRole("button", { name: /^Off$/ }))
-    expect(within(group).getByRole("button", { name: /^Off$/ })).toHaveAttribute(
-      "aria-pressed",
-      "true"
-    )
+    expect(searchSwitch).toHaveAttribute("aria-checked", "true")
+    await user.click(searchSwitch)
+    expect(searchSwitch).toHaveAttribute("aria-checked", "false")
     expect(stub.requests.filter((r) => r.method === "PATCH")).toHaveLength(0)
   })
 
-  it("keeps Fetch segments local-only with exclusive aria-pressed", async () => {
+  it("keeps Fetch switch local-only with exclusive aria-checked", async () => {
     const user = userEvent.setup()
     const stub = renderSettings()
     await waitForProviders()
 
     const fetchCell = cellFor("Tavily", "Fetch")
-    const group = within(fetchCell).getByRole("group", {
+    const fetchSwitch = within(fetchCell).getByRole("switch", {
       name: "Tavily fetch routing",
     })
-    expect(within(group).getByRole("button", { name: /^On$/ })).toHaveAttribute(
-      "aria-pressed",
-      "true"
-    )
-    await user.click(within(group).getByRole("button", { name: /^Off$/ }))
-    expect(within(group).getByRole("button", { name: /^Off$/ })).toHaveAttribute(
-      "aria-pressed",
-      "true"
-    )
+    expect(fetchSwitch).toHaveAttribute("aria-checked", "true")
+    await user.click(fetchSwitch)
+    expect(fetchSwitch).toHaveAttribute("aria-checked", "false")
     expect(stub.requests.filter((r) => r.method === "PATCH")).toHaveLength(0)
   })
 

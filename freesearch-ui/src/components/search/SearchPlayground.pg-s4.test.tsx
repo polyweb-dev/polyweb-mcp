@@ -756,7 +756,7 @@ describe("PG-S4 AC-PG-S4-7 regressions: PG-S1/S2/S3 guards + composer gating + f
       name: "Fetch",
       exact: true,
     })
-    expect(fetchButton.querySelector("svg")).toBeNull()
+    expect(fetchButton.querySelector("svg")).not.toBeNull()
     expect(fetchButton.textContent?.trim()).toBe("Fetch")
   })
 

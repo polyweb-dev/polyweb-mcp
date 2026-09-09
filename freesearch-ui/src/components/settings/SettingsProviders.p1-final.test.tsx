@@ -272,7 +272,6 @@ describe("P1F-2: registry controls preserved in the merged table", () => {
     await waitForProviders()
     // 10-col header must exist AND the 7 switches must sit in Global cells.
     expect(headerNames()).toEqual([...EXPECTED_MERGED_HEADERS])
-    expect(screen.getAllByRole("switch")).toHaveLength(7)
     for (const name of SEED_PROVIDER_NAMES) {
       const cell = cellFor(name, "Global")
       expect(
@@ -281,15 +280,15 @@ describe("P1F-2: registry controls preserved in the merged table", () => {
     }
   })
 
-  it("keeps Search/Fetch segments local-only with exclusive aria-pressed", async () => {
+  it("keeps Search/Fetch controls local-only with switch toggles", async () => {
     const user = userEvent.setup()
     const stub = renderSettings()
     await waitForProviders()
     const searchCell = cellFor("Brave Search", "Search")
-    const group = within(searchCell).getByRole("group", { name: "Brave Search search routing" })
-    expect(within(group).getByRole("button", { name: /^On$/ })).toHaveAttribute("aria-pressed", "true")
-    await user.click(within(group).getByRole("button", { name: /^Off$/ }))
-    expect(within(group).getByRole("button", { name: /^Off$/ })).toHaveAttribute("aria-pressed", "true")
+    const searchSwitch = within(searchCell).getByRole("switch", { name: "Brave Search search routing" })
+    expect(searchSwitch).toHaveAttribute("aria-checked", "true")
+    await user.click(searchSwitch)
+    expect(searchSwitch).toHaveAttribute("aria-checked", "false")
     expect(stub.requests.filter((r) => r.method === "PATCH")).toHaveLength(0)
   })
 

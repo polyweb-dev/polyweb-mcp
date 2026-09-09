@@ -1,3 +1,4 @@
+
 import React, { useState } from "react"
 import {
   Search,
@@ -139,12 +140,12 @@ export const SearchPlayground: React.FC = () => {
   ]
 
   const requestForm = (
-    <form onSubmit={handleExecute} noValidate={mode === "search"}>
+    <form onSubmit={handleExecute} noValidate={mode === "search"} className="w-full">
       {mode === "search" ? (
         // Search composer seam; Fetch and Simulator can adopt the pattern later.
         <div
           data-testid="search-composer"
-          className="rounded-xl border border-[var(--border-subtle)] bg-[var(--elevated)] p-4 shadow-lg transition-all transition-colors focus-within:border-[var(--signal)]/60 motion-reduce:transition-none"
+          className="w-full rounded-xl border border-[var(--border-subtle)] bg-[var(--elevated)] p-4 shadow-lg transition-all transition-colors focus-within:border-[var(--signal)]/60 motion-reduce:transition-none"
         >
           <div className="relative">
             <div
@@ -197,36 +198,50 @@ export const SearchPlayground: React.FC = () => {
               ))}
             </div>
 
-            <div className="flex flex-wrap items-center gap-4">
-              <div className="flex items-center gap-2">
-                <span>Provider:</span>
-                <select
-                  value={selectedProviderId}
-                  onChange={(e) => setSelectedProviderId(e.target.value)}
-                  className="rounded border border-[var(--border-subtle)] bg-[var(--elevated)] px-2.5 py-1 text-[13px] text-[var(--text)] outline-none"
-                >
-                  <option value="auto">Auto arbitration</option>
-                  {eligibleProviders.map((provider) => (
-                    <option key={provider.id} value={provider.id}>
-                      {provider.name}
-                    </option>
-                  ))}
-                </select>
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div className="flex flex-wrap items-center gap-4">
+                <div className="flex items-center gap-2">
+                  <span>Provider:</span>
+                  <select
+                    value={selectedProviderId}
+                    onChange={(e) => setSelectedProviderId(e.target.value)}
+                    className="rounded border border-[var(--border-subtle)] bg-[var(--elevated)] px-2.5 py-1 text-[13px] text-[var(--text)] outline-none"
+                  >
+                    <option value="auto">Auto arbitration</option>
+                    {eligibleProviders.map((provider) => (
+                      <option key={provider.id} value={provider.id}>
+                        {provider.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <label className="flex items-center gap-2">
+                  <span>Results:</span>
+                  <input
+                    type="number"
+                    aria-label="Number of results"
+                    min="1"
+                    max="100"
+                    step="1"
+                    value={resultCount}
+                    onChange={(e) => setResultCount(Number(e.target.value))}
+                    className="w-16 rounded border border-[var(--border-subtle)] bg-[var(--elevated)] px-2.5 py-1 text-[13px] text-[var(--text)] outline-none tnum"
+                  />
+                </label>
               </div>
 
-              <label className="flex items-center gap-2">
-                <span>Results:</span>
-                <input
-                  type="number"
-                  aria-label="Number of results"
-                  min="1"
-                  max="100"
-                  step="1"
-                  value={resultCount}
-                  onChange={(e) => setResultCount(Number(e.target.value))}
-                  className="w-16 rounded border border-[var(--border-subtle)] bg-[var(--elevated)] px-2.5 py-1 text-[13px] text-[var(--text)] outline-none tnum"
-                />
-              </label>
+              <div
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    ;(e.target as HTMLElement)?.click()
+                  }
+                }}
+              >
+                <PillTabsList />
+              </div>
             </div>
           </div>
         </div>
@@ -256,13 +271,14 @@ export const SearchPlayground: React.FC = () => {
                   className="inline-flex items-center gap-2 rounded-md px-5 py-2 text-[13px] font-medium text-white"
                   style={{ background: "var(--signal)" }}
                 >
+                  <FileText aria-hidden="true" className="size-3.5" />
                   {isSearching || isFetching ? "Executing..." : "Fetch"}
                 </Button>
               </div>
             </div>
           }
           footer={
-            <div className="flex flex-wrap items-center gap-4">
+            <div className="flex flex-wrap items-center justify-between gap-4">
               <div className="flex items-center gap-2">
                 <span>Provider:</span>
                 <select
@@ -278,6 +294,18 @@ export const SearchPlayground: React.FC = () => {
                   ))}
                 </select>
               </div>
+
+              <div
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    ;(e.target as HTMLElement)?.click()
+                  }
+                }}
+              >
+                <PillTabsList />
+              </div>
             </div>
           }
         />
@@ -292,9 +320,9 @@ export const SearchPlayground: React.FC = () => {
       onValueChange={(value) => switchMode(value as "search" | "fetch")}
       ariaLabel="Playground view"
       idPrefix="playground"
-      className="block space-y-8"
+      className="flex flex-1 flex-col space-y-8"
     >
-      {/* Page heading + mode toggle */}
+      {/* Page heading */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-2 border-b border-[var(--border-subtle)]">
         <div>
           <h2 className="text-[var(--text-strong)]">Search Playground</h2>
@@ -302,18 +330,16 @@ export const SearchPlayground: React.FC = () => {
             Run queries and fetches across the provider fleet with live arbitration.
           </p>
         </div>
-
-        <PillTabsList className="ml-auto" />
       </div>
 
-      <PillTabsPanel value="search" className="space-y-8">
+      <PillTabsPanel value="search" className="flex flex-1 flex-col space-y-8">
         <div
           data-testid="search-layout"
           data-state={hasSearchContent ? "docked" : "hero"}
           className={`transition-all duration-300 ease-out motion-reduce:transition-none ${
             hasSearchContent
               ? "top-docked"
-              : "mx-auto flex min-h-[55vh] max-w-3xl flex-col justify-center"
+              : "w-full mx-auto flex flex-1 min-h-[55vh] max-w-3xl flex-col justify-center"
           }`}
         >
           {requestForm}
@@ -546,14 +572,14 @@ export const SearchPlayground: React.FC = () => {
         )}
       </PillTabsPanel>
 
-      <PillTabsPanel value="fetch" className="space-y-8">
+      <PillTabsPanel value="fetch" className="flex flex-1 flex-col space-y-8">
         <div
           data-testid="fetch-layout"
           data-state={hasFetchContent ? "docked" : "hero"}
           className={`transition-all duration-300 ease-out motion-reduce:transition-none ${
             hasFetchContent
               ? "top-docked"
-              : "mx-auto flex min-h-[55vh] max-w-3xl flex-col justify-center"
+              : "w-full mx-auto flex flex-1 min-h-[55vh] max-w-3xl flex-col justify-center"
           }`}
         >
           {requestForm}

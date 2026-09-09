@@ -99,15 +99,8 @@ async function waitForProviders() {
 
 function findProviderRow(provider: string): HTMLElement {
   const providerName = screen.getByText(provider, { exact: true })
-  let current = providerName.parentElement
-
-  while (current && current !== document.body) {
-    const hasGlobalLabel = within(current).queryByText("Global", { exact: true })
-    const hasSearchLabel = within(current).queryByText("Search", { exact: true })
-    const hasOperationButton = within(current).queryAllByRole("button", { name: /^On$/ }).length > 0
-    if (hasGlobalLabel && hasSearchLabel && hasOperationButton) return current
-    current = current.parentElement
-  }
+  const tr = providerName.closest("tr")
+  if (tr) return tr
 
   throw new Error(`Provider registry row not found for ${provider}`)
 }
@@ -152,7 +145,11 @@ describe("SettingsView (live backend)", () => {
     for (let priority = 1; priority <= seedProviderNames.length; priority += 1) {
       expect(screen.getByText(`P${priority}`, { exact: true })).toBeInTheDocument()
     }
-    expect(screen.getAllByRole("switch")).toHaveLength(7)
+    for (const provider of seedProviderNames) {
+      expect(
+        screen.getByRole("switch", { name: `${provider} global routing` })
+      ).toBeInTheDocument()
+    }
   })
 
   it("labels every global switch with its provider name", async () => {
@@ -200,17 +197,17 @@ describe("SettingsView (live backend)", () => {
     await waitForProviders()
 
     const row = findProviderRow("Brave Search")
-    const searchOperation = within(row).getByText("Search", { exact: true }).parentElement!
-    await user.click(within(searchOperation).getByRole("button", { name: /^Off$/ }))
-    expect(
-      within(searchOperation).getByRole("button", { name: /^Off$/ })
-    ).toHaveAttribute("aria-pressed", "true")
+    const searchSwitch = within(row).getByRole("switch", { name: "Brave Search search routing" })
+    expect(searchSwitch).toHaveAttribute("aria-checked", "true")
+    await user.click(searchSwitch)
+    expect(searchSwitch).toHaveAttribute("aria-checked", "false")
     // Local-only: no PATCH for per-operation flips
     expect(
       stub.requests.filter((r) => r.method === "PATCH")
     ).toHaveLength(0)
-    // Brave is search-only: fetch shows the unsupported guard, never a switch
-    expect(within(row).getByText("Not supported", { exact: true })).toBeInTheDocument()
+    // Brave is search-only: fetch shows the disabled switch
+    const fetchSwitch = within(row).getByRole("switch", { name: "Brave Search fetch routing (not supported)" })
+    expect(fetchSwitch).toBeDisabled()
   })
 
   it("labels every key input with its provider name and disables Save on blank", async () => {

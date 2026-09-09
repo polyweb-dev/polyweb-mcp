@@ -9,6 +9,7 @@ import { QuotaAnalytics } from "@/components/quota/QuotaAnalytics"
 import { ActivityStream } from "@/components/activity/ActivityStream"
 import { SettingsView } from "@/components/settings/SettingsView"
 import { ToastContainer } from "@/components/common/ToastContainer"
+import { TooltipProvider } from "@/components/ui/tooltip"
 
 const workspaceRoutes: Array<{
   id: TabId
@@ -31,7 +32,7 @@ function DashboardContent() {
       <Sidebar />
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <main className="min-w-0 flex-1 px-6 py-8 pt-16 sm:px-8 md:pt-8 lg:px-12">
+        <main className="min-w-0 flex-1 px-6 py-8 pt-16 sm:px-8 md:pt-8 lg:px-12 flex flex-col">
           <Routes>
             <Route path="/" element={<Navigate to="/playground" replace />} />
             <Route path="/providers" element={<Navigate to="/settings" replace />} />
@@ -53,7 +54,9 @@ function DashboardContent() {
 function App() {
   return (
     <FreeSearchProvider>
-      <DashboardContent />
+      <TooltipProvider>
+        <DashboardContent />
+      </TooltipProvider>
     </FreeSearchProvider>
   )
 }

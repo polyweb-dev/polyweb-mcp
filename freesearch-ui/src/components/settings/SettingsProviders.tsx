@@ -3,8 +3,13 @@ import { ArrowDown, ArrowUp, RefreshCw } from "lucide-react"
 import { useFreeSearch } from "@/context/useFreeSearch"
 import { Modal } from "@/components/common/Modal"
 import { Switch } from "@/components/common/Switch"
-import { SegmentedControl } from "@/components/common/SegmentedControl"
 import { Button } from "@/components/ui/button"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import {
   Table,
   TableBody,
@@ -58,66 +63,84 @@ export const SettingsProviders: React.FC = () => {
   const lastPriorityId = sortedByPriority.at(-1)?.id ?? null
   const selectedProvider = providers.find((provider) => provider.id === selectedTestId) ?? null
 
+  const activeCount = providers.filter((p) => p.globalEnabled).length
+  const healthyCount = providers.filter((p) => p.healthStatus === "healthy" && p.circuitBreaker !== "open").length
+
   return (
-    <section className="w-full max-w-none space-y-4">
-      <div>
-        <h3 className="text-[var(--text-strong)]">Provider registry</h3>
-        <p className="mt-0.5 text-[13px] text-[var(--muted)]">
-          Reorder dispatch priority, control routing, and inspect live provider telemetry.
-        </p>
-      </div>
+    <TooltipProvider delay={100}>
+      <section className="w-full max-w-none space-y-4">
+        {providersError && (
+          <p
+            role="alert"
+            className="rounded border border-[var(--status-danger)]/40 bg-[var(--elevated)] p-3 text-[13px]"
+            style={{ color: "var(--status-danger)" }}
+          >
+            Provider data unavailable — {providersError}
+          </p>
+        )}
 
-      {providersError && (
-        <p
-          role="alert"
-          className="rounded border border-[var(--status-danger)]/40 bg-[var(--elevated)] p-3 text-[13px]"
-          style={{ color: "var(--status-danger)" }}
-        >
-          Provider data unavailable — {providersError}
-        </p>
-      )}
+        <div className="w-full max-w-none overflow-hidden rounded-lg border border-[var(--border-subtle)]">
+          <div className="flex flex-col gap-2 border-b border-[var(--border-subtle)] bg-[var(--elevated)] px-4 py-2.5 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-center gap-2.5">
+              <h3 className="text-[13px] font-semibold text-[var(--text-strong)]">Provider registry</h3>
+              <span className="rounded-full border border-[var(--border-subtle)] bg-[var(--surface)] px-2 py-0.5 text-[11px] text-[var(--muted)] tnum">
+                {providers.length} configured
+              </span>
+              <span className="inline-flex items-center gap-1.5 text-[11px] text-[var(--status-healthy)]">
+                <span aria-hidden="true" className="size-1.5 rounded-full bg-[#22c55e]" />
+                <span className="tnum">{activeCount} active</span>
+              </span>
+            </div>
+            <div className="flex items-center gap-3 text-[12px] text-[var(--muted)]">
+              <span className="hidden sm:inline">Priority dispatch · P1 to P{providers.length}</span>
+              <span className="hidden md:inline opacity-40">|</span>
+              <span>
+                <strong className="font-medium text-[var(--text-strong)] tnum">{healthyCount}/{providers.length}</strong> healthy
+              </span>
+            </div>
+          </div>
 
-      <div className="w-full max-w-none overflow-hidden rounded-lg border border-[var(--border-subtle)]">
-        <Table className="min-w-[1280px] text-[13px]">
-          <TableHeader>
-            <TableRow className="border-b border-[var(--border-subtle)] bg-[var(--elevated)] hover:bg-[var(--elevated)]">
-              {MERGED_HEADERS.map((header) => (
-                <TableHead key={header} className="h-9 whitespace-nowrap px-3 text-[12px] text-[var(--muted)]">
-                  {header}
-                </TableHead>
+          <Table className="min-w-[1280px] text-[13px]">
+            <TableHeader>
+              <TableRow className="border-b border-[var(--border-subtle)] bg-[var(--elevated)] hover:bg-[var(--elevated)]">
+                {MERGED_HEADERS.map((header) => (
+                  <TableHead key={header} className="h-9 whitespace-nowrap px-3 text-[12px] text-[var(--muted)]">
+                    {header}
+                  </TableHead>
+                ))}
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {providers.map((provider) => (
+                <ProviderRegistryRow
+                  key={provider.id}
+                  provider={provider}
+                  rank={rankById.get(provider.id) ?? 0}
+                  providerCount={providers.length}
+                  testing={testingId === provider.id}
+                  globalPending={pendingGlobalId === provider.id}
+                  canMoveUp={providers.length > 1 && provider.id !== firstPriorityId}
+                  canMoveDown={providers.length > 1 && provider.id !== lastPriorityId}
+                  onMovePriority={(direction) => moveProviderPriority(provider.id, direction)}
+                  onToggleGlobal={(enabled) => void handleGlobalToggle(provider.id, enabled)}
+                  onToggleSearch={(enabled) => toggleProviderSearch(provider.id, enabled)}
+                  onToggleFetch={(enabled) => toggleProviderFetch(provider.id, enabled)}
+                  onOpenTest={() => setSelectedTestId(provider.id)}
+                />
               ))}
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {providers.map((provider) => (
-              <ProviderRegistryRow
-                key={provider.id}
-                provider={provider}
-                rank={rankById.get(provider.id) ?? 0}
-                providerCount={providers.length}
-                testing={testingId === provider.id}
-                globalPending={pendingGlobalId === provider.id}
-                canMoveUp={providers.length > 1 && provider.id !== firstPriorityId}
-                canMoveDown={providers.length > 1 && provider.id !== lastPriorityId}
-                onMovePriority={(direction) => moveProviderPriority(provider.id, direction)}
-                onToggleGlobal={(enabled) => void handleGlobalToggle(provider.id, enabled)}
-                onToggleSearch={(enabled) => toggleProviderSearch(provider.id, enabled)}
-                onToggleFetch={(enabled) => toggleProviderFetch(provider.id, enabled)}
-                onOpenTest={() => setSelectedTestId(provider.id)}
-              />
-            ))}
-          </TableBody>
-        </Table>
-      </div>
+            </TableBody>
+          </Table>
+        </div>
 
-      <ProviderTestModal
-        provider={selectedProvider}
-        testing={selectedProvider ? testingId === selectedProvider.id : false}
-        lastResult={selectedProvider ? testResults[selectedProvider.id] : undefined}
-        onClose={() => setSelectedTestId(null)}
-        onTest={(id) => void handleTest(id)}
-      />
-    </section>
+        <ProviderTestModal
+          provider={selectedProvider}
+          testing={selectedProvider ? testingId === selectedProvider.id : false}
+          lastResult={selectedProvider ? testResults[selectedProvider.id] : undefined}
+          onClose={() => setSelectedTestId(null)}
+          onTest={(id) => void handleTest(id)}
+        />
+      </section>
+    </TooltipProvider>
   )
 }
 
@@ -295,17 +318,62 @@ const ModalDetail: React.FC<{ label: string; value: string; mono?: boolean }> = 
   </>
 )
 
+const HEALTH_CONFIG: Record<
+  string,
+  { label: string; dotClass: string; textClass: string; bgClass: string }
+> = {
+  healthy: {
+    label: "Healthy",
+    dotClass: "bg-[#22c55e]",
+    textClass: "text-[#22c55e]",
+    bgClass: "bg-[#22c55e]/15",
+  },
+  offline: {
+    label: "Offline",
+    dotClass: "bg-[#eab308]",
+    textClass: "text-[#eab308]",
+    bgClass: "bg-[#eab308]/15",
+  },
+  degraded: {
+    label: "Degraded",
+    dotClass: "bg-[#f59e0b]",
+    textClass: "text-[#f59e0b]",
+    bgClass: "bg-[#f59e0b]/15",
+  },
+  rate_limited: {
+    label: "Rate limited",
+    dotClass: "bg-[#f97316]",
+    textClass: "text-[#f97316]",
+    bgClass: "bg-[#f97316]/15",
+  },
+  circuit_broken: {
+    label: "Circuit broken",
+    dotClass: "bg-[#ef4444]",
+    textClass: "text-[#ef4444]",
+    bgClass: "bg-[#ef4444]/15",
+  },
+  open: {
+    label: "Open",
+    dotClass: "bg-[#ef4444]",
+    textClass: "text-[#ef4444]",
+    bgClass: "bg-[#ef4444]/15",
+  },
+}
+
 const HealthStatus: React.FC<{ status: string }> = ({ status }) => {
-  const color = status === "healthy"
-    ? "var(--status-healthy)"
-    : status === "open" || status === "circuit_broken"
-      ? "var(--status-danger)"
-      : "var(--status-warning)"
+  const config = HEALTH_CONFIG[status] ?? {
+    label: status.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
+    dotClass: "bg-[var(--muted)]",
+    textClass: "text-[var(--muted)]",
+    bgClass: "bg-white/[0.06]",
+  }
 
   return (
-    <span className="inline-flex items-center gap-1.5 text-[12px] text-[var(--muted)]">
-      <span aria-hidden="true" className="size-2 rounded-full" style={{ background: color }} />
-      {status.replace("_", " ")}
+    <span
+      className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-medium ${config.bgClass} ${config.textClass}`}
+    >
+      <span aria-hidden="true" className={`size-2 rounded-full ${config.dotClass}`} />
+      <span>{config.label}</span>
     </span>
   )
 }
@@ -377,27 +445,33 @@ const OperationControl: React.FC<OperationControlProps> = ({
   onToggle,
 }) => {
   if (!supported) {
-    return globallyDisabled ? (
-      <span className="inline-flex min-w-[110px] text-[var(--muted)] opacity-60">—</span>
-    ) : (
-      <span className="inline-flex min-w-[110px] justify-center rounded border border-[var(--border-subtle)] px-1.5 py-0.5 text-[12px] text-[var(--muted)]">
-        Not supported
-      </span>
+    return (
+      <Tooltip>
+        <TooltipTrigger
+          render={<span className="inline-flex cursor-not-allowed" />}
+        >
+          <Switch
+            checked={false}
+            onChange={() => {}}
+            disabled
+            ariaLabel={`${providerName} ${label.toLowerCase()} routing (not supported)`}
+          />
+        </TooltipTrigger>
+        <TooltipContent>
+          {providerName} does not support {label.toLowerCase()}
+        </TooltipContent>
+      </Tooltip>
     )
   }
 
   return (
-    <div className="min-w-[110px]" title="Session-only — backend has global enable only">
-      <span className="sr-only">{label}</span>
-      <fieldset disabled={globallyDisabled} className="m-0 border-0 p-0">
-        <SegmentedControl
-          options={["On", "Off"] as const}
-          value={enabled ? "On" : "Off"}
-          onChange={(value) => onToggle(value === "On")}
-          ariaLabel={`${providerName} ${label.toLowerCase()} routing`}
-          minColumnWidth="52px"
-        />
-      </fieldset>
+    <div title="Session-only — backend has global enable only">
+      <Switch
+        checked={enabled}
+        onChange={onToggle}
+        disabled={globallyDisabled}
+        ariaLabel={`${providerName} ${label.toLowerCase()} routing`}
+      />
     </div>
   )
 }

@@ -14,7 +14,7 @@ export function ComposerShell({
   return (
     <div
       data-testid={`${testIdPrefix}-composer`}
-      className="rounded-xl border border-[var(--border-subtle)] bg-[var(--elevated)] p-4 shadow-lg transition-all transition-colors focus-within:border-[var(--signal)]/60 motion-reduce:transition-none"
+      className="w-full rounded-xl border border-[var(--border-subtle)] bg-[var(--elevated)] p-4 shadow-lg transition-all transition-colors focus-within:border-[var(--signal)]/60 motion-reduce:transition-none"
     >
       {inputRow}
       {footer && (

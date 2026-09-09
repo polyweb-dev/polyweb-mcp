@@ -43,29 +43,14 @@ export const RouteSimulator: React.FC = () => {
   }
 
   return (
-    <section className="space-y-5">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div>
-          <h3 className="text-[var(--text-strong)]">Route simulator</h3>
-          <p className="text-[13px] text-[var(--muted)] mt-0.5">
-            Resolves a hypothetical request through the active strategy.
-          </p>
-        </div>
-        <SegmentedControl
-          options={SIMULATOR_OPERATIONS}
-          value={operation}
-          onChange={handleOperationChange}
-          ariaLabel="Simulator operation"
-        />
-      </div>
-
+    <section className="flex flex-1 flex-col space-y-5 w-full max-w-none">
       <div
         data-testid="simulator-layout"
         data-state={hasSimulated ? "docked" : "hero"}
         className={`transition-all duration-300 ease-out motion-reduce:transition-none ${
           hasSimulated
             ? "top-docked"
-            : "mx-auto flex min-h-[55vh] max-w-3xl flex-col justify-center"
+            : "w-full mx-auto flex flex-1 min-h-[55vh] max-w-3xl flex-col justify-center"
         }`}
       >
         <ComposerShell
@@ -94,12 +79,29 @@ export const RouteSimulator: React.FC = () => {
                 <button
                   type="button"
                   onClick={handleSimulate}
-                  className="rounded-md px-5 py-2 text-[13px] font-medium text-white transition-opacity motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--signal)]/40"
+                  className="inline-flex items-center gap-2 rounded-md px-5 py-2 text-[13px] font-medium text-white transition-opacity motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--signal)]/40"
                   style={{ background: "var(--signal)" }}
                 >
+                  <Search aria-hidden="true" className="size-3.5" />
                   Simulate route
                 </button>
               </div>
+            </div>
+          }
+          footer={
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <h3 className="sr-only">Route simulator</h3>
+                <span className="text-[13px] text-[var(--muted)]">
+                  Resolves a hypothetical request through the active strategy.
+                </span>
+              </div>
+              <SegmentedControl
+                options={SIMULATOR_OPERATIONS}
+                value={operation}
+                onChange={handleOperationChange}
+                ariaLabel="Simulator operation"
+              />
             </div>
           }
         />
