@@ -1,15 +1,7 @@
-import React, { createContext, useContext } from "react"
-import {
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-} from "@/components/ui/tabs"
-
-export interface PillTabOption {
-  value: string
-  label: string
-}
+import React from "react"
+import { Tabs } from "@/components/ui/tabs"
+import { PillTabsContext } from "./PillTabsContext"
+import type { PillTabOption } from "./PillTabsContext"
 
 export interface PillTabsProps {
   options: readonly PillTabOption[]
@@ -20,20 +12,6 @@ export interface PillTabsProps {
   onValueChange?: (value: string) => void
   className?: string
   children: React.ReactNode
-}
-
-interface PillTabsContextValue {
-  options: readonly PillTabOption[]
-  ariaLabel: string
-  idPrefix: string
-}
-
-const PillTabsContext = createContext<PillTabsContextValue | null>(null)
-
-function usePillTabs(): PillTabsContextValue {
-  const context = useContext(PillTabsContext)
-  if (!context) throw new Error("PillTabs children must be inside PillTabs")
-  return context
 }
 
 /**
@@ -54,48 +32,11 @@ export function PillTabs({
   )
 }
 
-/** Renders the configured options with the provider-filter pill treatment. */
-export function PillTabsList({ className }: { className?: string }) {
-  const { options, ariaLabel, idPrefix } = usePillTabs()
-
-  return (
-    <TabsList variant="pill" aria-label={ariaLabel} className={className}>
-      {options.map(({ value, label }) => (
-        <TabsTrigger
-          key={value}
-          value={value}
-          id={`${idPrefix}-tab-${value}`}
-          aria-controls={`${idPrefix}-panel-${value}`}
-        >
-          {label}
-        </TabsTrigger>
-      ))}
-    </TabsList>
-  )
-}
-
-export interface PillTabsPanelProps {
-  value: string
-  className?: string
-  children: React.ReactNode
-}
-
-/** Mounts the active view panel with stable two-way tab linkage. */
-export function PillTabsPanel({
-  value,
-  className,
-  children,
-}: PillTabsPanelProps) {
-  const { idPrefix } = usePillTabs()
-
-  return (
-    <TabsContent
-      value={value}
-      id={`${idPrefix}-panel-${value}`}
-      aria-labelledby={`${idPrefix}-tab-${value}`}
-      className={className}
-    >
-      {children}
-    </TabsContent>
-  )
-}
+// The barrel re-exports the shared hook and context for compatibility.
+// eslint-disable-next-line react-refresh/only-export-components
+export { PillTabsContext, usePillTabs, type PillTabOption } from "./PillTabsContext"
+export { PillTabsList } from "./PillTabsList"
+export {
+  PillTabsPanel,
+  type PillTabsPanelProps,
+} from "./PillTabsPanel"
