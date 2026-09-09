@@ -58,10 +58,23 @@ import {
  */
 
 const testDir = import.meta.dirname
-const playgroundSource = readFileSync(
-  path.resolve(testDir, "./SearchPlayground.tsx"),
-  "utf8"
-)
+const playgroundSource = [
+  "./hooks/usePlaygroundSelection.ts",
+  "./SearchPlayground.tsx",
+  "./PlaygroundHeader.tsx",
+  "./PlaygroundPanel.tsx",
+  "./PlaygroundRequestForm.tsx",
+  "./SearchRequestForm.tsx",
+  "./FetchRequestForm.tsx",
+  "./ProviderPicker.tsx",
+  "./SearchResultsView.tsx",
+  "./SearchResultsSummary.tsx",
+  "./SearchResultList.tsx",
+  "./SearchResultInspector.tsx",
+  "./FetchDocumentView.tsx",
+]
+  .map((sourcePath) => readFileSync(path.resolve(testDir, sourcePath), "utf8"))
+  .join("\n")
 const packageJson = JSON.parse(
   readFileSync(path.resolve(testDir, "../../../package.json"), "utf8")
 ) as {

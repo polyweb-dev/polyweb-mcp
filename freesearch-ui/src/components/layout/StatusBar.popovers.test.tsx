@@ -82,6 +82,20 @@ const statusBarChildPaths = [
 ]
 const appPath = path.resolve(testDir, "../../App.tsx")
 const playgroundPath = path.resolve(testDir, "../search/SearchPlayground.tsx")
+const playgroundChildPaths = [
+  path.resolve(testDir, "../search/hooks/usePlaygroundSelection.ts"),
+  path.resolve(testDir, "../search/PlaygroundHeader.tsx"),
+  path.resolve(testDir, "../search/PlaygroundPanel.tsx"),
+  path.resolve(testDir, "../search/PlaygroundRequestForm.tsx"),
+  path.resolve(testDir, "../search/SearchRequestForm.tsx"),
+  path.resolve(testDir, "../search/FetchRequestForm.tsx"),
+  path.resolve(testDir, "../search/ProviderPicker.tsx"),
+  path.resolve(testDir, "../search/SearchResultsView.tsx"),
+  path.resolve(testDir, "../search/SearchResultsSummary.tsx"),
+  path.resolve(testDir, "../search/SearchResultList.tsx"),
+  path.resolve(testDir, "../search/SearchResultInspector.tsx"),
+  path.resolve(testDir, "../search/FetchDocumentView.tsx"),
+]
 const routingPath = path.resolve(testDir, "../routing/RoutingEngine.tsx")
 const composerShellPath = path.resolve(testDir, "../common/ComposerShell.tsx")
 const sidebarPath = path.resolve(testDir, "./Sidebar.tsx")
@@ -91,7 +105,9 @@ const appSource =
   readFileSync(appPath, "utf8") +
   "\n" +
   readFileSync(path.resolve(testDir, "./DashboardContent.tsx"), "utf8")
-const playgroundSource = readFileSync(playgroundPath, "utf8")
+const playgroundSource = [playgroundPath, ...playgroundChildPaths]
+  .map((sourcePath) => readFileSync(sourcePath, "utf8"))
+  .join("\n")
 const routingSource = readFileSync(routingPath, "utf8")
 const composerShellSource = readFileSync(composerShellPath, "utf8")
 const sidebarSource = readFileSync(sidebarPath, "utf8")

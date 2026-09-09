@@ -96,7 +96,23 @@ const simulatorSource =
   "\n" +
   readFileSync(path.resolve(testDir, "./simulator/FallbackCascade.tsx"), "utf8")
 const strategySource = readFileSync(strategyPath, "utf8")
-const playgroundSource = readFileSync(playgroundPath, "utf8")
+const playgroundChildPaths = [
+  path.resolve(testDir, "../search/hooks/usePlaygroundSelection.ts"),
+  path.resolve(testDir, "../search/PlaygroundHeader.tsx"),
+  path.resolve(testDir, "../search/PlaygroundPanel.tsx"),
+  path.resolve(testDir, "../search/PlaygroundRequestForm.tsx"),
+  path.resolve(testDir, "../search/SearchRequestForm.tsx"),
+  path.resolve(testDir, "../search/FetchRequestForm.tsx"),
+  path.resolve(testDir, "../search/ProviderPicker.tsx"),
+  path.resolve(testDir, "../search/SearchResultsView.tsx"),
+  path.resolve(testDir, "../search/SearchResultsSummary.tsx"),
+  path.resolve(testDir, "../search/SearchResultList.tsx"),
+  path.resolve(testDir, "../search/SearchResultInspector.tsx"),
+  path.resolve(testDir, "../search/FetchDocumentView.tsx"),
+]
+const playgroundSource = [playgroundPath, ...playgroundChildPaths]
+  .map((sourcePath) => readFileSync(sourcePath, "utf8"))
+  .join("\n")
 const appSource =
   readFileSync(appPath, "utf8") +
   "\n" +
