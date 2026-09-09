@@ -72,7 +72,13 @@ const tableSource = readFileSync(path.resolve(testDir, "../ui/table.tsx"), "utf8
 // P1-FINAL (blessed inversion): ProviderMatrix.tsx is DELETED by the merge —
 // no test may read it (the file is gone Green). Fleet-telemetry pins live in
 // SettingsProviders.p1-final.test.tsx.
-const appSource = readFileSync(path.resolve(testDir, "../../App.tsx"), "utf8")
+const appSource =
+  readFileSync(path.resolve(testDir, "../../App.tsx"), "utf8") +
+  "\n" +
+  readFileSync(
+    path.resolve(testDir, "../layout/DashboardContent.tsx"),
+    "utf8"
+  )
 const sidebarSource = readFileSync(path.resolve(testDir, "../layout/Sidebar.tsx"), "utf8")
 const indexCssSource = readFileSync(path.resolve(testDir, "../../index.css"), "utf8")
 

@@ -24,7 +24,13 @@ import { describe, it, expect } from "vitest"
 
 const layoutDir = import.meta.dirname
 const uiRoot = path.resolve(layoutDir, "../../..")
-const appSource = readFileSync(path.join(uiRoot, "src/App.tsx"), "utf8")
+const appSource =
+  readFileSync(path.join(uiRoot, "src/App.tsx"), "utf8") +
+  "\n" +
+  readFileSync(
+    path.join(uiRoot, "src/components/layout/DashboardContent.tsx"),
+    "utf8"
+  )
 const mainSource = readFileSync(path.join(uiRoot, "src/main.tsx"), "utf8")
 const sidebarSource = readFileSync(
   path.join(uiRoot, "src/components/layout/Sidebar.tsx"),

@@ -88,7 +88,13 @@ const pgf1Path = path.resolve(testDir, "../search/SearchPlayground.pg-f1.test.ts
 const simulatorSource = readFileSync(simulatorPath, "utf8")
 const strategySource = readFileSync(strategyPath, "utf8")
 const playgroundSource = readFileSync(playgroundPath, "utf8")
-const appSource = readFileSync(appPath, "utf8")
+const appSource =
+  readFileSync(appPath, "utf8") +
+  "\n" +
+  readFileSync(
+    path.resolve(testDir, "../layout/DashboardContent.tsx"),
+    "utf8"
+  )
 const pgf1Source = readFileSync(pgf1Path, "utf8")
 
 function renderRouting(providers: WireProviderStatus[] = allProvidersFixture()) {

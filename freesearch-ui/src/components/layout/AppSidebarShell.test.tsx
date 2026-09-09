@@ -34,7 +34,10 @@ import {
  */
 
 const testDir = import.meta.dirname
-const appSource = readFileSync(path.resolve(testDir, "../../App.tsx"), "utf8")
+const appSource =
+  readFileSync(path.resolve(testDir, "../../App.tsx"), "utf8") +
+  "\n" +
+  readFileSync(path.resolve(testDir, "./DashboardContent.tsx"), "utf8")
 const packageJsonRaw = readFileSync(
   path.resolve(testDir, "../../../package.json"),
   "utf8"

@@ -82,7 +82,10 @@ const composerShellPath = path.resolve(testDir, "../common/ComposerShell.tsx")
 const sidebarPath = path.resolve(testDir, "./Sidebar.tsx")
 const indexCssPath = path.resolve(testDir, "../../index.css")
 
-const appSource = readFileSync(appPath, "utf8")
+const appSource =
+  readFileSync(appPath, "utf8") +
+  "\n" +
+  readFileSync(path.resolve(testDir, "./DashboardContent.tsx"), "utf8")
 const playgroundSource = readFileSync(playgroundPath, "utf8")
 const routingSource = readFileSync(routingPath, "utf8")
 const composerShellSource = readFileSync(composerShellPath, "utf8")

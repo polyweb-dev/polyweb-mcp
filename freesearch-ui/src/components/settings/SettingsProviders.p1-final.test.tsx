@@ -71,7 +71,13 @@ import {
 
 const testDir = import.meta.dirname
 const settingsSource = readFileSync(path.resolve(testDir, "./SettingsProviders.tsx"), "utf8")
-const appSource = readFileSync(path.resolve(testDir, "../../App.tsx"), "utf8")
+const appSource =
+  readFileSync(path.resolve(testDir, "../../App.tsx"), "utf8") +
+  "\n" +
+  readFileSync(
+    path.resolve(testDir, "../layout/DashboardContent.tsx"),
+    "utf8"
+  )
 const sidebarSource = readFileSync(
   path.resolve(testDir, "../layout/Sidebar.tsx"),
   "utf8"
