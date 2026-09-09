@@ -1,6 +1,5 @@
 import React, { useState } from "react"
 import { useFreeSearch } from "@/context/useFreeSearch"
-import { Modal } from "@/components/common/Modal"
 import { ProviderLogo } from "@/components/common/ProviderLogo"
 import { SegmentedControl } from "@/components/common/SegmentedControl"
 import {
@@ -12,6 +11,8 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import type { UsageEvent } from "@/types/freesearch"
+import { StatusPill } from "./StatusPill"
+import { TraceDetailModal } from "./TraceDetailModal"
 
 type OperationFilter = "all" | "search" | "fetch"
 
@@ -127,61 +128,5 @@ export const ActivityStream: React.FC = () => {
   )
 }
 
-function statusColor(status: UsageEvent["status"]): string {
-  if (status === "success") return "var(--status-healthy)"
-  if (status === "fallback_recovered") return "var(--status-warning)"
-  return "var(--status-danger)"
-}
-
-const StatusPill: React.FC<{ status: UsageEvent["status"] }> = ({ status }) => (
-  <span
-    className="text-[12px] px-1.5 py-0.5 rounded font-medium"
-    style={{
-      color: statusColor(status),
-      background: "var(--elevated)",
-      border: "1px solid var(--border-subtle)",
-    }}
-  >
-    {status}
-  </span>
-)
-
-const TraceDetailModal: React.FC<{ event: UsageEvent; onClose: () => void }> = ({
-  event,
-  onClose,
-}) => (
-  <Modal isOpen onClose={onClose} title={`${event.operation} trace`} subtitle={event.timestamp}>
-    <div className="space-y-4 text-[13px]">
-      <div className="grid grid-cols-2 gap-4">
-        <div className="p-3 rounded bg-[var(--elevated)] border border-[var(--border-subtle)]">
-          <span className="text-[var(--muted)] block mb-1">Resolved provider</span>
-          <div className="flex items-center gap-2">
-            <ProviderLogo providerId={event.providerId} name={event.providerName} />
-            <p className="font-medium text-[var(--text-strong)]">{event.providerName}</p>
-          </div>
-        </div>
-
-        <div className="p-3 rounded bg-[var(--elevated)] border border-[var(--border-subtle)]">
-          <span className="text-[var(--muted)] block mb-1">Roundtrip latency</span>
-          <p className="text-[var(--text-strong)] tnum">
-            {event.latencyMs === null ? "—" : `${event.latencyMs}ms`}
-          </p>
-        </div>
-      </div>
-
-      <div>
-        <span className="text-[var(--muted)] block mb-1">Arbitration reason</span>
-        <p className="p-3 rounded bg-[var(--elevated)] text-[var(--text)] border border-[var(--border-subtle)] leading-relaxed">
-          {event.routeReason}
-        </p>
-      </div>
-
-      <div>
-        <span className="text-[var(--muted)] block mb-1">Execution hop cascade</span>
-        <p className="p-3 rounded bg-[var(--elevated)] text-[var(--text)] border border-[var(--border-subtle)] tnum">
-          {event.fallbackChain.join(" → ")}
-        </p>
-      </div>
-    </div>
-  </Modal>
-)
+export { StatusPill } from "./StatusPill"
+export { TraceDetailModal } from "./TraceDetailModal"
