@@ -17,37 +17,48 @@ type RoutingConfigPatch = Partial<BackendRoutingConfig>
 type ProviderPatch = { enabled?: boolean; priority?: number }
 
 export class FreeSearchApiService {
-  private async request<T>(path: string, init?: RequestInit): Promise<T> {
+  private buildJsonHeaders(init?: RequestInit): Headers {
     const headers = new Headers(init?.headers)
     if (init?.body !== undefined && !headers.has("Content-Type")) {
       headers.set("Content-Type", "application/json")
     }
+    return headers
+  }
 
+  private async throwForStatus(
+    response: Response,
+    body: unknown
+  ): Promise<never | void> {
+    if (!response.ok) {
+      const detail = parseDetail(body)
+      throw new ApiError(response.status, detail, body)
+    }
+  }
+
+  private throwNormalizedNetworkError(error: unknown): never {
+    if (error instanceof ApiError) throw error
+    if (isAbortOrTimeout(error)) {
+      const detail =
+        error && typeof error === "object" && "message" in error
+          ? String((error as { message?: unknown }).message ?? "timeout")
+          : "timeout"
+      throw new ApiError(0, statusMessage(0, detail), error)
+    }
+    if (error instanceof TypeError) {
+      throw new ApiError(0, statusMessage(0, error.message), error)
+    }
+    throw error
+  }
+
+  private async request<T>(path: string, init?: RequestInit): Promise<T> {
+    const headers = this.buildJsonHeaders(init)
     try {
-      const response = await fetch(`${API_BASE}${path}`, {
-        ...init,
-        headers,
-      })
+      const response = await fetch(`${API_BASE}${path}`, { ...init, headers })
       const body = await this.readBody(response)
-      if (!response.ok) {
-        const detail = parseDetail(body)
-        throw new ApiError(response.status, detail, body)
-      }
+      await this.throwForStatus(response, body)
       return body as T
     } catch (error) {
-      if (error instanceof ApiError) throw error
-      if (isAbortOrTimeout(error)) {
-        const detail =
-          error && typeof error === "object" && "message" in error
-            ? String((error as { message?: unknown }).message ?? "timeout")
-            : "timeout"
-        throw new ApiError(0, statusMessage(0, detail), error)
-      }
-      if (error instanceof TypeError) {
-        const detail = statusMessage(0, error.message)
-        throw new ApiError(0, detail, error)
-      }
-      throw error
+      this.throwNormalizedNetworkError(error)
     }
   }
 
