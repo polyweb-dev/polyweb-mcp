@@ -8,8 +8,15 @@ export default defineConfig({
     globals: true,
     environment: "jsdom",
     setupFiles: ["./src/test/setup.ts"],
-    // Playwright-BDD emits Playwright specs under tests/features-gen; never run them under vitest.
-    exclude: ["node_modules", "dist", "tests/features-gen/**", "test-results/**", "playwright-report/**"],
+    include: ["src/**/*.{test,spec}.{ts,tsx}"],
+    exclude: [
+      "node_modules",
+      "dist",
+      ".stryker-tmp/**",
+      "tests/**",
+      "test-results/**",
+      "playwright-report/**"
+    ],
     // worker_threads avoid subprocess pipes, which restricted sandboxes deny
     pool: "threads",
   },

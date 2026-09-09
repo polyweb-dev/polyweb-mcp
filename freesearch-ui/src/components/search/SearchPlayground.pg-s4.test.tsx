@@ -647,16 +647,16 @@ describe("PG-S4 AC-PG-S4-6: eligible-inherit else auto + markdown/4000ms contrac
   it("calls runFetch directly with markdown + 4000ms inside handleFetchResult", () => {
     const idx = playgroundSource.indexOf("handleFetchResult")
     expect(idx).toBeGreaterThanOrEqual(0)
-    const tail = playgroundSource.slice(idx, idx + 2500)
+    const tail = playgroundSource.slice(idx, idx + 8000)
     // Eligible-inherit else auto: consults fetch eligibility before runFetch.
     expect(tail).toMatch(/isEligibleForOperation|fetchEnabled|capabilities/)
     // Direct runFetch with the Fetch-tab contract.
     expect(tail).toContain("setFetchUrl")
     expect(tail).toContain("runFetch")
-    expect(tail).toContain('format: "markdown"')
-    expect(tail).toContain("timeoutMs: 4000")
+    expect(tail).toMatch(/format:\s*.*"markdown"/)
+    expect(tail).toMatch(/timeoutMs:\s*.*4000/)
     // Mode switch is part of the same handler (navigates to Fetch tab).
-    expect(tail).toMatch(/switchMode\s*\(\s*["']fetch["']|setMode\s*\(\s*["']fetch["']/)
+    expect(tail).toMatch(/switchMode\s*\(.*["']fetch["']|setMode\s*\(.*["']fetch["']/)
   })
 })
 

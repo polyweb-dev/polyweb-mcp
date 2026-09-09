@@ -2,9 +2,24 @@
   "$schema": "https://json.schemastore.org/stryker.json",
   "testRunner": "vitest",
   "plugins": ["@stryker-mutator/vitest-runner"],
-  "vitest": { "configFile": "vitest.mutate.config.ts" },
-  "mutate": ["src/model/adapters.ts", "src/api/sessions.ts", "src/hooks/useMonitor.ts"],
+  "vitest": {
+    "configFile": "vitest.mutate.config.ts"
+  },
+  "mutate": [
+    "src/**/*.{ts,tsx}",
+    "!src/**/*.{test,spec}.{ts,tsx}",
+    "!src/test/**",
+    "!src/main.tsx"
+  ],
   "concurrency": 4,
+  "coverageAnalysis": "perTest",
+  "ignoreStatic": true,
+  "dryRunTimeoutMinutes": 10,
+  "timeoutMS": 15000,
+  "reporters": ["html", "clear-text", "progress"],
+  "htmlReporter": {
+    "fileName": "coverage/stryker/index.html"
+  },
   "tempDirName": ".stryker-tmp",
   "cleanTempDir": "always"
 }

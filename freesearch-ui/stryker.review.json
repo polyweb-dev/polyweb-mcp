@@ -1,9 +1,0 @@
-{  
-  "testRunner": "vitest",  
-  "plugins": ["@stryker-mutator/vitest-runner"],  
-  "vitest": { "configFile": "vitest.review.config.ts" },  
-  "mutate": ["src/components/inspector/Inspector.tsx", "src/components/inspector/ToolCall.tsx", "src/components/inspector/MarkdownContent.tsx", "src/components/inspector/SubtaskBlock.tsx"],  
-  "concurrency": 4,  
-  "tempDirName": ".stryker-tmp",  
-  "cleanTempDir": "always"  
-}  
