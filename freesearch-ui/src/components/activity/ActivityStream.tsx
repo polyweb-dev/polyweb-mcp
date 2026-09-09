@@ -1,6 +1,7 @@
 import React, { useState } from "react"
 import { useFreeSearch } from "@/context/useFreeSearch"
 import { Modal } from "@/components/common/Modal"
+import { ProviderLogo } from "@/components/common/ProviderLogo"
 import { SegmentedControl } from "@/components/common/SegmentedControl"
 import {
   Table,
@@ -103,7 +104,12 @@ export const ActivityStream: React.FC = () => {
                     {new Date(evt.timestamp).toLocaleTimeString()}
                   </TableCell>
                   <TableCell className="px-4 py-2.5 capitalize text-[var(--text)]">{evt.operation}</TableCell>
-                  <TableCell className="px-4 py-2.5"><span className="font-medium text-[var(--text-strong)]">{evt.providerName}</span></TableCell>
+                  <TableCell className="px-4 py-2.5">
+                    <div className="flex items-center gap-2">
+                      <ProviderLogo providerId={evt.providerId} name={evt.providerName} />
+                      <span className="font-medium text-[var(--text-strong)]">{evt.providerName}</span>
+                    </div>
+                  </TableCell>
                   <TableCell className="px-4 py-2.5 text-center"><StatusPill status={evt.status} /></TableCell>
                   <TableCell className="px-4 py-2.5 text-right text-[var(--text)] tnum">
                     {evt.latencyMs === null ? "—" : `${evt.latencyMs}ms`}
@@ -149,7 +155,10 @@ const TraceDetailModal: React.FC<{ event: UsageEvent; onClose: () => void }> = (
       <div className="grid grid-cols-2 gap-4">
         <div className="p-3 rounded bg-[var(--elevated)] border border-[var(--border-subtle)]">
           <span className="text-[var(--muted)] block mb-1">Resolved provider</span>
-          <p className="font-medium text-[var(--text-strong)]">{event.providerName}</p>
+          <div className="flex items-center gap-2">
+            <ProviderLogo providerId={event.providerId} name={event.providerName} />
+            <p className="font-medium text-[var(--text-strong)]">{event.providerName}</p>
+          </div>
         </div>
 
         <div className="p-3 rounded bg-[var(--elevated)] border border-[var(--border-subtle)]">

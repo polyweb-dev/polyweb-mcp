@@ -1,5 +1,6 @@
 import React, { useState } from "react"
 import { useFreeSearch } from "@/context/useFreeSearch"
+import { ProviderLogo } from "@/components/common/ProviderLogo"
 import type { ProviderConfig } from "@/types/freesearch"
 
 const STATUS_LABELS: Record<ProviderConfig["keyVaultStatus"], string> = {
@@ -121,7 +122,10 @@ const KeyCard: React.FC<KeyCardProps> = ({
   return (
     <div className="p-4 rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] hover:bg-[var(--elevated)] transition-colors space-y-2.5">
       <div className="flex items-center justify-between gap-3">
-        <span className="text-[13px] font-medium text-[var(--text-strong)]">{provider.name}</span>
+        <div className="flex items-center gap-2 min-w-0">
+          <ProviderLogo providerId={provider.id} />
+          <span className="text-[13px] font-medium text-[var(--text-strong)] truncate">{provider.name}</span>
+        </div>
         <span
           className="text-[12px] px-2 py-0.5 rounded font-medium whitespace-nowrap"
           style={{

@@ -13,6 +13,7 @@ import {
 } from "@/components/common/PillTabs"
 import { Button } from "@/components/ui/button"
 import { ComposerShell } from "@/components/common/ComposerShell"
+import { ProviderLogo } from "@/components/common/ProviderLogo"
 import type { SearchResult } from "@/types/freesearch"
 
 const PLAYGROUND_VIEW_OPTIONS = [
@@ -433,7 +434,10 @@ export const SearchPlayground: React.FC = () => {
                           </p>
 
                           <div className="flex items-center gap-3 text-[12px] text-[var(--muted)] pt-1">
-                            <span className="text-[var(--text-strong)]">{res.providerName}</span>
+                            <span className="inline-flex items-center gap-1.5 text-[var(--text-strong)]">
+                              <ProviderLogo providerId={res.providerId} name={res.providerName} className="size-3.5" />
+                              {res.providerName}
+                            </span>
                             <span className="tnum">
                               {Math.round(res.relevanceScore * 100)}% match
                             </span>

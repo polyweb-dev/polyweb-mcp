@@ -2,6 +2,7 @@ import React from "react"
 import { useFreeSearch } from "@/context/useFreeSearch"
 import type { RoutingPreset } from "@/types/freesearch"
 import { getEligibleProviders } from "./routingUtils"
+import { ProviderLogo } from "@/components/common/ProviderLogo"
 import { cn } from "@/lib/utils"
 
 interface StrategyCard {
@@ -155,6 +156,7 @@ const StrategyCardButton: React.FC<StrategyCardButtonProps> = ({
             <span className="text-[12px] px-1.5 py-0.5 rounded bg-[var(--signal-muted)] text-[var(--signal)] font-medium">
               Primary
             </span>
+            <ProviderLogo providerId={primary.id} />
             <span className="text-[13px] text-[var(--text-strong)]">{primary.name}</span>
             <span className="text-[13px] text-[var(--muted)] tnum ml-auto">
               {primary.latencyP95Ms === null ? "—" : `${primary.latencyP95Ms} ms`} p95

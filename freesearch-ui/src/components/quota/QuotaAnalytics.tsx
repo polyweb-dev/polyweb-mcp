@@ -2,6 +2,7 @@ import React from "react"
 import { Clock, Database, Gauge } from "lucide-react"
 import { useFreeSearch } from "@/context/useFreeSearch"
 import { catalogNameOf } from "@/services/api/providerCatalog"
+import { ProviderLogo } from "@/components/common/ProviderLogo"
 import type { DashboardQuota, ProviderConfig } from "@/types/freesearch"
 
 export const QuotaAnalytics: React.FC = () => {
@@ -83,9 +84,12 @@ export const QuotaAnalytics: React.FC = () => {
                 key={`${total.provider}-${total.operation}`}
                 className="grid grid-cols-[1fr_1fr_1fr] items-center py-3 px-4 border-b last:border-b-0 border-[var(--border-subtle)]"
               >
-                <span className="text-[13px] font-medium text-[var(--text-strong)]">
-                  {catalogNameOf(total.provider) ?? total.provider}
-                </span>
+                <div className="flex items-center gap-2 min-w-0">
+                  <ProviderLogo providerId={total.provider} name={catalogNameOf(total.provider)} />
+                  <span className="text-[13px] font-medium text-[var(--text-strong)] truncate">
+                    {catalogNameOf(total.provider) ?? total.provider}
+                  </span>
+                </div>
                 <span className="text-[13px] capitalize text-[var(--muted)]">{total.operation}</span>
                 <span className="text-right text-[13px] tnum text-[var(--text)]">{total.total_units}</span>
               </div>
@@ -130,7 +134,10 @@ const QuotaRow: React.FC<QuotaRowProps> = ({ provider, latestQuota }) => {
     : 0
   return (
     <div className="grid grid-cols-[1fr_1fr_1.5fr] items-center gap-4 py-3 px-4 border-b last:border-b-0 border-[var(--border-subtle)]">
-      <span className="text-[13px] font-medium text-[var(--text-strong)]">{provider.name} quota</span>
+      <span className="flex items-center gap-2 min-w-0 text-[13px] font-medium text-[var(--text-strong)]">
+        <ProviderLogo providerId={provider.id} />
+        {provider.name} quota
+      </span>
       <span className="text-[13px] text-[var(--muted)]">{quota.resetPeriod ?? "—"}</span>
       <div className="flex items-center gap-3">
         {hasValues && (

@@ -2,6 +2,7 @@ import React, { useState } from "react"
 import { ArrowDown, ArrowUp, RefreshCw } from "lucide-react"
 import { useFreeSearch } from "@/context/useFreeSearch"
 import { Modal } from "@/components/common/Modal"
+import { ProviderLogo } from "@/components/common/ProviderLogo"
 import { Switch } from "@/components/common/Switch"
 import { Button } from "@/components/ui/button"
 import {
@@ -200,6 +201,7 @@ const ProviderRegistryRow: React.FC<ProviderRegistryRowProps> = ({
             onMovePriority={onMovePriority}
           />
           <div className="flex items-center gap-2">
+            <ProviderLogo providerId={provider.id} />
             <span className="font-medium text-[var(--text-strong)]">{provider.name}</span>
             {provider.isCustom && <RowPill tone="signal">custom</RowPill>}
             {provider.capabilities.includes("keyless_tier") && (

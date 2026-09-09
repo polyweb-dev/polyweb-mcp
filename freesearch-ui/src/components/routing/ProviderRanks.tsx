@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from "react"
 import { Search } from "lucide-react"
 import { useFreeSearch } from "@/context/useFreeSearch"
+import { ProviderLogo } from "@/components/common/ProviderLogo"
 import { SegmentedControl } from "@/components/common/SegmentedControl"
 import {
   Table,
@@ -141,6 +142,7 @@ const RankRow: React.FC<{ provider: ProviderConfig; rank: number; role: string }
     <TableCell className="px-3 py-2.5 text-[var(--muted)] tnum">#{rank}</TableCell>
     <TableCell className="px-3 py-2.5">
       <div className="flex items-center gap-2 min-w-0">
+        <ProviderLogo providerId={provider.id} />
         <span className="font-medium text-[var(--text-strong)] truncate">{provider.name}</span>
         {provider.capabilities.includes("keyless_tier") && (
           <span className="text-[12px] px-1 rounded bg-[var(--elevated)] text-[var(--muted)]">

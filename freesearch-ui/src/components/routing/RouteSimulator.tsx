@@ -2,6 +2,7 @@ import React, { useState } from "react"
 import { Search } from "lucide-react"
 import { useFreeSearch } from "@/context/useFreeSearch"
 import { ComposerShell } from "@/components/common/ComposerShell"
+import { ProviderLogo } from "@/components/common/ProviderLogo"
 import { SegmentedControl } from "@/components/common/SegmentedControl"
 import type { ProviderConfig } from "@/types/freesearch"
 import { getEligibleProviders, getProviderReason } from "./routingUtils"
@@ -207,9 +208,12 @@ const ProviderStep: React.FC<{
     </span>
     <div className="flex-1 min-w-0">
       <div className="flex items-center justify-between gap-2">
-        <span className="text-[13px] font-semibold text-[var(--text-strong)]">
-          {provider.name}
-        </span>
+        <div className="flex items-center gap-2 min-w-0">
+          <ProviderLogo providerId={provider.id} />
+          <span className="text-[13px] font-semibold text-[var(--text-strong)] truncate">
+            {provider.name}
+          </span>
+        </div>
         {highlight && (
           <span className="text-[12px] px-1.5 py-0.5 rounded bg-[var(--signal-muted)] text-[var(--signal)] font-medium">
             Primary
@@ -246,6 +250,7 @@ const FallbackCascade: React.FC<{
       >
         <div className="flex items-center gap-2.5 min-w-0">
           <span className="text-[12px] text-[var(--muted)] tnum">#{idx + 2}</span>
+          <ProviderLogo providerId={fallback.id} />
           <span className="text-[13px] font-medium text-[var(--text)] truncate">
             {fallback.name}
           </span>
