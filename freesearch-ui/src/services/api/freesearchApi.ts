@@ -2,6 +2,8 @@ import type {
   BackendDashboard,
   BackendFetchRequest,
   BackendFetchResponse,
+  BackendManualQuota,
+  BackendManualQuotaPayload,
   BackendProviderStatus,
   BackendProviderTest,
   BackendRoutingConfig,
@@ -135,6 +137,38 @@ export class FreeSearchApiService {
 
   getDashboard(limit = 50): Promise<BackendDashboard> {
     return this.request<BackendDashboard>(`/dashboard?limit=${limit}`)
+  }
+
+  /**
+   * Manually entered billing window for one provider. A 404 means no manual
+   * entry is configured (honest null, not an error) — every other failure
+   * surfaces as ApiError via the shared request() mapping.
+   */
+  async getManualQuota(backendId: string): Promise<BackendManualQuota | null> {
+    try {
+      return await this.request<BackendManualQuota>(
+        `/api/v1/providers/${backendId}/manual-quota`
+      )
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404) return null
+      throw error
+    }
+  }
+
+  putManualQuota(
+    backendId: string,
+    payload: BackendManualQuotaPayload
+  ): Promise<BackendManualQuota> {
+    return this.request<BackendManualQuota>(
+      `/api/v1/providers/${backendId}/manual-quota`,
+      { method: "PUT", body: JSON.stringify(payload) }
+    )
+  }
+
+  async deleteManualQuota(backendId: string): Promise<void> {
+    await this.request<unknown>(`/api/v1/providers/${backendId}/manual-quota`, {
+      method: "DELETE",
+    })
   }
 }
 

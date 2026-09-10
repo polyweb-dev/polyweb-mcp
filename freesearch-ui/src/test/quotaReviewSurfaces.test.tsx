@@ -1,11 +1,12 @@
 import React from "react"
 import { describe, it, expect, afterEach, vi } from "vitest"
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { FreeSearchProvider } from "@/context/FreeSearchContext"
 import { ProviderRanks } from "@/components/routing/ProviderRanks"
 import { RouteSimulator } from "@/components/routing/RouteSimulator"
 import { SettingsView } from "@/components/settings/SettingsView"
+import { QuotaAnalytics } from "@/components/quota/QuotaAnalytics"
 import { installFetchStub, ok, err } from "@/test/fetchMock"
 import {
   allProvidersFixture,
@@ -22,7 +23,7 @@ import {
  * - RF3: same-unit guidance caption in ranks/simulator tables; unit included
  *   in the fallback tooltip. No routing-state inference.
  * - RF4: visible (not title-only) unavailable/confidence semantics in the
- *   Settings registry table AND test modal.
+ *   Settings test modal AND Usage quota view (registry carries no Quota/p95 columns).
  *
  * Deterministic: fixed fixtures, mocked fetch, no Date.now, no network.
  * Explicit non-goals (NOT asserted here): exhausted/hard/soft pills, routing
@@ -109,6 +110,30 @@ async function waitForSettings() {
   })
 }
 
+function renderUsage(dashboard: WireDashboard) {
+  installFetchStub((req) => {
+    if (req.url === "/api/v1/providers" && req.method === "GET") {
+      return ok(allProvidersFixture())
+    }
+    if (req.url === "/api/v1/routing/config" && req.method === "GET") {
+      return ok(routingConfigFixture())
+    }
+    if (req.url.startsWith("/dashboard")) return ok(dashboard)
+    return err(404, { detail: "unhandled test route" })
+  })
+  return render(
+    <FreeSearchProvider>
+      <QuotaAnalytics />
+    </FreeSearchProvider>
+  )
+}
+
+async function waitForUsage() {
+  await waitFor(() => {
+    expect(screen.getByText("Usage totals", { exact: true })).toBeInTheDocument()
+  })
+}
+
 describe("RF2: null limits render as — on ranks / simulator / settings", () => {
   afterEach(() => {
     vi.unstubAllGlobals()
@@ -141,13 +166,25 @@ describe("RF2: null limits render as — on ranks / simulator / settings", () =>
     expect(body).toContain("—")
   })
 
-  it("settings registry shows — for null limits, never ∞", async () => {
+  it("quota drill-down + Usage view show em-dash blanks for null limits, never infinity", async () => {
+    const user = userEvent.setup()
     renderSettings(dashboardFixture())
     await waitForSettings()
 
-    const table = screen.getByRole("table")
-    expect(table.textContent).not.toContain("∞")
-    expect(table.textContent).toContain("—")
+    // Registry carries no quota cells, so it must never invent an infinity marker.
+    expect(screen.getByRole("table").textContent).not.toContain("∞")
+    // Tavily (no snapshot) renders a null-limit blank in the drill-down quota value.
+    await user.click(screen.getByRole("button", { name: "Tavily test connection" }))
+    const dialog = await screen.findByRole("dialog")
+    expect(dialog.textContent).not.toContain("∞")
+    expect(dialog.textContent).toMatch(/[\u2014]/)
+    cleanup()
+
+    renderUsage(dashboardFixture())
+    await waitForUsage()
+    const body = document.body.textContent ?? ""
+    expect(body).not.toContain("∞")
+    expect(body).toMatch(/[\u2014]/)
   })
 
   it("RF1 verbatim: canonical Tavily limit '100000.10' survives on the ranks surface", async () => {
@@ -223,12 +260,13 @@ describe("RF3: normalized-percentage guidance and native tooltip units", () => {
   })
 })
 
-describe("RF4: visible unavailable/confidence semantics in Settings", () => {
+describe("RF4: visible unavailable/confidence semantics in Settings modal + Usage view", () => {
   afterEach(() => {
     vi.unstubAllGlobals()
   })
 
-  it("registry quota cells show confidence/unavailable visibly, not title-only", async () => {
+  it("registry carries no Quota/p95 columns; confidence lives in the modal + Usage quota view", async () => {
+    const user = userEvent.setup()
     renderSettings(dashboardFixture({ latest_quota: canonicalQuotasFixture() }))
     await waitForSettings()
 
@@ -236,41 +274,56 @@ describe("RF4: visible unavailable/confidence semantics in Settings", () => {
     const headers = Array.from(table.querySelectorAll("thead th")).map(
       (th) => th.textContent?.trim() ?? ""
     )
-    const quotaIdx = headers.indexOf("Quota")
-    expect(quotaIdx).toBeGreaterThanOrEqual(0)
+    expect(headers).not.toContain("Quota")
+    expect(headers).not.toContain("p95")
     const rows = Array.from(table.querySelectorAll("tbody tr"))
     expect(rows.length).toBe(7)
-    // Visible text (not title attributes) must carry confidence semantics.
-    const visibleQuotaText = rows
-      .map((row) => row.children[quotaIdx]?.textContent ?? "")
-      .join(" | ")
-    expect(visibleQuotaText).toMatch(/authoritative|observed|estimated|unavailable|no quota|—/i)
-    // And the confidence must not hide in title-only attributes.
-    const quotaCells = rows.map((row) => row.children[quotaIdx] as HTMLElement)
-    const anyVisibleConfidence = quotaCells.some((cell) =>
-      /authoritative|observed|estimated|unavailable/i.test(cell.textContent ?? "")
+    for (const row of rows) {
+      expect(row.children).toHaveLength(headers.length)
+    }
+    // Drill-down still carries visible confidence semantics (not title-only).
+    const braveRow = screen.getByText("Brave Search", { exact: true }).closest("tr")!
+    const testIdx = headers.indexOf("Test")
+    expect(testIdx).toBeGreaterThanOrEqual(0)
+    await user.click(
+      within(braveRow.children[testIdx] as HTMLElement).getByRole("button", { name: /brave.*test/i })
     )
-    expect(anyVisibleConfidence).toBe(true)
+    const dialog = await screen.findByRole("dialog")
+    expect(dialog.textContent).toMatch(/authoritative|observed|estimated|unavailable|no quota/i)
   })
 
-  it("registry leads with normalized remaining capacity and its period", async () => {
+  it("modal + Usage quota view lead with normalized remaining capacity and its period", async () => {
+    const user = userEvent.setup()
     renderSettings(dashboardFixture({ latest_quota: canonicalQuotasFixture() }))
     await waitForSettings()
 
-    expect(screen.getByTestId("settings-quota-headline-brave")).toHaveTextContent("95% remaining")
-    const braveRow = screen.getByText("Brave Search", { exact: true }).closest("tr")!
-    expect(braveRow.textContent).toMatch(/95% remaining.*monthly.*950\/1000 requests/i)
+    await user.click(screen.getByRole("button", { name: "Brave Search test connection" }))
+    const dialog = await screen.findByRole("dialog")
+    expect(dialog.textContent).toMatch(/95% remaining/)
+    expect(dialog.textContent).toMatch(/950\/1000 requests/)
+    cleanup()
 
-    const keenableRow = screen.getByText("Keenable", { exact: true }).closest("tr")!
-    expect(keenableRow.textContent).toMatch(/hourly quota pending.*rolling hour/i)
+    renderUsage(dashboardFixture({ latest_quota: canonicalQuotasFixture() }))
+    await waitForUsage()
+    expect(screen.getByTestId("quota-remaining-percent-brave")).toHaveTextContent("95% remaining")
+    const usageBody = document.body.textContent ?? ""
+    expect(usageBody).toMatch(/95% remaining.*monthly.*950\/1000 requests/i)
+    expect(usageBody).toMatch(/hourly quota pending.*rolling hour/i)
   })
 
-  it("registry shows a visible unavailable marker when the dashboard has no snapshots", async () => {
+  it("modal + Usage view show a visible unavailable marker when the dashboard has no snapshots", async () => {
+    const user = userEvent.setup()
     renderSettings(dashboardFixture({ latest_quota: [] }))
     await waitForSettings()
 
-    const table = screen.getByRole("table")
-    expect(table.textContent).toMatch(/unavailable|no quota|—/i)
+    await user.click(screen.getByRole("button", { name: "Brave Search test connection" }))
+    const dialog = await screen.findByRole("dialog")
+    expect(dialog.textContent).toMatch(/unavailable|no quota|[\u2014]/i)
+    cleanup()
+
+    renderUsage(dashboardFixture({ latest_quota: [] }))
+    await waitForUsage()
+    expect(document.body.textContent).toMatch(/unavailable|no quota|[\u2014]/i)
   })
 
   it("test modal shows quota confidence/unavailable visibly, not title-only", async () => {

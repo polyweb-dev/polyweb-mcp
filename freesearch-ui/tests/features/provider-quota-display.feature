@@ -37,6 +37,23 @@ Feature: Provider quota display stays honest
     And the usage view should show "—"
     And the usage view should not show "∞"
 
+  @stub @quota @manual
+  Scenario: Brave manual budget entry shows an estimated overlay
+    Given the stubbed dashboard shows "Brave observed quota"
+    And the stubbed manual quota for "brave" is empty
+    When I navigate directly to "/usage"
+    And I open the manual budget entry for provider "brave"
+    And I enter the manual billing window "2026-09-01" to "2026-09-30" with allowance "5.00" and usage "0.88"
+    And I save the manual budget entry
+    Then the usage view should show "82.4% remaining"
+    And the usage view should show "manual entry"
+    And the manual overlay progress bar for provider "brave" should show "82.4"
+    And the usage view should show "Vendor: 950/1000 requests"
+    And the usage view should show "observed"
+    And the usage view should show "estimated"
+    And the usage view should not show "95% remaining"
+    And the usage view should not show "∞"
+
   @stub @quota @keenable
   Scenario: Keenable keyless pool renders rolling hourly headroom
     Given the stubbed dashboard shows "Keenable keyless quota"

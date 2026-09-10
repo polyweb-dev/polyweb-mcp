@@ -48,6 +48,21 @@ interface StubRouting {
   max_attempts: number
 }
 
+/**
+ * In-memory manual billing entries for manual-quota scenarios. Mutated (never
+ * reassigned) so route closures registered by installBackendStub always see
+ * the current per-scenario state; writes via PUT persist for the scenario.
+ */
+const stubbedManualQuotas: Record<string, Record<string, unknown>> = {}
+
+export function setStubbedManualQuota(
+  provider: string,
+  entry: Record<string, unknown> | null
+): void {
+  if (entry === null) delete stubbedManualQuotas[provider]
+  else stubbedManualQuotas[provider] = entry
+}
+
 const SECRET_PRESENCE: Record<string, SecretPresence> = {
   brave: "configured",
   keenable: "keyless_public",
@@ -163,7 +178,30 @@ export async function installBackendStub(page: Page): Promise<void> {
     return route.fallback()
   })
 
-  // Provider connectivity probes: fixed healthy answers, never live state.
+  // Manual billing entries: GET 404s while unconfigured, PUT stores the window,
+  // DELETE clears it again. Writes persist per scenario via stubbedManualQuotas.
+  await page.route("**/api/v1/providers/*/manual-quota", (route) => {
+    const method = route.request().method()
+    const parts = new URL(route.request().url()).pathname.split("/")
+    const backendId = parts[parts.length - 2] || ""
+    if (method === "GET") {
+      const entry = stubbedManualQuotas[backendId]
+      if (!entry) return json(route, { detail: "no manual quota for " + backendId }, 404)
+      return json(route, entry)
+    }
+    if (method === "PUT") {
+      const body = readJsonBody(route)
+      const stored: Record<string, unknown> = { provider: backendId }
+      for (const key of Object.keys(body)) stored[key] = body[key]
+      stubbedManualQuotas[backendId] = stored
+      return json(route, stored)
+    }
+    if (method === "DELETE") {
+      delete stubbedManualQuotas[backendId]
+      return json(route, { provider: backendId, deleted: true })
+    }
+    return route.fallback()
+  })
   await page.route("**/api/v1/providers/*/test", (route) => {
     if (route.request().method() !== "POST") return route.fallback()
     const segments = new URL(route.request().url()).pathname.split("/")

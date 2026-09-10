@@ -3,7 +3,7 @@
 This module is the control surface's service layer: it resolves effective
 provider configuration (defaults <- env JSON <- persisted), applies the
 persisted routing policy, resolves secret presence without ever exposing or
-persisting raw keys, and serves the eight ``/api/v1`` endpoints. Provider keys
+persisting raw keys, and serves the ``/api/v1`` endpoints. Provider keys
 are written only through the injected :class:`SecretStore`; fingerprints are
 derived in memory and are the only secret-adjacent value ever persisted.
 """
@@ -26,14 +26,20 @@ from freesearch.contracts import (
     CircuitBreakerStatusResponse,
     CostPreset,
     HealthStatus,
+    ManualQuota,
+    ManualQuotaResponse,
+    ManualQuotaUpdate,
     ProviderHealth,
     ProviderStatusResponse,
     ProviderTestResponse,
+    QuotaSource,
     RoutingConfigResponse,
     RoutingConfigUpdate,
     SecretPresence,
     SecretStatusResponse,
     SetSecretRequest,
+    manual_quota_remaining,
+    manual_quota_remaining_percent,
 )
 from freesearch.logging import redact_secrets
 from freesearch.monitoring import latency_p95_ms
@@ -50,9 +56,11 @@ SecretSource = Literal["environment", "dotenv", "keyring", "none"]
 
 _ROUTING_KEY = "routing"
 
+_MANUAL_QUOTA_PREFIX = "manual_quota:"
+
 
 def register_control_routes(app: FastAPI) -> None:
-    """Register the eight control-plane endpoints on ``app`` under ``/api/v1``.
+    """Register the control-plane endpoints on ``app`` under ``/api/v1``.
 
     Routes are registered directly on the application router (rather than via
     ``include_router``) so every entry in ``app.routes`` stays a plain route
@@ -220,6 +228,46 @@ def register_control_routes(app: FastAPI) -> None:
         )
         await persist_routing_config(repository, merged)
         return merged
+
+    _register_manual_quota_routes(app)
+
+
+def _register_manual_quota_routes(app: FastAPI) -> None:
+    """Register the routing-neutral billing-anchor overlay routes."""
+
+    @app.get(
+        "/api/v1/providers/{provider_id}/manual-quota",
+        response_model=ManualQuotaResponse,
+    )
+    async def get_manual_quota(provider_id: str, request: Request) -> ManualQuotaResponse:
+        """Return the operator-entered billing anchor; never touches routing."""
+
+        name = _require_provider(provider_id)
+        stored = await load_manual_quota(request.app.state.repository, name)
+        if stored is None:
+            raise HTTPException(status_code=404, detail=f"no manual quota for {provider_id!r}")
+        return stored
+
+    @app.put(
+        "/api/v1/providers/{provider_id}/manual-quota",
+        response_model=ManualQuotaResponse,
+    )
+    async def put_manual_quota(
+        provider_id: str, update: ManualQuotaUpdate, request: Request
+    ) -> ManualQuotaResponse:
+        """Store the billing anchor and return the ESTIMATED capacity view."""
+
+        name = _require_provider(provider_id)
+        return await persist_manual_quota(
+            request.app.state.repository, name, update, datetime.now(UTC)
+        )
+
+    @app.delete("/api/v1/providers/{provider_id}/manual-quota", status_code=204)
+    async def delete_manual_quota(provider_id: str, request: Request) -> None:
+        """Clear the billing anchor idempotently; the overlay never steers routing."""
+
+        name = _require_provider(provider_id)
+        await clear_manual_quota(request.app.state.repository, name)
 
 
 def secret_fingerprint(provider: str, key: str) -> str:
@@ -455,6 +503,94 @@ async def persist_secret_record(
     await repository.set_runtime_setting(
         _secret_key(provider), {"fingerprint": fingerprint, "updated_at": _iso(now)}
     )
+
+
+def _manual_quota_key(provider: ProviderName) -> str:
+    """Return the runtime-settings key for a provider billing anchor."""
+
+    return f"{_MANUAL_QUOTA_PREFIX}{provider.value}"
+
+
+def _manual_quota_response(
+    provider: ProviderName, quota: ManualQuota, updated_at: datetime
+) -> ManualQuotaResponse:
+    """Build the ESTIMATED capacity view with Decimal-exact derived fields."""
+
+    return ManualQuotaResponse(
+        provider=provider.value,
+        billing_start=quota.billing_start,
+        billing_end=quota.billing_end,
+        allowance=quota.allowance,
+        current_usage=quota.current_usage,
+        remaining=manual_quota_remaining(quota.allowance, quota.current_usage),
+        remaining_percent=manual_quota_remaining_percent(quota.allowance, quota.current_usage),
+        source=QuotaSource.ESTIMATED,
+        updated_at=updated_at,
+        note=quota.note,
+    )
+
+
+async def load_manual_quota(
+    repository: SQLiteRepository | None, provider: ProviderName
+) -> ManualQuotaResponse | None:
+    """Return the stored billing anchor view, or None when absent/corrupt."""
+
+    payload = await _safe_runtime_setting(repository, _manual_quota_key(provider))
+    if not isinstance(payload, dict):
+        return None
+    raw_updated_at = payload.get("updated_at")
+    quota_payload = {
+        key: payload.get(key)
+        for key in (
+            "billing_start",
+            "billing_end",
+            "allowance",
+            "current_usage",
+            "note",
+        )
+    }
+    try:
+        quota = ManualQuota.model_validate(quota_payload)
+        updated_at = (
+            datetime.fromisoformat(str(raw_updated_at)) if isinstance(raw_updated_at, str) else None
+        )
+    except (ValidationError, ValueError):
+        return None
+    if updated_at is None:
+        return None
+    return _manual_quota_response(provider, quota, updated_at)
+
+
+async def persist_manual_quota(
+    repository: SQLiteRepository | None,
+    provider: ProviderName,
+    update: ManualQuotaUpdate,
+    now: datetime,
+) -> ManualQuotaResponse:
+    """Persist the billing anchor and return its ESTIMATED capacity view."""
+
+    quota = ManualQuota.model_validate(update.model_dump(mode="json"))
+    if repository is not None:
+        await repository.set_runtime_setting(
+            _manual_quota_key(provider),
+            {
+                "billing_start": quota.billing_start.isoformat(),
+                "billing_end": quota.billing_end.isoformat(),
+                "allowance": str(quota.allowance),
+                "current_usage": str(quota.current_usage),
+                "note": quota.note,
+                "updated_at": _iso(now),
+            },
+        )
+    return _manual_quota_response(provider, quota, now)
+
+
+async def clear_manual_quota(repository: SQLiteRepository | None, provider: ProviderName) -> None:
+    """Clear the billing anchor idempotently; unknown providers never reach here."""
+
+    if repository is None:
+        return
+    await repository.set_runtime_setting(_manual_quota_key(provider), None)
 
 
 async def _latest_health(

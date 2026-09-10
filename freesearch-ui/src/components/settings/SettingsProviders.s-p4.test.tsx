@@ -1,4 +1,4 @@
-import React from "react"
+﻿import React from "react"
 import { readFileSync } from "node:fs"
 import path from "node:path"
 import { describe, expect, it, afterEach, vi } from "vitest"
@@ -96,8 +96,6 @@ const EXPECTED_HEADERS = [
   "Provider",
   "Endpoint",
   "Health",
-  "Quota",
-  "p95",
   "Test",
   "Search",
   "Fetch",
@@ -335,7 +333,7 @@ describe("S-P4-3: 1440px viewport fills the Settings main column", () => {
     ).toContain("max-w-none")
   })
 
-  it("at 1440px the single 7-row merged table with min-w-[1280px] sits inside the w-full scroller", async () => {
+  it("at 1440px the single 7-row merged table with min-w-[960px] sits inside the w-full scroller", async () => {
     ;(window.innerWidth as number) = 1440
     window.dispatchEvent(new Event("resize"))
     renderSettings()
@@ -343,7 +341,7 @@ describe("S-P4-3: 1440px viewport fills the Settings main column", () => {
     expect(screen.getAllByRole("table")).toHaveLength(1)
     const table = screen.getByRole("table")
     expect(table.querySelectorAll("tbody tr")).toHaveLength(7)
-    expect(table.className).toMatch(/min-w-\[1280px\]/)
+    expect(table.className).toMatch(/min-w-\[960px\]/)
     const container = table.closest('[data-slot="table-container"]') as HTMLElement | null
     expect(container, "ui/table scroller must wrap the table at 1440px").not.toBeNull()
     expect(container!.className).toMatch(/w-full/)
@@ -367,11 +365,11 @@ describe("S-P4-4: responsive horizontal scroll preserved (no wrap, 375px scrolls
     expect(table.className).toMatch(/w-full/)
   })
 
-  it("Table keeps min-w-[1280px] in source and in the DOM", async () => {
-    expect(settingsSource).toMatch(/min-w-\[1280px\]/)
+  it("Table keeps min-w-[960px] in source and in the DOM", async () => {
+    expect(settingsSource).toMatch(/min-w-\[960px\]/)
     renderSettings()
     await waitForProviders()
-    expect(screen.getByRole("table").className).toMatch(/min-w-\[1280px\]/)
+    expect(screen.getByRole("table").className).toMatch(/min-w-\[960px\]/)
   })
 
   it("all header and body cells keep whitespace-nowrap (no wrapping)", async () => {
@@ -393,7 +391,7 @@ describe("S-P4-4: responsive horizontal scroll preserved (no wrap, 375px scrolls
     const table = screen.getByRole("table")
     const container = table.closest('[data-slot="table-container"]') as HTMLElement
     expect(container.className).toMatch(/overflow-x-auto/)
-    expect(table.className).toMatch(/min-w-\[1280px\]/)
+    expect(table.className).toMatch(/min-w-\[960px\]/)
     const cells = Array.from(table.querySelectorAll("th, td")) as HTMLElement[]
     expect(cells.length).toBe(EXPECTED_HEADERS.length + 7 * EXPECTED_HEADERS.length)
     for (const cell of cells) {
@@ -408,7 +406,7 @@ describe("S-P4-4: responsive horizontal scroll preserved (no wrap, 375px scrolls
 // ---------------------------------------------------------------------------
 
 describe("S-P4-5: no regression — S-P1 table, S-P2 ranks, S-P3 buttons, SettingsView", () => {
-  it("S-P1 table invariant: single merged table, 9 headers, 7x9, scroller, nowrap", async () => {
+  it("S-P1 table invariant: single merged table, 7 headers, 7x7, scroller, nowrap", async () => {
     renderSettings()
     await waitForProviders()
     expect(screen.getAllByRole("table")).toHaveLength(1)

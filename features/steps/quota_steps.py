@@ -526,6 +526,75 @@ def step_then_brave_field_unknown(context: Any, field: str) -> None:
 
 
 # --------------------------------------------------------------------------
+# Brave derived USD spend (manual dashboard math, no scraping)
+# --------------------------------------------------------------------------
+
+
+@when("I record {count:d} successful Brave REQUEST searches")
+def step_when_record_brave_successes(context: Any, count: int) -> None:
+    unit_kind = _require_unit_kind_model()
+    assert count >= 0, f"Brave success count must be non-negative, saw {count}"
+    base = FIXED_AT
+    for index in range(count):
+        event = UsageEvent(
+            provider="brave",
+            operation=UsageOperation.SEARCH,
+            units=Decimal("1"),
+            observed_at=base + timedelta(seconds=index),
+            status=UsageStatus.SUCCESS,
+            unit_kind=_opt(unit_kind, "REQUEST"),
+            display_unit="requests",
+        )
+        _run(context, context.repository.record_usage(event))
+
+
+@then(
+    "collect_stats Brave quota should show spend USD {spend} of allowance USD "
+    "{allowance} at cost USD {cost} per request"
+)
+def step_then_brave_spend_projection(context: Any, spend: str, allowance: str, cost: str) -> None:
+    expected_spend = Decimal(spend)
+    expected_allowance = Decimal(allowance)
+    expected_cost = Decimal(cost)
+    stats = _run(context, collect_stats(context.repository, adapter_names=["brave"]))
+    rows = [snap for snap in stats.latest_quota if snap.provider == "brave"]
+    assert rows, "dashboard must include a Brave quota row after recorded successes"
+    view = rows[0]
+    assert view.remaining is None and view.limit is None, (
+        "unlimited Brave throttle must stay None/None alongside spend metadata, saw "
+        f"{view.remaining!r}/{view.limit!r}"
+    )
+    assert view.remaining_percent is None, (
+        f"Brave remaining_percent must stay None (no invented denominator), saw {view!r}"
+    )
+    metadata = dict(_opt(view, "metadata", None) or {})
+    assert metadata.get("spend_usd") == expected_spend, (
+        f"176 Brave REQUEST successes must project spend USD {spend}, saw {metadata!r}"
+    )
+    assert isinstance(metadata.get("spend_usd"), Decimal), (
+        "spend metadata must stay Decimal-exact, never float"
+    )
+    assert metadata.get("allowance_usd") == expected_allowance, (
+        f"allowance must be USD {allowance}, saw {metadata!r}"
+    )
+    assert metadata.get("cost_per_req") == expected_cost, (
+        f"cost_per_req must be USD {cost}, saw {metadata!r}"
+    )
+
+
+@then("the Brave usage event should carry per-second headroom {headroom:d}")
+def step_then_brave_per_second_headroom(context: Any, headroom: int) -> None:
+    usage = context.search_response.usage
+    assert usage is not None, "Brave search must report a usage event"
+    assert usage.metadata.get("rate_limit_remaining") == headroom, (
+        f"usage must carry per-second headroom {headroom}, saw {usage.metadata!r}"
+    )
+    assert type(usage.metadata.get("rate_limit_remaining")) is int, (
+        "per-second headroom must be an int, never float"
+    )
+
+
+# --------------------------------------------------------------------------
 # AC-3: safe aggregation by (provider, operation, unit_kind)
 # --------------------------------------------------------------------------
 

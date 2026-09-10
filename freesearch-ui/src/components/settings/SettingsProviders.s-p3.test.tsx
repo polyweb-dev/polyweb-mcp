@@ -56,7 +56,7 @@ import {
  * (ui/button ghost icon-sm, aria-label "{name} test connection") that opens
  * the ProviderTestModal (zero fetch on open). The modal Test button runs the
  * existing handleTest (Test/Testing... + exactly one POST). Table is the
- * merged 10-column registry.
+ * merged 7-column registry.
  */
 
 const testDir = import.meta.dirname
@@ -79,8 +79,6 @@ const EXPECTED_HEADERS = [
   "Provider",
   "Endpoint",
   "Health",
-  "Quota",
-  "p95",
   "Test",
   "Search",
   "Fetch",
@@ -345,7 +343,7 @@ describe("S-P3-2: modal Test interaction states (Test/Testing... + POST)", () =>
 // ---------------------------------------------------------------------------
 
 describe("S-P3-3: no regression — S-P1 table, S-P2 ranks, tokens, merge", () => {
-  it("S-P1 table invariant: single merged table, 9 headers, 7x9, scroller, nowrap", async () => {
+  it("S-P1 table invariant: single merged table, 7 headers, 7x7, scroller, nowrap", async () => {
     renderSettings()
     await waitForProviders()
     expect(screen.getAllByRole("table")).toHaveLength(1)

@@ -102,7 +102,7 @@ export const SettingsProviders: React.FC = () => {
             </div>
           </div>
 
-          <Table className="min-w-[1280px] text-[13px]">
+          <Table className="min-w-[960px] text-[13px]">
             <TableHeader>
               <TableRow className="border-b border-[var(--border-subtle)] bg-[var(--elevated)] hover:bg-[var(--elevated)]">
                 {MERGED_HEADERS.map((header) => (
@@ -150,8 +150,6 @@ const MERGED_HEADERS = [
   "Provider",
   "Endpoint",
   "Health",
-  "Quota",
-  "p95",
   "Test",
   "Search",
   "Fetch",
@@ -218,12 +216,6 @@ const ProviderRegistryRow: React.FC<ProviderRegistryRowProps> = ({
       </TableCell>
       <TableCell className="whitespace-nowrap px-3 py-2.5">
         <HealthStatus status={health} />
-      </TableCell>
-      <TableCell className="whitespace-nowrap px-3 py-2.5 tnum">
-        <ProviderQuotaSummary provider={provider} />
-      </TableCell>
-      <TableCell className="whitespace-nowrap px-3 py-2.5 tnum">
-        {formatLatency(provider.latencyP95Ms)}
       </TableCell>
       <TableCell className="whitespace-nowrap px-3 py-2.5">
         <Button
@@ -386,23 +378,6 @@ const formatLatency = (latency: number | null) => latency === null ? "—" : `${
 const formatQuota = (provider: ProviderConfig) => {
   const display = providerQuotaDisplay(provider)
   return `${display.headline} · ${display.periodLabel} · ${display.nativeValue} · ${display.confidenceLabel}`
-}
-
-const ProviderQuotaSummary: React.FC<{ provider: ProviderConfig }> = ({ provider }) => {
-  const display = providerQuotaDisplay(provider)
-  return (
-    <div className="flex flex-col gap-0.5 leading-tight">
-      <span className="text-[13px] font-medium text-[var(--text-strong)]">
-        <span data-testid={`settings-quota-headline-${provider.id}`}>{display.headline}</span>
-        <span className="ml-1.5 text-[11px] font-normal uppercase tracking-wide text-[var(--muted)]">
-          {display.periodLabel}
-        </span>
-      </span>
-      <span className="text-[11px] text-[var(--muted)]">
-        {display.nativeValue} · {display.confidenceLabel}
-      </span>
-    </div>
-  )
 }
 
 const PriorityIndicator: React.FC<{

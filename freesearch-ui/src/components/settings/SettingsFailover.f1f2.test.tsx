@@ -1,4 +1,4 @@
-import React from "react"
+﻿import React from "react"
 import { readFileSync } from "node:fs"
 import path from "node:path"
 import { describe, expect, it, afterEach, vi } from "vitest"
@@ -725,8 +725,8 @@ describe("B-4: all four switches are keyboard-operable", () => {
 // G-1: Providers S-P4 intact (GREEN guard)
 // ---------------------------------------------------------------------------
 
-describe("G-1: Providers P1-FINAL merged table (inverted — 9 cols, min-w-1280)", () => {
-  it("registry section + frame keep w-full max-w-none with overflow-hidden and min-w-[1280px] merged table", async () => {
+describe("G-1: Providers P1-FINAL merged table (inverted — 7 cols, min-w-960)", () => {
+  it("registry section + frame keep w-full max-w-none with overflow-hidden and min-w-[960px] merged table", async () => {
     renderSettings()
     await waitForProviders()
     const table = screen.getByRole("table")
@@ -736,8 +736,6 @@ describe("G-1: Providers P1-FINAL merged table (inverted — 9 cols, min-w-1280)
       "Provider",
       "Endpoint",
       "Health",
-      "Quota",
-      "p95",
       "Test",
       "Search",
       "Fetch",
@@ -754,7 +752,7 @@ describe("G-1: Providers P1-FINAL merged table (inverted — 9 cols, min-w-1280)
     expect(frameTokens).toContain("w-full")
     expect(frameTokens).toContain("max-w-none")
     expect(frameTokens).toContain("overflow-hidden")
-    expect(table.className).toMatch(/min-w-\[1280px\]/)
+    expect(table.className).toMatch(/min-w-\[960px\]/)
     expect(settingsSource).toContain("w-full max-w-none")
   })
 })

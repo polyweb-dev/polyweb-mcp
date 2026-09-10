@@ -29,9 +29,9 @@ import {
  *   all contracts preserved (priority, Switch, SegmentedControl On/Off,
  *   Not-supported, Test states). NO page merge (P1 separate). freesearch-ui/ ONLY.
  *
- * AC mapping (P1-FINAL: merged 10-column table):
+ * AC mapping (P1-FINAL: merged 7-column table):
  *   S-P1-1  registry renders as ui/table with columns
- *           Provider|Endpoint|Global|Search|Fetch|Health|p95|Quota|Breaker|Test
+ *           Provider|Endpoint|Health|Test|Search|Fetch|Global
  *           in order (Table/Header/Body/Row/Head/Cell reuse as-is;
  *           flex-wrap list gone).
  *   S-P1-2  per-column x-position equality across 7 rows (<=1px): single shared
@@ -60,9 +60,9 @@ import {
  *   S-P1-1..S-P1-5 FAIL cleanly (no <table>, no <tr>, bare `return null`,
  *   flex-wrap still present). S-P1-6 PASSES (baseline intact).
  *
- * P1-FINAL sweep: the registry is now the merged 10-column table
- *   Provider|Endpoint|Global|Search|Fetch|Health|p95|Quota|Breaker|Test
- *   (registry controls + fleet telemetry, min-w-1280 scroll) with an
+ * P1-FINAL sweep: the registry is now the merged 7-column table
+ *   Provider|Endpoint|Health|Test|Search|Fetch|Global
+ *   (registry controls + endpoint/health telemetry, min-w-960 scroll) with an
  *   icon-opened ProviderTestModal. All counts/headers below track FINAL.
  */
 
@@ -95,8 +95,6 @@ const EXPECTED_HEADERS = [
   "Provider",
   "Endpoint",
   "Health",
-  "Quota",
-  "p95",
   "Test",
   "Search",
   "Fetch",
@@ -207,7 +205,7 @@ afterEach(() => {
 // S-P1-1: table structure + ui/table reuse
 // ---------------------------------------------------------------------------
 
-describe("S-P1-1: registry is a ui/table with the merged 10 columns", () => {
+describe("S-P1-1: registry is a ui/table with the merged 7 columns", () => {
   it("reuses ui/table primitives as-is (Table/Header/Body/Row/Head/Cell import)", () => {
     expect(settingsSource).toContain('from "@/components/ui/table"')
     for (const symbol of [
@@ -246,7 +244,7 @@ describe("S-P1-1: registry is a ui/table with the merged 10 columns", () => {
     expect(screen.getAllByRole("table")).toHaveLength(1)
   })
 
-  it("exposes the ten merged headers in exact order", async () => {
+  it("exposes the seven merged headers in exact order", async () => {
     renderSettings()
     await waitForProviders()
     expect(headerNames()).toEqual([...EXPECTED_HEADERS])
@@ -262,7 +260,7 @@ describe("S-P1-1: registry is a ui/table with the merged 10 columns", () => {
     }
   })
 
-  it("gives every body row exactly 9 cells (columns never collapse)", async () => {
+  it("gives every body row exactly 7 cells (columns never collapse)", async () => {
     renderSettings()
     await waitForProviders()
     const rows = Array.from(providerTable().querySelectorAll("tbody tr"))
@@ -348,7 +346,7 @@ describe("S-P1-3: Global-off placeholder keeps columns from collapsing", () => {
     }
   })
 
-  it("toggling Global off keeps all 10 cells with a non-empty Fetch placeholder (no-shift)", async () => {
+  it("toggling Global off keeps all 7 cells with a non-empty Fetch placeholder (no-shift)", async () => {
     const user = userEvent.setup()
     const stub = renderSettings()
     await waitForProviders()
@@ -369,7 +367,7 @@ describe("S-P1-3: Global-off placeholder keeps columns from collapsing", () => {
     expect(patches).toHaveLength(1)
     expect(patches[0].body).toEqual({ enabled: false })
 
-    // Columns never collapse: still 9 cells, Fetch still occupied.
+    // Columns never collapse: still 7 cells, Fetch still occupied.
     const row = findProviderRowTr("Brave Search")
     expect(row.children).toHaveLength(EXPECTED_HEADERS.length)
     const fetchCell = cellFor("Brave Search", "Fetch")

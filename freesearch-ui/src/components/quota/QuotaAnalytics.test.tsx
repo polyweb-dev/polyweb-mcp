@@ -1,4 +1,4 @@
-import React from "react"
+﻿import React from "react"
 import { describe, it, expect, afterEach, vi } from "vitest"
 import { render, screen, waitFor } from "@testing-library/react"
 import { FreeSearchProvider } from "@/context/FreeSearchContext"
@@ -262,5 +262,68 @@ describe("QuotaAnalytics (live backend)", () => {
     expect(body).toContain("authoritative")
     expect(body).toContain("observed")
     expect(body).toContain("estimated")
+  })
+
+
+  it("shows per-provider p95 in the Usage totals grid (shared across operation rows)", async () => {
+    renderWithBackend(dashboardFixture({ usage_totals: canonicalTotalsFixture() }))
+    await waitFor(() => {
+      expect(screen.getAllByText("Tavily", { exact: true }).length).toBeGreaterThanOrEqual(2)
+    })
+
+    const section = screen.getByText("Usage totals", { exact: true }).closest("section")!
+    const board = section.querySelector("div.border")!
+    const grids = Array.from(board.querySelectorAll(":scope > div"))
+    // Header row + one row per triple-keyed total (2 Tavily + Brave + legacy Exa).
+    expect(grids.length).toBe(5)
+    expect(
+      Array.from(grids[0].querySelectorAll("span")).map((s) => s.textContent?.trim() ?? "")
+    ).toEqual(["Provider", "Operation", "Unit", "p95", "Total units"])
+    // Fixture p95 is 100 + rank*10: Brave 110ms, Tavily 130ms, Exa 140ms.
+    const p95Cells = (row: Element) =>
+      Array.from(row.querySelectorAll("span"))
+        .map((s) => s.textContent?.trim() ?? "")
+        .filter((t) => t === "110ms" || t === "130ms" || t === "140ms")
+    const bodyRows = grids.slice(1)
+    expect(p95Cells(bodyRows[0])).toEqual(["130ms"])
+    expect(p95Cells(bodyRows[1])).toEqual(["130ms"])
+    expect(p95Cells(bodyRows[2])).toEqual(["110ms"])
+    expect(p95Cells(bodyRows[3])).toEqual(["140ms"])
+    // Dimension-safe grouping note stays put.
+    expect(section.textContent).toMatch(/only within the same unit/i)
+  })
+
+  it("renders an em-dash p95 when the provider reports null latency", async () => {
+    const providers = allProvidersFixture().map((row) =>
+      row.provider_id === "exa" ? { ...row, latency_p95_ms: null } : row
+    )
+    installFetchStub((req) => {
+      if (req.url === "/api/v1/providers" && req.method === "GET") {
+        return ok(providers)
+      }
+      if (req.url === "/api/v1/routing/config" && req.method === "GET") {
+        return ok(routingConfigFixture())
+      }
+      if (req.url.startsWith("/dashboard"))
+        return ok(dashboardFixture({ usage_totals: canonicalTotalsFixture() }))
+      return err(404, { detail: "unhandled test route" })
+    })
+    render(
+      <FreeSearchProvider>
+        <QuotaAnalytics />
+      </FreeSearchProvider>
+    )
+    await waitFor(() => {
+      expect(screen.getAllByText("Tavily", { exact: true }).length).toBeGreaterThanOrEqual(2)
+    })
+
+    const section = screen.getByText("Usage totals", { exact: true }).closest("section")!
+    const board = section.querySelector("div.border")!
+    const bodyRows = Array.from(board.querySelectorAll(":scope > div")).slice(1)
+    const exaRow = bodyRows.find((row) => row.textContent?.includes("Exa"))
+    expect(exaRow, "legacy Exa totals row must exist").toBeDefined()
+    expect(exaRow!.textContent).toContain("\u2014")
+    const braveRow = bodyRows.find((row) => row.textContent?.includes("Brave"))
+    expect(braveRow!.textContent).toContain("110ms")
   })
 })

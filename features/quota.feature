@@ -290,3 +290,17 @@ Feature: Quota and usage accounting (QUOTA.md acceptance)
     Given an isolated quota repository
     When I record a keyless local hourly quota at zero remaining
     Then keyless local hourly zero should stay eligible for routing
+
+  # Brave derived USD spend: manual dashboard math ($5.00 per 1000 requests).
+  # 176 REQUEST successes project to $0.88 spend metadata alongside the $5
+  # allowance, while the unlimited throttle stays None/None with no percent
+  # and per-second headroom stays in usage metadata.
+  @quota @ac2
+  Scenario: Brave derived spend tracks REQUEST successes without touching throttle
+    Given an isolated quota repository
+    And a Brave adapter with stubbed headers "49, 0" remaining, "50, 0" limit, "1, 0" reset
+    When I record 175 successful Brave REQUEST searches
+    And I run a successful Brave search for "spend projection" with limit 3
+    Then collect_stats Brave quota should show spend USD 0.88 of allowance USD 5.00 at cost USD 0.005 per request
+    And the Brave snapshot remaining should be unknown and limit should be unknown and reset should be unknown
+    And the Brave usage event should carry per-second headroom 49

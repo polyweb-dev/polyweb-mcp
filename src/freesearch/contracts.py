@@ -1,10 +1,10 @@
 """Provider-neutral request, response, usage, and error models."""
 
 import re
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Any, Literal, Self
 
 from pydantic import (
     AnyHttpUrl,
@@ -15,6 +15,7 @@ from pydantic import (
     computed_field,
     field_validator,
     model_serializer,
+    model_validator,
 )
 
 
@@ -413,6 +414,109 @@ class RoutingConfigUpdate(ContractModel):
     fallback_policy: FallbackPolicy | None = None
     cost_optimization_preset: CostPreset | None = None
     max_attempts: int | None = Field(default=None, ge=1)
+
+
+def manual_quota_remaining(allowance: Decimal, current_usage: Decimal) -> Decimal:
+    """Return the remaining allowance, floored at zero with Decimal math."""
+
+    remaining = allowance - current_usage
+    return remaining if remaining > 0 else Decimal("0")
+
+
+def manual_quota_remaining_percent(allowance: Decimal, current_usage: Decimal) -> Decimal | None:
+    """Return remaining capacity as 0-100, or None when allowance is unknown."""
+
+    if allowance <= 0:
+        return None
+    remaining = manual_quota_remaining(allowance, current_usage)
+    ratio = remaining / allowance * Decimal("100")
+    return min(Decimal("100"), max(Decimal("0"), ratio))
+
+
+class ManualQuota(ContractModel):
+    """Operator-entered billing anchor; provider-agnostic and routing-neutral.
+
+    The unit is implied by the provider (Brave/Exa/Parallel use USD with
+    Brave costing $0.005/request; other providers use REQUEST/CREDIT). This
+    model never steers routing; it only feeds the ESTIMATED control response.
+    """
+
+    billing_start: date
+    billing_end: date
+    allowance: Decimal = Field(ge=0)
+    current_usage: Decimal = Field(ge=0)
+    note: str | None = Field(default=None, max_length=500)
+
+    @field_validator("allowance", "current_usage", mode="before")
+    @classmethod
+    def validate_quota_decimal(cls, value: object) -> Decimal:
+        try:
+            return parse_decimal(value)
+        except TypeError as exc:
+            raise ValueError(str(exc)) from exc
+
+    @model_validator(mode="after")
+    def validate_billing_window(self) -> Self:
+        if self.billing_end <= self.billing_start:
+            raise ValueError("billing_end must be after billing_start")
+        return self
+
+
+class ManualQuotaUpdate(ContractModel):
+    """Full billing-anchor input accepted by PUT; same shape as ManualQuota."""
+
+    billing_start: date
+    billing_end: date
+    allowance: Decimal = Field(ge=0)
+    current_usage: Decimal = Field(ge=0)
+    note: str | None = Field(default=None, max_length=500)
+
+    @field_validator("allowance", "current_usage", mode="before")
+    @classmethod
+    def validate_quota_decimal(cls, value: object) -> Decimal:
+        try:
+            return parse_decimal(value)
+        except TypeError as exc:
+            raise ValueError(str(exc)) from exc
+
+    @model_validator(mode="after")
+    def validate_billing_window(self) -> Self:
+        if self.billing_end <= self.billing_start:
+            raise ValueError("billing_end must be after billing_start")
+        return self
+
+
+class ManualQuotaResponse(ContractModel):
+    """Stored billing anchor plus derived ESTIMATED capacity for the dashboard."""
+
+    provider: str
+    billing_start: date
+    billing_end: date
+    allowance: Decimal = Field(ge=0)
+    current_usage: Decimal = Field(ge=0)
+    remaining: Decimal = Field(ge=0)
+    remaining_percent: Decimal | None = Field(default=None, ge=0, le=100)
+    source: QuotaSource = QuotaSource.ESTIMATED
+    updated_at: datetime
+    note: str | None = Field(default=None, max_length=500)
+
+    @field_validator("allowance", "current_usage", "remaining", mode="before")
+    @classmethod
+    def validate_quota_decimal(cls, value: object) -> Decimal:
+        try:
+            return parse_decimal(value)
+        except TypeError as exc:
+            raise ValueError(str(exc)) from exc
+
+    @field_validator("remaining_percent", mode="before")
+    @classmethod
+    def validate_percent(cls, value: object) -> Decimal | None:
+        if value is None:
+            return None
+        try:
+            return parse_decimal(value)
+        except TypeError as exc:
+            raise ValueError(str(exc)) from exc
 
 
 SearchResponse.model_rebuild()

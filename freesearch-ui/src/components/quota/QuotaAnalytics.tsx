@@ -1,13 +1,29 @@
-import React from "react"
+import React, { useMemo, useState } from "react"
 import { Clock, Database, Gauge } from "lucide-react"
 import { useFreeSearch } from "@/context/useFreeSearch"
 import { catalogNameOf } from "@/services/api/providerCatalog"
 import { unitLabel } from "@/services/api/mappers"
 import { ProviderLogo } from "@/components/common/ProviderLogo"
+import { Button } from "@/components/ui/button"
 import { quotaDisplay } from "@/services/quotaDisplay"
+import { ManualQuotaModal, type ManualQuotaDefaults } from "./ManualQuotaModal"
+import { useManualQuota } from "./useManualQuota"
 import type { DashboardQuota, ProviderConfig, QuotaConfidence } from "@/types/freesearch"
 
-export const QuotaAnalytics: React.FC = () => {
+/**
+ * Manual-entry eligibility per provider. Brave always offers a manual
+ * billing window; Exa/Parallel offer one only while no vendor budget is
+ * configured. Inject a replacement to extend coverage to new providers.
+ */
+export function isManualQuotaEligible(providerId: string, budgetNotConfigured: boolean): boolean {
+  if (providerId === "brave") return true
+  if (providerId === "exa" || providerId === "parallel") return budgetNotConfigured
+  return false
+}
+
+export const QuotaAnalytics: React.FC<{
+  manualQuotaEligible?: typeof isManualQuotaEligible
+}> = ({ manualQuotaEligible = isManualQuotaEligible }) => {
   const {
     providers,
     usageTotals,
@@ -17,6 +33,8 @@ export const QuotaAnalytics: React.FC = () => {
     usageLoading,
     usageError,
   } = useFreeSearch()
+
+  const p95ByProvider = new Map(providers.map((provider) => [provider.id, provider.latencyP95Ms]))
 
   return (
     <div className="space-y-8">
@@ -77,16 +95,17 @@ export const QuotaAnalytics: React.FC = () => {
           </p>
         ) : (
           <div className="border border-[var(--border-subtle)] rounded-lg overflow-hidden">
-            <div className="grid grid-cols-[1fr_1fr_1fr_1fr] items-center py-2.5 px-4 bg-[var(--elevated)] border-b border-[var(--border-subtle)] text-[12px] text-[var(--muted)]">
+            <div className="grid grid-cols-[1fr_1fr_1fr_1fr_1fr] items-center py-2.5 px-4 bg-[var(--elevated)] border-b border-[var(--border-subtle)] text-[12px] text-[var(--muted)]">
               <span>Provider</span>
               <span>Operation</span>
               <span>Unit</span>
+              <span>p95</span>
               <span className="text-right">Total units</span>
             </div>
             {usageTotals.map((total) => (
               <div
                 key={`${total.provider}-${total.operation}-${total.unitKind ?? "legacy"}`}
-                className="grid grid-cols-[1fr_1fr_1fr_1fr] items-center py-3 px-4 border-b last:border-b-0 border-[var(--border-subtle)]"
+                className="grid grid-cols-[1fr_1fr_1fr_1fr_1fr] items-center py-3 px-4 border-b last:border-b-0 border-[var(--border-subtle)]"
               >
                 <div className="flex items-center gap-2 min-w-0">
                   <ProviderLogo providerId={total.provider} name={catalogNameOf(total.provider)} />
@@ -103,6 +122,9 @@ export const QuotaAnalytics: React.FC = () => {
                   ) : (
                     unitLabel(total.unitKind, null)
                   )}
+                </span>
+                <span className="text-[13px] tnum text-[var(--muted)]">
+                  {formatUsageP95(p95ByProvider.get(total.provider) ?? null)}
                 </span>
                 <span className="text-right text-[13px] tnum text-[var(--text)]">
                   {total.total_units}
@@ -137,6 +159,7 @@ export const QuotaAnalytics: React.FC = () => {
                key={provider.id}
                provider={provider}
                latestQuota={dashboardQuotas.find((quota) => quota.provider === provider.id)}
+               manualQuotaEligible={manualQuotaEligible}
              />
            ))}
         </div>
@@ -148,6 +171,7 @@ export const QuotaAnalytics: React.FC = () => {
 interface QuotaRowProps {
   provider: ProviderConfig
   latestQuota: DashboardQuota | undefined
+  manualQuotaEligible: typeof isManualQuotaEligible
 }
 
 interface ResolvedQuota {
@@ -155,6 +179,7 @@ interface ResolvedQuota {
   confidence: QuotaConfidence | null
   resetAt: string | null
   unitKind: ProviderConfig["quota"]["unitKind"]
+  displayUnit: string | null
 }
 
 interface QuotaValues {
@@ -201,7 +226,13 @@ function resolveQuota(provider: ProviderConfig, latestQuota: DashboardQuota | un
     providerId: provider.id,
     keyless: provider.id === "keenable" && provider.keyVaultStatus === "keyless_public",
   })
-  return { display, confidence: values.confidence, resetAt: values.resetAt, unitKind: values.unitKind }
+  return {
+    display,
+    confidence: values.confidence,
+    resetAt: values.resetAt,
+    unitKind: values.unitKind,
+    displayUnit: values.displayUnit,
+  }
 }
 
 function quotaCaptionFor(
@@ -226,34 +257,108 @@ function quotaCaptionFor(
   return null
 }
 
-const QuotaRow: React.FC<QuotaRowProps> = ({ provider, latestQuota }) => {
-  const { display, confidence, resetAt, unitKind } = resolveQuota(provider, latestQuota)
+const QuotaRow: React.FC<QuotaRowProps> = ({ provider, latestQuota, manualQuotaEligible }) => {
+  const { display, confidence, unitKind, displayUnit } = resolveQuota(provider, latestQuota)
   const quotaCaption = quotaCaptionFor(provider, latestQuota, display)
+  const [modalOpen, setModalOpen] = useState(false)
+
+  // Exa/Parallel only offer manual entry while no vendor budget is
+  // configured; Brave always does. A saved entry promotes to the row's
+  // headline (ESTIMATED chip + manual bar); the vendor snapshot demotes to
+  // one quiet detail line and its explainer is suppressed.
+  const noSnapshot =
+    latestQuota === undefined ||
+    (latestQuota.remaining === null && latestQuota.limit === null)
+  const budgetNotConfigured =
+    (provider.id === "exa" || provider.id === "parallel") &&
+    noSnapshot &&
+    display.remainingPercent === null
+  const manualEligible = manualQuotaEligible(provider.id, budgetNotConfigured)
+  const { manual, estimate: manualEstimate, save, remove } = useManualQuota(
+    provider.id,
+    manualEligible
+  )
+  const manualDefaults: ManualQuotaDefaults | null = useMemo(
+    () =>
+      manual
+        ? {
+            billingStart: manual.billing_start,
+            billingEnd: manual.billing_end,
+            allowance: manual.allowance,
+            used: manual.current_usage,
+          }
+        : null,
+    [manual]
+  )
+
   return (
     <div className="grid grid-cols-[1fr_1fr_1.5fr] items-center gap-4 py-3 px-4 border-b last:border-b-0 border-[var(--border-subtle)]">
       <span className="flex items-center gap-2 min-w-0 text-[13px] font-medium text-[var(--text-strong)]">
         <ProviderLogo providerId={provider.id} />
         {provider.name} quota
       </span>
-      <QuotaSource confidence={confidence} resetAt={resetAt} />
-      <QuotaHeadline provider={provider} display={display} />
+      {manualEstimate ? (
+        <span className="text-[13px] text-[var(--muted)]">
+          <ConfidenceBadge confidence="estimated" />
+        </span>
+      ) : (
+        <QuotaSource confidence={confidence} />
+      )}
+      {manualEstimate ? (
+        <ManualHeadline
+          providerId={provider.id}
+          providerName={provider.name}
+          estimate={manualEstimate}
+        />
+      ) : (
+        <QuotaHeadline provider={provider} display={display} />
+      )}
       <QuotaRowDetail
         display={display}
-        quotaCaption={quotaCaption}
+        quotaCaption={manualEstimate ? null : quotaCaption}
         latestQuota={latestQuota}
         unitKind={unitKind}
+        manualActive={manualEstimate !== null}
+        manualAction={
+          manualEligible ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="xs"
+              data-testid={`manual-quota-open-${provider.id}`}
+              aria-label={`${manual ? "Update usage" : "Set budget"} for ${provider.name}`}
+              onClick={() => setModalOpen(true)}
+              className="ml-auto"
+            >
+              {manual ? "Update usage" : "Set budget"}
+            </Button>
+          ) : null
+        }
       />
+      {manualEligible && modalOpen && (
+        <ManualQuotaModal
+          open={modalOpen}
+          providerId={provider.id}
+          providerName={provider.name}
+          unitKind={unitKind}
+          displayUnit={displayUnit}
+          defaults={manualDefaults}
+          onClose={() => setModalOpen(false)}
+          onSave={save}
+          onDelete={manual ? remove : undefined}
+        />
+      )}
     </div>
   )
 }
 
-const QuotaSource: React.FC<{ confidence: QuotaConfidence | null; resetAt: string | null }> = ({
-  confidence,
-  resetAt,
-}) => (
+const QuotaSource: React.FC<{ confidence: QuotaConfidence | null }> = ({ confidence }) => (
   <span className="text-[13px] text-[var(--muted)]">
-    {confidence ? <ConfidenceBadge confidence={confidence} /> : <span title="No quota snapshot from the backend">—</span>}
-    {resetAt && <span className="ml-1.5" title={`Quota resets at ${resetAt}`}>· resets {formatReset(resetAt)}</span>}
+    {confidence ? (
+      <ConfidenceBadge confidence={confidence} />
+    ) : (
+      <span title="No quota snapshot from the backend">—</span>
+    )}
   </span>
 )
 
@@ -283,25 +388,56 @@ const QuotaHeadline: React.FC<{ provider: ProviderConfig; display: ReturnType<ty
   </div>
 )
 
+const ManualHeadline: React.FC<{
+  providerId: string
+  providerName: string
+  estimate: { percentText: string; rangeText: string; percent: number }
+}> = ({ providerId, providerName, estimate }) => (
+  <div className="flex items-center gap-3" data-testid={`manual-quota-estimate-${providerId}`}>
+    <div
+      className="flex-1 h-1.5 rounded-full bg-[var(--border-subtle)] overflow-hidden"
+      role="progressbar"
+      aria-label={`${providerName} estimated remaining from manual entry`}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={estimate.percent}
+    >
+      <div className="h-full rounded-full bg-[var(--signal)]" style={{ width: `${estimate.percent}%` }} />
+    </div>
+    <span className="text-[13px] text-[var(--text)] tnum shrink-0">
+      <span>{estimate.percentText}</span>
+      <span className="ml-1.5 text-[12px] text-[var(--muted)]">· {estimate.rangeText}</span>
+    </span>
+  </div>
+)
+
 const QuotaRowDetail: React.FC<{
   display: ReturnType<typeof quotaDisplay>
   quotaCaption: { testId: string; text: string } | null
   latestQuota: DashboardQuota | undefined
   unitKind: ProviderConfig["quota"]["unitKind"]
-}> = ({ display, quotaCaption, latestQuota, unitKind }) => (
+  manualActive: boolean
+  manualAction: React.ReactNode
+}> = ({ display, quotaCaption, latestQuota, unitKind, manualActive, manualAction }) => (
   <>
     <div className="col-span-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-[var(--muted)]">
-      <span className="tnum" title="Native provider units; retained for detail">{display.nativeValue}</span>
-      <span aria-label={`Quota source ${display.confidenceLabel}`}>· {display.confidenceLabel}</span>
+      {manualActive ? (
+        <span className="tnum" title="Vendor snapshot; the manual estimate above leads this row">
+          Vendor: {display.nativeValue} · {display.confidenceLabel}
+        </span>
+      ) : (
+        <span className="tnum" title="Native provider units; retained for detail">{display.nativeValue}</span>
+      )}
       {display.resetLabel && <span>· resets {display.resetLabel}</span>}
+      {manualAction}
     </div>
-    {quotaCaption ? (
+    {!manualActive && (quotaCaption ? (
       <span data-testid={quotaCaption.testId} className="col-span-3 text-[12px] text-[var(--muted)]">{quotaCaption.text}</span>
     ) : latestQuota && display.detail ? (
       <span className="col-span-3 text-[12px] text-[var(--muted)]">
         {display.detail}{unitKind === "USD" ? " Call equivalents are derived, not a vendor limit." : ""}
       </span>
-    ) : null}
+    ) : null)}
   </>
 )
 
@@ -320,10 +456,8 @@ const ConfidenceBadge: React.FC<{ confidence: QuotaConfidence }> = ({ confidence
   </span>
 )
 
-function formatReset(resetAt: string): string {
-  const date = new Date(resetAt)
-  if (Number.isNaN(date.getTime())) return resetAt
-  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" })
+function formatUsageP95(latency: number | null): string {
+  return latency === null ? "\u2014" : `${latency}ms`
 }
 
 const KpiCard: React.FC<{ icon: React.ReactNode; label: string; children: React.ReactNode }> = ({
