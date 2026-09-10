@@ -311,8 +311,7 @@ def step_then_vendor_called_once(context: Any) -> None:
         f"AC-8: first poll should call each vendor once, saw {context.ttl_first_run_calls!r}"
     )
     assert context.ttl_vendor_calls == context.ttl_first_run_calls, (
-        "AC-8: second immediate poll must not re-hit vendors "
-        f"(calls: {context.ttl_vendor_calls!r})"
+        f"AC-8: second immediate poll must not re-hit vendors (calls: {context.ttl_vendor_calls!r})"
     )
 
 
@@ -370,17 +369,14 @@ def step_then_failover_snapshots(context: Any) -> None:
         f"write outage, saw {providers!r}"
     )
     assert "tavily" not in providers, (
-        "AC-1/AC-8 setup: the failing provider's snapshot must not be reported "
-        "as persisted"
+        "AC-1/AC-8 setup: the failing provider's snapshot must not be reported as persisted"
     )
 
 
 @then("routing should still produce candidates from available state")
 def step_then_failover_routes(context: Any) -> None:
     quota = {snapshot.provider: snapshot for snapshot in context.failover_snapshots}
-    candidates = select_route(
-        _search_request(), list(context.failover_adapters), {}, quota
-    )
+    candidates = select_route(_search_request(), list(context.failover_adapters), {}, quota)
     names = _route_names(candidates)
     assert "brave" in names, (
         f"AC-6/AC-8: routing must still produce candidates from surviving "
@@ -409,12 +405,9 @@ def _brave_payload() -> dict[str, Any]:
 
 
 @given(
-    'a Brave adapter with stubbed headers "{remaining}" remaining, '
-    '"{limit}" limit, "{reset}" reset'
+    'a Brave adapter with stubbed headers "{remaining}" remaining, "{limit}" limit, "{reset}" reset'
 )
-def step_given_brave_stubbed_headers(
-    context: Any, remaining: str, limit: str, reset: str
-) -> None:
+def step_given_brave_stubbed_headers(context: Any, remaining: str, limit: str, reset: str) -> None:
     _patch_resolver(context, brave_module)
     headers = {
         "X-RateLimit-Remaining": remaining,
@@ -435,13 +428,14 @@ def step_given_brave_stubbed_headers(
 def step_when_brave_search(context: Any, query: str, limit: int) -> None:
     request = SearchRequest(query=query, limit=limit)
     try:
-        context.search_response = _run(context,
+        context.search_response = _run(
+            context,
             tracked_call(
                 context.repository,
                 context.adapter,
                 lambda adapter: adapter.search(request),
                 operation=UsageOperation.SEARCH,
-            )
+            ),
         )
     except Exception as exc:  # pragma: no cover - success path expected
         context.last_error = exc
@@ -466,8 +460,7 @@ def step_then_brave_snapshot_monthly(context: Any, remaining: int, limit: int) -
     assert _opt(latest, "unit_kind", None) is not None and str(
         _opt(latest, "unit_kind")
     ).upper().endswith("REQUEST"), (
-        f"AC-2: Brave snapshot unit_kind must be REQUEST, saw "
-        f"{_opt(latest, 'unit_kind', None)!r}"
+        f"AC-2: Brave snapshot unit_kind must be REQUEST, saw {_opt(latest, 'unit_kind', None)!r}"
     )
     assert latest.remaining == Decimal(remaining), (
         f"AC-2: remaining must be Decimal({remaining}) from the monthly header "
@@ -479,8 +472,9 @@ def step_then_brave_snapshot_monthly(context: Any, remaining: int, limit: int) -
         f"saw {latest.limit!r}"
     )
     display = _opt(latest, "display_unit", None)
-    assert display == "requests", (
-        f"AC-2: Brave display_unit must be 'requests', saw {display!r}"
+    assert display == "requests", f"AC-2: Brave display_unit must be 'requests', saw {display!r}"
+    assert _opt(latest, "window", None) == "monthly", (
+        f"AC-2: Brave quota must identify its monthly window, saw {_opt(latest, 'window', None)!r}"
     )
 
 
@@ -532,6 +526,75 @@ def step_then_brave_field_unknown(context: Any, field: str) -> None:
 
 
 # --------------------------------------------------------------------------
+# Brave derived USD spend (manual dashboard math, no scraping)
+# --------------------------------------------------------------------------
+
+
+@when("I record {count:d} successful Brave REQUEST searches")
+def step_when_record_brave_successes(context: Any, count: int) -> None:
+    unit_kind = _require_unit_kind_model()
+    assert count >= 0, f"Brave success count must be non-negative, saw {count}"
+    base = FIXED_AT
+    for index in range(count):
+        event = UsageEvent(
+            provider="brave",
+            operation=UsageOperation.SEARCH,
+            units=Decimal("1"),
+            observed_at=base + timedelta(seconds=index),
+            status=UsageStatus.SUCCESS,
+            unit_kind=_opt(unit_kind, "REQUEST"),
+            display_unit="requests",
+        )
+        _run(context, context.repository.record_usage(event))
+
+
+@then(
+    "collect_stats Brave quota should show spend USD {spend} of allowance USD "
+    "{allowance} at cost USD {cost} per request"
+)
+def step_then_brave_spend_projection(context: Any, spend: str, allowance: str, cost: str) -> None:
+    expected_spend = Decimal(spend)
+    expected_allowance = Decimal(allowance)
+    expected_cost = Decimal(cost)
+    stats = _run(context, collect_stats(context.repository, adapter_names=["brave"]))
+    rows = [snap for snap in stats.latest_quota if snap.provider == "brave"]
+    assert rows, "dashboard must include a Brave quota row after recorded successes"
+    view = rows[0]
+    assert view.remaining is None and view.limit is None, (
+        "unlimited Brave throttle must stay None/None alongside spend metadata, saw "
+        f"{view.remaining!r}/{view.limit!r}"
+    )
+    assert view.remaining_percent is None, (
+        f"Brave remaining_percent must stay None (no invented denominator), saw {view!r}"
+    )
+    metadata = dict(_opt(view, "metadata", None) or {})
+    assert metadata.get("spend_usd") == expected_spend, (
+        f"176 Brave REQUEST successes must project spend USD {spend}, saw {metadata!r}"
+    )
+    assert isinstance(metadata.get("spend_usd"), Decimal), (
+        "spend metadata must stay Decimal-exact, never float"
+    )
+    assert metadata.get("allowance_usd") == expected_allowance, (
+        f"allowance must be USD {allowance}, saw {metadata!r}"
+    )
+    assert metadata.get("cost_per_req") == expected_cost, (
+        f"cost_per_req must be USD {cost}, saw {metadata!r}"
+    )
+
+
+@then("the Brave usage event should carry per-second headroom {headroom:d}")
+def step_then_brave_per_second_headroom(context: Any, headroom: int) -> None:
+    usage = context.search_response.usage
+    assert usage is not None, "Brave search must report a usage event"
+    assert usage.metadata.get("rate_limit_remaining") == headroom, (
+        f"usage must carry per-second headroom {headroom}, saw {usage.metadata!r}"
+    )
+    assert type(usage.metadata.get("rate_limit_remaining")) is int, (
+        "per-second headroom must be an int, never float"
+    )
+
+
+# --------------------------------------------------------------------------
 # AC-3: safe aggregation by (provider, operation, unit_kind)
 # --------------------------------------------------------------------------
 
@@ -559,7 +622,8 @@ def step_given_incompatible_usage(context: Any) -> None:
         )
         _run(context, context.repository.record_usage(event))
     # Zero-unit FAILURE rows: observability only, never totals.
-    _run(context,
+    _run(
+        context,
         context.repository.record_usage(
             UsageEvent(
                 provider="brave",
@@ -570,7 +634,7 @@ def step_given_incompatible_usage(context: Any) -> None:
                 unit_kind=_opt(unit_kind, "REQUEST"),
                 display_unit="requests",
             )
-        )
+        ),
     )
 
 
@@ -638,8 +702,7 @@ def step_then_failures_excluded(context: Any) -> None:
 
 
 @when(
-    "I record an authoritative Tavily credit snapshot with remaining {remaining:d} "
-    "limit {limit:d}"
+    "I record an authoritative Tavily credit snapshot with remaining {remaining:d} limit {limit:d}"
 )
 def step_when_record_tavily(context: Any, remaining: int, limit: int) -> None:
     _require_unit_kind_model()
@@ -676,8 +739,7 @@ def step_then_tavily_snapshot(context: Any, kind: str, display: str) -> None:
         f"AC-4: Tavily unit_kind must be {kind}, saw {_opt(latest, 'unit_kind', None)!r}"
     )
     assert _opt(latest, "display_unit", None) == display, (
-        f"AC-4: Tavily display_unit must be {display!r}, "
-        f"saw {_opt(latest, 'display_unit', None)!r}"
+        f"AC-4: Tavily display_unit must be {display!r}, saw {_opt(latest, 'display_unit', None)!r}"
     )
     assert latest.source == QuotaSource.AUTHORITATIVE, (
         f"AC-4: Tavily source must stay AUTHORITATIVE (GET /usage), saw {latest.source!r}"
@@ -771,8 +833,8 @@ def step_then_youcom_gap_marked(context: Any) -> None:
     # estimate), never a silent known zero.
     gap = _opt(response, "usage_gap", None)
     if gap is None:
-        estimate = _run(context,
-            context.you_adapter.estimate_cost(SearchRequest(query="gap probe", limit=3))
+        estimate = _run(
+            context, context.you_adapter.estimate_cost(SearchRequest(query="gap probe", limit=3))
         )
         assert estimate.units == Decimal("0.005") and estimate.currency == "USD", (
             "AC-4 setup: You.com search estimate must be USD 0.005 "
@@ -812,9 +874,7 @@ def _keenable_handler(request: httpx.Request) -> httpx.Response:
     return httpx.Response(200, json={"content": "keenable doc", "title": "k"})
 
 
-@when(
-    "I apply {count:d} paid-false Keenable calls against the {allowance:d} monthly allowance"
-)
+@when("I apply {count:d} paid-false Keenable calls against the {allowance:d} monthly allowance")
 def step_when_keenable_paid_false(context: Any, count: int, allowance: int) -> None:
     _patch_resolver(context, keenable_module)
     context.keenable_paid_meta = None
@@ -834,13 +894,14 @@ def step_when_keenable_paid_false(context: Any, count: int, allowance: int) -> N
     context.http_client = client
     context.keenable_adapter = KeenableAdapter(client)
     for _ in range(count):
-        _run(context,
+        _run(
+            context,
             tracked_call(
                 context.repository,
                 context.keenable_adapter,
                 lambda adapter: adapter.search(SearchRequest(query="allowance", limit=3)),
                 operation=UsageOperation.SEARCH,
-            )
+            ),
         )
     context.keenable_allowance = Decimal(allowance)
 
@@ -870,13 +931,14 @@ def step_then_keenable_paid_true(context: Any) -> None:
     # (None) with both counters preserved (D-2).
     context.keenable_paid_meta = {"credits": 2, "paid": True, "sku": "search.pro"}
     adapter = context.keenable_adapter
-    response = _run(context,
+    response = _run(
+        context,
         tracked_call(
             context.repository,
             adapter,
             lambda running: running.search(SearchRequest(query="paid tier", limit=2)),
             operation=UsageOperation.SEARCH,
-        )
+        ),
     )
     assert response.usage is not None and response.usage.units == Decimal("2"), (
         f"AC-5 setup: paid call must report 2 credits of usage, saw {response.usage!r}"
@@ -909,7 +971,7 @@ def step_then_keenable_paid_true(context: Any) -> None:
     )
 
 
-@then("a keyless Keenable call should record FREE units with no quota snapshot")
+@then("a keyless Keenable call should record one REQUEST unit and an hourly snapshot")
 def step_then_keenable_keyless(context: Any) -> None:
     _require_unit_kind_model()
     keenable_module.get_provider_secret_resolver = lambda: _NullKeyResolver()
@@ -919,12 +981,23 @@ def step_then_keenable_keyless(context: Any) -> None:
         response = _run(context, adapter.search(SearchRequest(query="keyless", limit=2)))
     finally:
         _patch_resolver(context, keenable_module)
-    assert response.usage is not None and response.usage.units == Decimal("0"), (
-        f"AC-5: keyless usage must be raw 0, saw {response.usage!r}"
+    assert response.usage is not None and response.usage.units == Decimal("1"), (
+        f"AC-5: keyless usage must consume one hourly request unit, saw {response.usage!r}"
     )
-    assert str(_opt(response.usage, "unit_kind", None)).upper().endswith("FREE"), (
-        "AC-5: keyless usage unit_kind must be FREE "
+    assert str(_opt(response.usage, "unit_kind", None)).upper().endswith("REQUEST"), (
+        "AC-5: keyless usage unit_kind must be REQUEST "
         f"(saw {_opt(response.usage, 'unit_kind', None)!r})"
+    )
+    assert response.usage.metadata.get("cost_usd") == Decimal("0"), (
+        "AC-5: keyless usage should expose zero monetary cost separately"
+    )
+    snapshot = _opt(response, "quota_snapshot", None)
+    assert snapshot is not None, "AC-5: keyless call must expose rolling-hour quota state"
+    assert snapshot.remaining == Decimal("999") and snapshot.limit == Decimal("1000"), (
+        f"AC-5: expected local hourly headroom 999/1000, saw {snapshot!r}"
+    )
+    assert snapshot.metadata.get("window") == "hourly", (
+        "AC-5: keyless quota should identify its rolling hourly window"
     )
 
 
@@ -941,8 +1014,8 @@ def step_when_keenable_estimate(context: Any) -> None:
     _patch_resolver(context, keenable_module)
     client = httpx.AsyncClient(transport=httpx.MockTransport(_keenable_handler), timeout=30.0)
     context.http_client = client
-    context.keenable_estimate = _run(context,
-        KeenableAdapter(client).estimate_cost(SearchRequest(query="price", limit=3))
+    context.keenable_estimate = _run(
+        context, KeenableAdapter(client).estimate_cost(SearchRequest(query="price", limit=3))
     )
 
 
@@ -972,9 +1045,7 @@ def step_when_parallel_search_estimate(context: Any, mode: str, bundles: int) ->
     # cross-check against the documented pricing function directly, so the
     # estimate provably equals the executed-search price for these options.
     try:
-        request = SearchRequest(
-            query="mode probe", limit=5, mode=mode, extra_bundles=bundles
-        )
+        request = SearchRequest(query="mode probe", limit=5, mode=mode, extra_bundles=bundles)
     except ValidationError as exc:
         raise AssertionError(
             "AC-PA-2: SearchRequest lacks the mode-aware estimate contract "
@@ -982,8 +1053,8 @@ def step_when_parallel_search_estimate(context: Any, mode: str, bundles: int) ->
             f"driven through estimate_cost: {exc}"
         ) from exc
     context.parallel_request = request
-    context.parallel_search_estimate = _run(context,
-        context.parallel_adapter.estimate_cost(request)
+    context.parallel_search_estimate = _run(
+        context, context.parallel_adapter.estimate_cost(request)
     )
 
 
@@ -1023,7 +1094,7 @@ def step_then_parallel_search_estimate(context: Any, amount: str) -> None:
     assert isinstance(estimate.units, Decimal), "AC-PA-2: Parallel pricing must avoid float"
 
 
-@when('I estimate Parallel search with omitted mode and {bundles:d} extra bundles')
+@when("I estimate Parallel search with omitted mode and {bundles:d} extra bundles")
 def step_when_parallel_omitted_mode(context: Any, bundles: int) -> None:
     _patch_resolver(context, parallel_module)
     client = httpx.AsyncClient(
@@ -1042,8 +1113,8 @@ def step_when_parallel_omitted_mode(context: Any, bundles: int) -> None:
             f"(P1-6: mode/extra_bundles fields): {exc}"
         ) from exc
     context.parallel_request = request
-    context.parallel_search_estimate = _run(context,
-        context.parallel_adapter.estimate_cost(request)
+    context.parallel_search_estimate = _run(
+        context, context.parallel_adapter.estimate_cost(request)
     )
 
 
@@ -1058,10 +1129,11 @@ def step_when_parallel_extract_estimate(context: Any, urls: int) -> None:
     )
     context.http_client = client
     context.parallel_adapter = ParallelAdapter(client)
-    estimate = _run(context,
+    estimate = _run(
+        context,
         context.parallel_adapter.estimate_cost(
             FetchRequest(url="https://example.com/extract", url_count=urls)
-        )
+        ),
     )
     context.parallel_extract_estimate = estimate
     context.parallel_extract_urls = urls
@@ -1090,14 +1162,12 @@ def step_then_parallel_extract_projection(context: Any, amount: str) -> None:
 @then("the executable single-URL extract estimate should be USD {amount}")
 def step_then_parallel_extract_single(context: Any, amount: str) -> None:
     # Critic caveat: the only executable extract path prices exactly one URL.
-    estimate = _run(context,
-        context.parallel_adapter.estimate_cost(
-            FetchRequest(url="https://example.com/extract")
-        )
+    estimate = _run(
+        context,
+        context.parallel_adapter.estimate_cost(FetchRequest(url="https://example.com/extract")),
     )
     assert estimate.units == Decimal(amount), (
-        f"AC-PA-2: the executable single-URL extract must cost USD {amount}, "
-        f"saw {estimate.units!r}"
+        f"AC-PA-2: the executable single-URL extract must cost USD {amount}, saw {estimate.units!r}"
     )
     assert estimate.currency == "USD", (
         f"AC-PA-2: Parallel extract must be Decimal USD, saw {estimate.currency!r}"
@@ -1134,9 +1204,7 @@ def step_when_route_hard_exhausted(context: Any) -> None:
         "tavily": ProviderHealth(
             provider="tavily", status=HealthStatus.HEALTHY, checked_at=FIXED_AT
         ),
-        "brave": ProviderHealth(
-            provider="brave", status=HealthStatus.HEALTHY, checked_at=FIXED_AT
-        ),
+        "brave": ProviderHealth(provider="brave", status=HealthStatus.HEALTHY, checked_at=FIXED_AT),
     }
     context.route_hard = select_route(_search_request(), [exhausted, fallback], health, quota)
 
@@ -1164,7 +1232,8 @@ def step_when_parallel_soft_then_success(context: Any) -> None:
         "effective-quota view where a Parallel soft 402 zero expires after the "
         "next successful billed operation (QUOTA.md AC-6/AC-PA-5)"
     )
-    _run(context,
+    _run(
+        context,
         context.repository.record_quota(
             QuotaSnapshot(
                 provider="parallel",
@@ -1173,9 +1242,10 @@ def step_when_parallel_soft_then_success(context: Any) -> None:
                 limit=None,
                 observed_at=FIXED_AT,
             )
-        )
+        ),
     )
-    _run(context,
+    _run(
+        context,
         context.repository.record_usage(
             UsageEvent(
                 provider="parallel",
@@ -1184,7 +1254,7 @@ def step_when_parallel_soft_then_success(context: Any) -> None:
                 observed_at=FIXED_AT + timedelta(seconds=60),
                 status=UsageStatus.SUCCESS,
             )
-        )
+        ),
     )
     context.parallel_effective = _run(context, effective(context.repository, "parallel"))
 
@@ -1219,13 +1289,14 @@ def step_when_429_signal(context: Any) -> None:
     )
     adapter = _StubAdapter("brave", fail=failure)
     try:
-        _run(context,
+        _run(
+            context,
             tracked_call(
                 context.repository,
                 adapter,
                 lambda running: running.search(_search_request()),
                 operation=UsageOperation.SEARCH,
-            )
+            ),
         )
     except ProviderOperationError as exc:
         context.rate_error = exc
@@ -1239,14 +1310,11 @@ def step_when_429_signal(context: Any) -> None:
 def step_then_429_not_exhaustion(context: Any) -> None:
     latest = _run(context, context.repository.latest_quota("brave"))
     assert latest is None or latest.remaining != Decimal("0"), (
-        f"AC-6: a 429 must never be persisted as quota exhaustion (remaining=0); "
-        f"saw {latest!r}"
+        f"AC-6: a 429 must never be persisted as quota exhaustion (remaining=0); saw {latest!r}"
     )
     adapter = _StubAdapter("brave")
     health = {
-        "brave": ProviderHealth(
-            provider="brave", status=HealthStatus.DEGRADED, checked_at=FIXED_AT
-        )
+        "brave": ProviderHealth(provider="brave", status=HealthStatus.DEGRADED, checked_at=FIXED_AT)
     }
     quota = {} if latest is None else {"brave": latest}
     candidates = select_route(_search_request(), [adapter], health, quota)
@@ -1337,7 +1405,8 @@ def step_then_usage_serialized(context: Any) -> None:
 
 @when("I record legacy usage and quota rows without unit kinds")
 def step_when_record_legacy(context: Any) -> None:
-    _run(context,
+    _run(
+        context,
         context.repository.record_usage(
             UsageEvent(
                 provider="exa",
@@ -1345,9 +1414,10 @@ def step_when_record_legacy(context: Any) -> None:
                 units=Decimal("0.001"),
                 observed_at=FIXED_AT,
             )
-        )
+        ),
     )
-    _run(context,
+    _run(
+        context,
         context.repository.record_quota(
             QuotaSnapshot(
                 provider="tavily",
@@ -1356,7 +1426,7 @@ def step_when_record_legacy(context: Any) -> None:
                 limit=Decimal("100"),
                 observed_at=FIXED_AT,
             )
-        )
+        ),
     )
 
 
@@ -1389,7 +1459,8 @@ def step_then_legacy_unknown(context: Any) -> None:
 def step_when_record_credential_metadata(context: Any) -> None:
     context.credential_error = None
     try:
-        _run(context,
+        _run(
+            context,
             context.repository.record_usage(
                 UsageEvent(
                     provider="tavily",
@@ -1398,7 +1469,7 @@ def step_when_record_credential_metadata(context: Any) -> None:
                     observed_at=FIXED_AT,
                     metadata={"api_key": "sk-secret-should-never-persist"},
                 )
-            )
+            ),
         )
     except ValueError as exc:
         context.credential_error = exc
@@ -1431,7 +1502,8 @@ def step_given_mixed_usage(context: Any) -> None:
         ("exa", UsageOperation.SEARCH, Decimal("0.001"), "USD"),
     ]
     for index, (provider, op, units, kind) in enumerate(known):
-        _run(context,
+        _run(
+            context,
             context.repository.record_usage(
                 UsageEvent(
                     provider=provider,
@@ -1441,10 +1513,11 @@ def step_given_mixed_usage(context: Any) -> None:
                     unit_kind=_opt(unit_kind, kind),
                     display_unit=kind.lower(),
                 )
-            )
+            ),
         )
     # Legacy row predating unit dimensions: raw value preserved, kind unknown.
-    _run(context,
+    _run(
+        context,
         context.repository.record_usage(
             UsageEvent(
                 provider="tavily",
@@ -1452,7 +1525,7 @@ def step_given_mixed_usage(context: Any) -> None:
                 units=Decimal("5"),
                 observed_at=FIXED_AT + timedelta(seconds=90),
             )
-        )
+        ),
     )
 
 
@@ -1495,8 +1568,7 @@ def step_then_legacy_separate(context: Any) -> None:
     )
     legacy_rows = _run(context, context.repository.list_usage(provider="tavily"))
     assert len(legacy_rows) == 1 and legacy_rows[0].units == Decimal("5"), (
-        "AC-8: legacy rows stay available in history with exact raw units, "
-        f"saw {legacy_rows!r}"
+        f"AC-8: legacy rows stay available in history with exact raw units, saw {legacy_rows!r}"
     )
     assert _opt(legacy_rows[0], "unit_kind", None) is None, (
         "AC-8: the legacy row must read back with unknown unit kind"
@@ -1512,7 +1584,8 @@ def step_then_legacy_separate(context: Any) -> None:
 def step_when_record_quota_metadata(context: Any) -> None:
     unit_kind = _require_unit_kind_model()
     context.quota_metadata = {"free": Decimal("99995"), "paid": Decimal("2")}
-    _run(context,
+    _run(
+        context,
         context.repository.record_quota(
             QuotaSnapshot(
                 provider="keenable",
@@ -1524,7 +1597,7 @@ def step_when_record_quota_metadata(context: Any) -> None:
                 display_unit="credits",
                 metadata=dict(context.quota_metadata),
             )
-        )
+        ),
     )
 
 
@@ -1586,8 +1659,7 @@ def step_then_firecrawl_snapshot(context: Any, remaining: int, limit: int) -> No
         f"AC-FC-1: Firecrawl quota must be AUTHORITATIVE, saw {latest.source!r}"
     )
     assert str(_opt(latest, "unit_kind", None)).upper().endswith("CREDIT"), (
-        "AC-FC-1: Firecrawl unit_kind must be CREDIT "
-        f"(saw {_opt(latest, 'unit_kind', None)!r})"
+        f"AC-FC-1: Firecrawl unit_kind must be CREDIT (saw {_opt(latest, 'unit_kind', None)!r})"
     )
     # remainingCredits stays truth even above the planCredits baseline.
     assert latest.remaining == Decimal(remaining), (
@@ -1595,8 +1667,7 @@ def step_then_firecrawl_snapshot(context: Any, remaining: int, limit: int) -> No
         f"saw {latest.remaining!r}"
     )
     assert latest.limit == Decimal(limit), (
-        f"AC-FC-1: limit must be the planCredits baseline Decimal({limit}), "
-        f"saw {latest.limit!r}"
+        f"AC-FC-1: limit must be the planCredits baseline Decimal({limit}), saw {latest.limit!r}"
     )
 
 
@@ -1610,9 +1681,7 @@ def step_then_firecrawl_reset(context: Any) -> None:
     )
 
 
-@when(
-    'I map a Firecrawl credit-usage payload with remaining "{remaining}" and plan "{plan}"'
-)
+@when('I map a Firecrawl credit-usage payload with remaining "{remaining}" and plan "{plan}"')
 def step_when_firecrawl_malformed(context: Any, remaining: str, plan: str) -> None:
     context.firecrawl_raw = {"remaining": remaining, "plan": plan}
     # SEAM PROBE (AC-FC-2): strict finite non-negative Decimal validation for
@@ -1633,9 +1702,11 @@ def step_when_firecrawl_malformed(context: Any, remaining: str, plan: str) -> No
 @then('the Firecrawl snapshot field "{field}" should be unknown rather than zero')
 def step_then_firecrawl_field_unknown(context: Any, field: str) -> None:
     parser = context.firecrawl_parser
-    raw = context.firecrawl_raw["remaining"] if field == "remaining" else context.firecrawl_raw[
-        "plan"
-    ]
+    raw = (
+        context.firecrawl_raw["remaining"]
+        if field == "remaining"
+        else context.firecrawl_raw["plan"]
+    )
     try:
         value = parser(raw)
     except (ValueError, TypeError):
@@ -1653,8 +1724,8 @@ def step_when_firecrawl_search_estimate(context: Any, limit: int) -> None:
     context.http_client = client
     adapter = FirecrawlAdapter(client, sdk_client=object())
     context.firecrawl_adapter = adapter
-    context.firecrawl_estimate = _run(context,
-        adapter.estimate_cost(SearchRequest(query="credit probe", limit=limit))
+    context.firecrawl_estimate = _run(
+        context, adapter.estimate_cost(SearchRequest(query="credit probe", limit=limit))
     )
     context.firecrawl_limit = limit
 
@@ -1717,8 +1788,7 @@ def step_then_firecrawl_fetch_estimate(context: Any, credits: int) -> None:
     )
     expected = fetch_credits(Decimal("1"), modifiers)
     assert expected == Decimal(credits), (
-        f"AC-FC-3 setup: 1 + {modifiers} option credits must be {credits} "
-        f"(outline row out of sync)"
+        f"AC-FC-3 setup: 1 + {modifiers} option credits must be {credits} (outline row out of sync)"
     )
     assert estimate.units == expected, (
         f"AC-FC-3: estimate_cost must equal the executed-option price "
@@ -1747,9 +1817,7 @@ def step_when_parallel_sku_response(context: Any, first: int, second: int) -> No
             200,
             json={
                 "search_id": "ps-sku",
-                "results": [
-                    {"url": "https://example.com/a", "title": "a", "excerpts": ["a"]}
-                ],
+                "results": [{"url": "https://example.com/a", "title": "a", "excerpts": ["a"]}],
                 "usage": [
                     {"sku": "sku_search", "count": first},
                     {"sku": "sku_extra", "count": second},
@@ -1760,13 +1828,11 @@ def step_when_parallel_sku_response(context: Any, first: int, second: int) -> No
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler), timeout=30.0)
     context.http_client = client
     adapter = ParallelAdapter(client)
-    context.parallel_sku_response = _run(context,
-        adapter.search(SearchRequest(query="sku probe", limit=3))
+    context.parallel_sku_response = _run(
+        context, adapter.search(SearchRequest(query="sku probe", limit=3))
     )
     context.parallel_sku_expected = Decimal(first + second)
-    context.parallel_oauth_calls = [
-        call for call in calls if "service/v1/balance" in str(call.url)
-    ]
+    context.parallel_oauth_calls = [call for call in calls if "service/v1/balance" in str(call.url)]
 
 
 @then("the Parallel usage units should be {expected:d} with SKU metadata retained")
@@ -1793,9 +1859,7 @@ def step_then_parallel_sku_units(context: Any, expected: int) -> None:
 def step_then_parallel_spend_decimal(context: Any) -> None:
     estimate = _run(
         context,
-        _parallel_adapter_for(context).estimate_cost(
-            SearchRequest(query="spend probe", limit=5)
-        ),
+        _parallel_adapter_for(context).estimate_cost(SearchRequest(query="spend probe", limit=5)),
     )
     assert estimate.currency == "USD", (
         "AC-PA-1: Parallel spend projection must be Decimal USD, "
@@ -1825,7 +1889,8 @@ def step_when_parallel_seed(context: Any, seed: str, spend: str) -> None:
         f"AC-PA-3 setup: eligible free seed must be USD 5.00/month, saw {seed!r}"
     )
     # Success-only ledger: failed requests never decrement the local budget.
-    _run(context,
+    _run(
+        context,
         context.repository.record_usage(
             UsageEvent(
                 provider="parallel",
@@ -1836,9 +1901,10 @@ def step_when_parallel_seed(context: Any, seed: str, spend: str) -> None:
                 unit_kind=_opt(unit_kind, "USD"),
                 display_unit="USD",
             )
-        )
+        ),
     )
-    _run(context,
+    _run(
+        context,
         context.repository.record_usage(
             UsageEvent(
                 provider="parallel",
@@ -1847,10 +1913,11 @@ def step_when_parallel_seed(context: Any, seed: str, spend: str) -> None:
                 observed_at=FIXED_AT + timedelta(seconds=10),
                 status=UsageStatus.FAILURE,
             )
-        )
+        ),
     )
     remaining = max(Decimal("0"), context.parallel_seed - context.parallel_spend)
-    _run(context,
+    _run(
+        context,
         context.repository.record_quota(
             QuotaSnapshot(
                 provider="parallel",
@@ -1861,7 +1928,7 @@ def step_when_parallel_seed(context: Any, seed: str, spend: str) -> None:
                 unit_kind=_opt(unit_kind, "USD"),
                 display_unit="USD",
             )
-        )
+        ),
     )
 
 
@@ -1941,7 +2008,8 @@ def step_when_parallel_402(context: Any) -> None:
         "AC-PA-5: Parallel 402 must be non-retryable as an operation"
     )
     # The soft zero must be recorded as a soft (temporary) signal.
-    _run(context,
+    _run(
+        context,
         context.repository.record_quota(
             QuotaSnapshot(
                 provider="parallel",
@@ -1950,7 +2018,7 @@ def step_when_parallel_402(context: Any) -> None:
                 limit=context.parallel_seed,
                 observed_at=FIXED_AT + timedelta(minutes=5),
             )
-        )
+        ),
     )
 
 
@@ -1977,7 +2045,8 @@ def step_when_parallel_success_after_soft(context: Any) -> None:
     if unit_kind is not None:
         kwargs["unit_kind"] = _opt(unit_kind, "USD")
         kwargs["display_unit"] = "USD"
-    _run(context,
+    _run(
+        context,
         context.repository.record_usage(
             UsageEvent(
                 provider="parallel",
@@ -1986,7 +2055,7 @@ def step_when_parallel_success_after_soft(context: Any) -> None:
                 observed_at=FIXED_AT + timedelta(minutes=10),
                 **kwargs,
             )
-        )
+        ),
     )
 
 
@@ -2037,12 +2106,11 @@ def step_then_parallel_429_transient(context: Any) -> None:
         f"(saw retryable={context.parallel_429_error.error.retryable!r})"
     )
     latest = _run(context, context.repository.latest_quota("parallel"))
-    assert latest is None or latest.remaining != Decimal("0") or latest.observed_at < (
-        FIXED_AT + timedelta(minutes=5)
-    ), (
-        "AC-PA-5: a 429 must never be recorded as fresh spend exhaustion "
-        f"(saw {latest!r})"
-    )
+    assert (
+        latest is None
+        or latest.remaining != Decimal("0")
+        or latest.observed_at < (FIXED_AT + timedelta(minutes=5))
+    ), f"AC-PA-5: a 429 must never be recorded as fresh spend exhaustion (saw {latest!r})"
 
 
 @when("I inspect Parallel quota capabilities")
@@ -2078,4 +2146,233 @@ def step_then_no_oauth_poll(context: Any) -> None:
     )
     assert _opt(context, "parallel_oauth_calls", []) == [], (
         "AC-PA-4: no request may target the OAuth-only balance endpoint with an API key"
+    )
+
+
+# --------------------------------------------------------------------------
+# B-QUOTA-BRAVE-REGRESSION: degenerate 0/0 is unknown and routable (AC-2/AC-6)
+# --------------------------------------------------------------------------
+
+
+@then(
+    "the Brave snapshot remaining should be unknown and limit should be unknown "
+    "and reset should be unknown"
+)
+def step_then_brave_snapshot_all_unknown(context: Any) -> None:
+    latest = _run(context, context.repository.latest_quota("brave"))
+    assert latest is not None, (
+        "AC-2: expected a Brave snapshot after a successful search with degenerate "
+        "monthly elements; no snapshot was recorded at all"
+    )
+    assert latest.remaining is None, (
+        "AC-2: a degenerate monthly remaining of 0 with no positive limit must "
+        f"be unknown (None), never 0 (saw {latest.remaining!r})"
+    )
+    assert latest.limit is None, (
+        "AC-2: a degenerate monthly limit of 0 carries no allowance and must be "
+        f"unknown (None), never 0 (saw {latest.limit!r})"
+    )
+    assert latest.reset_at is None, (
+        "AC-2: a degenerate monthly reset of 0 carries no reset instant and must "
+        f"be unknown (None), saw {latest.reset_at!r}"
+    )
+
+
+@then("Brave should stay eligible for search routing despite zero monthly elements")
+def step_then_brave_stays_eligible(context: Any) -> None:
+    latest = _run(context, context.repository.latest_quota("brave"))
+    assert latest is not None, "AC-6 setup: expected a Brave snapshot for routing"
+    assert latest.remaining is None and latest.limit is None, (
+        f"AC-2/AC-6 setup: degenerate monthly elements must persist as unknown "
+        f"(None/None), saw {latest.remaining!r}/{latest.limit!r}"
+    )
+    adapter = _StubAdapter("brave")
+    health = {
+        "brave": ProviderHealth(provider="brave", status=HealthStatus.HEALTHY, checked_at=FIXED_AT)
+    }
+    candidates = select_route(_search_request(), [adapter], health, {"brave": latest})
+    assert "brave" in _route_names(candidates), (
+        "AC-6: unknown Brave quota must stay eligible and never be treated as 0; "
+        f"brave was removed from candidates (latest={latest!r})"
+    )
+
+
+@then(
+    "Brave should be excluded from search routing when remaining is zero "
+    "with a known positive limit"
+)
+def step_then_brave_genuine_zero_excluded(context: Any) -> None:
+    latest = _run(context, context.repository.latest_quota("brave"))
+    assert latest is not None, "AC-6 setup: expected a Brave snapshot for routing"
+    assert latest.remaining == Decimal("0"), (
+        f"AC-6 setup: genuine depletion must persist remaining=0, saw {latest.remaining!r}"
+    )
+    assert latest.limit == Decimal("1000"), (
+        f"AC-6 setup: genuine depletion keeps a known positive limit, saw {latest.limit!r}"
+    )
+    adapter = _StubAdapter("brave")
+    fallback = _StubAdapter("tavily")
+    health = {
+        "brave": ProviderHealth(provider="brave", status=HealthStatus.HEALTHY, checked_at=FIXED_AT),
+        "tavily": ProviderHealth(
+            provider="tavily", status=HealthStatus.HEALTHY, checked_at=FIXED_AT
+        ),
+    }
+    candidates = select_route(_search_request(), [adapter, fallback], health, {"brave": latest})
+    assert "brave" not in _route_names(candidates), (
+        f"AC-6: genuine remaining=0 with limit>0 must steer routing away, "
+        f"but brave stayed eligible: {_route_names(candidates)!r}"
+    )
+    assert _route_names(candidates) == ["tavily"], (
+        f"AC-6: healthy fallback must lead after genuine exclusion, "
+        f"saw {_route_names(candidates)!r}"
+    )
+
+
+# --------------------------------------------------------------------------
+# S4: shared normalize_degenerate_quota through BOTH read paths (AC-2/AC-6)
+# --------------------------------------------------------------------------
+
+
+def _require_normalize_helper() -> Any:
+    """Gate S4 steps on the shared degenerate-quota helper contract."""
+
+    helper = _opt(monitoring_module, "normalize_degenerate_quota", None)
+    assert helper is not None, (
+        "S4/AC-2: freesearch.monitoring.normalize_degenerate_quota missing — "
+        "expected a shared pure helper normalize_degenerate_quota(snapshot) "
+        "mapping limit==Decimal('0') to remaining/limit/reset None (else "
+        "identity), used by BOTH effective_quota and the dashboard path "
+        "(_latest_quotas/collect_stats)"
+    )
+    return helper
+
+
+@when("I record a Brave OBSERVED REQUEST quota with remaining 0 limit 0")
+def step_when_record_brave_degenerate_zero(context: Any) -> None:
+    unit_kind = _require_unit_kind_model()
+    snapshot = QuotaSnapshot(
+        provider="brave",
+        source=QuotaSource.OBSERVED,
+        remaining=Decimal("0"),
+        limit=Decimal("0"),
+        reset_at=FIXED_AT,
+        observed_at=FIXED_AT,
+        unit_kind=_opt(unit_kind, "REQUEST"),
+        display_unit="requests",
+    )
+    _run(context, context.repository.record_quota(snapshot))
+    context.degenerate_recorded = snapshot
+
+
+@then("collect_stats latest_quota for brave should be unknown remaining limit and reset")
+def step_then_collect_stats_normalized(context: Any) -> None:
+    _require_normalize_helper()
+    stats = _run(context, collect_stats(context.repository, adapter_names=["brave"]))
+    rows = [snap for snap in stats.latest_quota if snap.provider == "brave"]
+    assert rows, (
+        "S4/AC-2: collect_stats latest_quota has no brave row after record_quota "
+        f"0/0 (saw {[s.provider for s in stats.latest_quota]!r})"
+    )
+    view = rows[0]
+    assert view.remaining is None, (
+        "S4/AC-2: dashboard path must normalize degenerate remaining 0/0 to "
+        f"unknown (None), never 0 (saw {view.remaining!r})"
+    )
+    assert view.limit is None, (
+        "S4/AC-2: dashboard path must normalize degenerate limit 0 to unknown "
+        f"(None), never 0 (saw {view.limit!r})"
+    )
+    assert view.reset_at is None, (
+        "S4/AC-2: dashboard path must normalize degenerate reset to unknown "
+        f"(None), saw {view.reset_at!r}"
+    )
+    context.degenerate_dashboard_view = view
+
+
+@then("effective_quota for brave should match the normalized unknown view")
+def step_then_effective_matches_normalized(context: Any) -> None:
+    helper = _require_normalize_helper()
+    effective = _opt(monitoring_module, "effective_quota", None)
+    assert effective is not None, (
+        "S4/AC-2: freesearch.monitoring.effective_quota missing — routing needs "
+        "the effective-quota view over the normalized degenerate snapshot"
+    )
+    view = _run(context, effective(context.repository, "brave"))
+    assert view is not None, "S4/AC-2 setup: expected an effective_quota view for brave"
+    assert view.remaining is None and view.limit is None and view.reset_at is None, (
+        "S4/AC-2: effective_quota must return the same normalized unknown view "
+        f"(None/None/None), saw {view.remaining!r}/{view.limit!r}/{view.reset_at!r}"
+    )
+    dashboard = context.degenerate_dashboard_view
+    assert (view.remaining, view.limit, view.reset_at) == (
+        dashboard.remaining,
+        dashboard.limit,
+        dashboard.reset_at,
+    ), (
+        "S4/AC-2: effective_quota and collect_stats must return the same "
+        f"normalized view (effective={view!r} dashboard={dashboard!r})"
+    )
+    # The shared helper is the single source of truth for both paths.
+    direct = helper(context.degenerate_recorded)
+    assert (direct.remaining, direct.limit, direct.reset_at) == (None, None, None), (
+        f"S4/AC-2: normalize_degenerate_quota(0/0) must be (None,None,None), saw {direct!r}"
+    )
+    context.degenerate_effective_view = view
+
+
+@then("Brave should stay eligible from the normalized view despite zero limit")
+def step_then_brave_eligible_normalized(context: Any) -> None:
+    view = context.degenerate_effective_view
+    assert view is not None, "S4/AC-6 setup: expected a normalized effective view for brave"
+    assert view.remaining is None and view.limit is None, (
+        f"S4/AC-2/AC-6 setup: degenerate 0/0 must read as unknown (None/None), "
+        f"saw {view.remaining!r}/{view.limit!r}"
+    )
+    adapter = _StubAdapter("brave")
+    health = {
+        "brave": ProviderHealth(provider="brave", status=HealthStatus.HEALTHY, checked_at=FIXED_AT)
+    }
+    candidates = select_route(_search_request(), [adapter], health, {"brave": view})
+    assert "brave" in _route_names(candidates), (
+        "S4/AC-6: normalized unknown Brave quota must stay eligible and never be "
+        f"treated as 0; brave was removed (view={view!r})"
+    )
+
+
+@when("I record a keyless local hourly quota at zero remaining")
+def step_when_keyless_local_zero(context: Any) -> None:
+    unit_kind = _require_unit_kind_model()
+    snapshot = QuotaSnapshot(
+        provider="keenable",
+        source=QuotaSource.OBSERVED,
+        remaining=Decimal("0"),
+        limit=Decimal("1000"),
+        reset_at=FIXED_AT + timedelta(hours=1),
+        observed_at=FIXED_AT,
+        unit_kind=_opt(unit_kind, "REQUEST"),
+        display_unit="requests",
+        metadata={
+            "mode": "keyless",
+            "window": "hourly",
+            "scope": "shared_pool_local_observation",
+        },
+    )
+    _run(context, context.repository.record_quota(snapshot))
+    context.keyless_local_zero = snapshot
+
+
+@then("keyless local hourly zero should stay eligible for routing")
+def step_then_keyless_local_zero_eligible(context: Any) -> None:
+    adapter = _StubAdapter("keenable")
+    health = {
+        "keenable": ProviderHealth(
+            provider="keenable", status=HealthStatus.HEALTHY, checked_at=FIXED_AT
+        )
+    }
+    candidates = select_route(
+        _search_request(), [adapter], health, {"keenable": context.keyless_local_zero}
+    )
+    assert "keenable" in _route_names(candidates), (
+        "AC-6: local keyless 0/1000 is not authoritative shared-pool exhaustion"
     )

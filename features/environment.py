@@ -1,7 +1,9 @@
 """Behave environment hooks for FreeSearch BDD test execution."""
 
 import asyncio
+import gc
 import os
+import time
 from collections.abc import Iterable
 from typing import Any
 
@@ -29,16 +31,34 @@ def before_all(context: Any) -> None:
     context.has_firecrawl_key = resolver.get(ProviderName.FIRECRAWL) is not None
     context.has_parallel_key = resolver.get(ProviderName.PARALLEL) is not None
     context.has_youcom_key = resolver.get(ProviderName.YOU) is not None
+    context.has_keenable_key = resolver.get(ProviderName.KEENABLE) is not None
 
 
 def before_scenario(context: Any, scenario: Any) -> None:
     """Set up async event loop, HTTP client, and provider adapter per scenario.
 
-    A ``@live @keenable`` scenario runs only when ``FREESEARCH_RUN_LIVE=1``;
-    otherwise it is skipped before any resource setup, keeping offline BDD
-    runs network-safe (Keenable is keyless, so no key check can gate it).
+    Offline quota/monitoring/control scenarios win over provider tags: they
+    return before any live gate or live adapter construction, so the offline
+    path never constructs live adapters. A ``@live @keenable`` scenario runs
+    only when ``FREESEARCH_RUN_LIVE=1``; otherwise it is skipped before any
+    resource setup, keeping offline BDD runs network-safe (Keenable is
+    keyless, so no key check can gate it).
     """
+    if _has_monitoring_tag(scenario) or _has_control_tag(scenario) or _has_quota_tag(scenario):
+        context.loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(context.loop)
+        context.http_client = create_async_client()
+        context.adapter = None
+        context.youcom_adapter = None
+        context.search_response = None
+        context.fetch_response = None
+        context.quota_snapshot = None
+        context.last_error = None
+        return
     if _has_keenable_tag(scenario) and os.environ.get(_LIVE_GATE) != "1":
+        scenario.mark_skipped(f"live Keenable scenario requires {_LIVE_GATE}=1")
+        return
+    if _has_keenable_keyed_tag(scenario) and os.environ.get(_LIVE_GATE) != "1":
         scenario.mark_skipped(f"live Keenable scenario requires {_LIVE_GATE}=1")
         return
     if _is_exa_scenario(scenario) and not context.has_exa_key:
@@ -52,12 +72,6 @@ def before_scenario(context: Any, scenario: Any) -> None:
     # Monitoring, control, and quota scenarios supply their own offline adapters and
     # repositories in their steps; never fall through to default provider
     # construction or a live network call.
-    if _has_monitoring_tag(scenario) or _has_control_tag(scenario) or _has_quota_tag(scenario):
-        context.search_response = None
-        context.fetch_response = None
-        context.quota_snapshot = None
-        context.last_error = None
-        return
     # You.com live scenarios skip before any adapter is constructed: TavilyAdapter
     # fails closed without a Tavily key, which would abort a You.com scenario
     # (e.g. when both provider keys are absent) instead of skipping it.
@@ -74,6 +88,30 @@ def before_scenario(context: Any, scenario: Any) -> None:
 
         context.youcom_adapter = YoucomAdapter(context.http_client)
     else:
+        if _has_brave_tag(scenario) and not getattr(context, "has_brave_key", True):
+            scenario.skip(
+                reason=(
+                    "FREESEARCH_BRAVE_SEARCH_API_KEY is not configured in .env or environment. "
+                    "Brave live BDD scenarios are skipped without a resolver key."
+                )
+            )
+            return
+        if _has_parallel_tag(scenario) and not getattr(context, "has_parallel_key", True):
+            scenario.skip(
+                reason=(
+                    "FREESEARCH_PARALLEL_API_KEY is not configured in .env or environment. "
+                    "Parallel live BDD scenarios are skipped without a resolver key."
+                )
+            )
+            return
+        if _has_keenable_keyed_tag(scenario) and not getattr(context, "has_keenable_key", True):
+            scenario.skip(
+                reason=(
+                    "FREESEARCH_KEENABLE_API_KEY is not configured in .env or environment. "
+                    "Keenable keyed live BDD scenarios are skipped without a resolver key."
+                )
+            )
+            return
         context.adapter = _adapter_for(context.http_client, scenario)
     context.search_response = None
     context.fetch_response = None
@@ -87,7 +125,7 @@ def _adapter_for(client: Any, scenario: Any) -> Any:
         return ParallelAdapter(client)
     if _has_firecrawl_tag(scenario):
         return FirecrawlAdapter(client)
-    if _has_keenable_tag(scenario):
+    if _has_keenable_tag(scenario) or _has_keenable_keyed_tag(scenario):
         return KeenableAdapter(client)
     if _has_brave_tag(scenario):
         return BraveAdapter(client)
@@ -117,12 +155,31 @@ def after_scenario(context: Any, scenario: Any) -> None:
         context.loop.run_until_complete(context.http_client.aclose())
     if getattr(context, "loop", None) is not None:
         context.loop.close()
+    database_path = getattr(context, "database_path", None)
+    migration_lock_path = f"{database_path}.migration.lock" if database_path else None
+    for test_path in (database_path, migration_lock_path):
+        if test_path is not None:
+            _unlink_with_retries(test_path)
     temp_directory = getattr(context, "temp_directory", None)
     if temp_directory is not None:
         temp_directory.cleanup()
-    database_path = getattr(context, "database_path", None)
-    if database_path is not None and os.path.exists(database_path):
-        os.unlink(database_path)
+
+
+def _unlink_with_retries(path: str, *, attempts: int = 20) -> None:
+    """Remove a test database after Windows releases delayed SQLite handles."""
+
+    for attempt in range(attempts):
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            gc.collect()
+            time.sleep(0.05)
+        else:
+            return
 
 
 def _has_monitoring_tag(scenario: Any) -> bool:
@@ -178,6 +235,14 @@ def _has_keenable_tag(scenario: Any) -> bool:
     if not tags:
         return False
     return any(str(getattr(tag, "name", tag)).lstrip("@") == "keenable" for tag in tags)
+
+
+def _has_keenable_keyed_tag(scenario: Any) -> bool:
+    """Return True when the scenario carries the 'keenable-keyed' tag."""
+    tags = getattr(scenario, "tags", None)
+    if not tags:
+        return False
+    return any(str(getattr(tag, "name", tag)).lstrip("@") == "keenable-keyed" for tag in tags)
 
 
 def _has_firecrawl_tag(scenario: Any) -> bool:

@@ -104,6 +104,7 @@ def _credit_snapshot(payload: dict[str, Any], provider: str) -> QuotaSnapshot:
         observed_at=datetime.now(UTC),
         unit_kind=UnitKind.CREDIT,
         display_unit="credits",
+        metadata={"window": "monthly"},
     )
 
 

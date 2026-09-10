@@ -596,6 +596,7 @@ class TavilyAdapter(ProviderAdapter):
                     observed_at=observed_at,
                     unit_kind=UnitKind.CREDIT,
                     display_unit="credits",
+                    metadata={"window": "monthly"},
                 )
             # Incomplete plan figures: validate any present value so a
             # malformed one still errors, then fall back to the key figures.
@@ -619,6 +620,7 @@ class TavilyAdapter(ProviderAdapter):
                 observed_at=observed_at,
                 unit_kind=UnitKind.CREDIT,
                 display_unit="credits",
+                metadata={"window": "monthly"},
             )
         assert key_usage is not None
         return QuotaSnapshot(
@@ -630,6 +632,7 @@ class TavilyAdapter(ProviderAdapter):
             observed_at=observed_at,
             unit_kind=UnitKind.CREDIT,
             display_unit="credits",
+            metadata={"window": "monthly"},
         )
 
     def _quota_number(self, value: Any) -> Decimal | None:

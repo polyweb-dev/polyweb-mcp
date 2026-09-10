@@ -159,6 +159,50 @@ class TestUnitKindContract:
         )
 
 
+class TestRemainingPercentContract:
+    def _snapshot(self, remaining: str | None, limit: str | None) -> QuotaSnapshot:
+        return QuotaSnapshot(
+            provider="tavily",
+            source=QuotaSource.AUTHORITATIVE,
+            remaining=Decimal(remaining) if remaining is not None else None,
+            limit=Decimal(limit) if limit is not None else None,
+            observed_at=FIXED_AT,
+            unit_kind=_opt(_unit_kind(), "CREDIT"),
+            display_unit="credits",
+        )
+
+    def test_bounded_percentage_is_decimal_exact(self) -> None:
+        snapshot = self._snapshot("25", "100")
+        assert snapshot.remaining_percent == Decimal("25"), (
+            f"Quota percentage must derive from native Decimal values, saw {snapshot!r}"
+        )
+        assert Decimal(snapshot.model_dump(mode="json")["remaining_percent"]) == Decimal("25"), (
+            "Bounded remaining_percent must be present on the canonical wire contract"
+        )
+
+    def test_promotional_balance_clamps_at_one_hundred(self) -> None:
+        snapshot = self._snapshot("250", "100")
+        assert snapshot.remaining_percent == Decimal("100"), (
+            "A remaining balance above the plan baseline must clamp to 100%"
+        )
+
+    @pytest.mark.parametrize("remaining,limit", [("0", "0"), ("0", None), ("10", None)])
+    def test_unbounded_or_zero_limit_is_unknown(self, remaining: str, limit: str | None) -> None:
+        snapshot = self._snapshot(remaining, limit)
+        assert snapshot.remaining_percent is None
+        assert snapshot.model_dump(mode="json")["remaining_percent"] is None
+
+    async def test_dashboard_serializes_the_same_derived_percentage(
+        self, repo: SQLiteRepository
+    ) -> None:
+        await repo.record_quota(self._snapshot("25", "100"))
+        stats = await monitoring_module.collect_stats(repo, adapter_names=["tavily"])
+        payload = stats.model_dump(mode="json")
+        assert Decimal(payload["latest_quota"][0]["remaining_percent"]) == Decimal("25"), (
+            "Dashboard serialization must expose the canonical derived percentage"
+        )
+
+
 # --------------------------------------------------------------------------
 # Decimal rules (QUOTA.md section 2.3)
 # --------------------------------------------------------------------------
@@ -278,8 +322,7 @@ class TestSafeAggregation:
         for total in totals:
             if _opt(total, "unit_kind", None) is None:
                 assert isinstance(total, LegacyUsageTotal), (
-                    "AC-8: kind-less totals must be LegacyUsageTotal, "
-                    f"saw {type(total).__name__}"
+                    f"AC-8: kind-less totals must be LegacyUsageTotal, saw {type(total).__name__}"
                 )
         rows = await repo.list_usage(provider="exa")
         assert len(rows) == 1 and rows[0].units == Decimal("0.001"), (
@@ -289,9 +332,7 @@ class TestSafeAggregation:
             "AC-8: legacy rows read back with unknown unit kind"
         )
 
-    async def test_legacy_only_totals_are_legacy_compatible(
-        self, repo: SQLiteRepository
-    ) -> None:
+    async def test_legacy_only_totals_are_legacy_compatible(self, repo: SQLiteRepository) -> None:
         await repo.record_usage(
             UsageEvent(
                 provider="exa",
@@ -304,9 +345,7 @@ class TestSafeAggregation:
         assert len(totals) == 1 and isinstance(totals[0], LegacyUsageTotal), (
             f"AC-8: legacy-only data must aggregate as LegacyUsageTotal, saw {totals!r}"
         )
-        assert totals[0].total_units == Decimal("0.001"), (
-            "AC-8: legacy totals keep exact raw units"
-        )
+        assert totals[0].total_units == Decimal("0.001"), "AC-8: legacy totals keep exact raw units"
 
     async def test_failure_zeros_excluded(self, repo: SQLiteRepository) -> None:
         kind = _unit_kind()
@@ -571,14 +610,18 @@ class TestCostEstimates:
             f"AC-PA-2: Parallel estimates must be USD, saw {estimate.currency!r}"
         )
         assert estimate.units == Decimal("0.005"), (
-            f"AC-PA-2: omitted/default-advanced search must be USD 0.005, "
-            f"saw {estimate.units!r}"
+            f"AC-PA-2: omitted/default-advanced search must be USD 0.005, saw {estimate.units!r}"
         )
 
     @pytest.mark.parametrize(
         ("mode", "bundles", "expected"),
-        [(None, 0, "0.005"), ("omitted", 0, "0.005"), ("turbo", 0, "0.001"),
-         ("basic", 0, "0.005"), ("advanced", 2, "0.007")],
+        [
+            (None, 0, "0.005"),
+            ("omitted", 0, "0.005"),
+            ("turbo", 0, "0.001"),
+            ("basic", 0, "0.005"),
+            ("advanced", 2, "0.007"),
+        ],
     )
     def test_parallel_search_price_table(
         self, mode: str | None, bundles: int, expected: str
@@ -613,9 +656,7 @@ class TestCostEstimates:
         try:
             adapter = ParallelAdapter(client)
             try:
-                request = SearchRequest(
-                    query="q", limit=3, mode="turbo", extra_bundles=0
-                )
+                request = SearchRequest(query="q", limit=3, mode="turbo", extra_bundles=0)
             except ValidationError as exc:
                 raise AssertionError(
                     "AC-PA-2: SearchRequest lacks the mode-aware estimate "
@@ -626,8 +667,7 @@ class TestCostEstimates:
             await adapter.aclose()
             await client.aclose()
         assert estimate.units == search_cost_usd("turbo", 0) == Decimal("0.001"), (
-            f"AC-PA-2: turbo estimate must equal the documented price, "
-            f"saw {estimate.units!r}"
+            f"AC-PA-2: turbo estimate must equal the documented price, saw {estimate.units!r}"
         )
         assert estimate.currency == "USD", (
             f"AC-PA-2: Parallel estimates must be USD, saw {estimate.currency!r}"
@@ -700,9 +740,7 @@ class TestKeenableErrors:
                 200,
                 json={
                     "results": [{"title": "k", "url": "https://example.com/k"}],
-                    "_meta": {
-                        "keenable/usage": {"credits": 2, "paid": True, "sku": "search.pro"}
-                    },
+                    "_meta": {"keenable/usage": {"credits": 2, "paid": True, "sku": "search.pro"}},
                 },
             )
 
@@ -810,9 +848,7 @@ class TestRoutingSemantics:
             async def fetch(self, request: FetchRequest):  # type: ignore[no-untyped-def]
                 return FetchResponse(
                     provider=self._name,
-                    document=FetchedDocument(
-                        url=request.url, content="", fetched_at=FIXED_AT
-                    ),
+                    document=FetchedDocument(url=request.url, content="", fetched_at=FIXED_AT),
                 )
 
             async def estimate_cost(self, request):  # type: ignore[no-untyped-def]
@@ -844,10 +880,7 @@ class TestRoutingSemantics:
 
     def test_unknown_quota_eligible(self) -> None:
         adapters = self._adapters()
-        names = [
-            c.adapter.name
-            for c in select_route(SearchRequest(query="q"), adapters, {}, {})
-        ]
+        names = [c.adapter.name for c in select_route(SearchRequest(query="q"), adapters, {}, {})]
         assert names == ["tavily", "brave"], (
             f"AC-6: unknown quota must stay eligible, never 0: {names!r}"
         )
@@ -870,8 +903,7 @@ class TestRoutingSemantics:
         }
         health = {"tavily": _health("tavily", HealthStatus.HEALTHY)}
         names = [
-            c.adapter.name
-            for c in select_route(SearchRequest(query="q"), adapters, health, quota)
+            c.adapter.name for c in select_route(SearchRequest(query="q"), adapters, health, quota)
         ]
         assert "tavily" not in names, f"AC-6: genuine depletion must steer away: {names!r}"
         assert names[0] == "brave", f"AC-6: fallback must lead: {names!r}"
@@ -888,12 +920,41 @@ class TestRoutingSemantics:
         }
         names = [
             c.adapter.name
-            for c in select_route(
-                SearchRequest(query="q"), [_parallel_route_adapter()], {}, quota
-            )
+            for c in select_route(SearchRequest(query="q"), [_parallel_route_adapter()], {}, quota)
         ]
         assert names == ["parallel"], (
             f"AC-6/AC-PA-5: Parallel soft zero must stay routable, saw {names!r}"
+        )
+
+    def test_keyless_local_hourly_zero_stays_routable(self) -> None:
+        # The local keyless counter cannot observe shared traffic from the
+        # same IP/pool, so 0/1000 is pressure metadata rather than hard
+        # exhaustion; a vendor 429 remains the authoritative signal.
+        adapters = self._adapters()
+        adapters[0]._name = "keenable"  # type: ignore[attr-defined]
+        quota = {
+            "keenable": QuotaSnapshot(
+                provider="keenable",
+                source=QuotaSource.OBSERVED,
+                remaining=Decimal("0"),
+                limit=Decimal("1000"),
+                observed_at=FIXED_AT,
+                unit_kind=_opt(_unit_kind(), "REQUEST"),
+                display_unit="requests",
+                metadata={
+                    "mode": "keyless",
+                    "window": "hourly",
+                    "scope": "shared_pool_local_observation",
+                },
+            )
+        }
+        health = {"keenable": _health("keenable", HealthStatus.HEALTHY)}
+        names = [
+            candidate.adapter.name
+            for candidate in select_route(SearchRequest(query="q"), adapters, health, quota)
+        ]
+        assert names[0] == "keenable", (
+            "AC-6: keyless local 0/1000 must stay eligible despite shared-pool uncertainty"
         )
 
     async def test_soft_zero_clears_on_success(self, repo: SQLiteRepository) -> None:
@@ -1223,9 +1284,7 @@ class TestParallelFetchUsagePersistence:
             response = await tracked(
                 repo,
                 adapter,
-                lambda running: running.fetch(
-                    FetchReq(url="https://example.com/doc", url_count=4)
-                ),
+                lambda running: running.fetch(FetchReq(url="https://example.com/doc", url_count=4)),
                 operation=UsageOperation.FETCH,
             )
         finally:
@@ -1233,8 +1292,7 @@ class TestParallelFetchUsagePersistence:
             await client.aclose()
         assert response.usage is not None, "AC-PA-1 setup: fetch must report usage"
         assert response.usage.metadata.get("url_count") == 4, (
-            f"AC-PA-1 setup: executed fetch must tag url_count=4, "
-            f"saw {response.usage.metadata!r}"
+            f"AC-PA-1 setup: executed fetch must tag url_count=4, saw {response.usage.metadata!r}"
         )
         events = await repo.list_usage(provider="parallel", operation=UsageOperation.FETCH)
         assert len(events) == 1, f"AC-PA-1/R2: fetch usage must persist, saw {events!r}"
@@ -1254,9 +1312,7 @@ class TestParallelFetchUsagePersistence:
 # --------------------------------------------------------------------------
 
 
-def _keenable_search_handler(
-    usage_meta: dict | None = None, *, status: int = 200
-) -> object:
+def _keenable_search_handler(usage_meta: dict | None = None, *, status: int = 200) -> object:
     def handler(request: httpx.Request) -> httpx.Response:
         if status != 200:
             return httpx.Response(status, json={"error": f"HTTP {status}"})
@@ -1307,8 +1363,7 @@ class TestKeenableRebuildPersistence:
         finally:
             await client.aclose()
         assert (await rebuilt.quota()).remaining == Decimal("99997"), (
-            "AC-5/R3: hydration must restore the persisted 3-credit spend "
-            "across rebuild"
+            "AC-5/R3: hydration must restore the persisted 3-credit spend across rebuild"
         )
 
     async def test_402_exhaustion_survives_rebuild(
@@ -1389,9 +1444,7 @@ class TestKeenableRebuildPersistence:
 
 
 class TestMetadataTypePreservation:
-    async def test_int_and_bool_and_none_round_trip_exactly(
-        self, repo: SQLiteRepository
-    ) -> None:
+    async def test_int_and_bool_and_none_round_trip_exactly(self, repo: SQLiteRepository) -> None:
         await repo.record_usage(
             UsageEvent(
                 provider="alpha",
@@ -1406,9 +1459,7 @@ class TestMetadataTypePreservation:
         assert event.metadata["paid"] is False
         assert event.metadata["missing"] is None
 
-    async def test_numeric_strings_never_coerce_to_numbers(
-        self, repo: SQLiteRepository
-    ) -> None:
+    async def test_numeric_strings_never_coerce_to_numbers(self, repo: SQLiteRepository) -> None:
         # A numeric string is telemetry text, not a number: "4" must come back
         # as str (never int), "0.005" as str (never float/Decimal).
         await repo.record_usage(
@@ -1428,9 +1479,7 @@ class TestMetadataTypePreservation:
             event.metadata["price_text"], str
         ), f"numeric strings must not coerce to numbers, saw {event.metadata!r}"
 
-    async def test_decimal_never_contaminates_with_float(
-        self, repo: SQLiteRepository
-    ) -> None:
+    async def test_decimal_never_contaminates_with_float(self, repo: SQLiteRepository) -> None:
         await repo.record_usage(
             UsageEvent(
                 provider="alpha",
@@ -1457,9 +1506,7 @@ class TestMetadataTypePreservation:
 
 
 class TestQuotaPollBackoffAndEviction:
-    async def test_quota_poll_backs_off_on_429_then_succeeds(
-        self, static_resolver: None
-    ) -> None:
+    async def test_quota_poll_backs_off_on_429_then_succeeds(self, static_resolver: None) -> None:
         # Failure backoff through the public ResilientRunner seams (injected
         # clock/sleeper, deterministic jitter): two 429s on the quota poll
         # sleep capped exponential backoff, then the poll succeeds.
@@ -1507,9 +1554,7 @@ class TestQuotaPollBackoffAndEviction:
             f"quota 429s must sleep capped exponential backoff [1.0, 2.0], saw {sleeps!r}"
         )
 
-    async def test_poll_state_eviction_forces_repoll(
-        self, repo: SQLiteRepository
-    ) -> None:
+    async def test_poll_state_eviction_forces_repoll(self, repo: SQLiteRepository) -> None:
         # Lock/cache eviction through the public seam: after eviction the next
         # bounded poll must hit vendors again instead of serving stale state.
         from freesearch.monitoring import clear_quota_poll_cache, refresh_quotas
@@ -1612,3 +1657,360 @@ class TestParallelHydrationUnknownMode:
             "AC-PA-3: unknown-mode rows contribute no spend; the known "
             f"current-month row must price exactly, saw {snapshot.remaining!r}"
         )
+
+
+# --------------------------------------------------------------------------
+# Brave derived USD spend (manual dashboard math, no scraping)
+# --------------------------------------------------------------------------
+
+
+def _brave_search_handler(headers: dict[str, str]) -> object:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"web": {"results": [{"title": "t", "url": "https://example.com/t"}]}},
+            headers=headers,
+        )
+
+    return handler
+
+
+class TestBraveDerivedSpend:
+    def test_cost_constants_are_decimal_exact(self) -> None:
+        cost = _opt(brave_module, "COST_USD_PER_REQUEST", None)
+        allowance = _opt(brave_module, "FREE_CREDITS_USD", None)
+        assert cost is not None, "Brave COST_USD_PER_REQUEST missing"
+        assert allowance is not None, "Brave FREE_CREDITS_USD missing"
+        assert cost == Decimal("0.005"), f"Brave cost must be 0.005, saw {cost!r}"
+        assert allowance == Decimal("5.00"), f"Brave allowance must be 5.00, saw {allowance!r}"
+        assert isinstance(cost, Decimal) and isinstance(allowance, Decimal), (
+            "Brave cost constants must stay Decimal-exact, never float"
+        )
+        assert not isinstance(cost, float) and not isinstance(allowance, float)
+
+    def test_spend_helper_is_decimal_exact(self) -> None:
+        spend = _opt(brave_module, "brave_spend_usd", None)
+        assert spend is not None, "Brave brave_spend_usd helper missing"
+        assert spend(176) == Decimal("0.88"), f"176 reqs must cost 0.88, saw {spend(176)!r}"
+        assert spend(0) == Decimal("0"), "zero requests must cost zero"
+        assert spend(1000) == Decimal("5.00"), "1000 reqs must cost exactly the allowance"
+        assert isinstance(spend(176), Decimal), "spend must stay Decimal-exact"
+
+    @staticmethod
+    @pytest.mark.parametrize("bad", [True, False, 1.5, "176", None, float("nan")])
+    def test_spend_helper_rejects_non_decimal_inputs(bad: object) -> None:
+        spend = _opt(brave_module, "brave_spend_usd", None)
+        assert spend is not None, "Brave brave_spend_usd helper missing"
+        with pytest.raises((TypeError, ValueError)):
+            spend(bad)  # type: ignore[arg-type]
+
+    @staticmethod
+    @pytest.mark.parametrize("bad", [-1, Decimal("-1"), Decimal("NaN"), Decimal("1.5")])
+    def test_spend_helper_rejects_bad_counts(bad: object) -> None:
+        spend = _opt(brave_module, "brave_spend_usd", None)
+        assert spend is not None, "Brave brave_spend_usd helper missing"
+        with pytest.raises((TypeError, ValueError)):
+            spend(bad)  # type: ignore[arg-type]
+
+    async def test_snapshot_keeps_throttle_but_carries_cost_metadata(
+        self, static_resolver: None
+    ) -> None:
+        from freesearch.adapters.brave import BraveAdapter
+
+        headers = {"X-RateLimit-Remaining": "49, 0", "X-RateLimit-Limit": "50, 0"}
+        client = httpx.AsyncClient(
+            transport=httpx.MockTransport(_brave_search_handler(headers)), timeout=30.0
+        )
+        try:
+            adapter = BraveAdapter(client)
+            response = await adapter.search(SearchRequest(query="q", limit=2))
+        finally:
+            await client.aclose()
+        snapshot = response.quota_snapshot
+        assert snapshot is not None, "AC-2 setup: Brave snapshot missing"
+        assert snapshot.remaining is None and snapshot.limit is None, (
+            f"AC-2: unlimited 0/0 stays None/None, saw {snapshot.remaining!r}/{snapshot.limit!r}"
+        )
+        assert str(_opt(snapshot, "unit_kind")) == "REQUEST", "AC-2: unit stays REQUEST"
+        assert snapshot.source == QuotaSource.OBSERVED, "AC-2: source stays OBSERVED"
+        assert _opt(snapshot, "window", None) == "monthly", "AC-2: window stays monthly"
+        assert snapshot.remaining_percent is None, "AC-7a: unlimited Brave has no percent"
+        metadata = dict(_opt(snapshot, "metadata", None) or {})
+        assert metadata.get("cost_per_req") == Decimal("0.005"), (
+            f"spend metadata must carry cost_per_req 0.005, saw {metadata!r}"
+        )
+        assert metadata.get("allowance_usd") == Decimal("5.00"), (
+            f"spend metadata must carry allowance 5.00, saw {metadata!r}"
+        )
+
+    async def test_collect_stats_projects_176_requests_to_088(
+        self, static_resolver: None, repo: SQLiteRepository
+    ) -> None:
+        from freesearch.adapters.brave import BraveAdapter
+
+        kind = _unit_kind()
+        for index in range(175):
+            await repo.record_usage(
+                UsageEvent(
+                    provider="brave",
+                    operation=UsageOperation.SEARCH,
+                    units=Decimal("1"),
+                    observed_at=FIXED_AT + timedelta(seconds=index),
+                    status=UsageStatus.SUCCESS,
+                    unit_kind=_opt(kind, "REQUEST"),
+                    display_unit="requests",
+                )
+            )
+        headers = {
+            "X-RateLimit-Remaining": "49, 0",
+            "X-RateLimit-Limit": "50, 0",
+            "X-RateLimit-Reset": "1, 0",
+        }
+        client = httpx.AsyncClient(
+            transport=httpx.MockTransport(_brave_search_handler(headers)), timeout=30.0
+        )
+        try:
+            adapter = BraveAdapter(client)
+            await tracked_call(
+                repo,
+                adapter,
+                lambda running: running.search(SearchRequest(query="spend", limit=3)),
+                operation=UsageOperation.SEARCH,
+            )
+        finally:
+            await client.aclose()
+        stats = await monitoring_module.collect_stats(repo, adapter_names=["brave"])
+        rows = [snap for snap in stats.latest_quota if snap.provider == "brave"]
+        assert rows, "dashboard must include a Brave quota row"
+        view = rows[0]
+        assert view.remaining is None and view.limit is None, (
+            f"unlimited throttle stays None/None, saw {view.remaining!r}/{view.limit!r}"
+        )
+        assert view.remaining_percent is None, "AC-7a: Brave percent stays None"
+        metadata = dict(view.metadata)
+        assert metadata.get("spend_usd") == Decimal("0.88") or metadata.get("spend_usd") == Decimal(
+            "0.880"
+        ), f"176 REQUEST successes must project spend 0.88, saw {metadata!r}"
+        assert metadata.get("allowance_usd") == Decimal("5.00"), (
+            f"allowance must be 5.00, saw {metadata!r}"
+        )
+        assert metadata.get("cost_per_req") == Decimal("0.005"), (
+            f"cost_per_req must be 0.005, saw {metadata!r}"
+        )
+        totals = {
+            (total.provider, str(total.operation), str(_opt(total, "unit_kind"))): total
+            for total in await repo.usage_totals()
+        }
+        assert totals[("brave", "search", "REQUEST")].total_units == Decimal("176"), (
+            "AC-3: Brave REQUEST ledger stays exact (175 plus the tracked search)"
+        )
+
+    async def test_per_second_headroom_in_usage_metadata(self, static_resolver: None) -> None:
+        from freesearch.adapters.brave import BraveAdapter
+
+        headers = {"X-RateLimit-Remaining": "49, 0"}
+        client = httpx.AsyncClient(
+            transport=httpx.MockTransport(_brave_search_handler(headers)), timeout=30.0
+        )
+        try:
+            adapter = BraveAdapter(client)
+            response = await adapter.search(SearchRequest(query="q", limit=2))
+        finally:
+            await client.aclose()
+        assert response.usage is not None, "Brave usage missing"
+        assert response.usage.metadata.get("rate_limit_remaining") == 49, (
+            f"usage must carry per-second headroom 49, saw {response.usage.metadata!r}"
+        )
+
+    async def test_other_dimensions_never_inflate_brave_spend(
+        self, static_resolver: None, repo: SQLiteRepository
+    ) -> None:
+        kind = _unit_kind()
+        await repo.record_usage(
+            UsageEvent(
+                provider="exa",
+                operation=UsageOperation.SEARCH,
+                units=Decimal("0.500"),
+                observed_at=FIXED_AT,
+                unit_kind=_opt(kind, "USD"),
+                display_unit="USD",
+            )
+        )
+        await repo.record_usage(
+            UsageEvent(
+                provider="brave",
+                operation=UsageOperation.SEARCH,
+                units=Decimal("1"),
+                observed_at=FIXED_AT + timedelta(seconds=1),
+                status=UsageStatus.SUCCESS,
+                unit_kind=_opt(kind, "REQUEST"),
+                display_unit="requests",
+            )
+        )
+        headers = {"X-RateLimit-Remaining": "49, 0", "X-RateLimit-Limit": "50, 0"}
+        client = httpx.AsyncClient(
+            transport=httpx.MockTransport(_brave_search_handler(headers)), timeout=30.0
+        )
+        try:
+            from freesearch.adapters.brave import BraveAdapter
+
+            adapter = BraveAdapter(client)
+            await tracked_call(
+                repo,
+                adapter,
+                lambda running: running.search(SearchRequest(query="q", limit=2)),
+                operation=UsageOperation.SEARCH,
+            )
+        finally:
+            await client.aclose()
+        stats = await monitoring_module.collect_stats(repo, adapter_names=["brave", "exa"])
+        view = next(snap for snap in stats.latest_quota if snap.provider == "brave")
+        assert dict(view.metadata).get("spend_usd") == Decimal("0.010"), (
+            "AC-3: only Brave REQUEST units price spend (2 reqs), Exa USD must not mix, "
+            f"saw {view.metadata!r}"
+        )
+
+
+class TestBraveExhaustionMapping:
+    @staticmethod
+    @pytest.mark.parametrize("code", ["CREDIT_EXHAUSTED", "QUOTA_LIMITED", "USAGE_LIMIT_EXCEEDED"])
+    async def test_body_code_maps_to_quota_exhausted(static_resolver: None, code: str) -> None:
+        from freesearch.adapters.brave import BraveAdapter
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(402, json={"code": code})
+
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler), timeout=30.0)
+        try:
+            adapter = BraveAdapter(client)
+            with pytest.raises(ProviderOperationError) as exc_info:
+                await adapter.search(SearchRequest(query="q", limit=2))
+        finally:
+            await client.aclose()
+        assert exc_info.value.error.code == "quota_exhausted", (
+            f"body {code} must map to quota_exhausted, saw {exc_info.value.error.code!r}"
+        )
+        assert exc_info.value.error.retryable is False, "exhaustion is non-retryable"
+        assert exc_info.value.error.status_code == 402
+
+    async def test_429_with_body_code_never_becomes_exhaustion(self, static_resolver: None) -> None:
+        from freesearch.adapters.brave import BraveAdapter
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(429, json={"code": "QUOTA_LIMITED"})
+
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler), timeout=30.0)
+        try:
+            adapter = BraveAdapter(client)
+            with pytest.raises(ProviderOperationError) as exc_info:
+                await adapter.search(SearchRequest(query="q", limit=2))
+        finally:
+            await client.aclose()
+        assert exc_info.value.error.code == "http_error", (
+            "AC-6: 429 stays transient even with an exhaustion body code, saw "
+            f"{exc_info.value.error.code!r}"
+        )
+        assert exc_info.value.error.retryable is True
+
+    async def test_quota_after_error_402_records_exhaustion_without_limit(
+        self, static_resolver: None, repo: SQLiteRepository
+    ) -> None:
+        from freesearch.adapters.brave import BraveAdapter
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(402, json={"code": "CREDIT_EXHAUSTED"})
+
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler), timeout=30.0)
+        try:
+            adapter = BraveAdapter(client)
+            with pytest.raises(ProviderOperationError):
+                await tracked_call(
+                    repo,
+                    adapter,
+                    lambda running: running.search(SearchRequest(query="q", limit=2)),
+                    operation=UsageOperation.SEARCH,
+                )
+        finally:
+            await client.aclose()
+        latest = await repo.latest_quota("brave")
+        assert latest is not None, "402 must persist an exhaustion observation"
+        assert latest.remaining == Decimal("0"), f"exhaustion remaining must be 0, saw {latest!r}"
+        assert latest.limit is None, (
+            f"unlimited throttle must not invent a limit on exhaustion, saw {latest.limit!r}"
+        )
+        assert latest.remaining_percent is None, "AC-7a: percent stays None"
+
+    async def test_genuine_throttle_zero_still_excludes(
+        self, static_resolver: None, repo: SQLiteRepository
+    ) -> None:
+        from freesearch.adapters.base import ProviderAdapter
+        from freesearch.adapters.brave import BraveAdapter
+        from freesearch.contracts import (
+            CostEstimate,
+            FetchedDocument,
+            FetchRequest,
+            FetchResponse,
+            SearchResponse,
+        )
+
+        headers = {
+            "X-RateLimit-Remaining": "1, 0",
+            "X-RateLimit-Limit": "60, 1000",
+            "X-RateLimit-Reset": "5, 2592000",
+        }
+        client = httpx.AsyncClient(
+            transport=httpx.MockTransport(_brave_search_handler(headers)), timeout=30.0
+        )
+        try:
+            adapter = BraveAdapter(client)
+            await tracked_call(
+                repo,
+                adapter,
+                lambda running: running.search(SearchRequest(query="depleted", limit=2)),
+                operation=UsageOperation.SEARCH,
+            )
+        finally:
+            await client.aclose()
+        latest = await repo.latest_quota("brave")
+        assert latest is not None and latest.remaining == Decimal("0"), (
+            "AC-6 setup: genuine depletion must persist remaining=0"
+        )
+        assert latest.limit == Decimal("1000")
+
+        class Stub(ProviderAdapter):
+            def __init__(self, name: str) -> None:
+                self._name = name
+
+            @property
+            def name(self) -> str:
+                return self._name
+
+            @property
+            def capabilities(self) -> ProviderCapabilities:
+                return ProviderCapabilities(search=True, fetch=True)
+
+            async def search(self, request: SearchRequest) -> SearchResponse:
+                return SearchResponse(query=request.query, provider=self._name, results=[])
+
+            async def fetch(self, request: FetchRequest) -> FetchResponse:
+                return FetchResponse(
+                    provider=self._name,
+                    document=FetchedDocument(url=request.url, content="", fetched_at=FIXED_AT),
+                )
+
+            async def estimate_cost(self, request: object) -> CostEstimate:
+                operation = (
+                    UsageOperation.SEARCH
+                    if isinstance(request, SearchRequest)
+                    else UsageOperation.FETCH
+                )
+                return CostEstimate(provider=self._name, operation=operation, units=Decimal("0"))
+
+        adapters = [Stub("brave"), Stub("tavily")]
+        health = {"brave": _health("brave", HealthStatus.HEALTHY)}
+        names = [
+            c.adapter.name
+            for c in select_route(SearchRequest(query="q"), adapters, health, {"brave": latest})
+        ]
+        assert "brave" not in names, f"AC-6: genuine 0/1000 must steer away: {names!r}"
+        assert names[0] == "tavily", f"AC-6: fallback must lead: {names!r}"

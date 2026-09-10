@@ -72,7 +72,7 @@ export const PROVIDER_CATALOG: StaticProviderMeta[] = [
     description: "High-throughput parallelized search and link discovery aggregator.",
     baseUrl: "https://api.parallel.ai/v1",
     authHeaderName: "Authorization",
-    capabilities: ["search", "extract"],
+    capabilities: ["search", "extract", "fetch"],
   },
 ]
 

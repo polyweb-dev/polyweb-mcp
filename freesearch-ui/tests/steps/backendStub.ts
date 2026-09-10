@@ -1,4 +1,9 @@
 import type { Page, Route } from "@playwright/test"
+import {
+  dashboardFixture as canonicalDashboardFixture,
+  fetchResponseFixture as canonicalFetchFixture,
+  searchResponseFixture as canonicalSearchFixture,
+} from "../../src/test/backendFixtures"
 
 /**
  * Deterministic in-memory backend stub for state-neutral E2E.
@@ -41,6 +46,21 @@ interface StubRouting {
   fallback_policy: "chained" | "first_only"
   cost_optimization_preset: "balanced" | "free_first"
   max_attempts: number
+}
+
+/**
+ * In-memory manual billing entries for manual-quota scenarios. Mutated (never
+ * reassigned) so route closures registered by installBackendStub always see
+ * the current per-scenario state; writes via PUT persist for the scenario.
+ */
+const stubbedManualQuotas: Record<string, Record<string, unknown>> = {}
+
+export function setStubbedManualQuota(
+  provider: string,
+  entry: Record<string, unknown> | null
+): void {
+  if (entry === null) delete stubbedManualQuotas[provider]
+  else stubbedManualQuotas[provider] = entry
 }
 
 const SECRET_PRESENCE: Record<string, SecretPresence> = {
@@ -158,7 +178,30 @@ export async function installBackendStub(page: Page): Promise<void> {
     return route.fallback()
   })
 
-  // Provider connectivity probes: fixed healthy answers, never live state.
+  // Manual billing entries: GET 404s while unconfigured, PUT stores the window,
+  // DELETE clears it again. Writes persist per scenario via stubbedManualQuotas.
+  await page.route("**/api/v1/providers/*/manual-quota", (route) => {
+    const method = route.request().method()
+    const parts = new URL(route.request().url()).pathname.split("/")
+    const backendId = parts[parts.length - 2] || ""
+    if (method === "GET") {
+      const entry = stubbedManualQuotas[backendId]
+      if (!entry) return json(route, { detail: "no manual quota for " + backendId }, 404)
+      return json(route, entry)
+    }
+    if (method === "PUT") {
+      const body = readJsonBody(route)
+      const stored: Record<string, unknown> = { provider: backendId }
+      for (const key of Object.keys(body)) stored[key] = body[key]
+      stubbedManualQuotas[backendId] = stored
+      return json(route, stored)
+    }
+    if (method === "DELETE") {
+      delete stubbedManualQuotas[backendId]
+      return json(route, { provider: backendId, deleted: true })
+    }
+    return route.fallback()
+  })
   await page.route("**/api/v1/providers/*/test", (route) => {
     if (route.request().method() !== "POST") return route.fallback()
     const segments = new URL(route.request().url()).pathname.split("/")
@@ -222,4 +265,128 @@ export async function installBackendStub(page: Page): Promise<void> {
     if (route.request().method() !== "GET") return route.fallback()
     return json(route, dashboardFixture())
   })
+
+  // Deterministic search: echoes the pinned provider from routing.providers
+  // and serves a fixed two-result payload (with scores so "% match" renders).
+  await page.route("**/search", (route) => {
+    if (route.request().method() !== "POST") return route.fallback()
+    const body = readJsonBody(route)
+    const routing = (body.routing ?? {}) as { providers?: unknown }
+    const providers = Array.isArray(routing.providers) ? routing.providers : []
+    const pinned = typeof providers[0] === "string" ? (providers[0] as string) : "brave"
+    const query = typeof body.query === "string" ? (body.query as string) : "stubbed query"
+    if (query === "doomed query") {
+      return json(route, { detail: "stubbed provider unavailable" }, 503)
+    }
+    return json(
+      route,
+      canonicalSearchFixture({ query, provider: pinned })
+    )
+  })
+
+  // Deterministic fetch: echoes the pinned provider and target URL with
+  // non-empty markdown content.
+  await page.route("**/fetch", (route) => {
+    if (route.request().method() !== "POST") return route.fallback()
+    const body = readJsonBody(route)
+    const routing = (body.routing ?? {}) as { providers?: unknown }
+    const providers = Array.isArray(routing.providers) ? routing.providers : []
+    const pinned = typeof providers[0] === "string" ? (providers[0] as string) : "keenable"
+    const url = typeof body.url === "string" ? (body.url as string) : "https://example.com"
+    const base = canonicalFetchFixture() as {
+      provider: string
+      document: Record<string, unknown>
+      usage: Record<string, unknown>
+    }
+    return json(route, {
+      ...base,
+      provider: pinned,
+      document: { ...base.document, url },
+      usage: { ...(base.usage as Record<string, unknown>), provider: pinned },
+    })
+  })
+}
+
+/**
+ * Override the stubbed dashboard latest_quota for quota-display scenarios.
+ *
+ * The base stub serves an empty latest_quota; quota scenarios replace it
+ * with per-provider deterministic rows from src/test/backendFixtures. The
+ * previous dashboard handler is removed first so the override wins.
+ */
+export async function overrideDashboardLatestQuota(
+  page: Page,
+  latestQuota: unknown[]
+): Promise<void> {
+  await page.unroute("**/dashboard*")
+  await page.route("**/dashboard*", (route) => {
+    if (route.request().method() !== "GET") return route.fallback()
+    return json(route, canonicalDashboardFixture({ latest_quota: latestQuota as never }))
+  })
+}
+
+/** Brave OBSERVED 950/1000 requests fixture for the quota-display suite. */
+export function braveObservedQuota(): unknown[] {
+  return [
+    {
+      provider: "brave",
+      source: "observed",
+      observed_at: FIXED_AT,
+      remaining: "950",
+      limit: "1000",
+      reset_at: "2026-10-01T00:00:00Z",
+      unit_kind: "REQUEST",
+      display_unit: "requests",
+    },
+  ]
+}
+
+/** Parallel seeded USD 5.00 budget fixture (3.75 remaining). */
+export function parallelSeededQuota(): unknown[] {
+  return [
+    {
+      provider: "parallel",
+      source: "estimated",
+      observed_at: FIXED_AT,
+      remaining: "3.75",
+      limit: "5.00",
+      reset_at: null,
+      unit_kind: "USD",
+      display_unit: "USD",
+    },
+  ]
+}
+
+/** Parallel unseeded spend-ledger fixture (no balance to show). */
+export function parallelUnseededQuota(): unknown[] {
+  return [
+    {
+      provider: "parallel",
+      source: "estimated",
+      observed_at: FIXED_AT,
+      remaining: null,
+      limit: null,
+      reset_at: null,
+      unit_kind: "USD",
+      display_unit: "USD",
+    },
+  ]
+}
+
+/** Keenable keyless rolling-hour request headroom fixture. */
+export function keenableKeylessQuota(): unknown[] {
+  return [
+    {
+      provider: "keenable",
+      source: "observed",
+      observed_at: FIXED_AT,
+      remaining: "999",
+      remaining_percent: "99.9",
+      limit: "1000",
+      reset_at: null,
+      unit_kind: "REQUEST",
+      display_unit: "requests",
+      window: "hourly",
+    },
+  ]
 }

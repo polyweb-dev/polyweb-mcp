@@ -1,5 +1,6 @@
 """Async SQLite persistence for provider-neutral operational data."""
 
+import asyncio
 import json
 import math
 from collections.abc import Sequence
@@ -11,7 +12,7 @@ from typing import Any, Self, cast, overload
 
 from sqlalchemy import URL, Index, Integer, Text, delete, insert, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-from sqlalchemy.engine import Connection, CursorResult, Row
+from sqlalchemy.engine import CursorResult, Row
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -30,6 +31,10 @@ from freesearch.contracts import (
     UsageEvent,
     UsageOperation,
     UsageStatus,
+)
+from freesearch.database_migrations import (
+    absolute_database_path,
+    upgrade_database,
 )
 
 _DECIMAL_METADATA_TAG = "__freesearch_decimal__"
@@ -201,68 +206,6 @@ class CacheMetadataRow(Base):
     size_bytes: Mapped[int | None]
 
 
-def _create_legacy_schema(connection: Connection) -> None:
-    """Create the additive baseline schema before a feature column is needed."""
-
-    statements = (
-        "CREATE TABLE IF NOT EXISTS usage_events ("
-        "id INTEGER PRIMARY KEY, provider TEXT NOT NULL, operation TEXT NOT NULL, "
-        "units TEXT NOT NULL, observed_at TEXT NOT NULL, request_id TEXT, "
-        "metadata TEXT NOT NULL, latency_ms INTEGER, status TEXT)",
-        "CREATE TABLE IF NOT EXISTS runtime_settings ("
-        "key TEXT PRIMARY KEY, value_json TEXT NOT NULL)",
-        "CREATE TABLE IF NOT EXISTS quota_snapshots ("
-        "id INTEGER PRIMARY KEY, provider TEXT NOT NULL, source TEXT NOT NULL, "
-        "remaining TEXT, limit_units TEXT, reset_at TEXT, observed_at TEXT NOT NULL)",
-        "CREATE TABLE IF NOT EXISTS provider_health ("
-        "id INTEGER PRIMARY KEY, provider TEXT NOT NULL, status TEXT NOT NULL, "
-        "checked_at TEXT NOT NULL, message TEXT)",
-        "CREATE TABLE IF NOT EXISTS cache_metadata ("
-        "cache_key TEXT PRIMARY KEY, provider TEXT NOT NULL, operation TEXT NOT NULL, "
-        "created_at TEXT NOT NULL, expires_at TEXT NOT NULL, accessed_at TEXT NOT NULL, "
-        "hit_count INTEGER NOT NULL, size_bytes INTEGER)",
-    )
-    for statement in statements:
-        connection.exec_driver_sql(statement)
-
-
-def _ensure_indexes(connection: Connection) -> None:
-    """Recreate any declared indexes missing from existing tables."""
-
-    for table in Base.metadata.tables.values():
-        for index in table.indexes:
-            index.create(connection, checkfirst=True)
-
-
-def _add_missing_column(connection: Connection, table: str, column: str, column_type: str) -> None:
-    """Add ``column`` to ``table`` when an older schema predates it."""
-
-    result = connection.exec_driver_sql(f"PRAGMA table_info({table})")
-    existing = {row[1] for row in result.fetchall()}
-    if column not in existing:
-        connection.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {column} {column_type}")
-
-
-def _migrate_usage_events(connection: Connection) -> None:
-    """Upgrade a legacy ``usage_events`` table additively, preserving all rows.
-
-    Missing columns are added as nullable: legacy rows read back with
-    ``latency_ms=None`` and ``status=success`` compatibility defaults.
-    """
-
-    _add_missing_column(connection, "usage_events", "latency_ms", "INTEGER")
-    _add_missing_column(connection, "usage_events", "status", "TEXT")
-    _add_missing_column(connection, "usage_events", "unit_kind", "TEXT")
-
-
-def _migrate_quota_snapshots(connection: Connection) -> None:
-    """Add canonical quota dimensions to legacy snapshot tables."""
-
-    _add_missing_column(connection, "quota_snapshots", "unit_kind", "TEXT")
-    _add_missing_column(connection, "quota_snapshots", "display_unit", "TEXT")
-    _add_missing_column(connection, "quota_snapshots", "metadata", "TEXT")
-
-
 @dataclass(frozen=True)
 class UsageTotal:
     """Usage units aggregated for one provider, operation, and unit kind."""
@@ -378,18 +321,14 @@ class SQLiteRepository:
 
     @classmethod
     async def open(cls, database: str | Path) -> Self:
-        """Open a database and initialize its schema."""
+        """Migrate, validate, and open a database at the canonical absolute path."""
 
+        database_path = absolute_database_path(database)
+        await asyncio.to_thread(upgrade_database, database_path)
         engine = create_async_engine(
-            URL.create(drivername="sqlite+aiosqlite", database=str(database))
+            URL.create(drivername="sqlite+aiosqlite", database=str(database_path))
         )
-        repository = cls(engine)
-        try:
-            await repository.initialize()
-        except BaseException:
-            await engine.dispose()
-            raise
-        return repository
+        return cls(engine)
 
     async def __aenter__(self) -> Self:
         return self
@@ -398,19 +337,12 @@ class SQLiteRepository:
         await self.close()
 
     async def initialize(self) -> None:
-        """Create the schema, missing indexes, and any missing usage columns."""
+        """Validate that this repository was opened against Alembic head."""
 
-        async with self._engine.begin() as connection:
-            await connection.run_sync(_create_legacy_schema)
-            await connection.run_sync(_ensure_indexes)
-
-    async def _ensure_usage_schema(self) -> None:
-        async with self._engine.begin() as connection:
-            await connection.run_sync(_migrate_usage_events)
-
-    async def _ensure_quota_schema(self) -> None:
-        async with self._engine.begin() as connection:
-            await connection.run_sync(_migrate_quota_snapshots)
+        database = self._engine.url.database
+        if database is None:
+            raise ValueError("SQLiteRepository requires a file-backed database")
+        await asyncio.to_thread(upgrade_database, Path(database))
 
     async def close(self) -> None:
         """Dispose the engine, releasing pooled connections; safe to call repeatedly."""
@@ -420,7 +352,6 @@ class SQLiteRepository:
     async def record_usage(self, event: UsageEvent) -> None:
         """Append a provider usage event."""
 
-        await self._ensure_usage_schema()
         async with self._session_factory() as session:
             await session.execute(
                 insert(UsageEventRow).values(
@@ -446,7 +377,6 @@ class SQLiteRepository:
     ) -> list[UsageEvent]:
         """Return the usage ledger in chronological (observed_at, id) order."""
 
-        await self._ensure_usage_schema()
         statement = select(UsageEventRow).order_by(UsageEventRow.observed_at, UsageEventRow.id)
         if provider is not None:
             statement = statement.where(UsageEventRow.provider == provider)
@@ -468,7 +398,6 @@ class SQLiteRepository:
         ``observed_at`` instant, inclusively.
         """
 
-        await self._ensure_usage_schema()
         statement = select(
             UsageEventRow.provider,
             UsageEventRow.operation,
@@ -485,7 +414,6 @@ class SQLiteRepository:
     async def recent_usage(self, *, limit: int = 20) -> list[UsageEvent]:
         """Return the newest usage events first, up to ``limit`` rows."""
 
-        await self._ensure_usage_schema()
         statement = (
             select(UsageEventRow)
             .order_by(UsageEventRow.observed_at.desc(), UsageEventRow.id.desc())
@@ -502,7 +430,6 @@ class SQLiteRepository:
         excluded so latency statistics only see real samples.
         """
 
-        await self._ensure_usage_schema()
         statement = (
             select(UsageEventRow.latency_ms)
             .where(
@@ -519,7 +446,6 @@ class SQLiteRepository:
     async def record_quota(self, snapshot: QuotaSnapshot) -> None:
         """Append a provider quota observation."""
 
-        await self._ensure_quota_schema()
         async with self._session_factory() as session:
             await session.execute(
                 insert(QuotaSnapshotRow).values(
@@ -543,7 +469,6 @@ class SQLiteRepository:
     ) -> QuotaSnapshot | None:
         """Return the newest quota snapshot for a provider and optional source."""
 
-        await self._ensure_quota_schema()
         statement = (
             select(QuotaSnapshotRow)
             .where(QuotaSnapshotRow.provider == provider)

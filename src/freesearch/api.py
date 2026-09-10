@@ -89,6 +89,11 @@ def create_app(
             if owns_repository:
                 repo = await SQLiteRepository.open(resolve_database_path(database))
                 app.state.repository = repo
+            # Restore locally derived quota state before the first dashboard
+            # read.  This hydrates Keenable's rolling-hour keyless counter and
+            # applies any persisted Parallel monthly budget without requiring
+            # a search/fetch request to happen first.
+            await _apply_parallel_seed(routes, repo)
             yield
         finally:
             if owns_repository and repo is not None:
@@ -146,7 +151,14 @@ def create_app(
             adapter_names=[adapter.name for adapter in routes],
             recent_limit=_clamped_limit(limit),
         )
-        return DashboardResponse(**snapshot.model_dump(), generated_at=datetime.now(UTC))
+        return DashboardResponse(
+            notice=snapshot.notice,
+            usage_totals=snapshot.usage_totals,
+            recent_usage=snapshot.recent_usage,
+            latest_quota=snapshot.latest_quota,
+            latest_health=snapshot.latest_health,
+            generated_at=datetime.now(UTC),
+        )
 
     return app
 

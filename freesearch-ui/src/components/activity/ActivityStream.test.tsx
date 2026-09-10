@@ -2,6 +2,7 @@ import React from "react"
 import { describe, expect, it, afterEach, vi } from "vitest"
 import { render, screen, waitFor } from "@testing-library/react"
 import { FreeSearchProvider } from "@/context/FreeSearchContext"
+import { FreeSearchContext } from "@/context/context"
 import { ActivityStream } from "./ActivityStream"
 import { installFetchStub, ok, err, deferred } from "@/test/fetchMock"
 import {
@@ -9,6 +10,7 @@ import {
   routingConfigFixture,
   dashboardFixture,
 } from "@/test/backendFixtures"
+import type { UsageEvent } from "@/types/freesearch"
 
 /**
  * RED update: events are fed by GET /dashboard (mocked fetch) instead of
@@ -116,5 +118,126 @@ describe("ActivityStream (live backend)", () => {
     })
 
     expect(screen.queryByRole("button", { name: /^Clear log$/ })).not.toBeInTheDocument()
+  })
+})
+
+/**
+ * RF5: optimistic local events carry no unit claim (id ends "-local",
+ * unitKind/displayUnit null). The ActivityStream must render them as
+ * pending/— — never the "legacy" label reserved for pre-canonical rows.
+ * Deterministic: events are injected via context, no fetch, no Date.now.
+ */
+function localEvent(overrides: Partial<UsageEvent> = {}): UsageEvent {
+  return {
+    id: "2026-09-06T10:02:00Z-tavily-local",
+    timestamp: "2026-09-06T10:02:00Z",
+    operation: "search",
+    queryOrUrl: "",
+    providerId: "tavily",
+    providerName: "Tavily",
+    latencyMs: 187,
+    costCredits: 1,
+    status: "success",
+    routeReason: "Recorded search via tavily",
+    fallbackChain: ["tavily"],
+    unitKind: null,
+    displayUnit: null,
+    ...overrides,
+  }
+}
+
+function renderActivityWithEvents(events: UsageEvent[]) {
+  const value = {
+    providers: [],
+    providersLoading: false,
+    providersError: null,
+    fallbackConfig: {
+      enabled: true,
+      maxAttempts: 3,
+      fallbackOnRateLimit: true,
+      fallbackOnTimeout: true,
+      fallbackOnServerError: true,
+    },
+    routingLoading: false,
+    routingError: null,
+    routingPreset: "priority",
+    costOptimizationPreset: "balanced",
+    activeSearch: null,
+    activeFetch: null,
+    isSearching: false,
+    isFetching: false,
+    searchError: null,
+    fetchError: null,
+    usageEvents: events,
+    usageLoading: false,
+    usageError: null,
+    usageTotals: [],
+    dashboardQuotas: [],
+    quotaAvailable: false,
+    dashboardNotice: null,
+    toasts: [],
+    toggleProvider: vi.fn(),
+    toggleProviderSearch: vi.fn(),
+    toggleProviderFetch: vi.fn(),
+    updateProviderPriority: vi.fn(),
+    moveProviderPriority: vi.fn(),
+    setCircuitBreaker: vi.fn(),
+    testProviderConnection: vi.fn(),
+    saveProviderKey: vi.fn(),
+    deleteProviderKey: vi.fn(),
+    updateFallbackConfig: vi.fn(),
+    updateCostPreset: vi.fn(),
+    setRoutingPreset: vi.fn(),
+    runSearch: vi.fn(),
+    runFetch: vi.fn(),
+    clearActiveResults: vi.fn(),
+    refreshProviders: vi.fn(),
+    refreshDashboard: vi.fn(),
+    showToast: vi.fn(),
+    dismissToast: vi.fn(),
+  } as never
+  return render(
+    <FreeSearchContext.Provider value={value}>
+      <ActivityStream />
+    </FreeSearchContext.Provider>
+  )
+}
+
+describe("ActivityStream RF5: optimistic -local events", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it("renders a -local null-kind search event as pending/—, never 'legacy'", () => {
+    renderActivityWithEvents([localEvent()])
+
+    const row = screen.getByText("Tavily", { exact: true }).closest("tr")!
+    expect(row.textContent).toMatch(/pending|—/)
+    expect(row.textContent).not.toMatch(/legacy/i)
+  })
+
+  it("renders a -local null-kind fetch event as pending/—, never 'legacy'", () => {
+    renderActivityWithEvents([
+      localEvent({
+        id: "2026-09-06T10:03:01Z-firecrawl-local",
+        timestamp: "2026-09-06T10:03:01Z",
+        operation: "fetch",
+        providerId: "firecrawl",
+        providerName: "Firecrawl",
+        routeReason: "Recorded fetch via firecrawl",
+        fallbackChain: ["firecrawl"],
+      }),
+    ])
+
+    const row = screen.getByText("Firecrawl", { exact: true }).closest("tr")!
+    expect(row.textContent).toMatch(/pending|—/)
+    expect(row.textContent).not.toMatch(/legacy/i)
+  })
+
+  it("keeps the -local id suffix as the pending marker (contract for the Developer)", () => {
+    const event = localEvent()
+    expect(event.id.endsWith("-local")).toBe(true)
+    expect(event.unitKind).toBeNull()
+    expect(event.displayUnit).toBeNull()
   })
 })

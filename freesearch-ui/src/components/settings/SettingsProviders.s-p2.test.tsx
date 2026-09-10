@@ -390,20 +390,20 @@ describe("S-P2-3: priority indicator never clips at the card edge", () => {
     }
   })
 
-  it("table + scroller stay intact: single 7x9 merged table, overflow-x-auto, nowrap", async () => {
+  it("table + scroller stay intact: single 7x7 merged table, overflow-x-auto, nowrap", async () => {
     renderSettingsWith(all100Fixture())
     await waitForProviders()
     expect(screen.getAllByRole("table")).toHaveLength(1)
     const table = screen.getByRole("table")
     expect(table.querySelectorAll("tbody tr")).toHaveLength(7)
     for (const row of Array.from(table.querySelectorAll("tbody tr"))) {
-      expect(row.children).toHaveLength(9)
+      expect(row.children).toHaveLength(7)
     }
     const container = table.closest('[data-slot="table-container"]') as HTMLElement | null
     expect(container, "ui/table scroller must wrap the table").not.toBeNull()
     expect(container!.className).toMatch(/overflow-x-auto/)
     const cells = Array.from(table.querySelectorAll("th, td")) as HTMLElement[]
-    expect(cells.length).toBe(9 + 7 * 9)
+    expect(cells.length).toBe(7 + 7 * 7)
     for (const cell of cells) {
       expect(cell.className).toMatch(/whitespace-nowrap/)
     }

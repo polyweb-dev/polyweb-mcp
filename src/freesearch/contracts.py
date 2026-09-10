@@ -1,12 +1,22 @@
 """Provider-neutral request, response, usage, and error models."""
 
 import re
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Any, Literal, Self
 
-from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, SecretStr, field_validator
+from pydantic import (
+    AnyHttpUrl,
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    computed_field,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 
 def parse_decimal(value: object, *, allow_negative: bool = False) -> Decimal:
@@ -170,6 +180,48 @@ class QuotaSnapshot(ContractModel):
     # Local routing state is not a vendor payload and is never serialized.
     metadata: dict[str, Any] = Field(default_factory=dict, exclude=True)
 
+    @computed_field(return_type=Decimal | None)  # type: ignore[prop-decorator]
+    @property
+    def remaining_percent(self) -> Decimal | None:
+        """Return remaining capacity as a canonical 0-100 percentage.
+
+        The percentage is deliberately derived from the native values rather
+        than persisted.  A missing/zero limit (or missing remaining value)
+        does not describe a bounded allowance, so it remains unknown.  Some
+        vendors report promotional balance above their baseline plan; clamp
+        that case to 100 while retaining the original native values.
+        """
+
+        if self.remaining is None or self.limit is None or self.limit <= 0:
+            return None
+        ratio = self.remaining / self.limit * Decimal("100")
+        return min(Decimal("100"), max(Decimal("0"), ratio))
+
+    @computed_field(return_type=str | None)  # type: ignore[prop-decorator]
+    @property
+    def window(self) -> str | None:
+        """Expose an optional non-sensitive scope label without raw metadata."""
+
+        value = self.metadata.get("window")
+        return value if isinstance(value, str) else None
+
+    @model_serializer(mode="wrap")
+    def _serialize_compat(self, handler: Any) -> Any:
+        """Keep legacy/unknown snapshots backward compatible on the wire.
+
+        The derived percentage is useful only for a canonical unit-bearing
+        snapshot.  Omitting it for legacy rows and unknown limits preserves
+        the historical payload shape while known quotas gain one consistent
+        field.
+        """
+
+        payload = handler(self)
+        if self.unit_kind is None:
+            payload.pop("remaining_percent", None)
+        if self.window is None:
+            payload.pop("window", None)
+        return payload
+
     @field_validator("remaining", "limit", mode="before")
     @classmethod
     def validate_quota_number(cls, value: object) -> Decimal | None:
@@ -179,8 +231,18 @@ class QuotaSnapshot(ContractModel):
 
 
 def is_soft_quota_zero(provider: str, snapshot: QuotaSnapshot) -> bool:
-    """Identify a temporary estimated zero without weakening hard exhaustion."""
+    """Identify non-authoritative zero signals without weakening hard exhaustion."""
 
+    if (
+        provider == "keenable"
+        and snapshot.source is QuotaSource.OBSERVED
+        and snapshot.metadata.get("mode") == "keyless"
+        and snapshot.metadata.get("scope") == "shared_pool_local_observation"
+    ):
+        # This is only this process's view of a shared IP/pool rate limit. A
+        # local count reaching zero cannot prove the vendor pool is exhausted;
+        # let the provider's 429 response remain the authoritative pressure.
+        return True
     return (
         provider == "parallel"
         and snapshot.source is QuotaSource.ESTIMATED
@@ -352,6 +414,109 @@ class RoutingConfigUpdate(ContractModel):
     fallback_policy: FallbackPolicy | None = None
     cost_optimization_preset: CostPreset | None = None
     max_attempts: int | None = Field(default=None, ge=1)
+
+
+def manual_quota_remaining(allowance: Decimal, current_usage: Decimal) -> Decimal:
+    """Return the remaining allowance, floored at zero with Decimal math."""
+
+    remaining = allowance - current_usage
+    return remaining if remaining > 0 else Decimal("0")
+
+
+def manual_quota_remaining_percent(allowance: Decimal, current_usage: Decimal) -> Decimal | None:
+    """Return remaining capacity as 0-100, or None when allowance is unknown."""
+
+    if allowance <= 0:
+        return None
+    remaining = manual_quota_remaining(allowance, current_usage)
+    ratio = remaining / allowance * Decimal("100")
+    return min(Decimal("100"), max(Decimal("0"), ratio))
+
+
+class ManualQuota(ContractModel):
+    """Operator-entered billing anchor; provider-agnostic and routing-neutral.
+
+    The unit is implied by the provider (Brave/Exa/Parallel use USD with
+    Brave costing $0.005/request; other providers use REQUEST/CREDIT). This
+    model never steers routing; it only feeds the ESTIMATED control response.
+    """
+
+    billing_start: date
+    billing_end: date
+    allowance: Decimal = Field(ge=0)
+    current_usage: Decimal = Field(ge=0)
+    note: str | None = Field(default=None, max_length=500)
+
+    @field_validator("allowance", "current_usage", mode="before")
+    @classmethod
+    def validate_quota_decimal(cls, value: object) -> Decimal:
+        try:
+            return parse_decimal(value)
+        except TypeError as exc:
+            raise ValueError(str(exc)) from exc
+
+    @model_validator(mode="after")
+    def validate_billing_window(self) -> Self:
+        if self.billing_end <= self.billing_start:
+            raise ValueError("billing_end must be after billing_start")
+        return self
+
+
+class ManualQuotaUpdate(ContractModel):
+    """Full billing-anchor input accepted by PUT; same shape as ManualQuota."""
+
+    billing_start: date
+    billing_end: date
+    allowance: Decimal = Field(ge=0)
+    current_usage: Decimal = Field(ge=0)
+    note: str | None = Field(default=None, max_length=500)
+
+    @field_validator("allowance", "current_usage", mode="before")
+    @classmethod
+    def validate_quota_decimal(cls, value: object) -> Decimal:
+        try:
+            return parse_decimal(value)
+        except TypeError as exc:
+            raise ValueError(str(exc)) from exc
+
+    @model_validator(mode="after")
+    def validate_billing_window(self) -> Self:
+        if self.billing_end <= self.billing_start:
+            raise ValueError("billing_end must be after billing_start")
+        return self
+
+
+class ManualQuotaResponse(ContractModel):
+    """Stored billing anchor plus derived ESTIMATED capacity for the dashboard."""
+
+    provider: str
+    billing_start: date
+    billing_end: date
+    allowance: Decimal = Field(ge=0)
+    current_usage: Decimal = Field(ge=0)
+    remaining: Decimal = Field(ge=0)
+    remaining_percent: Decimal | None = Field(default=None, ge=0, le=100)
+    source: QuotaSource = QuotaSource.ESTIMATED
+    updated_at: datetime
+    note: str | None = Field(default=None, max_length=500)
+
+    @field_validator("allowance", "current_usage", "remaining", mode="before")
+    @classmethod
+    def validate_quota_decimal(cls, value: object) -> Decimal:
+        try:
+            return parse_decimal(value)
+        except TypeError as exc:
+            raise ValueError(str(exc)) from exc
+
+    @field_validator("remaining_percent", mode="before")
+    @classmethod
+    def validate_percent(cls, value: object) -> Decimal | None:
+        if value is None:
+            return None
+        try:
+            return parse_decimal(value)
+        except TypeError as exc:
+            raise ValueError(str(exc)) from exc
 
 
 SearchResponse.model_rebuild()

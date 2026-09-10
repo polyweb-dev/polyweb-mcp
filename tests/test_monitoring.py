@@ -37,10 +37,11 @@ from freesearch.contracts import (
     SearchRequest,
     SearchResponse,
     SearchResult,
+    UnitKind,
     UsageEvent,
     UsageOperation,
 )
-from freesearch.server import close_adapters, create_server
+from freesearch.server import _quota_state_changed, close_adapters, create_server
 from freesearch.storage import SQLiteRepository
 
 
@@ -125,6 +126,23 @@ class _StubAdapter(ProviderAdapter):
             UsageOperation.SEARCH if isinstance(request, SearchRequest) else UsageOperation.FETCH
         )
         return CostEstimate(provider=self._name, operation=operation, units=Decimal("0"))
+
+
+class _HydratingStubAdapter(_StubAdapter):
+    """Adapter double that restores a quota snapshot during app startup."""
+
+    async def hydrate_quota(self, repository: SQLiteRepository) -> QuotaSnapshot:
+        return QuotaSnapshot(
+            provider=self.name,
+            source=QuotaSource.OBSERVED,
+            remaining=Decimal("1000"),
+            limit=Decimal("1000"),
+            reset_at=datetime(2026, 1, 1, 13, 0, tzinfo=UTC),
+            observed_at=datetime(2026, 1, 1, 12, 0, tzinfo=UTC),
+            unit_kind=UnitKind.REQUEST,
+            display_unit="requests",
+            metadata={"window": "hourly"},
+        )
 
 
 class _FailingTelemetryRepository:
@@ -465,15 +483,9 @@ async def test_privacy_gate_blocks_sensitive_keys_allows_benign_telemetry(
         _event("private", UsageOperation.SEARCH, "1", observed_at, metadata={"query": 7}),
         _event("private", UsageOperation.SEARCH, "1", observed_at, metadata={"url": 7}),
         _event("private", UsageOperation.SEARCH, "1", observed_at, metadata={"api_key": 7}),
-        _event(
-            "private", UsageOperation.SEARCH, "1", observed_at, metadata={"token": "x"}
-        ),
-        _event(
-            "private", UsageOperation.SEARCH, "1", observed_at, metadata={"session": "abc"}
-        ),
-        _event(
-            "private", UsageOperation.SEARCH, "1", observed_at, metadata={"content": "doc"}
-        ),
+        _event("private", UsageOperation.SEARCH, "1", observed_at, metadata={"token": "x"}),
+        _event("private", UsageOperation.SEARCH, "1", observed_at, metadata={"session": "abc"}),
+        _event("private", UsageOperation.SEARCH, "1", observed_at, metadata={"content": "doc"}),
     ]
 
     for invalid_event in invalid_events:
@@ -866,6 +878,35 @@ async def test_dashboard_endpoint_matches_stats_and_preserves_quota_provenance(
     assert before_dashboard <= generated_at <= after_dashboard
 
 
+async def test_dashboard_endpoint_accepts_canonical_quota_computed_fields(
+    repository: SQLiteRepository,
+) -> None:
+    """Computed wire fields must not be fed back through strict input validation."""
+
+    observed_at = datetime(2026, 1, 1, tzinfo=UTC)
+    await repository.record_quota(
+        QuotaSnapshot(
+            provider="tavily",
+            source=QuotaSource.AUTHORITATIVE,
+            remaining=Decimal("996"),
+            limit=Decimal("1000"),
+            unit_kind=UnitKind.CREDIT,
+            display_unit="credits",
+            observed_at=observed_at,
+        )
+    )
+    app = create_app([_StubAdapter("tavily")], repository=repository)
+
+    with TestClient(app) as client:
+        response = client.get("/dashboard")
+
+    assert response.status_code == 200
+    quota = response.json()["latest_quota"][0]
+    assert quota["remaining_percent"] == "99.600"
+    assert quota["unit_kind"] == "CREDIT"
+    assert quota["display_unit"] == "credits"
+
+
 async def test_dashboard_endpoint_clamps_recent_limit_and_orders_newest_first(
     repository: SQLiteRepository,
 ) -> None:
@@ -1036,6 +1077,55 @@ async def test_app_owned_repository_lifespan_creates_and_closes_database(
 
     assert app.state.repository is None
     assert closed == [owned]
+
+
+async def test_app_lifespan_hydrates_local_quota_before_first_dashboard_read(
+    repository: SQLiteRepository,
+) -> None:
+    adapter = _HydratingStubAdapter("keenable")
+    app = create_app([adapter], repository=repository)
+
+    with TestClient(app) as client:
+        response = client.get("/dashboard")
+
+    assert response.status_code == 200
+    assert response.json()["latest_quota"] == [
+        {
+            "provider": "keenable",
+            "source": "observed",
+            "remaining": "1000",
+            "remaining_percent": "100",
+            "limit": "1000",
+            "reset_at": "2026-01-01T13:00:00Z",
+            "observed_at": "2026-01-01T12:00:00Z",
+            "unit_kind": "REQUEST",
+            "display_unit": "requests",
+            "window": "hourly",
+        }
+    ]
+
+
+def test_quota_hydration_refreshes_an_expired_rolling_window() -> None:
+    observed = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+    current = QuotaSnapshot(
+        provider="keenable",
+        source=QuotaSource.OBSERVED,
+        remaining=Decimal("1000"),
+        limit=Decimal("1000"),
+        reset_at=observed + timedelta(hours=1),
+        observed_at=observed,
+        unit_kind=UnitKind.REQUEST,
+        display_unit="requests",
+        metadata={"window": "hourly"},
+    )
+    refreshed = current.model_copy(
+        update={
+            "observed_at": observed + timedelta(hours=2),
+            "reset_at": observed + timedelta(hours=3),
+        }
+    )
+
+    assert _quota_state_changed(current, refreshed) is True
 
 
 async def test_server_owned_repository_lifespan_creates_and_closes_database(

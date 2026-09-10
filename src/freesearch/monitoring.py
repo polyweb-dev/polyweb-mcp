@@ -25,6 +25,7 @@ from typing import Any
 from pydantic import AwareDatetime, model_serializer
 
 from freesearch.adapters.base import ProviderAdapter
+from freesearch.adapters.brave import COST_USD_PER_REQUEST, FREE_CREDITS_USD, brave_spend_usd
 from freesearch.contracts import (
     ContractModel,
     FetchResponse,
@@ -458,6 +459,14 @@ async def _poll_one_quota(
         return snapshot
 
 
+def normalize_degenerate_quota(snapshot: QuotaSnapshot) -> QuotaSnapshot:
+    """Return a copy that treats a zero quota limit as unknown."""
+
+    if snapshot.limit == Decimal("0"):
+        return snapshot.model_copy(update={"remaining": None, "limit": None, "reset_at": None})
+    return snapshot.model_copy()
+
+
 async def effective_quota(
     repository: SQLiteRepository | None, provider: str
 ) -> QuotaSnapshot | None:
@@ -466,11 +475,10 @@ async def effective_quota(
     if repository is None:
         return None
     snapshot = await repository.latest_quota(provider)
-    if (
-        snapshot is None
-        or snapshot.remaining != Decimal("0")
-        or not is_soft_quota_zero(provider, snapshot)
-    ):
+    if snapshot is None:
+        return None
+    snapshot = normalize_degenerate_quota(snapshot)
+    if snapshot.remaining != Decimal("0") or not is_soft_quota_zero(provider, snapshot):
         return snapshot
     try:
         events = await repository.list_usage(provider=provider)
@@ -564,7 +572,7 @@ async def collect_stats(
             | {total.provider for total in totals}
             | {event.provider for event in recent}
         )
-        latest_quota = await _latest_quotas(repository, providers)
+        latest_quota = await _latest_quotas(repository, providers, totals=totals)
         latest_health = await _latest_health(repository, providers)
     except Exception:
         logger.warning("monitoring reads could not be collected")
@@ -578,16 +586,55 @@ async def collect_stats(
     )
 
 
+def _brave_request_success_total(
+    totals: Sequence[UsageTotal | LegacyUsageTotal],
+) -> Decimal:
+    """Sum Brave REQUEST success units without mixing other dimensions."""
+    total = Decimal("0")
+    for item in totals:
+        if item.provider != "brave":
+            continue
+        if getattr(item, "unit_kind", None) is not UnitKind.REQUEST:
+            continue
+        total += item.total_units
+    return total
+
+
+def _enrich_brave_snapshot(snapshot: QuotaSnapshot, success_total: Decimal) -> QuotaSnapshot:
+    """Attach derived USD spend metadata without touching throttle fields."""
+    if snapshot.provider != "brave":
+        return snapshot
+    metadata: dict[str, Any] = dict(snapshot.metadata)
+    metadata.setdefault("cost_per_req", COST_USD_PER_REQUEST)
+    metadata.setdefault("allowance_usd", FREE_CREDITS_USD)
+    try:
+        metadata["spend_usd"] = brave_spend_usd(success_total)
+    except (ArithmeticError, TypeError, ValueError):
+        return snapshot.model_copy(update={"metadata": metadata})
+    return snapshot.model_copy(update={"metadata": metadata})
+
+
 async def _latest_quotas(
-    repository: SQLiteRepository, providers: Sequence[str]
+    repository: SQLiteRepository,
+    providers: Sequence[str],
+    *,
+    totals: Sequence[UsageTotal | LegacyUsageTotal] | None = None,
 ) -> list[QuotaSnapshot]:
     """Return each provider's newest quota snapshot, keeping its provenance."""
-
+    if totals is None:
+        try:
+            totals = await repository.usage_totals()
+        except Exception:
+            totals = []
+    brave_total = _brave_request_success_total(totals)
     snapshots: list[QuotaSnapshot] = []
     for provider in providers:
         snapshot = await repository.latest_quota(provider)
         if snapshot is not None:
-            snapshots.append(snapshot)
+            normalized = normalize_degenerate_quota(snapshot)
+            if normalized.provider == "brave":
+                normalized = _enrich_brave_snapshot(normalized, brave_total)
+            snapshots.append(normalized)
     return snapshots
 
 

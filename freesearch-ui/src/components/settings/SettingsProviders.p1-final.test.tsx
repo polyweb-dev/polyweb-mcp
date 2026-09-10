@@ -1,4 +1,4 @@
-import React from "react"
+﻿import React from "react"
 import { readFileSync } from "node:fs"
 import path from "node:path"
 import { describe, expect, it, afterEach, vi, beforeEach } from "vitest"
@@ -31,8 +31,8 @@ import {
  *
  * Plan under test (freesearch-ui/ ONLY):
  *   SettingsProviders table expands to
- *     Provider|Endpoint|Global|Search|Fetch|Health|p95|Quota|Breaker|Test
- *   (registry controls preserved + fleet telemetry; min-w-1280 scroll);
+ *     Provider|Endpoint|Health|Test|Search|Fetch|Global
+ *   (registry controls preserved + endpoint/health telemetry; min-w-960 scroll);
  *   ProviderTestModal (Modal/Dialog wrapper, endpoint/caps/health/p95/quota/
  *   last-result, Test button = existing handleTest, icon opens / never fetches,
  *   Esc/scrim close); DELETE ProviderMatrix.tsx; App removes the providers
@@ -40,13 +40,13 @@ import {
  *   TabId/navItems/TAB_PATHS.
  *
  * AC mapping:
- *   P1F-1  ONE merged table: exact 10 headers in order, 7 rows x 10 cells,
+ *   P1F-1  ONE merged table: exact 7 headers in order, 7 rows x 7 cells,
  *          single ui/table.
  *   P1F-2  registry controls preserved: 7 global Switches (PATCH + pending),
  *          Search/Fetch segments (local-only), P1..P7 ranks + arrow boundaries.
- *   P1F-3  fleet telemetry per row: stripped Endpoint, Health dot+label, p95
- *          (exact ms, null -> "—"), Quota used/limit, Breaker Trip/Reset with
- *          Trip local-only (ZERO fetch) + Reset POST .../circuit-breaker/reset.
+ *   P1F-3  endpoint/health per row: stripped Endpoint, Health dot+label, no
+ *          Quota/p95 columns (telemetry drill-down lives in the modal +
+ *          Usage view), no Breaker column or Trip/Reset buttons.
  *   P1F-4  ProviderTestModal: Modal/Dialog wrapper; icon button per row opens
  *          it with endpoint/caps/health/p95/quota/last-result; opening issues
  *          ZERO fetch; modal Test button runs existing handleTest (Testing...
@@ -58,7 +58,7 @@ import {
  *          /providers -> /settings Navigate redirect; Sidebar has no
  *          "providers" TabId and no "/providers" target; SettingsProviders
  *          carries the fleet merge (Endpoint/Breaker/modal markers).
- *   P1F-7  1280 scroll: Table min-w-[1280px] inside the overflow-x-auto
+ *   P1F-7  960 scroll: Table min-w-[960px] inside the overflow-x-auto
  *          scroller; header/body cells nowrap.
  *   P1F-8  redirect behavior: MemoryRouter at /providers lands on /settings
  *          rendering the merged Settings registry; no Providers view remains.
@@ -91,8 +91,6 @@ const EXPECTED_MERGED_HEADERS = [
   "Provider",
   "Endpoint",
   "Health",
-  "Quota",
-  "p95",
   "Test",
   "Search",
   "Fetch",
@@ -224,10 +222,10 @@ afterEach(() => {
 })
 
 // ---------------------------------------------------------------------------
-// P1F-1: ONE merged table with the exact 10 headers
+// P1F-1: ONE merged table with the exact 7 headers
 // ---------------------------------------------------------------------------
 
-describe("P1F-1: Settings registry is ONE merged table with 9 columns", () => {
+describe("P1F-1: Settings registry is ONE merged table with 7 columns", () => {
   it("exposes the exact merged headers in order", async () => {
     renderSettings()
     await waitForProviders()
@@ -244,7 +242,7 @@ describe("P1F-1: Settings registry is ONE merged table with 9 columns", () => {
     }
   })
 
-  it("gives every body row exactly 9 cells (merged columns never collapse)", async () => {
+  it("gives every body row exactly 7 cells (merged columns never collapse)", async () => {
     renderSettings()
     await waitForProviders()
     const rows = Array.from(mergedTable().querySelectorAll("tbody tr"))
@@ -270,7 +268,7 @@ describe("P1F-2: registry controls preserved in the merged table", () => {
   it("keeps 7 global Switches with provider-qualified labels", async () => {
     renderSettings()
     await waitForProviders()
-    // 10-col header must exist AND the 7 switches must sit in Global cells.
+    // 7-col header must exist AND the 7 switches must sit in Global cells.
     expect(headerNames()).toEqual([...EXPECTED_MERGED_HEADERS])
     for (const name of SEED_PROVIDER_NAMES) {
       const cell = cellFor(name, "Global")
@@ -309,10 +307,10 @@ describe("P1F-2: registry controls preserved in the merged table", () => {
 })
 
 // ---------------------------------------------------------------------------
-// P1F-3: fleet telemetry per row (RED)
+// P1F-3: endpoint/health per row, quota/p95 in modal + Usage (RED)
 // ---------------------------------------------------------------------------
 
-describe("P1F-3: fleet telemetry rides in the merged row", () => {
+describe("P1F-3: endpoint/health ride in the merged row", () => {
   it("shows the stripped upstream endpoint per row (protocol removed)", async () => {
     renderSettings()
     await waitForProviders()
@@ -334,27 +332,27 @@ describe("P1F-3: fleet telemetry rides in the merged row", () => {
     expect(cellFor("Brave Search", "Health").textContent).toMatch(/healthy/i)
   })
 
-  it("shows exact p95 latency per row (null renders '—')", async () => {
+  it("does not render Quota or p95 as registry columns (telemetry lives in the modal + Usage view)", async () => {
     renderSettings()
     await waitForProviders()
-    // Fixture latency is 100 + rank*10: Brave (rank 1) reads exactly 110ms.
-    expect(cellFor("Brave Search", "p95").textContent).toContain("110ms")
-    for (const name of SEED_PROVIDER_NAMES) {
-      expect(cellFor(name, "p95").textContent).toMatch(/\d+ms|—/)
-      expect(cellFor(name, "p95").textContent).not.toMatch(/null|NaN/)
+    expect(headerNames()).not.toContain("Quota")
+    expect(headerNames()).not.toContain("p95")
+    expect(headerNames()).toEqual([...EXPECTED_MERGED_HEADERS])
+    const rows = Array.from(mergedTable().querySelectorAll("tbody tr"))
+    expect(rows).toHaveLength(7)
+    for (const row of rows) {
+      expect(row.children).toHaveLength(EXPECTED_MERGED_HEADERS.length)
     }
   })
 
-  it("shows quota used/limit per row without NaN", async () => {
+  it("keeps quota/p95 drill-down in the test modal (not in row cells)", async () => {
+    const user = userEvent.setup()
     renderSettings()
     await waitForProviders()
-    for (const name of SEED_PROVIDER_NAMES) {
-      const quota = cellFor(name, "Quota")
-      expect(quota.textContent?.trim().length).toBeGreaterThan(0)
-      expect(quota.textContent).not.toMatch(/null|NaN/)
-    }
-    // Estimated quota (null/null) renders the "—/∞" form from the fleet page.
-    expect(cellFor("Brave Search", "Quota").textContent).toContain("—/∞")
+    await user.click(testIconFor("Brave Search"))
+    const dialog = await screen.findByRole("dialog")
+    expect(dialog.textContent).toMatch(/\d+ms|—/)
+    expect(dialog.textContent).not.toContain("∞")
   })
 
   it("does not expose a Breaker column or Trip/Reset buttons", async () => {
@@ -365,13 +363,13 @@ describe("P1F-3: fleet telemetry rides in the merged row", () => {
     expect(screen.queryByRole("button", { name: "Reset" })).not.toBeInTheDocument()
   })
 
-  it("aligns p95 and quota fields with column header (left-aligned)", async () => {
+  it("keeps row cells left-aligned with no right-aligned drift", async () => {
     renderSettings()
     await waitForProviders()
-    const p95 = cellFor("Brave Search", "p95")
-    const quota = cellFor("Brave Search", "Quota")
-    expect(p95.className).not.toContain("text-right")
-    expect(quota.className).not.toContain("text-right")
+    const health = cellFor("Brave Search", "Health")
+    const test = cellFor("Brave Search", "Test")
+    expect(health.className).not.toContain("text-right")
+    expect(test.className).not.toContain("text-right")
   })
 })
 
@@ -412,7 +410,19 @@ describe("P1F-4: icon opens the ProviderTestModal (never fetches on open)", () =
     expect(dialog.textContent).toContain("api.search.brave.com")
     expect(dialog.textContent).toMatch(/healthy|degraded|offline|unknown/i)
     expect(dialog.textContent).toMatch(/\d+ms|—/)
-    expect(dialog.textContent).toContain("—/∞")
+    // RF2: null limits stay blank/emdash (infinity retired). Brave with no
+    // snapshot shows its honest unavailable message; Tavily renders the
+    // blank native form, so the em-dash blank is pinned on Tavily.
+    expect(dialog.textContent).not.toContain("∞")
+    await user.keyboard("{Escape}")
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
+    })
+    await user.click(testIconFor("Tavily"))
+    const tavilyDialog = await screen.findByRole("dialog")
+    expect(tavilyDialog.textContent).toContain("—/—")
+    expect(tavilyDialog.textContent).not.toContain("∞")
+
   })
 
   it("modal Test button runs the existing handleTest: Testing... + exactly one POST .../test", async () => {
@@ -548,12 +558,12 @@ describe("P1F-6: Providers page retired — redirect + no providers nav", () => 
 // P1F-7: min-w-1280 horizontal scroll (RED)
 // ---------------------------------------------------------------------------
 
-describe("P1F-7: merged table scrolls horizontally from 1280px", () => {
-  it("Table carries min-w-[1280px] inside the overflow-x-auto scroller", async () => {
+describe("P1F-7: merged table scrolls horizontally from 960px", () => {
+  it("Table carries min-w-[960px] inside the overflow-x-auto scroller", async () => {
     renderSettings()
     await waitForProviders()
     const table = mergedTable()
-    expect(table.className).toMatch(/min-w-\[1280px\]/)
+    expect(table.className).toMatch(/min-w-\[960px\]/)
     const container = table.closest('[data-slot="table-container"]') as HTMLElement | null
     expect(container, "ui/table scroller must wrap the merged table").not.toBeNull()
     expect(container!.className).toMatch(/overflow-x-auto/)
@@ -583,7 +593,7 @@ describe("P1F-8: legacy /providers URL renders the merged Settings registry", ()
     expect(screen.getByTestId("test-location").textContent).toBe("/settings")
   })
 
-  it("the redirect target shows the merged registry (9 headers, no Providers view)", async () => {
+  it("the redirect target shows the merged registry (7 headers, no Providers view)", async () => {
     renderAppAt("/providers")
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: "Settings" })).toBeInTheDocument()
