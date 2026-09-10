@@ -8,6 +8,7 @@ import {
   allProvidersFixture,
   routingConfigFixture,
   dashboardFixture,
+  canonicalQuotasFixture,
   searchResponseFixture,
   fetchResponseFixture,
   providerTestFixture,
@@ -765,5 +766,164 @@ describe("FreeSearchContext (live backend)", () => {
     expect(result.current.isSearching).toBe(false)
     expect(result.current.searchError).toMatch(/timed out|timeout/i)
     expect(result.current.searchError).not.toMatch(/was aborted|AbortError|DOMException/i)
+  })
+
+  it("RF1: dashboard overlay prefers snapshot values with exact limit strings verbatim", async () => {
+    const server = createServer()
+    server.dashboard = dashboardFixture({ latest_quota: canonicalQuotasFixture() })
+    const { result } = await mountLoaded(server)
+
+    await waitFor(() => {
+      expect(result.current.dashboardQuotas).toHaveLength(4)
+    })
+
+    // Tavily AUTHORITATIVE: trailing-zero limit must survive verbatim.
+    const tavily = result.current.providers.find((p) => p.id === "tavily")!
+    expect(tavily.quota.confidence).toBe("authoritative")
+    expect(tavily.quota.unitKind).toBe("CREDIT")
+    expect(tavily.quota.displayUnit).toBe("credits")
+    expect(tavily.quota.remaining).toBe("90000.05")
+    const tavilyLimit: unknown = tavily.quota.limit
+    expect(typeof tavilyLimit).toBe("string")
+    expect(tavilyLimit).toBe("100000.10")
+    expect(tavilyLimit).not.toBe("100000.1")
+
+    // Brave OBSERVED: reset passthrough.
+    const brave = result.current.providers.find((p) => p.id === "brave")!
+    expect(brave.quota.confidence).toBe("observed")
+    expect(brave.quota.unitKind).toBe("REQUEST")
+    expect(brave.quota.nextReset).toBe("2026-10-01T00:00:00Z")
+
+    // You.com ESTIMATED: limit stays null, never a fabricated cap.
+    const youcom = result.current.providers.find((p) => p.id === "youcom")!
+    expect(youcom.quota.confidence).toBe("estimated")
+    expect(youcom.quota.unitKind).toBe("USD")
+    expect(youcom.quota.limit).toBeNull()
+    expect(youcom.quota.remaining).toBe("4.75")
+  })
+
+  it("RF1: tiny limit strings survive verbatim on the legacy row (never 1e-8)", async () => {
+    const server = createServer()
+    server.dashboard = dashboardFixture({ latest_quota: canonicalQuotasFixture() })
+    const { result } = await mountLoaded(server)
+
+    await waitFor(() => {
+      expect(result.current.dashboardQuotas).toHaveLength(4)
+    })
+
+    const exa = result.current.providers.find((p) => p.id === "exa")!
+    const exaLimit: unknown = exa.quota.limit
+    expect(typeof exaLimit).toBe("string")
+    expect(exaLimit).toBe("0.00000001")
+    expect(String(exaLimit)).not.toContain("e-")
+    expect(exa.quota.unitKind).toBeNull()
+  })
+
+  it("dashboard overlay leaves providers without snapshots on the honest null placeholder", async () => {
+    const { result } = await mountLoaded()
+
+    await waitFor(() => {
+      expect(result.current.providersLoading).toBe(false)
+    })
+    expect(result.current.dashboardQuotas).toEqual([])
+    expect(result.current.quotaAvailable).toBe(false)
+    const brave = result.current.providers.find((p) => p.id === "brave")!
+    expect(brave.quota.limit).toBeNull()
+    expect(brave.quota.remaining).toBeNull()
+  })
+
+  it("RF5: runSearch prepends an optimistic local event (id ends -local, null kind, no unit claim)", async () => {
+    // Hold the post-search dashboard refresh so the optimistic event stays
+    // observable: the refresh GET hangs on a deferred gate.
+    const server = createServer()
+    const gate = deferred<Response>()
+    let dashboardCalls = 0
+    const stub = installFetchStub((req) => {
+      if (req.url === "/api/v1/providers" && req.method === "GET") {
+        return ok(server.providers)
+      }
+      if (req.url === "/api/v1/routing/config" && req.method === "GET") {
+        return ok(server.routing)
+      }
+      if (req.url.startsWith("/dashboard") && req.method === "GET") {
+        dashboardCalls += 1
+        // Initial mount resolves; the refresh triggered by runSearch hangs.
+        if (dashboardCalls === 1) return ok(server.dashboard)
+        return gate.promise
+      }
+      if (req.url === "/search" && req.method === "POST") {
+        return ok(server.searchResponse)
+      }
+      return err(404, { detail: "unhandled test route" })
+    })
+    const utils = renderHook(() => useFreeSearch(), { wrapper })
+    await waitFor(() => {
+      expect(utils.result.current.providersLoading).toBe(false)
+    })
+    const before = utils.result.current.usageEvents.length
+
+    await act(async () => {
+      await utils.result.current.runSearch({
+        query: "optimistic units",
+        maxResults: 6,
+        timeoutMs: 3000,
+      })
+    })
+
+    const events = utils.result.current.usageEvents
+    expect(events.length).toBe(before + 1)
+    const optimistic = events[0]
+    expect(optimistic.id.endsWith("-local")).toBe(true)
+    expect(optimistic.unitKind).toBeNull()
+    expect(optimistic.displayUnit).toBeNull()
+    expect(optimistic.providerId).toBe("tavily")
+    expect(optimistic.queryOrUrl).toBe("")
+    expect(stub.requestsTo("/search")).toHaveLength(1)
+    gate.resolve(ok(server.dashboard))
+  })
+
+  it("RF5: runFetch prepends an optimistic local event (id ends -local, null kind)", async () => {
+    const server = createServer()
+    const gate = deferred<Response>()
+    let dashboardCalls = 0
+    installFetchStub((req) => {
+      if (req.url === "/api/v1/providers" && req.method === "GET") {
+        return ok(server.providers)
+      }
+      if (req.url === "/api/v1/routing/config" && req.method === "GET") {
+        return ok(server.routing)
+      }
+      if (req.url.startsWith("/dashboard") && req.method === "GET") {
+        dashboardCalls += 1
+        if (dashboardCalls === 1) return ok(server.dashboard)
+        return gate.promise
+      }
+      if (req.url === "/fetch" && req.method === "POST") {
+        return ok(server.fetchResponse)
+      }
+      return err(404, { detail: "unhandled test route" })
+    })
+    const utils = renderHook(() => useFreeSearch(), { wrapper })
+    await waitFor(() => {
+      expect(utils.result.current.providersLoading).toBe(false)
+    })
+    const before = utils.result.current.usageEvents.length
+
+    await act(async () => {
+      await utils.result.current.runFetch({
+        url: "https://example.com/doc",
+        providerId: "firecrawl",
+        format: "markdown",
+        timeoutMs: 4000,
+      })
+    })
+
+    const events = utils.result.current.usageEvents
+    expect(events.length).toBe(before + 1)
+    expect(events[0].id.endsWith("-local")).toBe(true)
+    expect(events[0].unitKind).toBeNull()
+    expect(events[0].displayUnit).toBeNull()
+    expect(events[0].operation).toBe("fetch")
+    gate.resolve(ok(server.dashboard))
   })
 })

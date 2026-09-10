@@ -503,7 +503,7 @@ class ParallelAdapter(ProviderAdapter):
             observed_at=observed_at,
             unit_kind=UnitKind.USD,
             display_unit="USD",
-            metadata={"soft_zero": self._soft_zero},
+            metadata={"soft_zero": self._soft_zero, "window": "monthly"},
         )
 
     def _error(

@@ -12,6 +12,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import type { FallbackConfig, ProviderConfig } from "@/types/freesearch"
+import { providerQuotaDisplay } from "@/services/quotaDisplay"
 import { getEligibleProviders } from "./routingUtils"
 
 type RanksOperation = "Search" | "Fetch"
@@ -57,6 +58,9 @@ export const ProviderRanks: React.FC = () => {
 
   return (
     <section className="space-y-4 w-full max-w-none">
+      <p className="text-[12px] text-[var(--muted)]">
+        Remaining percentages are comparable; details keep each provider&apos;s native unit.
+      </p>
       <div className="border border-[var(--border-subtle)] rounded-lg overflow-hidden w-full">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[var(--border-subtle)] bg-[var(--elevated)] px-4 py-2.5">
           <div className="flex items-center gap-2.5">
@@ -137,7 +141,10 @@ const RankRow: React.FC<{ provider: ProviderConfig; rank: number; role: string }
   provider,
   rank,
   role,
-}) => (
+}) => {
+  const quota = providerQuotaDisplay(provider)
+  const headline = quota.remainingPercent === null ? "Quota unavailable" : `${quota.remainingPercent}% remaining`
+  return (
   <TableRow className="border-b border-[var(--border-subtle)] last:border-b-0">
     <TableCell className="px-3 py-2.5 text-[var(--muted)] tnum">#{rank}</TableCell>
     <TableCell className="px-3 py-2.5">
@@ -155,7 +162,16 @@ const RankRow: React.FC<{ provider: ProviderConfig; rank: number; role: string }
       {provider.latencyP95Ms === null ? "—" : `${provider.latencyP95Ms}ms`}
     </TableCell>
     <TableCell className="px-3 py-2.5 text-right text-[var(--muted)] tnum">
-      {provider.quota.used ?? "—"}/{provider.quota.limit ?? "∞"}
+      <span
+        title={
+          provider.quota.observedAt
+            ? `Remaining quota (${provider.quota.confidence}, ${provider.quota.displayUnit ?? provider.quota.unit})`
+            : "Quota unavailable from the backend"
+        }
+      >
+        <span data-testid={`rank-quota-percent-${provider.id}`}>{headline}</span>
+        <span className="ml-1.5 text-[11px] text-[var(--muted)]">({quota.nativeValue})</span>
+      </span>
     </TableCell>
     <TableCell className="px-3 py-2.5 text-right">
       <span
@@ -171,4 +187,5 @@ const RankRow: React.FC<{ provider: ProviderConfig; rank: number; role: string }
       </span>
     </TableCell>
   </TableRow>
-)
+  )
+}

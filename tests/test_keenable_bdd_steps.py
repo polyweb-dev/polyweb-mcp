@@ -18,8 +18,8 @@ Contract under test (BDD fix contract):
          must still be closed.
   AC-L3  The Keenable search step assertions accept a ``keenable`` response
          with at least one nonempty title/http-URL/snippet result, a correct
-         total count, and a zero-unit search ``UsageEvent``, and reject each
-         individual violation.
+         total count, and one request unit for a keyless search (whose monetary
+         cost is zero), and reject each individual violation.
 """
 
 import asyncio
@@ -36,6 +36,7 @@ from freesearch import http as freesearch_http
 from freesearch.contracts import (
     SearchResponse,
     SearchResult,
+    UnitKind,
     UsageEvent,
     UsageOperation,
 )
@@ -238,12 +239,15 @@ def test_after_scenario_still_closes_adapters_with_aclose() -> None:
 # --- AC-L3: step assertions ------------------------------------------
 
 
-def _usage_event(units: str = "0") -> UsageEvent:
+def _usage_event(units: str = "1") -> UsageEvent:
     return UsageEvent(
         provider="keenable",
         operation=UsageOperation.SEARCH,
         units=Decimal(units),
+        unit_kind=UnitKind.REQUEST,
+        display_unit="requests",
         observed_at=datetime.now(UTC),
+        metadata={"mode": "keyless", "cost_usd": Decimal("0")},
     )
 
 
@@ -355,18 +359,18 @@ def test_total_count_step_rejects_mismatch() -> None:
 
 
 def test_usage_step_rejects_missing_usage() -> None:
-    """Zero-unit usage is required; an absent UsageEvent must still fail."""
+    """Request usage is required; an absent UsageEvent must still fail."""
     context = SimpleNamespace(search_response=_response([_result()], usage=None))
 
     with pytest.raises(AssertionError, match="missing usage"):
         keenable_steps.step_then_keenable_zero_usage(context)
 
 
-def test_usage_step_rejects_nonzero_units() -> None:
-    """Keenable searches are free: any nonzero unit count must fail."""
-    context = SimpleNamespace(search_response=_response([_result()], usage=_usage_event("1")))
+def test_usage_step_rejects_zero_units() -> None:
+    """A keyless call consumes one request despite zero monetary cost."""
+    context = SimpleNamespace(search_response=_response([_result()], usage=_usage_event("0")))
 
-    with pytest.raises(AssertionError, match="zero"):
+    with pytest.raises(AssertionError, match="one request"):
         keenable_steps.step_then_keenable_zero_usage(context)
 
 
@@ -375,7 +379,9 @@ def test_usage_step_rejects_wrong_operation_or_provider() -> None:
     usage = UsageEvent(
         provider="keenable",
         operation=UsageOperation.FETCH,
-        units=Decimal("0"),
+        units=Decimal("1"),
+        unit_kind=UnitKind.REQUEST,
+        display_unit="requests",
         observed_at=datetime.now(UTC),
     )
     context = SimpleNamespace(search_response=_response([_result()], usage=usage))

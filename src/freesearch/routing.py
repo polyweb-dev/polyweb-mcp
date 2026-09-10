@@ -9,6 +9,7 @@ database, configuration, or provider calls happen here.
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
 
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.contracts import (
@@ -128,16 +129,21 @@ def _eligible(
         )
 
     quota = quota_snapshots.get(adapter.name)
-    if quota is not None and quota.remaining == 0 and _hard_quota_exhaustion(adapter.name, quota):
+    if quota is not None and _hard_quota_exhaustion(adapter.name, quota):
         return None
 
     return RouteCandidate(adapter=adapter, health=health, quota=quota)
 
 
 def _hard_quota_exhaustion(name: str, quota: QuotaSnapshot) -> bool:
-    """Distinguish a marked Parallel 402 soft zero from genuine depletion."""
+    """Return whether a known positive allowance has reached zero."""
 
-    return not is_soft_quota_zero(name, quota)
+    return (
+        quota.remaining == Decimal("0")
+        and quota.limit is not None
+        and quota.limit > Decimal("0")
+        and not is_soft_quota_zero(name, quota)
+    )
 
 
 def _preference_rank(name: str, preference: RoutingPreference) -> int:

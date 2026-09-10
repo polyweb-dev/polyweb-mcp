@@ -458,6 +458,14 @@ async def _poll_one_quota(
         return snapshot
 
 
+def normalize_degenerate_quota(snapshot: QuotaSnapshot) -> QuotaSnapshot:
+    """Return a copy that treats a zero quota limit as unknown."""
+
+    if snapshot.limit == Decimal("0"):
+        return snapshot.model_copy(update={"remaining": None, "limit": None, "reset_at": None})
+    return snapshot.model_copy()
+
+
 async def effective_quota(
     repository: SQLiteRepository | None, provider: str
 ) -> QuotaSnapshot | None:
@@ -466,11 +474,10 @@ async def effective_quota(
     if repository is None:
         return None
     snapshot = await repository.latest_quota(provider)
-    if (
-        snapshot is None
-        or snapshot.remaining != Decimal("0")
-        or not is_soft_quota_zero(provider, snapshot)
-    ):
+    if snapshot is None:
+        return None
+    snapshot = normalize_degenerate_quota(snapshot)
+    if snapshot.remaining != Decimal("0") or not is_soft_quota_zero(provider, snapshot):
         return snapshot
     try:
         events = await repository.list_usage(provider=provider)
@@ -587,7 +594,7 @@ async def _latest_quotas(
     for provider in providers:
         snapshot = await repository.latest_quota(provider)
         if snapshot is not None:
-            snapshots.append(snapshot)
+            snapshots.append(normalize_degenerate_quota(snapshot))
     return snapshots
 
 

@@ -3,6 +3,7 @@ import { useFreeSearch } from "@/context/useFreeSearch"
 import { Modal } from "@/components/common/Modal"
 import { ProviderLogo } from "@/components/common/ProviderLogo"
 import { SegmentedControl } from "@/components/common/SegmentedControl"
+import { unitLabel } from "@/services/api/mappers"
 import {
   Table,
   TableBody,
@@ -32,23 +33,10 @@ export const ActivityStream: React.FC = () => {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-baseline justify-between gap-4 pb-2 border-b border-[var(--border-subtle)]">
-        <div>
-          <h2 className="text-[var(--text-strong)]">Activity</h2>
-          <p className="text-[13px] text-[var(--muted)] mt-0.5">
-            Operational telemetry for routing decisions, failover traces, and latency.
-          </p>
-        </div>
-
-        <SegmentedControl
-          options={FILTER_OPTIONS}
-          value={filterOp[0].toUpperCase() + filterOp.slice(1)}
-          onChange={(value) =>
-            setFilterOp(value.toLowerCase() as OperationFilter)
-          }
-          ariaLabel="Activity operation filter"
-        />
-      </div>
+      <ActivityHeader
+        filterOp={filterOp}
+        onFilterChange={(value) => setFilterOp(value.toLowerCase() as OperationFilter)}
+      />
 
       {usageLoading ? (
         <>
@@ -114,7 +102,9 @@ export const ActivityStream: React.FC = () => {
                   <TableCell className="px-4 py-2.5 text-right text-[var(--text)] tnum">
                     {evt.latencyMs === null ? "—" : `${evt.latencyMs}ms`}
                   </TableCell>
-                  <TableCell className="px-4 py-2.5 text-right text-[var(--muted)] tnum">{evt.costCredits} units</TableCell>
+                  <TableCell className="px-4 py-2.5 text-right text-[var(--muted)] tnum">
+                    {evt.costCredits} {activityUnitLabel(evt)}
+                  </TableCell>
                 </TableRow>
               ))}
             </TableBody>
@@ -125,6 +115,31 @@ export const ActivityStream: React.FC = () => {
       {selectedEvent && <TraceDetailModal event={selectedEvent} onClose={() => setSelectedEvent(null)} />}
     </div>
   )
+}
+
+const ActivityHeader: React.FC<{
+  filterOp: OperationFilter
+  onFilterChange: (value: string) => void
+}> = ({ filterOp, onFilterChange }) => (
+  <div className="flex flex-col sm:flex-row sm:items-baseline justify-between gap-4 pb-2 border-b border-[var(--border-subtle)]">
+    <div>
+      <h2 className="text-[var(--text-strong)]">Activity</h2>
+      <p className="text-[13px] text-[var(--muted)] mt-0.5">Operational telemetry for routing decisions, failover traces, and latency.</p>
+    </div>
+    <SegmentedControl
+      options={FILTER_OPTIONS}
+      value={filterOp[0].toUpperCase() + filterOp.slice(1)}
+      onChange={onFilterChange}
+      ariaLabel="Activity operation filter"
+    />
+  </div>
+)
+
+function activityUnitLabel(event: UsageEvent): string {
+  if (event.unitKind === null) {
+    return event.id.endsWith("-local") ? "pending" : "legacy (mixed)"
+  }
+  return event.displayUnit ?? unitLabel(event.unitKind, event.displayUnit)
 }
 
 function statusColor(status: UsageEvent["status"]): string {

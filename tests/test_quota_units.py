@@ -159,6 +159,50 @@ class TestUnitKindContract:
         )
 
 
+class TestRemainingPercentContract:
+    def _snapshot(self, remaining: str | None, limit: str | None) -> QuotaSnapshot:
+        return QuotaSnapshot(
+            provider="tavily",
+            source=QuotaSource.AUTHORITATIVE,
+            remaining=Decimal(remaining) if remaining is not None else None,
+            limit=Decimal(limit) if limit is not None else None,
+            observed_at=FIXED_AT,
+            unit_kind=_opt(_unit_kind(), "CREDIT"),
+            display_unit="credits",
+        )
+
+    def test_bounded_percentage_is_decimal_exact(self) -> None:
+        snapshot = self._snapshot("25", "100")
+        assert snapshot.remaining_percent == Decimal("25"), (
+            f"Quota percentage must derive from native Decimal values, saw {snapshot!r}"
+        )
+        assert Decimal(snapshot.model_dump(mode="json")["remaining_percent"]) == Decimal("25"), (
+            "Bounded remaining_percent must be present on the canonical wire contract"
+        )
+
+    def test_promotional_balance_clamps_at_one_hundred(self) -> None:
+        snapshot = self._snapshot("250", "100")
+        assert snapshot.remaining_percent == Decimal("100"), (
+            "A remaining balance above the plan baseline must clamp to 100%"
+        )
+
+    @pytest.mark.parametrize("remaining,limit", [("0", "0"), ("0", None), ("10", None)])
+    def test_unbounded_or_zero_limit_is_unknown(self, remaining: str, limit: str | None) -> None:
+        snapshot = self._snapshot(remaining, limit)
+        assert snapshot.remaining_percent is None
+        assert snapshot.model_dump(mode="json")["remaining_percent"] is None
+
+    async def test_dashboard_serializes_the_same_derived_percentage(
+        self, repo: SQLiteRepository
+    ) -> None:
+        await repo.record_quota(self._snapshot("25", "100"))
+        stats = await monitoring_module.collect_stats(repo, adapter_names=["tavily"])
+        payload = stats.model_dump(mode="json")
+        assert Decimal(payload["latest_quota"][0]["remaining_percent"]) == Decimal("25"), (
+            "Dashboard serialization must expose the canonical derived percentage"
+        )
+
+
 # --------------------------------------------------------------------------
 # Decimal rules (QUOTA.md section 2.3)
 # --------------------------------------------------------------------------
@@ -278,8 +322,7 @@ class TestSafeAggregation:
         for total in totals:
             if _opt(total, "unit_kind", None) is None:
                 assert isinstance(total, LegacyUsageTotal), (
-                    "AC-8: kind-less totals must be LegacyUsageTotal, "
-                    f"saw {type(total).__name__}"
+                    f"AC-8: kind-less totals must be LegacyUsageTotal, saw {type(total).__name__}"
                 )
         rows = await repo.list_usage(provider="exa")
         assert len(rows) == 1 and rows[0].units == Decimal("0.001"), (
@@ -289,9 +332,7 @@ class TestSafeAggregation:
             "AC-8: legacy rows read back with unknown unit kind"
         )
 
-    async def test_legacy_only_totals_are_legacy_compatible(
-        self, repo: SQLiteRepository
-    ) -> None:
+    async def test_legacy_only_totals_are_legacy_compatible(self, repo: SQLiteRepository) -> None:
         await repo.record_usage(
             UsageEvent(
                 provider="exa",
@@ -304,9 +345,7 @@ class TestSafeAggregation:
         assert len(totals) == 1 and isinstance(totals[0], LegacyUsageTotal), (
             f"AC-8: legacy-only data must aggregate as LegacyUsageTotal, saw {totals!r}"
         )
-        assert totals[0].total_units == Decimal("0.001"), (
-            "AC-8: legacy totals keep exact raw units"
-        )
+        assert totals[0].total_units == Decimal("0.001"), "AC-8: legacy totals keep exact raw units"
 
     async def test_failure_zeros_excluded(self, repo: SQLiteRepository) -> None:
         kind = _unit_kind()
@@ -571,14 +610,18 @@ class TestCostEstimates:
             f"AC-PA-2: Parallel estimates must be USD, saw {estimate.currency!r}"
         )
         assert estimate.units == Decimal("0.005"), (
-            f"AC-PA-2: omitted/default-advanced search must be USD 0.005, "
-            f"saw {estimate.units!r}"
+            f"AC-PA-2: omitted/default-advanced search must be USD 0.005, saw {estimate.units!r}"
         )
 
     @pytest.mark.parametrize(
         ("mode", "bundles", "expected"),
-        [(None, 0, "0.005"), ("omitted", 0, "0.005"), ("turbo", 0, "0.001"),
-         ("basic", 0, "0.005"), ("advanced", 2, "0.007")],
+        [
+            (None, 0, "0.005"),
+            ("omitted", 0, "0.005"),
+            ("turbo", 0, "0.001"),
+            ("basic", 0, "0.005"),
+            ("advanced", 2, "0.007"),
+        ],
     )
     def test_parallel_search_price_table(
         self, mode: str | None, bundles: int, expected: str
@@ -613,9 +656,7 @@ class TestCostEstimates:
         try:
             adapter = ParallelAdapter(client)
             try:
-                request = SearchRequest(
-                    query="q", limit=3, mode="turbo", extra_bundles=0
-                )
+                request = SearchRequest(query="q", limit=3, mode="turbo", extra_bundles=0)
             except ValidationError as exc:
                 raise AssertionError(
                     "AC-PA-2: SearchRequest lacks the mode-aware estimate "
@@ -626,8 +667,7 @@ class TestCostEstimates:
             await adapter.aclose()
             await client.aclose()
         assert estimate.units == search_cost_usd("turbo", 0) == Decimal("0.001"), (
-            f"AC-PA-2: turbo estimate must equal the documented price, "
-            f"saw {estimate.units!r}"
+            f"AC-PA-2: turbo estimate must equal the documented price, saw {estimate.units!r}"
         )
         assert estimate.currency == "USD", (
             f"AC-PA-2: Parallel estimates must be USD, saw {estimate.currency!r}"
@@ -700,9 +740,7 @@ class TestKeenableErrors:
                 200,
                 json={
                     "results": [{"title": "k", "url": "https://example.com/k"}],
-                    "_meta": {
-                        "keenable/usage": {"credits": 2, "paid": True, "sku": "search.pro"}
-                    },
+                    "_meta": {"keenable/usage": {"credits": 2, "paid": True, "sku": "search.pro"}},
                 },
             )
 
@@ -810,9 +848,7 @@ class TestRoutingSemantics:
             async def fetch(self, request: FetchRequest):  # type: ignore[no-untyped-def]
                 return FetchResponse(
                     provider=self._name,
-                    document=FetchedDocument(
-                        url=request.url, content="", fetched_at=FIXED_AT
-                    ),
+                    document=FetchedDocument(url=request.url, content="", fetched_at=FIXED_AT),
                 )
 
             async def estimate_cost(self, request):  # type: ignore[no-untyped-def]
@@ -844,10 +880,7 @@ class TestRoutingSemantics:
 
     def test_unknown_quota_eligible(self) -> None:
         adapters = self._adapters()
-        names = [
-            c.adapter.name
-            for c in select_route(SearchRequest(query="q"), adapters, {}, {})
-        ]
+        names = [c.adapter.name for c in select_route(SearchRequest(query="q"), adapters, {}, {})]
         assert names == ["tavily", "brave"], (
             f"AC-6: unknown quota must stay eligible, never 0: {names!r}"
         )
@@ -870,8 +903,7 @@ class TestRoutingSemantics:
         }
         health = {"tavily": _health("tavily", HealthStatus.HEALTHY)}
         names = [
-            c.adapter.name
-            for c in select_route(SearchRequest(query="q"), adapters, health, quota)
+            c.adapter.name for c in select_route(SearchRequest(query="q"), adapters, health, quota)
         ]
         assert "tavily" not in names, f"AC-6: genuine depletion must steer away: {names!r}"
         assert names[0] == "brave", f"AC-6: fallback must lead: {names!r}"
@@ -888,12 +920,41 @@ class TestRoutingSemantics:
         }
         names = [
             c.adapter.name
-            for c in select_route(
-                SearchRequest(query="q"), [_parallel_route_adapter()], {}, quota
-            )
+            for c in select_route(SearchRequest(query="q"), [_parallel_route_adapter()], {}, quota)
         ]
         assert names == ["parallel"], (
             f"AC-6/AC-PA-5: Parallel soft zero must stay routable, saw {names!r}"
+        )
+
+    def test_keyless_local_hourly_zero_stays_routable(self) -> None:
+        # The local keyless counter cannot observe shared traffic from the
+        # same IP/pool, so 0/1000 is pressure metadata rather than hard
+        # exhaustion; a vendor 429 remains the authoritative signal.
+        adapters = self._adapters()
+        adapters[0]._name = "keenable"  # type: ignore[attr-defined]
+        quota = {
+            "keenable": QuotaSnapshot(
+                provider="keenable",
+                source=QuotaSource.OBSERVED,
+                remaining=Decimal("0"),
+                limit=Decimal("1000"),
+                observed_at=FIXED_AT,
+                unit_kind=_opt(_unit_kind(), "REQUEST"),
+                display_unit="requests",
+                metadata={
+                    "mode": "keyless",
+                    "window": "hourly",
+                    "scope": "shared_pool_local_observation",
+                },
+            )
+        }
+        health = {"keenable": _health("keenable", HealthStatus.HEALTHY)}
+        names = [
+            candidate.adapter.name
+            for candidate in select_route(SearchRequest(query="q"), adapters, health, quota)
+        ]
+        assert names[0] == "keenable", (
+            "AC-6: keyless local 0/1000 must stay eligible despite shared-pool uncertainty"
         )
 
     async def test_soft_zero_clears_on_success(self, repo: SQLiteRepository) -> None:
@@ -1223,9 +1284,7 @@ class TestParallelFetchUsagePersistence:
             response = await tracked(
                 repo,
                 adapter,
-                lambda running: running.fetch(
-                    FetchReq(url="https://example.com/doc", url_count=4)
-                ),
+                lambda running: running.fetch(FetchReq(url="https://example.com/doc", url_count=4)),
                 operation=UsageOperation.FETCH,
             )
         finally:
@@ -1233,8 +1292,7 @@ class TestParallelFetchUsagePersistence:
             await client.aclose()
         assert response.usage is not None, "AC-PA-1 setup: fetch must report usage"
         assert response.usage.metadata.get("url_count") == 4, (
-            f"AC-PA-1 setup: executed fetch must tag url_count=4, "
-            f"saw {response.usage.metadata!r}"
+            f"AC-PA-1 setup: executed fetch must tag url_count=4, saw {response.usage.metadata!r}"
         )
         events = await repo.list_usage(provider="parallel", operation=UsageOperation.FETCH)
         assert len(events) == 1, f"AC-PA-1/R2: fetch usage must persist, saw {events!r}"
@@ -1254,9 +1312,7 @@ class TestParallelFetchUsagePersistence:
 # --------------------------------------------------------------------------
 
 
-def _keenable_search_handler(
-    usage_meta: dict | None = None, *, status: int = 200
-) -> object:
+def _keenable_search_handler(usage_meta: dict | None = None, *, status: int = 200) -> object:
     def handler(request: httpx.Request) -> httpx.Response:
         if status != 200:
             return httpx.Response(status, json={"error": f"HTTP {status}"})
@@ -1307,8 +1363,7 @@ class TestKeenableRebuildPersistence:
         finally:
             await client.aclose()
         assert (await rebuilt.quota()).remaining == Decimal("99997"), (
-            "AC-5/R3: hydration must restore the persisted 3-credit spend "
-            "across rebuild"
+            "AC-5/R3: hydration must restore the persisted 3-credit spend across rebuild"
         )
 
     async def test_402_exhaustion_survives_rebuild(
@@ -1389,9 +1444,7 @@ class TestKeenableRebuildPersistence:
 
 
 class TestMetadataTypePreservation:
-    async def test_int_and_bool_and_none_round_trip_exactly(
-        self, repo: SQLiteRepository
-    ) -> None:
+    async def test_int_and_bool_and_none_round_trip_exactly(self, repo: SQLiteRepository) -> None:
         await repo.record_usage(
             UsageEvent(
                 provider="alpha",
@@ -1406,9 +1459,7 @@ class TestMetadataTypePreservation:
         assert event.metadata["paid"] is False
         assert event.metadata["missing"] is None
 
-    async def test_numeric_strings_never_coerce_to_numbers(
-        self, repo: SQLiteRepository
-    ) -> None:
+    async def test_numeric_strings_never_coerce_to_numbers(self, repo: SQLiteRepository) -> None:
         # A numeric string is telemetry text, not a number: "4" must come back
         # as str (never int), "0.005" as str (never float/Decimal).
         await repo.record_usage(
@@ -1428,9 +1479,7 @@ class TestMetadataTypePreservation:
             event.metadata["price_text"], str
         ), f"numeric strings must not coerce to numbers, saw {event.metadata!r}"
 
-    async def test_decimal_never_contaminates_with_float(
-        self, repo: SQLiteRepository
-    ) -> None:
+    async def test_decimal_never_contaminates_with_float(self, repo: SQLiteRepository) -> None:
         await repo.record_usage(
             UsageEvent(
                 provider="alpha",
@@ -1457,9 +1506,7 @@ class TestMetadataTypePreservation:
 
 
 class TestQuotaPollBackoffAndEviction:
-    async def test_quota_poll_backs_off_on_429_then_succeeds(
-        self, static_resolver: None
-    ) -> None:
+    async def test_quota_poll_backs_off_on_429_then_succeeds(self, static_resolver: None) -> None:
         # Failure backoff through the public ResilientRunner seams (injected
         # clock/sleeper, deterministic jitter): two 429s on the quota poll
         # sleep capped exponential backoff, then the poll succeeds.
@@ -1507,9 +1554,7 @@ class TestQuotaPollBackoffAndEviction:
             f"quota 429s must sleep capped exponential backoff [1.0, 2.0], saw {sleeps!r}"
         )
 
-    async def test_poll_state_eviction_forces_repoll(
-        self, repo: SQLiteRepository
-    ) -> None:
+    async def test_poll_state_eviction_forces_repoll(self, repo: SQLiteRepository) -> None:
         # Lock/cache eviction through the public seam: after eviction the next
         # bounded poll must hit vendors again instead of serving stale state.
         from freesearch.monitoring import clear_quota_poll_cache, refresh_quotas

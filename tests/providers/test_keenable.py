@@ -11,7 +11,7 @@ from pydantic import SecretStr
 import freesearch.adapters.keenable as keenable_module
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.adapters.keenable import KeenableAdapter
-from freesearch.contracts import FetchRequest, SearchRequest, UsageOperation
+from freesearch.contracts import FetchRequest, SearchRequest, UnitKind, UsageOperation
 from freesearch.resilience import ProviderOperationError
 from freesearch.secrets import ProviderName
 
@@ -112,10 +112,14 @@ async def test_keyless_search_and_fetch_use_public_paths_and_title(
         "description": "Description",
         "acquired_at": "2026-01-16T08:12:34Z",
     }
-    assert search.usage is not None and search.usage.units == Decimal("0")
+    assert search.usage is not None and search.usage.units == Decimal("1")
+    assert search.usage.unit_kind is UnitKind.REQUEST
+    assert search.usage.display_unit == "requests"
+    assert search.usage.metadata["cost_usd"] == Decimal("0")
     assert fetch.document.content == "abc"
     assert fetch.document.metadata["truncated"] is True
-    assert fetch.usage is not None and fetch.usage.units == Decimal("0")
+    assert fetch.usage is not None and fetch.usage.units == Decimal("1")
+    assert fetch.usage.unit_kind is UnitKind.REQUEST
 
 
 @pytest.mark.asyncio

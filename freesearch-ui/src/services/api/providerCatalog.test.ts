@@ -23,7 +23,7 @@ describe("PROVIDER_CATALOG", () => {
       backendId: "you",
       capabilities: ["search", "fetch", "live_crawl"],
     },
-    { id: "parallel", backendId: "parallel", capabilities: ["search", "extract"] },
+    { id: "parallel", backendId: "parallel", capabilities: ["search", "extract", "fetch"] },
   ]
 
   it("contains exactly 7 static entries", () => {

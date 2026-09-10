@@ -21,6 +21,7 @@ from freesearch.contracts import (
     UsageEvent,
     UsageOperation,
 )
+from freesearch.database_migrations import DatabaseMigrationError
 from freesearch.storage import SQLiteRepository, UsageEventRow
 
 
@@ -42,6 +43,7 @@ _SCHEMA: dict[str, dict[str, object]] = {
             "metadata": ("TEXT", False),
             "latency_ms": ("INTEGER", True),
             "status": ("TEXT", True),
+            "unit_kind": ("TEXT", True),
         },
         "primary_key": ("id",),
         "indexes": {"usage_events_provider_observed_at": ["provider", "observed_at"]},
@@ -55,6 +57,9 @@ _SCHEMA: dict[str, dict[str, object]] = {
             "limit_units": ("TEXT", True),
             "reset_at": ("TEXT", True),
             "observed_at": ("TEXT", False),
+            "unit_kind": ("TEXT", True),
+            "display_unit": ("TEXT", True),
+            "metadata": ("TEXT", True),
         },
         "primary_key": ("id",),
         "indexes": {
@@ -562,8 +567,8 @@ async def test_initialized_schema_matches_baseline_contract(
     assert indexes == _SCHEMA[table_name]["indexes"]
 
 
-async def test_initialize_recreates_missing_declared_index(tmp_path: Path) -> None:
-    """Dropping a declared index must be repaired by a later initialize()."""
+async def test_initialize_rejects_schema_drift_at_alembic_head(tmp_path: Path) -> None:
+    """A stamped database with missing schema must fail instead of hiding drift."""
     async with await SQLiteRepository.open(tmp_path / "repair.db") as repository:
         usage_index = next(iter(UsageEventRow.__table__.indexes))
         async with repository._engine.begin() as connection:
@@ -573,7 +578,8 @@ async def test_initialize_recreates_missing_declared_index(tmp_path: Path) -> No
         index_names = [index["name"] for index in snapshot["indexes"]["usage_events"]]
         assert "usage_events_provider_observed_at" not in index_names
 
-        await repository.initialize()
+        with pytest.raises(DatabaseMigrationError, match="missing indexes"):
+            await repository.initialize()
 
         snapshot = await _schema_snapshot(repository)
         indexes = {
@@ -581,7 +587,7 @@ async def test_initialize_recreates_missing_declared_index(tmp_path: Path) -> No
             for index in snapshot["indexes"]["usage_events"]
             if not index["name"].startswith("sqlite_autoindex_")
         }
-        assert indexes["usage_events_provider_observed_at"] == ["provider", "observed_at"]
+        assert "usage_events_provider_observed_at" not in indexes
 
 
 async def test_open_uses_literal_database_path_with_spaces(tmp_path: Path) -> None:

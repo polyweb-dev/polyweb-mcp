@@ -21,13 +21,30 @@ export type CircuitBreakerStatus = "closed" | "open" | "half_open"
 export type QuotaConfidence = "authoritative" | "observed" | "estimated"
 export type KeySource = "environment" | "dotenv" | "keyring" | "none"
 
+/**
+ * Canonical aggregation dimension from the backend (QUOTA.md Option A).
+ * Logic branches on this, never on display text. `null` = legacy/unknown:
+ * rows recorded before canonical units existed; never merged into a
+ * known dimension and never summed across kinds.
+ */
+export type UnitKind = "REQUEST" | "CREDIT" | "USD" | "FREE"
+
 export interface ProviderQuota {
   used: number | null
-  limit: number | null
+  limit: string | null
   unit: string
   confidence: QuotaConfidence
   resetPeriod: string | null
   nextReset: string | null
+  /** Dashboard overlay: exact decimal string from the backend, never float-cast for display. */
+  remaining: string | null
+  /** Canonical backend-derived 0..100 remaining percentage, when available. */
+  remainingPercent: string | null
+  unitKind: UnitKind | null
+  displayUnit: string | null
+  observedAt: string | null
+  /** Optional rolling window label, used by keyless rate-limit snapshots. */
+  window: string | null
 }
 
 export interface ProviderConfig {
@@ -150,18 +167,27 @@ export interface UsageEvent {
   status: "success" | "error" | "fallback_recovered"
   routeReason: string
   fallbackChain: string[]
+  unitKind: UnitKind | null
+  displayUnit: string | null
 }
 
 export interface UsageTotal {
   provider: string
   operation: string
   total_units: string
+  unitKind: UnitKind | null
+  eventCount: number
 }
 
 export interface DashboardQuota {
   provider: string
   remaining: string | null
+  remainingPercent: string | null
   limit: string | null
   observed_at: string
   source: QuotaConfidence
+  unitKind: UnitKind | null
+  displayUnit: string | null
+  resetAt: string | null
+  window: string | null
 }

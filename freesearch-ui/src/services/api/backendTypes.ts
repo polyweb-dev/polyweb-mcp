@@ -4,6 +4,8 @@ export type BackendHealth = "healthy" | "degraded" | "unavailable" | "unknown"
 export type BackendSecretPresence = "configured" | "missing" | "keyless_public"
 export type BackendSecretSource = "environment" | "dotenv" | "keyring" | "none"
 export type BackendUsageStatus = "success" | "failure"
+/** Canonical unit dimension (QUOTA.md Option A). Uppercase on the wire; null/absent = legacy. */
+export type BackendUnitKind = "REQUEST" | "CREDIT" | "USD" | "FREE"
 export type BackendCircuitBreaker = {
   state: BackendBreakerState
   updated_at: string
@@ -38,6 +40,8 @@ export interface BackendUsageEvent {
   provider: string
   operation: string
   units: string
+  unit_kind?: BackendUnitKind | null
+  display_unit?: string | null
   observed_at: string
   request_id: string | null
   metadata: Record<string, unknown>
@@ -114,6 +118,7 @@ export interface BackendDashboardUsage {
   operation: string
   total_units: string
   event_count: number
+  unit_kind?: BackendUnitKind | null
 }
 
 export interface BackendDashboardQuota {
@@ -121,8 +126,14 @@ export interface BackendDashboardQuota {
   source: "authoritative" | "observed" | "estimated"
   observed_at: string
   remaining: string | number | null
+  /** Canonical 0..100 remaining percentage; absent on older backends. */
+  remaining_percent?: string | number | null
   limit: string | number | null
   reset_at: string | null
+  unit_kind?: BackendUnitKind | null
+  display_unit?: string | null
+  /** Optional scope label for rolling/keyless windows (for example hourly). */
+  window?: string | null
 }
 
 export interface BackendDashboardHealth {
@@ -138,6 +149,8 @@ export interface BackendDashboard {
     provider: string
     operation: string
     units: string
+    unit_kind?: BackendUnitKind | null
+    display_unit?: string | null
     observed_at: string
     latency_ms: number | null
     status: BackendUsageStatus

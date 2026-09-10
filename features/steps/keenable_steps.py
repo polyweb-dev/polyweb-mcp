@@ -4,8 +4,9 @@ from decimal import Decimal
 from typing import Any
 
 from behave import given, then, when  # type: ignore[import-untyped]
+from pydantic import HttpUrl
 
-from freesearch.contracts import SearchRequest, UsageOperation
+from freesearch.contracts import FetchRequest, SearchRequest, UsageOperation
 from freesearch.provider_config import get_provider_secret_resolver
 from freesearch.secrets import ProviderName
 
@@ -66,9 +67,9 @@ def step_then_keenable_total_count(context: Any) -> None:
     )
 
 
-@then("the Keenable search response should report zero-unit usage")
+@then("the Keenable search response should report one request unit")
 def step_then_keenable_zero_usage(context: Any) -> None:
-    """Verify a zero-unit search UsageEvent (free tier, no quota consumed)."""
+    """Verify one hourly-limit request unit (the public tier is dollar-free)."""
     usage = context.search_response.usage
     assert usage is not None, "Search response missing usage telemetry"
     assert usage.provider == "keenable", (
@@ -77,7 +78,10 @@ def step_then_keenable_zero_usage(context: Any) -> None:
     assert usage.operation is UsageOperation.SEARCH, (
         f"Expected SEARCH operation, got {usage.operation}"
     )
-    assert usage.units == Decimal("0"), f"Expected zero usage units, got {usage.units}"
+    assert usage.units == Decimal("1"), f"Expected one request unit, got {usage.units}"
+    assert str(usage.unit_kind).upper().endswith("REQUEST"), (
+        f"Expected REQUEST usage kind, got {usage.unit_kind}"
+    )
 
 
 @then("the live Keenable request should use the keyless public endpoint")
@@ -85,6 +89,78 @@ def step_then_keenable_public_request(context: Any) -> None:
     """Verify the live wire request used Keenable's unauthenticated endpoint."""
     request = context.live_request
     assert request.url.path == "/v1/search/public"
+    assert request.headers["X-Keenable-Title"] == "freesearch"
+    assert "X-API-Key" not in request.headers
+    assert "Authorization" not in request.headers
+
+
+@given("the Keenable adapter is ready for keyed search")
+def step_given_keenable_keyed_adapter(context: Any) -> None:
+    """Verify the Keenable adapter is configured with an API key for keyed use."""
+    assert context.adapter is not None, "Keenable adapter was not initialized."
+    assert context.adapter.name == "keenable", (
+        f"Expected Keenable adapter, got '{context.adapter.name}'"
+    )
+    assert get_provider_secret_resolver().get(ProviderName.KEENABLE) is not None, (
+        "Keyed live scenario requires FREESEARCH_KEENABLE_API_KEY to be configured."
+    )
+
+
+@when('I perform a live Keenable fetch for "{url}" with max {max_chars:d} chars')
+def step_when_live_keenable_fetch(context: Any, url: str, max_chars: int) -> None:
+    """Execute a single low-cost fetch request through the Keenable adapter."""
+
+    async def capture(request: Any) -> None:
+        context.live_fetch_request = request
+
+    context.http_client.event_hooks["request"].append(capture)
+    request = FetchRequest(url=HttpUrl(url), max_chars=max_chars)
+    context.fetch_url = str(request.url)
+    context.fetch_max_chars = max_chars
+    context.fetch_response = context.loop.run_until_complete(context.adapter.fetch(request))
+
+
+@then("the Keenable fetch response should contain non-empty content within {limit:d} chars")
+def step_then_keenable_fetch_content(context: Any, limit: int) -> None:
+    """Verify fetched content is non-empty and respects the max char bound."""
+    response = getattr(context, "fetch_response", None)
+    assert response is not None, "Fetch response is None"
+    assert response.provider == "keenable", (
+        f"Expected provider 'keenable', got '{response.provider}'"
+    )
+    assert response.document is not None, "Document missing from fetch response"
+    content = response.document.content
+    assert isinstance(content, str) and len(content.strip()) > 0, (
+        "Extracted document content is empty"
+    )
+    assert len(content) <= limit, f"Content exceeds max {limit} chars: {len(content)}"
+    assert len(content) <= context.fetch_max_chars, (
+        f"Content exceeds requested max {context.fetch_max_chars} chars: {len(content)}"
+    )
+
+
+@then("the Keenable fetch response should report one request unit")
+def step_then_keenable_fetch_zero_usage(context: Any) -> None:
+    """Verify one hourly-limit request unit for a keyless fetch."""
+    usage = context.fetch_response.usage
+    assert usage is not None, "Fetch response missing usage telemetry"
+    assert usage.provider == "keenable", (
+        f"Expected usage provider 'keenable', got '{usage.provider}'"
+    )
+    assert usage.operation is UsageOperation.FETCH, (
+        f"Expected FETCH operation, got {usage.operation}"
+    )
+    assert usage.units == Decimal("1"), f"Expected one request unit, got {usage.units}"
+    assert str(usage.unit_kind).upper().endswith("REQUEST"), (
+        f"Expected REQUEST usage kind, got {usage.unit_kind}"
+    )
+
+
+@then("the live Keenable fetch should use the keyless public endpoint")
+def step_then_keenable_fetch_public_request(context: Any) -> None:
+    """Verify the live fetch wire request used Keenable's unauthenticated endpoint."""
+    request = context.live_fetch_request
+    assert request.url.path == "/v1/fetch/public"
     assert request.headers["X-Keenable-Title"] == "freesearch"
     assert "X-API-Key" not in request.headers
     assert "Authorization" not in request.headers

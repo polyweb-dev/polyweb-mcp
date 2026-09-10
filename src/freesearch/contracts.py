@@ -6,7 +6,16 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, SecretStr, field_validator
+from pydantic import (
+    AnyHttpUrl,
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    computed_field,
+    field_validator,
+    model_serializer,
+)
 
 
 def parse_decimal(value: object, *, allow_negative: bool = False) -> Decimal:
@@ -170,6 +179,48 @@ class QuotaSnapshot(ContractModel):
     # Local routing state is not a vendor payload and is never serialized.
     metadata: dict[str, Any] = Field(default_factory=dict, exclude=True)
 
+    @computed_field(return_type=Decimal | None)  # type: ignore[prop-decorator]
+    @property
+    def remaining_percent(self) -> Decimal | None:
+        """Return remaining capacity as a canonical 0-100 percentage.
+
+        The percentage is deliberately derived from the native values rather
+        than persisted.  A missing/zero limit (or missing remaining value)
+        does not describe a bounded allowance, so it remains unknown.  Some
+        vendors report promotional balance above their baseline plan; clamp
+        that case to 100 while retaining the original native values.
+        """
+
+        if self.remaining is None or self.limit is None or self.limit <= 0:
+            return None
+        ratio = self.remaining / self.limit * Decimal("100")
+        return min(Decimal("100"), max(Decimal("0"), ratio))
+
+    @computed_field(return_type=str | None)  # type: ignore[prop-decorator]
+    @property
+    def window(self) -> str | None:
+        """Expose an optional non-sensitive scope label without raw metadata."""
+
+        value = self.metadata.get("window")
+        return value if isinstance(value, str) else None
+
+    @model_serializer(mode="wrap")
+    def _serialize_compat(self, handler: Any) -> Any:
+        """Keep legacy/unknown snapshots backward compatible on the wire.
+
+        The derived percentage is useful only for a canonical unit-bearing
+        snapshot.  Omitting it for legacy rows and unknown limits preserves
+        the historical payload shape while known quotas gain one consistent
+        field.
+        """
+
+        payload = handler(self)
+        if self.unit_kind is None:
+            payload.pop("remaining_percent", None)
+        if self.window is None:
+            payload.pop("window", None)
+        return payload
+
     @field_validator("remaining", "limit", mode="before")
     @classmethod
     def validate_quota_number(cls, value: object) -> Decimal | None:
@@ -179,8 +230,18 @@ class QuotaSnapshot(ContractModel):
 
 
 def is_soft_quota_zero(provider: str, snapshot: QuotaSnapshot) -> bool:
-    """Identify a temporary estimated zero without weakening hard exhaustion."""
+    """Identify non-authoritative zero signals without weakening hard exhaustion."""
 
+    if (
+        provider == "keenable"
+        and snapshot.source is QuotaSource.OBSERVED
+        and snapshot.metadata.get("mode") == "keyless"
+        and snapshot.metadata.get("scope") == "shared_pool_local_observation"
+    ):
+        # This is only this process's view of a shared IP/pool rate limit. A
+        # local count reaching zero cannot prove the vendor pool is exhausted;
+        # let the provider's 429 response remain the authoritative pressure.
+        return True
     return (
         provider == "parallel"
         and snapshot.source is QuotaSource.ESTIMATED

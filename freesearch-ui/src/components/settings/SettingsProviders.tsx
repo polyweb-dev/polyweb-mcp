@@ -20,6 +20,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import type { ProviderConfig } from "@/types/freesearch"
+import { providerQuotaDisplay } from "@/services/quotaDisplay"
 
 type TestResult = Awaited<ReturnType<ReturnType<typeof useFreeSearch>["testProviderConnection"]>>
 
@@ -219,7 +220,7 @@ const ProviderRegistryRow: React.FC<ProviderRegistryRowProps> = ({
         <HealthStatus status={health} />
       </TableCell>
       <TableCell className="whitespace-nowrap px-3 py-2.5 tnum">
-        {formatQuota(provider)}
+        <ProviderQuotaSummary provider={provider} />
       </TableCell>
       <TableCell className="whitespace-nowrap px-3 py-2.5 tnum">
         {formatLatency(provider.latencyP95Ms)}
@@ -382,7 +383,27 @@ const HealthStatus: React.FC<{ status: string }> = ({ status }) => {
 
 const stripProtocol = (url: string) => url.replace(/^https?:\/\//, "")
 const formatLatency = (latency: number | null) => latency === null ? "—" : `${latency}ms`
-const formatQuota = (provider: ProviderConfig) => `${provider.quota.used ?? "—"}/${provider.quota.limit ?? "∞"}`
+const formatQuota = (provider: ProviderConfig) => {
+  const display = providerQuotaDisplay(provider)
+  return `${display.headline} · ${display.periodLabel} · ${display.nativeValue} · ${display.confidenceLabel}`
+}
+
+const ProviderQuotaSummary: React.FC<{ provider: ProviderConfig }> = ({ provider }) => {
+  const display = providerQuotaDisplay(provider)
+  return (
+    <div className="flex flex-col gap-0.5 leading-tight">
+      <span className="text-[13px] font-medium text-[var(--text-strong)]">
+        <span data-testid={`settings-quota-headline-${provider.id}`}>{display.headline}</span>
+        <span className="ml-1.5 text-[11px] font-normal uppercase tracking-wide text-[var(--muted)]">
+          {display.periodLabel}
+        </span>
+      </span>
+      <span className="text-[11px] text-[var(--muted)]">
+        {display.nativeValue} · {display.confidenceLabel}
+      </span>
+    </div>
+  )
+}
 
 const PriorityIndicator: React.FC<{
   provider: ProviderConfig

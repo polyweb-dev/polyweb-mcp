@@ -193,6 +193,18 @@ class BraveAdapter(ProviderAdapter):
         remaining = monthly_header_value(response.headers.get("X-RateLimit-Remaining"))
         limit = monthly_header_value(response.headers.get("X-RateLimit-Limit"))
         reset = monthly_header_value(response.headers.get("X-RateLimit-Reset"))
+        if limit == Decimal("0"):
+            return QuotaSnapshot(
+                provider=self.name,
+                source=QuotaSource.OBSERVED,
+                remaining=None,
+                limit=None,
+                reset_at=None,
+                observed_at=observed_at,
+                unit_kind=UnitKind.REQUEST,
+                display_unit="requests",
+                metadata={"window": "monthly"},
+            )
         return QuotaSnapshot(
             provider=self.name,
             source=QuotaSource.OBSERVED,
@@ -202,6 +214,7 @@ class BraveAdapter(ProviderAdapter):
             observed_at=observed_at,
             unit_kind=UnitKind.REQUEST,
             display_unit="requests",
+            metadata={"window": "monthly"},
         )
 
     def _empty_quota(self) -> QuotaSnapshot:
@@ -214,15 +227,25 @@ class BraveAdapter(ProviderAdapter):
             observed_at=datetime.now(UTC),
             unit_kind=UnitKind.REQUEST,
             display_unit="requests",
+            metadata={"window": "monthly"},
         )
 
     @staticmethod
     def _rate_limit_remaining(value: str | None) -> int | None:
-        try:
-            remaining = int(value) if value is not None else None
-        except ValueError:
+        if value is None:
             return None
-        return remaining if remaining is not None and remaining >= 0 else None
+        # Brave may expose either a bare value (legacy responses) or the
+        # documented ``per-second, monthly`` pair.  Usage telemetry records
+        # the per-second headroom; the quota snapshot separately records the
+        # monthly element via ``monthly_header_value``.
+        raw = value.split(",", 1)[0].strip()
+        if not raw:
+            return None
+        try:
+            remaining = int(raw)
+        except (TypeError, ValueError):
+            return None
+        return remaining if remaining >= 0 else None
 
     def _http_error(self, status: int) -> ProviderOperationError:
         return self._error(

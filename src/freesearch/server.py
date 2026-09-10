@@ -98,7 +98,15 @@ def _quota_state_changed(current: QuotaSnapshot | None, projected: QuotaSnapshot
         return True
     return any(
         getattr(current, field, None) != getattr(projected, field, None)
-        for field in ("remaining", "limit", "unit_kind", "display_unit", "metadata")
+        for field in (
+            "source",
+            "remaining",
+            "limit",
+            "reset_at",
+            "unit_kind",
+            "display_unit",
+            "metadata",
+        )
     )
 
 

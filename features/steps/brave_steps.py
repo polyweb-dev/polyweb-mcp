@@ -5,12 +5,18 @@ secrets are asserted or logged; the ``given`` step only reports whether the
 FREESEARCH_BRAVE_SEARCH_API_KEY is resolvable.
 """
 
+import tempfile
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
 from behave import given, then, when  # type: ignore[import-untyped]
+from pydantic import HttpUrl
 
-from freesearch.contracts import SearchRequest, UsageOperation
+from freesearch.contracts import FetchRequest, SearchRequest, UsageOperation, UsageStatus
+from freesearch.monitoring import tracked_call
+from freesearch.resilience import ProviderOperationError
+from freesearch.storage import SQLiteRepository
 
 
 @given("a configured Brave search adapter")
@@ -110,3 +116,73 @@ def step_then_brave_cost_estimate(context: Any) -> None:
     )
     assert estimate.units == Decimal("1"), f"Expected exactly one unit, got {estimate.units}"
     assert estimate.currency == "queries", f"Expected currency 'queries', got '{estimate.currency}'"
+
+
+@when('I attempt a live Brave fetch for "{url}" with max {max_chars:d} chars')
+def step_when_live_brave_fetch(context: Any, url: str, max_chars: int) -> None:
+    """Attempt a Brave fetch that must fail as unsupported, recording telemetry."""
+    if getattr(context, "repository", None) is None:
+        context.temp_directory = tempfile.TemporaryDirectory(prefix="brave-fetch-bdd-")
+        db_path = Path(context.temp_directory.name) / "brave-fetch-test.db"
+        context.database_path = str(db_path)
+        context.repository = context.loop.run_until_complete(SQLiteRepository.open(db_path))
+    request = FetchRequest(url=HttpUrl(url), max_chars=max_chars)
+    context.fetch_url = str(request.url)
+    context.fetch_response = None
+    context.fetch_error = None
+    try:
+        context.loop.run_until_complete(
+            tracked_call(
+                context.repository,
+                context.adapter,
+                lambda adapter: adapter.fetch(request),
+                operation=UsageOperation.FETCH,
+            )
+        )
+    except ProviderOperationError as exc:
+        context.fetch_error = exc
+    except Exception as exc:  # pragma: no cover - typed error expected
+        context.fetch_error = exc
+
+
+@then("the Brave fetch should raise unsupported_operation")
+def step_then_brave_fetch_unsupported(context: Any) -> None:
+    """Verify the fetch attempt raised the unsupported operation error."""
+    error = getattr(context, "fetch_error", None)
+    assert error is not None, "Expected Brave fetch to raise, but it succeeded"
+    code = getattr(getattr(error, "error", None), "code", None)
+    assert code == "unsupported_operation", (
+        f"Expected Brave fetch error code 'unsupported_operation', got {code!r}"
+    )
+
+
+@then("no Brave quota snapshot should be recorded")
+def step_then_brave_no_quota(context: Any) -> None:
+    """Verify the unsupported fetch left no quota snapshot behind."""
+    latest = context.loop.run_until_complete(context.repository.latest_quota("brave"))
+    assert latest is None, (
+        f"Expected no Brave quota snapshot after unsupported fetch, saw {latest!r}"
+    )
+
+
+@then("the zero-unit Brave FAILURE should be excluded from usage totals")
+def step_then_brave_failure_excluded(context: Any) -> None:
+    """Verify the zero-unit failure row exists for observability but not totals."""
+    events = context.loop.run_until_complete(context.repository.list_usage(provider="brave"))
+    failures = [
+        event
+        for event in events
+        if event.status == UsageStatus.FAILURE and event.units == Decimal("0")
+    ]
+    assert len(failures) >= 1, (
+        f"Expected at least one zero-unit Brave FAILURE event for observability, saw {events!r}"
+    )
+    totals = context.loop.run_until_complete(context.repository.usage_totals())
+    brave_fetch = [
+        total
+        for total in totals
+        if total.provider == "brave" and total.operation == UsageOperation.FETCH
+    ]
+    assert brave_fetch == [], (
+        f"Zero-unit Brave FAILURE rows must not appear in usage totals, saw {brave_fetch!r}"
+    )

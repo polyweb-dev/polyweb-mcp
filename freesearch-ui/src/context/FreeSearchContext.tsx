@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type {
-  BackendDashboard,
   BackendSearchRequest,
   BackendProviderStatus,
   BackendRoutingConfig,
@@ -12,6 +11,7 @@ import { catalogEntryForId, catalogNameOf } from "@/services/api/providerCatalog
 import {
   mapBackendHealth,
   mapDashboardQuotas,
+  mapDashboardTotals,
   mapDashboardUsage,
   mapFetchResponse,
   mapRoutingConfig,
@@ -19,6 +19,7 @@ import {
   mergeProviderStatus,
   toBackendId,
   toUiId,
+  unitLabel,
 } from "@/services/api/mappers"
 import type {
   CircuitBreakerStatus,
@@ -81,14 +82,38 @@ function updateProviderFromWire(
     .sort((a, b) => a.priority - b.priority)
 }
 
-function usageTotalsFromDashboard(
-  rows: BackendDashboard["usage_totals"]
-): UsageTotal[] {
-  return rows.map(({ provider, operation, total_units }) => ({
-    provider,
-    operation,
-    total_units,
-  }))
+/**
+ * Overlay authoritative dashboard quota snapshots onto the provider list.
+ * The static provider status carries no quota numbers (honest null
+ * placeholder); the dashboard snapshot is the real source. Per-provider
+ * rows keep their identity — only the quota slice is replaced.
+ */
+function overlayDashboardQuotas(
+  previous: ProviderConfig[],
+  quotas: DashboardQuota[]
+): ProviderConfig[] {
+  if (quotas.length === 0) return previous
+  const byProvider = new Map(quotas.map((snapshot) => [snapshot.provider, snapshot]))
+  return previous.map((provider) => {
+    const snapshot = byProvider.get(provider.id)
+    if (!snapshot) return provider
+    return {
+      ...provider,
+      quota: {
+        ...provider.quota,
+        limit: snapshot.limit,
+        unit: snapshot.displayUnit ?? unitLabel(snapshot.unitKind, snapshot.displayUnit),
+        confidence: snapshot.source,
+        nextReset: snapshot.resetAt ?? provider.quota.nextReset,
+        remaining: snapshot.remaining,
+        remainingPercent: snapshot.remainingPercent,
+        unitKind: snapshot.unitKind,
+        displayUnit: snapshot.displayUnit,
+        observedAt: snapshot.observed_at,
+        window: snapshot.window,
+      },
+    }
+  })
 }
 
 function makeSearchEvent(response: SearchResponse): UsageEvent {
@@ -105,6 +130,10 @@ function makeSearchEvent(response: SearchResponse): UsageEvent {
     status: "success",
     routeReason: `Recorded search via ${response.selectedProviderId}`,
     fallbackChain: response.fallbackChain,
+    // Canonical units arrive via the dashboard refresh below; local
+    // optimistic events carry no unit claim rather than a fabricated one.
+    unitKind: null,
+    displayUnit: null,
   }
 }
 
@@ -121,6 +150,8 @@ function makeFetchEvent(response: FetchResponse): UsageEvent {
     status: "success",
     routeReason: `Recorded fetch via ${response.providerId}`,
     fallbackChain: response.fallbackChain,
+    unitKind: null,
+    displayUnit: null,
   }
 }
 
@@ -234,7 +265,7 @@ export const FreeSearchProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     try {
       const dashboard = await apiService.getDashboard()
       setUsageEvents(mapDashboardUsage(dashboard, catalogNameOf))
-      setUsageTotals(usageTotalsFromDashboard(dashboard.usage_totals))
+      setUsageTotals(mapDashboardTotals(dashboard))
       setDashboardQuotas(mapDashboardQuotas(dashboard))
       setDashboardNotice(dashboard.notice)
     } catch (error) {
@@ -288,7 +319,7 @@ export const FreeSearchProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         const dashboard = await apiService.getDashboard()
         if (!mounted) return
         setUsageEvents(mapDashboardUsage(dashboard, catalogNameOf))
-        setUsageTotals(usageTotalsFromDashboard(dashboard.usage_totals))
+        setUsageTotals(mapDashboardTotals(dashboard))
         setDashboardQuotas(mapDashboardQuotas(dashboard))
         setDashboardNotice(dashboard.notice)
       } catch (error) {
@@ -662,9 +693,18 @@ export const FreeSearchProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     setFetchError(null)
   }, [])
 
+  // Dashboard snapshots are the authoritative quota source; the static
+  // provider status carries only an honest null placeholder. Deriving the
+  // overlay here (rather than in the loaders) keeps it correct regardless
+  // of whether providers or dashboard resolve first.
+  const providersWithQuota = useMemo(
+    () => overlayDashboardQuotas(providers, dashboardQuotas),
+    [providers, dashboardQuotas]
+  )
+
   const value = useMemo(
     () => ({
-      providers,
+      providers: providersWithQuota,
       providersLoading,
       providersError,
       fallbackConfig,
@@ -707,7 +747,7 @@ export const FreeSearchProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       dismissToast,
     }),
     [
-      providers,
+      providersWithQuota,
       providersLoading,
       providersError,
       fallbackConfig,

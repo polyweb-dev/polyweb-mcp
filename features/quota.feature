@@ -85,12 +85,12 @@ Feature: Quota and usage accounting (QUOTA.md acceptance)
 
   # AC-5 — Keenable/Parallel local counters.
   @ac5
-  Scenario: Keenable keyed allowance decrements locally while keyless stays unmetered
+  Scenario: Keenable keyed allowance decrements locally while keyless tracks hourly requests
     Given an isolated quota repository
     When I apply 3 paid-false Keenable calls against the 100000 monthly allowance
     Then the Keenable remaining should be 99997 of 100000
     And a paid-true Keenable call should preserve the free allowance separately
-    And a keyless Keenable call should record FREE units with no quota snapshot
+    And a keyless Keenable call should record one REQUEST unit and an hourly snapshot
 
   @ac5
   Scenario: Keenable keyed estimate prices one request at about USD 0.004
@@ -245,3 +245,48 @@ Feature: Quota and usage accounting (QUOTA.md acceptance)
     Given an isolated quota repository
     When I record Parallel spend without enabling the free seed
     Then the Parallel quota should report remaining unknown with limit unknown
+
+  # B-QUOTA-BRAVE-REGRESSION — degenerate 0/0 is unknown and routable (AC-2/AC-6).
+  @quota @ac2
+  Scenario: Brave degenerate zero limit is treated as unknown and stays routable
+    Given an isolated quota repository
+    And a Brave adapter with stubbed headers ", 0" remaining, ", 0" limit, ", 0" reset
+    When I run a successful Brave search for "open data documentation" with limit 3
+    Then the Brave snapshot remaining should be unknown and limit should be unknown and reset should be unknown
+    And Brave should stay eligible for search routing despite zero monthly elements
+
+  @quota @ac2
+  Scenario: Brave missing monthly elements stay unknown and routable
+    Given an isolated quota repository
+    And a Brave adapter with stubbed headers "11" remaining, "60" limit, "5" reset
+    When I run a successful Brave search for "open data documentation" with limit 3
+    Then the Brave snapshot remaining should be unknown and limit should be unknown and reset should be unknown
+    And Brave should stay eligible for search routing despite zero monthly elements
+
+  @quota @ac2
+  Scenario: Brave genuine zero remaining with positive limit stays excluded
+    Given an isolated quota repository
+    And a Brave adapter with stubbed headers "1, 0" remaining, "60, 1000" limit, "5, 2592000" reset
+    When I run a successful Brave search for "open data documentation" with limit 3
+    Then the Brave snapshot should be OBSERVED monthly REQUEST quota with remaining 0 limit 1000
+    And Brave should be excluded from search routing when remaining is zero with a known positive limit
+
+  # S4 — shared normalize_degenerate_quota through BOTH read paths (AC-2/AC-6).
+  # Direct record_quota of Brave OBSERVED REQUEST 0/0 (bypassing the adapter's
+  # own zero-limit guard) must still normalize on the dashboard path
+  # (_latest_quotas/collect_stats) exactly like effective_quota, and routing
+  # must stay eligible. RED until freesearch.monitoring.normalize_degenerate_quota
+  # exists and is used by BOTH paths.
+  @quota @ac2
+  Scenario: Degenerate zero-limit quota normalizes through both read paths and stays routable
+    Given an isolated quota repository
+    When I record a Brave OBSERVED REQUEST quota with remaining 0 limit 0
+    Then collect_stats latest_quota for brave should be unknown remaining limit and reset
+    And effective_quota for brave should match the normalized unknown view
+    And Brave should stay eligible from the normalized view despite zero limit
+
+  @quota @ac6
+  Scenario: Keyless rolling-hour local zero stays routable because the pool is shared
+    Given an isolated quota repository
+    When I record a keyless local hourly quota at zero remaining
+    Then keyless local hourly zero should stay eligible for routing

@@ -353,8 +353,10 @@ describe("P1F-3: fleet telemetry rides in the merged row", () => {
       expect(quota.textContent?.trim().length).toBeGreaterThan(0)
       expect(quota.textContent).not.toMatch(/null|NaN/)
     }
-    // Estimated quota (null/null) renders the "—/∞" form from the fleet page.
-    expect(cellFor("Brave Search", "Quota").textContent).toContain("—/∞")
+    // RF2: null limits stay blank/— (∞ retired). Estimated quota (null/null)
+    // renders the "—/—" form.
+    expect(cellFor("Brave Search", "Quota").textContent).toContain("—/—")
+    expect(cellFor("Brave Search", "Quota").textContent).not.toContain("∞")
   })
 
   it("does not expose a Breaker column or Trip/Reset buttons", async () => {
@@ -412,7 +414,9 @@ describe("P1F-4: icon opens the ProviderTestModal (never fetches on open)", () =
     expect(dialog.textContent).toContain("api.search.brave.com")
     expect(dialog.textContent).toMatch(/healthy|degraded|offline|unknown/i)
     expect(dialog.textContent).toMatch(/\d+ms|—/)
-    expect(dialog.textContent).toContain("—/∞")
+    // RF2: null limits stay blank/— (∞ retired).
+    expect(dialog.textContent).toContain("—/—")
+    expect(dialog.textContent).not.toContain("∞")
   })
 
   it("modal Test button runs the existing handleTest: Testing... + exactly one POST .../test", async () => {
