@@ -2,8 +2,9 @@ import React from "react"
 import { describe, it, expect, vi, afterEach } from "vitest"
 import { render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import { OAuthPairingModal, formatCountdown } from "./OAuthPairingModal"
-import { ApiError } from "@/services/api/httpErrors"
+import { OAuthPairingModal } from "./OAuthPairingModal"
+import { formatCountdown } from "@/features/oauth/model/pairingFlow"
+import { ApiError } from "@/shared/api/http"
 import { deferred } from "@/test/fetchMock"
 import type {
   BackendOAuthDeviceCode,
@@ -171,7 +172,6 @@ describe("OAuthPairingModal", () => {
   })
 
   it("maps a 409 to paired-elsewhere with disconnect-then-retry and no auto retry", async () => {
-    const user = userEvent.setup()
     const beginFlow = vi.fn(() => Promise.reject(new ApiError(409, "already paired", {})))
     const onRevokePairing = vi.fn(() => Promise.resolve())
     const onClose = vi.fn()

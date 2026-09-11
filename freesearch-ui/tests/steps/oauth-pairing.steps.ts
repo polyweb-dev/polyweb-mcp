@@ -57,6 +57,19 @@ When(
   }
 )
 
+// Error-path begin: stubbed 503 renders alert with no code and no polling
+// (see parallelOAuthPairing.test.tsx begin-failure case). Do not reuse the
+// shared start step here; it asserts the user-code element.
+When(
+  "I attempt OAuth pairing for provider {string} with a failing begin",
+  async ({ page }, provider: string) => {
+    await page.getByTestId(OPEN_PREFIX + provider).click()
+    await expect(page.getByTestId("oauth-device-error")).toBeVisible()
+    await expect(page.getByTestId("oauth-device-error")).toContainText(/oauth unavailable/i)
+    await expect(page.getByTestId("oauth-device-user-code")).toHaveCount(0)
+  }
+)
+
 When(
   "the stubbed backend pairs {string} with balance {string}",
   async ({}, provider: string, _balance: string) => {

@@ -3,7 +3,7 @@ import { describe, it, expect, vi, afterEach } from "vitest"
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { ManualQuotaModal } from "./ManualQuotaModal"
-import { ApiError } from "@/services/api/httpErrors"
+import { ApiError } from "@/shared/api/http"
 import { deferred } from "@/test/fetchMock"
 
 const braveProps = {

@@ -81,7 +81,31 @@ import {
  */
 
 const testDir = import.meta.dirname
-const playgroundSource = readFileSync(
+// Slice 5 ownership: SearchPlayground.tsx is a compatibility shell over
+// features/playground. Read the joined owner sources (same strength as the
+// monolith read) plus the shell for the shim-compat assert below.
+const playgroundOwnerFiles = [
+  "../../features/playground/model/usePlaygroundController.ts",
+  "../../features/playground/model/playgroundFetchAction.ts",
+  "../../features/playground/model/playgroundExecuteAction.ts",
+  "../../features/playground/model/playgroundTypes.ts",
+  "../../features/playground/model/useResultPreview.ts",
+  "../../features/playground/ui/PlaygroundPage.tsx",
+  "../../features/playground/ui/SearchSection.tsx",
+  "../../features/playground/ui/FetchSection.tsx",
+  "../../features/playground/ui/SearchComposer.tsx",
+  "../../features/playground/ui/SearchOptions.tsx",
+  "../../features/playground/ui/FetchComposer.tsx",
+  "../../features/playground/ui/SearchResults.tsx",
+  "../../features/playground/ui/ResultCard.tsx",
+  "../../features/playground/ui/ResultInspector.tsx",
+  "../../features/playground/ui/WaterfallPanel.tsx",
+  "../../features/playground/ui/FetchResult.tsx",
+]
+const playgroundSource = playgroundOwnerFiles
+  .map((file) => readFileSync(path.resolve(testDir, file), "utf8"))
+  .join("\n")
+const playgroundShim = readFileSync(
   path.resolve(testDir, "./SearchPlayground.tsx"),
   "utf8"
 )
@@ -89,11 +113,26 @@ const typesSource = readFileSync(
   path.resolve(testDir, "../../types/freesearch.ts"),
   "utf8"
 )
-const contextSource = readFileSync(
+const executionTypesSource = readFileSync(
+  path.resolve(testDir, "../../domains/execution/model/types.ts"),
+  "utf8"
+)
+const requestUtilsSource = readFileSync(path.resolve(testDir, "../../domains/execution/model/requestUtils.ts"),"utf8");
+const executionRunnerFiles = [
+  "../../domains/execution/state/useSearchRunner.ts",
+  "../../domains/execution/state/useFetchRunner.ts",
+];
+const executionStateSource = executionRunnerFiles
+  .map((file) => readFileSync(path.resolve(testDir, file), "utf8"))
+  .join("\n");const contextSource = readFileSync(
   path.resolve(testDir, "../../context/FreeSearchContext.tsx"),
   "utf8"
 )
-const segmentedPath = path.resolve(testDir, "../common/SegmentedControl.tsx")
+// Slice 4 ownership: the canonical primitive lives in shared/ui; common/
+// keeps a compatibility shell. Read the owner (same strength) plus the
+// shell for the shim-compat assert below.
+const segmentedPath = path.resolve(testDir, "../../shared/ui/SegmentedControl.tsx")
+const segmentedShimPath = path.resolve(testDir, "../common/SegmentedControl.tsx")
 
 function renderWithBackend(
   searchHandler?: (req: { url: string }) => Response | Promise<Response>,
@@ -439,7 +478,7 @@ describe("PG-S5 AC-PG-S5-3: source number contract (playground/types/context)", 
   })
 
   it("types/freesearch SearchRequest drops mode (query + maxResults + timeoutMs only)", () => {
-    const match = typesSource.match(/interface SearchRequest \{[\s\S]*?\}/)
+    const match = executionTypesSource.match(/interface SearchRequest \{[\s\S]*?\}/)
     expect(match).not.toBeNull()
     const block = match![0]
     expect(block).toContain("query: string")
@@ -449,19 +488,39 @@ describe("PG-S5 AC-PG-S5-3: source number contract (playground/types/context)", 
     expect(block).not.toContain("fast")
     expect(block).not.toContain("balanced")
     expect(block).not.toContain("deep")
+    expect(typesSource).toContain("SearchRequest")
   })
 
   it("FreeSearchContext routes require|auto with prefer dead and clampLimit intact", () => {
     // prefer dies: no prefer literal and no request.mode read remain.
     expect(contextSource).not.toContain('"prefer"')
     expect(contextSource).not.toContain("request.mode")
-    // Number routing: pinned -> require, auto otherwise.
-    expect(contextSource).toMatch(
+    // Number routing: pinned -> require, auto otherwise (canonical owner is
+    // the execution domain; the context wires runSearch through).
+    expect(executionStateSource).toMatch(
       /providerIds\.length\s*>\s*0\s*\?\s*["']require["']\s*:\s*["']auto["']/
     )
-    // clampLimit is unchanged (still the 1..100 trunc guard).
-    expect(contextSource).toContain("function clampLimit")
-    expect(contextSource).toContain("Math.min(100, Math.max(1")
+    expect(executionStateSource).toContain("runSearch")
+    expect(contextSource).toContain("FreeSearchInner")
+    // clampLimit is unchanged (still the 1..100 trunc guard) — canonical owner is the execution model; context wires it.
+    expect(requestUtilsSource).toContain("function clampLimit")
+    expect(requestUtilsSource).toContain("Math.min(100, Math.max(1")
+    expect(executionStateSource).toContain("clampLimit")
+  })
+
+  it("playground search uses a 5000ms timeout budget (fetch stays 4000ms)", () => {
+    const executeSource = readFileSync(
+      path.resolve(testDir, "../../features/playground/model/playgroundExecuteAction.ts"),
+      "utf8"
+    )
+    const searchBranch = executeSource.slice(
+      executeSource.indexOf('if (mode === "search")'),
+      executeSource.indexOf("} else {")
+    )
+    expect(searchBranch).toContain("timeoutMs: 5000")
+    expect(searchBranch).not.toContain("timeoutMs: 3000")
+    // Fetch contract untouched.
+    expect(executeSource).toContain("timeoutMs: 4000")
   })
 
   it("preserves the shared SegmentedControl.tsx file (no deletion)", () => {
@@ -470,6 +529,10 @@ describe("PG-S5 AC-PG-S5-3: source number contract (playground/types/context)", 
     expect(segmentedSource).toContain('role="group"')
     expect(segmentedSource).toContain("aria-pressed")
     expect(segmentedSource).toContain("SegmentedControl")
+    // Compatibility shell re-exports the canonical primitive.
+    const segmentedShim = readFileSync(segmentedShimPath, "utf8")
+    expect(segmentedShim).toContain("SegmentedControl")
+    expect(segmentedShim).toContain("shared/ui/SegmentedControl")
   })
 })
 
@@ -581,5 +644,17 @@ describe("PG-S5 AC-PG-S5-4 regressions: per-card fetch + composer + 422", () => 
     // Last-good results survive the validation failure.
     expect(screen.getByText("Live backend result one")).toBeInTheDocument()
     expect(screen.getByText("Live backend result two")).toBeInTheDocument()
+  })
+})
+
+describe("Slice 5 shim compatibility: SearchPlayground shell re-exports the feature owner", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it("re-exports PlaygroundPage as SearchPlayground without forking UI", () => {
+    expect(playgroundShim).toContain("PlaygroundPage")
+    expect(playgroundShim).toContain("SearchPlayground")
+    expect(playgroundShim).toContain("features/playground/ui/PlaygroundPage")
   })
 })

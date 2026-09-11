@@ -114,5 +114,14 @@ Then("the usage view should show {string}", async ({ page }, text: string) => {
 })
 
 Then("the usage view should not show {string}", async ({ page }, text: string) => {
+  // Scoped absence: "Budget not configured" stays honest on the Exa row
+  // (7-provider table), so only the Parallel row must not show it after
+  // pairing. All other strings keep the global main assertion.
+  if (text === "Budget not configured") {
+    const parallelRow = page.getByRole("row").filter({ hasText: /Parallel/ })
+    await expect(parallelRow).toHaveCount(1)
+    await expect(parallelRow).not.toContainText(text)
+    return
+  }
   await expect(page.locator("main")).not.toContainText(text)
 })

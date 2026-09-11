@@ -42,7 +42,7 @@ import {
  *           the table existing. Real sub-pixel proof needs a browser (Playwright).
  *   S-P1-3  Global-off placeholder no-shift: OperationControl never returns
  *           null — unsupported+globally-disabled renders a placeholder cell so
- *           Search/Fetch columns never collapse (Brave/Exa fetch; Parallel is fetch-capable).
+ *           Search/Fetch columns never collapse (Brave fetch; Parallel is fetch-capable).
  *   S-P1-4  375px scroll-no-wrap: table container scrolls horizontally
  *           (overflow-x-auto) with nowrap cells; no wrapping, no flex-wrap.
  *   S-P1-5  contracts preserved: priority P1..P7 + up/down boundaries, global
@@ -68,12 +68,36 @@ import {
 
 const testDir = import.meta.dirname
 const settingsSource = readFileSync(path.resolve(testDir, "./SettingsProviders.tsx"), "utf8")
-const tableSource = readFileSync(path.resolve(testDir, "../ui/table.tsx"), "utf8")
+// Slice 4: registry siblings own rows/header/modal/controls; assertions run
+// against the union of the feature owners plus shim-compat pins.
+const settingsFeatureSource = [
+  settingsSource,
+  readFileSync(path.resolve(testDir, "./ProviderRegistryRow.tsx"), "utf8"),
+  readFileSync(path.resolve(testDir, "./ProviderRegistryHeader.tsx"), "utf8"),
+  readFileSync(path.resolve(testDir, "./ProviderTestModal.tsx"), "utf8"),
+  readFileSync(path.resolve(testDir, "./ProviderTestModalDetail.tsx"), "utf8"),
+  readFileSync(path.resolve(testDir, "./ProviderHealthStatus.tsx"), "utf8"),
+  readFileSync(path.resolve(testDir, "./ProviderPriorityControl.tsx"), "utf8"),
+  readFileSync(path.resolve(testDir, "./ProviderRowPill.tsx"), "utf8"),
+  readFileSync(path.resolve(testDir, "./ProviderOperationControl.tsx"), "utf8"),
+  readFileSync(path.resolve(testDir, "./providerDisplay.ts"), "utf8"),
+].join("\n")
+const tableSource = readFileSync(path.resolve(testDir, "../../shared/ui/table.tsx"), "utf8")
+const tableShimSource = readFileSync(path.resolve(testDir, "../ui/table.tsx"), "utf8")
 // P1-FINAL (blessed inversion): ProviderMatrix.tsx is DELETED by the merge —
 // no test may read it (the file is gone Green). Fleet-telemetry pins live in
 // SettingsProviders.p1-final.test.tsx.
 const appSource = readFileSync(path.resolve(testDir, "../../App.tsx"), "utf8")
+const routesSource = readFileSync(path.resolve(testDir, "../../app/routes.ts"), "utf8")
+const dashboardShellSource = readFileSync(
+  path.resolve(testDir, "../../app/DashboardShell.tsx"),
+  "utf8"
+)
 const sidebarSource = readFileSync(path.resolve(testDir, "../layout/Sidebar.tsx"), "utf8")
+const routesNavSource = readFileSync(
+  path.resolve(testDir, "../../app/layout/SidebarNavList.tsx"),
+  "utf8"
+)
 const indexCssSource = readFileSync(path.resolve(testDir, "../../index.css"), "utf8")
 
 const norm = (value: string): string => value.toLowerCase().replace(/\s+/g, "")
@@ -88,8 +112,8 @@ const SEED_PROVIDER_NAMES = [
   "Parallel",
 ] as const
 
-const FETCH_UNSUPPORTED = ["Brave Search", "Exa"] as const
-const FETCH_SUPPORTED = ["Keenable", "Tavily", "Firecrawl", "You.com", "Parallel"] as const
+const FETCH_UNSUPPORTED = ["Brave Search"] as const
+const FETCH_SUPPORTED = ["Keenable", "Tavily", "Exa", "Firecrawl", "You.com", "Parallel"] as const
 
 const EXPECTED_HEADERS = [
   "Provider",
@@ -207,7 +231,9 @@ afterEach(() => {
 
 describe("S-P1-1: registry is a ui/table with the merged 7 columns", () => {
   it("reuses ui/table primitives as-is (Table/Header/Body/Row/Head/Cell import)", () => {
-    expect(settingsSource).toContain('from "@/components/ui/table"')
+    expect(settingsFeatureSource).toContain('from "@/shared/ui/table"')
+    // Old ui path stays as a compat shim over the shared owner.
+    expect(tableShimSource).toMatch(/from\s+["']@\/shared\/ui\/table["']/)
     for (const symbol of [
       "Table",
       "TableHeader",
@@ -216,7 +242,7 @@ describe("S-P1-1: registry is a ui/table with the merged 7 columns", () => {
       "TableHead",
       "TableCell",
     ]) {
-      expect(settingsSource, `SettingsProviders must reuse ${symbol}`).toContain(symbol)
+      expect(settingsFeatureSource, `SettingsProviders must reuse ${symbol}`).toContain(symbol)
     }
   })
 
@@ -234,8 +260,8 @@ describe("S-P1-1: registry is a ui/table with the merged 7 columns", () => {
   })
 
   it("flex-wrap list is gone (no flex-wrap rows, no basis-48 drift)", () => {
-    expect(settingsSource.includes("flex-wrap")).toBe(false)
-    expect(settingsSource.includes("basis-48")).toBe(false)
+    expect(settingsFeatureSource.includes("flex-wrap")).toBe(false)
+    expect(settingsFeatureSource.includes("basis-48")).toBe(false)
   })
 
   it("renders exactly one table for the provider registry", async () => {
@@ -317,10 +343,10 @@ describe("S-P1-2: per-column x-position equality across 7 rows (<=1px)", () => {
 
 describe("S-P1-3: Global-off placeholder keeps columns from collapsing", () => {
   it("OperationControl never returns null (placeholder keeps the cell occupied)", () => {
-    expect(settingsSource).not.toMatch(/if\s*\(\s*globallyDisabled\s*\)\s*return\s+null/)
+    expect(settingsFeatureSource).not.toMatch(/if\s*\(\s*globallyDisabled\s*\)\s*return\s+null/)
   })
 
-  it("unsupported fetch shows a disabled switch with tooltip while Global is on (Brave/Exa)", async () => {
+  it("unsupported fetch shows a disabled switch with tooltip while Global is on (Brave)", async () => {
     renderSettings()
     await waitForProviders()
     for (const name of FETCH_UNSUPPORTED) {
@@ -407,7 +433,7 @@ describe("S-P1-4: 375px viewport scrolls horizontally without wrapping", () => {
       expect(cell.className).toMatch(/whitespace-nowrap/)
     }
     // No wrapping list remains in the migrated source.
-    expect(settingsSource.includes("flex-wrap")).toBe(false)
+    expect(settingsFeatureSource.includes("flex-wrap")).toBe(false)
   })
 })
 
@@ -601,43 +627,55 @@ describe("S-P1-6: P1-FINAL merge guards (inverted — page merged, RED)", () => 
       "/activity",
       "/settings",
     ]) {
-      expect(appSource).toContain(`"${routePath}"`)
+      expect(routesSource).toContain(`"${routePath}"`)
     }
-    expect(appSource).toMatch(/<Routes/)
+    expect(dashboardShellSource).toMatch(/<Routes/)
+    expect(dashboardShellSource).not.toMatch(/ProviderMatrix/)
     expect(appSource).not.toMatch(/ProviderMatrix/)
+    // Thin App shim renders the shell that owns the table.
+    expect(appSource).toContain("DashboardShell")
     // Legacy path survives ONLY as a redirect into Settings.
-    expect(appSource).toContain('"/providers"')
-    const idx = appSource.indexOf('"/providers"')
-    const window_ = appSource.slice(Math.max(0, idx - 120), idx + 300)
+    expect(dashboardShellSource).toContain('"/providers"')
+    const idx = dashboardShellSource.indexOf('"/providers"')
+    const window_ = dashboardShellSource.slice(Math.max(0, idx - 120), idx + 300)
     expect(window_).toMatch(/Navigate/)
     expect(window_).toContain('"/settings"')
-    expect(sidebarSource).toMatch(/export\s+(type|interface)\s+TabId/)
-    expect(sidebarSource.includes("<NavLink")).toBe(true)
-    expect(sidebarSource).not.toContain('"providers"')
-    expect(sidebarSource).not.toContain('"/providers"')
-    for (const href of [
-      "/playground",
-      "/routing",
-      "/usage",
-      "/activity",
-      "/settings",
+    expect(routesSource).toMatch(/export\s+(type|interface)\s+TabId/)
+    expect(routesNavSource.includes("<NavLink")).toBe(true)
+    expect(routesNavSource).not.toContain('"providers"')
+    expect(routesNavSource).not.toContain('"/providers"')
+    // Compat shim keeps the old sidebar import surface working.
+    expect(sidebarSource).toMatch(/from\s+["']@\/app\/layout\/Sidebar["']/)
+    // Nav targets live in the app route table; the nav binds through it.
+    const tabPathsBlock = routesSource.slice(
+      routesSource.indexOf("TAB_PATHS"),
+      routesSource.indexOf("WorkspaceRoute")
+    )
+    for (const [id, href] of [
+      ["playground", "/playground"],
+      ["routing", "/routing"],
+      ["quotas", "/usage"],
+      ["activity", "/activity"],
+      ["settings", "/settings"],
     ]) {
-      expect(sidebarSource).toContain(`"${href}"`)
+      expect(tabPathsBlock).toContain(`"${href}"`)
+      expect(tabPathsBlock).toMatch(new RegExp(`${id}:`))
     }
+    expect(routesNavSource).toMatch(/to=\{TAB_PATHS\[id\]\}/)
   })
 
   it("P1-FINAL page merge: ProviderMatrix retired, fleet telemetry merged into SettingsProviders", () => {
     // Standalone fleet page is gone: no Trip/Reset matrix, no fleet filter,
     // no stat cards in a separate page — the merged registry carries them.
     for (const marker of ["Endpoint", "Health", "Quota", "p95", "ProviderTestModal"]) {
-      expect(settingsSource, `merged registry must carry ${marker}`).toContain(marker)
+      expect(settingsFeatureSource, `merged registry must carry ${marker}`).toContain(marker)
     }
-    expect(settingsSource).not.toMatch(/Total fleet/)
-    expect(settingsSource).not.toMatch(/Provider filter/)
+    expect(settingsFeatureSource).not.toMatch(/Total fleet/)
+    expect(settingsFeatureSource).not.toMatch(/Provider filter/)
   })
 
   it("freesearch-ui ONLY: SettingsProviders imports no backend/python paths", () => {
-    expect(settingsSource).not.toMatch(/\.py["']/)
-    expect(settingsSource).not.toMatch(/src\/freesearch/)
+    expect(settingsFeatureSource).not.toMatch(/\.py["']/)
+    expect(settingsFeatureSource).not.toMatch(/src\/freesearch/)
   })
 })

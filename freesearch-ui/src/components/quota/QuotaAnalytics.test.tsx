@@ -1,4 +1,4 @@
-﻿import React from "react"
+import React from "react"
 import { describe, it, expect, afterEach, vi } from "vitest"
 import { render, screen, waitFor } from "@testing-library/react"
 import { FreeSearchProvider } from "@/context/FreeSearchContext"
@@ -11,12 +11,12 @@ import {
   canonicalQuotasFixture,
   canonicalTotalsFixture,
   type WireDashboard,
-} from "@/test/backendFixtures"
+} from "@/test/fixtures"
 
 /**
  * RED (new file): quota telemetry comes from the dashboard — usage_totals
  * aggregates are shown, an empty latest_quota renders a "quota unavailable"
- * notice, per-provider null limits render "—"/blank (RF2: never ∞), and no
+ * notice, per-provider null limits render "—"/blank (RF2: never 8), and no
  * invented savings/cache numbers (248/814/342) may appear.
  */
 function renderWithBackend(dashboard: WireDashboard) {
@@ -80,15 +80,15 @@ describe("QuotaAnalytics (live backend)", () => {
     expect(screen.getAllByText(/quota unavailable|unavailable/i).length).toBeGreaterThan(0)
   })
 
-  it("RF2: renders per-provider null limits as —/blank, never ∞ or numbers", async () => {
+  it("RF2: renders per-provider null limits as —/blank, never 8 or numbers", async () => {
     renderWithBackend(dashboardFixture())
     await waitFor(() => {
       expect(screen.getByText("Tavily", { exact: true })).toBeInTheDocument()
     })
 
-    // RF2: null limits stay blank/— on every surface. ∞ is retired.
+    // RF2: null limits stay blank/— on every surface. 8 is retired.
     const body = document.body.textContent ?? ""
-    expect(body).not.toContain("∞")
+    expect(body).not.toContain("8")
     expect(screen.getAllByText(/—/).length).toBeGreaterThan(0)
   })
 

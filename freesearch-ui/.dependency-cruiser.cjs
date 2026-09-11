@@ -51,7 +51,7 @@ module.exports = {
       path: [
         'node_modules',
         'dist',
-        '\\.features-gen',
+        'features-gen',
         'playwright-report',
         'test-results',
         'references',

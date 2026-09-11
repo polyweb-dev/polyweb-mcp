@@ -1,4 +1,4 @@
-﻿import React from "react"
+import React from "react"
 import { readFileSync } from "node:fs"
 import path from "node:path"
 import { describe, expect, it, afterEach, vi } from "vitest"
@@ -104,6 +104,20 @@ import {
 const testDir = import.meta.dirname
 const failoverSource = readFileSync(path.resolve(testDir, "./SettingsFailover.tsx"), "utf8")
 const settingsSource = readFileSync(path.resolve(testDir, "./SettingsProviders.tsx"), "utf8")
+// Slice 4: registry siblings own rows/modal/controls; the merge markers run
+// against the union of the registry feature owners.
+const settingsFeatureSource = [
+  settingsSource,
+  readFileSync(path.resolve(testDir, "./ProviderRegistryRow.tsx"), "utf8"),
+  readFileSync(path.resolve(testDir, "./ProviderRegistryHeader.tsx"), "utf8"),
+  readFileSync(path.resolve(testDir, "./ProviderTestModal.tsx"), "utf8"),
+  readFileSync(path.resolve(testDir, "./ProviderTestModalDetail.tsx"), "utf8"),
+  readFileSync(path.resolve(testDir, "./ProviderHealthStatus.tsx"), "utf8"),
+  readFileSync(path.resolve(testDir, "./ProviderPriorityControl.tsx"), "utf8"),
+  readFileSync(path.resolve(testDir, "./ProviderRowPill.tsx"), "utf8"),
+  readFileSync(path.resolve(testDir, "./ProviderOperationControl.tsx"), "utf8"),
+  readFileSync(path.resolve(testDir, "./providerDisplay.ts"), "utf8"),
+].join("\n")
 // P1-FINAL (blessed inversion): ProviderMatrix.tsx is DELETED by the merge —
 // no test may read it (the file is gone Green). The G-5 guard below now pins
 // the merged end-state instead of the retired split.
@@ -841,7 +855,7 @@ describe("G-5: P1-FINAL page merge (inverted — fleet merged, matrix retired)",
     expect(settingsViewSource).toContain("SettingsKeyVault")
     expect(settingsViewSource).toContain("SettingsFailover")
     for (const marker of ["Endpoint", "Health", "Quota", "p95", "ProviderTestModal"]) {
-      expect(settingsSource, `merged registry must carry ${marker}`).toContain(marker)
+      expect(settingsFeatureSource, `merged registry must carry ${marker}`).toContain(marker)
     }
   })
 

@@ -13,11 +13,8 @@ import type {
   UsageTotal,
 } from "@/types/freesearch"
 
-export interface ToastNotification {
-  id: string
-  message: string
-  type: "success" | "info" | "warning" | "error"
-}
+import type { ToastNotification } from "@/shared/notifications/context";
+export type { ToastNotification } from "@/shared/notifications/context";
 
 export interface FreeSearchContextType {
   providers: ProviderConfig[]

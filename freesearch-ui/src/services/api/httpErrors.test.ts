@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { ApiError, parseDetail, statusMessage } from "./httpErrors"
+import { ApiError, parseDetail, statusMessage } from "@/shared/api/http"
 
 /**
  * RED: `src/services/api/httpErrors.ts` does not exist yet. The Developer
