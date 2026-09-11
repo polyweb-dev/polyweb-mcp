@@ -66,3 +66,15 @@ export function statusMessage(status: number, detail: string): string {
   if (status >= 400) return `API request failed${suffix}`
   return `API response error${suffix}`
 }
+export function errorMessage(error: unknown, fallback: string): string {
+  if (error instanceof ApiError) return error.detail;
+  if (isAbortOrTimeout(error)) {
+    const detail =
+      error && typeof error === "object" && "message" in error
+        ? String((error as { message?: unknown }).message ?? "timeout")
+        : "timeout";
+    return statusMessage(0, detail);
+  }
+  if (error instanceof Error && error.message) return error.message;
+  return fallback;
+}
