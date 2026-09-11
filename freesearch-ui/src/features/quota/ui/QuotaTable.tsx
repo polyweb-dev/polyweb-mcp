@@ -51,7 +51,7 @@ export function QuotaTable({ providers, dashboardQuotas, manualQuotaEligible, re
               provider={provider}
               latestQuota={dashboardQuotas.find((quota) => quota.provider === provider.id)}
               manualQuotaEligible={manualQuotaEligible}
-              renderOAuthActions={renderOAuthActions}
+              {...(renderOAuthActions !== undefined ? { renderOAuthActions } : {})}
             />
           ))}
           {providers.length === 0 && (

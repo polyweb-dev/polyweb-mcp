@@ -51,7 +51,11 @@ export function ManualQuotaModal(props: ManualQuotaModalProps) {
   const noun = rawNoun === "legacy" ? "units" : rawNoun
   const placeholders = placeholdersFor(unitKind)
   const isEditing = Boolean(defaults?.allowance)
-  const form = useQuotaForm(defaults, { onSave, onDelete, onClose })
+  const form = useQuotaForm(defaults, {
+    onSave,
+    ...(onDelete !== undefined ? { onDelete } : {}),
+    onClose,
+  })
 
   return (
     <Modal

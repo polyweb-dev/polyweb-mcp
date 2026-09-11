@@ -125,7 +125,7 @@ export class FreeSearchApiService {
     return this.request<BackendSearchResponse>("/search", {
       method: "POST",
       body: JSON.stringify(body),
-      signal,
+      ...(signal !== undefined ? { signal } : {}),
     })
   }
 
@@ -133,7 +133,7 @@ export class FreeSearchApiService {
     return this.request<BackendFetchResponse>("/fetch", {
       method: "POST",
       body: JSON.stringify(body),
-      signal,
+      ...(signal !== undefined ? { signal } : {}),
     })
   }
 

@@ -44,7 +44,9 @@ export function createExecuteHandler(deps: ExecuteActionDeps): (e?: FormEvent) =
       if (!query.trim()) return
       const res: SearchResponse | null = await runSearch({
         query: query.trim(),
-        providerIds: selectedProvider ? [selectedProvider] : undefined,
+        ...(selectedProvider !== undefined
+          ? { providerIds: [selectedProvider] }
+          : {}),
         maxResults: resultCount,
         timeoutMs: 3000,
       })
@@ -53,7 +55,7 @@ export function createExecuteHandler(deps: ExecuteActionDeps): (e?: FormEvent) =
       if (!fetchUrl.trim()) return
       await runFetch({
         url: fetchUrl.trim(),
-        providerId: selectedProvider,
+        ...(selectedProvider !== undefined ? { providerId: selectedProvider } : {}),
         format: "markdown",
         timeoutMs: 4000,
       })

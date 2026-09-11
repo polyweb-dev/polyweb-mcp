@@ -54,6 +54,7 @@ export const SettingsProviders: React.FC = () => {
   const firstPriorityId = sortedByPriority[0]?.id ?? null
   const lastPriorityId = sortedByPriority.at(-1)?.id ?? null
   const selectedProvider = providers.find((provider) => provider.id === selectedTestId) ?? null
+  const selectedLastResult = selectedProvider ? testResults[selectedProvider.id] : undefined
 
   return (
     <TooltipProvider delay={100}>
@@ -106,7 +107,7 @@ export const SettingsProviders: React.FC = () => {
         <ProviderTestModal
           provider={selectedProvider}
           testing={selectedProvider ? testingId === selectedProvider.id : false}
-          lastResult={selectedProvider ? testResults[selectedProvider.id] : undefined}
+          {...(selectedLastResult !== undefined ? { lastResult: selectedLastResult } : {})}
           onClose={() => setSelectedTestId(null)}
           onTest={(id) => void handleTest(id)}
         />

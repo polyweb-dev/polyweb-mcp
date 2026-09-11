@@ -38,7 +38,7 @@ export function createFetchResultHandler(deps: FetchResultDeps): (result: Search
     deps.switchMode("fetch")
     await deps.runFetch({
       url,
-      providerId,
+      ...(providerId !== undefined ? { providerId } : {}),
       format: "markdown",
       timeoutMs: 4000,
     })

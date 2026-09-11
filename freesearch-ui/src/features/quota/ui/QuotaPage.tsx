@@ -80,7 +80,7 @@ export function QuotaPage({ manualQuotaEligible = isManualQuotaEligible, renderO
         providers={providers}
         dashboardQuotas={dashboardQuotas}
         manualQuotaEligible={manualQuotaEligible}
-        renderOAuthActions={renderOAuthActions}
+        {...(renderOAuthActions !== undefined ? { renderOAuthActions } : {})}
       />
     </div>
   )

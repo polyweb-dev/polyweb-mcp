@@ -37,7 +37,9 @@ export function priorityPatchesForMove(
 ): ProviderPriorityPatch[] {
   const reordered = [...sorted];
   const moving = reordered[index];
-  reordered[index] = reordered[targetIndex];
+  const target = reordered[targetIndex];
+  if (moving === undefined || target === undefined) return [];
+  reordered[index] = target;
   reordered[targetIndex] = moving;
   return reordered
     .map((provider, rankIndex) => {

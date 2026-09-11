@@ -16,7 +16,7 @@ export const ActivityHeader: React.FC<{
     </div>
     <SegmentedControl
       options={FILTER_OPTIONS}
-      value={filterOp[0].toUpperCase() + filterOp.slice(1)}
+      value={filterOp.charAt(0).toUpperCase() + filterOp.slice(1)}
       onChange={onFilterChange}
       ariaLabel="Activity operation filter"
     />

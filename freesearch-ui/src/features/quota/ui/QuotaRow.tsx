@@ -128,7 +128,7 @@ export function QuotaRow({ provider, latestQuota, manualQuotaEligible, renderOAu
             defaults={manualDefaults}
             onClose={() => setModalOpen(false)}
             onSave={save}
-            onDelete={manual ? remove : undefined}
+            {...(manual ? { onDelete: remove } : {})}
           />
         )}
       </TableCell>

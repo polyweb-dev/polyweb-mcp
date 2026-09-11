@@ -22,7 +22,11 @@ export function Sidebar({
     openDrawer,
     closeDrawer,
     toggleCollapsed,
-  } = useSidebarState({ collapsed, defaultCollapsed, onCollapsedChange })
+  } = useSidebarState({
+    ...(collapsed !== undefined ? { collapsed } : {}),
+    defaultCollapsed,
+    ...(onCollapsedChange !== undefined ? { onCollapsedChange } : {}),
+  })
 
   return (
     <>

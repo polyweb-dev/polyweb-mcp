@@ -39,7 +39,7 @@ export function UsageTotals({ usageTotals, providers }: UsageTotalsProps) {
               className="grid grid-cols-[1fr_1fr_1fr_1fr_1fr] items-center py-3 px-4 border-b last:border-b-0 border-[var(--border-subtle)]"
             >
               <div className="flex items-center gap-2 min-w-0">
-                <ProviderLogo providerId={total.provider} name={catalogNameOf(total.provider)} />
+                <ProviderLogo providerId={total.provider} name={catalogNameOf(total.provider) ?? total.provider} />
                 <span className="text-[13px] font-medium text-[var(--text-strong)] truncate">
                   {catalogNameOf(total.provider) ?? total.provider}
                 </span>
@@ -70,7 +70,7 @@ export function UsageTotals({ usageTotals, providers }: UsageTotalsProps) {
       {usageTotals.some((total) => total.unitKind === null) && (
         <p className="border-t border-[var(--border-subtle)] px-4 py-2.5 text-[12px] text-[var(--muted)]">
           Legacy (mixed) rows predate canonical units and are shown with
-          their raw values only — they are excluded from dimension totals
+          their raw values only â€” they are excluded from dimension totals
           and never converted.
         </p>
       )}
