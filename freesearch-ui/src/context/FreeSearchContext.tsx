@@ -1,13 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type {
   BackendSearchRequest,
-  BackendProviderStatus,
   BackendRoutingConfig,
   BackendSecretStatus,
 } from "@/services/api/backendTypes"
 import { ApiError, isAbortOrTimeout, statusMessage } from "@/shared/api/http"
 import { apiService } from "@/services/api/freesearchApi"
-import { catalogEntryForId, catalogNameOf } from "@/services/api/providerCatalog"
+import { catalogNameOf } from "@/services/api/providerCatalog"
 import {
   mapBackendHealth,
   mapDashboardQuotas,
@@ -16,10 +15,8 @@ import {
   mapFetchResponse,
   mapRoutingConfig,
   mapSearchResponse,
-  mergeProviderStatus,
   toBackendId,
   toUiId,
-  unitLabel,
 } from "@/services/api/mappers"
 import type {
   CircuitBreakerStatus,
@@ -35,6 +32,14 @@ import type {
   UsageTotal,
 } from "@/types/freesearch"
 import { FreeSearchContext, type ToastNotification } from "./context"
+import {
+  mapProviderRows,
+  updateProviderFromWire,
+  priorityPatchesForMove,
+  type ProviderPriorityPatch,
+} from "@/domains/providers/model/providerMapping"
+import { overlayDashboardQuotas } from "@/app/selectors/dashboardOverlay"
+import { makeSearchEvent, makeFetchEvent, createTimeoutSignal, clampLimit } from "@/domains/execution"
 
 const INITIAL_FALLBACK_CONFIG: FallbackConfig = {
   enabled: true,
@@ -58,133 +63,6 @@ function errorMessage(error: unknown, fallback: string): string {
   }
   if (error instanceof Error && error.message) return error.message
   return fallback
-}
-
-function mapProviderRows(rows: BackendProviderStatus[]): ProviderConfig[] {
-  return rows
-    .map((row) => {
-      const entry = catalogEntryForId(row.provider_id)
-      return entry ? mergeProviderStatus(entry, row) : null
-    })
-    .filter((row): row is ProviderConfig => row !== null)
-    .sort((a, b) => a.priority - b.priority)
-}
-
-function updateProviderFromWire(
-  previous: ProviderConfig[],
-  row: BackendProviderStatus
-): ProviderConfig[] {
-  const entry = catalogEntryForId(row.provider_id)
-  if (!entry) return previous
-  const mapped = mergeProviderStatus(entry, row)
-  return previous
-    .map((provider) => (provider.id === mapped.id ? mapped : provider))
-    .sort((a, b) => a.priority - b.priority)
-}
-
-/**
- * Overlay authoritative dashboard quota snapshots onto the provider list.
- * The static provider status carries no quota numbers (honest null
- * placeholder); the dashboard snapshot is the real source. Per-provider
- * rows keep their identity — only the quota slice is replaced.
- */
-function overlayDashboardQuotas(
-  previous: ProviderConfig[],
-  quotas: DashboardQuota[]
-): ProviderConfig[] {
-  if (quotas.length === 0) return previous
-  const byProvider = new Map(quotas.map((snapshot) => [snapshot.provider, snapshot]))
-  return previous.map((provider) => {
-    const snapshot = byProvider.get(provider.id)
-    if (!snapshot) return provider
-    return {
-      ...provider,
-      quota: {
-        ...provider.quota,
-        limit: snapshot.limit,
-        unit: snapshot.displayUnit ?? unitLabel(snapshot.unitKind, snapshot.displayUnit),
-        confidence: snapshot.source,
-        nextReset: snapshot.resetAt ?? provider.quota.nextReset,
-        remaining: snapshot.remaining,
-        remainingPercent: snapshot.remainingPercent,
-        unitKind: snapshot.unitKind,
-        displayUnit: snapshot.displayUnit,
-        observedAt: snapshot.observed_at,
-        window: snapshot.window,
-      },
-    }
-  })
-}
-
-function makeSearchEvent(response: SearchResponse): UsageEvent {
-  const providerName = response.waterfall[0]?.providerName ?? response.selectedProviderId
-  return {
-    id: `${response.timestamp}-${response.selectedProviderId}-local`,
-    timestamp: response.timestamp,
-    operation: "search",
-    queryOrUrl: "",
-    providerId: response.selectedProviderId,
-    providerName,
-    latencyMs: response.executionTimeMs,
-    costCredits: response.costEstimateCredits,
-    status: "success",
-    routeReason: `Recorded search via ${response.selectedProviderId}`,
-    fallbackChain: response.fallbackChain,
-    // Canonical units arrive via the dashboard refresh below; local
-    // optimistic events carry no unit claim rather than a fabricated one.
-    unitKind: null,
-    displayUnit: null,
-  }
-}
-
-function makeFetchEvent(response: FetchResponse): UsageEvent {
-  return {
-    id: `${response.timestamp}-${response.providerId}-local`,
-    timestamp: response.timestamp,
-    operation: "fetch",
-    queryOrUrl: "",
-    providerId: response.providerId,
-    providerName: response.document.providerName,
-    latencyMs: response.executionTimeMs,
-    costCredits: response.costEstimateCredits,
-    status: "success",
-    routeReason: `Recorded fetch via ${response.providerId}`,
-    fallbackChain: response.fallbackChain,
-    unitKind: null,
-    displayUnit: null,
-  }
-}
-
-function createTimeoutSignal(timeoutMs: number): AbortSignal {
-  // GAP: 11 — the backend does not expose a request timeout; enforce it client-side.
-  return AbortSignal.timeout(Math.max(0, timeoutMs))
-}
-
-function clampLimit(value: number): number {
-  if (!Number.isFinite(value)) return 1
-  return Math.min(100, Math.max(1, Math.trunc(value)))
-}
-
-interface ProviderPriorityPatch {
-  provider: ProviderConfig
-  priority: number
-}
-
-function priorityPatchesForMove(
-  sorted: ProviderConfig[],
-  index: number,
-  targetIndex: number
-): ProviderPriorityPatch[] {
-  const reordered = [...sorted]
-  const moving = reordered[index]
-  reordered[index] = reordered[targetIndex]
-  reordered[targetIndex] = moving
-  return reordered
-    .map((provider, rankIndex) => {
-      const priority = rankIndex + 1
-      return provider.priority === priority ? null : { provider, priority }
-    })
-    .filter((patch): patch is ProviderPriorityPatch => patch !== null)
 }
 
 async function restoreProviderPriorities(completed: ProviderPriorityPatch[]): Promise<void> {

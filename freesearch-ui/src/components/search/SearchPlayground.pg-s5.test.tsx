@@ -117,7 +117,7 @@ const executionTypesSource = readFileSync(
   path.resolve(testDir, "../../domains/execution/model/types.ts"),
   "utf8"
 )
-const contextSource = readFileSync(
+const requestUtilsSource = readFileSync(path.resolve(testDir, "../../domains/execution/model/requestUtils.ts"),"utf8");const contextSource = readFileSync(
   path.resolve(testDir, "../../context/FreeSearchContext.tsx"),
   "utf8"
 )
@@ -492,9 +492,10 @@ describe("PG-S5 AC-PG-S5-3: source number contract (playground/types/context)", 
     expect(contextSource).toMatch(
       /providerIds\.length\s*>\s*0\s*\?\s*["']require["']\s*:\s*["']auto["']/
     )
-    // clampLimit is unchanged (still the 1..100 trunc guard).
-    expect(contextSource).toContain("function clampLimit")
-    expect(contextSource).toContain("Math.min(100, Math.max(1")
+    // clampLimit is unchanged (still the 1..100 trunc guard) — canonical owner is the execution model; context wires it.
+    expect(requestUtilsSource).toContain("function clampLimit")
+    expect(requestUtilsSource).toContain("Math.min(100, Math.max(1")
+    expect(contextSource).toContain("clampLimit")
   })
 
   it("preserves the shared SegmentedControl.tsx file (no deletion)", () => {
