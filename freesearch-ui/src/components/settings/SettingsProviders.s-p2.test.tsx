@@ -66,15 +66,23 @@ import {
 
 const testDir = import.meta.dirname
 const settingsSource = readFileSync(path.resolve(testDir, "./SettingsProviders.tsx"), "utf8")
-
-const indicatorSource = (() => {
-  const start = settingsSource.indexOf("const PriorityIndicator")
-  const end = settingsSource.indexOf("const RowPill")
-  if (start < 0 || end < 0 || end <= start) {
-    throw new Error("PriorityIndicator source block not found — SettingsProviders.tsx refactored?")
-  }
-  return settingsSource.slice(start, end)
-})()
+// Slice 4: PriorityIndicator owns its module; assertions run against the new
+// owner plus the union of the registry feature owners.
+const indicatorSource = readFileSync(
+  path.resolve(testDir, "./ProviderPriorityControl.tsx"),
+  "utf8"
+)
+const settingsFeatureSource = [
+  settingsSource,
+  indicatorSource,
+  readFileSync(path.resolve(testDir, "./ProviderRegistryRow.tsx"), "utf8"),
+  readFileSync(path.resolve(testDir, "./ProviderRegistryHeader.tsx"), "utf8"),
+  readFileSync(path.resolve(testDir, "./ProviderTestModal.tsx"), "utf8"),
+  readFileSync(path.resolve(testDir, "./ProviderHealthStatus.tsx"), "utf8"),
+  readFileSync(path.resolve(testDir, "./ProviderRowPill.tsx"), "utf8"),
+  readFileSync(path.resolve(testDir, "./ProviderOperationControl.tsx"), "utf8"),
+  readFileSync(path.resolve(testDir, "./providerDisplay.ts"), "utf8"),
+].join("\n")
 
 const SEED_PROVIDER_NAMES = [
   "Brave Search",
@@ -295,7 +303,9 @@ describe("S-P2-1: all-100 backend renders rank display P1..P7 (never raw P100)",
   })
 
   it("never renders the raw priority interpolation", () => {
-    expect(settingsSource).not.toContain("P{provider.priority}")
+    expect(indicatorSource).not.toContain("P{provider.priority}")
+    // The page renders ranks through the extracted row sibling.
+    expect(settingsSource).toContain("ProviderRegistryRow")
   })
 })
 
@@ -331,7 +341,7 @@ describe("S-P2-2: rank follows sorted order with dispatch-order tooltip", () => 
   })
 
   it("declares the dispatch-order tooltip in source", () => {
-    expect(settingsSource).toContain("Dispatch order")
+    expect(indicatorSource).toContain("Dispatch order")
   })
 
   it("derives arrow boundaries from sorted order on scrambled priorities", async () => {
@@ -390,20 +400,20 @@ describe("S-P2-3: priority indicator never clips at the card edge", () => {
     }
   })
 
-  it("table + scroller stay intact: single 7x9 merged table, overflow-x-auto, nowrap", async () => {
+  it("table + scroller stay intact: single 7x7 merged table, overflow-x-auto, nowrap", async () => {
     renderSettingsWith(all100Fixture())
     await waitForProviders()
     expect(screen.getAllByRole("table")).toHaveLength(1)
     const table = screen.getByRole("table")
     expect(table.querySelectorAll("tbody tr")).toHaveLength(7)
     for (const row of Array.from(table.querySelectorAll("tbody tr"))) {
-      expect(row.children).toHaveLength(9)
+      expect(row.children).toHaveLength(7)
     }
     const container = table.closest('[data-slot="table-container"]') as HTMLElement | null
     expect(container, "ui/table scroller must wrap the table").not.toBeNull()
     expect(container!.className).toMatch(/overflow-x-auto/)
     const cells = Array.from(table.querySelectorAll("th, td")) as HTMLElement[]
-    expect(cells.length).toBe(9 + 7 * 9)
+    expect(cells.length).toBe(7 + 7 * 7)
     for (const cell of cells) {
       expect(cell.className).toMatch(/whitespace-nowrap/)
     }
@@ -624,9 +634,9 @@ describe("S-P2-4: reorder arrows with tie-safe distinct PATCH + refresh", () => 
 
 describe("S-P2-5: no restyle, no merge, freesearch-ui only (stays green)", () => {
   it("keeps the lucide ArrowUp/ArrowDown controls with exact aria-labels", async () => {
-    expect(settingsSource).toContain("lucide-react")
-    expect(settingsSource).toContain("ArrowUp")
-    expect(settingsSource).toContain("ArrowDown")
+    expect(indicatorSource).toContain("lucide-react")
+    expect(indicatorSource).toContain("ArrowUp")
+    expect(indicatorSource).toContain("ArrowDown")
     renderSettingsWith(all100Fixture())
     await waitForProviders()
     for (const name of SEED_PROVIDER_NAMES) {
@@ -641,12 +651,12 @@ describe("S-P2-5: no restyle, no merge, freesearch-ui only (stays green)", () =>
 
   it("P1-FINAL page merge: fleet telemetry merged into SettingsProviders (ProviderMatrix retired)", () => {
     for (const marker of ["Endpoint", "Health", "Quota", "p95", "ProviderTestModal"]) {
-      expect(settingsSource, `merged registry must carry ${marker}`).toContain(marker)
+      expect(settingsFeatureSource, `merged registry must carry ${marker}`).toContain(marker)
     }
   })
 
   it("freesearch-ui ONLY: no backend/python import paths", () => {
-    expect(settingsSource).not.toMatch(/\.py["']/)
-    expect(settingsSource).not.toMatch(/src\/freesearch/)
+    expect(settingsFeatureSource).not.toMatch(/\.py["']/)
+    expect(settingsFeatureSource).not.toMatch(/src\/freesearch/)
   })
 })

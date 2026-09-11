@@ -40,11 +40,15 @@ import {
  */
 
 const testDir = import.meta.dirname
-const strategySource = readFileSync(
-  path.resolve(testDir, "./RoutingStrategy.tsx"),
-  "utf8"
-)
-
+// Slice 5 ownership: strategy UI lives in features/routing (shell removed
+// at migration completion). Read the joined owner sources.
+const strategyOwnerFiles = [
+  "../../features/routing/ui/RoutingStrategy.tsx",
+  "../../features/routing/ui/StrategyCardButton.tsx",
+]
+const strategySource = strategyOwnerFiles
+  .map((file) => readFileSync(path.resolve(testDir, file), "utf8"))
+  .join("\n")
 function renderRouting() {
   const stub = installFetchStub((req) => {
     if (req.url === "/api/v1/providers" && req.method === "GET") {

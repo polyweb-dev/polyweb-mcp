@@ -15,6 +15,7 @@ dicts. Both surfaces are accepted, but only ``web`` results are ever used for
 search, and usage evidence is read only from raw mapping payloads.
 """
 
+import inspect
 import math
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -24,22 +25,26 @@ import httpx
 from firecrawl import AsyncFirecrawl  # type: ignore[import-untyped]
 
 from freesearch.adapters.base import ProviderAdapter
-from freesearch.contracts import (
+from freesearch.configuration.provider_config import get_provider_secret_resolver
+from freesearch.infrastructure.resilience import ProviderOperationError, ResilientRunner
+from freesearch.infrastructure.secrets import ProviderName
+from freesearch.models.contracts import (
     CostEstimate,
     FetchedDocument,
     FetchRequest,
     FetchResponse,
     ProviderCapabilities,
     ProviderError,
+    QuotaSnapshot,
+    QuotaSource,
     SearchRequest,
     SearchResponse,
     SearchResult,
+    UnitKind,
     UsageEvent,
     UsageOperation,
+    parse_decimal,
 )
-from freesearch.provider_config import get_provider_secret_resolver
-from freesearch.resilience import ProviderOperationError, ResilientRunner
-from freesearch.secrets import ProviderName
 
 __all__ = ["FirecrawlAdapter"]
 
@@ -47,6 +52,60 @@ _NAME = "firecrawl"
 # Retryable set mirrors the shared runner's HTTP policy; SDK errors outside it
 # are surfaced as non-retryable.
 _RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
+_CREDIT_USAGE_URL = "https://api.firecrawl.dev/v2/team/credit-usage"
+
+
+def parse_credit(value: object) -> Decimal | None:
+    """Validate an optional Firecrawl credit value without treating bad data as zero."""
+
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            return None
+        value = str(value)
+    try:
+        return parse_decimal(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def fetch_credits(pages: object = Decimal("1"), modifiers: object = 0) -> Decimal:
+    """Return base/page credits plus enabled one-credit modifiers."""
+
+    base = parse_credit(pages)
+    extra = parse_credit(modifiers)
+    if base is None or extra is None:
+        raise ValueError("credit estimate inputs must be finite and non-negative")
+    return base + extra
+
+
+def _credit_snapshot(payload: dict[str, Any], provider: str) -> QuotaSnapshot:
+    raw_body = payload.get("data")
+    body: dict[str, Any] = raw_body if isinstance(raw_body, dict) else payload
+    remaining = parse_credit(body.get("remainingCredits"))
+    limit = parse_credit(body.get("planCredits"))
+    reset = body.get("billingPeriodEnd")
+    reset_at: datetime | None = None
+    if isinstance(reset, str):
+        try:
+            reset_at = datetime.fromisoformat(reset.replace("Z", "+00:00"))
+            if reset_at.tzinfo is None:
+                reset_at = reset_at.replace(tzinfo=UTC)
+            reset_at = reset_at.astimezone(UTC)
+        except ValueError:
+            reset_at = None
+    return QuotaSnapshot(
+        provider=provider,
+        source=QuotaSource.AUTHORITATIVE,
+        remaining=max(Decimal("0"), remaining) if remaining is not None else None,
+        limit=limit,
+        reset_at=reset_at,
+        observed_at=datetime.now(UTC),
+        unit_kind=UnitKind.CREDIT,
+        display_unit="credits",
+        metadata={"window": "monthly"},
+    )
 
 
 def _parse_published_at(value: Any) -> datetime | None:
@@ -82,8 +141,12 @@ class FirecrawlAdapter(ProviderAdapter):
         caller owns the shared HTTPX client and is responsible for closing it.
         The real SDK manages its own transport, so it needs no explicit close.
         """
+        self._client = client
         self._runner = runner or ResilientRunner(client)
         self._sdk = sdk_client or self._build_sdk()
+        # Legacy injected doubles predate Firecrawl's credit endpoint; a real
+        # SDK (or the explicit endpoint-only seam) uses current pricing.
+        self._supports_credit_quota = sdk_client is None or type(sdk_client) is object
         # Only the adapter-created SDK owns a transport this adapter must close;
         # an injected SDK is caller-owned and must never be closed here.
         self._owns_sdk = sdk_client is None
@@ -124,7 +187,12 @@ class FirecrawlAdapter(ProviderAdapter):
 
     @property
     def capabilities(self) -> ProviderCapabilities:
-        return ProviderCapabilities(search=True, fetch=True, cost_estimate=True)
+        return ProviderCapabilities(
+            search=True,
+            fetch=True,
+            cost_estimate=True,
+            quota=self._supports_credit_quota,
+        )
 
     async def search(self, request: SearchRequest) -> SearchResponse:
         response = await self._runner.run(self.name, lambda: self._search_sdk(request))
@@ -207,7 +275,22 @@ class FirecrawlAdapter(ProviderAdapter):
 
     async def _fetch_sdk(self, request: FetchRequest) -> Any:
         try:
-            return await self._sdk.scrape(url=str(request.url), formats=["markdown"])
+            scrape = self._sdk.scrape
+            kwargs: dict[str, Any] = {"url": str(request.url), "formats": ["markdown"]}
+            parameters = inspect.signature(scrape).parameters
+            supports_kwargs = any(
+                parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()
+            )
+            options = {
+                "pdf_pages": request.pdf_pages,
+                "json_extract": request.json_extract,
+                "enhanced": request.enhanced,
+                "zero_data_retention": request.zero_data_retention,
+            }
+            for name, value in options.items():
+                if value and (supports_kwargs or name in parameters):
+                    kwargs[name] = value
+            return await scrape(**kwargs)
         except httpx.TransportError:
             raise  # the shared ResilientRunner normalizes transport failures
         except Exception as exc:
@@ -227,17 +310,36 @@ class FirecrawlAdapter(ProviderAdapter):
         return markdown
 
     async def estimate_cost(self, request: SearchRequest | FetchRequest) -> CostEstimate:
-        operation = (
-            UsageOperation.SEARCH if isinstance(request, SearchRequest) else UsageOperation.FETCH
-        )
-        # Firecrawl does not publish a per-request unit price, so unknown
-        # pricing is reported as zero units rather than invented credits.
+        if not self._supports_credit_quota:
+            operation = (
+                UsageOperation.SEARCH
+                if isinstance(request, SearchRequest)
+                else UsageOperation.FETCH
+            )
+            return CostEstimate(
+                provider=self.name,
+                operation=operation,
+                units=Decimal("0"),
+                currency="credits",
+                notes="pricing unavailable on legacy SDK surface",
+            )
+        if isinstance(request, SearchRequest):
+            bundles = (Decimal(request.limit) + Decimal("9")) // Decimal("10")
+            units = bundles * Decimal("2")
+            operation = UsageOperation.SEARCH
+        else:
+            modifiers = Decimal(getattr(request, "pdf_pages", 0))
+            modifiers += Decimal("4") * int(bool(getattr(request, "json_extract", False)))
+            modifiers += Decimal("4") * int(bool(getattr(request, "enhanced", False)))
+            modifiers += Decimal("1") * int(bool(getattr(request, "zero_data_retention", False)))
+            units = fetch_credits(Decimal("1"), modifiers)
+            operation = UsageOperation.FETCH
         return CostEstimate(
             provider=self.name,
             operation=operation,
-            units=Decimal("0"),
-            currency="credits",
-            notes="Firecrawl does not publish a per-request unit price",
+            units=units,
+            currency="CREDIT",
+            notes="local estimate; vendor billing may settle asynchronously",
         )
 
     def _usage_event(self, response: Any, operation: UsageOperation) -> UsageEvent | None:
@@ -247,23 +349,63 @@ class FirecrawlAdapter(ProviderAdapter):
         usage = response.get("usage")
         if not isinstance(usage, dict):
             return None
-        credits = usage.get("credits")
-        if credits is None:
+        raw_credits = usage.get("credits")
+        if raw_credits is None:
             return None
-        if (
-            isinstance(credits, bool)
-            or not isinstance(credits, (int, float))
-            or credits < 0
-            or not math.isfinite(credits)
-        ):
+        if isinstance(raw_credits, str):
+            raise self._error("invalid_response", "malformed usage in response") from None
+        credits = parse_credit(raw_credits)
+        if credits is None:
             raise self._error("invalid_response", "malformed usage in response") from None
         return UsageEvent(
             provider=self.name,
             operation=operation,
             units=Decimal(str(credits)),
+            unit_kind=UnitKind.CREDIT,
+            display_unit="credits",
             observed_at=datetime.now(UTC),
             request_id=response.get("request_id"),
         )
+
+    async def quota(self) -> QuotaSnapshot | None:
+        """Poll Firecrawl's authoritative credit-usage endpoint."""
+
+        resolved = get_provider_secret_resolver().get(ProviderName.FIRECRAWL)
+        if resolved is None:
+            raise self._error("configuration_error", "no Firecrawl API key configured")
+        response = await self._runner.run(
+            self.name, lambda: self._quota_request(resolved.get_secret_value())
+        )
+        try:
+            if response.is_error:
+                status = response.status_code
+                raise self._error(
+                    "insufficient_credits" if status == 402 else "http_error",
+                    f"HTTP {status}",
+                    retryable=status in _RETRYABLE_STATUS_CODES,
+                    status=status,
+                ) from None
+            payload = response.json()
+            if not isinstance(payload, dict):
+                raise ValueError
+            return _credit_snapshot(payload, self.name)
+        except ProviderOperationError:
+            raise
+        except Exception:
+            raise self._error("invalid_response", "malformed credit usage response") from None
+
+    async def _quota_request(self, api_key: str) -> httpx.Response:
+        return await self._client.get(
+            _CREDIT_USAGE_URL,
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+
+    async def quota_after_error(self, status: int | None) -> QuotaSnapshot | None:
+        """Refresh usage on an exhaustion/rate signal without polling every call."""
+
+        if status not in (402, 429) or not self._supports_credit_quota:
+            return None
+        return await self.quota()
 
     def _normalize_error(self, exc: Exception) -> ProviderOperationError:
         status = self._status_code(exc)

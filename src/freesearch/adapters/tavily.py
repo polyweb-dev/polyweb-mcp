@@ -38,7 +38,10 @@ from tavily.errors import (
 )
 
 from freesearch.adapters.base import ProviderAdapter
-from freesearch.contracts import (
+from freesearch.configuration.provider_config import get_provider_secret_resolver
+from freesearch.infrastructure.resilience import ProviderOperationError, ResilientRunner
+from freesearch.infrastructure.secrets import ProviderName
+from freesearch.models.contracts import (
     CostEstimate,
     FetchedDocument,
     FetchRequest,
@@ -50,12 +53,10 @@ from freesearch.contracts import (
     SearchRequest,
     SearchResponse,
     SearchResult,
+    UnitKind,
     UsageEvent,
     UsageOperation,
 )
-from freesearch.provider_config import get_provider_secret_resolver
-from freesearch.resilience import ProviderOperationError, ResilientRunner
-from freesearch.secrets import ProviderName
 
 __all__ = ["TavilyAdapter"]
 
@@ -593,6 +594,9 @@ class TavilyAdapter(ProviderAdapter):
                     limit=plan_limit,
                     reset_at=None,
                     observed_at=observed_at,
+                    unit_kind=UnitKind.CREDIT,
+                    display_unit="credits",
+                    metadata={"window": "monthly"},
                 )
             # Incomplete plan figures: validate any present value so a
             # malformed one still errors, then fall back to the key figures.
@@ -614,6 +618,9 @@ class TavilyAdapter(ProviderAdapter):
                 limit=None,
                 reset_at=None,
                 observed_at=observed_at,
+                unit_kind=UnitKind.CREDIT,
+                display_unit="credits",
+                metadata={"window": "monthly"},
             )
         assert key_usage is not None
         return QuotaSnapshot(
@@ -623,6 +630,9 @@ class TavilyAdapter(ProviderAdapter):
             limit=key_limit,
             reset_at=None,
             observed_at=observed_at,
+            unit_kind=UnitKind.CREDIT,
+            display_unit="credits",
+            metadata={"window": "monthly"},
         )
 
     def _quota_number(self, value: Any) -> Decimal | None:
@@ -672,6 +682,8 @@ class TavilyAdapter(ProviderAdapter):
             provider=self.name,
             operation=operation,
             units=Decimal(str(credits)),
+            unit_kind=UnitKind.CREDIT,
+            display_unit="credits",
             observed_at=datetime.now(UTC),
             request_id=response.get("request_id"),
         )

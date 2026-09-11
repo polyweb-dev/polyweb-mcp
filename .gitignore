@@ -15,7 +15,8 @@ htmlcov/
 coverage/
 .gremlins*/
 .coverage*
-*.db
+*.db*
 *.pnpm-store/
 .runtime-tmp/
 FEEDBACK/
+.tmp/

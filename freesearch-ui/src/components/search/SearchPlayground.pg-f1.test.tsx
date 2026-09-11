@@ -74,7 +74,32 @@ import {
  */
 
 const testDir = import.meta.dirname
-const playgroundSource = readFileSync(
+// Slice 5 ownership: SearchPlayground.tsx and RouteSimulator.tsx are
+// compatibility shells over features/playground and features/routing. Read
+// the joined owner sources (same strength as the monolith reads) plus the
+// shells for the shim-compat asserts below.
+const playgroundOwnerFiles = [
+  "../../features/playground/model/usePlaygroundController.ts",
+  "../../features/playground/model/playgroundFetchAction.ts",
+  "../../features/playground/model/playgroundExecuteAction.ts",
+  "../../features/playground/model/playgroundTypes.ts",
+  "../../features/playground/model/useResultPreview.ts",
+  "../../features/playground/ui/PlaygroundPage.tsx",
+  "../../features/playground/ui/SearchSection.tsx",
+  "../../features/playground/ui/FetchSection.tsx",
+  "../../features/playground/ui/SearchComposer.tsx",
+  "../../features/playground/ui/SearchOptions.tsx",
+  "../../features/playground/ui/FetchComposer.tsx",
+  "../../features/playground/ui/SearchResults.tsx",
+  "../../features/playground/ui/ResultCard.tsx",
+  "../../features/playground/ui/ResultInspector.tsx",
+  "../../features/playground/ui/WaterfallPanel.tsx",
+  "../../features/playground/ui/FetchResult.tsx",
+]
+const playgroundSource = playgroundOwnerFiles
+  .map((file) => readFileSync(path.resolve(testDir, file), "utf8"))
+  .join("\n")
+const playgroundShim = readFileSync(
   path.resolve(testDir, "./SearchPlayground.tsx"),
   "utf8"
 )
@@ -82,13 +107,37 @@ const contextSource = readFileSync(
   path.resolve(testDir, "../../context/FreeSearchContext.tsx"),
   "utf8"
 )
-const simulatorSource = readFileSync(
+const executionRunnerFiles = [
+  "../../domains/execution/state/useSearchRunner.ts",
+  "../../domains/execution/state/useFetchRunner.ts",
+]
+const executionSource = executionRunnerFiles
+  .map((file) => readFileSync(path.resolve(testDir, file), "utf8"))
+  .join("\n")
+const simulatorOwnerFiles = [
+  "../../features/routing/model/useSimulatorController.ts",
+  "../../features/routing/ui/RouteSimulator.tsx",
+  "../../features/routing/ui/SimulatorInputRow.tsx",
+  "../../features/routing/ui/SimulatorFooter.tsx",
+  "../../features/routing/ui/SimulatorPipeline.tsx",
+  "../../features/routing/ui/PipelineStep.tsx",
+  "../../features/routing/ui/ProviderStep.tsx",
+  "../../features/routing/ui/FallbackCascade.tsx",
+]
+const simulatorSource = simulatorOwnerFiles
+  .map((file) => readFileSync(path.resolve(testDir, file), "utf8"))
+  .join("\n")
+const simulatorShim = readFileSync(
   path.resolve(testDir, "../routing/RouteSimulator.tsx"),
   "utf8"
 )
 const commonDir = path.resolve(testDir, "../common")
 const searchDir = testDir
-const composerShellPath = path.resolve(testDir, "../common/ComposerShell.tsx")
+// Slice 4 ownership: the canonical shell lives in shared/ui; common/
+// keeps a compatibility shell. Read the owner (same strength) plus the
+// shell for the shim-compat assert in the source test below.
+const composerShellPath = path.resolve(testDir, "../../shared/ui/ComposerShell.tsx")
+const composerShimPath = path.resolve(testDir, "../common/ComposerShell.tsx")
 
 function renderWithBackend(
   searchHandler?: (req: { url: string }) => Response | Promise<Response>,
@@ -561,6 +610,10 @@ describe("PG-F1 AC-PG-F1-5: Fetch composer via shared ComposerShell (Fetch ONLY)
     expect(shellSource).toContain("motion-reduce:transition-none")
     expect(shellSource).toContain("text-[13px]")
     expect(shellSource).toContain("text-[var(--muted)]")
+    // Compatibility shell re-exports the canonical primitive.
+    const composerShim = readFileSync(composerShimPath, "utf8")
+    expect(composerShim).toContain("ComposerShell")
+    expect(composerShim).toContain("shared/ui/ComposerShell")
 
     // Playground imports the shell for Fetch ONLY.
     expect(playgroundSource).toMatch(
@@ -810,15 +863,17 @@ describe("PG-F1 AC-PG-F1-6 regressions: PG-S1..S5 + header + Simulator + logic u
     expect(simulatorSource).not.toContain("fetch-composer")
     expect(simulatorSource).not.toContain("search-composer")
 
-    // Fetching logic untouched: context start-clear + trim + routing.
-    expect(contextSource).toContain("setActiveFetch(null)")
-    expect(contextSource).toContain("setFetchError(null)")
-    expect(contextSource).toContain("setIsFetching(true)")
-    expect(contextSource).toContain("url: request.url.trim()")
-    expect(contextSource).toContain("max_chars: null")
-    expect(contextSource).toMatch(
+    // Fetching logic untouched: execution start-clear + trim + routing
+    // (canonical owner is the execution domain; the context wires runFetch).
+    expect(executionSource).toContain("setActiveFetch(null)")
+    expect(executionSource).toContain("setFetchError(null)")
+    expect(executionSource).toContain("setIsFetching(true)")
+    expect(executionSource).toContain("url: request.url.trim()")
+    expect(executionSource).toContain("max_chars: null")
+    expect(executionSource).toMatch(
       /mode:\s*request\.providerId\s*\?\s*["']require["']\s*:\s*["']auto["']/
     )
+    expect(contextSource).toContain("FreeSearchInner")
     // Playground fetch call contract untouched (markdown/4000 + trims).
     expect(playgroundSource).toContain('format: "markdown"')
     expect(playgroundSource).toContain("timeoutMs: 4000")
@@ -829,5 +884,22 @@ describe("PG-F1 AC-PG-F1-6 regressions: PG-S1..S5 + header + Simulator + logic u
     expect(playgroundSource).toContain('data-testid="search-layout"')
     expect(playgroundSource).toContain('data-testid="search-composer"')
     expect(playgroundSource).toContain("hasSearchContent")
+  })
+})
+
+describe("Slice 5 shim compatibility: shells re-export the feature owners", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it("SearchPlayground shell re-exports PlaygroundPage without forking UI", () => {
+    expect(playgroundShim).toContain("PlaygroundPage")
+    expect(playgroundShim).toContain("SearchPlayground")
+    expect(playgroundShim).toContain("features/playground/ui/PlaygroundPage")
+  })
+
+  it("RouteSimulator shell re-exports the routing feature without forking UI", () => {
+    expect(simulatorShim).toContain("RouteSimulator")
+    expect(simulatorShim).toContain("features/routing/ui/RouteSimulator")
   })
 })

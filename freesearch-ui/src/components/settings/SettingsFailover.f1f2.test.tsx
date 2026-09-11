@@ -104,6 +104,20 @@ import {
 const testDir = import.meta.dirname
 const failoverSource = readFileSync(path.resolve(testDir, "./SettingsFailover.tsx"), "utf8")
 const settingsSource = readFileSync(path.resolve(testDir, "./SettingsProviders.tsx"), "utf8")
+// Slice 4: registry siblings own rows/modal/controls; the merge markers run
+// against the union of the registry feature owners.
+const settingsFeatureSource = [
+  settingsSource,
+  readFileSync(path.resolve(testDir, "./ProviderRegistryRow.tsx"), "utf8"),
+  readFileSync(path.resolve(testDir, "./ProviderRegistryHeader.tsx"), "utf8"),
+  readFileSync(path.resolve(testDir, "./ProviderTestModal.tsx"), "utf8"),
+  readFileSync(path.resolve(testDir, "./ProviderTestModalDetail.tsx"), "utf8"),
+  readFileSync(path.resolve(testDir, "./ProviderHealthStatus.tsx"), "utf8"),
+  readFileSync(path.resolve(testDir, "./ProviderPriorityControl.tsx"), "utf8"),
+  readFileSync(path.resolve(testDir, "./ProviderRowPill.tsx"), "utf8"),
+  readFileSync(path.resolve(testDir, "./ProviderOperationControl.tsx"), "utf8"),
+  readFileSync(path.resolve(testDir, "./providerDisplay.ts"), "utf8"),
+].join("\n")
 // P1-FINAL (blessed inversion): ProviderMatrix.tsx is DELETED by the merge —
 // no test may read it (the file is gone Green). The G-5 guard below now pins
 // the merged end-state instead of the retired split.
@@ -725,8 +739,8 @@ describe("B-4: all four switches are keyboard-operable", () => {
 // G-1: Providers S-P4 intact (GREEN guard)
 // ---------------------------------------------------------------------------
 
-describe("G-1: Providers P1-FINAL merged table (inverted — 9 cols, min-w-1280)", () => {
-  it("registry section + frame keep w-full max-w-none with overflow-hidden and min-w-[1280px] merged table", async () => {
+describe("G-1: Providers P1-FINAL merged table (inverted — 7 cols, min-w-960)", () => {
+  it("registry section + frame keep w-full max-w-none with overflow-hidden and min-w-[960px] merged table", async () => {
     renderSettings()
     await waitForProviders()
     const table = screen.getByRole("table")
@@ -736,8 +750,6 @@ describe("G-1: Providers P1-FINAL merged table (inverted — 9 cols, min-w-1280)
       "Provider",
       "Endpoint",
       "Health",
-      "Quota",
-      "p95",
       "Test",
       "Search",
       "Fetch",
@@ -754,7 +766,7 @@ describe("G-1: Providers P1-FINAL merged table (inverted — 9 cols, min-w-1280)
     expect(frameTokens).toContain("w-full")
     expect(frameTokens).toContain("max-w-none")
     expect(frameTokens).toContain("overflow-hidden")
-    expect(table.className).toMatch(/min-w-\[1280px\]/)
+    expect(table.className).toMatch(/min-w-\[960px\]/)
     expect(settingsSource).toContain("w-full max-w-none")
   })
 })
@@ -843,7 +855,7 @@ describe("G-5: P1-FINAL page merge (inverted — fleet merged, matrix retired)",
     expect(settingsViewSource).toContain("SettingsKeyVault")
     expect(settingsViewSource).toContain("SettingsFailover")
     for (const marker of ["Endpoint", "Health", "Quota", "p95", "ProviderTestModal"]) {
-      expect(settingsSource, `merged registry must carry ${marker}`).toContain(marker)
+      expect(settingsFeatureSource, `merged registry must carry ${marker}`).toContain(marker)
     }
   })
 

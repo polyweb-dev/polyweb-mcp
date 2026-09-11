@@ -71,7 +71,31 @@ import {
  */
 
 const testDir = import.meta.dirname
-const playgroundSource = readFileSync(
+// Slice 5 ownership: SearchPlayground.tsx is a compatibility shell over
+// features/playground. Read the joined owner sources (same strength as the
+// monolith read) plus the shell for the shim-compat assert below.
+const playgroundOwnerFiles = [
+  "../../features/playground/model/usePlaygroundController.ts",
+  "../../features/playground/model/playgroundFetchAction.ts",
+  "../../features/playground/model/playgroundExecuteAction.ts",
+  "../../features/playground/model/playgroundTypes.ts",
+  "../../features/playground/model/useResultPreview.ts",
+  "../../features/playground/ui/PlaygroundPage.tsx",
+  "../../features/playground/ui/SearchSection.tsx",
+  "../../features/playground/ui/FetchSection.tsx",
+  "../../features/playground/ui/SearchComposer.tsx",
+  "../../features/playground/ui/SearchOptions.tsx",
+  "../../features/playground/ui/FetchComposer.tsx",
+  "../../features/playground/ui/SearchResults.tsx",
+  "../../features/playground/ui/ResultCard.tsx",
+  "../../features/playground/ui/ResultInspector.tsx",
+  "../../features/playground/ui/WaterfallPanel.tsx",
+  "../../features/playground/ui/FetchResult.tsx",
+]
+const playgroundSource = playgroundOwnerFiles
+  .map((file) => readFileSync(path.resolve(testDir, file), "utf8"))
+  .join("\n")
+const playgroundShim = readFileSync(
   path.resolve(testDir, "./SearchPlayground.tsx"),
   "utf8"
 )
@@ -834,13 +858,25 @@ describe("PG-S4 AC-PG-S4-7 regressions: PG-S1/S2/S3 guards + composer gating + f
 
   it("SearchPlayground-only diff: fetch-result seam lives only in SearchPlayground", () => {
     // The per-result seam must not leak into shared chrome or services.
+    // Slice 4 ownership: canonical tabs live in shared/ui; common/ keeps a
+    // shell. Read the joined owners (same strength) plus the shell below.
     expect(playgroundSource).toContain("search-composer")
-    const pillTabsSource = readFileSync(
+    const pillTabsSource = [
+      "../../shared/ui/PillTabs.tsx",
+      "../../shared/ui/PillTabsList.tsx",
+      "../../shared/ui/PillTabsPanel.tsx",
+      "../../shared/ui/PillTabsContext.ts",
+    ]
+      .map((file) => readFileSync(path.resolve(testDir, file), "utf8"))
+      .join("\n")
+    expect(pillTabsSource).not.toContain("fetch-result-")
+    expect(pillTabsSource).not.toContain("handleFetchResult")
+    const pillTabsShim = readFileSync(
       path.resolve(testDir, "../common/PillTabs.tsx"),
       "utf8"
     )
-    expect(pillTabsSource).not.toContain("fetch-result-")
-    expect(pillTabsSource).not.toContain("handleFetchResult")
+    expect(pillTabsShim).toContain("PillTabs")
+    expect(pillTabsShim).not.toContain("fetch-result-")
     // No shared fetch-result component file was introduced.
     const searchFiles: string[] = existsSync(searchDir)
       ? readdirSync(searchDir)
@@ -854,5 +890,17 @@ describe("PG-S4 AC-PG-S4-7 regressions: PG-S1/S2/S3 guards + composer gating + f
       ? readdirSync(commonDir)
       : []
     expect(commonFiles.filter((f) => /fetch-?result/i.test(f))).toEqual([])
+  })
+})
+
+describe("Slice 5 shim compatibility: SearchPlayground shell re-exports the feature owner", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it("re-exports PlaygroundPage as SearchPlayground without forking UI", () => {
+    expect(playgroundShim).toContain("PlaygroundPage")
+    expect(playgroundShim).toContain("SearchPlayground")
+    expect(playgroundShim).toContain("features/playground/ui/PlaygroundPage")
   })
 })

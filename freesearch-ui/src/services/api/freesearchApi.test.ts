@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach, vi } from "vitest"
 import { FreeSearchApiService } from "./freesearchApi"
-import { ApiError } from "./httpErrors"
+import { ApiError } from "@/shared/api/http"
 import { installFetchStub, ok, err } from "@/test/fetchMock"
 import {
   allProvidersFixture,

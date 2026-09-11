@@ -1,5 +1,6 @@
 import type {
   BackendDashboard,
+  BackendDashboardUsage,
   BackendFetchResponse,
   BackendHealth,
   BackendProviderStatus,
@@ -14,15 +15,12 @@ import type {
   ProviderHealthStatus,
   SearchResponse,
   UsageEvent,
+  UsageTotal,
 } from "@/types/freesearch"
+import { normalizeUnitKind } from "@/shared/api/units"
+import { toUiId } from "@/domains/providers"
 
-export function toBackendId(uiId: string): string {
-  return uiId === "youcom" ? "you" : uiId
-}
-
-export function toUiId(backendId: string): string {
-  return backendId === "you" ? "youcom" : backendId
-}
+export { toBackendId, toUiId } from "@/domains/providers"
 
 function parseUnits(units: string | undefined): number {
   const parsed = Number.parseFloat(units ?? "0")
@@ -32,6 +30,8 @@ function parseUnits(units: string | undefined): number {
 function decimalString(value: string | number | null): string | null {
   return value === null ? null : String(value)
 }
+
+export { normalizeUnitKind, unitLabel } from "@/shared/api/units"
 
 function providerDisplayName(
   providerId: string,
@@ -154,6 +154,12 @@ export function mergeProviderStatus(
       confidence: "estimated",
       resetPeriod: wire.reset_schedule ?? "—",
       nextReset: "—",
+      remaining: null,
+      remainingPercent: null,
+      unitKind: null,
+      displayUnit: null,
+      observedAt: null,
+      window: null,
     },
   }
 }
@@ -164,6 +170,7 @@ export function mapDashboardUsage(
 ): UsageEvent[] {
   return dashboard.recent_usage.map((usage, index) => {
     const providerId = toUiId(usage.provider)
+    const unitKind = normalizeUnitKind(usage.unit_kind ?? null)
     return {
       id: `${usage.observed_at}-${usage.provider}-${index}`,
       timestamp: usage.observed_at,
@@ -176,17 +183,34 @@ export function mapDashboardUsage(
       status: usage.status === "success" ? "success" : "error",
       routeReason: `Recorded ${usage.operation} via ${usage.provider}`,
       fallbackChain: [providerId],
+      unitKind,
+      displayUnit: usage.display_unit ?? null,
     }
   })
+}
+
+export function mapDashboardTotals(dashboard: BackendDashboard): UsageTotal[] {
+  return dashboard.usage_totals.map((total: BackendDashboardUsage) => ({
+    provider: toUiId(total.provider),
+    operation: total.operation,
+    total_units: String(total.total_units),
+    unitKind: normalizeUnitKind(total.unit_kind ?? null),
+    eventCount: total.event_count ?? 0,
+  }))
 }
 
 export function mapDashboardQuotas(dashboard: BackendDashboard): DashboardQuota[] {
   return dashboard.latest_quota.map((quota) => ({
     provider: toUiId(quota.provider),
     remaining: decimalString(quota.remaining),
+    remainingPercent: decimalString(quota.remaining_percent ?? null),
     limit: decimalString(quota.limit),
     observed_at: quota.observed_at,
     source: quota.source,
+    unitKind: normalizeUnitKind(quota.unit_kind ?? null),
+    displayUnit: quota.display_unit ?? null,
+    resetAt: quota.reset_at ?? null,
+    window: quota.window ?? null,
   }))
 }
 

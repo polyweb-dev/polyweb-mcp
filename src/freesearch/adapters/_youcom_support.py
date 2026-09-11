@@ -13,7 +13,13 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from freesearch.contracts import FetchRequest, QuotaSnapshot, QuotaSource, SearchRequest
+from freesearch.models.contracts import (
+    FetchRequest,
+    QuotaSnapshot,
+    QuotaSource,
+    SearchRequest,
+    UnitKind,
+)
 
 # Published unit prices in USD: Web Search at $5 per 1,000 calls and contents
 # fetch per URL. ``estimate_cost`` and quota mapping share the same constants.
@@ -156,27 +162,36 @@ def _quota_balance(payload: Any) -> int | float:
 
 
 def _quota_snapshot(provider: str, balance: int | float) -> QuotaSnapshot:
-    """Floored Web Search call count from USD cents at the unit price."""
-    remaining = (Decimal(str(balance)) / Decimal("100")) // _SEARCH_UNIT_PRICE
+    """Expose the USD balance plus floored search and fetch equivalents."""
+    balance_usd = Decimal(str(balance)) / Decimal("100")
+    search_calls = balance_usd // _SEARCH_UNIT_PRICE
+    fetch_calls = balance_usd // _FETCH_UNIT_PRICE
     return QuotaSnapshot(
         provider=provider,
         source=QuotaSource.ESTIMATED,
-        remaining=remaining,
+        remaining=balance_usd,
         limit=None,
         reset_at=None,
         observed_at=datetime.now(UTC),
+        unit_kind=UnitKind.USD,
+        display_unit="USD",
+        metadata={
+            "balance_usd": balance_usd,
+            "search_calls": search_calls,
+            "fetch_calls": fetch_calls,
+        },
     )
 
 
 def _estimated_quota(payload: Any, provider: str) -> QuotaSnapshot:
-    """Map the account-balance payload to an estimated search-call snapshot.
+    """Map the account-balance payload to an estimated USD snapshot.
 
     The ``balance`` is the remaining USD credit balance in cents. It must be a
     real, finite, non-negative number; bools, strings, absent or non-mapping
     structure, NaN/inf, and negatives raise ``ValueError`` (the adapter
     surfaces it as the redaction-safe ``invalid_response`` error, so the raw
-    payload never leaks). Remaining is the floored count of Web Search calls
-    the balance covers at the $5-per-1k unit price; the vendor exposes no plan
-    limit or reset, so both stay ``None``.
+    payload never leaks). Remaining is the authoritative USD balance; the
+    metadata carries floored Web Search and contents-call equivalents. The
+    vendor exposes no plan limit or reset, so both stay ``None``.
     """
     return _quota_snapshot(provider, _quota_balance(payload))

@@ -1,23 +1,27 @@
 # Quota and usage plan
 
-> **Status: PLANNING ONLY — DO NOT IMPLEMENT**  
-> **Date:** 2026-09-09  
-> SDLC is paused. This document records research, unit math, decisions, and a future implementation strategy; it authorizes no backend, frontend, migration, or test changes.
+> **Status: V1 AND ALEMBIC SCHEMA ADOPTION IMPLEMENTED IN THIS BRANCH**
+> **Updated:** 2026-09-10
+> Sections 0–7 describe the implemented quota and migration integration. Section 8 is a future, optional historical unit backfill; the Alembic rollout intentionally preserves historical rows with nullable canonical fields.
 
 ## 0. Decisions locked
 
 1. **Canonical model:** use **Option A, dual-field units**. Preserve raw usage in `units`, add a machine-readable `unit_kind`, and add a human-readable `display_unit`.
 2. **Arithmetic:** use `Decimal` end to end. Do not route quota/cost calculations through binary floating point.
-3. **Tavily:** keep the existing vendor quota integration. `GET /usage` is the authoritative credit source.
-4. **You.com:** keep the existing balance integration. Convert balance cents into floored call counts; snapshots are `ESTIMATED`, and `limit` remains `None`.
-5. **Brave:** use the monthly values observed in successful-search rate-limit headers as an `OBSERVED` request quota. V1 has no USD 5.00 wallet, monthly-dollar reset, settings, or re-sync UX. Optional dollar-spend tracking is future work, not v1.
-6. **Keenable:** authenticated Free is **100,000 requests/month** and API-key use raises limits relative to keyless access. The Keyless Public Tier is for testing, has stricter shared rate limits, and is not a monthly quota to display as remaining allowance. Public material reports up to **1,000 requests/hour via the MCP server**; the exact REST/keyless limits must be verified before implementation.
-7. **Firecrawl:** poll `GET /v2/team/credit-usage`; do not use token usage as the current quota source. `remainingCredits` is the truth; `planCredits` is only the baseline limit.
-8. **Parallel:** the adapter cannot poll a balance with its API key. Track estimated USD spend locally, keep raw response SKU counts, and distinguish a soft 402 balance signal from a transient 429.
-9. **Failure accounting:** failed operations may be recorded with zero units for observability, but zero-valued `FAILURE` records are excluded from usage totals.
-10. **No quota gate until populated:** routing must not claim quota awareness until snapshots are recorded and the gate is fed real state.
+3. **Common UI headline:** expose a derived `remaining_percent` in the public quota projection. It is `remaining / limit × 100`, clamped to `0–100`, only when a real positive limit exists. It is never persisted and never fabricated for an unknown or unbounded balance. Provider-native remaining/limit units, reset window, and confidence remain visible as details.
+4. **Tavily:** keep the existing vendor quota integration. `GET /usage` is the authoritative credit source.
+5. **You.com:** keep the existing balance integration. Convert balance cents into floored call counts; snapshots are `ESTIMATED`, and `limit` remains `None`.
+6. **Brave:** use the monthly values observed in successful-search rate-limit headers as an `OBSERVED` request quota. V1 has no USD 5.00 wallet, monthly-dollar reset, settings, or re-sync UX. Optional dollar-spend tracking is future work, not v1.
+7. **Keenable:** authenticated Free is **100,000 requests/month** and API-key use raises limits relative to keyless access. Keyless is a separate rolling rate-limit window: show locally observed hourly headroom against **1,000 requests/hour** only when that mode/window is explicit, and label it as local/shared-pool observation rather than a vendor balance. Preserve the **10 requests/second per IP** constraint as detail/future burst-window work.
+8. **Firecrawl:** poll `GET /v2/team/credit-usage`; do not use token usage as the current quota source. `remainingCredits` is the truth; `planCredits` is only the baseline limit.
+9. **Parallel:** the adapter cannot poll a balance with its API key. Track estimated USD spend locally, keep raw response SKU counts, and distinguish a soft 402 balance signal from a transient 429.
+10. **Failure accounting:** failed operations may be recorded with zero units for observability, but zero-valued `FAILURE` records are excluded from usage totals.
+11. **No quota gate until populated:** routing must not claim quota awareness until snapshots are recorded and the gate is fed real state.
+12. **Quota UI hierarchy:** Settings and Usage → Provider quota view lead with normalized remaining percentage plus its explicit window (`Monthly`, `Rolling hour`, or `Account balance`). Native credits/USD/requests and provenance stay on the detail line. Activity and Usage totals retain native event units. Missing denominators use provider-specific states such as `Quota pending`, `Budget not configured`, or `Balance available`; they are never described as a finite percentage or the ambiguous `No finite limit`.
 
-## 1. Root causes
+## 1. Root causes in the original implementation
+
+This section records the pre-fix state used to define the acceptance tests. It is historical diagnosis, not a description of the final implementation.
 
 ### R1 — quota snapshots are never recorded
 
@@ -82,9 +86,12 @@ QuotaSnapshot
   unit_kind: UnitKind | None
   display_unit: str | None
   source: AUTHORITATIVE | OBSERVED | ESTIMATED
+
+Public quota projection
+  remaining_percent: Decimal | None  # derived, clamped to [0, 100], never stored
 ```
 
-`QuotaSnapshot` currently has no `unit_kind` or `display_unit`; these are proposed contract additions. Until migration, `CostEstimate.currency` is the only available convention for distinguishing credits from USD and must be used consistently, not treated as a final model.
+`QuotaSnapshot.unit_kind` and `display_unit` are implemented as additive nullable fields. Historical rows remain readable with unknown dimensions until an optional deterministic backfill is approved.
 
 ### 2.2 Semantics
 
@@ -98,6 +105,7 @@ QuotaSnapshot
 - Preserve raw Parallel SKU count in `UsageEvent.units`; perform SKU-to-USD conversion in the quota/cost projection layer and retain SKU metadata.
 - Exclude zero-valued `FAILURE` events from usage totals. Do not infer that every successful zero means free; it can mean unavailable metering.
 - Never sum `REQUEST`, `CREDIT`, `USD`, `FREE`, or unknown values together.
+- `remaining_percent` is the only cross-provider comparison dimension. It exists only when `limit > 0`; a balance without a denominator remains `None`. A provider such as Firecrawl may report `remaining > limit` because packs or recharge credits sit above the plan baseline, so the headline percentage is capped at 100 while the uncapped native balance remains visible.
 
 ### 2.3 Decimal rules
 
@@ -152,8 +160,8 @@ fetch  = USD 0.001 per URL
 **Usage gap:** when a response omits usage, do not silently record a known zero. Record the event as metering unavailable/estimated in metadata or apply the documented local estimate; surface the confidence distinction.
 
 Docs:
-- [You.com API overview](https://documentation.you.com/)
-- [You.com API pricing](https://documentation.you.com/api-reference/pricing)
+- [You.com account balance API](https://you.com/docs/api-reference/billing/get-account-balance)
+- [You.com billing and pricing](https://you.com/docs/administration/billing)
 
 ### 3.3 Brave — observed monthly request quota from headers
 
@@ -232,12 +240,15 @@ REST per-call usage is undocumented in the supplied research. Inspect/verify `op
 Endpoints use `/v1/search/public` and `/v1/fetch/public` with `X-Keenable-Title`. Keyless access is a testing/shared-pool mode, not metered monthly allowance:
 
 ```text
-quota snapshot = None
-raw usage      = 0 / FREE with metadata mode="keyless"
-estimated cost = 0
+quota snapshot = locally observed rolling-hour headroom
+remaining      = max(0, 1000 - successful keyless requests observed in the last hour)
+limit          = 1000 requests / rolling hour
+source         = OBSERVED
+raw usage      = 1 / REQUEST with metadata mode="keyless"
+estimated cost = USD 0 (a cost fact, not the usage dimension)
 ```
 
-Public findings report up to **1,000 requests/hour via MCP** and **10 requests/second per IP** in a shared pool. These are rate limits, not quota. The exact REST keyless limit remains unverified.
+The supplied current Keenable documentation states **1,000 unauthenticated requests/hour** and **10 requests/second per IP** across search and fetch. These are rate limits, not a purchased quota. The one-hour value can still use the normalized percentage display when it is explicitly labelled **rolling hour**, **keyless**, and **locally observed**. Because the pool is enforced per public IP, traffic outside this FreeSearch database can consume capacity that the local counter cannot see. Do not use this local snapshot as authoritative exhaustion state for routing; vendor `429` remains the hard signal. Tracking the 10-request/second burst window is future work.
 
 For keyed operation, fix `estimate_cost` from zero to approximately **USD 0.004/request** for the advertised $4/1,000 cloud price, while keeping the quota counter in credits/requests. Dedicated pricing is reported as $1/1,000 at 100 RPS+ and must not be assumed for normal cloud keys.
 
@@ -371,20 +382,21 @@ Docs:
 - [Extract API](https://docs.parallel.ai/api-reference/extract-v1/extract)
 - [Pricing](https://parallel.ai/pricing)
 
-### 3.7 Exa — no change
+### 3.7 Exa — response-reported USD usage, no fabricated quota
 
-Keep Exa's existing transparent USD estimates, including the current `Decimal("0.001")` convention where applicable. The shared model change merely labels these values as `unit_kind=USD` and prevents them being added to request or credit counts. No quota endpoint or new local allowance is proposed.
+Current Exa search responses can include a `costDollars.total` breakdown. Record that returned amount as Decimal USD and do not replace it with a blanket request estimate. A normal Exa API key does not expose its remaining balance or monthly denominator. Exa's Team Management API can return per-key USD usage and configured key budgets, but it requires a separate service API key plus the target API-key UUID and is not wired in V1. Therefore Exa shows tracked USD spend with **Budget not configured** and no normalized percentage until either an explicit local monthly budget or the admin integration is configured. The shared model labels reported spend as `unit_kind=USD` and prevents it being added to request or credit counts.
 
 Docs:
-- [Exa API documentation](https://docs.exa.ai/)
+- [Exa search response (`costDollars`)](https://exa.ai/docs/reference/search)
+- [Exa Team Management API-key usage](https://exa.ai/docs/reference/team-management/get-api-key-usage)
 - [Exa pricing](https://exa.ai/pricing)
 
-## 4. Target files (future work; no code now)
+## 4. Implementation map
 
 ### Backend/contracts and persistence
 
 - `src/freesearch/contracts.py` — add `UnitKind`, `unit_kind`, and `display_unit` to usage/quota contracts.
-- `src/freesearch/storage.py` — additive nullable columns/migration path; aggregate by `(provider, operation, unit_kind)`; exclude zero `FAILURE` totals.
+- `src/freesearch/storage.py` and `src/freesearch/database_migrations.py` — Alembic-managed additive schema; aggregate by `(provider, operation, unit_kind)`; exclude zero `FAILURE` totals.
 - `src/freesearch/monitoring.py` — quota polling/recording orchestration, TTL behavior, and dashboard projection.
 - `src/freesearch/api.py`, `src/freesearch/control.py`, `src/freesearch/server.py` — wire polling at the appropriate service boundary without per-request vendor calls.
 - `src/freesearch/routing.py` — feed real persisted quota state into the routing gate and distinguish hard, soft, and transient signals.
@@ -410,7 +422,7 @@ Docs:
 - `freesearch-ui/src/components/quota/QuotaAnalytics.tsx` — dimension-safe totals, confidence labels, and unavailable states.
 - `freesearch-ui/src/components/routing/ProviderRanks.tsx` and `RouteSimulator.tsx` — show only comparable quota values and hard/soft routing state.
 
-Independent test files are constraints in a future implementation cycle and are not targets for modification.
+Existing tests remain behavioral constraints. They may be updated where they encoded the old mixed-unit presentation, but coverage must not be weakened; new unit and BDD scenarios pin the normalized percentage, native detail, confidence, unknown-limit, and Keenable rolling-window behavior.
 
 ## 5. Acceptance criteria
 
@@ -422,7 +434,8 @@ Independent test files are constraints in a future implementation cycle and are 
 - **AC-4 — Existing authoritative providers:** Tavily remains authoritative from `GET /usage`; You.com remains estimated with `limit=None`, floored call equivalents, and explicit missing-usage handling.
 - **AC-5 — Local providers:** Keenable keyed and Parallel use their documented local-counter rules.
 - **AC-6 — Routing semantics:** hard exhaustion can steer routing away; Parallel soft 402 expires on later success; 429 never becomes quota exhaustion; empty/unknown quota does not masquerade as zero.
-- **AC-7 — Honest UI:** the dashboard displays unit labels and `AUTHORITATIVE`/`OBSERVED`/`ESTIMATED` confidence and leaves unknown limits blank.
+- **AC-7a — Honest normalized UI:** every bounded quota uses backend-derived `remaining_percent` as the common 0–100 headline, while native remaining/limit units, reset window, and `AUTHORITATIVE`/`OBSERVED`/`ESTIMATED` confidence remain details. Unknown/unbounded balances show no percentage and no invented denominator.
+- **AC-7b — Keenable keyless:** successful keyless search/fetch calls count as `REQUEST`, not `FREE`; a local rolling one-hour view uses limit 1,000 and is labelled keyless/local/shared-pool. It does not become a hard routing gate, and the separate 10 requests/second per-IP burst limit remains documented future work.
 - **AC-8 — Compatibility and privacy:** new fields are additive/nullable, API serialization stays backward compatible, credentials are never persisted in usage metadata, and vendor polling is bounded rather than per request.
 
 ### Firecrawl-specific ACs
@@ -446,7 +459,7 @@ Independent test files are constraints in a future implementation cycle and are 
 1. **Brave wallet inputs — SUPERSEDED:** cost/query defaults, a local reset anchor, and re-sync UX are no longer v1 inputs; the observed monthly header elements supersede the wallet model.
 2. **Brave header pair order:** verify against a real successful response that index `[1]` is monthly and index `[0]` is per-second for all three rate-limit headers.
 3. **Brave 429 headers:** verify whether 429 responses include usable rate-limit headers despite the current error path raising before response parsing.
-4. **Keenable keyless limit:** verify whether 1,000/hour applies only through MCP or also REST public endpoints; confirm the documented 10 req/s per-IP/shared-pool limits.
+4. **Keenable keyless reconciliation:** the supplied current documentation confirms 1,000/hour and 10 req/s per IP for unauthenticated search/fetch. Determine whether response headers can reconcile FreeSearch's rolling local count with other traffic sharing the same public IP.
 5. **Keenable reset day:** calendar-month rollover is provisional. Verify the actual organization billing/allowance reset day.
 6. **Keenable REST usage block:** inspect the current `openapi.json` and real keyed responses for SKU, `amount`, `credits`, and `paid`; determine how purchased and free balances coexist.
 7. **Full SKU table:** verify prices/credit weights for all Keenable and Parallel SKUs, modes, extra bundles, live fetch, and future variants before coding conversion logic.
@@ -458,11 +471,54 @@ Independent test files are constraints in a future implementation cycle and are 
 13. **Parallel OAuth:** decide whether a future device-grant credential is desirable; it is explicitly outside the API-key adapter strategy in this plan.
 14. **Soft-signal expiry:** define a bounded timeout in addition to “next success” for Parallel 402 so a stale soft zero cannot suppress the provider indefinitely.
 
-## 7. Historical DB migration (copy-test-replace, no data loss)
+> **2026-09-10 implementation note:** Keyless Keenable now targets a locally observed rolling-hour request view (`1000` requests/hour) rather than a fake monthly allowance. Its percentage is a UI headroom signal only; shared-IP traffic outside FreeSearch is invisible and a vendor `429` remains the authoritative pressure signal. Brave degenerate `limit==0` is treated as unknown (`None/None`) and requires a known positive limit for hard exclusion in routing; genuine `remaining==0/limit>0` still steers away per AC-6. Parallel `capabilities.quota` stays false; unseeded accounts report spend with `remaining=None` (no fabricated balance) per AC-PA-3/4. OBSERVED-snapshot expiry (for example 24h in `effective_quota`) remains a follow-up pending an agreed stale-state budget.
 
-This is a migration design, not authorization to run a migration. The existing `freesearch.db` contains useful historical telemetry and must never be discarded, recreated, or migrated in place. Implementation of the script and every database operation below remains future work pending explicit approval.
+## 7. Alembic schema adoption across worktrees
 
-### 7.1 Safety principles and rollback boundary
+Alembic is now the schema authority. Repository startup resolves one absolute database path, obtains an adjacent cross-process migration lock, and upgrades that file before creating the async SQLAlchemy engine. Fresh databases run both revisions. An unversioned legacy or already-canonical database is preflight-validated, backed up with SQLite's online backup API, and adopted at head. A database already at head is validated without another backup or mutation.
+
+The migration chain is deliberately additive:
+
+1. `0001_legacy_baseline` creates missing operational tables and indexes and completes the older nullable usage columns.
+2. `0002_canonical_quota_units` adds `usage_events.unit_kind` plus `quota_snapshots.unit_kind`, `display_unit`, and `metadata` as nullable text.
+
+No revision rewrites IDs, timestamps, native `units`, provider names, runtime settings, health, cache metadata, or historical quota values. Old unit fields remain `NULL`; that is an honest unknown dimension, not data loss.
+
+### 7.1 Worktree and main-checkout behavior
+
+SQLite files are ignored by Git, so merging this worktree carries migration code and revisions but never this worktree's `freesearch.db` or `alembic_version` row. The main checkout keeps its own database. On the first API or MCP startup after merge, that main database is backed up beside itself and upgraded to Alembic head. This worktree cannot touch the sibling main database unless both services are explicitly configured to the same absolute `FREESEARCH_DB` path.
+
+Use an absolute `FREESEARCH_DB` per checkout when services can start from different working directories. The CLI prints the resolved target and revision:
+
+```text
+freesearch-db --database C:\path\to\freesearch.db status
+freesearch-db --database C:\path\to\freesearch.db upgrade
+```
+
+`FREESEARCH_DB`, when set, intentionally takes precedence over `--database`, matching the application composition root. The runner rejects in-memory, SQLite URI, `-wal`, and `-shm` targets.
+
+### 7.2 Backup, concurrency, and failure behavior
+
+An existing database receives a uniquely named `freesearch.db.pre-alembic-<UTC>-<id>.bak` before its first schema mutation. The transactionally consistent SQLite backup must pass `PRAGMA integrity_check`. The lock is shared by API and MCP processes, so concurrent startup upgrades are serialized; the second process observes the first process's head revision and performs only validation.
+
+Backups and lock files match the repository's `*.db*` ignore rule and are never merged. A failed migration keeps its backup for diagnosis and raises a startup error; it does not automatically replace the database while other handles or WAL sidecars may exist.
+
+### 7.3 Merge/run procedure
+
+1. Merge the code normally; do not copy either checkout's database.
+2. Drain writers that bypass the normal repository startup path; keep the psmux sessions themselves.
+3. Run `freesearch-db status` against the resolved main database for a read-only preview if wanted.
+4. Start one upgraded API or MCP process.
+5. Start the other service. It validates the same head and performs no second migration.
+6. Verify `/dashboard`, provider settings, runtime settings, and representative historical activity.
+
+Deleting and recreating the main database is unnecessary and would discard useful settings and telemetry. Schema adoption is automatic; historical unit classification remains a separate optional operation.
+
+## 8. Future historical unit backfill (copy-test-replace, no data loss)
+
+This section is planning only for a possible data-classification backfill. Alembic schema adoption in Section 7 is implemented and authorized; rewriting historical row values is not. The existing `freesearch.db` contains useful telemetry and must never be discarded merely to classify old units.
+
+### 8.1 Safety principles and rollback boundary
 
 Use a **copy → migrate the copy → verify the copy → atomically swap** workflow:
 
@@ -475,7 +531,7 @@ Use a **copy → migrate the copy → verify the copy → atomically swap** work
 
 Rollback is the reverse swap: stop writes briefly, preserve the rejected migrated file for diagnosis, atomically restore the verified `.bak` file (and its coordinated sidecars if applicable), start/re-point only the API process in its existing `freesearch-api` session, and repeat integrity, count, hash, and application checks. Never stop, kill, reconfigure, or otherwise touch the `deepseek-harness` session.
 
-### 7.2 Pre-migration inventory and write quiescence
+### 8.2 Pre-migration inventory and write quiescence
 
 Before any copy, record the source path, byte size, SQLite version, `PRAGMA journal_mode`, `PRAGMA user_version`, and the presence and size of `freesearch.db-wal` and `freesearch.db-shm`. Capture:
 
@@ -489,29 +545,31 @@ Do not rely on a file hash taken while writes are active. First stop incoming se
 
 For WAL mode, prefer a clean checkpoint (`PRAGMA wal_checkpoint(TRUNCATE)`) only after exclusive write quiescence, then copy the main database. If a checkpoint cannot be obtained, copy the database, `-wal`, and `-shm` as one coordinated snapshot using SQLite's backup API or another SQLite-aware method; copying only `freesearch.db` while a live WAL exists is not a valid backup.
 
-### 7.3 Additive, nullable, idempotent schema changes
+### 8.3 Additive, nullable, idempotent schema changes
 
-The historical migration adds exactly these nullable columns:
+The Alembic schema adoption in Section 7 already provides these nullable columns. A future backfill must verify that the candidate is at Alembic head before touching data; it must not duplicate or replace the schema revision:
 
 | Table | Column | SQLite declaration |
 |---|---|---|
 | `usage_events` | `unit_kind` | `TEXT NULL` |
 | `quota_snapshots` | `unit_kind` | `TEXT NULL` |
 | `quota_snapshots` | `display_unit` | `TEXT NULL` |
+| `quota_snapshots` | `metadata` | `TEXT NULL` |
 
-The script must use the same introspection pattern as `storage.py::_add_missing_column`: read `PRAGMA table_info(<table>)`, and run `ALTER TABLE ... ADD COLUMN ... TEXT` only when the named column is absent. SQLite's added `TEXT` column is nullable unless constrained otherwise. In equivalent SQL:
+For reference, the additive DDL represented by revision `0002` is:
 
 ```sql
 ALTER TABLE usage_events ADD COLUMN unit_kind TEXT;
 ALTER TABLE quota_snapshots ADD COLUMN unit_kind TEXT;
 ALTER TABLE quota_snapshots ADD COLUMN display_unit TEXT;
+ALTER TABLE quota_snapshots ADD COLUMN metadata TEXT;
 ```
 
-These statements are examples, not an unconditional batch: each is guarded by the column-existence check. Re-running the migration must be safe. Backfill updates must likewise target only rows that are unclassified or carry this migration's prior classification, and the migration ledger version must prevent duplicate work. Do not rebuild either table, drop columns, renumber IDs, alter raw `units`, or coerce decimal text through floating point. This migration does not add `usage_events.display_unit`; historical usage labels are derived from `unit_kind` unless the approved implementation schema later explicitly expands this migration.
+These statements describe the additive shape of revision `0002`; the actual Alembic revision is idempotent because adoption stamps a validated legacy database at `0001` before upgrading. Do not rebuild either table, drop columns, renumber IDs, alter raw `units`, or coerce decimal text through floating point. Revision `0002` does not add `usage_events.display_unit`; historical usage labels are derived from `unit_kind` when available and otherwise remain unknown. Quota `metadata` is JSON text used by the application for routing and display; it is not a historical-unit backfill. The live startup path performs schema adoption/upgrades only and never rewrites historical usage values. Any future historical classification remains gated behind the copy-migrate-verify-swap procedure in §§8.2–8.7, with quiescence, integrity checks, reconciliation, and explicit approval.
 
 Create an index only when the approved query plan demonstrates a need—for example, a guarded index over `usage_events(provider, operation, unit_kind, observed_at)`. Use `CREATE INDEX IF NOT EXISTS` and verify the query plan before retaining it.
 
-### 7.4 Deterministic historical backfill
+### 8.4 Deterministic historical backfill
 
 Classification uses normalized provider and operation names plus trusted historical metadata; it never guesses from a numeric magnitude such as `1` or `0.001`. Raw `usage_events.units` text and value are immutable.
 
@@ -541,7 +599,7 @@ For existing `quota_snapshots` rows:
 
 The current repository may have few or zero quota rows; the script must handle the empty table without special failure and must never fabricate snapshots.
 
-### 7.5 Future custom migration script contract
+### 8.5 Future custom migration script contract
 
 Implement, after approval, `scripts/migrate_quota_units.py` with this interface:
 
@@ -565,7 +623,7 @@ A normal run must:
 7. Commit, then run `VACUUM` outside the transaction only when adequate disk space exists, followed by `PRAGMA integrity_check` and all semantic verification. A VACUUM failure blocks the swap but never damages the source.
 8. Emit a machine-readable report alongside the candidate; never claim success when any blocking check fails.
 
-### 7.6 Verification and acceptance on the copy
+### 8.6 Verification and acceptance on the copy
 
 Verification is performed against the candidate copy, never by starting the normal service on the original during migration:
 
@@ -595,7 +653,7 @@ For the application smoke test, set the documented `FREESEARCH_DB` override to t
 
 The swap is blocked by any integrity error, count/hash mismatch, raw-unit difference, unclassified row outside the reported ambiguity set, schema drift, app deserialization error, cross-kind sum, incorrect unit label, unexpected write to the source, unresolved WAL snapshot, inability to obtain write quiescence, or inadequate free disk space. Acceptance requires all checks to pass, 100% reconciliation of source rows, zero raw-unit mutations, and explicit user approval of the generated report.
 
-### 7.7 Production swap and post-swap checks
+### 8.7 Production swap and post-swap checks
 
 Perform these steps in order:
 
@@ -612,7 +670,7 @@ A SQLite hot-swap is allowed only if the platform, journal mode, connection life
 
 If post-swap verification fails, quiesce traffic, stop only the API child, preserve the failed migrated DB under a diagnostic name, atomically restore the verified backup and its correct sidecar state, restart the recorded API command in `freesearch-api`, and repeat integrity/count/hash plus `/dashboard` checks before reopening traffic.
 
-### 7.8 Risks and mitigations
+### 8.8 Risks and mitigations
 
 | Risk | Mitigation |
 |---|---|
@@ -625,4 +683,4 @@ If post-swap verification fails, quiesce traffic, stop only the API child, prese
 | Metadata parse/corruption risk | Preserve undecodable metadata unchanged, report its row ID, and leave `unit_kind=NULL`; never rewrite the whole row merely to add an annotation. |
 | Script interruption or partial work | Use one transaction for schema/backfill/ledger where SQLite permits, idempotent guards, deterministic batches, and a source that is never writable; discard the candidate and recopy on uncertainty. |
 
-> **Status remains PLANNING ONLY — DO NOT IMPLEMENT.** This section specifies a future migration rehearsal and swap procedure; it does not authorize creation of `scripts/migrate_quota_units.py`, modification of `freesearch.db`, or any backend/frontend/test change.
+> **Section 8 remains planning only.** It specifies a future historical-unit classification rehearsal and swap procedure; it does not authorize creation of `scripts/migrate_quota_units.py`, modification of historical `units` values, or any live database replacement. The Alembic schema adoption described in Section 7 is implemented and authorized.

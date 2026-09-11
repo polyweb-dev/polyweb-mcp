@@ -26,8 +26,23 @@ const layoutDir = import.meta.dirname
 const uiRoot = path.resolve(layoutDir, "../../..")
 const appSource = readFileSync(path.join(uiRoot, "src/App.tsx"), "utf8")
 const mainSource = readFileSync(path.join(uiRoot, "src/main.tsx"), "utf8")
+// Slice 4: route identifiers live in app/routes, the Routes table + shell in
+// app/DashboardShell.tsx, navigation in app/layout (Sidebar + NavList).
+const routesSource = readFileSync(path.join(uiRoot, "src/app/routes.ts"), "utf8")
+const dashboardShellSource = readFileSync(
+  path.join(uiRoot, "src/app/DashboardShell.tsx"),
+  "utf8"
+)
 const sidebarSource = readFileSync(
   path.join(uiRoot, "src/components/layout/Sidebar.tsx"),
+  "utf8"
+)
+const sidebarOwnerSource = readFileSync(
+  path.join(uiRoot, "src/app/layout/Sidebar.tsx"),
+  "utf8"
+)
+const sidebarNavSource = readFileSync(
+  path.join(uiRoot, "src/app/layout/SidebarNavList.tsx"),
   "utf8"
 )
 const packageJson = JSON.parse(
@@ -55,41 +70,45 @@ describe("C4-1: react-router v7 install + BrowserRouter boot", () => {
 
 describe("C4-2: App.tsx Routes table + redirects", () => {
   it("imports Routes, Route, and Navigate from react-router", () => {
-    expect(appSource).toMatch(/<Routes/)
-    expect(appSource).toMatch(/<Route/)
-    expect(appSource).toMatch(/<Navigate/)
-    expect(appSource).toMatch(/from\s+["']react-router["']/)
+    expect(dashboardShellSource).toMatch(/<Routes/)
+    expect(dashboardShellSource).toMatch(/<Route/)
+    expect(dashboardShellSource).toMatch(/<Navigate/)
+    expect(dashboardShellSource).toMatch(/from\s+["']react-router["']/)
+    // Thin App shim composes providers over the dashboard shell.
+    expect(appSource).toContain("DashboardShell")
+    expect(appSource).toContain("AppProviders")
   })
 
   it("declares every route-table path exactly once", () => {
     for (const routePath of ROUTE_PATHS) {
-      expect(appSource).toContain(`"${routePath}"`)
+      expect(routesSource).toContain(`"${routePath}"`)
     }
   })
 
   it("redirects the root path to the playground", () => {
-    expect(appSource).toContain('"/playground"')
-    expect(appSource).toMatch(/path="\/"[^>]*element=\{[^}]*Navigate/)
+    expect(dashboardShellSource).toContain('"/playground"')
+    expect(dashboardShellSource).toMatch(/path="\/"[^>]*element=\{[^}]*Navigate/)
   })
 
   it("catches unknown paths back to the playground", () => {
-    expect(appSource).toMatch(/path="\*"[^>]*element=\{[^}]*Navigate/)
+    expect(dashboardShellSource).toMatch(/path="\*"[^>]*element=\{[^}]*Navigate/)
   })
 
   it("maps the quotas TabId to the /usage path (no /quotas route)", () => {
-    expect(appSource).toContain('"/usage"')
-    expect(appSource).not.toContain('"/quotas"')
-    expect(appSource).toContain('"quotas"')
+    expect(routesSource).toContain('"/usage"')
+    expect(routesSource).not.toContain('"/quotas"')
+    expect(routesSource).toContain('"quotas"')
   })
 
   it("P1-FINAL: retires the providers view — no ProviderMatrix route", () => {
+    expect(dashboardShellSource).not.toMatch(/ProviderMatrix/)
     expect(appSource).not.toMatch(/ProviderMatrix/)
   })
 
   it("P1-FINAL: redirects the legacy /providers path to /settings", () => {
-    expect(appSource).toContain('"/providers"')
-    const idx = appSource.indexOf('"/providers"')
-    const window_ = appSource.slice(Math.max(0, idx - 120), idx + 300)
+    expect(dashboardShellSource).toContain('"/providers"')
+    const idx = dashboardShellSource.indexOf('"/providers"')
+    const window_ = dashboardShellSource.slice(Math.max(0, idx - 120), idx + 300)
     expect(window_).toMatch(/Navigate/)
     expect(window_).toContain('"/settings"')
   })
@@ -97,29 +116,45 @@ describe("C4-2: App.tsx Routes table + redirects", () => {
 
 describe("C4-5: Sidebar NavLink contract in source", () => {
   it("imports NavLink from react-router", () => {
-    expect(sidebarSource).toMatch(/NavLink/)
-    expect(sidebarSource).toMatch(/from\s+["']react-router["']/)
+    expect(sidebarNavSource).toMatch(/NavLink/)
+    expect(sidebarNavSource).toMatch(/from\s+["']react-router["']/)
+    // Compat shim keeps the old import surface working.
+    expect(sidebarSource).toMatch(/from\s+["']@\/app\/layout\/Sidebar["']/)
   })
 
   it("binds every nav item to its exact route target", () => {
-    for (const routePath of ROUTE_PATHS) {
-      expect(sidebarSource).toContain(`"${routePath}"`)
+    // Route identifiers live in app routing: TAB_PATHS pins each id->target
+    // pair exactly once, and the nav binds through that table.
+    const tabPathsBlock = routesSource.slice(
+      routesSource.indexOf("TAB_PATHS"),
+      routesSource.indexOf("WorkspaceRoute")
+    )
+    for (const [id, routePath] of [
+      ["playground", "/playground"],
+      ["routing", "/routing"],
+      ["quotas", "/usage"],
+      ["activity", "/activity"],
+      ["settings", "/settings"],
+    ]) {
+      expect(tabPathsBlock).toContain(`"${routePath}"`)
+      expect(tabPathsBlock).toMatch(new RegExp(`${id}:`))
     }
+    expect(sidebarNavSource).toMatch(/to=\{TAB_PATHS\[id\]\}/)
+    expect(sidebarNavSource).toMatch(/from\s+["']\.\.\/routes["']/)
+    expect(sidebarOwnerSource).toContain("NavList")
   })
 
   it("P1-FINAL: sidebar drops the retired /providers target", () => {
-    expect(sidebarSource).not.toContain('"/providers"')
-    expect(sidebarSource).not.toContain('"providers"')
+    expect(sidebarNavSource).not.toContain('"/providers"')
+    expect(sidebarNavSource).not.toContain('"providers"')
+    expect(routesSource).not.toContain('"providers"')
   })
 
   it("renders no plain-button nav items (controls stay buttons)", () => {
     // NavList must not render <button> for the six workspaces; the only
     // <button> elements left are the collapse toggle + drawer controls.
-    const navListBlock = sidebarSource.slice(
-      sidebarSource.indexOf("function NavList"),
-      sidebarSource.indexOf("function Brand")
-    )
-    expect(navListBlock).not.toContain("<button")
-    expect(navListBlock).toContain("<NavLink")
+    expect(sidebarNavSource).not.toContain("<button")
+    expect(sidebarNavSource).toContain("<NavLink")
+    expect(sidebarNavSource).toMatch(/export\s+(function|const)\s+NavList/)
   })
 })

@@ -7,7 +7,11 @@ import {
   mergeProviderStatus,
   mapBackendHealth,
   mapDashboardUsage,
+  mapDashboardTotals,
+  mapDashboardQuotas,
   mapRoutingConfig,
+  normalizeUnitKind,
+  unitLabel,
 } from "./mappers"
 import {
   catalogNameOf,
@@ -15,8 +19,11 @@ import {
   minimalSearchResponseFixture,
   fetchResponseFixture,
   dashboardFixture,
+  canonicalQuotasFixture,
+  canonicalTotalsFixture,
+  canonicalRecentUsageFixture,
   providerStatus,
-} from "@/test/backendFixtures"
+} from "@/test/fixtures"
 
 /**
  * RED: `src/services/api/mappers.ts` does not exist yet. The Developer
@@ -301,7 +308,7 @@ describe("mergeProviderStatus", () => {
 
   it("P3(a): leaves quota used unknown (null) instead of fabricating zero", () => {
     // Honest placeholder: the backend exposes no authoritative usage total,
-    // so unknown usage must render as "—/∞", never "0/∞" (which misreads as
+    // so unknown usage must render as "—/—", never "0/—" (which misreads as
     // "nothing consumed"). RED until the Developer flips mappers.ts used: 0 → null.
     const merged = mergeProviderStatus(catalogEntry, providerStatus("tavily") as never)
 
@@ -359,5 +366,247 @@ describe("mapRoutingConfig", () => {
     expect(
       mapRoutingConfig({ fallback_policy: "first_only", max_attempts: 1 } as never)
     ).toEqual({ enabled: false, maxAttempts: 1 })
+  })
+})
+
+describe("normalizeUnitKind (QUOTA.md Option A)", () => {
+  it("passes through the four canonical uppercase kinds", () => {
+    expect(normalizeUnitKind("REQUEST")).toBe("REQUEST")
+    expect(normalizeUnitKind("CREDIT")).toBe("CREDIT")
+    expect(normalizeUnitKind("USD")).toBe("USD")
+    expect(normalizeUnitKind("FREE")).toBe("FREE")
+  })
+
+  it("tolerates lowercase wire values via case-insensitive normalization", () => {
+    expect(normalizeUnitKind("credit")).toBe("CREDIT")
+    expect(normalizeUnitKind("request")).toBe("REQUEST")
+    expect(normalizeUnitKind("usd")).toBe("USD")
+    expect(normalizeUnitKind("free")).toBe("FREE")
+    expect(normalizeUnitKind("Credit")).toBe("CREDIT")
+  })
+
+  it("maps unknown, null, undefined, and non-string inputs to null (legacy)", () => {
+    expect(normalizeUnitKind("TOKENS")).toBeNull()
+    expect(normalizeUnitKind("")).toBeNull()
+    expect(normalizeUnitKind(null)).toBeNull()
+    expect(normalizeUnitKind(undefined)).toBeNull()
+    expect(normalizeUnitKind(42)).toBeNull()
+    expect(normalizeUnitKind({})).toBeNull()
+  })
+
+  it("never throws for absent wire fields (unit_kind omitted → null)", () => {
+    expect(normalizeUnitKind(({} as { unit_kind?: unknown }).unit_kind)).toBeNull()
+  })
+})
+
+describe("unitLabel", () => {
+  it("prefers the explicit display_unit over the kind default", () => {
+    expect(unitLabel("CREDIT", "credits")).toBe("credits")
+    expect(unitLabel("REQUEST", "requests")).toBe("requests")
+    expect(unitLabel(null, "custom-label")).toBe("custom-label")
+  })
+
+  it("falls back to kind defaults and legacy for null kind", () => {
+    expect(unitLabel("REQUEST", null)).toBe("requests")
+    expect(unitLabel("CREDIT", null)).toBe("credits")
+    expect(unitLabel("USD", null)).toBe("USD")
+    expect(unitLabel("FREE", null)).toBe("free")
+    expect(unitLabel(null, null)).toBe("legacy")
+  })
+})
+
+describe("mapDashboardTotals (triple-keyed, QUOTA.md AC-3)", () => {
+  it("keys by (provider, operation, unit_kind): same provider+operation with different kinds stay separate", () => {
+    const totals = mapDashboardTotals(
+      dashboardFixture({ usage_totals: canonicalTotalsFixture() }) as never
+    )
+
+    expect(totals).toHaveLength(4)
+    const tavilySearch = totals.filter(
+      (t) => t.provider === "tavily" && t.operation === "search"
+    )
+    expect(tavilySearch).toHaveLength(2)
+    const kinds = tavilySearch.map((t) => t.unitKind).sort()
+    expect(kinds).toEqual(["CREDIT", "USD"])
+    expect(tavilySearch.find((t) => t.unitKind === "CREDIT")?.total_units).toBe("3.5")
+    expect(tavilySearch.find((t) => t.unitKind === "USD")?.total_units).toBe("0.007")
+  })
+
+  it("preserves total_units verbatim as strings and keeps event counts", () => {
+    const totals = mapDashboardTotals(
+      dashboardFixture({ usage_totals: canonicalTotalsFixture() }) as never
+    )
+
+    for (const total of totals) {
+      expect(typeof total.total_units).toBe("string")
+    }
+    expect(totals.find((t) => t.provider === "tavily" && t.unitKind === "CREDIT")).toMatchObject({
+      total_units: "3.5",
+      eventCount: 4,
+    })
+    expect(totals.find((t) => t.provider === "brave")).toMatchObject({
+      total_units: "12",
+      unitKind: "REQUEST",
+      eventCount: 12,
+    })
+  })
+
+  it("projects a legacy null-kind row without merging it into a known dimension", () => {
+    const totals = mapDashboardTotals(
+      dashboardFixture({ usage_totals: canonicalTotalsFixture() }) as never
+    )
+
+    const legacy = totals.find((t) => t.provider === "exa")
+    expect(legacy).toBeDefined()
+    expect(legacy?.unitKind).toBeNull()
+    expect(legacy?.total_units).toBe("9")
+    expect(legacy?.eventCount).toBe(9)
+    // Legacy rows never share a key with a known dimension.
+    expect(totals.filter((t) => t.provider === "exa")).toHaveLength(1)
+  })
+
+  it("maps backend 'you' to UI 'youcom' in totals", () => {
+    const totals = mapDashboardTotals(
+      dashboardFixture({
+        usage_totals: [
+          { provider: "you", operation: "search", total_units: "4.75", event_count: 7, unit_kind: "USD" },
+        ],
+      }) as never
+    )
+
+    expect(totals).toHaveLength(1)
+    expect(totals[0].provider).toBe("youcom")
+    expect(totals[0].unitKind).toBe("USD")
+    expect(totals[0].total_units).toBe("4.75")
+  })
+
+  it("defaults a missing unit_kind to null (legacy) instead of guessing", () => {
+    const totals = mapDashboardTotals(
+      dashboardFixture({
+        usage_totals: [
+          { provider: "tavily", operation: "search", total_units: "3.5", event_count: 4 },
+        ],
+      }) as never
+    )
+
+    expect(totals[0].unitKind).toBeNull()
+  })
+})
+
+describe("mapDashboardQuotas (confidence/reset passthrough, RF1 verbatim limits)", () => {
+  it("passes confidence source, reset_at, unitKind, and displayUnit through untouched", () => {
+    const quotas = mapDashboardQuotas(
+      dashboardFixture({ latest_quota: canonicalQuotasFixture() }) as never
+    )
+
+    expect(quotas).toHaveLength(4)
+    expect(quotas.find((q) => q.provider === "tavily")).toMatchObject({
+      source: "authoritative",
+      unitKind: "CREDIT",
+      displayUnit: "credits",
+      remainingPercent: "90.00005",
+      resetAt: null,
+      observed_at: "2026-09-06T18:00:00Z",
+    })
+    expect(quotas.find((q) => q.provider === "brave")).toMatchObject({
+      source: "observed",
+      unitKind: "REQUEST",
+      displayUnit: "requests",
+      remainingPercent: "95",
+      resetAt: "2026-10-01T00:00:00Z",
+    })
+    expect(quotas.find((q) => q.provider === "youcom")).toMatchObject({
+      source: "estimated",
+      unitKind: "USD",
+      displayUnit: "USD",
+      limit: null,
+    })
+  })
+
+  it("RF1: preserves exact limit strings verbatim ('100000.10' stays, '0.00000001' never becomes 1e-8)", () => {
+    const quotas = mapDashboardQuotas(
+      dashboardFixture({ latest_quota: canonicalQuotasFixture() }) as never
+    )
+
+    const tavily = quotas.find((q) => q.provider === "tavily")!
+    expect(typeof tavily.limit).toBe("string")
+    expect(tavily.limit).toBe("100000.10")
+    expect(tavily.limit).not.toBe("100000.1")
+
+    const legacy = quotas.find((q) => q.provider === "exa")!
+    expect(typeof legacy.limit).toBe("string")
+    expect(legacy.limit).toBe("0.00000001")
+    expect(String(legacy.limit)).not.toContain("e-")
+    expect(legacy.limit).not.toBe("1e-8")
+    expect(legacy.remaining).toBe("0.00000005")
+  })
+
+  it("keeps You.com ESTIMATED limit null (never fabricates a hard cap)", () => {
+    const quotas = mapDashboardQuotas(
+      dashboardFixture({ latest_quota: canonicalQuotasFixture() }) as never
+    )
+
+    const you = quotas.find((q) => q.provider === "youcom")!
+    expect(you.limit).toBeNull()
+    expect(you.remaining).toBe("4.75")
+    expect(you.source).toBe("estimated")
+  })
+
+  it("projects the null-kind legacy quota row with null unitKind/displayUnit", () => {
+    const quotas = mapDashboardQuotas(
+      dashboardFixture({ latest_quota: canonicalQuotasFixture() }) as never
+    )
+
+    const legacy = quotas.find((q) => q.provider === "exa")!
+    expect(legacy.unitKind).toBeNull()
+    expect(legacy.displayUnit).toBeNull()
+    expect(legacy.source).toBe("estimated")
+  })
+
+  it("maps backend 'you' to UI 'youcom' in quotas", () => {
+    const quotas = mapDashboardQuotas(
+      dashboardFixture({ latest_quota: canonicalQuotasFixture() }) as never
+    )
+
+    expect(quotas.map((q) => q.provider)).not.toContain("you")
+    expect(quotas.map((q) => q.provider)).toContain("youcom")
+  })
+
+  it("returns an empty list when the dashboard carries no quota snapshots", () => {
+    expect(mapDashboardQuotas(dashboardFixture({ latest_quota: [] }) as never)).toEqual([])
+  })
+})
+
+describe("mapDashboardUsage (canonical units)", () => {
+  it("passes unitKind/displayUnit through for CREDIT, REQUEST, and USD rows", () => {
+    const events = mapDashboardUsage(
+      dashboardFixture({ recent_usage: canonicalRecentUsageFixture() }) as never,
+      catalogNameOf
+    )
+
+    expect(events).toHaveLength(4)
+    expect(events[0]).toMatchObject({ providerId: "tavily", unitKind: "CREDIT", displayUnit: "credits" })
+    expect(events[1]).toMatchObject({ providerId: "brave", unitKind: "REQUEST", displayUnit: "requests" })
+    expect(events[2]).toMatchObject({ providerId: "youcom", unitKind: "USD", displayUnit: "USD" })
+  })
+
+  it("projects a legacy row with null unitKind/displayUnit for missing wire fields", () => {
+    const events = mapDashboardUsage(
+      dashboardFixture({ recent_usage: canonicalRecentUsageFixture() }) as never,
+      catalogNameOf
+    )
+
+    const legacy = events.find((e) => e.providerId === "exa")!
+    expect(legacy.unitKind).toBeNull()
+    expect(legacy.displayUnit).toBeNull()
+  })
+
+  it("carries canonical kinds on the default dashboard fixture (gap lock-in)", () => {
+    const events = mapDashboardUsage(dashboardFixture() as never, catalogNameOf)
+
+    expect(events[0].unitKind).toBe("CREDIT")
+    expect(events[0].displayUnit).toBe("credits")
+    expect(events[1].unitKind).toBe("REQUEST")
+    expect(events[1].displayUnit).toBe("requests")
   })
 })

@@ -14,14 +14,14 @@ import {
 } from "@/test/backendFixtures"
 
 /**
- * S-P3 Test buttons look like actual buttons — BDD Acceptance (RED phase).
+ * S-P3 Test buttons look like actual buttons â€” BDD Acceptance (RED phase).
  *
  * User bullet (verbatim): "Make these test buttons look like actual buttons."
  * Read-only: .agents/FEEDBACK/UI/feedback.md L22. SEE image yourself:
  * .agents/FEEDBACK/UI/image-3.png (Test plain text, no affordance).
  *
  * BUG image-3.png shows every registry row with a bare muted "Test" text
- * label at the far right — no border, no rounded box, no padding, no
+ * label at the far right â€” no border, no rounded box, no padding, no
  * data-slot="button". It reads as plain text, not an affordance.
  *
  * Plan under test (ONLY SettingsProviders.tsx Test cell):
@@ -30,14 +30,14 @@ import {
  *   no other changes. freesearch-ui/ ONLY.
  *
  * AC mapping:
- *   S-P3-1  affordance — every Test button exposes a real button box:
+ *   S-P3-1  affordance â€” every Test button exposes a real button box:
  *           (ui/button: data-slot="button" + outline border) OR
  *           (Carbon button-like: border + rounded + padding), and is NOT
  *           plain muted text. RED: current Test cell is a bare <button>
  *           with `text-[13px] text-[var(--muted)] hover:text-white ...`
  *           and no border/rounded/padding/data-slot, so all affordance
  *           assertions FAIL cleanly.
- *   S-P3-2  states preserved — initial `Test` + type="button" + exact
+ *   S-P3-2  states preserved â€” initial `Test` + type="button" + exact
  *           aria-label `{name} connection`; click flips to `Testing...` +
  *           disabled with aria-label/type stable; exactly one POST to
  *           /api/v1/providers/{id}/test; flips back to `Test` + enabled
@@ -49,18 +49,44 @@ import {
  *           P100 + Dispatch order tooltip + shrink-0/min-w + px-3 + arrow
  *           boundaries), Carbon Black tokens, NO ProviderMatrix merge,
  *           freesearch-ui ONLY. NOTE: S-P2-5 "no button restyle" covers ONLY
- *           the ArrowUp/ArrowDown arrows — this file MUST NOT assert no
+ *           the ArrowUp/ArrowDown arrows â€” this file MUST NOT assert no
  *           Button in file (Green adds ui/Button to the Test cell).
  *
  * P1-FINAL sweep: per-row Test affordance is now an icon button
  * (ui/button ghost icon-sm, aria-label "{name} test connection") that opens
  * the ProviderTestModal (zero fetch on open). The modal Test button runs the
  * existing handleTest (Test/Testing... + exactly one POST). Table is the
- * merged 10-column registry.
+ * merged 7-column registry.
  */
 
 const testDir = import.meta.dirname
 const settingsSource = readFileSync(path.resolve(testDir, "./SettingsProviders.tsx"), "utf8")
+// Slice 4: row/modal/priority siblings own their sources; assertions run
+// against the new owners plus the union of the registry feature owners.
+const settingsRowSource = readFileSync(
+  path.resolve(testDir, "./ProviderRegistryRow.tsx"),
+  "utf8"
+)
+const settingsModalSource = readFileSync(
+  path.resolve(testDir, "./ProviderTestModal.tsx"),
+  "utf8"
+)
+const settingsPrioritySource = readFileSync(
+  path.resolve(testDir, "./ProviderPriorityControl.tsx"),
+  "utf8"
+)
+const buttonShimSource = readFileSync(path.resolve(testDir, "../ui/button.tsx"), "utf8")
+const settingsFeatureSource = [
+  settingsSource,
+  settingsRowSource,
+  settingsModalSource,
+  settingsPrioritySource,
+  readFileSync(path.resolve(testDir, "./ProviderRegistryHeader.tsx"), "utf8"),
+  readFileSync(path.resolve(testDir, "./ProviderHealthStatus.tsx"), "utf8"),
+  readFileSync(path.resolve(testDir, "./ProviderRowPill.tsx"), "utf8"),
+  readFileSync(path.resolve(testDir, "./ProviderOperationControl.tsx"), "utf8"),
+  readFileSync(path.resolve(testDir, "./providerDisplay.ts"), "utf8"),
+].join("\n")
 const indexCssSource = readFileSync(path.resolve(testDir, "../../index.css"), "utf8")
 
 const norm = (value: string): string => value.toLowerCase().replace(/\s+/g, "")
@@ -79,8 +105,6 @@ const EXPECTED_HEADERS = [
   "Provider",
   "Endpoint",
   "Health",
-  "Quota",
-  "p95",
   "Test",
   "Search",
   "Fetch",
@@ -152,9 +176,9 @@ function hasIconAffordance(btn: HTMLElement): boolean {
 /** Narrow source window around the icon test aria-label (stays inside the row). */
 function testCellWindow(): string {
   const marker = "${provider.name} test connection"
-  const idx = settingsSource.indexOf(marker)
-  if (idx < 0) throw new Error("Icon test aria-label marker not found in SettingsProviders.tsx")
-  return settingsSource.slice(Math.max(0, idx - 600), idx + 600)
+  const idx = settingsRowSource.indexOf(marker)
+  if (idx < 0) throw new Error("Icon test aria-label marker not found in ProviderRegistryRow.tsx")
+  return settingsRowSource.slice(Math.max(0, idx - 600), idx + 600)
 }
 
 function findProviderRowTr(provider: string): HTMLTableRowElement {
@@ -162,7 +186,7 @@ function findProviderRowTr(provider: string): HTMLTableRowElement {
   const tr = nameEl.closest("tr")
   if (!tr) {
     throw new Error(
-      `Provider table row <tr> not found for ${provider} — S-P1 table migration missing`
+      `Provider table row <tr> not found for ${provider} â€” S-P1 table migration missing`
     )
   }
   return tr as HTMLTableRowElement
@@ -174,7 +198,7 @@ afterEach(() => {
 })
 
 // ---------------------------------------------------------------------------
-// S-P3-1: affordance — icon test button per row (P1-FINAL)
+// S-P3-1: affordance â€” icon test button per row (P1-FINAL)
 // ---------------------------------------------------------------------------
 
 describe("S-P3-1: icon test buttons open the ProviderTestModal (affordance)", () => {
@@ -223,14 +247,16 @@ describe("S-P3-1: icon test buttons open the ProviderTestModal (affordance)", ()
     expect(window_).toMatch(/ghost/)
     expect(window_).toMatch(/icon-sm/)
     expect(window_).toMatch(/onOpenTest/)
-    expect(settingsSource).toContain("@/components/ui/button")
-    expect(settingsSource).toMatch(/onTest\(provider\.id\)/)
+    expect(settingsModalSource).toContain("@/shared/ui/button")
+    // Old ui path stays as a compat shim over the shared owner.
+    expect(buttonShimSource).toMatch(/from\s+["']@\/shared\/ui\/button["']/)
+    expect(settingsModalSource).toMatch(/onTest\(provider\.id\)/)
     expect(settingsSource).toContain("handleTest")
   })
 })
 
 // ---------------------------------------------------------------------------
-// S-P3-2: modal Test states — Testing...+disabled, one POST, last-result
+// S-P3-2: modal Test states â€” Testing...+disabled, one POST, last-result
 // ---------------------------------------------------------------------------
 
 describe("S-P3-2: modal Test interaction states (Test/Testing... + POST)", () => {
@@ -341,11 +367,11 @@ describe("S-P3-2: modal Test interaction states (Test/Testing... + POST)", () =>
 })
 
 // ---------------------------------------------------------------------------
-// S-P3-3: no-regression — S-P1 table, S-P2 ranks, tokens, no merge
+// S-P3-3: no-regression â€” S-P1 table, S-P2 ranks, tokens, no merge
 // ---------------------------------------------------------------------------
 
-describe("S-P3-3: no regression — S-P1 table, S-P2 ranks, tokens, merge", () => {
-  it("S-P1 table invariant: single merged table, 9 headers, 7x9, scroller, nowrap", async () => {
+describe("S-P3-3: no regression â€” S-P1 table, S-P2 ranks, tokens, merge", () => {
+  it("S-P1 table invariant: single merged table, 7 headers, 7x7, scroller, nowrap", async () => {
     renderSettings()
     await waitForProviders()
     expect(screen.getAllByRole("table")).toHaveLength(1)
@@ -378,19 +404,19 @@ describe("S-P3-3: no regression — S-P1 table, S-P2 ranks, tokens, merge", () =
       )
     }
     expect(screen.queryByText("P100", { exact: true })).toBeNull()
-    expect(settingsSource).not.toContain("P{provider.priority}")
-    expect(settingsSource).toContain("Dispatch order")
+    expect(settingsPrioritySource).not.toContain("P{provider.priority}")
+    expect(settingsPrioritySource).toContain("Dispatch order")
   })
 
   it("S-P2 indicator + arrows intact: shrink-0/min-w floor, px-3, lucide up/down with boundaries", async () => {
     renderSettings()
     await waitForProviders()
     // S-P2-5 scope: arrows stay lucide ArrowUp/ArrowDown with exact aria-labels.
-    // (Deliberately no "no Button in file" assertion — Green adds ui/Button
+    // (Deliberately no "no Button in file" assertion â€” Green adds ui/Button
     // to the Test cell; the restyle guard covers ONLY the arrows.)
-    expect(settingsSource).toContain("lucide-react")
-    expect(settingsSource).toContain("ArrowUp")
-    expect(settingsSource).toContain("ArrowDown")
+    expect(settingsPrioritySource).toContain("lucide-react")
+    expect(settingsPrioritySource).toContain("ArrowUp")
+    expect(settingsPrioritySource).toContain("ArrowDown")
     for (let rank = 1; rank <= 7; rank += 1) {
       const label = screen.getByText(`P${rank}`, { exact: true })
       const indicator = label.parentElement as HTMLElement | null
@@ -429,12 +455,12 @@ describe("S-P3-3: no regression — S-P1 table, S-P2 ranks, tokens, merge", () =
 
   it("P1-FINAL page merge: fleet telemetry merged into SettingsProviders (ProviderMatrix retired)", () => {
     for (const marker of ["Endpoint", "Health", "Quota", "p95", "ProviderTestModal"]) {
-      expect(settingsSource, `merged registry must carry ${marker}`).toContain(marker)
+      expect(settingsFeatureSource, `merged registry must carry ${marker}`).toContain(marker)
     }
   })
 
   it("freesearch-ui ONLY: SettingsProviders imports no backend/python paths", () => {
-    expect(settingsSource).not.toMatch(/\.py["']/)
-    expect(settingsSource).not.toMatch(/src\/freesearch/)
+    expect(settingsFeatureSource).not.toMatch(/\.py["']/)
+    expect(settingsFeatureSource).not.toMatch(/src\/freesearch/)
   })
 })

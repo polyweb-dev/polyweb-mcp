@@ -784,3 +784,45 @@ uv run behave --dry-run 2>$null                        # 0 undefined steps (9 fe
   these; without the sandbox the verbatim battery commands apply.
 - **Prior Stage 4.5 record (unchanged)**: 864 passed suite; live 2026-09-05
   Brave/Tavily attribution stays verified in `/stats` + `/dashboard` JSON.
+
+## Backend modularization (2026-09-11, per `docs/backend-modularization-plan.md`)
+
+Structural move only: whole files relocated into responsibility-based
+packages, plus import/reference/path updates and empty `__init__.py` markers.
+No function/class bodies, signatures, SQL, scenarios, or assertions changed.
+Historical entries above keep their original paths by intent.
+
+- `src/freesearch/api.py`, `control.py` → `src/freesearch/routers/`
+- `src/freesearch/server.py` → `src/freesearch/mcp/server.py` (lazy
+  `routers.control` import kept inside `_apply_parallel_seed`)
+- `src/freesearch/config.py`, `provider_config.py` →
+  `src/freesearch/configuration/`; `contracts.py` →
+  `src/freesearch/models/contracts.py` (root reexports preserved)
+- `src/freesearch/routing.py`, `monitoring.py`, `parallel_oauth.py` →
+  `src/freesearch/services/`
+- `src/freesearch/http.py`, `logging.py`, `resilience.py`, `secrets.py` →
+  `src/freesearch/infrastructure/`
+- `src/freesearch/storage.py`, `database_cli.py`,
+  `database_migrations.py`, `migrations/` → `src/freesearch/persistence/`
+- `tests/providers/*` → `tests/unit/adapters/`; other pytest modules split
+  into `tests/unit/<package>/` and `tests/integration/<package>/`
+  (OAuth security tests → `tests/integration/services/oauth/`;
+  `THREAT_MODEL.md` → `docs/THREAT_MODEL.md` — follow-up 2026-09-11
+  dissolved the `adversarial/` label; fixture scope unchanged)
+- `features/` → `tests/bdd/features/` (`[tool.behave] paths` set;
+  `Dockerfile.test` no longer copies `features/`)
+- Entry points unchanged in name, retargeted in `pyproject.toml`:
+  `freesearch-api = freesearch.routers.api:main`,
+  `freesearch-db = freesearch.persistence.database_cli:main`,
+  `freesearch-mcp = freesearch.mcp.server:main`; `alembic.ini`
+  `script_location` → `src/freesearch/persistence/migrations`.
+
+Current-use verification (all green): `uv run pytest` (1170 passed),
+`uv run ruff format --check src tests`, `uv run ruff check src tests`,
+`uv run mypy` (42 source files), `uv run python -m behave --dry-run`
+(17 features / 115 scenarios / 510 steps, 0 undefined), offline Behave
+(control, monitoring, database_migrations: 12 scenarios / 48 steps passed),
+wheel build with both Alembic revisions (`migration_head()` =
+`0002_canonical_quota_units`). Baseline for comparison: 1124 collected
+with 1 pre-existing `tests.adversarial` collection error (missing `tests`
+package marker; resolved by the new markers). `freesearch-ui/` untouched.

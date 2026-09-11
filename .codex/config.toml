@@ -1,0 +1,14 @@
+# Main/orchestrator
+model = "gpt-6-astra"
+model_reasoning_effort = "light"
+
+[agents]
+enabled = true
+
+# Workers spawned by Sol
+default_subagent_model = "muse-spark-1.3-contributor"
+default_subagent_reasoning_effort = "xhigh"
+
+[mcp_servers.codegraph]
+command = "codegraph"
+args = ["serve", "--mcp"]

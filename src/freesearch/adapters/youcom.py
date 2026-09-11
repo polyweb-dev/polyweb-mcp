@@ -20,7 +20,10 @@ from freesearch.adapters._youcom_support import (
 )
 from freesearch.adapters._youcom_support import _same_url as _same_url
 from freesearch.adapters.base import ProviderAdapter
-from freesearch.contracts import (
+from freesearch.configuration.provider_config import get_provider_secret_resolver
+from freesearch.infrastructure.resilience import ProviderOperationError, ResilientRunner
+from freesearch.infrastructure.secrets import ProviderName
+from freesearch.models.contracts import (
     CostEstimate,
     FetchedDocument,
     FetchRequest,
@@ -33,9 +36,6 @@ from freesearch.contracts import (
     SearchResult,
     UsageOperation,
 )
-from freesearch.provider_config import get_provider_secret_resolver
-from freesearch.resilience import ProviderOperationError, ResilientRunner
-from freesearch.secrets import ProviderName
 
 __all__ = ["YoucomAdapter"]
 
@@ -91,6 +91,12 @@ class YoucomAdapter(ProviderAdapter):
             provider=self.name,
             results=normalized,
             total_results=len(normalized),
+            usage_gap={
+                "reason": "metering-unavailable",
+                "estimated": True,
+                "units": _SEARCH_UNIT_PRICE,
+                "currency": "USD",
+            },
         )
 
     def _search_items(self, payload: Any) -> list[Any]:
@@ -150,7 +156,16 @@ class YoucomAdapter(ProviderAdapter):
             raise self._remap_error(exc) from None
         except Exception:
             raise self._error("invalid_response", "malformed fetch response") from None
-        return FetchResponse(provider=self.name, document=document)
+        return FetchResponse(
+            provider=self.name,
+            document=document,
+            usage_gap={
+                "reason": "metering-unavailable",
+                "estimated": True,
+                "units": _FETCH_UNIT_PRICE,
+                "currency": "USD",
+            },
+        )
 
     def _document(self, match: dict[str, Any], request: FetchRequest) -> FetchedDocument:
         content = match.get("markdown")

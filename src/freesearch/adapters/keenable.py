@@ -4,33 +4,38 @@ The adapter sends per-request headers through the caller-owned shared HTTPX
 client (never mutating or closing it), running every call through the shared
 :class:`ResilientRunner`. The key is resolved lazily per request: absent or
 blank keys select keyless ``/public`` endpoints with ``X-Keenable-Title``; a
-key selects private endpoints with ``X-API-Key`` only. Keenable's free tier is
-zero cost, so usage and cost events always report zero units.
+key selects private endpoints with ``X-API-Key`` only. Keenable's public tier
+has zero monetary cost, while usage events still count one request against its
+rolling hourly rate limit.
 """
 
-from datetime import UTC, datetime
+from collections import deque
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
 import httpx
 
 from freesearch.adapters.base import ProviderAdapter
-from freesearch.contracts import (
+from freesearch.configuration.provider_config import get_provider_secret_resolver
+from freesearch.infrastructure.resilience import ProviderOperationError, ResilientRunner
+from freesearch.infrastructure.secrets import ProviderName
+from freesearch.models.contracts import (
     CostEstimate,
     FetchedDocument,
     FetchRequest,
     FetchResponse,
     ProviderCapabilities,
     ProviderError,
+    QuotaSnapshot,
+    QuotaSource,
     SearchRequest,
     SearchResponse,
     SearchResult,
+    UnitKind,
     UsageEvent,
     UsageOperation,
 )
-from freesearch.provider_config import get_provider_secret_resolver
-from freesearch.resilience import ProviderOperationError, ResilientRunner
-from freesearch.secrets import ProviderName
 
 __all__ = ["KeenableAdapter"]
 
@@ -49,6 +54,18 @@ _PATHS = {
     _KEYLESS: ("/v1/search/public", "/v1/fetch/public"),
     _KEYED: ("/v1/search", "/v1/fetch"),
 }
+_KEYLESS_HOURLY_LIMIT = Decimal("1000")
+_KEYLESS_PER_SECOND_LIMIT = Decimal("10")
+
+
+def _month_start(value: datetime) -> datetime:
+    return datetime(value.year, value.month, 1, tzinfo=UTC)
+
+
+def _next_month_start(value: datetime) -> datetime:
+    if value.month == 12:
+        return datetime(value.year + 1, 1, 1, tzinfo=UTC)
+    return datetime(value.year, value.month + 1, 1, tzinfo=UTC)
 
 
 def _parse_published_at(value: Any) -> datetime | None:
@@ -73,6 +90,18 @@ class KeenableAdapter(ProviderAdapter):
         """Wrap the caller-owned ``client`` in the shared resilience runner."""
         self._client = client
         self._runner = runner or ResilientRunner(client)
+        self._allowance_limit = Decimal("100000")
+        self._allowance_spend = Decimal("0")
+        self._paid_spend = Decimal("0")
+        self._paid_usage_seen = False
+        self._hard_exhausted = False
+        self._ledger_month = _month_start(datetime.now(UTC))
+        self._hydrated_month: datetime | None = None
+        # Keyless access is a shared rolling rate-limit pool rather than a
+        # monthly credit allowance.  Keep only local successful-call times so
+        # a tracked request can expose an honest observed headroom snapshot;
+        # the vendor's shared-pool traffic from other clients remains unknown.
+        self._keyless_calls: deque[datetime] = deque()
 
     @property
     def name(self) -> str:
@@ -80,7 +109,10 @@ class KeenableAdapter(ProviderAdapter):
 
     @property
     def capabilities(self) -> ProviderCapabilities:
-        return ProviderCapabilities(search=True, fetch=True, cost_estimate=True, quota=False)
+        keyed, _headers = self._auth()
+        return ProviderCapabilities(
+            search=True, fetch=True, cost_estimate=True, quota=keyed == _KEYED
+        )
 
     def _auth(self) -> tuple[str, dict[str, str]]:
         """Resolve the API key lazily; absent or blank keys select keyless mode."""
@@ -118,12 +150,14 @@ class KeenableAdapter(ProviderAdapter):
                 raise self._http_error(response) from None
             payload = response.json()
             results = [self._normalize_result(item) for item in payload["results"]]
+            mode, _headers = self._auth()
             return SearchResponse(
                 query=request.query,
                 provider=self.name,
                 results=results,
                 total_results=len(results),
-                usage=self._usage_event(UsageOperation.SEARCH),
+                usage=self._usage_event(UsageOperation.SEARCH, payload),
+                quota_snapshot=(self._keyless_snapshot() if mode == _KEYLESS else None),
             )
         except ProviderOperationError:
             raise
@@ -179,7 +213,7 @@ class KeenableAdapter(ProviderAdapter):
                     fetched_at=datetime.now(UTC),
                     metadata={"truncated": True} if truncated else {},
                 ),
-                usage=self._usage_event(UsageOperation.FETCH),
+                usage=self._usage_event(UsageOperation.FETCH, payload),
             )
         except ProviderOperationError:
             raise
@@ -201,25 +235,251 @@ class KeenableAdapter(ProviderAdapter):
         operation = (
             UsageOperation.SEARCH if isinstance(request, SearchRequest) else UsageOperation.FETCH
         )
+        keyed, _headers = self._auth()
+        amount = Decimal("0.004") if keyed == _KEYED else Decimal("0")
         return CostEstimate(
             provider=self.name,
             operation=operation,
-            units=Decimal("0"),
-            notes="Keenable free tier is zero cost",
+            units=amount,
+            currency="USD",
+            notes="estimated keyed cloud request price" if amount else "keyless public tier",
         )
 
-    def _usage_event(self, operation: UsageOperation) -> UsageEvent:
+    def _usage_event(
+        self, operation: UsageOperation, payload: dict[str, Any] | None = None
+    ) -> UsageEvent:
+        mode, _headers = self._auth()
+        if mode != _KEYED:
+            self._record_keyless_call()
+            return UsageEvent(
+                provider=self.name,
+                operation=operation,
+                # The public tier is free in dollars, but it still consumes
+                # one request from the rolling hourly rate limit.  Keep the
+                # usage dimension aligned with that limit and expose the
+                # monetary zero as metadata rather than conflating FREE with
+                # an unmetered/no-request event.
+                units=Decimal("1"),
+                unit_kind=UnitKind.REQUEST,
+                display_unit="requests",
+                observed_at=datetime.now(UTC),
+                metadata={"mode": mode, "cost_usd": Decimal("0")},
+            )
+        credits, paid, metadata = self._reported_usage(payload)
+        self.apply_usage(credits=credits, paid=paid)
         return UsageEvent(
             provider=self.name,
             operation=operation,
-            units=Decimal("0"),
+            units=credits,
+            unit_kind=UnitKind.CREDIT,
+            display_unit="credits",
             observed_at=datetime.now(UTC),
+            metadata={"mode": mode, **metadata},
+        )
+
+    @staticmethod
+    def _reported_usage(payload: dict[str, Any] | None) -> tuple[Decimal, bool, dict[str, Any]]:
+        raw = payload.get("_meta", {}).get("keenable/usage") if payload else None
+        if not isinstance(raw, dict):
+            return Decimal("1"), False, {}
+        credits = raw.get("credits", raw.get("amount", 1))
+        if isinstance(credits, bool):
+            raise ValueError("malformed Keenable usage")
+        try:
+            parsed = Decimal(str(credits))
+        except (ArithmeticError, ValueError):
+            raise ValueError("malformed Keenable usage") from None
+        if not parsed.is_finite() or parsed < 0:
+            raise ValueError("malformed Keenable usage")
+        paid = raw.get("paid", False)
+        if not isinstance(paid, bool):
+            raise ValueError("malformed Keenable usage")
+        metadata = {key: raw[key] for key in ("sku", "paid") if key in raw}
+        return parsed, paid, metadata
+
+    async def hydrate_quota(self, repository: Any) -> QuotaSnapshot | None:
+        """Restore keyed allowance or keyless rolling-window counters."""
+
+        mode, _headers = self._auth()
+        if mode == _KEYLESS:
+            # Rebuild the local rolling-hour observation after an adapter or
+            # process restart.  These rows are deliberately filtered by their
+            # explicit keyless/request metadata; keyed credits must never be
+            # interpreted as public-pool rate usage.
+            now = datetime.now(UTC)
+            cutoff = now - timedelta(hours=1)
+            events = await repository.list_usage(provider=self.name, since=cutoff)
+            self._keyless_calls.clear()
+            self._keyless_calls.extend(
+                event.observed_at
+                for event in events
+                if event.status.value == "success"
+                and event.unit_kind is UnitKind.REQUEST
+                and event.metadata.get("mode") == _KEYLESS
+            )
+            return self._keyless_snapshot()
+        now = datetime.now(UTC)
+        month_start = _month_start(now)
+        self._rollover_if_needed(now)
+        if self._hydrated_month == month_start:
+            return None
+        latest = await repository.latest_quota(self.name)
+        events = await repository.list_usage(provider=self.name)
+        current = [
+            event
+            for event in events
+            if event.observed_at >= month_start
+            and event.status.value == "success"
+            and event.unit_kind is UnitKind.CREDIT
+        ]
+        self._allowance_spend = sum(
+            (event.units for event in current if event.metadata.get("paid") is not True),
+            Decimal("0"),
+        )
+        self._paid_spend = sum(
+            (event.units for event in current if event.metadata.get("paid") is True),
+            Decimal("0"),
+        )
+        self._paid_usage_seen = any(event.metadata.get("paid") is True for event in current)
+        later_success = any(
+            event.observed_at > latest.observed_at for event in current if latest is not None
+        )
+        self._hard_exhausted = bool(
+            latest is not None
+            and latest.remaining == Decimal("0")
+            and not later_success
+            and latest.observed_at >= month_start
+        )
+        self._hydrated_month = month_start
+        return self._snapshot_sync()
+
+    async def quota(self) -> QuotaSnapshot | None:
+        """Return the keyed local monthly allowance; keyless has no quota."""
+
+        mode, _headers = self._auth()
+        if mode != _KEYED:
+            return None
+        self._rollover_if_needed(datetime.now(UTC))
+        return self._snapshot_sync()
+
+    async def quota_after_success(self, response: object) -> QuotaSnapshot | None:
+        mode, _headers = self._auth()
+        if mode == _KEYLESS:
+            # This method is invoked by ``tracked_call`` after a successful
+            # operation.  Keyless ``quota()`` intentionally stays ``None`` so
+            # refresh_quotas never treats the shared pool as a pollable
+            # monthly balance; this observed rolling view is request-driven.
+            del response
+            return self._keyless_snapshot()
+        del response
+        return await self.quota()
+
+    async def quota_after_error(self, status: int | None) -> QuotaSnapshot | None:
+        if status == 402 and self._auth()[0] == _KEYED:
+            self._hard_exhausted = True
+            return await self.quota()
+        return None
+
+    def apply_usage(self, *, credits: Decimal, paid: bool = False) -> QuotaSnapshot | None:
+        """Apply a reported paid/free usage detail without mixing counters."""
+
+        mode, _headers = self._auth()
+        if mode != _KEYED:
+            return None
+        self._rollover_if_needed(datetime.now(UTC))
+        if credits < 0:
+            raise ValueError("usage credits must be non-negative")
+        if paid:
+            self._paid_spend += credits
+            self._paid_usage_seen = True
+        else:
+            self._allowance_spend += credits
+        return self._snapshot_sync()
+
+    def _rollover_if_needed(self, now: datetime) -> None:
+        month = _month_start(now)
+        if month == self._ledger_month:
+            return
+        self._ledger_month = month
+        self._allowance_spend = Decimal("0")
+        self._paid_spend = Decimal("0")
+        self._paid_usage_seen = False
+        self._hard_exhausted = False
+        self._hydrated_month = None
+
+    def _snapshot_sync(self) -> QuotaSnapshot:
+        remaining = (
+            None
+            if self._paid_usage_seen
+            else (
+                Decimal("0")
+                if self._hard_exhausted
+                else max(Decimal("0"), self._allowance_limit - self._allowance_spend)
+            )
+        )
+        observed_at = datetime.now(UTC)
+        metadata: dict[str, object] = {
+            "free": max(Decimal("0"), self._allowance_limit - self._allowance_spend),
+            "free_spend": self._allowance_spend,
+            "soft_zero": False,
+            "window": "monthly",
+        }
+        if self._paid_usage_seen:
+            metadata["paid"] = self._paid_spend
+            metadata["paid_spend"] = self._paid_spend
+        return QuotaSnapshot(
+            provider=self.name,
+            source=QuotaSource.OBSERVED,
+            remaining=remaining,
+            limit=self._allowance_limit,
+            reset_at=_next_month_start(observed_at),
+            observed_at=observed_at,
+            unit_kind=UnitKind.CREDIT,
+            display_unit="credits",
+            metadata=metadata,
+        )
+
+    def _record_keyless_call(self) -> None:
+        """Record one local keyless call and discard entries older than 1 hour."""
+
+        now = datetime.now(UTC)
+        cutoff = now - timedelta(hours=1)
+        calls = self._keyless_calls
+        while calls and calls[0] <= cutoff:
+            calls.popleft()
+        calls.append(now)
+
+    def _keyless_snapshot(self) -> QuotaSnapshot:
+        """Project local rolling-hour observations for the public tier."""
+
+        now = datetime.now(UTC)
+        cutoff = now - timedelta(hours=1)
+        calls = self._keyless_calls
+        while calls and calls[0] <= cutoff:
+            calls.popleft()
+        remaining = max(Decimal("0"), _KEYLESS_HOURLY_LIMIT - Decimal(len(calls)))
+        reset_at = calls[0] + timedelta(hours=1) if calls else now + timedelta(hours=1)
+        return QuotaSnapshot(
+            provider=self.name,
+            source=QuotaSource.OBSERVED,
+            remaining=remaining,
+            limit=_KEYLESS_HOURLY_LIMIT,
+            reset_at=reset_at,
+            observed_at=now,
+            unit_kind=UnitKind.REQUEST,
+            display_unit="requests",
+            metadata={
+                "mode": _KEYLESS,
+                "window": "hourly",
+                "per_second_limit": _KEYLESS_PER_SECOND_LIMIT,
+                "scope": "shared_pool_local_observation",
+            },
         )
 
     def _http_error(self, response: httpx.Response) -> ProviderOperationError:
         status = response.status_code
         return self._error(
-            "http_error",
+            "quota_exhausted" if status == 402 else "http_error",
             f"HTTP {status}",
             retryable=status in _RETRYABLE_STATUS_CODES,
             status=status,

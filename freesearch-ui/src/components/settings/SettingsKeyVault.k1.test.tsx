@@ -65,7 +65,7 @@ import {
  *           masked fingerprints with no reveal actions, exact placeholders.
  *   K1-6  regression guards (must stay GREEN before and after):
  *           Providers S-P4 intact (section w-full max-w-none, frame w-full
- *           max-w-none + overflow-hidden, table min-w-[880px]), Failover
+ *           max-w-none + overflow-hidden, table min-w-[960px]), Failover
  *           Failover spans full width (F1), SettingsView pills
  *           (Providers/Keys/Failover pill variant), Carbon Black tokens, NO
  *           ProviderMatrix merge, freesearch-ui ONLY (no backend/python
@@ -623,7 +623,7 @@ describe("K1-6: no regression — Providers S-P4, Failover cap, pills, theme, sc
     expect(frameTokens).toContain("w-full")
     expect(frameTokens).toContain("max-w-none")
     expect(frameTokens).toContain("overflow-hidden")
-    expect(table.className).toMatch(/min-w-\[1280px\]/)
+    expect(table.className).toMatch(/min-w-\[960px\]/)
     expect(providersSource).toContain("w-full max-w-none")
   })
 
