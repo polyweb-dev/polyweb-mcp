@@ -21,7 +21,6 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # Copy project source code, tests, and documentation/configs
 COPY src/ ./src/
 COPY tests/ ./tests/
-COPY features/ ./features/
 COPY README.md .env.example ./
 
 # Install the project itself

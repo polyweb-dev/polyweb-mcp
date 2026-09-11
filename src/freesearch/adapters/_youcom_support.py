@@ -13,7 +13,13 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from freesearch.contracts import FetchRequest, QuotaSnapshot, QuotaSource, SearchRequest, UnitKind
+from freesearch.models.contracts import (
+    FetchRequest,
+    QuotaSnapshot,
+    QuotaSource,
+    SearchRequest,
+    UnitKind,
+)
 
 # Published unit prices in USD: Web Search at $5 per 1,000 calls and contents
 # fetch per URL. ``estimate_cost`` and quota mapping share the same constants.

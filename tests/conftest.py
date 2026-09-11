@@ -5,7 +5,7 @@ from decimal import Decimal
 import pytest_asyncio
 
 from freesearch.adapters.base import ProviderAdapter
-from freesearch.contracts import (
+from freesearch.models.contracts import (
     CostEstimate,
     FetchedDocument,
     FetchRequest,

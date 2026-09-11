@@ -21,9 +21,9 @@ dependencies = [
 ]
 
 [project.scripts]
-freesearch-api = "freesearch.api:main"
-freesearch-db = "freesearch.database_cli:main"
-freesearch-mcp = "freesearch.server:main"
+freesearch-api = "freesearch.routers.api:main"
+freesearch-db = "freesearch.persistence.database_cli:main"
+freesearch-mcp = "freesearch.mcp.server:main"
 
 [dependency-groups]
 dev = [
@@ -50,7 +50,7 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-src = ["src", "tests", "features"]
+src = ["src", "tests"]
 # Runtime-only debris from the constrained-sandbox BDD runs (scenario working
 # directories that the harness cannot list or delete); never source code.
 extend-exclude = ["freesearch-control-cwd-*"]
@@ -73,9 +73,11 @@ select = [
 max-complexity = 15
 
 [tool.ruff.lint.per-file-ignores]
-"src/freesearch/resilience.py" = ["C901"]  # _self_check smoke test contains complex state verification
+"src/freesearch/infrastructure/resilience.py" = ["C901"]  # _self_check smoke test contains complex state verification
 "tests/**" = ["C901"]                     # Tests have lengthy setups, parameter matrices, and extensive assertions
-"features/**" = ["C901"]                  # BDD steps and hooks have multi-step verification flows
+
+[tool.behave]
+paths = ["tests/bdd/features"]
 
 [tool.mypy]
 python_version = "3.12"
