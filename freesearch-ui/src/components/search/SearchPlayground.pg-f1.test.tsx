@@ -107,6 +107,10 @@ const contextSource = readFileSync(
   path.resolve(testDir, "../../context/FreeSearchContext.tsx"),
   "utf8"
 )
+const executionSource = readFileSync(
+  path.resolve(testDir, "../../domains/execution/state/ExecutionContext.tsx"),
+  "utf8"
+)
 const simulatorOwnerFiles = [
   "../../features/routing/model/useSimulatorController.ts",
   "../../features/routing/ui/RouteSimulator.tsx",
@@ -856,15 +860,17 @@ describe("PG-F1 AC-PG-F1-6 regressions: PG-S1..S5 + header + Simulator + logic u
     expect(simulatorSource).not.toContain("fetch-composer")
     expect(simulatorSource).not.toContain("search-composer")
 
-    // Fetching logic untouched: context start-clear + trim + routing.
-    expect(contextSource).toContain("setActiveFetch(null)")
-    expect(contextSource).toContain("setFetchError(null)")
-    expect(contextSource).toContain("setIsFetching(true)")
-    expect(contextSource).toContain("url: request.url.trim()")
-    expect(contextSource).toContain("max_chars: null")
-    expect(contextSource).toMatch(
+    // Fetching logic untouched: execution start-clear + trim + routing
+    // (canonical owner is the execution domain; the context wires runFetch).
+    expect(executionSource).toContain("setActiveFetch(null)")
+    expect(executionSource).toContain("setFetchError(null)")
+    expect(executionSource).toContain("setIsFetching(true)")
+    expect(executionSource).toContain("url: request.url.trim()")
+    expect(executionSource).toContain("max_chars: null")
+    expect(executionSource).toMatch(
       /mode:\s*request\.providerId\s*\?\s*["']require["']\s*:\s*["']auto["']/
     )
+    expect(contextSource).toContain("FreeSearchInner")
     // Playground fetch call contract untouched (markdown/4000 + trims).
     expect(playgroundSource).toContain('format: "markdown"')
     expect(playgroundSource).toContain("timeoutMs: 4000")
