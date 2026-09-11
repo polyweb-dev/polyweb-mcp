@@ -18,24 +18,30 @@ export function getEligibleProviders(
   return [...eligible].sort(compareForPreset(preset));
 }
 
+function compareCostOptimized(a: ProviderConfig, b: ProviderConfig): number | null {
+  const aFree = a.capabilities.includes("keyless_tier") ? 0 : 1;
+  const bFree = b.capabilities.includes("keyless_tier") ? 0 : 1;
+  return aFree === bFree ? null : aFree - bFree;
+}
+
+function compareLatencyOptimized(a: ProviderConfig, b: ProviderConfig): number {
+  if (a.latencyP95Ms === null && b.latencyP95Ms === null) return a.priority - b.priority;
+  if (a.latencyP95Ms === null) return 1;
+  if (b.latencyP95Ms === null) return -1;
+  return a.latencyP95Ms - b.latencyP95Ms;
+}
+
+function compareQualityFirst(a: ProviderConfig, b: ProviderConfig): number | null {
+  const aScore = a.capabilities.includes("neural_search") ? 1 : 0;
+  const bScore = b.capabilities.includes("neural_search") ? 1 : 0;
+  return aScore === bScore ? null : bScore - aScore;
+}
+
 function compareForPreset(preset: RoutingPreset) {
   return (a: ProviderConfig, b: ProviderConfig): number => {
-    if (preset === "cost_optimized") {
-      const aFree = a.capabilities.includes("keyless_tier") ? 0 : 1;
-      const bFree = b.capabilities.includes("keyless_tier") ? 0 : 1;
-      if (aFree !== bFree) return aFree - bFree;
-    }
-    if (preset === "latency_optimized") {
-      if (a.latencyP95Ms === null && b.latencyP95Ms === null) return a.priority - b.priority;
-      if (a.latencyP95Ms === null) return 1;
-      if (b.latencyP95Ms === null) return -1;
-      return a.latencyP95Ms - b.latencyP95Ms;
-    }
-    if (preset === "quality_first") {
-      const aScore = a.capabilities.includes("neural_search") ? 1 : 0;
-      const bScore = b.capabilities.includes("neural_search") ? 1 : 0;
-      if (aScore !== bScore) return bScore - aScore;
-    }
+    if (preset === "cost_optimized") return compareCostOptimized(a, b) ?? a.priority - b.priority;
+    if (preset === "latency_optimized") return compareLatencyOptimized(a, b);
+    if (preset === "quality_first") return compareQualityFirst(a, b) ?? a.priority - b.priority;
     return a.priority - b.priority;
   };
 }
