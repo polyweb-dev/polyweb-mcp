@@ -1,4 +1,4 @@
-﻿import React from "react"
+import React from "react"
 import { readFileSync } from "node:fs"
 import path from "node:path"
 import { describe, expect, it, afterEach, vi } from "vitest"
@@ -74,6 +74,28 @@ import {
 
 const testDir = import.meta.dirname
 const settingsSource = readFileSync(path.resolve(testDir, "./SettingsProviders.tsx"), "utf8")
+// Slice 4: row/modal/priority siblings own their sources; assertions run
+// against the new owners plus the union of the registry feature owners.
+const settingsPrioritySource = readFileSync(
+  path.resolve(testDir, "./ProviderPriorityControl.tsx"),
+  "utf8"
+)
+const settingsModalSource = readFileSync(
+  path.resolve(testDir, "./ProviderTestModal.tsx"),
+  "utf8"
+)
+const buttonShimSource = readFileSync(path.resolve(testDir, "../ui/button.tsx"), "utf8")
+const settingsFeatureSource = [
+  settingsSource,
+  settingsPrioritySource,
+  settingsModalSource,
+  readFileSync(path.resolve(testDir, "./ProviderRegistryRow.tsx"), "utf8"),
+  readFileSync(path.resolve(testDir, "./ProviderRegistryHeader.tsx"), "utf8"),
+  readFileSync(path.resolve(testDir, "./ProviderHealthStatus.tsx"), "utf8"),
+  readFileSync(path.resolve(testDir, "./ProviderRowPill.tsx"), "utf8"),
+  readFileSync(path.resolve(testDir, "./ProviderOperationControl.tsx"), "utf8"),
+  readFileSync(path.resolve(testDir, "./providerDisplay.ts"), "utf8"),
+].join("\n")
 const indexCssSource = readFileSync(path.resolve(testDir, "../../index.css"), "utf8")
 // P1-FINAL (blessed inversion): ProviderMatrix.tsx is DELETED by the merge —
 // no test may read it (the file is gone Green).
@@ -397,7 +419,7 @@ describe("S-P4-4: responsive horizontal scroll preserved (no wrap, 375px scrolls
     for (const cell of cells) {
       expect(cell.className).toMatch(/whitespace-nowrap/)
     }
-    expect(settingsSource.includes("flex-wrap")).toBe(false)
+    expect(settingsFeatureSource.includes("flex-wrap")).toBe(false)
   })
 })
 
@@ -439,16 +461,16 @@ describe("S-P4-5: no regression — S-P1 table, S-P2 ranks, S-P3 buttons, Settin
       )
     }
     expect(screen.queryByText("P100", { exact: true })).toBeNull()
-    expect(settingsSource).not.toContain("P{provider.priority}")
-    expect(settingsSource).toContain("Dispatch order")
+    expect(settingsPrioritySource).not.toContain("P{provider.priority}")
+    expect(settingsPrioritySource).toContain("Dispatch order")
   })
 
   it("S-P2 indicator + arrows intact: shrink-0/min-w floor, px-3, lucide up/down with boundaries", async () => {
     renderSettings()
     await waitForProviders()
-    expect(settingsSource).toContain("lucide-react")
-    expect(settingsSource).toContain("ArrowUp")
-    expect(settingsSource).toContain("ArrowDown")
+    expect(settingsPrioritySource).toContain("lucide-react")
+    expect(settingsPrioritySource).toContain("ArrowUp")
+    expect(settingsPrioritySource).toContain("ArrowDown")
     for (let rank = 1; rank <= 7; rank += 1) {
       const label = screen.getByText(`P${rank}`, { exact: true })
       const indicator = label.parentElement as HTMLElement | null
@@ -486,7 +508,9 @@ describe("S-P4-5: no regression — S-P1 table, S-P2 ranks, S-P3 buttons, Settin
       expect(btn.textContent?.trim()).toBe("")
       expect(btn.querySelector("svg")).not.toBeNull()
     }
-    expect(settingsSource).toContain("@/components/ui/button")
+    expect(settingsModalSource).toContain("@/shared/ui/button")
+    // Old ui path stays as a compat shim over the shared owner.
+    expect(buttonShimSource).toMatch(/from\s+["']@\/shared\/ui\/button["']/)
   })
 
   it("SettingsView pills stay Providers/Keys/Failover on the pill variant", async () => {
@@ -527,12 +551,12 @@ describe("S-P4-5: no regression — S-P1 table, S-P2 ranks, S-P3 buttons, Settin
 
   it("P1-FINAL page merge: fleet telemetry merged into SettingsProviders (ProviderMatrix retired)", () => {
     for (const marker of ["Endpoint", "Health", "Quota", "p95", "ProviderTestModal"]) {
-      expect(settingsSource, `merged registry must carry ${marker}`).toContain(marker)
+      expect(settingsFeatureSource, `merged registry must carry ${marker}`).toContain(marker)
     }
   })
 
   it("freesearch-ui ONLY: SettingsProviders imports no backend/python paths", () => {
-    expect(settingsSource).not.toMatch(/\.py["']/)
-    expect(settingsSource).not.toMatch(/src\/freesearch/)
+    expect(settingsFeatureSource).not.toMatch(/\.py["']/)
+    expect(settingsFeatureSource).not.toMatch(/src\/freesearch/)
   })
 })

@@ -36,7 +36,7 @@ describe("quotaDisplay", () => {
       window: "hourly",
     })
     expect(display.detail).toMatch(/hourly|locally observed|shared rate limits/i)
-    expect(display.periodLabel).toBe("Rolling hour")
+    expect(display.periodLabel).toBe("Hourly")
     expect(display.headline).toBe("99.9% remaining")
   })
 

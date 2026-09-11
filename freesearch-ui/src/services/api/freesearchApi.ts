@@ -4,6 +4,8 @@ import type {
   BackendFetchResponse,
   BackendManualQuota,
   BackendManualQuotaPayload,
+  BackendOAuthDeviceCode,
+  BackendOAuthStatus,
   BackendProviderStatus,
   BackendProviderTest,
   BackendRoutingConfig,
@@ -11,7 +13,7 @@ import type {
   BackendSearchResponse,
   BackendSecretStatus,
 } from "./backendTypes"
-import { ApiError, isAbortOrTimeout, parseDetail, statusMessage } from "./httpErrors"
+import { ApiError, parseDetail, toApiError } from "@/shared/api/http"
 
 const API_BASE = (import.meta.env.VITE_API_URL as string | undefined) ?? ""
 
@@ -37,19 +39,7 @@ export class FreeSearchApiService {
       }
       return body as T
     } catch (error) {
-      if (error instanceof ApiError) throw error
-      if (isAbortOrTimeout(error)) {
-        const detail =
-          error && typeof error === "object" && "message" in error
-            ? String((error as { message?: unknown }).message ?? "timeout")
-            : "timeout"
-        throw new ApiError(0, statusMessage(0, detail), error)
-      }
-      if (error instanceof TypeError) {
-        const detail = statusMessage(0, error.message)
-        throw new ApiError(0, detail, error)
-      }
-      throw error
+      throw toApiError(error)
     }
   }
 
@@ -123,7 +113,7 @@ export class FreeSearchApiService {
     return this.request<BackendSearchResponse>("/search", {
       method: "POST",
       body: JSON.stringify(body),
-      signal,
+      ...(signal !== undefined ? { signal } : {}),
     })
   }
 
@@ -131,7 +121,7 @@ export class FreeSearchApiService {
     return this.request<BackendFetchResponse>("/fetch", {
       method: "POST",
       body: JSON.stringify(body),
-      signal,
+      ...(signal !== undefined ? { signal } : {}),
     })
   }
 
@@ -163,6 +153,37 @@ export class FreeSearchApiService {
       `/api/v1/providers/${backendId}/manual-quota`,
       { method: "PUT", body: JSON.stringify(payload) }
     )
+  }
+
+  /**
+   * OAuth device-flow pairing (Parallel Account API). A 404 on status means
+   * no pairing exists (honest unpaired null-shape, not an error) — every
+   * other failure surfaces as ApiError via the shared request() mapping.
+   */
+  beginOAuthDeviceFlow(backendId: string): Promise<BackendOAuthDeviceCode> {
+    return this.request<BackendOAuthDeviceCode>(
+      `/api/v1/providers/${backendId}/oauth/device-code`,
+      { method: "POST" }
+    )
+  }
+
+  async getOAuthStatus(backendId: string): Promise<BackendOAuthStatus> {
+    try {
+      return await this.request<BackendOAuthStatus>(
+        `/api/v1/providers/${backendId}/oauth/status`
+      )
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404) {
+        return { provider: backendId, status: "unpaired", expires_in: null }
+      }
+      throw error
+    }
+  }
+
+  async revokeOAuth(backendId: string): Promise<void> {
+    await this.request<unknown>(`/api/v1/providers/${backendId}/oauth`, {
+      method: "DELETE",
+    })
   }
 
   async deleteManualQuota(backendId: string): Promise<void> {

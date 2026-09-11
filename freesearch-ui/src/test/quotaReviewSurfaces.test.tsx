@@ -308,7 +308,7 @@ describe("RF4: visible unavailable/confidence semantics in Settings modal + Usag
     expect(screen.getByTestId("quota-remaining-percent-brave")).toHaveTextContent("95% remaining")
     const usageBody = document.body.textContent ?? ""
     expect(usageBody).toMatch(/95% remaining.*monthly.*950\/1000 requests/i)
-    expect(usageBody).toMatch(/hourly quota pending.*rolling hour/i)
+    expect(usageBody).toMatch(/hourly quota pending.*Hourly/i)
   })
 
   it("modal + Usage view show a visible unavailable marker when the dashboard has no snapshots", async () => {

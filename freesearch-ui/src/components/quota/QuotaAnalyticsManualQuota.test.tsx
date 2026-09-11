@@ -98,14 +98,17 @@ describe("QuotaAnalytics manual billing entry", () => {
     const estimate = screen.getByTestId("manual-quota-estimate-brave")
     expect(estimate).toHaveTextContent("82.4% remaining")
     const bar = within(estimate).getByRole("progressbar", {
-      name: /estimated remaining from manual entry/i,
+      name: /estimated remaining from Manual Entry/i,
     })
     expect(bar).toHaveAttribute("aria-valuenow", "82.4")
     expect(bar.firstElementChild).toHaveStyle({ width: "82.4%" })
-    expect(estimate).toHaveTextContent(/manual entry \w{3} 1–\w{3} 30/)
+    expect(estimate.closest("tr")).toHaveTextContent(/Manual Entry \w{3} 1–\w{3} 30/)
 
     // Consolidated row: the manual estimate leads and the vendor demotes.
-    const row = screen.getByText("Brave Search quota", { exact: true }).parentElement!
+    const row = screen.getByText("Brave Search quota", { exact: true }).closest("tr")!
+    expect(row.querySelector("time")).toHaveAttribute("datetime", "2026-09-30")
+    expect(row.children[2]).not.toHaveTextContent(/manual entry/i)
+    expect(row.children[4]).toHaveTextContent(/manual entry/i)
     expect(row.textContent).toContain("observed")
     expect(
       row.querySelector('[data-testid="quota-remaining-percent-brave"]')

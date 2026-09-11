@@ -78,17 +78,62 @@ import {
  */
 
 const testDir = import.meta.dirname
-const simulatorPath = path.resolve(testDir, "./RouteSimulator.tsx")
-const strategyPath = path.resolve(testDir, "./RoutingStrategy.tsx")
-const playgroundPath = path.resolve(testDir, "../search/SearchPlayground.tsx")
+// Slice 5 ownership: RouteSimulator.tsx, RoutingStrategy.tsx, and
+// SearchPlayground.tsx are compatibility shells over features/routing and
+// features/playground. Read the joined owner sources (same strength as the
+// monolith reads); app/pgf1 shells keep their paths.
+const simulatorOwnerFiles = [
+  "../../features/routing/model/useSimulatorController.ts",
+  "../../features/routing/ui/RouteSimulator.tsx",
+  "../../features/routing/ui/SimulatorInputRow.tsx",
+  "../../features/routing/ui/SimulatorFooter.tsx",
+  "../../features/routing/ui/SimulatorPipeline.tsx",
+  "../../features/routing/ui/PipelineStep.tsx",
+  "../../features/routing/ui/ProviderStep.tsx",
+  "../../features/routing/ui/FallbackCascade.tsx",
+]
+const strategyOwnerFiles = [
+  "../../features/routing/ui/RoutingStrategy.tsx",
+  "../../features/routing/ui/StrategyCardButton.tsx",
+]
+const playgroundOwnerFiles = [
+  "../../features/playground/model/usePlaygroundController.ts",
+  "../../features/playground/model/playgroundFetchAction.ts",
+  "../../features/playground/model/playgroundExecuteAction.ts",
+  "../../features/playground/model/playgroundTypes.ts",
+  "../../features/playground/model/useResultPreview.ts",
+  "../../features/playground/ui/PlaygroundPage.tsx",
+  "../../features/playground/ui/SearchSection.tsx",
+  "../../features/playground/ui/FetchSection.tsx",
+  "../../features/playground/ui/SearchComposer.tsx",
+  "../../features/playground/ui/SearchOptions.tsx",
+  "../../features/playground/ui/FetchComposer.tsx",
+  "../../features/playground/ui/SearchResults.tsx",
+  "../../features/playground/ui/ResultCard.tsx",
+  "../../features/playground/ui/ResultInspector.tsx",
+  "../../features/playground/ui/WaterfallPanel.tsx",
+  "../../features/playground/ui/FetchResult.tsx",
+]
 const appPath = path.resolve(testDir, "../../App.tsx")
-const statusBarPath = path.resolve(testDir, "../layout/StatusBar.tsx")
+const statusBarPath = path.resolve(testDir, "../../app/layout/StatusBar.tsx")
 const pgf1Path = path.resolve(testDir, "../search/SearchPlayground.pg-f1.test.tsx")
 
-const simulatorSource = readFileSync(simulatorPath, "utf8")
-const strategySource = readFileSync(strategyPath, "utf8")
-const playgroundSource = readFileSync(playgroundPath, "utf8")
+const simulatorSource = simulatorOwnerFiles
+  .map((file) => readFileSync(path.resolve(testDir, file), "utf8"))
+  .join("\n")
+const strategySource = strategyOwnerFiles
+  .map((file) => readFileSync(path.resolve(testDir, file), "utf8"))
+  .join("\n")
+const playgroundSource = playgroundOwnerFiles
+  .map((file) => readFileSync(path.resolve(testDir, file), "utf8"))
+  .join("\n")
 const appSource = readFileSync(appPath, "utf8")
+// Slice 4: the Routes table + shell live in app/DashboardShell.tsx; App.tsx
+// is a thin AppProviders>DashboardShell shim.
+const dashboardShellSource = readFileSync(
+  path.resolve(testDir, "../../app/DashboardShell.tsx"),
+  "utf8"
+)
 const pgf1Source = readFileSync(pgf1Path, "utf8")
 
 function renderRouting(providers: WireProviderStatus[] = allProvidersFixture()) {
@@ -499,8 +544,10 @@ describe("R-SIM AC-R-REG-1: regressions stay GREEN (Search/Fetch, bar, tabs, log
 
   it("R1 StatusBar still owns page status (single source, App renders once)", () => {
     expect(existsSync(statusBarPath)).toBe(true)
-    expect(appSource).toMatch(/from\s+["']@\/components\/layout\/StatusBar["']/)
-    expect(appSource.match(/<StatusBar/g) ?? []).toHaveLength(1)
+    expect(dashboardShellSource).toMatch(/from\s+["']@\/app\/layout\/StatusBar["']/)
+    expect(dashboardShellSource.match(/<StatusBar/g) ?? []).toHaveLength(1)
+    // Thin App shim renders the shell that owns the single StatusBar.
+    expect(appSource).toContain("DashboardShell")
   })
 
   it("routing tabs intact with no page-level status cluster reintroduced", async () => {
@@ -558,5 +605,19 @@ describe("R-SIM AC-R-REG-1: regressions stay GREEN (Search/Fetch, bar, tabs, log
         screen.getByRole("button", { name: /^Strict priority/ })
       ).toBeInTheDocument()
     })
+  })
+})
+
+describe("Slice 5 shim compatibility: routing shells re-export feature owners", () => {
+  it("RouteSimulator shell re-exports the routing feature without forking UI", () => {
+    const shim = readFileSync(path.resolve(testDir, "./RouteSimulator.tsx"), "utf8")
+    expect(shim).toContain("RouteSimulator")
+    expect(shim).toContain("features/routing/ui/RouteSimulator")
+  })
+
+  it("SearchPlayground shell re-exports the playground feature without forking UI", () => {
+    const shim = readFileSync(path.resolve(testDir, "../search/SearchPlayground.tsx"), "utf8")
+    expect(shim).toContain("PlaygroundPage")
+    expect(shim).toContain("SearchPlayground")
   })
 })

@@ -1,5 +1,5 @@
 import React, { act } from "@testing-library/react"
-import { existsSync, readFileSync } from "node:fs"
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs"
 import path from "node:path"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
@@ -74,17 +74,67 @@ import {
  */
 
 const testDir = import.meta.dirname
-const statusBarPath = path.resolve(testDir, "./StatusBar.tsx")
+// Slice 4: StatusBar shell in app/layout/StatusBar.tsx, pure summary in
+// app/layout/statusSummary.ts, popover siblings alongside; DashboardShell
+// owns the Routes table + shell; ComposerShell in shared/ui.
+const statusBarPath = path.resolve(testDir, "../../app/layout/StatusBar.tsx")
+const statusSummaryPath = path.resolve(testDir, "../../app/layout/statusSummary.ts")
+const providerPopoverPath = path.resolve(
+  testDir,
+  "../../app/layout/ProviderStatusPopover.tsx"
+)
+const failoverPopoverPath = path.resolve(
+  testDir,
+  "../../app/layout/FailoverStatusPopover.tsx"
+)
+const dashboardShellPath = path.resolve(testDir, "../../app/DashboardShell.tsx")
+const sharedComposerShellPath = path.resolve(
+  testDir,
+  "../../shared/ui/ComposerShell.tsx"
+)
+const sidebarOwnerPath = path.resolve(testDir, "../../app/layout/Sidebar.tsx")
 const appPath = path.resolve(testDir, "../../App.tsx")
-const playgroundPath = path.resolve(testDir, "../search/SearchPlayground.tsx")
-const routingPath = path.resolve(testDir, "../routing/RoutingEngine.tsx")
+// Slice 5 moved the playground/routing pages into features/: the old entry
+// points stay as compat shims, content asserts run against the feature
+// owners (playground page content is split across its feature, routing
+// through its workbench shell).
+const playgroundEntryPath = path.resolve(testDir, "../search/SearchPlayground.tsx")
+const playgroundOwnerDir = path.resolve(testDir, "../../features/playground")
+const routingEntryPath = path.resolve(testDir, "../routing/RoutingEngine.tsx")
+const routingOwnerPath = path.resolve(
+  testDir,
+  "../../features/routing/ui/RoutingEngine.tsx"
+)
 const composerShellPath = path.resolve(testDir, "../common/ComposerShell.tsx")
 const sidebarPath = path.resolve(testDir, "./Sidebar.tsx")
 const indexCssPath = path.resolve(testDir, "../../index.css")
 
 const appSource = readFileSync(appPath, "utf8")
-const playgroundSource = readFileSync(playgroundPath, "utf8")
-const routingSource = readFileSync(routingPath, "utf8")
+const dashboardShellSource = readFileSync(dashboardShellPath, "utf8")
+const sidebarOwnerSource = readFileSync(sidebarOwnerPath, "utf8")
+const sharedComposerShellSource = readFileSync(sharedComposerShellPath, "utf8")
+
+/** Concatenated non-test sources under a feature directory, sorted. */
+function readDirSources(dir: string): string {
+  const names = readdirSync(dir, { withFileTypes: true })
+    .map((entry) => entry.name)
+    .sort()
+  const parts: string[] = []
+  for (const name of names) {
+    const full = path.join(dir, name)
+    if (statSync(full).isDirectory()) {
+      parts.push(readDirSources(full))
+    } else if (/\.tsx?$/.test(name) && !/\.test\./.test(name)) {
+      parts.push(readFileSync(full, "utf8"))
+    }
+  }
+  return parts.join("\n")
+}
+
+const playgroundShimSource = readFileSync(playgroundEntryPath, "utf8")
+const routingShimSource = readFileSync(routingEntryPath, "utf8")
+const playgroundSource = readDirSources(playgroundOwnerDir)
+const routingSource = readFileSync(routingOwnerPath, "utf8")
 const composerShellSource = readFileSync(composerShellPath, "utf8")
 const sidebarSource = readFileSync(sidebarPath, "utf8")
 const indexCssSource = readFileSync(indexCssPath, "utf8")
@@ -95,6 +145,27 @@ function statusBarSource(): string {
   } catch {
     return ""
   }
+}
+
+function statusSummarySource(): string {
+  return readFileSync(statusSummaryPath, "utf8")
+}
+
+function providerPopoverSource(): string {
+  return readFileSync(providerPopoverPath, "utf8")
+}
+
+function failoverPopoverSource(): string {
+  return readFileSync(failoverPopoverPath, "utf8")
+}
+
+function statusSources(): string[] {
+  return [
+    statusBarSource(),
+    statusSummarySource(),
+    providerPopoverSource(),
+    failoverPopoverSource(),
+  ]
 }
 
 function stubBackend(opts: {
@@ -170,6 +241,7 @@ describe("AC-R1-1: StatusBar module contract", () => {
     expect(existsSync(statusBarPath)).toBe(true)
     expect(statusBarSource()).toContain("StatusBar")
     expect(statusBarSource()).toMatch(/export\s+(function|const)\s+StatusBar/)
+    // Migration complete: the old layout shell is gone (see git history); the app owner above is canonical.
   })
 
   it("takes no props (prop-less component)", () => {
@@ -185,21 +257,26 @@ describe("AC-R1-1: StatusBar module contract", () => {
   })
 
   it("derives the count via getEligibleProviders with search + routingPreset", () => {
-    const src = statusBarSource()
+    // Pure summary helper owns the routing-policy derivation via the routing
+    // public API; the bar consumes the helper.
+    const src = statusSummarySource()
     expect(src).toContain("getEligibleProviders")
     expect(src).toContain('"search"')
     expect(src).toContain("routingPreset")
     expect(src).toContain("fallbackConfig")
+    expect(src).toMatch(/from\s+["']@\/domains\/routing["']/)
+    expect(statusBarSource()).toContain("getStatusSummary")
   })
 
   it("is context-only: never fetches or touches backend routes directly", () => {
     expect(existsSync(statusBarPath)).toBe(true)
-    const src = statusBarSource()
-    expect(src.length).toBeGreaterThan(0)
-    expect(src).not.toContain("apiService")
-    expect(src).not.toContain("/api/")
-    expect(src).not.toContain("127.0.0.1")
-    expect(src).not.toContain("http://")
+    for (const src of statusSources()) {
+      expect(src.length).toBeGreaterThan(0)
+      expect(src).not.toContain("apiService")
+      expect(src).not.toContain("/api/")
+      expect(src).not.toContain("127.0.0.1")
+      expect(src).not.toContain("http://")
+    }
   })
 
   it("carries the a11y + behavior tokens (aria, Escape, outside, focus, role, above-bar)", () => {
@@ -208,27 +285,34 @@ describe("AC-R1-1: StatusBar module contract", () => {
     expect(src).toContain("aria-controls")
     expect(src).toContain("Escape")
     expect(src).toContain(".focus()")
-    expect(src).toMatch(/role="(dialog|status)"/)
-    expect(src).toContain("absolute")
-    expect(src).toMatch(/bottom-(full|6|7|8)/)
     expect(src.includes("mousedown") || src.includes("pointerdown")).toBe(true)
+    // Popover siblings own the dialog role + above-bar positioning.
+    const popovers = providerPopoverSource() + failoverPopoverSource()
+    expect(popovers).toMatch(/role="(dialog|status)"/)
+    expect(popovers).toContain("absolute")
+    expect(popovers).toMatch(/bottom-(full|6|7|8)/)
   })
 
   it("has no deep-links (popover is display-only)", () => {
     expect(existsSync(statusBarPath)).toBe(true)
-    const src = statusBarSource()
-    expect(src.length).toBeGreaterThan(0)
-    expect(src).not.toContain("<a")
-    expect(src).not.toContain("href")
-    expect(src).not.toContain("NavLink")
-    expect(src).not.toContain("useNavigate")
+    for (const src of statusSources()) {
+      expect(src.length).toBeGreaterThan(0)
+      expect(src).not.toContain("<a")
+      expect(src).not.toContain("href")
+      expect(src).not.toContain("NavLink")
+      expect(src).not.toContain("useNavigate")
+    }
   })
 
   it("stays below the navigation drawer (no z-50 in the bar)", () => {
-    expect(sidebarSource).toContain("z-50")
+    expect(sidebarOwnerSource).toContain("z-50")
+    // Old sidebar path stays as a compat shim over the app owner.
+    expect(sidebarSource).toMatch(/from\s+["']@\/app\/layout\/Sidebar["']/)
     expect(existsSync(statusBarPath)).toBe(true)
-    expect(statusBarSource().length).toBeGreaterThan(0)
-    expect(statusBarSource()).not.toContain("z-50")
+    for (const src of statusSources()) {
+      expect(src.length).toBeGreaterThan(0)
+      expect(src).not.toContain("z-50")
+    }
   })
 })
 
@@ -324,9 +408,11 @@ describe("AC-R1-3: bar content (unified wording)", () => {
 
 describe("AC-R1-4: single source on both routes", () => {
   it("App imports StatusBar from layout and renders it exactly once", () => {
-    expect(appSource).toMatch(/from\s+["']@\/components\/layout\/StatusBar["']/)
-    expect(appSource).toContain("<StatusBar")
-    expect(appSource.match(/<StatusBar/g) ?? []).toHaveLength(1)
+    expect(dashboardShellSource).toMatch(/from\s+["']@\/app\/layout\/StatusBar["']/)
+    expect(dashboardShellSource).toContain("<StatusBar")
+    expect(dashboardShellSource.match(/<StatusBar/g) ?? []).toHaveLength(1)
+    // Thin App shim renders the shell that owns the single StatusBar.
+    expect(appSource).toContain("DashboardShell")
   })
 
   it("playground shows exactly one count and exactly one Failover claim", async () => {
@@ -378,10 +464,12 @@ describe("AC-R1-4: single source on both routes", () => {
 
 describe("AC-R1-5: placement (right column, borders, shell intact)", () => {
   it("App source keeps the outer flex-row shell and adds an in-flow sticky bar", () => {
-    expect(appSource).toMatch(/flex-row/)
-    expect(appSource).not.toContain("fixed")
-    expect(appSource).toContain("sticky")
-    expect(appSource).toContain("bottom-0")
+    expect(dashboardShellSource).toMatch(/flex-row/)
+    expect(dashboardShellSource).not.toContain("fixed")
+    expect(dashboardShellSource).toContain("sticky")
+    expect(dashboardShellSource).toContain("bottom-0")
+    // Thin App shim renders the shell that owns the layout.
+    expect(appSource).toContain("DashboardShell")
   })
 
   it("outer shell still lays out horizontally with aside + main", () => {
@@ -561,6 +649,15 @@ describe("AC-R1-7: popover close (toggle / Esc + focus return / outside)", () =>
 })
 
 describe("AC-R1-8: page-level clusters removed, views intact", () => {
+  it("playground/routing entries stay as compat shims over the feature owners", () => {
+    expect(existsSync(playgroundEntryPath)).toBe(true)
+    expect(playgroundShimSource).toMatch(/from\s+["']@\/features\/playground/)
+    expect(playgroundShimSource).toContain("SearchPlayground")
+    expect(existsSync(routingEntryPath)).toBe(true)
+    expect(routingShimSource).toMatch(/from\s+["']@\/features\/routing/)
+    expect(routingShimSource).toContain("RoutingEngine")
+  })
+
   it("SearchPlayground source drops its provider/failover cluster", () => {
     expect(playgroundSource).not.toContain("Fallback")
     expect(playgroundSource).not.toContain("fallbackConfig")
@@ -696,13 +793,16 @@ describe("AC-R1-9: edge states (loading neutral, error muted, 0-of-N)", () => {
 
 describe("AC-R1-10 regressions: ComposerShell, layouts, fetching, shell", () => {
   it("ComposerShell contract untouched (shared shell, exact tokens)", () => {
+    expect(existsSync(sharedComposerShellPath)).toBe(true)
+    expect(sharedComposerShellSource).toContain("ComposerShell")
+    expect(sharedComposerShellSource).toContain("testIdPrefix")
+    expect(sharedComposerShellSource).toContain("-composer-divider")
+    expect(sharedComposerShellSource).toContain("-composer-footer")
+    expect(sharedComposerShellSource).toContain("bg-[var(--elevated)]")
+    expect(sharedComposerShellSource).toContain("rounded-xl")
+    // Old common path stays as a compat shim over the shared owner.
     expect(existsSync(composerShellPath)).toBe(true)
-    expect(composerShellSource).toContain("ComposerShell")
-    expect(composerShellSource).toContain("testIdPrefix")
-    expect(composerShellSource).toContain("-composer-divider")
-    expect(composerShellSource).toContain("-composer-footer")
-    expect(composerShellSource).toContain("bg-[var(--elevated)]")
-    expect(composerShellSource).toContain("rounded-xl")
+    expect(composerShellSource).toMatch(/from\s+["']@\/shared\/ui\/ComposerShell["']/)
     expect(playgroundSource).toMatch(/testIdPrefix\s*=\s*["']fetch["']/)
     expect(playgroundSource).not.toMatch(/testIdPrefix\s*=\s*["']search["']/)
   })

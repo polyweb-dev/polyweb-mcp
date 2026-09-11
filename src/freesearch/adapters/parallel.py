@@ -16,7 +16,10 @@ from typing import Any
 import httpx
 
 from freesearch.adapters.base import ProviderAdapter
-from freesearch.contracts import (
+from freesearch.configuration.provider_config import get_provider_secret_resolver
+from freesearch.infrastructure.resilience import ProviderOperationError, ResilientRunner
+from freesearch.infrastructure.secrets import ProviderName
+from freesearch.models.contracts import (
     CostEstimate,
     FetchedDocument,
     FetchRequest,
@@ -33,9 +36,6 @@ from freesearch.contracts import (
     UsageOperation,
     parse_decimal,
 )
-from freesearch.provider_config import get_provider_secret_resolver
-from freesearch.resilience import ProviderOperationError, ResilientRunner
-from freesearch.secrets import ProviderName
 
 logger = logging.getLogger(__name__)
 

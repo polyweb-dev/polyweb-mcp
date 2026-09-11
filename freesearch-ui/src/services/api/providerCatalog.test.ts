@@ -12,7 +12,7 @@ describe("PROVIDER_CATALOG", () => {
     { id: "brave", backendId: "brave", capabilities: ["search"] },
     { id: "keenable", backendId: "keenable", capabilities: ["search", "fetch", "keyless_tier"] },
     { id: "tavily", backendId: "tavily", capabilities: ["search", "fetch", "extract"] },
-    { id: "exa", backendId: "exa", capabilities: ["search", "neural_search"] },
+    { id: "exa", backendId: "exa", capabilities: ["search", "fetch", "neural_search"] },
     {
       id: "firecrawl",
       backendId: "firecrawl",

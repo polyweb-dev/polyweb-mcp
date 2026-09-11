@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from freesearch.adapters.base import ProviderAdapter
-from freesearch.contracts import FetchRequest, FetchResponse, SearchRequest, SearchResponse
+from freesearch.models.contracts import FetchRequest, FetchResponse, SearchRequest, SearchResponse
 
 
 class UnsupportedOperationError(RuntimeError):

@@ -1,6 +1,6 @@
 """Shared foundation and contracts for the FreeSearch application."""
 
-from freesearch.contracts import (
+from freesearch.models.contracts import (
     CacheMetadata,
     CostEstimate,
     FetchedDocument,

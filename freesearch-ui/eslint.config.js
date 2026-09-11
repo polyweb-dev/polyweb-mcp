@@ -11,7 +11,7 @@ export default tseslint.config(
       '**/node_modules/**',
       '**/dist/**',
       '**/coverage/**',
-      '**/.features-gen/**',
+      '**/features-gen/**',
       '**/references/**',
       '**/playwright-report/**',
       '**/test-results/**',
@@ -108,6 +108,21 @@ export default tseslint.config(
   },
   {
     files: ['src/components/ui/**/*.{ts,tsx}'],
+    rules: {
+      'react-refresh/only-export-components': 'off',
+      'react/no-multi-comp': 'off',
+    },
+  },
+  {
+    // Slice 4: relocated compound primitives keep the components/ui
+    // multi-export exception (plan: do not split those further).
+    files: [
+      'src/shared/ui/button.tsx',
+      'src/shared/ui/dialog.tsx',
+      'src/shared/ui/table.tsx',
+      'src/shared/ui/tabs.tsx',
+      'src/shared/ui/tooltip.tsx',
+    ],
     rules: {
       'react-refresh/only-export-components': 'off',
       'react/no-multi-comp': 'off',

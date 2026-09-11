@@ -4,6 +4,7 @@ import {
   braveObservedQuota,
   keenableKeylessQuota,
   overrideDashboardLatestQuota,
+  parallelPairedQuota,
   parallelSeededQuota,
   parallelUnseededQuota,
 } from "./backendStub"
@@ -99,6 +100,8 @@ Given("the stubbed dashboard shows {string}", async ({ page }, kind: string) => 
     await overrideDashboardLatestQuota(page, parallelSeededQuota())
   } else if (kind === "Parallel unseeded quota") {
     await overrideDashboardLatestQuota(page, parallelUnseededQuota())
+  } else if (kind === "Parallel paired quota") {
+    await overrideDashboardLatestQuota(page, parallelPairedQuota())
   } else if (kind === "Keenable keyless quota") {
     await overrideDashboardLatestQuota(page, keenableKeylessQuota())
   } else {
@@ -111,5 +114,14 @@ Then("the usage view should show {string}", async ({ page }, text: string) => {
 })
 
 Then("the usage view should not show {string}", async ({ page }, text: string) => {
+  // Scoped absence: "Budget not configured" stays honest on the Exa row
+  // (7-provider table), so only the Parallel row must not show it after
+  // pairing. All other strings keep the global main assertion.
+  if (text === "Budget not configured") {
+    const parallelRow = page.getByRole("row").filter({ hasText: /Parallel/ })
+    await expect(parallelRow).toHaveCount(1)
+    await expect(parallelRow).not.toContainText(text)
+    return
+  }
   await expect(page.locator("main")).not.toContainText(text)
 })

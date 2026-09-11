@@ -46,12 +46,28 @@ Feature: Provider quota display stays honest
     And I enter the manual billing window "2026-09-01" to "2026-09-30" with allowance "5.00" and usage "0.88"
     And I save the manual budget entry
     Then the usage view should show "82.4% remaining"
-    And the usage view should show "manual entry"
+    And the usage view should show "Manual Entry"
     And the manual overlay progress bar for provider "brave" should show "82.4"
     And the usage view should show "Vendor: 950/1000 requests"
     And the usage view should show "observed"
     And the usage view should show "estimated"
     And the usage view should not show "95% remaining"
+    And the usage view should not show "∞"
+
+  @stub @quota @oauth
+  Scenario: Parallel OAuth pairing shows an authoritative balance
+    Given the stubbed dashboard shows "Parallel unseeded quota"
+    And the stubbed OAuth pairing for "parallel" is empty
+    When I navigate directly to "/usage"
+    And I open the OAuth pairing for provider "parallel"
+    Then the pairing code "ABCD-EFGH" should be visible
+    When the stubbed OAuth status for "parallel" becomes "ready"
+    And the stubbed dashboard shows "Parallel paired quota"
+    Then the pairing should close
+    And the usage view should show "Balance available"
+    And the usage view should show "3.75"
+    And the OAuth disconnect control should be visible
+    And the usage view should not show "Budget not configured"
     And the usage view should not show "∞"
 
   @stub @quota @keenable

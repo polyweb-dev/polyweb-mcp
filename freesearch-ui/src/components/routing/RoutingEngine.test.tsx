@@ -133,8 +133,8 @@ describe("RoutingEngine (live backend)", () => {
     expect(within(table).getAllByRole("row")).toHaveLength(8)
 
     await user.click(screen.getByRole("button", { name: /^Fetch$/ }))
-    // 5 fetch-capable (keenable, tavily, firecrawl, youcom, parallel) + header
-    expect(within(table).getAllByRole("row")).toHaveLength(6)
+    // 6 fetch-capable (keenable, tavily, exa, firecrawl, youcom, parallel) + header
+    expect(within(table).getAllByRole("row")).toHaveLength(7)
     // S1: Parallel is fetch-capable via plain includes("fetch"); Brave stays fetch-incapable.
     expect(
       within(table).getByRole("row", { name: /Parallel/ })

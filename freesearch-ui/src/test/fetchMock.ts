@@ -38,19 +38,17 @@ export interface FetchStub {
   requestsTo(urlMatch: string | RegExp): RecordedRequest[]
 }
 
-function toRecordedRequest(input: unknown, init?: RequestInit): RecordedRequest {
-  const url = typeof input === "string" ? input : String(input)
-  const bodyText = typeof init?.body === "string" ? init.body : undefined
-  let body: unknown
-  if (bodyText !== undefined) {
-    try {
-      body = JSON.parse(bodyText)
-    } catch {
-      body = bodyText
-    }
+function parseBodyText(bodyText: string | undefined): unknown {
+  if (bodyText === undefined) return undefined
+  try {
+    return JSON.parse(bodyText)
+  } catch {
+    return bodyText
   }
+}
+
+function normalizeHeaders(raw: HeadersInit | undefined): Record<string, string> {
   const headers: Record<string, string> = {}
-  const raw = init?.headers
   if (raw instanceof Headers) {
     raw.forEach((value, key) => {
       headers[key] = value
@@ -60,6 +58,14 @@ function toRecordedRequest(input: unknown, init?: RequestInit): RecordedRequest 
   } else if (raw) {
     Object.assign(headers, raw)
   }
+  return headers
+}
+
+function toRecordedRequest(input: unknown, init?: RequestInit): RecordedRequest {
+  const url = typeof input === "string" ? input : String(input)
+  const bodyText = typeof init?.body === "string" ? init.body : undefined
+  const body = parseBodyText(bodyText)
+  const headers = normalizeHeaders(init?.headers)
   return {
     url,
     method: (init?.method ?? "GET").toUpperCase(),

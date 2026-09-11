@@ -1,4 +1,4 @@
-﻿import React from "react"
+import React from "react"
 import { describe, it, expect, afterEach, vi } from "vitest"
 import { render, screen, waitFor } from "@testing-library/react"
 import { FreeSearchProvider } from "@/context/FreeSearchContext"
@@ -11,12 +11,12 @@ import {
   canonicalQuotasFixture,
   canonicalTotalsFixture,
   type WireDashboard,
-} from "@/test/backendFixtures"
+} from "@/test/fixtures"
 
 /**
  * RED (new file): quota telemetry comes from the dashboard — usage_totals
  * aggregates are shown, an empty latest_quota renders a "quota unavailable"
- * notice, per-provider null limits render "—"/blank (RF2: never ∞), and no
+ * notice, per-provider null limits render "—"/blank (RF2: never 8), and no
  * invented savings/cache numbers (248/814/342) may appear.
  */
 function renderWithBackend(dashboard: WireDashboard) {
@@ -38,6 +38,20 @@ function renderWithBackend(dashboard: WireDashboard) {
 }
 
 describe("QuotaAnalytics (live backend)", () => {
+  it("shows hourly resets as local time with minutes and AM/PM", async () => {
+    const resetAt = "2026-09-11T13:05:00Z"
+    renderWithBackend(dashboardFixture({ latest_quota: [{
+      provider: "keenable", source: "observed", observed_at: "2026-09-11T12:00:00Z",
+      remaining: "1000", limit: "1000", remaining_percent: "100",
+      unit_kind: "REQUEST", reset_at: resetAt,
+    }] }))
+    const expected = new Date(resetAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true })
+    await waitFor(() => {
+      expect(screen.getByText("Keenable quota", { exact: true }).closest("tr"))
+        .toHaveTextContent(`Resets ${expected}`)
+    })
+  })
+
   afterEach(() => {
     vi.unstubAllGlobals()
   })
@@ -66,15 +80,15 @@ describe("QuotaAnalytics (live backend)", () => {
     expect(screen.getAllByText(/quota unavailable|unavailable/i).length).toBeGreaterThan(0)
   })
 
-  it("RF2: renders per-provider null limits as —/blank, never ∞ or numbers", async () => {
+  it("RF2: renders per-provider null limits as —/blank, never 8 or numbers", async () => {
     renderWithBackend(dashboardFixture())
     await waitFor(() => {
       expect(screen.getByText("Tavily", { exact: true })).toBeInTheDocument()
     })
 
-    // RF2: null limits stay blank/— on every surface. ∞ is retired.
+    // RF2: null limits stay blank/— on every surface. 8 is retired.
     const body = document.body.textContent ?? ""
-    expect(body).not.toContain("∞")
+    expect(body).not.toContain("8")
     expect(screen.getAllByText(/—/).length).toBeGreaterThan(0)
   })
 
@@ -98,7 +112,7 @@ describe("QuotaAnalytics (live backend)", () => {
     })
 
     const row =
-      screen.getByText("Brave Search quota", { exact: true }).parentElement!
+      screen.getByText("Brave Search quota", { exact: true }).closest("tr")!
     expect(row.textContent).toContain("900")
     expect(row.textContent).toContain("1000")
   })
@@ -109,7 +123,7 @@ describe("QuotaAnalytics (live backend)", () => {
       expect(screen.getByText("Tavily quota", { exact: true })).toBeInTheDocument()
     })
 
-    const row = screen.getByText("Tavily quota", { exact: true }).parentElement!
+    const row = screen.getByText("Tavily quota", { exact: true }).closest("tr")!
     expect(row.querySelector('[data-testid="quota-remaining-percent-tavily"]')?.textContent).toBe(
       "90% remaining"
     )
@@ -122,12 +136,12 @@ describe("QuotaAnalytics (live backend)", () => {
       expect(screen.getByText("Parallel quota", { exact: true })).toBeInTheDocument()
     })
 
-    const parallelRow = screen.getByText("Parallel quota", { exact: true }).parentElement!
+    const parallelRow = screen.getByText("Parallel quota", { exact: true }).closest("tr")!
     expect(parallelRow.textContent).toMatch(/budget not configured.*monthly/i)
     expect(parallelRow.textContent).toMatch(/no api-key balance endpoint/i)
 
-    const keenableRow = screen.getByText("Keenable quota", { exact: true }).parentElement!
-    expect(keenableRow.textContent).toMatch(/hourly quota pending.*rolling hour/i)
+    const keenableRow = screen.getByText("Keenable quota", { exact: true }).closest("tr")!
+    expect(keenableRow.textContent).toMatch(/hourly quota pending.*Hourly/i)
   })
 
   it("renders the persistent usageError banner when the dashboard fails", async () => {
@@ -176,11 +190,11 @@ describe("QuotaAnalytics (live backend)", () => {
       expect(screen.getByText("Tavily quota", { exact: true })).toBeInTheDocument()
     })
 
-    const tavilyRow = screen.getByText("Tavily quota", { exact: true }).parentElement!
+    const tavilyRow = screen.getByText("Tavily quota", { exact: true }).closest("tr")!
     expect(tavilyRow.textContent).toContain("100000.10")
     expect(tavilyRow.textContent).not.toContain("100000.1 ")
 
-    const exaRow = screen.getByText("Exa quota", { exact: true }).parentElement!
+    const exaRow = screen.getByText("Exa quota", { exact: true }).closest("tr")!
     expect(exaRow.textContent).toContain("0.00000001")
     expect(exaRow.textContent).not.toContain("1e-8")
   })
@@ -191,7 +205,7 @@ describe("QuotaAnalytics (live backend)", () => {
       expect(screen.getByText("Tavily quota", { exact: true })).toBeInTheDocument()
     })
 
-    const row = screen.getByText("Tavily quota", { exact: true }).parentElement!
+    const row = screen.getByText("Tavily quota", { exact: true }).closest("tr")!
     expect(row.textContent).toContain("authoritative")
     expect(row.textContent).toContain("90000.05")
     expect(row.textContent).toContain("100000.10")
@@ -204,7 +218,7 @@ describe("QuotaAnalytics (live backend)", () => {
       expect(screen.getByText("Brave Search quota", { exact: true })).toBeInTheDocument()
     })
 
-    const row = screen.getByText("Brave Search quota", { exact: true }).parentElement!
+    const row = screen.getByText("Brave Search quota", { exact: true }).closest("tr")!
     expect(row.textContent).toContain("observed")
     expect(row.textContent).toContain("950")
     expect(row.textContent).toContain("1000")
@@ -217,7 +231,7 @@ describe("QuotaAnalytics (live backend)", () => {
       expect(screen.getByText("You.com quota", { exact: true })).toBeInTheDocument()
     })
 
-    const row = screen.getByText("You.com quota", { exact: true }).parentElement!
+    const row = screen.getByText("You.com quota", { exact: true }).closest("tr")!
     expect(row.textContent).toContain("estimated")
     expect(row.textContent).toContain("4.75")
     // RF2 (null-limit —) is locked by the dedicated RF2 test above; here we
@@ -232,7 +246,7 @@ describe("QuotaAnalytics (live backend)", () => {
       expect(screen.getByText("Exa quota", { exact: true })).toBeInTheDocument()
     })
 
-    const row = screen.getByText("Exa quota", { exact: true }).parentElement!
+    const row = screen.getByText("Exa quota", { exact: true }).closest("tr")!
     expect(row.textContent).toContain("0.00000005")
     expect(row.textContent).toContain("0.00000001")
     expect(row.textContent).toMatch(/legacy|estimated/i)
@@ -272,7 +286,7 @@ describe("QuotaAnalytics (live backend)", () => {
     })
 
     const section = screen.getByText("Usage totals", { exact: true }).closest("section")!
-    const board = section.querySelector("div.border")!
+    const board = section.querySelector("div.overflow-x-auto")!
     const grids = Array.from(board.querySelectorAll(":scope > div"))
     // Header row + one row per triple-keyed total (2 Tavily + Brave + legacy Exa).
     expect(grids.length).toBe(5)
@@ -318,7 +332,7 @@ describe("QuotaAnalytics (live backend)", () => {
     })
 
     const section = screen.getByText("Usage totals", { exact: true }).closest("section")!
-    const board = section.querySelector("div.border")!
+    const board = section.querySelector("div.overflow-x-auto")!
     const bodyRows = Array.from(board.querySelectorAll(":scope > div")).slice(1)
     const exaRow = bodyRows.find((row) => row.textContent?.includes("Exa"))
     expect(exaRow, "legacy Exa totals row must exist").toBeDefined()

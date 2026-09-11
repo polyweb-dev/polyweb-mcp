@@ -2,7 +2,7 @@
 
 from abc import ABC, abstractmethod
 
-from freesearch.contracts import (
+from freesearch.models.contracts import (
     CostEstimate,
     FetchRequest,
     FetchResponse,
