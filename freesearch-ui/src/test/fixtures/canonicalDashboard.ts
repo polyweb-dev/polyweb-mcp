@@ -2,9 +2,7 @@
  * Canonical-dashboard slice — verbatim extract from ../backendFixtures.ts (step 1).
  */
 
-import { dashboardFixture } from "./dashboard"
 import type {
-  WireDashboard,
   WireDashboardQuota,
   WireDashboardRecentUsage,
   WireDashboardUsageTotal,
@@ -143,19 +141,4 @@ export function canonicalRecentUsageFixture(): WireDashboardRecentUsage[] {
       status: "success",
     },
   ]
-}
-
-/**
- * Full canonical dashboard: triple-keyed totals, canonical recent usage, and
- * the four canonical quota rows. Pass overrides to trim for a focused test.
- */
-export function canonicalDashboardFixture(
-  overrides: Partial<WireDashboard> = {}
-): WireDashboard {
-  return dashboardFixture({
-    usage_totals: canonicalTotalsFixture(),
-    recent_usage: canonicalRecentUsageFixture(),
-    latest_quota: canonicalQuotasFixture(),
-    ...overrides,
-  })
 }
