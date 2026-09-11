@@ -107,10 +107,13 @@ const contextSource = readFileSync(
   path.resolve(testDir, "../../context/FreeSearchContext.tsx"),
   "utf8"
 )
-const executionSource = readFileSync(
-  path.resolve(testDir, "../../domains/execution/state/ExecutionContext.tsx"),
-  "utf8"
-)
+const executionRunnerFiles = [
+  "../../domains/execution/state/useSearchRunner.ts",
+  "../../domains/execution/state/useFetchRunner.ts",
+]
+const executionSource = executionRunnerFiles
+  .map((file) => readFileSync(path.resolve(testDir, file), "utf8"))
+  .join("\n")
 const simulatorOwnerFiles = [
   "../../features/routing/model/useSimulatorController.ts",
   "../../features/routing/ui/RouteSimulator.tsx",

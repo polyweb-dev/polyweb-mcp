@@ -118,7 +118,13 @@ const executionTypesSource = readFileSync(
   "utf8"
 )
 const requestUtilsSource = readFileSync(path.resolve(testDir, "../../domains/execution/model/requestUtils.ts"),"utf8");
-const executionStateSource = readFileSync(path.resolve(testDir, "../../domains/execution/state/ExecutionContext.tsx"),"utf8");const contextSource = readFileSync(
+const executionRunnerFiles = [
+  "../../domains/execution/state/useSearchRunner.ts",
+  "../../domains/execution/state/useFetchRunner.ts",
+];
+const executionStateSource = executionRunnerFiles
+  .map((file) => readFileSync(path.resolve(testDir, file), "utf8"))
+  .join("\n");const contextSource = readFileSync(
   path.resolve(testDir, "../../context/FreeSearchContext.tsx"),
   "utf8"
 )
