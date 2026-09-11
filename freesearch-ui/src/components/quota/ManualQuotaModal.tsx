@@ -2,7 +2,7 @@ import React, { useState } from "react"
 import { Modal } from "@/components/common/Modal"
 import { Button } from "@/components/ui/button"
 import { unitLabel } from "@/services/api/mappers"
-import { ApiError } from "@/services/api/httpErrors"
+import { ApiError } from "@/shared/api/http"
 import type { BackendManualQuotaPayload } from "@/services/api/backendTypes"
 import type { UnitKind } from "@/types/freesearch"
 import {

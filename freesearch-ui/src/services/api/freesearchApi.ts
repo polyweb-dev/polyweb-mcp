@@ -13,7 +13,7 @@ import type {
   BackendSearchResponse,
   BackendSecretStatus,
 } from "./backendTypes"
-import { ApiError, isAbortOrTimeout, parseDetail, statusMessage } from "./httpErrors"
+import { ApiError, isAbortOrTimeout, parseDetail, statusMessage } from "@/shared/api/http"
 
 const API_BASE = (import.meta.env.VITE_API_URL as string | undefined) ?? ""
 

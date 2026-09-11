@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react"
 import { toBackendId } from "@/services/api/mappers"
 import { apiService } from "@/services/api/freesearchApi"
-import { ApiError } from "@/services/api/httpErrors"
+import { ApiError } from "@/shared/api/http"
 import type { BackendOAuthStatus } from "@/services/api/backendTypes"
 
 export function oauthErrorMessage(error: unknown, fallback: string): string {

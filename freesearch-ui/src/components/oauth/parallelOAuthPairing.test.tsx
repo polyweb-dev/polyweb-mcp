@@ -12,7 +12,7 @@ import type {
   BackendOAuthDeviceCode,
   BackendOAuthStatus,
 } from "@/services/api/backendTypes"
-import { ApiError } from "@/services/api/httpErrors"
+import { ApiError } from "@/shared/api/http"
 import { quotaDisplay } from "@/services/quotaDisplay"
 import { installFetchStub, ok, err, deferred } from "@/test/fetchMock"
 import {

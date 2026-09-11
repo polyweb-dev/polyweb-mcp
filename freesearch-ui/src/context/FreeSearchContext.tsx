@@ -5,7 +5,7 @@ import type {
   BackendRoutingConfig,
   BackendSecretStatus,
 } from "@/services/api/backendTypes"
-import { ApiError, isAbortOrTimeout, statusMessage } from "@/services/api/httpErrors"
+import { ApiError, isAbortOrTimeout, statusMessage } from "@/shared/api/http"
 import { apiService } from "@/services/api/freesearchApi"
 import { catalogEntryForId, catalogNameOf } from "@/services/api/providerCatalog"
 import {

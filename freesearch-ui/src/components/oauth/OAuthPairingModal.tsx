@@ -6,7 +6,7 @@ import type {
   BackendOAuthDeviceCode,
   BackendOAuthStatus,
 } from "@/services/api/backendTypes"
-import { ApiError } from "@/services/api/httpErrors"
+import { ApiError } from "@/shared/api/http"
 import { oauthErrorMessage } from "./useOAuthPairing"
 
 export interface OAuthPairingModalProps {
