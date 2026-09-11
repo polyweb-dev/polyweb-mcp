@@ -32,21 +32,38 @@ export interface QuotaDisplay {
   hasFiniteLimit: boolean
 }
 
+/** Remaining-only balances read as account balances, never as budgets. */
+function isBalancePeriod(input: QuotaDisplayInput): boolean {
+  if (input.providerId === "you" || input.providerId === "youcom") return true
+  return (
+    input.providerId === "parallel" &&
+    input.confidence === "authoritative" &&
+    input.limit === null
+  )
+}
+
 function periodLabel(input: QuotaDisplayInput): string {
   const normalizedWindow = input.window?.trim().toLowerCase()
-  if (normalizedWindow === "hourly" || normalizedWindow === "hour") return "Rolling hour"
+  if (normalizedWindow === "hourly" || normalizedWindow === "hour") return "Hourly"
   if (normalizedWindow === "monthly" || normalizedWindow === "month") return "Monthly"
-  if (input.providerId === "you" || input.providerId === "youcom") return "Account balance"
-  if (input.providerId === "keenable" && input.keyless) return "Rolling hour"
+  if (isBalancePeriod(input)) return "Account balance"
+  if (input.providerId === "keenable" && input.keyless) return "Hourly"
   if (["brave", "exa", "firecrawl", "keenable", "parallel", "tavily"].includes(input.providerId ?? "")) {
     return "Monthly"
   }
   return "Quota"
 }
 
+/** A remaining balance with no percentage reads as available funds. */
+function isBalanceHeadline(input: QuotaDisplayInput, remaining: number | null): boolean {
+  if (remaining === null) return false
+  if (input.providerId === "you" || input.providerId === "youcom") return true
+  return input.providerId === "parallel" && input.confidence === "authoritative"
+}
+
 function quotaHeadline(input: QuotaDisplayInput, percent: number | null, remaining: number | null): string {
   if (percent !== null) return `${percent}% remaining`
-  if ((input.providerId === "you" || input.providerId === "youcom") && remaining !== null) return "Balance available"
+  if (isBalanceHeadline(input, remaining)) return "Balance available"
   if (input.providerId === "exa" || input.providerId === "parallel") return "Budget not configured"
   if (input.providerId === "brave") return "Limit unavailable"
   if (input.providerId === "keenable") return input.keyless ? "Hourly quota pending" : "Quota pending"

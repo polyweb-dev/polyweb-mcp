@@ -41,8 +41,19 @@ from freesearch.contracts import (
     manual_quota_remaining,
     manual_quota_remaining_percent,
 )
+from freesearch.http import create_async_client
 from freesearch.logging import redact_secrets
 from freesearch.monitoring import latency_p95_ms
+from freesearch.parallel_oauth import (
+    PARALLEL_API_BASE_URL,
+    PARALLEL_PLATFORM_BASE_URL,
+    DeviceCodeResponse,
+    OAuthAlreadyPaired,
+    OAuthStatusResponse,
+    disconnect_oauth,
+    query_oauth_status,
+    start_device_flow,
+)
 from freesearch.provider_config import (
     ProviderConfig,
     ProviderConfigUpdate,
@@ -230,6 +241,7 @@ def register_control_routes(app: FastAPI) -> None:
         return merged
 
     _register_manual_quota_routes(app)
+    _register_oauth_routes(app)
 
 
 def _register_manual_quota_routes(app: FastAPI) -> None:
@@ -268,6 +280,124 @@ def _register_manual_quota_routes(app: FastAPI) -> None:
 
         name = _require_provider(provider_id)
         await clear_manual_quota(request.app.state.repository, name)
+
+
+def _require_oauth_provider(provider_id: str) -> ProviderName:
+    """Return PARALLEL for OAuth routes; other known providers are unsupported."""
+
+    name = _require_provider(provider_id)
+    if name is not ProviderName.PARALLEL:
+        raise HTTPException(status_code=404, detail=f"oauth-not-supported for {provider_id!r}")
+    return name
+
+
+def _oauth_base_urls(request: Request) -> tuple[str, str]:
+    """Return the injectable OAuth base URLs, defaulting to the Parallel hosts."""
+
+    platform_base = getattr(request.app.state, "oauth_platform_base_url", None)
+    api_base = getattr(request.app.state, "oauth_api_base_url", None)
+    return (
+        platform_base or PARALLEL_PLATFORM_BASE_URL,
+        api_base or PARALLEL_API_BASE_URL,
+    )
+
+
+def _register_oauth_routes(app: FastAPI) -> None:
+    """Register the Parallel OAuth device-flow routes (frozen contract)."""
+
+    @app.post(
+        "/api/v1/providers/{provider_id}/oauth/device-code",
+        response_model=DeviceCodeResponse,
+    )
+    async def start_oauth_device_code(provider_id: str, request: Request) -> DeviceCodeResponse:
+        """Initiate a device flow; 409 while paired, never destructive on 409."""
+
+        _require_oauth_provider(provider_id)
+        platform_base, api_base = _oauth_base_urls(request)
+        provided = getattr(request.app.state, "oauth_http_client", None)
+        try:
+            if provided is not None:
+                return await start_device_flow(
+                    secret_store=request.app.state.secret_store,
+                    repository=request.app.state.repository,
+                    http_client=provided,
+                    platform_base_url=platform_base,
+                    api_base_url=api_base,
+                )
+            async with create_async_client() as client:
+                return await start_device_flow(
+                    secret_store=request.app.state.secret_store,
+                    repository=request.app.state.repository,
+                    http_client=client,
+                    platform_base_url=platform_base,
+                    api_base_url=api_base,
+                )
+        except OAuthAlreadyPaired as exc:
+            raise HTTPException(
+                status_code=409, detail=redact_secrets(str(exc)) or "oauth already paired"
+            ) from None
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502, detail=redact_secrets(str(exc)) or "oauth flow failed"
+            ) from None
+
+    @app.get(
+        "/api/v1/providers/{provider_id}/oauth/status",
+        response_model=OAuthStatusResponse,
+    )
+    async def oauth_status(provider_id: str, request: Request) -> OAuthStatusResponse:
+        """Report pairing status with one bounded token attempt unless terminal."""
+
+        _require_oauth_provider(provider_id)
+        platform_base, api_base = _oauth_base_urls(request)
+        provided = getattr(request.app.state, "oauth_http_client", None)
+        try:
+            if provided is not None:
+                return await query_oauth_status(
+                    secret_store=request.app.state.secret_store,
+                    repository=request.app.state.repository,
+                    http_client=provided,
+                    platform_base_url=platform_base,
+                    api_base_url=api_base,
+                )
+            async with create_async_client() as client:
+                return await query_oauth_status(
+                    secret_store=request.app.state.secret_store,
+                    repository=request.app.state.repository,
+                    http_client=client,
+                    platform_base_url=platform_base,
+                    api_base_url=api_base,
+                )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502, detail=redact_secrets(str(exc)) or "oauth status failed"
+            ) from None
+
+    @app.delete("/api/v1/providers/{provider_id}/oauth", status_code=204)
+    async def delete_oauth(provider_id: str, request: Request) -> None:
+        """Revoke bearer material before deleting it; idempotent."""
+
+        _require_oauth_provider(provider_id)
+        platform_base, api_base = _oauth_base_urls(request)
+        provided = getattr(request.app.state, "oauth_http_client", None)
+        with suppress(Exception):
+            if provided is not None:
+                await disconnect_oauth(
+                    secret_store=request.app.state.secret_store,
+                    repository=request.app.state.repository,
+                    http_client=provided,
+                    platform_base_url=platform_base,
+                    api_base_url=api_base,
+                )
+            else:
+                async with create_async_client() as client:
+                    await disconnect_oauth(
+                        secret_store=request.app.state.secret_store,
+                        repository=request.app.state.repository,
+                        http_client=client,
+                        platform_base_url=platform_base,
+                        api_base_url=api_base,
+                    )
 
 
 def secret_fingerprint(provider: str, key: str) -> str:

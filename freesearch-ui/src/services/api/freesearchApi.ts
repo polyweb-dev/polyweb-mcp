@@ -4,6 +4,8 @@ import type {
   BackendFetchResponse,
   BackendManualQuota,
   BackendManualQuotaPayload,
+  BackendOAuthDeviceCode,
+  BackendOAuthStatus,
   BackendProviderStatus,
   BackendProviderTest,
   BackendRoutingConfig,
@@ -163,6 +165,37 @@ export class FreeSearchApiService {
       `/api/v1/providers/${backendId}/manual-quota`,
       { method: "PUT", body: JSON.stringify(payload) }
     )
+  }
+
+  /**
+   * OAuth device-flow pairing (Parallel Account API). A 404 on status means
+   * no pairing exists (honest unpaired null-shape, not an error) — every
+   * other failure surfaces as ApiError via the shared request() mapping.
+   */
+  beginOAuthDeviceFlow(backendId: string): Promise<BackendOAuthDeviceCode> {
+    return this.request<BackendOAuthDeviceCode>(
+      `/api/v1/providers/${backendId}/oauth/device-code`,
+      { method: "POST" }
+    )
+  }
+
+  async getOAuthStatus(backendId: string): Promise<BackendOAuthStatus> {
+    try {
+      return await this.request<BackendOAuthStatus>(
+        `/api/v1/providers/${backendId}/oauth/status`
+      )
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404) {
+        return { provider: backendId, status: "unpaired", expires_in: null }
+      }
+      throw error
+    }
+  }
+
+  async revokeOAuth(backendId: string): Promise<void> {
+    await this.request<unknown>(`/api/v1/providers/${backendId}/oauth`, {
+      method: "DELETE",
+    })
   }
 
   async deleteManualQuota(backendId: string): Promise<void> {

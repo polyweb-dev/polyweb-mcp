@@ -4,6 +4,7 @@ import {
   braveObservedQuota,
   keenableKeylessQuota,
   overrideDashboardLatestQuota,
+  parallelPairedQuota,
   parallelSeededQuota,
   parallelUnseededQuota,
 } from "./backendStub"
@@ -99,6 +100,8 @@ Given("the stubbed dashboard shows {string}", async ({ page }, kind: string) => 
     await overrideDashboardLatestQuota(page, parallelSeededQuota())
   } else if (kind === "Parallel unseeded quota") {
     await overrideDashboardLatestQuota(page, parallelUnseededQuota())
+  } else if (kind === "Parallel paired quota") {
+    await overrideDashboardLatestQuota(page, parallelPairedQuota())
   } else if (kind === "Keenable keyless quota") {
     await overrideDashboardLatestQuota(page, keenableKeylessQuota())
   } else {

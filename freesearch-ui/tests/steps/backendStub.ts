@@ -63,6 +63,62 @@ export function setStubbedManualQuota(
   else stubbedManualQuotas[provider] = entry
 }
 
+// ---------------------------------------------------------------------------
+// Parallel OAuth device-flow stub (adversarial test-only, Phase 1).
+//
+// Per-scenario in-memory flow state for POST/GET/DELETE
+// /api/v1/providers/{id}/oauth[/device-code|/status]. Unpaired by default
+// (GET status 404s, mirroring the frozen getOAuthStatus 404->unpaired
+// mapping); steps mutate the flow so polling picks up transitions without
+// sleeps. Cleared per scenario at the top of installBackendStub.
+// ---------------------------------------------------------------------------
+
+export type StubbedOAuthStatus = "pending" | "ready" | "expired" | "denied"
+
+interface StubbedOAuthFlow {
+  hasFlow: boolean
+  status: StubbedOAuthStatus
+  beginFails: boolean
+}
+
+const stubbedOAuthFlows: Record<string, StubbedOAuthFlow> = {}
+
+function oauthFlowOf(provider: string): StubbedOAuthFlow {
+  return stubbedOAuthFlows[provider] ?? { hasFlow: false, status: "pending", beginFails: false }
+}
+
+function clearStubbedOAuthFlows(): void {
+  for (const key of Object.keys(stubbedOAuthFlows)) delete stubbedOAuthFlows[key]
+}
+
+export function setStubbedOAuthFlow(
+  provider: string,
+  status: "unpaired" | StubbedOAuthStatus
+): void {
+  if (status === "unpaired") {
+    delete stubbedOAuthFlows[provider]
+    return
+  }
+  const current = oauthFlowOf(provider)
+  stubbedOAuthFlows[provider] = { ...current, hasFlow: true, status }
+}
+
+export function failStubbedOAuthBegin(provider: string): void {
+  stubbedOAuthFlows[provider] = { ...oauthFlowOf(provider), beginFails: true }
+}
+
+/**
+ * Mutable dashboard latest_quota override. overrideDashboardLatestQuota
+ * installs a dashboard route that reads this per request (instead of
+ * closing over fixed rows), so OAuth steps can flip pairing state and the
+ * SUT's post-transition dashboard refresh deterministically sees it.
+ */
+let dashboardQuotaOverride: unknown[] | null = null
+
+export function setDashboardQuotaOverride(latestQuota: unknown[]): void {
+  dashboardQuotaOverride = [...latestQuota]
+}
+
 const SECRET_PRESENCE: Record<string, SecretPresence> = {
   brave: "configured",
   keenable: "keyless_public",
@@ -150,6 +206,8 @@ function readJsonBody(route: Route): Record<string, unknown> {
  * the fixed fixtures. State is per-call, hence per-scenario isolation.
  */
 export async function installBackendStub(page: Page): Promise<void> {
+  clearStubbedOAuthFlows()
+  dashboardQuotaOverride = null
   let providers = initialProviders()
   let routing: StubRouting = {
     fallback_policy: "chained",
@@ -201,6 +259,52 @@ export async function installBackendStub(page: Page): Promise<void> {
       return json(route, { provider: backendId, deleted: true })
     }
     return route.fallback()
+  })
+
+  // OAuth device flow (see the stub-state block above). A POST begins (or
+  // restarts) the flow as pending with a 1s poll interval; GET serves the
+  // mutable flow state (404 while unpaired); DELETE revokes to unpaired and
+  // flips the next dashboard refresh back to the unbudgeted row.
+  await page.route("**/api/v1/providers/*/oauth/device-code", (route) => {
+    if (route.request().method() !== "POST") return route.fallback()
+    const parts = new URL(route.request().url()).pathname.split("/")
+    const backendId = parts[parts.length - 3] || ""
+    const flow = oauthFlowOf(backendId)
+    if (flow.beginFails) {
+      return json(route, { detail: backendId + " oauth unavailable" }, 503)
+    }
+    stubbedOAuthFlows[backendId] = { hasFlow: true, status: "pending", beginFails: false }
+    return json(route, {
+      provider: backendId,
+      user_code: "ABCD-EFGH",
+      verification_uri: "https://parallel.ai/activate",
+      verification_uri_complete: "https://parallel.ai/activate?code=ABCD-EFGH",
+      expires_in: 300,
+      interval: 1,
+    })
+  })
+
+  await page.route("**/api/v1/providers/*/oauth/status", (route) => {
+    if (route.request().method() !== "GET") return route.fallback()
+    const parts = new URL(route.request().url()).pathname.split("/")
+    const backendId = parts[parts.length - 2] || ""
+    const flow = stubbedOAuthFlows[backendId]
+    if (!flow || !flow.hasFlow) {
+      return json(route, { detail: "no oauth pairing for '" + backendId + "'" }, 404)
+    }
+    return json(route, {
+      provider: backendId,
+      status: flow.status,
+      expires_in: flow.status === "pending" ? 299 : null,
+    })
+  })
+
+  await page.route("**/api/v1/providers/*/oauth", (route) => {
+    if (route.request().method() !== "DELETE") return route.fallback()
+    const backendId = new URL(route.request().url()).pathname.split("/").pop() ?? ""
+    delete stubbedOAuthFlows[backendId]
+    dashboardQuotaOverride = parallelUnseededQuota()
+    return json(route, { provider: backendId, deleted: true })
   })
   await page.route("**/api/v1/providers/*/test", (route) => {
     if (route.request().method() !== "POST") return route.fallback()
@@ -318,10 +422,17 @@ export async function overrideDashboardLatestQuota(
   page: Page,
   latestQuota: unknown[]
 ): Promise<void> {
+  // Mutable per-request read (not a fixed close-over): later
+  // setDashboardQuotaOverride calls — e.g. the OAuth ready/revoke
+  // transitions — are visible to the SUT's post-transition refresh.
+  dashboardQuotaOverride = [...latestQuota]
   await page.unroute("**/dashboard*")
   await page.route("**/dashboard*", (route) => {
     if (route.request().method() !== "GET") return route.fallback()
-    return json(route, canonicalDashboardFixture({ latest_quota: latestQuota as never }))
+    return json(
+      route,
+      canonicalDashboardFixture({ latest_quota: (dashboardQuotaOverride ?? []) as never })
+    )
   })
 }
 
@@ -350,6 +461,22 @@ export function parallelSeededQuota(): unknown[] {
       observed_at: FIXED_AT,
       remaining: "3.75",
       limit: "5.00",
+      reset_at: null,
+      unit_kind: "USD",
+      display_unit: "USD",
+    },
+  ]
+}
+
+/** Parallel paired fixture: AUTHORITATIVE remaining-only USD (frozen contract). */
+export function parallelPairedQuota(): unknown[] {
+  return [
+    {
+      provider: "parallel",
+      source: "authoritative",
+      observed_at: FIXED_AT,
+      remaining: "3.75",
+      limit: null,
       reset_at: null,
       unit_kind: "USD",
       display_unit: "USD",

@@ -412,7 +412,24 @@ async def refresh_quotas(
             continue
         if snapshot is not None:
             snapshots.append(snapshot)
+    try:
+        oauth_snapshot = await _poll_parallel_oauth_balance(repository, observed_at)
+    except Exception:
+        logger.warning("quota poll could not be completed")
+        oauth_snapshot = None
+    if oauth_snapshot is not None:
+        snapshots.append(oauth_snapshot)
     return snapshots
+
+
+async def _poll_parallel_oauth_balance(
+    repository: SQLiteRepository, observed_at: datetime
+) -> QuotaSnapshot | None:
+    """Poll the paired Parallel Account API balance without touching adapter quotas."""
+
+    from freesearch.parallel_oauth import poll_oauth_balance_snapshot
+
+    return await poll_oauth_balance_snapshot(repository, now=observed_at)
 
 
 async def _poll_one_quota(
@@ -514,6 +531,8 @@ async def _record_adapter_quota(
 
     if repository is None:
         return
+    if adapter.name == "parallel" and await _parallel_oauth_owns_snapshot(repository):
+        return
     method = getattr(adapter, method_name, None)
     if not callable(method):
         return
@@ -528,6 +547,17 @@ async def _record_adapter_quota(
             await repository.record_quota(snapshot)
     except Exception:
         logger.warning("local quota state could not be persisted")
+
+
+async def _parallel_oauth_owns_snapshot(repository: SQLiteRepository) -> bool:
+    """Return True while the AUTHORITATIVE OAuth balance owns the Parallel snapshot."""
+
+    try:
+        from freesearch.parallel_oauth import is_oauth_ready
+
+        return await is_oauth_ready(repository)
+    except Exception:
+        return False
 
 
 async def latency_p95_ms(

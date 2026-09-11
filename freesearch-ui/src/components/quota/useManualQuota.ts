@@ -27,7 +27,7 @@ function toEstimate(manual: BackendManualQuota | null): ManualQuotaEstimate | nu
   if (percent === null) return null
   return {
     percentText: `${formatPercent1dp(percent)}% remaining`,
-    rangeText: `manual entry ${formatManualRange(manual.billing_start, manual.billing_end)}`,
+    rangeText: `Manual Entry ${formatManualRange(manual.billing_start, manual.billing_end)}`,
     percent,
   }
 }

@@ -42,9 +42,9 @@ function toFields(defaults: ManualQuotaDefaults | null | undefined): ManualQuota
 }
 
 function saveErrorMessage(error: unknown): string {
-  if (error instanceof ApiError) return error.detail || "Unable to save manual entry"
+  if (error instanceof ApiError) return error.detail || "Unable to save Manual Entry"
   if (error instanceof Error && error.message) return error.message
-  return "Unable to save manual entry"
+  return "Unable to save Manual Entry"
 }
 
 function placeholdersFor(unitKind: UnitKind | null): { allowance: string; used: string } {
@@ -313,13 +313,13 @@ const QuotaModalActions: React.FC<{
   onCancel: () => void
   onDelete: () => void
 }> = ({ isEditing, canDelete, pending, saving, deleting, onCancel, onDelete }) => (
-  <div className="mt-4 flex items-center justify-between gap-2">
+  <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
     <span>
       {isEditing && canDelete && (
         <Button
           type="button"
-          variant="ghost"
-          size="sm"
+          variant="outline"
+          size="lg" className="px-3"
           data-testid="manual-quota-clear"
           disabled={pending}
           onClick={onDelete}
@@ -332,14 +332,14 @@ const QuotaModalActions: React.FC<{
       <Button
         type="button"
         variant="outline"
-        size="sm"
+        size="lg" className="px-3"
         data-testid="manual-quota-cancel"
         disabled={pending}
         onClick={onCancel}
       >
         Cancel
       </Button>
-      <Button type="submit" size="sm" data-testid="manual-quota-save" disabled={pending}>
+      <Button type="submit" size="lg" className="px-3" data-testid="manual-quota-save" disabled={pending}>
         {saving ? "Saving…" : isEditing ? "Save usage" : "Save budget"}
       </Button>
     </span>
