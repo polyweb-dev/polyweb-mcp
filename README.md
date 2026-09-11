@@ -1,25 +1,210 @@
 # FreeSearch
 
-FreeSearch is a provider-neutral async search and document-fetching application.
-The foundation, shared adapter contracts, and all Stage 2 core-platform worktrees
-(Resilience, Usage/Data persistence, Routing, MCP surface, and Provider configuration)
-are complete. Concrete provider implementations from [`WORKPLAN.md`](WORKPLAN.md)
-are the next stage.
+FreeSearch is a provider-neutral search, content extraction, and quota-orchestration platform. It aggregates multiple search and web-scraping providers behind a unified REST API, Model Context Protocol (MCP) server, and modern React dashboard.
 
-## Local development
+---
 
-The project uses [`uv`](https://docs.astral.sh/uv/).
+## Supported Providers
 
-```powershell
+- **Brave Search** (Search & Summarizer / Answers)
+- **Exa** (Search & Content Fetch)
+- **Firecrawl** (Web Scrape / Fetch)
+- **Tavily** (Search & Extract)
+- **Parallel** (Search & Fetch with OAuth balance tracking)
+- **You.com** (Search & Fetch)
+- **Keenable** (Search with rolling-hour keyless tier or API key)
+
+---
+
+## Prerequisites
+
+Ensure you have the following installed on your system:
+
+- **Python**: `>= 3.12, < 3.14`
+- [**uv**](https://docs.astral.sh/uv/): Fast Python package and virtual environment manager
+- [**Node.js**](https://nodejs.org/): `>= 20.x`
+- [**pnpm**](https://pnpm.io/): Frontend package manager (`corepack enable pnpm` or `npm i -g pnpm`)
+
+---
+
+## Getting Started
+
+### 1. Clone the Repository
+
+```bash
+git clone <repository-url>
+cd freesearch
+```
+
+### 2. Environment Configuration
+
+Copy the example environment file:
+
+```bash
+# On Linux/macOS
+cp .env.example .env
+
+# On Windows PowerShell
+Copy-Item .env.example .env
+```
+
+Open `.env` and fill in any provider API keys you plan to use:
+
+```ini
+FREESEARCH_ENVIRONMENT=development
+FREESEARCH_LOG_LEVEL=INFO
+
+# Provider API Keys (leave blank if not using that provider)
+FREESEARCH_BRAVE_SEARCH_API_KEY=
+FREESEARCH_BRAVE_ANSWERS_API_KEY=
+FREESEARCH_EXA_API_KEY=
+FREESEARCH_FIRECRAWL_API_KEY=
+FREESEARCH_TAVILY_API_KEY=
+FREESEARCH_PARALLEL_API_KEY=
+FREESEARCH_YOU_API_KEY=
+FREESEARCH_KEENABLE_API_KEY= # Optional: Keenable provides a keyless tier
+```
+
+*(Note: Provider credentials can also be configured dynamically through the web dashboard, which stores them securely in your system keyring.)*
+
+---
+
+### 3. Backend Setup & Dependencies
+
+Install all Python dependencies and set up the local virtual environment using `uv`:
+
+```bash
 uv sync
+```
+
+This installs both core runtime and development dependencies (FastAPI, Alembic, SQLAlchemy, Behave, Pytest, Ruff, Mypy, etc.).
+
+---
+
+### 4. Database Setup & Migrations
+
+FreeSearch uses SQLite for telemetry, quota snapshots, runtime settings, and provider health. The default database path is `freesearch.db` (override with the `FREESEARCH_DB` environment variable).
+
+FreeSearch includes a dedicated database management CLI tool (`freesearch-db`):
+
+- **Check migration & schema status:**
+  ```bash
+  uv run freesearch-db status
+  ```
+
+- **Run migrations up to the latest revision:**
+  ```bash
+  uv run freesearch-db upgrade
+  ```
+  *(Note: `upgrade` automatically makes an integrity-verified pre-migration backup before applying schema changes, preserving existing data.)*
+
+> **Tip:** You do not have to run `freesearch-db upgrade` manually every time. When the backend server starts, it will automatically verify the schema and run pending migrations up to Alembic head.
+
+---
+
+### 5. Frontend Setup
+
+The dashboard UI is located in the `freesearch-ui` directory.
+
+```bash
+cd freesearch-ui
+pnpm install
+```
+
+---
+
+## Running the Services
+
+### Start the REST API Backend
+
+From the project root:
+
+```bash
+uv run freesearch-api
+```
+
+- **API URL:** `http://127.0.0.1:8001`
+- **Interactive Swagger Docs:** `http://127.0.0.1:8001/docs`
+- **Alternative ReDoc:** `http://127.0.0.1:8001/redoc`
+
+### Start the Frontend Dashboard
+
+In a separate terminal, navigate to `freesearch-ui` and start the Vite dev server:
+
+```bash
+cd freesearch-ui
+pnpm dev
+```
+
+- **Dashboard UI:** `http://localhost:5173`
+- The Vite development server automatically proxies API requests (`/search`, `/fetch`, `/dashboard`, `/stats`, `/api`) to the backend at `http://127.0.0.1:8001`.
+
+### Start the Model Context Protocol (MCP) Server (Optional)
+
+If integrating with AI agents, IDE assistants, or tools supporting Model Context Protocol:
+
+```bash
+uv run freesearch-mcp
+```
+
+- **MCP Endpoint:** `http://127.0.0.1:8000` (streamable HTTP transport)
+- Exposes `search` and `fetch` tools with automatic route selection and quota tracking.
+
+---
+
+## Quality & Testing
+
+### Backend Checks
+
+```bash
+# Run unit and integration tests
 uv run pytest
+
+# Run BDD feature scenarios
+uv run behave tests/bdd/features
+
+# Linting and formatting checks
 uv run ruff check .
 uv run ruff format --check .
+
+# Static type checking
 uv run mypy src
 ```
 
-Copy `.env.example` to `.env` to customize local settings. Real provider keys
-should preferably be entered through the planned settings dashboard, which will
-use the operating-system keyring locally. For deployment, inject secrets via
-the environment or a dedicated secret manager. Never commit `.env`, keys, or
-dashboard exports.
+### Frontend Checks
+
+Inside `freesearch-ui`:
+
+```bash
+# Run unit tests (Vitest)
+pnpm test
+
+# Type checking
+pnpm typecheck
+
+# Linting
+pnpm lint
+
+# Production build validation
+pnpm build
+```
+
+---
+
+## Project Structure
+
+```
+freesearch/
+├── src/freesearch/          # Core backend package
+│   ├── adapters/            # Search & fetch provider adapters
+│   ├── infrastructure/      # Foundation, resilience, secrets/keyring
+│   ├── mcp/                 # Model Context Protocol server & tools
+│   ├── models/              # Canonical contracts & Pydantic models
+│   ├── persistence/         # SQLite storage, Alembic migrations & CLI
+│   ├── routers/             # FastAPI search, fetch, & control routes
+│   └── services/            # Routing policy, monitoring, quota tracking
+├── freesearch-ui/           # React 19 + Vite + Tailwind CSS dashboard
+├── tests/                   # Test suite (unit, integration, and BDD features)
+├── pyproject.toml           # Python dependencies and CLI entrypoints
+└── uv.lock                  # Pinned Python dependency graph
+```
