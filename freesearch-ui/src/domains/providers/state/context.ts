@@ -1,5 +1,8 @@
 import { createContext } from "react";
+import type { ToastNotification } from "@/shared/notifications/context";
 import type { CircuitBreakerStatus, ProviderConfig } from "@/domains/providers/model/types";
+
+export type ShowToast = (message: string, type?: ToastNotification["type"]) => void;
 
 export interface ProvidersValue {
   providers: ProviderConfig[];
