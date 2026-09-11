@@ -11,7 +11,7 @@ export default tseslint.config(
       '**/node_modules/**',
       '**/dist/**',
       '**/coverage/**',
-      '**/.features-gen/**',
+      '**/features-gen/**',
       '**/references/**',
       '**/playwright-report/**',
       '**/test-results/**',
