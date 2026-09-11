@@ -81,7 +81,31 @@ import {
  */
 
 const testDir = import.meta.dirname
-const playgroundSource = readFileSync(
+// Slice 5 ownership: SearchPlayground.tsx is a compatibility shell over
+// features/playground. Read the joined owner sources (same strength as the
+// monolith read) plus the shell for the shim-compat assert below.
+const playgroundOwnerFiles = [
+  "../../features/playground/model/usePlaygroundController.ts",
+  "../../features/playground/model/playgroundFetchAction.ts",
+  "../../features/playground/model/playgroundExecuteAction.ts",
+  "../../features/playground/model/playgroundTypes.ts",
+  "../../features/playground/model/useResultPreview.ts",
+  "../../features/playground/ui/PlaygroundPage.tsx",
+  "../../features/playground/ui/SearchSection.tsx",
+  "../../features/playground/ui/FetchSection.tsx",
+  "../../features/playground/ui/SearchComposer.tsx",
+  "../../features/playground/ui/SearchOptions.tsx",
+  "../../features/playground/ui/FetchComposer.tsx",
+  "../../features/playground/ui/SearchResults.tsx",
+  "../../features/playground/ui/ResultCard.tsx",
+  "../../features/playground/ui/ResultInspector.tsx",
+  "../../features/playground/ui/WaterfallPanel.tsx",
+  "../../features/playground/ui/FetchResult.tsx",
+]
+const playgroundSource = playgroundOwnerFiles
+  .map((file) => readFileSync(path.resolve(testDir, file), "utf8"))
+  .join("\n")
+const playgroundShim = readFileSync(
   path.resolve(testDir, "./SearchPlayground.tsx"),
   "utf8"
 )
@@ -97,7 +121,11 @@ const contextSource = readFileSync(
   path.resolve(testDir, "../../context/FreeSearchContext.tsx"),
   "utf8"
 )
-const segmentedPath = path.resolve(testDir, "../common/SegmentedControl.tsx")
+// Slice 4 ownership: the canonical primitive lives in shared/ui; common/
+// keeps a compatibility shell. Read the owner (same strength) plus the
+// shell for the shim-compat assert below.
+const segmentedPath = path.resolve(testDir, "../../shared/ui/SegmentedControl.tsx")
+const segmentedShimPath = path.resolve(testDir, "../common/SegmentedControl.tsx")
 
 function renderWithBackend(
   searchHandler?: (req: { url: string }) => Response | Promise<Response>,
@@ -475,6 +503,10 @@ describe("PG-S5 AC-PG-S5-3: source number contract (playground/types/context)", 
     expect(segmentedSource).toContain('role="group"')
     expect(segmentedSource).toContain("aria-pressed")
     expect(segmentedSource).toContain("SegmentedControl")
+    // Compatibility shell re-exports the canonical primitive.
+    const segmentedShim = readFileSync(segmentedShimPath, "utf8")
+    expect(segmentedShim).toContain("SegmentedControl")
+    expect(segmentedShim).toContain("shared/ui/SegmentedControl")
   })
 })
 
@@ -586,5 +618,17 @@ describe("PG-S5 AC-PG-S5-4 regressions: per-card fetch + composer + 422", () => 
     // Last-good results survive the validation failure.
     expect(screen.getByText("Live backend result one")).toBeInTheDocument()
     expect(screen.getByText("Live backend result two")).toBeInTheDocument()
+  })
+})
+
+describe("Slice 5 shim compatibility: SearchPlayground shell re-exports the feature owner", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it("re-exports PlaygroundPage as SearchPlayground without forking UI", () => {
+    expect(playgroundShim).toContain("PlaygroundPage")
+    expect(playgroundShim).toContain("SearchPlayground")
+    expect(playgroundShim).toContain("features/playground/ui/PlaygroundPage")
   })
 })
