@@ -47,7 +47,6 @@ When(
       }
       await page.waitForTimeout(500)
     }
-    // eslint-disable-next-line no-console
     console.log(`LIVE-FIRST-SEARCH provider="${provider}" outcome=${outcome}`)
   }
 )
@@ -75,7 +74,6 @@ When(
       }
       await page.waitForTimeout(500)
     }
-    // eslint-disable-next-line no-console
     console.log(`LIVE-FIRST-FETCH provider="${provider}" outcome=${outcome}`)
   }
 )

@@ -31,6 +31,7 @@ describe("getEligibleProviders", () => {
     expect(idsFor(seedProviders(), "fetch", "priority")).toEqual([
       "keenable",
       "tavily",
+      "exa",
       "firecrawl",
       "youcom",
     ])

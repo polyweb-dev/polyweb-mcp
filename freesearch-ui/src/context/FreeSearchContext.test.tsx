@@ -293,6 +293,22 @@ describe("FreeSearchContext (live backend)", () => {
       result.current.providers.find((p) => p.id === "brave")?.fetchEnabled
     ).toBe(false)
     expect(stub.requests.length).toBe(callsBefore)
+
+    // Exa is fetch-capable: per-operation fetch toggle applies locally, still zero fetch
+    act(() => {
+      result.current.toggleProviderFetch("exa", false)
+    })
+    expect(
+      result.current.providers.find((p) => p.id === "exa")?.fetchEnabled
+    ).toBe(false)
+    expect(stub.requests.length).toBe(callsBefore)
+    act(() => {
+      result.current.toggleProviderFetch("exa", true)
+    })
+    expect(
+      result.current.providers.find((p) => p.id === "exa")?.fetchEnabled
+    ).toBe(true)
+    expect(stub.requests.length).toBe(callsBefore)
   })
 
   it("updateProviderPriority PATCHes {priority} and refreshes from the 200", async () => {

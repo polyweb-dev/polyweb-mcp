@@ -45,7 +45,7 @@ export const PROVIDER_CATALOG: StaticProviderMeta[] = [
     description: "Neural & semantic search built on embeddings for meaning-based retrieval.",
     baseUrl: "https://api.exa.ai",
     authHeaderName: "x-api-key",
-    capabilities: ["search", "neural_search"],
+    capabilities: ["search", "fetch", "neural_search"],
   },
   {
     id: "firecrawl",

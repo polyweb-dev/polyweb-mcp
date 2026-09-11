@@ -42,7 +42,7 @@ import {
  *           the table existing. Real sub-pixel proof needs a browser (Playwright).
  *   S-P1-3  Global-off placeholder no-shift: OperationControl never returns
  *           null — unsupported+globally-disabled renders a placeholder cell so
- *           Search/Fetch columns never collapse (Brave/Exa fetch; Parallel is fetch-capable).
+ *           Search/Fetch columns never collapse (Brave fetch; Parallel is fetch-capable).
  *   S-P1-4  375px scroll-no-wrap: table container scrolls horizontally
  *           (overflow-x-auto) with nowrap cells; no wrapping, no flex-wrap.
  *   S-P1-5  contracts preserved: priority P1..P7 + up/down boundaries, global
@@ -112,8 +112,8 @@ const SEED_PROVIDER_NAMES = [
   "Parallel",
 ] as const
 
-const FETCH_UNSUPPORTED = ["Brave Search", "Exa"] as const
-const FETCH_SUPPORTED = ["Keenable", "Tavily", "Firecrawl", "You.com", "Parallel"] as const
+const FETCH_UNSUPPORTED = ["Brave Search"] as const
+const FETCH_SUPPORTED = ["Keenable", "Tavily", "Exa", "Firecrawl", "You.com", "Parallel"] as const
 
 const EXPECTED_HEADERS = [
   "Provider",
@@ -346,7 +346,7 @@ describe("S-P1-3: Global-off placeholder keeps columns from collapsing", () => {
     expect(settingsFeatureSource).not.toMatch(/if\s*\(\s*globallyDisabled\s*\)\s*return\s+null/)
   })
 
-  it("unsupported fetch shows a disabled switch with tooltip while Global is on (Brave/Exa)", async () => {
+  it("unsupported fetch shows a disabled switch with tooltip while Global is on (Brave)", async () => {
     renderSettings()
     await waitForProviders()
     for (const name of FETCH_UNSUPPORTED) {

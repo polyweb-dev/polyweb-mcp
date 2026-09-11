@@ -1,8 +1,7 @@
 @live
 Feature: Live provider fetch smoke coverage
   One live fetch per fetch-capable provider against the real backend
-  (no stub). Brave Search has no fetch capability and Exa exposes no
-  fetch picker option in this UI revision, so both are skipped here.
+  (no stub). Brave Search has no fetch capability so it is skipped here.
   Each scenario captures the FIRST-fetch outcome, retries the same URL,
   and asserts the retry renders content with no API-failure alert.
 
@@ -23,6 +22,7 @@ Feature: Live provider fetch smoke coverage
       | provider  |
       | Keenable  |
       | Tavily    |
+      | Exa       |
       | Firecrawl |
       | You.com   |
       | Parallel  |
