@@ -1,4 +1,4 @@
-import { unitLabel } from "@/services/api/mappers"
+import { unitLabel } from "@/shared/api/units"
 import type { ProviderConfig, QuotaConfidence, UnitKind } from "@/types/freesearch"
 
 /**

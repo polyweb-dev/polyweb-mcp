@@ -14,10 +14,10 @@ import type {
   ProviderConfig,
   ProviderHealthStatus,
   SearchResponse,
-  UnitKind,
   UsageEvent,
   UsageTotal,
 } from "@/types/freesearch"
+import { normalizeUnitKind } from "@/shared/api/units"
 
 export function toBackendId(uiId: string): string {
   return uiId === "youcom" ? "you" : uiId
@@ -36,31 +36,7 @@ function decimalString(value: string | number | null): string | null {
   return value === null ? null : String(value)
 }
 
-/** Normalize wire unit_kind (uppercase) to the UI UnitKind; unknown/absent → null (legacy). */
-export function normalizeUnitKind(value: unknown): UnitKind | null {
-  if (typeof value !== "string") return null
-  const upper = value.toUpperCase() as UnitKind
-  return upper === "REQUEST" || upper === "CREDIT" || upper === "USD" || upper === "FREE"
-    ? upper
-    : null
-}
-
-/** Presentation label for a unit dimension. Logic must branch on unitKind, never this text. */
-export function unitLabel(unitKind: UnitKind | null, displayUnit?: string | null): string {
-  if (displayUnit) return displayUnit
-  switch (unitKind) {
-    case "REQUEST":
-      return "requests"
-    case "CREDIT":
-      return "credits"
-    case "USD":
-      return "USD"
-    case "FREE":
-      return "free"
-    default:
-      return "legacy"
-  }
-}
+export { normalizeUnitKind, unitLabel } from "@/shared/api/units"
 
 function providerDisplayName(
   providerId: string,
