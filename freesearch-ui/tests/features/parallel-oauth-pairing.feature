@@ -31,8 +31,8 @@ Feature: Parallel OAuth device pairing stays honest
     And the stubbed OAuth flow for "parallel" becomes "denied"
     Then the OAuth pairing should show an error
     And I should be able to retry OAuth pairing
-    When the stubbed OAuth flow for "parallel" becomes "ready"
-    And I retry OAuth pairing
+    When I retry OAuth pairing
+    And the stubbed OAuth flow for "parallel" becomes "ready"
     Then the OAuth pairing dialog should close automatically
 
   @stub @oauth @expired
@@ -49,7 +49,7 @@ Feature: Parallel OAuth device pairing stays honest
   Scenario: Failed device-code request surfaces an alert without polling
     Given the stubbed OAuth device-code request for "parallel" fails
     When I navigate directly to "/usage"
-    And I start OAuth pairing for provider "parallel"
+    And I attempt OAuth pairing for provider "parallel" with a failing begin
     Then the OAuth pairing should show an error
     And I should be able to retry OAuth pairing
 

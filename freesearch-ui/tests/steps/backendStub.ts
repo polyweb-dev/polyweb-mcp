@@ -207,6 +207,9 @@ function readJsonBody(route: Route): Record<string, unknown> {
  */
 export async function installBackendStub(page: Page): Promise<void> {
   clearStubbedOAuthFlows()
+  // Hygiene: manual overlays are module-level and must not leak across
+  // scenarios (e.g. Brave overlay into later quota rows).
+  for (const key of Object.keys(stubbedManualQuotas)) delete stubbedManualQuotas[key]
   dashboardQuotaOverride = null
   let providers = initialProviders()
   let routing: StubRouting = {
@@ -287,7 +290,7 @@ export async function installBackendStub(page: Page): Promise<void> {
   await page.route("**/api/v1/providers/*/oauth/status", (route) => {
     if (route.request().method() !== "GET") return route.fallback()
     const parts = new URL(route.request().url()).pathname.split("/")
-    const backendId = parts[parts.length - 2] || ""
+    const backendId = parts[parts.length - 3] || ""
     const flow = stubbedOAuthFlows[backendId]
     if (!flow || !flow.hasFlow) {
       return json(route, { detail: "no oauth pairing for '" + backendId + "'" }, 404)
@@ -301,7 +304,8 @@ export async function installBackendStub(page: Page): Promise<void> {
 
   await page.route("**/api/v1/providers/*/oauth", (route) => {
     if (route.request().method() !== "DELETE") return route.fallback()
-    const backendId = new URL(route.request().url()).pathname.split("/").pop() ?? ""
+    const deleteParts = new URL(route.request().url()).pathname.split("/")
+    const backendId = deleteParts[deleteParts.length - 2] ?? ""
     delete stubbedOAuthFlows[backendId]
     dashboardQuotaOverride = parallelUnseededQuota()
     return json(route, { provider: backendId, deleted: true })
@@ -365,7 +369,10 @@ export async function installBackendStub(page: Page): Promise<void> {
     return route.fallback()
   })
 
-  await page.route("**/dashboard*", (route) => {
+  // Pathname-exact dashboard matcher: the legacy "**/dashboard*" glob also
+  // matched the Vite module URL /src/app/selectors/dashboardOverlay.ts (new
+  // in Slice 6), fulfilling a JS import with JSON and blanking the app.
+  await page.route((url) => url.pathname === "/dashboard", (route) => {
     if (route.request().method() !== "GET") return route.fallback()
     return json(route, dashboardFixture())
   })
@@ -426,8 +433,11 @@ export async function overrideDashboardLatestQuota(
   // setDashboardQuotaOverride calls — e.g. the OAuth ready/revoke
   // transitions — are visible to the SUT's post-transition refresh.
   dashboardQuotaOverride = [...latestQuota]
-  await page.unroute("**/dashboard*")
-  await page.route("**/dashboard*", (route) => {
+  // Pathname-exact dashboard matcher: the legacy "**/dashboard*" glob also
+  // matched the Vite module URL /src/app/selectors/dashboardOverlay.ts,
+  // fulfilling a JS import with JSON and blanking the app.
+  await page.unroute((url) => url.pathname === "/dashboard")
+  await page.route((url) => url.pathname === "/dashboard", (route) => {
     if (route.request().method() !== "GET") return route.fallback()
     return json(
       route,
