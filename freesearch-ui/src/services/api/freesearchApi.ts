@@ -13,7 +13,7 @@ import type {
   BackendSearchResponse,
   BackendSecretStatus,
 } from "./backendTypes"
-import { ApiError, isAbortOrTimeout, parseDetail, statusMessage } from "@/shared/api/http"
+import { ApiError, parseDetail, toApiError } from "@/shared/api/http"
 
 const API_BASE = (import.meta.env.VITE_API_URL as string | undefined) ?? ""
 
@@ -39,19 +39,7 @@ export class FreeSearchApiService {
       }
       return body as T
     } catch (error) {
-      if (error instanceof ApiError) throw error
-      if (isAbortOrTimeout(error)) {
-        const detail =
-          error && typeof error === "object" && "message" in error
-            ? String((error as { message?: unknown }).message ?? "timeout")
-            : "timeout"
-        throw new ApiError(0, statusMessage(0, detail), error)
-      }
-      if (error instanceof TypeError) {
-        const detail = statusMessage(0, error.message)
-        throw new ApiError(0, detail, error)
-      }
-      throw error
+      throw toApiError(error)
     }
   }
 

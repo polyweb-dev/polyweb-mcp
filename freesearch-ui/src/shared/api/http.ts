@@ -66,6 +66,22 @@ export function statusMessage(status: number, detail: string): string {
   if (status >= 400) return `API request failed${suffix}`
   return `API response error${suffix}`
 }
+/** Map a transport failure to ApiError (ApiError passes through). Always throws. */
+export function toApiError(error: unknown): never {
+  if (error instanceof ApiError) throw error;
+  if (isAbortOrTimeout(error)) {
+    const detail =
+      error && typeof error === "object" && "message" in error
+        ? String((error as { message?: unknown }).message ?? "timeout")
+        : "timeout";
+    throw new ApiError(0, statusMessage(0, detail), error);
+  }
+  if (error instanceof TypeError) {
+    throw new ApiError(0, statusMessage(0, error.message), error);
+  }
+  throw error;
+}
+
 export function errorMessage(error: unknown, fallback: string): string {
   if (error instanceof ApiError) return error.detail;
   if (isAbortOrTimeout(error)) {
