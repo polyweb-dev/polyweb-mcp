@@ -155,7 +155,7 @@ function parallelRow(): Element {
     document.querySelector('[data-testid="quota-remaining-percent-parallel"]') ??
     document.querySelector('[data-testid="manual-quota-estimate-parallel"]')
   expect(marker, "parallel quota row marker must exist").not.toBeNull()
-  const row = marker!.closest("div.grid")
+  const row = marker!.closest("tr") ?? marker!.closest("div.grid")
   expect(row, "parallel quota row root must exist").not.toBeNull()
   return row!
 }
@@ -172,8 +172,10 @@ function quotaSection(): HTMLElement {
 }
 
 function quotaRows(): Element[] {
-  const board = quotaSection().querySelector("div.border")!
-  return Array.from(board.querySelectorAll(":scope > div"))
+  const section = quotaSection()
+  const body = section.querySelector('tbody[data-slot="table-body"]') ?? section.querySelector("tbody")
+  expect(body, "quota table body must exist").not.toBeNull()
+  return Array.from(body!.querySelectorAll("tr"))
 }
 
 /** Find the quota row that renders a fixture-controlled native value. */
