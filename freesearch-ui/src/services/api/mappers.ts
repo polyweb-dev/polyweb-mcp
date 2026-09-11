@@ -18,14 +18,9 @@ import type {
   UsageTotal,
 } from "@/types/freesearch"
 import { normalizeUnitKind } from "@/shared/api/units"
+import { toUiId } from "@/domains/providers"
 
-export function toBackendId(uiId: string): string {
-  return uiId === "youcom" ? "you" : uiId
-}
-
-export function toUiId(backendId: string): string {
-  return backendId === "you" ? "youcom" : backendId
-}
+export { toBackendId, toUiId } from "@/domains/providers"
 
 function parseUnits(units: string | undefined): number {
   const parsed = Number.parseFloat(units ?? "0")
