@@ -1,6 +1,6 @@
 # Main/orchestrator
 model = "gpt-6-astra"
-model_reasoning_effort = "medium"
+model_reasoning_effort = "light"
 
 [agents]
 enabled = true
