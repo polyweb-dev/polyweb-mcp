@@ -1,5 +1,5 @@
-import { unitLabel } from "@/shared/api/units"
-import type { ProviderConfig, QuotaConfidence, UnitKind } from "@/types/freesearch"
+import { unitLabel, type UnitKind } from "@/shared/api/units"
+import type { ProviderConfig } from "@/domains/providers/model/types";import type { QuotaConfidence } from "./quotaTypes";
 
 /**
  * The quota headline is deliberately provider-neutral: when both values are

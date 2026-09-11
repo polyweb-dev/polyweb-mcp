@@ -4,8 +4,8 @@ export type BackendHealth = "healthy" | "degraded" | "unavailable" | "unknown"
 export type BackendSecretPresence = "configured" | "missing" | "keyless_public"
 export type BackendSecretSource = "environment" | "dotenv" | "keyring" | "none"
 export type BackendUsageStatus = "success" | "failure"
-/** Canonical unit dimension (QUOTA.md Option A). Uppercase on the wire; null/absent = legacy. */
-export type BackendUnitKind = "REQUEST" | "CREDIT" | "USD" | "FREE"
+import type { BackendUnitKind } from "@/shared/api/units";
+export type { BackendUnitKind } from "@/shared/api/units";
 export type BackendCircuitBreaker = {
   state: BackendBreakerState
   updated_at: string

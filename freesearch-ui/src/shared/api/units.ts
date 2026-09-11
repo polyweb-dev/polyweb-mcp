@@ -1,7 +1,13 @@
-import type { UnitKind } from "@/types/freesearch";
-import type { BackendUnitKind } from "@/services/api/backendTypes";
+/**
+ * Canonical aggregation dimension from the backend (QUOTA.md Option A).
+ * Logic branches on this, never on display text. `null` = legacy/unknown:
+ * rows recorded before canonical units existed; never merged into a
+ * known dimension and never summed across kinds.
+ */
+export type UnitKind = "REQUEST" | "CREDIT" | "USD" | "FREE";
 
-export type { UnitKind, BackendUnitKind };
+/** Canonical unit dimension (QUOTA.md Option A). Uppercase on the wire; null/absent = legacy. */
+export type BackendUnitKind = "REQUEST" | "CREDIT" | "USD" | "FREE";
 
 /** Normalize wire unit_kind (uppercase) to the UI UnitKind; unknown/absent → null (legacy). */
 export function normalizeUnitKind(value: unknown): UnitKind | null {

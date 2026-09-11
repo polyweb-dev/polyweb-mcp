@@ -1,4 +1,4 @@
-import type { Capability } from "@/types/freesearch";
+import type { Capability } from "./types";
 
 export interface StaticProviderMeta {
   id: string;

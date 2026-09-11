@@ -1,4 +1,5 @@
-import type { ProviderConfig, RoutingPreset } from "@/types/freesearch";
+import type { ProviderConfig } from "@/domains/providers/model/types";
+import type { RoutingPreset } from "./types";
 
 export type RoutingOperation = "search" | "fetch";
 
