@@ -115,7 +115,7 @@ const playgroundOwnerFiles = [
   "../../features/playground/ui/FetchResult.tsx",
 ]
 const appPath = path.resolve(testDir, "../../App.tsx")
-const statusBarPath = path.resolve(testDir, "../layout/StatusBar.tsx")
+const statusBarPath = path.resolve(testDir, "../../app/layout/StatusBar.tsx")
 const pgf1Path = path.resolve(testDir, "../search/SearchPlayground.pg-f1.test.tsx")
 
 const simulatorSource = simulatorOwnerFiles
@@ -613,12 +613,6 @@ describe("Slice 5 shim compatibility: routing shells re-export feature owners", 
     const shim = readFileSync(path.resolve(testDir, "./RouteSimulator.tsx"), "utf8")
     expect(shim).toContain("RouteSimulator")
     expect(shim).toContain("features/routing/ui/RouteSimulator")
-  })
-
-  it("RoutingStrategy shell re-exports the routing feature without forking UI", () => {
-    const shim = readFileSync(path.resolve(testDir, "./RoutingStrategy.tsx"), "utf8")
-    expect(shim).toContain("RoutingStrategy")
-    expect(shim).toContain("features/routing/ui/RoutingStrategy")
   })
 
   it("SearchPlayground shell re-exports the playground feature without forking UI", () => {

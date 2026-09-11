@@ -92,7 +92,6 @@ const sharedComposerShellPath = path.resolve(
   testDir,
   "../../shared/ui/ComposerShell.tsx"
 )
-const layoutShimPath = path.resolve(testDir, "./StatusBar.tsx")
 const sidebarOwnerPath = path.resolve(testDir, "../../app/layout/Sidebar.tsx")
 const appPath = path.resolve(testDir, "../../App.tsx")
 // Slice 5 moved the playground/routing pages into features/: the old entry
@@ -112,7 +111,6 @@ const indexCssPath = path.resolve(testDir, "../../index.css")
 
 const appSource = readFileSync(appPath, "utf8")
 const dashboardShellSource = readFileSync(dashboardShellPath, "utf8")
-const layoutShimSource = readFileSync(layoutShimPath, "utf8")
 const sidebarOwnerSource = readFileSync(sidebarOwnerPath, "utf8")
 const sharedComposerShellSource = readFileSync(sharedComposerShellPath, "utf8")
 
@@ -243,8 +241,7 @@ describe("AC-R1-1: StatusBar module contract", () => {
     expect(existsSync(statusBarPath)).toBe(true)
     expect(statusBarSource()).toContain("StatusBar")
     expect(statusBarSource()).toMatch(/export\s+(function|const)\s+StatusBar/)
-    // Old layout path stays as a compat shim over the app owner.
-    expect(layoutShimSource).toMatch(/from\s+["']@\/app\/layout\/StatusBar["']/)
+    // Migration complete: the old layout shell is gone (see git history); the app owner above is canonical.
   })
 
   it("takes no props (prop-less component)", () => {

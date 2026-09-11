@@ -40,9 +40,8 @@ import {
  */
 
 const testDir = import.meta.dirname
-// Slice 5 ownership: RoutingStrategy.tsx is a compatibility shell over
-// features/routing. Read the joined owner sources (same strength as the
-// monolith read) plus the shell for the shim-compat assert below.
+// Slice 5 ownership: strategy UI lives in features/routing (shell removed
+// at migration completion). Read the joined owner sources.
 const strategyOwnerFiles = [
   "../../features/routing/ui/RoutingStrategy.tsx",
   "../../features/routing/ui/StrategyCardButton.tsx",
@@ -50,11 +49,6 @@ const strategyOwnerFiles = [
 const strategySource = strategyOwnerFiles
   .map((file) => readFileSync(path.resolve(testDir, file), "utf8"))
   .join("\n")
-const strategyShim = readFileSync(
-  path.resolve(testDir, "./RoutingStrategy.tsx"),
-  "utf8"
-)
-
 function renderRouting() {
   const stub = installFetchStub((req) => {
     if (req.url === "/api/v1/providers" && req.method === "GET") {
@@ -195,16 +189,5 @@ describe("R-STRAT AC-R-STRAT-2: strategy cards and selection logic intact", () =
     expect(strategySource).toContain("getEligibleProviders")
     expect(strategySource).toContain("free_first")
     expect(strategySource).toContain("balanced")
-  })
-})
-
-describe("Slice 5 shim compatibility: RoutingStrategy shell re-exports the feature owner", () => {
-  afterEach(() => {
-    vi.unstubAllGlobals()
-  })
-
-  it("re-exports RoutingStrategy without forking UI", () => {
-    expect(strategyShim).toContain("RoutingStrategy")
-    expect(strategyShim).toContain("features/routing/ui/RoutingStrategy")
   })
 })

@@ -117,7 +117,8 @@ const executionTypesSource = readFileSync(
   path.resolve(testDir, "../../domains/execution/model/types.ts"),
   "utf8"
 )
-const requestUtilsSource = readFileSync(path.resolve(testDir, "../../domains/execution/model/requestUtils.ts"),"utf8");const contextSource = readFileSync(
+const requestUtilsSource = readFileSync(path.resolve(testDir, "../../domains/execution/model/requestUtils.ts"),"utf8");
+const executionStateSource = readFileSync(path.resolve(testDir, "../../domains/execution/state/ExecutionContext.tsx"),"utf8");const contextSource = readFileSync(
   path.resolve(testDir, "../../context/FreeSearchContext.tsx"),
   "utf8"
 )
@@ -488,14 +489,17 @@ describe("PG-S5 AC-PG-S5-3: source number contract (playground/types/context)", 
     // prefer dies: no prefer literal and no request.mode read remain.
     expect(contextSource).not.toContain('"prefer"')
     expect(contextSource).not.toContain("request.mode")
-    // Number routing: pinned -> require, auto otherwise.
-    expect(contextSource).toMatch(
+    // Number routing: pinned -> require, auto otherwise (canonical owner is
+    // the execution domain; the context wires runSearch through).
+    expect(executionStateSource).toMatch(
       /providerIds\.length\s*>\s*0\s*\?\s*["']require["']\s*:\s*["']auto["']/
     )
-    // clampLimit is unchanged (still the 1..100 trunc guard) — canonical owner is the execution model; context wires it.
+    expect(executionStateSource).toContain("runSearch")
+    expect(contextSource).toContain("FreeSearchInner")
+    // clampLimit is unchanged (still the 1..100 trunc guard) â€” canonical owner is the execution model; context wires it.
     expect(requestUtilsSource).toContain("function clampLimit")
     expect(requestUtilsSource).toContain("Math.min(100, Math.max(1")
-    expect(contextSource).toContain("clampLimit")
+    expect(executionStateSource).toContain("clampLimit")
   })
 
   it("preserves the shared SegmentedControl.tsx file (no deletion)", () => {

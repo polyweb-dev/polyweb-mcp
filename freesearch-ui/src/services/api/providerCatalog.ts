@@ -1,6 +1,2 @@
-export {
-  PROVIDER_CATALOG,
-  catalogEntryForId,
-  catalogNameOf,
-} from "@/domains/providers";
+export { PROVIDER_CATALOG, catalogNameOf } from "@/domains/providers";
 export type { StaticProviderMeta } from "@/domains/providers";

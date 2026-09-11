@@ -23,7 +23,7 @@ import {
   canonicalTotalsFixture,
   canonicalRecentUsageFixture,
   providerStatus,
-} from "@/test/backendFixtures"
+} from "@/test/fixtures"
 
 /**
  * RED: `src/services/api/mappers.ts` does not exist yet. The Developer

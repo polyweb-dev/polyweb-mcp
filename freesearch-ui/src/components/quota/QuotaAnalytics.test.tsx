@@ -1,4 +1,4 @@
-ï»¿import React from "react"
+import React from "react"
 import { describe, it, expect, afterEach, vi } from "vitest"
 import { render, screen, waitFor } from "@testing-library/react"
 import { FreeSearchProvider } from "@/context/FreeSearchContext"
@@ -11,12 +11,12 @@ import {
   canonicalQuotasFixture,
   canonicalTotalsFixture,
   type WireDashboard,
-} from "@/test/backendFixtures"
+} from "@/test/fixtures"
 
 /**
- * RED (new file): quota telemetry comes from the dashboard â€” usage_totals
+ * RED (new file): quota telemetry comes from the dashboard — usage_totals
  * aggregates are shown, an empty latest_quota renders a "quota unavailable"
- * notice, per-provider null limits render "â€”"/blank (RF2: never âˆž), and no
+ * notice, per-provider null limits render "—"/blank (RF2: never 8), and no
  * invented savings/cache numbers (248/814/342) may appear.
  */
 function renderWithBackend(dashboard: WireDashboard) {
@@ -80,16 +80,16 @@ describe("QuotaAnalytics (live backend)", () => {
     expect(screen.getAllByText(/quota unavailable|unavailable/i).length).toBeGreaterThan(0)
   })
 
-  it("RF2: renders per-provider null limits as â€”/blank, never âˆž or numbers", async () => {
+  it("RF2: renders per-provider null limits as —/blank, never 8 or numbers", async () => {
     renderWithBackend(dashboardFixture())
     await waitFor(() => {
       expect(screen.getByText("Tavily", { exact: true })).toBeInTheDocument()
     })
 
-    // RF2: null limits stay blank/â€” on every surface. âˆž is retired.
+    // RF2: null limits stay blank/— on every surface. 8 is retired.
     const body = document.body.textContent ?? ""
-    expect(body).not.toContain("âˆž")
-    expect(screen.getAllByText(/â€”/).length).toBeGreaterThan(0)
+    expect(body).not.toContain("8")
+    expect(screen.getAllByText(/—/).length).toBeGreaterThan(0)
   })
 
   it("renders authoritative latest_quota values for Brave", async () => {
@@ -234,7 +234,7 @@ describe("QuotaAnalytics (live backend)", () => {
     const row = screen.getByText("You.com quota", { exact: true }).closest("tr")!
     expect(row.textContent).toContain("estimated")
     expect(row.textContent).toContain("4.75")
-    // RF2 (null-limit â€”) is locked by the dedicated RF2 test above; here we
+    // RF2 (null-limit —) is locked by the dedicated RF2 test above; here we
     // lock the You.com remaining-only note semantics.
     expect(row.textContent).toMatch(/no hard limit/i)
     expect(row.textContent).toMatch(/call equivalents are derived, not a vendor limit/i)

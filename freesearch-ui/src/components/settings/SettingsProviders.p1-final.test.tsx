@@ -13,7 +13,7 @@ import {
   allProvidersFixture,
   routingConfigFixture,
   dashboardFixture,
-} from "@/test/backendFixtures"
+} from "@/test/fixtures"
 
 /**
  * P1-FINAL Providers-into-Settings merge — BDD Acceptance (RED phase).

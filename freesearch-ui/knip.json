@@ -8,16 +8,15 @@
     "src/**/*.{ts,tsx}"
   ],
   "ignore": [
-    "src/components/ui/**"
+    "src/components/ui/**",
+    "src/shared/ui/**"
   ],
   "ignoreDependencies": [
     "@fontsource-variable/jetbrains-mono",
     "@fontsource-variable/plus-jakarta-sans",
     "shadcn",
     "tailwindcss",
-    "tw-animate-css",
-    "@stryker-mutator/core",
-    "@stryker-mutator/vitest-runner"
+    "tw-animate-css"
   ],
   "ignoreExportsUsedInFile": true,
   "rules": {
