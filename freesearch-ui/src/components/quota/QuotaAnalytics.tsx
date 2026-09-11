@@ -88,8 +88,7 @@ export const QuotaAnalytics: React.FC<{
         <div className="border-b border-[var(--border-subtle)] bg-[var(--elevated)] px-4 py-2.5">
           <h3 id="usage-totals-heading" className="text-[13px] font-semibold text-[var(--text-strong)]">Usage totals</h3>
           <p className="mt-1 text-[12px] text-[var(--muted)]">
-            Grouped by provider, operation, and unit. Dimensions are never
-            summed together — compare values only within the same unit.
+            Grouped by provider, operation, and unit. Compare values only within the same unit.
           </p>
         </div>
         {usageTotals.length === 0 ? (
