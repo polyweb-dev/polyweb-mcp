@@ -48,7 +48,7 @@ export function createExecuteHandler(deps: ExecuteActionDeps): (e?: FormEvent) =
           ? { providerIds: [selectedProvider] }
           : {}),
         maxResults: resultCount,
-        timeoutMs: 3000,
+        timeoutMs: 5000,
       })
       showResult(res?.results[0] ?? null)
     } else {

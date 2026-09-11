@@ -462,7 +462,7 @@ describe("FreeSearchContext (live backend)", () => {
           query: "  live backend query  ",
           providerIds: providerIds as unknown as string[] | undefined,
           maxResults: 6,
-          timeoutMs: 3000,
+          timeoutMs: 5000,
         })
       })
 
@@ -515,7 +515,7 @@ describe("FreeSearchContext (live backend)", () => {
         query: "q",
         providerIds: ["youcom"],
         maxResults: 500,
-        timeoutMs: 3000,
+        timeoutMs: 5000,
       })
     })
 
@@ -531,20 +531,20 @@ describe("FreeSearchContext (live backend)", () => {
 
   it("runSearch failure keeps the last-good response and surfaces searchError", async () => {
     const server = createServer()
-    const { stub, result } = await mountLoaded(server)
+    const { result } = await mountLoaded(server)
 
     await act(async () => {
       await result.current.runSearch({
         query: "first",
         maxResults: 6,
-        timeoutMs: 3000,
+        timeoutMs: 5000,
       })
     })
     expect(result.current.activeSearch?.query).toBe("live backend query")
 
     // Point the global fetch at a failing /search while keeping the other
     // routes healthy (the context calls globalThis.fetch per request):
-    installFetchStub((req) => {
+    const failing = installFetchStub((req) => {
       if (req.url === "/search") return err(503, { detail: "no provider is configured" })
       if (req.url === "/api/v1/providers") return ok(server.providers)
       if (req.url === "/api/v1/routing/config") return ok(server.routing)
@@ -556,14 +556,150 @@ describe("FreeSearchContext (live backend)", () => {
       const response = await result.current.runSearch({
         query: "second",
         maxResults: 6,
-        timeoutMs: 3000,
+        timeoutMs: 5000,
       })
       expect(response).toBeNull()
     })
 
     expect(result.current.activeSearch?.query).toBe("live backend query")
     expect(result.current.searchError).toContain("no provider is configured")
-    expect(stub.requestsTo("/search")).toHaveLength(1)
+    // Fallback engaged once (primary + next-best), then surfaced: never the
+    // same provider twice.
+    const searches = failing.requestsTo("/search")
+    expect(searches).toHaveLength(2)
+    expect(searches[0].body).toMatchObject({ routing: { mode: "auto", providers: [] } })
+    expect(searches[1].body).toMatchObject({ routing: { mode: "require" } })
+    const tried = searches.map((r) => JSON.stringify((r.body as { routing: { providers: string[] } }).routing.providers))
+    expect(new Set(tried).size).toBe(2)
+  })
+
+  it("runSearch falls back to the next-best provider when the pinned primary aborts", async () => {
+    const server = createServer()
+    const { result } = await mountLoaded(server)
+    let searchCalls = 0
+    const retried = installFetchStub((req) => {
+      if (req.url === "/api/v1/providers" && req.method === "GET") {
+        return ok(server.providers)
+      }
+      if (req.url === "/api/v1/routing/config" && req.method === "GET") {
+        return ok(server.routing)
+      }
+      if (req.url.startsWith("/dashboard") && req.method === "GET") {
+        return ok(server.dashboard)
+      }
+      if (req.url === "/search" && req.method === "POST") {
+        searchCalls += 1
+        if (searchCalls === 1) {
+          // Hung pinned primary: the client timeout aborts it, exactly like
+          // the slow first searches in production.
+          return new Promise<Response>((_resolve, reject) => {
+            req.signal?.addEventListener("abort", () => {
+              reject(new DOMException("The operation was aborted due to timeout", "TimeoutError"))
+            })
+          })
+        }
+        return ok(
+          searchResponseFixture({
+            provider: "keenable",
+            usage: {
+              provider: "keenable",
+              operation: "search",
+              units: "1",
+              observed_at: "2026-09-06T10:02:00Z",
+              request_id: "req-fallback",
+              metadata: {},
+              latency_ms: 210,
+              status: "success",
+            },
+          })
+        )
+      }
+      return err(404, { detail: "unhandled test route" })
+    })
+
+    let response: unknown = "unset"
+    await act(async () => {
+      response = await result.current.runSearch({
+        query: "pinned abort",
+        providerIds: ["brave"],
+        maxResults: 6,
+        timeoutMs: 100,
+      })
+    })
+
+    // Fallback served results with honest attribution and no error surface.
+    expect(response).not.toBeNull()
+    expect(result.current.searchError).toBeNull()
+    expect(result.current.activeSearch?.selectedProviderId).toBe("keenable")
+    expect(result.current.activeSearch?.fallbackChain).toEqual(["keenable"])
+    const searches = retried.requestsTo("/search")
+    expect(searches).toHaveLength(2)
+    expect(searches[0].body).toMatchObject({
+      routing: { mode: "require", providers: ["brave"] },
+    })
+    expect(searches[1].body).toMatchObject({
+      routing: { mode: "require", providers: ["keenable"] },
+    })
+  })
+
+  it("runSearch falls back in auto mode when the arbitrated pick fails", async () => {
+    const server = createServer()
+    const { result } = await mountLoaded(server)
+    let searchCalls = 0
+    const retried = installFetchStub((req) => {
+      if (req.url === "/api/v1/providers" && req.method === "GET") {
+        return ok(server.providers)
+      }
+      if (req.url === "/api/v1/routing/config" && req.method === "GET") {
+        return ok(server.routing)
+      }
+      if (req.url.startsWith("/dashboard") && req.method === "GET") {
+        return ok(server.dashboard)
+      }
+      if (req.url === "/search" && req.method === "POST") {
+        searchCalls += 1
+        if (searchCalls === 1) return err(503, { detail: "brave overloaded" })
+        return ok(
+          searchResponseFixture({
+            provider: "keenable",
+            usage: {
+              provider: "keenable",
+              operation: "search",
+              units: "1",
+              observed_at: "2026-09-06T10:02:00Z",
+              request_id: "req-auto-fallback",
+              metadata: {},
+              latency_ms: 212,
+              status: "success",
+            },
+          })
+        )
+      }
+      return err(404, { detail: "unhandled test route" })
+    })
+
+    let response: unknown = "unset"
+    await act(async () => {
+      response = await result.current.runSearch({
+        query: "auto failover",
+        maxResults: 6,
+        timeoutMs: 5000,
+      })
+    })
+
+    expect(response).not.toBeNull()
+    expect(result.current.searchError).toBeNull()
+    expect(result.current.activeSearch?.selectedProviderId).toBe("keenable")
+    const searches = retried.requestsTo("/search")
+    expect(searches).toHaveLength(2)
+    expect(searches[0].body).toMatchObject({
+      routing: { mode: "auto", providers: [] },
+    })
+    // Auto fallback walks past the inferred arbitrated head (brave) to the
+    // next-best provider without ever retrying the failed pick.
+    expect(searches[1].body).toMatchObject({
+      routing: { mode: "require", providers: ["keenable"] },
+    })
   })
 
   it("runFetch uses routing require when a providerId is set", async () => {
@@ -866,7 +1002,7 @@ describe("FreeSearchContext (live backend)", () => {
       await utils.result.current.runSearch({
         query: "optimistic units",
         maxResults: 6,
-        timeoutMs: 3000,
+        timeoutMs: 5000,
       })
     })
 

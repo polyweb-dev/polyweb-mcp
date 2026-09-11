@@ -508,6 +508,21 @@ describe("PG-S5 AC-PG-S5-3: source number contract (playground/types/context)", 
     expect(executionStateSource).toContain("clampLimit")
   })
 
+  it("playground search uses a 5000ms timeout budget (fetch stays 4000ms)", () => {
+    const executeSource = readFileSync(
+      path.resolve(testDir, "../../features/playground/model/playgroundExecuteAction.ts"),
+      "utf8"
+    )
+    const searchBranch = executeSource.slice(
+      executeSource.indexOf('if (mode === "search")'),
+      executeSource.indexOf("} else {")
+    )
+    expect(searchBranch).toContain("timeoutMs: 5000")
+    expect(searchBranch).not.toContain("timeoutMs: 3000")
+    // Fetch contract untouched.
+    expect(executeSource).toContain("timeoutMs: 4000")
+  })
+
   it("preserves the shared SegmentedControl.tsx file (no deletion)", () => {
     expect(existsSync(segmentedPath)).toBe(true)
     const segmentedSource = readFileSync(segmentedPath, "utf8")
