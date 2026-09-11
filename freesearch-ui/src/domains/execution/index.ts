@@ -7,3 +7,13 @@ export type {
   FetchedDocument,
   FetchResponse,
 } from "./model/types";
+export type {
+  BackendUsageStatus,
+  BackendSearchRequest,
+  BackendSearchResult,
+  BackendUsageEvent,
+  BackendSearchResponse,
+  BackendFetchRequest,
+  BackendFetchedDocument,
+  BackendFetchResponse,
+} from "./api/wire";

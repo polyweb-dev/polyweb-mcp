@@ -9,3 +9,18 @@ export type {
   ProviderQuota,
   ProviderConfig,
 } from "./model/types";
+export type {
+  BackendBreakerState,
+  BackendHealth,
+  BackendSecretPresence,
+  BackendSecretSource,
+  BackendCircuitBreaker,
+  BackendProviderStatus,
+  BackendProviderTest,
+  BackendSecretStatus,
+} from "./api/wire";
+export type {
+  BackendOAuthFlowStatus,
+  BackendOAuthDeviceCode,
+  BackendOAuthStatus,
+} from "./api/oauthWire";
