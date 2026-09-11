@@ -1,6 +1,6 @@
 import React from "react"
 import { useFreeSearch } from "@/context/useFreeSearch"
-import { Switch } from "@/components/common/Switch"
+import { Switch } from "@/shared/ui/Switch"
 
 /**
  * Failover policy: one master chaining switch over a vertical stack of

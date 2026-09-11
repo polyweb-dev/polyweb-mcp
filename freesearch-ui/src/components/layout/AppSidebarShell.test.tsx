@@ -35,6 +35,13 @@ import {
 
 const testDir = import.meta.dirname
 const appSource = readFileSync(path.resolve(testDir, "../../App.tsx"), "utf8")
+// Slice 4: route table lives in app/routes, the flex-row shell + Routes table
+// in app/DashboardShell.tsx; App.tsx is a thin AppProviders>DashboardShell shim.
+const routesSource = readFileSync(path.resolve(testDir, "../../app/routes.ts"), "utf8")
+const dashboardShellSource = readFileSync(
+  path.resolve(testDir, "../../app/DashboardShell.tsx"),
+  "utf8"
+)
 const packageJsonRaw = readFileSync(
   path.resolve(testDir, "../../../package.json"),
   "utf8"
@@ -218,7 +225,10 @@ describe("AC-SB-8d (C4): shell keeps the link+router contract", () => {
       ...(packageJson.devDependencies ?? {}),
     }
     expect(Object.keys(allDeps)).toContain("react-router")
-    expect(appSource).toMatch(/react-router/i)
+    expect(dashboardShellSource).toMatch(/react-router/i)
+    // Thin App shim composes the shell; the shell owns the router wiring.
+    expect(appSource).toContain("DashboardShell")
+    expect(appSource).toContain("AppProviders")
   })
 
   it("P1-FINAL: legacy /providers redirects to the merged Settings registry", async () => {
@@ -234,8 +244,8 @@ describe("AC-SB-8d (C4): shell keeps the link+router contract", () => {
   })
 
   it("App source declares the Routes table with redirect + catch-all", () => {
-    expect(appSource).toMatch(/<Routes/)
-    expect(appSource).toMatch(/<Route/)
+    expect(dashboardShellSource).toMatch(/<Routes/)
+    expect(dashboardShellSource).toMatch(/<Route/)
     for (const routePath of [
       "/playground",
       "/routing",
@@ -243,11 +253,13 @@ describe("AC-SB-8d (C4): shell keeps the link+router contract", () => {
       "/activity",
       "/settings",
     ]) {
-      expect(appSource).toContain(`"${routePath}"`)
+      expect(routesSource).toContain(`"${routePath}"`)
     }
     // Root redirect and unknown-path fallback both land on the playground.
-    expect(appSource).toMatch(/<Navigate/)
-    expect(appSource).toContain('"/playground"')
+    expect(dashboardShellSource).toMatch(/<Navigate/)
+    expect(dashboardShellSource).toContain('"/playground"')
+    // Thin App shim renders the shell that owns the table.
+    expect(appSource).toContain("DashboardShell")
   })
 })
 
@@ -305,14 +317,16 @@ describe("AC-SB-8e: PillTabs gold standard untouched", () => {
 
 describe("AC-SB-8f: App source wires Sidebar into the flex-row shell", () => {
   it("App source imports and renders the Sidebar", () => {
-    expect(appSource).toMatch(
-      /from\s+["']@\/components\/layout\/Sidebar["']/
+    expect(dashboardShellSource).toMatch(
+      /from\s+["']@\/app\/layout\/Sidebar["']/
     )
-    expect(appSource.includes("<Sidebar")).toBe(true)
+    expect(dashboardShellSource.includes("<Sidebar")).toBe(true)
+    // Thin App shim renders the shell; the old Sidebar path re-exports it.
+    expect(appSource).toContain("DashboardShell")
   })
 
   it("App source declares the horizontal shell", () => {
-    expect(appSource).toMatch(/flex-row/)
+    expect(dashboardShellSource).toMatch(/flex-row/)
   })
 
   it("App exposes the sidebar collapse toggle", async () => {

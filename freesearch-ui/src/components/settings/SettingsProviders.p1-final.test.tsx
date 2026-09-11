@@ -1,4 +1,4 @@
-﻿import React from "react"
+import React from "react"
 import { readFileSync } from "node:fs"
 import path from "node:path"
 import { describe, expect, it, afterEach, vi, beforeEach } from "vitest"
@@ -71,9 +71,37 @@ import {
 
 const testDir = import.meta.dirname
 const settingsSource = readFileSync(path.resolve(testDir, "./SettingsProviders.tsx"), "utf8")
+// Slice 4: row/modal siblings own their sources; assertions run against the
+// new owners plus the union of the registry feature owners.
+const settingsModalSource = readFileSync(
+  path.resolve(testDir, "./ProviderTestModal.tsx"),
+  "utf8"
+)
+const modalShimSource = readFileSync(path.resolve(testDir, "../common/Modal.tsx"), "utf8")
+const dialogShimSource = readFileSync(path.resolve(testDir, "../ui/dialog.tsx"), "utf8")
+const tableShimSource = readFileSync(path.resolve(testDir, "../ui/table.tsx"), "utf8")
+const settingsFeatureSource = [
+  settingsSource,
+  settingsModalSource,
+  readFileSync(path.resolve(testDir, "./ProviderRegistryRow.tsx"), "utf8"),
+  readFileSync(path.resolve(testDir, "./ProviderRegistryHeader.tsx"), "utf8"),
+  readFileSync(path.resolve(testDir, "./ProviderHealthStatus.tsx"), "utf8"),
+  readFileSync(path.resolve(testDir, "./ProviderPriorityControl.tsx"), "utf8"),
+  readFileSync(path.resolve(testDir, "./ProviderRowPill.tsx"), "utf8"),
+  readFileSync(path.resolve(testDir, "./ProviderOperationControl.tsx"), "utf8"),
+  readFileSync(path.resolve(testDir, "./providerDisplay.ts"), "utf8"),
+].join("\n")
 const appSource = readFileSync(path.resolve(testDir, "../../App.tsx"), "utf8")
+const dashboardShellSource = readFileSync(
+  path.resolve(testDir, "../../app/DashboardShell.tsx"),
+  "utf8"
+)
 const sidebarSource = readFileSync(
   path.resolve(testDir, "../layout/Sidebar.tsx"),
+  "utf8"
+)
+const routesNavSource = readFileSync(
+  path.resolve(testDir, "../../app/layout/SidebarNavList.tsx"),
   "utf8"
 )
 
@@ -253,9 +281,11 @@ describe("P1F-1: Settings registry is ONE merged table with 7 columns", () => {
   })
 
   it("reuses ui/table primitives for the merged table", () => {
-    expect(settingsSource).toContain('from "@/components/ui/table"')
+    expect(settingsFeatureSource).toContain('from "@/shared/ui/table"')
+    // Old ui path stays as a compat shim over the shared owner.
+    expect(tableShimSource).toMatch(/from\s+["']@\/shared\/ui\/table["']/)
     for (const symbol of ["Table", "TableHeader", "TableBody", "TableRow", "TableHead", "TableCell"]) {
-      expect(settingsSource, `SettingsProviders must reuse ${symbol}`).toContain(symbol)
+      expect(settingsFeatureSource, `SettingsProviders must reuse ${symbol}`).toContain(symbol)
     }
   })
 })
@@ -379,12 +409,17 @@ describe("P1F-3: endpoint/health ride in the merged row", () => {
 
 describe("P1F-4: icon opens the ProviderTestModal (never fetches on open)", () => {
   it("declares the ProviderTestModal on a Modal/Dialog wrapper in source", () => {
+    expect(settingsModalSource).toContain("ProviderTestModal")
+    // The page renders the extracted modal sibling.
     expect(settingsSource).toContain("ProviderTestModal")
     expect(
-      settingsSource.includes("@/components/common/Modal") ||
-        settingsSource.includes("@/components/ui/dialog") ||
-        settingsSource.includes("from \"@/components/ui/dialog\"")
+      settingsModalSource.includes("@/shared/ui/Modal") ||
+        settingsModalSource.includes("@/shared/ui/dialog") ||
+        settingsModalSource.includes("from \"@/shared/ui/dialog\"")
     ).toBe(true)
+    // Old Modal/Dialog paths stay as compat shims over the shared owners.
+    expect(modalShimSource).toMatch(/from\s+["']@\/shared\/ui\/Modal["']/)
+    expect(dialogShimSource).toMatch(/from\s+["']@\/shared\/ui\/dialog["']/)
   })
 
   it("exposes one icon test button per row in the Test column", async () => {
@@ -497,8 +532,8 @@ describe("P1F-5: fleet stat cards + capability filter are gone from Settings", (
     for (const card of ["Total fleet", "Health status", "Zero-key tiers", "Fleet avg latency"]) {
       expect(screen.queryByText(card, { exact: true })).not.toBeInTheDocument()
     }
-    expect(settingsSource).not.toMatch(/Total fleet/)
-    expect(settingsSource).not.toMatch(/Fleet avg latency/)
+    expect(settingsFeatureSource).not.toMatch(/Total fleet/)
+    expect(settingsFeatureSource).not.toMatch(/Fleet avg latency/)
   })
 
   it("renders no All/Search/Fetch/Keyless provider filter group", async () => {
@@ -511,7 +546,7 @@ describe("P1F-5: fleet stat cards + capability filter are gone from Settings", (
         within(g).queryByRole("button", { name: /^keyless$/i })
     )
     expect(filters).toHaveLength(0)
-    expect(settingsSource).not.toMatch(/Provider filter/)
+    expect(settingsFeatureSource).not.toMatch(/Provider filter/)
   })
 })
 
@@ -521,17 +556,24 @@ describe("P1F-5: fleet stat cards + capability filter are gone from Settings", (
 
 describe("P1F-6: Providers page retired — redirect + no providers nav", () => {
   it("App drops the ProviderMatrix route and redirects /providers -> /settings", () => {
+    expect(dashboardShellSource).not.toMatch(/ProviderMatrix/)
     expect(appSource).not.toMatch(/ProviderMatrix/)
-    expect(appSource).toContain('path="/providers"')
-    const idx = appSource.indexOf('path="/providers"')
-    const window_ = appSource.slice(idx, idx + 300)
+    // Thin App shim renders the shell that owns the redirect.
+    expect(appSource).toContain("DashboardShell")
+    expect(dashboardShellSource).toContain('path="/providers"')
+    const idx = dashboardShellSource.indexOf('path="/providers"')
+    const window_ = dashboardShellSource.slice(idx, idx + 300)
     expect(window_, "/providers must Navigate to /settings").toMatch(/Navigate/)
     expect(window_, "/providers must Navigate to /settings").toContain("/settings")
   })
 
   it("Sidebar drops the providers TabId, nav item, and route target", () => {
+    expect(routesNavSource).not.toContain('"providers"')
+    expect(routesNavSource).not.toContain('"/providers"')
     expect(sidebarSource).not.toContain('"providers"')
     expect(sidebarSource).not.toContain('"/providers"')
+    // Compat shim keeps the old sidebar import surface working.
+    expect(sidebarSource).toMatch(/from\s+["']@\/app\/layout\/Sidebar["']/)
   })
 
   it("Sidebar renders exactly five workspace links (no Providers)", async () => {
@@ -549,7 +591,7 @@ describe("P1F-6: Providers page retired — redirect + no providers nav", () => 
 
   it("SettingsProviders carries the fleet merge markers", () => {
     for (const marker of ["Endpoint", "Health", "Quota", "p95", "ProviderTestModal"]) {
-      expect(settingsSource, `merged table must carry ${marker}`).toContain(marker)
+      expect(settingsFeatureSource, `merged table must carry ${marker}`).toContain(marker)
     }
   })
 })

@@ -40,6 +40,33 @@ import type { TabId } from "./Sidebar"
 
 const testDir = import.meta.dirname
 const sidebarSource = readFileSync(path.resolve(testDir, "./Sidebar.tsx"), "utf8")
+// Slice 4: canonical owners — route identifiers in app/routes, Sidebar shell
+// in app/layout/Sidebar.tsx, nav items in SidebarNavList.tsx, collapse +
+// drawer state in useSidebarState.ts, brand in SidebarBrand.tsx.
+const routesSource = readFileSync(path.resolve(testDir, "../../app/routes.ts"), "utf8")
+const sidebarOwnerSource = readFileSync(
+  path.resolve(testDir, "../../app/layout/Sidebar.tsx"),
+  "utf8"
+)
+const sidebarNavSource = readFileSync(
+  path.resolve(testDir, "../../app/layout/SidebarNavList.tsx"),
+  "utf8"
+)
+const sidebarStateSource = readFileSync(
+  path.resolve(testDir, "../../app/layout/useSidebarState.ts"),
+  "utf8"
+)
+const sidebarBrandSource = readFileSync(
+  path.resolve(testDir, "../../app/layout/SidebarBrand.tsx"),
+  "utf8"
+)
+const sidebarFeatureSource = [
+  routesSource,
+  sidebarOwnerSource,
+  sidebarNavSource,
+  sidebarStateSource,
+  sidebarBrandSource,
+].join("\n")
 const packageJsonRaw = readFileSync(
   path.resolve(testDir, "../../../package.json"),
   "utf8"
@@ -118,7 +145,7 @@ afterEach(() => {
 
 describe("AC-SB-1: Sidebar module contract", () => {
   it("exports TabId verbatim including 'quotas'", () => {
-    expect(sidebarSource).toMatch(/export\s+(type|interface)\s+TabId/)
+    expect(routesSource).toMatch(/export\s+(type|interface)\s+TabId/)
     for (const id of [
       "playground",
       "routing",
@@ -126,33 +153,41 @@ describe("AC-SB-1: Sidebar module contract", () => {
       "activity",
       "settings",
     ]) {
-      expect(sidebarSource).toContain(`"${id}"`)
+      expect(routesSource).toContain(`"${id}"`)
     }
+    // Compat shim keeps the old import surface working.
+    expect(sidebarSource).toContain("TabId")
+    expect(sidebarSource).toMatch(/from\s+["']@\/app\/routes["']/)
   })
 
   it("declares navItems with all five tab ids (P1-FINAL: no providers)", () => {
-    expect(sidebarSource).toMatch(/navItems/)
+    expect(sidebarNavSource).toMatch(/navItems/)
     for (const { id } of EXPECTED_NAV) {
-      expect(sidebarSource).toContain(`"${id}"`)
+      expect(sidebarNavSource).toContain(`"${id}"`)
     }
+    // The shell renders the extracted NavList; the shim re-exports the shell.
+    expect(sidebarOwnerSource).toContain("NavList")
+    expect(sidebarSource).toMatch(/from\s+["']@\/app\/layout\/Sidebar["']/)
   })
 
   it("P1-FINAL: drops the providers TabId entirely (page retired)", () => {
+    expect(sidebarFeatureSource).not.toContain('"providers"')
+    expect(sidebarFeatureSource).not.toContain('"/providers"')
     expect(sidebarSource).not.toContain('"providers"')
     expect(sidebarSource).not.toContain('"/providers"')
   })
 
   it("declares prop-less routing with optional collapse controls", () => {
-    expect(sidebarSource).toMatch(/SidebarProps/)
-    expect(sidebarSource).not.toContain("activeTab")
-    expect(sidebarSource).not.toContain("onSelectTab")
-    expect(sidebarSource).toContain("collapsed")
-    expect(sidebarSource).toContain("defaultCollapsed")
-    expect(sidebarSource).toContain("onCollapsedChange")
+    expect(sidebarOwnerSource).toMatch(/SidebarProps/)
+    expect(sidebarOwnerSource).not.toContain("activeTab")
+    expect(sidebarOwnerSource).not.toContain("onSelectTab")
+    expect(sidebarOwnerSource).toContain("collapsed")
+    expect(sidebarOwnerSource).toContain("defaultCollapsed")
+    expect(sidebarOwnerSource).toContain("onCollapsedChange")
   })
 
   it("imports icons from lucide-react / hugeicons existing deps only", () => {
-    expect(sidebarSource).toMatch(
+    expect(sidebarFeatureSource).toMatch(
       /from\s+["'](lucide-react|@hugeicons\/react)["']/
     )
     expect(sidebarSource).not.toMatch(/from\s+["']react-icons["']/)
@@ -283,8 +318,8 @@ describe("AC-SB-2 (C4, P1-FINAL): landmark + five router links, URL changes on n
       ...(packageJson.devDependencies ?? {}),
     }
     expect(Object.keys(allDeps)).toContain("react-router")
-    expect(sidebarSource).toMatch(/react-router/i)
-    expect(sidebarSource.includes("<NavLink")).toBe(true)
+    expect(sidebarNavSource).toMatch(/react-router/i)
+    expect(sidebarNavSource.includes("<NavLink")).toBe(true)
   })
 })
 
@@ -348,7 +383,7 @@ describe("AC-SB-3: single active indicator tracks the router", () => {
   })
 
   it("Sidebar source wires the active state to the signal token", () => {
-    expect(sidebarSource.toLowerCase().includes("signal")).toBe(true)
+    expect(sidebarNavSource.toLowerCase().includes("signal")).toBe(true)
   })
 })
 
@@ -364,7 +399,9 @@ describe("AC-SB-4: keyboard focus ring + reduced-motion", () => {
   })
 
   it("Sidebar source declares reduced-motion handling", () => {
-    expect(sidebarSource).toMatch(/motion-reduce:|prefers-reduced-motion/)
+    expect(sidebarFeatureSource).toMatch(/motion-reduce:|prefers-reduced-motion/)
+    expect(sidebarOwnerSource).toMatch(/motion-reduce:/)
+    expect(sidebarNavSource).toMatch(/motion-reduce:/)
   })
 
   it("reduced-motion class reaches the rendered sidebar", () => {
@@ -512,11 +549,11 @@ describe("AC-SB-6: collapse toggle — controlled + uncontrolled", () => {
 
 describe("AC-SB-7: responsive <md overlay drawer + scrim + Esc + focus return", () => {
   it("Sidebar source wires the md breakpoint, scrim, Escape, and focus return", () => {
-    expect(sidebarSource).toMatch(/md:/)
-    expect(sidebarSource).toMatch(/Escape/)
-    expect(sidebarSource).toMatch(/keydown/)
-    expect(sidebarSource).toContain("sidebar-scrim")
-    expect(sidebarSource).toMatch(/\.focus\(\)/)
+    expect(sidebarOwnerSource).toMatch(/md:/)
+    expect(sidebarStateSource).toMatch(/Escape/)
+    expect(sidebarStateSource).toMatch(/keydown/)
+    expect(sidebarOwnerSource).toContain("sidebar-scrim")
+    expect(sidebarStateSource).toMatch(/\.focus\(\)/)
   })
 
   it("opening navigation shows the scrim and a dialog drawer", async () => {
@@ -578,25 +615,32 @@ describe("AC-SB-7: responsive <md overlay drawer + scrim + Esc + focus return", 
 
 describe("AC-SB-8 guard: token purity — no new hex/oklch/gradient", () => {
   it("Sidebar introduces zero hex color literals", () => {
-    const hexes = sidebarSource.match(/#[0-9a-fA-F]{3,8}\b/g) ?? []
-    expect(hexes).toEqual([])
+    for (const source of [
+      routesSource,
+      sidebarOwnerSource,
+      sidebarNavSource,
+      sidebarStateSource,
+      sidebarBrandSource,
+    ]) {
+      expect(source.match(/#[0-9a-fA-F]{3,8}\b/g) ?? []).toEqual([])
+    }
   })
 
   it("Sidebar contains no oklch()", () => {
-    expect(norm(sidebarSource).includes("oklch(")).toBe(false)
+    expect(norm(sidebarFeatureSource).includes("oklch(")).toBe(false)
   })
 
   it("Sidebar contains no gradient functions", () => {
-    expect(norm(sidebarSource).includes("gradient")).toBe(false)
+    expect(norm(sidebarFeatureSource).includes("gradient")).toBe(false)
   })
 })
 
 describe("AC-SB-9: persistence in freesearch.sidebar.collapsed", () => {
   it("Sidebar source persists 0/1 under the blessed key inside try/catch", () => {
-    expect(sidebarSource).toContain(STORAGE_KEY)
-    expect(sidebarSource).toContain("localStorage")
-    expect(sidebarSource).toMatch(/try/)
-    expect(sidebarSource).toMatch(/catch/)
+    expect(sidebarStateSource).toContain(STORAGE_KEY)
+    expect(sidebarStateSource).toContain("localStorage")
+    expect(sidebarStateSource).toMatch(/try/)
+    expect(sidebarStateSource).toMatch(/catch/)
   })
 
   it("stored '1' starts the uncontrolled sidebar collapsed", () => {
