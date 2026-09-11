@@ -89,6 +89,10 @@ const typesSource = readFileSync(
   path.resolve(testDir, "../../types/freesearch.ts"),
   "utf8"
 )
+const executionTypesSource = readFileSync(
+  path.resolve(testDir, "../../domains/execution/model/types.ts"),
+  "utf8"
+)
 const contextSource = readFileSync(
   path.resolve(testDir, "../../context/FreeSearchContext.tsx"),
   "utf8"
@@ -439,7 +443,7 @@ describe("PG-S5 AC-PG-S5-3: source number contract (playground/types/context)", 
   })
 
   it("types/freesearch SearchRequest drops mode (query + maxResults + timeoutMs only)", () => {
-    const match = typesSource.match(/interface SearchRequest \{[\s\S]*?\}/)
+    const match = executionTypesSource.match(/interface SearchRequest \{[\s\S]*?\}/)
     expect(match).not.toBeNull()
     const block = match![0]
     expect(block).toContain("query: string")
@@ -449,6 +453,7 @@ describe("PG-S5 AC-PG-S5-3: source number contract (playground/types/context)", 
     expect(block).not.toContain("fast")
     expect(block).not.toContain("balanced")
     expect(block).not.toContain("deep")
+    expect(typesSource).toContain("SearchRequest")
   })
 
   it("FreeSearchContext routes require|auto with prefer dead and clampLimit intact", () => {
