@@ -10,11 +10,6 @@ export function oauthErrorMessage(error: unknown, fallback: string): string {
   return fallback
 }
 
-/**
- * Pairing status for one provider row. A missing pairing (backend 404) maps
- * to `unpaired` inside the API client; any other failure keeps the previous
- * status so the row falls back to its unpaired affordances honestly.
- */
 export function useOAuthStatus(
   providerId: string,
   enabled: boolean
@@ -45,3 +40,5 @@ export function useOAuthStatus(
 
   return { status, reload }
 }
+
+

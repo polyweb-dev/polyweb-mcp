@@ -37,6 +37,23 @@ describe("quotaDisplay parallel authoritative balance", () => {
     expect(display.periodLabel).toBe("Monthly")
   })
 
+  it("shows Balance pending and Account balance when Parallel is connected via OAuth before first use", () => {
+    const display = quotaDisplay({
+      remaining: null,
+      limit: null,
+      unitKind: "USD",
+      displayUnit: "USD",
+      confidence: null,
+      resetAt: null,
+      providerId: "parallel",
+      isOAuthPaired: true,
+    })
+    expect(display.headline).toBe("Balance pending")
+    expect(display.periodLabel).toBe("Account balance")
+    expect(display.nativeValue).toBe("OAuth connected")
+  })
+
+
   it("keeps the seeded percent headline for estimated Parallel budgets", () => {
     const display = quotaDisplay({
       remaining: "3.75",

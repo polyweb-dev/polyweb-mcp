@@ -1,4 +1,5 @@
 import { Modal } from "@/components/common/Modal"
+import { Loader2, CheckCircle2, AlertCircle } from "lucide-react"
 import type {
   BackendOAuthDeviceCode,
   BackendOAuthStatus,
@@ -40,15 +41,16 @@ export function OAuthPairingModal(props: OAuthPairingModalProps) {
     <Modal
       isOpen={open}
       onClose={onClose}
-      maxWidth="sm"
+      maxWidth="md"
       title={"Connect " + providerName}
       subtitle="Approve in your browser to share your Parallel balance."
     >
       <div data-testid="oauth-device-dialog">
         {flow.phase === "starting" && (
-          <p data-testid="oauth-device-loading" className="text-[13px] text-[var(--muted)]">
-            Starting secure approval…
-          </p>
+          <div data-testid="oauth-device-loading" className="flex items-center gap-2.5 py-4 text-[13px] text-[var(--muted)]">
+            <Loader2 className="h-4 w-4 animate-spin text-[var(--signal)]" />
+            <span>Starting secure approval…</span>
+          </div>
         )}
         {flow.phase === "pending" && flow.device && (
           <PairingPendingView
@@ -58,12 +60,14 @@ export function OAuthPairingModal(props: OAuthPairingModalProps) {
             remainingSec={flow.remainingSec}
             copied={flow.copied}
             onCopy={flow.copyCode}
+            providerName={providerName}
           />
         )}
         {flow.phase === "ready" && (
-          <p data-testid="oauth-device-loading" className="text-[13px] text-[var(--muted)]">
-            Connected. Refreshing usage…
-          </p>
+          <div data-testid="oauth-device-loading" className="flex items-center gap-2.5 py-4 text-[13px] text-[var(--status-healthy)]">
+            <CheckCircle2 className="h-4 w-4 text-[var(--status-healthy)]" />
+            <span>Connected. Refreshing usage…</span>
+          </div>
         )}
         {(flow.phase === "denied" || flow.phase === "expired") && (
           <PairingFailedView kind={flow.phase} />
@@ -78,14 +82,15 @@ export function OAuthPairingModal(props: OAuthPairingModalProps) {
           />
         )}
         {flow.phase === "failed" && flow.error && (
-          <p
+          <div
             role="alert"
             data-testid="oauth-device-error"
-            className="p-2.5 rounded border border-[var(--status-danger)]/40 bg-[var(--surface)] text-[13px]"
+            className="flex items-start gap-2.5 rounded-lg border border-[var(--status-danger)]/40 bg-[var(--surface)] p-3 text-[13px]"
             style={{ color: "var(--status-danger)" }}
           >
-            {flow.error}
-          </p>
+            <AlertCircle className="h-4 w-4 text-[var(--status-danger)] shrink-0 mt-0.5" />
+            <span>{flow.error}</span>
+          </div>
         )}
         <PairingDialogFooter
           phase={flow.phase}
@@ -97,3 +102,4 @@ export function OAuthPairingModal(props: OAuthPairingModalProps) {
     </Modal>
   )
 }
+

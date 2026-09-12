@@ -19,6 +19,7 @@ export interface OAuthSlotArgs {
   providerName: string
   hasUsableEstimate: boolean
   pairedSnapshot: boolean
+  onPairedChange?: (paired: boolean) => void
 }
 
 export interface QuotaRowProps {
@@ -26,32 +27,47 @@ export interface QuotaRowProps {
   latestQuota: DashboardQuota | undefined
   manualQuotaEligible: typeof isManualQuotaEligible
   renderOAuthActions?: (args: OAuthSlotArgs) => ReactNode
+  isOAuthPaired?: boolean
 }
 
-export function QuotaRow({ provider, latestQuota, manualQuotaEligible, renderOAuthActions }: QuotaRowProps) {
-  const { display, confidence, unitKind, displayUnit, resetAt } = resolveQuota(provider, latestQuota)
-  const quotaCaption = quotaCaptionFor(provider, latestQuota, display)
+export function QuotaRow({
+  provider,
+  latestQuota,
+  manualQuotaEligible,
+  renderOAuthActions,
+  isOAuthPaired: isOAuthPairedProp = false,
+}: QuotaRowProps) {
+  const [oauthPaired, setOauthPaired] = useState(false)
+  const { pairedSnapshot } = resolveQuotaRow(
+    provider,
+    latestQuota,
+    null,
+    null
+  )
+  const isOAuthPaired = provider.id === "parallel" && (isOAuthPairedProp || oauthPaired || pairedSnapshot)
+  const { display, confidence, unitKind, displayUnit, resetAt } = resolveQuota(provider, latestQuota, isOAuthPaired)
+  const quotaCaption = quotaCaptionFor(provider, latestQuota, display, isOAuthPaired)
   const [modalOpen, setModalOpen] = useState(false)
 
   // A saved entry promotes to the row's headline (estimated source +
   // manual bar); the vendor snapshot demotes to one quiet detail line and
   // its explainer is suppressed.
   // Exa/Parallel only offer Manual Entry while no vendor budget is
-  // configured; Brave always does. A saved entry promotes to the row's
-  // headline (estimated source + manual bar); the vendor snapshot demotes to
-  // one quiet detail line and its explainer is suppressed.
-  const budgetNotConfigured = manualBudgetMissing(provider, latestQuota, display.remainingPercent)
+  // configured; Brave always does. When Parallel is paired via OAuth,
+  // manual entry is suppressed in favor of the vendor balance.
+  const budgetNotConfigured = !isOAuthPaired && manualBudgetMissing(provider, latestQuota, display.remainingPercent)
   const manualEligible = manualQuotaEligible(provider.id, budgetNotConfigured)
   const { manual, estimate: manualEstimate, save, remove } = useManualQuota(
     provider.id,
     manualEligible
   )
-  const { hasUsableEstimate, pairedSnapshot } = resolveQuotaRow(
+  const { hasUsableEstimate } = resolveQuotaRow(
     provider,
     latestQuota,
     display.remainingPercent,
     manualEstimate
   )
+
   const manualDefaults: ManualQuotaDefaults | null = useMemo(
     () =>
       manual
@@ -116,6 +132,7 @@ export function QuotaRow({ provider, latestQuota, manualQuotaEligible, renderOAu
             providerName: provider.name,
             hasUsableEstimate,
             pairedSnapshot,
+            onPairedChange: setOauthPaired,
           }) : null}
         />
         {manualEligible && modalOpen && (

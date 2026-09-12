@@ -22,6 +22,7 @@ export interface BeginPairingApi {
   begin: () => Promise<void>
   generation: { current: number }
   clearPollTimer: () => void
+  pollNow: () => void
 }
 
 /**
@@ -136,5 +137,10 @@ export function useBeginPairing(input: BeginPairingInput): BeginPairingApi {
     schedulePoll(gen, callbacksRef.current.statusPollMs ?? Math.max(1, code.interval) * 1000)
   }, [callbacksRef, clearPollTimer, schedulePoll, setPhase, setDevice, setError, setCopied, setRevokedElsewhere, setExpiresAt, setNowMs, alive])
 
-  return { begin, generation, clearPollTimer }
+  const pollNow = useCallback((): void => {
+    clearPollTimer()
+    void pollRoundRef.current(generation.current, callbacksRef.current.statusPollMs ?? 5000)
+  }, [clearPollTimer, callbacksRef])
+
+  return { begin, generation, clearPollTimer, pollNow }
 }

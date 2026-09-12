@@ -1,7 +1,8 @@
 import React from "react"
 import { describe, it, expect, afterEach, vi } from "vitest"
-import { render, screen, waitFor } from "@testing-library/react"
+import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
+
 import { FreeSearchProvider } from "@/context/FreeSearchContext"
 import { QuotaAnalytics } from "../quota/QuotaAnalytics"
 import { installFetchStub, ok, err, type FetchStub } from "@/test/fetchMock"
@@ -177,10 +178,30 @@ describe("QuotaAnalytics OAuth pairing", () => {
     await user.click(screen.getByTestId("oauth-device-disconnect"))
     expect(screen.getByTestId("oauth-device-confirm-disconnect")).toBeInTheDocument()
     await user.click(screen.getByTestId("oauth-device-keep"))
-    expect(screen.getByTestId("oauth-device-disconnect")).toBeInTheDocument()
     expect(
       stub.requestsTo("/api/v1/providers/parallel/oauth").filter((r) => r.method === "DELETE")
     ).toHaveLength(0)
   })
+
+  it("shows Balance will appear after first use and Balance pending before first balance is reported", async () => {
+    renderWithOAuthStub({
+      latest: parallelUnseeded,
+      oauth: { provider: "parallel", status: "ready", expires_in: null },
+    })
+    await waitFor(() => {
+      expect(screen.getByText("Parallel quota", { exact: true })).toBeInTheDocument()
+    })
+    const row = screen.getByText("Parallel quota", { exact: true }).closest("tr")!
+    expect(await within(row).findByTestId("oauth-device-disconnect")).toBeInTheDocument()
+    expect(within(row).getByText("Balance pending")).toBeInTheDocument()
+    expect(within(row).getByText("Account balance")).toBeInTheDocument()
+    expect(within(row).getByText("Balance will appear after first use.")).toBeInTheDocument()
+    expect(within(row).queryByText("Budget not configured")).toBeNull()
+    expect(within(row).queryByText(/No API-key balance endpoint is available/)).toBeNull()
+    expect(within(row).queryByTestId("manual-quota-open-parallel")).toBeNull()
+  })
+
 })
+
+
 

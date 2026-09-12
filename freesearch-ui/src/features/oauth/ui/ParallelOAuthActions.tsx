@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { useFreeSearch } from "@/context/useFreeSearch"
 import { toBackendId } from "@/services/api/mappers"
 import { apiService } from "@/services/api/freesearchApi"
@@ -12,6 +12,7 @@ export interface ParallelOAuthActionsProps {
   providerName: string
   hasUsableEstimate: boolean
   pairedSnapshot: boolean
+  onPairedChange?: (paired: boolean) => void
 }
 
 /**
@@ -25,11 +26,16 @@ export function ParallelOAuthActions({
   providerName,
   hasUsableEstimate,
   pairedSnapshot,
+  onPairedChange,
 }: ParallelOAuthActionsProps) {
   const { refreshDashboard } = useFreeSearch()
   const [oauthOpen, setOauthOpen] = useState(false)
   const { status: oauthStatus, reload: reloadOAuth } = useOAuthStatus(providerId, true)
   const oauthPaired = oauthStatus?.status === "ready" || pairedSnapshot
+
+  useEffect(() => {
+    onPairedChange?.(oauthPaired)
+  }, [oauthPaired, onPairedChange])
 
   async function handleOAuthPaired(): Promise<void> {
     await refreshDashboard()

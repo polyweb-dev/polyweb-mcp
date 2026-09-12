@@ -18,7 +18,11 @@ export interface QuotaPageProps {
 }
 
 /** Usage page: recorded aggregates plus the per-provider quota grid. */
-export function QuotaPage({ manualQuotaEligible = isManualQuotaEligible, renderOAuthActions }: QuotaPageProps) {
+export function QuotaPage({
+  manualQuotaEligible = isManualQuotaEligible,
+  renderOAuthActions,
+}: QuotaPageProps) {
+
   const {
     providers,
     usageTotals,
@@ -82,6 +86,7 @@ export function QuotaPage({ manualQuotaEligible = isManualQuotaEligible, renderO
         manualQuotaEligible={manualQuotaEligible}
         {...(renderOAuthActions !== undefined ? { renderOAuthActions } : {})}
       />
+
     </div>
   )
 }

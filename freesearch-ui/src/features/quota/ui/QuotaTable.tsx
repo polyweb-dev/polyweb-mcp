@@ -12,7 +12,12 @@ export interface QuotaTableProps {
 }
 
 /** Provider quota grid: one row per configured provider. */
-export function QuotaTable({ providers, dashboardQuotas, manualQuotaEligible, renderOAuthActions }: QuotaTableProps) {
+export function QuotaTable({
+  providers,
+  dashboardQuotas,
+  manualQuotaEligible,
+  renderOAuthActions,
+}: QuotaTableProps) {
   return (
     <section aria-labelledby="provider-quota-heading" className="overflow-hidden rounded-lg border border-[var(--border-subtle)]">
       <div className="border-b border-[var(--border-subtle)] bg-[var(--elevated)] px-4 py-2.5">
@@ -54,6 +59,7 @@ export function QuotaTable({ providers, dashboardQuotas, manualQuotaEligible, re
               {...(renderOAuthActions !== undefined ? { renderOAuthActions } : {})}
             />
           ))}
+
           {providers.length === 0 && (
             <TableRow><TableCell colSpan={6} className="p-8 text-center text-[var(--muted)]">No providers configured.</TableCell></TableRow>
           )}

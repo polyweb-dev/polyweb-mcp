@@ -907,6 +907,16 @@ async def _poll_device_once(
         logger.warning(redact_secrets(exc))
         return _status_view("pending", device_remaining)
     await _persist_token_grant(store, repository, metadata, grant, observed_at)
+    if repository is not None:
+        with suppress(Exception):
+            await _fetch_and_record_oauth_balance(
+                repository,
+                secret_store=store,
+                http_client=oauth._http,
+                platform_base_url=oauth._platform,
+                api_base_url=oauth._api,
+                observed_at=observed_at,
+            )
     return _status_view("ready", grant.expires_in)
 
 

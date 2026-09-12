@@ -55,12 +55,17 @@ export function quotaValues(provider: ProviderConfig, latest: DashboardQuota | u
   }
 }
 
-export function resolveQuota(provider: ProviderConfig, latestQuota: DashboardQuota | undefined): ResolvedQuota {
+export function resolveQuota(
+  provider: ProviderConfig,
+  latestQuota: DashboardQuota | undefined,
+  isOAuthPaired?: boolean
+): ResolvedQuota {
   const values = quotaValues(provider, latestQuota)
   const display = quotaDisplay({
     ...values,
     providerId: provider.id,
     keyless: provider.id === "keenable" && provider.keyVaultStatus === "keyless_public",
+    isOAuthPaired,
   })
   return {
     display,
@@ -74,11 +79,15 @@ export function resolveQuota(provider: ProviderConfig, latestQuota: DashboardQuo
 export function quotaCaptionFor(
   provider: ProviderConfig,
   latestQuota: DashboardQuota | undefined,
-  display: ReturnType<typeof quotaDisplay>
+  display: ReturnType<typeof quotaDisplay>,
+  isOAuthPaired?: boolean
 ): QuotaCaption | null {
   const noSnapshot = latestQuota === undefined || (latestQuota.remaining === null && latestQuota.limit === null)
   if (!noSnapshot || display.remainingPercent !== null) return null
   if (provider.id === "parallel") {
+    if (isOAuthPaired) {
+      return { testId: "quota-explainer-parallel", text: "Balance will appear after first use." }
+    }
     return { testId: "quota-explainer-parallel", text: "No API-key balance endpoint is available. Configure a local monthly USD budget to calculate remaining capacity." }
   }
   if (provider.id === "exa") {
@@ -92,6 +101,7 @@ export function quotaCaptionFor(
   }
   return null
 }
+
 
 export function formatUsageP95(latency: number | null): string {
   return latency === null ? "—" : latency + "ms"

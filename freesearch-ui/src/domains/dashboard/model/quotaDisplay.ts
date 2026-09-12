@@ -18,6 +18,7 @@ export interface QuotaDisplayInput {
   providerId?: string
   keyless?: boolean
   window?: string | null
+  isOAuthPaired?: boolean
 }
 
 export interface QuotaDisplay {
@@ -37,7 +38,7 @@ function isBalancePeriod(input: QuotaDisplayInput): boolean {
   if (input.providerId === "you" || input.providerId === "youcom") return true
   return (
     input.providerId === "parallel" &&
-    input.confidence === "authoritative" &&
+    (input.confidence === "authoritative" || Boolean(input.isOAuthPaired)) &&
     input.limit === null
   )
 }
@@ -64,6 +65,7 @@ function isBalanceHeadline(input: QuotaDisplayInput, remaining: number | null): 
 function quotaHeadline(input: QuotaDisplayInput, percent: number | null, remaining: number | null): string {
   if (percent !== null) return `${percent}% remaining`
   if (isBalanceHeadline(input, remaining)) return "Balance available"
+  if (input.providerId === "parallel" && input.isOAuthPaired) return "Balance pending"
   if (input.providerId === "exa" || input.providerId === "parallel") return "Budget not configured"
   if (input.providerId === "brave") return "Limit unavailable"
   if (input.providerId === "keenable") return input.keyless ? "Hourly quota pending" : "Quota pending"
@@ -72,12 +74,14 @@ function quotaHeadline(input: QuotaDisplayInput, percent: number | null, remaini
 
 function nativeValue(input: QuotaDisplayInput, nativeLabel: string): string {
   if (input.remaining === null && input.limit === null) {
+    if (input.providerId === "parallel" && input.isOAuthPaired) return "OAuth connected"
     if (input.providerId === "exa" || input.providerId === "parallel") return "USD spend tracked separately"
     if (input.providerId === "brave") return "Monthly request limit unavailable"
     if (input.providerId === "keenable" && input.keyless) return "Hourly request counter unavailable"
   }
   return `${input.remaining ?? "—"}/${input.limit ?? "—"} ${nativeLabel}`
 }
+
 
 function finiteNumber(value: string | null): number | null {
   if (value === null || value.trim() === "") return null

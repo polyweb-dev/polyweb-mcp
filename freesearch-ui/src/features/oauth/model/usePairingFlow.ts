@@ -41,7 +41,7 @@ export function usePairingFlow(callbacks: FlowCallbacks): PairingFlow {
     callbacksRef.current = callbacks
   })
 
-  const { begin, generation, clearPollTimer } = useBeginPairing({
+  const { begin, generation, clearPollTimer, pollNow } = useBeginPairing({
     callbacksRef,
     setPhase,
     setDevice,
@@ -63,6 +63,22 @@ export function usePairingFlow(callbacks: FlowCallbacks): PairingFlow {
       clearPollTimer()
     }
   }, [begin, clearPollTimer, generation])
+
+  // Poll immediately when returning to the tab/window from the provider's approval page
+  useEffect(() => {
+    if (phase !== "pending") return
+    const onWake = () => {
+      if (document.visibilityState === "visible") {
+        pollNow()
+      }
+    }
+    window.addEventListener("focus", onWake)
+    document.addEventListener("visibilitychange", onWake)
+    return () => {
+      window.removeEventListener("focus", onWake)
+      document.removeEventListener("visibilitychange", onWake)
+    }
+  }, [phase, pollNow])
 
   const copyCode = useCallback(async (): Promise<void> => {
     if (!device || typeof navigator === "undefined" || !navigator.clipboard) return

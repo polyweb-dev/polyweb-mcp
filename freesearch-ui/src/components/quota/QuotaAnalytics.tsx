@@ -13,15 +13,12 @@ export const QuotaAnalytics: FC<{
 }> = ({ manualQuotaEligible = isManualQuotaEligible }) => (
   <QuotaPage
     manualQuotaEligible={manualQuotaEligible}
-    renderOAuthActions={({ providerId, providerName, hasUsableEstimate, pairedSnapshot }) =>
-      providerId === "parallel" ? (
-        <ParallelOAuthActions
-          providerId={providerId}
-          providerName={providerName}
-          hasUsableEstimate={hasUsableEstimate}
-          pairedSnapshot={pairedSnapshot}
-        />
+    renderOAuthActions={(slotArgs) =>
+      slotArgs.providerId === "parallel" ? (
+        <ParallelOAuthActions {...slotArgs} />
       ) : null
     }
   />
 )
+
+
