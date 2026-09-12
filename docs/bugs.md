@@ -2,7 +2,7 @@
 
 2. Exa is still to be linked; it has not been linked properly yet.
 
-3. Keenable's progress bar is stuck until server restart, have to consider a better way of representing the information, possibly if API exposes actual usage limits
+3. Auth migration for all keys
 
 | What You Described | How It Works in the System |
 | :--- | :--- |
