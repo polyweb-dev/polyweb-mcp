@@ -1,8 +1,8 @@
 """Stage 4 composition root: bind the shared contracts to a runnable MCP server.
 
 Builds the enabled, key-configured adapters in priority order and exposes the
-two provider-neutral tools (``search``, ``fetch``) over MCP (streamable HTTP on
-loopback:8000), routing each request through
+two provider-neutral tools (``search``, ``fetch``) over MCP (streamable HTTP or
+stdio), routing each request through
 :func:`freesearch.routing.select_route`. Every tool call also records read-only
 local telemetry (usage and health observations) through
 :mod:`freesearch.monitoring`, mirroring the REST path.
@@ -235,6 +235,7 @@ def create_server(
     repository: SQLiteRepository | None = None,
     *,
     database: str | Path | None = None,
+    stateless_http: bool = False,
 ) -> FastMCP:
     """Create the MCP server, routing every tool call to a configured adapter."""
 
@@ -285,7 +286,7 @@ def create_server(
                 clear_quota_poll_cache(repository, routes or [])
                 await close_adapters(routes or [], None)
 
-    server = FastMCP("freesearch", lifespan=lifespan)
+    server = FastMCP("freesearch", lifespan=lifespan, stateless_http=stateless_http)
 
     async def _route(request: SearchRequest | FetchRequest) -> ProviderAdapter:
         # The owned path routes through the current generation's adapters; the
@@ -326,9 +327,47 @@ def create_server(
     return server
 
 
-def main() -> None:
-    """Run the MCP server over HTTP (streamable-http on loopback:8000)."""
-    create_server().run(transport="streamable-http")
+def main(argv: Sequence[str] | None = None) -> None:
+    """Run the MCP server over stdio or HTTP (streamable-http on loopback:8000)."""
+    import argparse
+    import os
+
+    default_transport = os.getenv("FREESEARCH_MCP_TRANSPORT", "streamable-http")
+    default_stateless = os.getenv("FREESEARCH_MCP_STATELESS", "").lower() in ("1", "true", "yes")
+
+    parser = argparse.ArgumentParser(description="FreeSearch MCP Server")
+    parser.add_argument(
+        "--transport",
+        choices=["stdio", "streamable-http"],
+        default=default_transport,
+        help="MCP transport protocol (default: streamable-http, env: FREESEARCH_MCP_TRANSPORT)",
+    )
+    parser.add_argument(
+        "--stateless",
+        action="store_true",
+        default=default_stateless,
+        help="Enable stateless mode for HTTP transport (env: FREESEARCH_MCP_STATELESS)",
+    )
+    parser.add_argument(
+        "--host",
+        default=os.getenv("FREESEARCH_MCP_HOST", "127.0.0.1"),
+        help="HTTP host (default: 127.0.0.1)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=int(os.getenv("FREESEARCH_MCP_PORT", "8000")),
+        help="HTTP port (default: 8000)",
+    )
+    args = parser.parse_args(argv)
+
+    server = create_server(stateless_http=args.stateless)
+    if args.transport == "stdio":
+        server.run(transport="stdio")
+    else:
+        server.settings.host = args.host
+        server.settings.port = args.port
+        server.run(transport="streamable-http")
 
 
 if __name__ == "__main__":

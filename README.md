@@ -144,11 +144,18 @@ pnpm dev
 If integrating with AI agents, IDE assistants, or tools supporting Model Context Protocol:
 
 ```bash
+# Default: streamable HTTP transport on http://127.0.0.1:8000
 uv run freesearch-mcp
+
+# Stateless HTTP mode (ideal for stateless proxies and microservices):
+uv run freesearch-mcp --transport streamable-http --stateless
+
+# Stdio transport (ideal for desktop clients like Claude Desktop, Cursor, Gemini):
+uv run freesearch-mcp --transport stdio
 ```
 
-- **MCP Endpoint:** `http://127.0.0.1:8000` (streamable HTTP transport)
-- Exposes `search` and `fetch` tools with automatic route selection and quota tracking.
+- Exposes provider-neutral `search` and `fetch` tools with automatic route selection and quota tracking.
+- Transports and flags can also be configured via `FREESEARCH_MCP_TRANSPORT` (`stdio` or `streamable-http`) and `FREESEARCH_MCP_STATELESS` (`true`/`false`).
 
 ---
 

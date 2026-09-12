@@ -137,3 +137,38 @@ async def test_server_lifespan_cleans_up() -> None:
     async with server._mcp_server.lifespan(server):
         pass
     assert closed == ["test_provider"]
+
+
+def test_create_server_stateless_http_flag() -> None:
+    server_default = create_server([])
+    assert server_default.settings.stateless_http is False
+
+    server_stateless = create_server([], stateless_http=True)
+    assert server_stateless.settings.stateless_http is True
+
+
+def test_main_cli_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    from freesearch.mcp.server import main
+
+    invocations: list[tuple[str, bool, str, int]] = []
+
+    def fake_run(self: object, transport: str = "stdio") -> None:
+        settings = getattr(self, "settings", None)
+        invocations.append((
+            transport,
+            getattr(settings, "stateless_http", False),
+            getattr(settings, "host", ""),
+            getattr(settings, "port", 0),
+        ))
+
+    from mcp.server.fastmcp import FastMCP
+    monkeypatch.setattr(FastMCP, "run", fake_run)
+
+    # 1. Test stdio dispatch
+    main(["--transport", "stdio"])
+    assert invocations[-1][0] == "stdio"
+
+    # 2. Test streamable-http with stateless flag and custom port
+    main(["--transport", "streamable-http", "--stateless", "--port", "8888"])
+    assert invocations[-1] == ("streamable-http", True, "127.0.0.1", 8888)
+
