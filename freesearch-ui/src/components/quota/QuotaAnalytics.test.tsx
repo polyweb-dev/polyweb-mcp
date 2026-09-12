@@ -340,4 +340,29 @@ describe("QuotaAnalytics (live backend)", () => {
     const braveRow = bodyRows.find((row) => row.textContent?.includes("Brave"))
     expect(braveRow!.textContent).toContain("110ms")
   })
+
+  it("flags a Keenable hourly row with a past reset as stale", async () => {
+    renderWithBackend(dashboardFixture({ latest_quota: [{
+      provider: "keenable", source: "observed", observed_at: "2026-09-11T12:00:00Z",
+      remaining: "999", limit: "1000", remaining_percent: "99.9",
+      unit_kind: "REQUEST", reset_at: "2000-01-01T00:00:00Z",
+    }] }))
+    await waitFor(() => {
+      expect(screen.getByText("Keenable quota", { exact: true }).closest("tr"))
+        .toHaveTextContent("Stale \u2014 refreshes on next use")
+    })
+  })
+
+  it("does not flag a Keenable hourly row with a future reset", async () => {
+    renderWithBackend(dashboardFixture({ latest_quota: [{
+      provider: "keenable", source: "observed", observed_at: "2026-09-11T12:00:00Z",
+      remaining: "999", limit: "1000", remaining_percent: "99.9",
+      unit_kind: "REQUEST", reset_at: "2999-01-01T00:00:00Z",
+    }] }))
+    await waitFor(() => {
+      expect(screen.getByText("Keenable quota", { exact: true })).toBeInTheDocument()
+    })
+    expect(screen.getByText("Keenable quota", { exact: true }).closest("tr")?.textContent)
+      .not.toContain("Stale \u2014 refreshes on next use")
+  })
 })

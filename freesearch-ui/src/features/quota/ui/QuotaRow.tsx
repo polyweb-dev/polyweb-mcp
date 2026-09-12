@@ -4,7 +4,7 @@ import { ProviderLogo } from "@/components/common/ProviderLogo"
 import { TableCell, TableRow } from "@/components/ui/table"
 import type { DashboardQuota, ProviderConfig } from "@/types/freesearch"
 import { isManualQuotaEligible } from "../model/quotaEligibility"
-import { formatQuotaDate, formatQuotaReset, quotaCaptionFor, resolveQuota } from "../model/quotaDetails"
+import { formatQuotaDate, formatQuotaReset, isStaleRollingQuota, quotaCaptionFor, resolveQuota } from "../model/quotaDetails"
 import { useManualQuota } from "../model/useManualQuota"
 import { manualBudgetMissing, resolveQuotaRow } from "../model/quotaRowModel"
 import { ManualQuotaModal, type ManualQuotaDefaults } from "./ManualQuotaModal"
@@ -104,6 +104,9 @@ export function QuotaRow({
             <div>{display.periodLabel}</div>
             {display.resetLabel && (
               <div className="mt-1">Resets {formatQuotaReset(resetAt, display.periodLabel, display.resetLabel)}</div>
+            )}
+            {isStaleRollingQuota(resetAt) && display.periodLabel.toLowerCase() === "hourly" && (
+              <div className="mt-1 text-[11px]" title="No successful call in the last hour; headroom recovers on next use">Stale — refreshes on next use</div>
             )}
           </>
         )}

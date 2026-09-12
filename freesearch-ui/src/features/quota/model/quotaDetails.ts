@@ -64,7 +64,9 @@ export function resolveQuota(
   const display = quotaDisplay({
     ...values,
     providerId: provider.id,
-    keyless: provider.id === "keenable" && provider.keyVaultStatus === "keyless_public",
+    keyless:
+      provider.id === "keenable" &&
+      (provider.keyVaultStatus === "keyless_public" || provider.keySource === "none"),
     isOAuthPaired,
   })
   return {
@@ -105,6 +107,13 @@ export function quotaCaptionFor(
 
 export function formatUsageP95(latency: number | null): string {
   return latency === null ? "—" : latency + "ms"
+}
+
+/** True when a rolling-window reset is in the past (idle snapshot, recovers on next use). */
+export function isStaleRollingQuota(resetAt: string | null): boolean {
+  if (!resetAt) return false
+  const time = new Date(resetAt).getTime()
+  return !Number.isNaN(time) && time < Date.now()
 }
 
 export function formatQuotaDate(value: string): string {

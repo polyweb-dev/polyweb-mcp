@@ -2,4 +2,12 @@
 
 2. Exa is still to be linked; it has not been linked properly yet.
 
-4. Keenable's progress bar is stuck until server restart, have to consider a better way of representing the information, possibly if API exposes actual usage limits
+3. Keenable's progress bar is stuck until server restart, have to consider a better way of representing the information, possibly if API exposes actual usage limits
+
+| What You Described | How It Works in the System |
+| :--- | :--- |
+| **1. User can set their own AES-256 key...** | The user can set `FREESEARCH_ENCRYPTION_KEY=my-custom-passphrase` in `docker-compose.yml` or `.env`. FreeSearch will use it directly. |
+| **2. ...or skip it, and it will be auto-generated** | If omitted, FreeSearch auto-generates a cryptographically strong 256-bit key and saves it to `/data/.secret_key` with strict `0600` permissions. |
+| **3. Key is stored in the Docker volume** | `/data/.secret_key` lives inside the mounted volume (`-v freesearch_data:/data`), surviving all container restarts and image updates. |
+| **4. All incoming keys encrypted before storing in DB** | Whenever the user saves a key in the Web UI, Python encrypts it with AES-256 first. Only the unreadable ciphertext blob (`gAAAAABn...`) touches SQLite. |
+| **5. Database is in the same Docker volume** | Both `/data/freesearch.db` and `/data/.secret_key` reside together in the same persistent `/data` volume. One single volume to manage, mount, or backup. |

@@ -91,7 +91,7 @@ but they must convert responses to the shared contract models at the boundary.
 | `provider-parallel` | Use direct HTTPX against the official API; implement search and URL extraction where available. |
 | `provider-youcom` | Use direct HTTPX; implement web search and content/live-crawl-backed fetch where supported. |
 | `provider-brave` | Use direct HTTPX; implement Brave Search API (`FREESEARCH_BRAVE_SEARCH_API_KEY`, header `X-Subscription-Token`) and declare `fetch=False` in capabilities. (Brave Answers API is deferred to a later stage). |
-| `provider-keenable` | Use direct HTTPX; implement native search and fetch endpoints (not its MCP server). Support keyless public tier (free, 30 req/IP/15min) when no `FREESEARCH_KEENABLE_API_KEY` is provided, attaching `X-API-Key` only when configured. |
+| `provider-keenable` | Use direct HTTPX; implement native search and fetch endpoints (not its MCP server). Support keyless public tier (free, 1,000 req/hour + 10 req/s per IP rolling rate limit) when no `FREESEARCH_KEENABLE_API_KEY` is provided, attaching `X-API-Key` only when configured. |
 
 Every provider worktree must:
 
