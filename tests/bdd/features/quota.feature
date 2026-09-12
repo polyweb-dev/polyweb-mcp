@@ -24,21 +24,31 @@ Feature: Quota and usage accounting (QUOTA.md acceptance)
     And the Brave usage event should carry unit kind REQUEST
 
   @ac2
-  Scenario Outline: Brave malformed monthly elements stay unknown, never zero
+  Scenario Outline: Brave malformed monthly elements fall back to the local counter, never zero
     Given an isolated quota repository
     And a Brave adapter with stubbed headers "<remaining>" remaining, "<limit>" limit, "<reset>" reset
     When I run a successful Brave search for "quota headers" with limit 3
-    Then the Brave snapshot monthly field "<field>" should be unknown rather than zero
+    Then the Brave snapshot should be a <source> monthly counter with remaining <counter_remaining> of limit <counter_limit>
 
     Examples:
-      | remaining | limit  | reset      | field     |
-      | 11        | 60     | 5          | remaining |
-      | 11,       | 60, 9  | 5, 7       | remaining |
-      | 11, -4    | 60, 9  | 5, 7       | remaining |
-      | 11, 1000  | 60     | 5, 7       | limit     |
-      | 11, 1000  | 60, -2 | 5, 7       | limit     |
-      | 11, 1000  | 60, 9  | 5          | reset     |
-      | 11, 1000  | 60, 9  | 5, -30     | reset     |
+      | remaining | limit  | reset | counter_remaining | counter_limit | source    |
+      | 11        | 60     | 5     | 999               | 1000          | ESTIMATED |
+      | 11,       | 60, 9  | 5, 7  | 8                 | 9             | OBSERVED  |
+      | 11, -4    | 60, 9  | 5, 7  | 8                 | 9             | OBSERVED  |
+      | 11, 1000  | 60     | 5, 7  | 999               | 1000          | ESTIMATED |
+      | 11, 1000  | 60, -2 | 5, 7  | 999               | 1000          | ESTIMATED |
+
+  @ac2
+  Scenario Outline: Brave malformed reset elements stay unknown, never zero
+    Given an isolated quota repository
+    And a Brave adapter with stubbed headers "<remaining>" remaining, "<limit>" limit, "<reset>" reset
+    When I run a successful Brave search for "quota headers" with limit 3
+    Then the Brave snapshot monthly field "reset" should be unknown rather than zero
+
+    Examples:
+      | remaining | limit | reset  |
+      | 11, 1000  | 60, 9 | 5      |
+      | 11, 1000  | 60, 9 | 5, -30 |
 
   # AC-3 — Safe aggregation by (provider, operation, unit_kind), FAILURE exclusion.
   @ac3
@@ -256,12 +266,24 @@ Feature: Quota and usage accounting (QUOTA.md acceptance)
     And Brave should stay eligible for search routing despite zero monthly elements
 
   @quota @ac2
-  Scenario: Brave missing monthly elements stay unknown and routable
+  Scenario: Brave missing monthly elements fall back to the local counter and stay routable
     Given an isolated quota repository
     And a Brave adapter with stubbed headers "11" remaining, "60" limit, "5" reset
     When I run a successful Brave search for "open data documentation" with limit 3
-    Then the Brave snapshot remaining should be unknown and limit should be unknown and reset should be unknown
-    And Brave should stay eligible for search routing despite zero monthly elements
+    Then the Brave snapshot should be a ESTIMATED monthly counter with remaining 999 of limit 1000
+    And the Brave snapshot limit should be flagged as implied
+    And Brave should stay eligible for search routing with counter headroom
+
+  @quota @ac2
+  Scenario: Brave monthly counter resets at the billing boundary
+    Given an isolated quota repository
+    And a Brave adapter with stubbed headers "11" remaining, "60" limit, "5" reset
+    When I run a successful Brave search for "quota headers" with limit 3
+    And I run a successful Brave search for "quota headers" with limit 3
+    Then the Brave snapshot should be a ESTIMATED monthly counter with remaining 998 of limit 1000
+    When the billing month rolls over
+    And I run a successful Brave search for "quota headers" with limit 3
+    Then the Brave snapshot should be a ESTIMATED monthly counter with remaining 999 of limit 1000
 
   @quota @ac2
   Scenario: Brave genuine zero remaining with positive limit stays excluded

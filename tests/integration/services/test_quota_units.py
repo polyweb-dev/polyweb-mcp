@@ -2024,3 +2024,86 @@ class TestBraveExhaustionMapping:
         ]
         assert "brave" not in names, f"AC-6: genuine 0/1000 must steer away: {names!r}"
         assert names[0] == "tavily", f"AC-6: fallback must lead: {names!r}"
+
+class TestBraveMonthlyCounterLedger:
+    async def test_tracked_bare_search_persists_bounded_quota(
+        self, static_resolver: None, repo: SQLiteRepository
+    ) -> None:
+        from freesearch.adapters.brave import BraveAdapter
+
+        client = httpx.AsyncClient(
+            transport=httpx.MockTransport(_brave_search_handler({"X-RateLimit-Remaining": "49"})),
+            timeout=30.0,
+        )
+        try:
+            adapter = BraveAdapter(client)
+            await tracked_call(
+                repo,
+                adapter,
+                lambda running: running.search(SearchRequest(query="q", limit=2)),
+                operation=UsageOperation.SEARCH,
+            )
+        finally:
+            await client.aclose()
+        latest = await repo.latest_quota("brave")
+        assert latest is not None, "bare-header search must persist a quota row"
+        assert latest.remaining == Decimal("999"), f"counter must leave 999, saw {latest!r}"
+        assert latest.limit == Decimal("1000")
+        assert latest.source == QuotaSource.ESTIMATED
+        assert latest.remaining_percent == Decimal("99.9")
+
+    async def test_hydrate_restores_counter_after_restart(
+        self, static_resolver: None, repo: SQLiteRepository
+    ) -> None:
+        from freesearch.adapters.brave import BraveAdapter
+
+        client = httpx.AsyncClient(
+            transport=httpx.MockTransport(_brave_search_handler({})), timeout=30.0
+        )
+        try:
+            first = BraveAdapter(client)
+            await tracked_call(
+                repo,
+                first,
+                lambda running: running.search(SearchRequest(query="q", limit=2)),
+                operation=UsageOperation.SEARCH,
+            )
+            rebuilt = BraveAdapter(client)
+            snapshot = await rebuilt.hydrate_quota(repo)
+        finally:
+            await client.aclose()
+        assert snapshot is not None, "hydrate must project the restored ledger"
+        assert snapshot.remaining == Decimal("999"), (
+            f"rebuilt counter must leave 999, saw {snapshot!r}"
+        )
+        assert snapshot.limit == Decimal("1000")
+
+    async def test_header_limit_preferred_over_implied(
+        self, static_resolver: None, repo: SQLiteRepository
+    ) -> None:
+        from freesearch.adapters.brave import BraveAdapter
+
+        headers = {
+            "X-RateLimit-Remaining": "5, 1990",
+            "X-RateLimit-Limit": "10, 2000",
+            "X-RateLimit-Reset": "5, 2592000",
+        }
+        client = httpx.AsyncClient(
+            transport=httpx.MockTransport(_brave_search_handler(headers)), timeout=30.0
+        )
+        try:
+            adapter = BraveAdapter(client)
+            await tracked_call(
+                repo,
+                adapter,
+                lambda running: running.search(SearchRequest(query="q", limit=2)),
+                operation=UsageOperation.SEARCH,
+            )
+        finally:
+            await client.aclose()
+        latest = await repo.latest_quota("brave")
+        assert latest is not None
+        assert latest.remaining == Decimal("1990")
+        assert latest.limit == Decimal("2000")
+        assert latest.source == QuotaSource.OBSERVED
+

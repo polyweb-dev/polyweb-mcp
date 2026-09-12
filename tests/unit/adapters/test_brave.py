@@ -1,6 +1,7 @@
 """Acceptance coverage for the Brave Search adapter; all HTTP is mocked."""
 
 import asyncio
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import httpx
@@ -12,7 +13,7 @@ from freesearch.adapters.brave import BraveAdapter
 from freesearch.infrastructure.resilience import ProviderOperationError
 from freesearch.infrastructure.secrets import PROVIDER_ENV_VARS, ProviderName
 from freesearch.mcp.surface import McpSurface, UnsupportedOperationError
-from freesearch.models.contracts import SearchRequest, SearchResponse, UsageOperation
+from freesearch.models.contracts import QuotaSource, SearchRequest, SearchResponse, UsageOperation
 
 
 class _Resolver:
@@ -203,3 +204,79 @@ async def test_capabilities_fetch_rejection_and_search_cost(monkeypatch) -> None
     assert estimate.operation is UsageOperation.SEARCH
     assert estimate.units == Decimal("1")
     assert estimate.currency == "queries"
+
+class TestBraveMonthlyCounter:
+    """Local monthly ledger: bare headers fall back to request counting."""
+
+    @staticmethod
+    def _handler(headers: dict[str, str]):
+        def handle(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json=_payload(), headers=headers)
+
+        return handle
+
+    async def test_bare_headers_yield_implied_estimated_snapshot(self, monkeypatch) -> None:
+        monkeypatch.setattr(brave_module, "get_provider_secret_resolver", lambda: _Resolver())
+        adapter, client = _adapter(self._handler({"X-RateLimit-Remaining": "49"}))
+        try:
+            response = await adapter.search(SearchRequest(query="q", limit=2))
+        finally:
+            await client.aclose()
+        snapshot = response.quota_snapshot
+        assert snapshot is not None
+        assert snapshot.remaining == Decimal("999"), (
+            f"one bare search must leave 999, saw {snapshot.remaining!r}"
+        )
+        assert snapshot.limit == Decimal("1000")
+        assert snapshot.source == QuotaSource.ESTIMATED
+        assert snapshot.metadata.get("limit_implied") is True
+        assert snapshot.remaining_percent == Decimal("99.9")
+
+    async def test_counter_ticks_down_per_search(self, monkeypatch) -> None:
+        monkeypatch.setattr(brave_module, "get_provider_secret_resolver", lambda: _Resolver())
+        adapter, client = _adapter(self._handler({}))
+        try:
+            first = await adapter.search(SearchRequest(query="q", limit=2))
+            second = await adapter.search(SearchRequest(query="q", limit=2))
+        finally:
+            await client.aclose()
+        assert first.quota_snapshot is not None and second.quota_snapshot is not None
+        assert first.quota_snapshot.remaining == Decimal("999")
+        assert second.quota_snapshot.remaining == Decimal("998"), (
+            f"second search must leave 998, saw {second.quota_snapshot.remaining!r}"
+        )
+
+    async def test_header_pair_reanchors_counter(self, monkeypatch) -> None:
+        monkeypatch.setattr(brave_module, "get_provider_secret_resolver", lambda: _Resolver())
+        adapter, client = _adapter(self._handler({}))
+        try:
+            await adapter.search(SearchRequest(query="q", limit=2))
+            # Drive the snapshot path directly with vendor-reported pairs.
+            headers = {
+                "X-RateLimit-Remaining": "5, 900",
+                "X-RateLimit-Limit": "10, 1000",
+                "X-RateLimit-Reset": "5, 2592000",
+            }
+            snapshot = adapter._quota_snapshot(httpx.Response(200, headers=headers))
+        finally:
+            await client.aclose()
+        assert snapshot.remaining == Decimal("900")
+        assert snapshot.limit == Decimal("1000")
+        assert snapshot.source == QuotaSource.OBSERVED
+        assert adapter._monthly_used == Decimal("100")
+
+    async def test_month_rollover_resets_counter(self, monkeypatch) -> None:
+        monkeypatch.setattr(brave_module, "get_provider_secret_resolver", lambda: _Resolver())
+        adapter, client = _adapter(self._handler({}))
+        try:
+            await adapter.search(SearchRequest(query="q", limit=2))
+            adapter._ledger_month = datetime(2000, 1, 1, tzinfo=UTC)
+            response = await adapter.search(SearchRequest(query="q", limit=2))
+        finally:
+            await client.aclose()
+        assert response.quota_snapshot is not None
+        assert response.quota_snapshot.remaining == Decimal("999"), (
+            "rollover must reset usage so the new month starts at 999, "
+            f"saw {response.quota_snapshot.remaining!r}"
+        )
+

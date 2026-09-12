@@ -199,6 +199,8 @@ Extend header parsing, build the `OBSERVED` request snapshot, and piggyback `rec
 
 Before implementation, verify the documented pair order `[per-second, monthly]` against a real response and observe whether 429 responses carry these headers. Malformed elements remain unknown (`None`), never exhausted (`0`). Optional dollar-spend tracking may be considered later, but it is not part of v1.
 
+**Local monthly counter fallback (implemented 2026-09-12):** live keys were observed returning no monthly pair elements, which left every snapshot `None/None` and the dashboard bar permanently empty. When the monthly pair is absent, the adapter now tracks usage locally: each successful search increments a monthly ledger; the snapshot is `remaining = max(0, limit - used)` with `limit` taken from the last header-reported monthly limit, or the pricing-implied 1,000 requests (`$5.00 / $0.005`) flagged `limit_implied` with source `ESTIMATED` when no vendor limit was ever seen. A later header-reported monthly pair (or remaining value) re-anchors the ledger; explicit unlimited (`limit == 0`) keeps the `None/None` `OBSERVED` behavior above. The window boundary is the header-reported monthly reset when present, else the calendar-month start (provisional). `hydrate_quota` rebuilds the ledger from this month's `REQUEST` success events plus the last stored vendor limit, so restarts and rollovers recover without inventing history.
+
 Docs:
 - [Brave Search API plans and pricing](https://brave.com/search/api/)
 - [Brave Search API documentation](https://api-dashboard.search.brave.com/app/documentation)

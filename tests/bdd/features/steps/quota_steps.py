@@ -524,6 +524,49 @@ def step_then_brave_field_unknown(context: Any, field: str) -> None:
         f"AC-2: malformed/absent monthly {field} must become None, never 0 (saw {value!r})"
     )
 
+@then(
+    "the Brave snapshot should be a {source:w} monthly counter "
+    "with remaining {remaining:d} of limit {limit:d}"
+)
+def step_then_brave_monthly_counter(
+    context: Any, source: str, remaining: int, limit: int
+) -> None:
+    latest = _run(context, context.repository.latest_quota("brave"))
+    assert latest is not None, "AC-2: no Brave quota snapshot recorded after a successful search"
+    assert latest.source == QuotaSource[source], (
+        f"AC-2: Brave counter snapshot must be {source}, saw {latest.source!r}"
+    )
+    assert latest.remaining == Decimal(remaining), (
+        f"AC-2: counter remaining must be Decimal({remaining}), saw {latest.remaining!r}"
+    )
+    assert latest.limit == Decimal(limit), (
+        f"AC-2: counter limit must be Decimal({limit}), saw {latest.limit!r}"
+    )
+    assert _opt(latest, "unit_kind", None) is not None and str(
+        _opt(latest, "unit_kind")
+    ).upper().endswith("REQUEST"), "AC-2: counter unit_kind must be REQUEST"
+    assert _opt(latest, "window", None) == "monthly", "AC-2: counter window must be monthly"
+    assert latest.remaining_percent == Decimal(remaining) / Decimal(limit) * Decimal(100), (
+        "AC-7a: counter percent must derive from remaining/limit"
+    )
+
+
+@then("the Brave snapshot limit should be flagged as implied")
+def step_then_brave_limit_implied(context: Any) -> None:
+    latest = _run(context, context.repository.latest_quota("brave"))
+    assert latest is not None, "AC-2: no Brave quota snapshot recorded"
+    assert dict(_opt(latest, "metadata", None) or {}).get("limit_implied") is True, (
+        "AC-2: pricing-derived limits must be flagged limit_implied, never vendor balances"
+    )
+
+
+@when("the billing month rolls over")
+def step_when_billing_month_rolls_over(context: Any) -> None:
+    # Test-only time travel: push the adapter ledger into a past month so the
+    # next search exercises the rollover path.
+    context.adapter._ledger_month = datetime(2000, 1, 1, tzinfo=UTC)
+
+
 
 # --------------------------------------------------------------------------
 # Brave derived USD spend (manual dashboard math, no scraping)
@@ -2195,6 +2238,24 @@ def step_then_brave_stays_eligible(context: Any) -> None:
         "AC-6: unknown Brave quota must stay eligible and never be treated as 0; "
         f"brave was removed from candidates (latest={latest!r})"
     )
+
+@then("Brave should stay eligible for search routing with counter headroom")
+def step_then_brave_counter_eligible(context: Any) -> None:
+    latest = _run(context, context.repository.latest_quota("brave"))
+    assert latest is not None, "AC-6 setup: expected a Brave snapshot for routing"
+    assert latest.remaining is not None and latest.remaining > 0, (
+        f"AC-6 setup: counter headroom must be positive, saw {latest.remaining!r}"
+    )
+    adapter = _StubAdapter("brave")
+    health = {
+        "brave": ProviderHealth(provider="brave", status=HealthStatus.HEALTHY, checked_at=FIXED_AT)
+    }
+    candidates = select_route(_search_request(), [adapter], health, {"brave": latest})
+    assert "brave" in _route_names(candidates), (
+        "AC-6: counter-backed Brave quota must stay eligible; "
+        f"brave was removed from candidates (latest={latest!r})"
+    )
+
 
 
 @then(

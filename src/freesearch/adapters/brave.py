@@ -49,6 +49,11 @@ __all__ = [
 COST_USD_PER_REQUEST = Decimal("0.005")
 # Free monthly credit allowance shown on the Brave dashboard.
 FREE_CREDITS_USD = Decimal("5.00")
+# Implied monthly request allowance derived from the dashboard pricing facts
+# ($5.00 free credits at $0.005/request). Used only when the vendor never
+# reported a monthly limit; snapshots built on it are ESTIMATED and flagged
+# in metadata so they are never mistaken for a vendor balance.
+_IMPLIED_MONTHLY_LIMIT = FREE_CREDITS_USD / COST_USD_PER_REQUEST
 # Vendor exhaustion markers observed in Brave error bodies. A non-429
 # response carrying one of these codes is a quota-exhausted signal.
 BRAVE_EXHAUSTION_BODY_CODES = frozenset(
@@ -95,6 +100,16 @@ def brave_cost_metadata(
     return metadata
 
 
+def _month_start(value: datetime) -> datetime:
+    return datetime(value.year, value.month, 1, tzinfo=UTC)
+
+
+def _next_month_start(value: datetime) -> datetime:
+    if value.month == 12:
+        return datetime(value.year + 1, 1, 1, tzinfo=UTC)
+    return datetime(value.year, value.month + 1, 1, tzinfo=UTC)
+
+
 def monthly_header_value(value: str | None) -> int | None:
     """Return the non-negative monthly element from a Brave comma pair."""
 
@@ -127,6 +142,16 @@ class BraveAdapter(ProviderAdapter):
         self._runner = runner or ResilientRunner(client)
         self._api_key: SecretStr = resolved
         self._last_quota = self._empty_quota()
+        # Local monthly counter. Header-reported monthly values re-anchor it
+        # whenever present; otherwise the counter tracks usage against the
+        # last header-seeded limit (or the implied pricing-derived limit).
+        # The calendar-month boundary is provisional until the vendor reset
+        # day is verified; a header-reported reset always wins for reset_at.
+        self._monthly_limit: Decimal | None = None
+        self._monthly_limit_implied = True
+        self._monthly_used = Decimal("0")
+        self._ledger_month = _month_start(datetime.now(UTC))
+        self._hydrated_month: datetime | None = None
 
     @property
     def name(self) -> str:
@@ -204,6 +229,9 @@ class BraveAdapter(ProviderAdapter):
         if not isinstance(web, dict) or not isinstance(results, list):
             raise TypeError("missing web results")
         normalized = [self._normalize_result(result) for result in results]
+        # Count the just-completed request before projecting the snapshot so
+        # the monthly ledger includes it (matches Keenable's usage-first order).
+        usage = self._usage_event(response)
         snapshot = self._quota_snapshot(response)
         self._last_quota = snapshot
         return SearchResponse(
@@ -211,7 +239,7 @@ class BraveAdapter(ProviderAdapter):
             provider=self.name,
             results=normalized,
             total_results=len(normalized),
-            usage=self._usage_event(response),
+            usage=usage,
             quota_snapshot=snapshot,
         )
 
@@ -219,6 +247,38 @@ class BraveAdapter(ProviderAdapter):
         """Project monthly rate-limit headers observed on a successful search."""
 
         return response.quota_snapshot or self._last_quota
+
+    async def hydrate_quota(self, repository: Any) -> QuotaSnapshot | None:
+        """Restore the monthly counter after an adapter or process restart."""
+
+        now = datetime.now(UTC)
+        month_start = _month_start(now)
+        self._rollover_if_needed(now)
+        if self._hydrated_month == month_start:
+            return None
+        latest = await repository.latest_quota(self.name)
+        if (
+            latest is not None
+            and latest.limit is not None
+            and latest.limit > 0
+            and latest.unit_kind is UnitKind.REQUEST
+            and latest.observed_at >= month_start
+            and not latest.metadata.get("limit_implied")
+        ):
+            self._monthly_limit = latest.limit
+            self._monthly_limit_implied = False
+        events = await repository.list_usage(provider=self.name)
+        used = Decimal("0")
+        for event in events:
+            if (
+                event.observed_at >= month_start
+                and event.status.value == "success"
+                and event.unit_kind is UnitKind.REQUEST
+            ):
+                used += event.units
+        self._monthly_used = used
+        self._hydrated_month = month_start
+        return self._snapshot_from_counter(now, None)
 
     @staticmethod
     def _normalize_result(result: Any) -> SearchResult:
@@ -235,7 +295,17 @@ class BraveAdapter(ProviderAdapter):
             metadata=metadata,
         )
 
+    def _rollover_if_needed(self, now: datetime) -> None:
+        month = _month_start(now)
+        if month == self._ledger_month:
+            return
+        self._ledger_month = month
+        self._monthly_used = Decimal("0")
+        self._hydrated_month = None
+
     def _usage_event(self, response: httpx.Response) -> UsageEvent:
+        self._rollover_if_needed(datetime.now(UTC))
+        self._monthly_used += Decimal("1")
         metadata: dict[str, int] = {}
         remaining = self._rate_limit_remaining(response.headers.get("X-RateLimit-Remaining"))
         if remaining is not None:
@@ -255,8 +325,38 @@ class BraveAdapter(ProviderAdapter):
         metadata.update(brave_cost_metadata())
         return metadata
 
+    def _snapshot_from_counter(self, observed_at: datetime, reset: int | None) -> QuotaSnapshot:
+        """Project the local monthly counter when headers carry no monthly pair."""
+
+        limit = self._monthly_limit
+        implied = True
+        if limit is not None:
+            implied = self._monthly_limit_implied
+        else:
+            limit = _IMPLIED_MONTHLY_LIMIT
+        remaining = max(Decimal("0"), limit - self._monthly_used)
+        metadata = self._base_metadata()
+        if implied:
+            metadata["limit_implied"] = True
+        return QuotaSnapshot(
+            provider=self.name,
+            source=QuotaSource.ESTIMATED if implied else QuotaSource.OBSERVED,
+            remaining=remaining,
+            limit=limit,
+            reset_at=(
+                observed_at + timedelta(seconds=reset)
+                if reset is not None
+                else _next_month_start(observed_at)
+            ),
+            observed_at=observed_at,
+            unit_kind=UnitKind.REQUEST,
+            display_unit="requests",
+            metadata=metadata,
+        )
+
     def _quota_snapshot(self, response: httpx.Response) -> QuotaSnapshot:
         observed_at = datetime.now(UTC)
+        self._rollover_if_needed(observed_at)
         remaining = monthly_header_value(response.headers.get("X-RateLimit-Remaining"))
         limit = monthly_header_value(response.headers.get("X-RateLimit-Limit"))
         reset = monthly_header_value(response.headers.get("X-RateLimit-Reset"))
@@ -272,17 +372,39 @@ class BraveAdapter(ProviderAdapter):
                 display_unit="requests",
                 metadata=self._base_metadata(),
             )
-        return QuotaSnapshot(
-            provider=self.name,
-            source=QuotaSource.OBSERVED,
-            remaining=Decimal(remaining) if remaining is not None else None,
-            limit=Decimal(limit) if limit is not None else None,
-            reset_at=observed_at + timedelta(seconds=reset) if reset is not None else None,
-            observed_at=observed_at,
-            unit_kind=UnitKind.REQUEST,
-            display_unit="requests",
-            metadata=self._base_metadata(),
-        )
+        if limit is not None:
+            # A vendor-reported monthly limit re-anchors the local ledger:
+            # seed the limit once, then per-request counting tracks usage.
+            self._monthly_limit = Decimal(limit)
+            self._monthly_limit_implied = False
+        if remaining is not None and limit is not None:
+            self._monthly_used = max(Decimal("0"), Decimal(limit) - Decimal(remaining))
+            return QuotaSnapshot(
+                provider=self.name,
+                source=QuotaSource.OBSERVED,
+                remaining=Decimal(remaining),
+                limit=Decimal(limit),
+                reset_at=observed_at + timedelta(seconds=reset) if reset is not None else None,
+                observed_at=observed_at,
+                unit_kind=UnitKind.REQUEST,
+                display_unit="requests",
+                metadata=self._base_metadata(),
+            )
+        if remaining is not None and self._monthly_limit is not None:
+            # Vendor remaining against a previously seeded limit: re-anchor.
+            self._monthly_used = max(Decimal("0"), self._monthly_limit - Decimal(remaining))
+            return QuotaSnapshot(
+                provider=self.name,
+                source=QuotaSource.OBSERVED,
+                remaining=Decimal(remaining),
+                limit=self._monthly_limit,
+                reset_at=observed_at + timedelta(seconds=reset) if reset is not None else None,
+                observed_at=observed_at,
+                unit_kind=UnitKind.REQUEST,
+                display_unit="requests",
+                metadata=self._base_metadata(),
+            )
+        return self._snapshot_from_counter(observed_at, reset)
 
     def _empty_quota(self) -> QuotaSnapshot:
         return QuotaSnapshot(
