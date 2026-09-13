@@ -78,7 +78,7 @@ class _ControlAdapter(ProviderAdapter):
 
     @property
     def capabilities(self) -> ProviderCapabilities:
-        return ProviderCapabilities(search=True, fetch=True, cost_estimate=True, health=True)
+        return ProviderCapabilities(search=True, fetch=True, cost_estimate=True)
 
     async def search(self, request: SearchRequest) -> SearchResponse:
         if self.fail:

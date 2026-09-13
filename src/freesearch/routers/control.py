@@ -20,6 +20,7 @@ from fastapi import FastAPI, HTTPException, Request
 from pydantic import ValidationError
 
 from freesearch.adapters.base import ProviderAdapter
+from freesearch.adapters.registry import adapter_factory
 from freesearch.configuration.provider_config import (
     ProviderConfig,
     ProviderConfigUpdate,
@@ -28,7 +29,6 @@ from freesearch.configuration.provider_config import (
 from freesearch.infrastructure.http import create_async_client
 from freesearch.infrastructure.logging import redact_secrets
 from freesearch.infrastructure.secrets import PROVIDER_ENV_VARS, ProviderName, SecretStore
-from freesearch.mcp.server import adapter_factory
 from freesearch.models.contracts import (
     BreakerState,
     CircuitBreakerState,

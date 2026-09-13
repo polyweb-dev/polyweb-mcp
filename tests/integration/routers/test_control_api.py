@@ -86,7 +86,7 @@ class ControlAdapter(ProviderAdapter):
 
     @property
     def capabilities(self) -> ProviderCapabilities:
-        return ProviderCapabilities(search=True, fetch=True, cost_estimate=True, health=True)
+        return ProviderCapabilities(search=True, fetch=True, cost_estimate=True)
 
     async def search(self, request: SearchRequest) -> SearchResponse:
         self.search_calls += 1
@@ -616,13 +616,13 @@ async def test_secret_write_constructs_missing_adapter_on_demand(
     tmp_path: Path,
 ) -> None:
     """AC-3/AC-5: a key written after startup makes a missing adapter testable."""
-    from freesearch.mcp import server as server_module
+    from freesearch.adapters import registry as registry_module
 
     store = MemorySecretStore()
     replacement = ControlAdapter("exa", health_status=HealthStatus.UNKNOWN)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(
-        server_module,
+        registry_module,
         "_ADAPTERS",
         {ProviderName.EXA: lambda _client: replacement},
     )

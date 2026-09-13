@@ -19,13 +19,16 @@ from alembic.script import ScriptDirectory
 
 logger = logging.getLogger(__name__)
 
+# NOTE (CLEANUP Phase 3.1 option b, deferred forward migration bf9f40b58cef):
+# the cache application API was removed in 0.1.0 and revision bf9f40b58cef
+# drops the retained ``cache_metadata`` table + ``cache_metadata_expires_at``
+# index going forward. Downgrade recreates them exactly for rollback only.
 _APP_TABLES = frozenset(
     {
         "usage_events",
         "runtime_settings",
         "quota_snapshots",
         "provider_health",
-        "cache_metadata",
     }
 )
 _CORE_COLUMNS: dict[str, frozenset[str]] = {
@@ -37,18 +40,6 @@ _CORE_COLUMNS: dict[str, frozenset[str]] = {
         {"id", "provider", "source", "remaining", "limit_units", "reset_at", "observed_at"}
     ),
     "provider_health": frozenset({"id", "provider", "status", "checked_at", "message"}),
-    "cache_metadata": frozenset(
-        {
-            "cache_key",
-            "provider",
-            "operation",
-            "created_at",
-            "expires_at",
-            "accessed_at",
-            "hit_count",
-            "size_bytes",
-        }
-    ),
 }
 _HEAD_COLUMNS: dict[str, frozenset[str]] = {
     **_CORE_COLUMNS,
@@ -62,7 +53,6 @@ _HEAD_INDEXES = frozenset(
         "usage_events_provider_observed_at",
         "quota_snapshots_provider_source_observed_at",
         "provider_health_provider_checked_at",
-        "cache_metadata_expires_at",
     }
 )
 _LOCK_TIMEOUT_SECONDS = 30.0

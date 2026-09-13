@@ -1,6 +1,5 @@
 """Provider-neutral request, response, usage, and error models."""
 
-import re
 from datetime import date, datetime
 from decimal import Decimal
 from enum import StrEnum
@@ -267,7 +266,6 @@ class ProviderCapabilities(ContractModel):
     search: bool = True
     fetch: bool = False
     cost_estimate: bool = False
-    health: bool = False
     quota: bool = False
 
 
@@ -283,26 +281,6 @@ class ProviderHealth(ContractModel):
     status: HealthStatus
     checked_at: datetime
     message: str | None = None
-
-
-class CacheMetadata(ContractModel):
-    """Metadata for a cached operation; cached payloads are never persisted here."""
-
-    cache_key: str = Field(min_length=1)
-    provider: str
-    operation: UsageOperation
-    created_at: datetime
-    expires_at: datetime
-    accessed_at: datetime
-    hit_count: int = Field(default=0, ge=0)
-    size_bytes: int | None = Field(default=None, ge=0)
-
-    @field_validator("cache_key")
-    @classmethod
-    def validate_cache_key(cls, cache_key: str) -> str:
-        if re.fullmatch(r"[0-9a-f]{64}", cache_key) is None:
-            raise ValueError("cache_key must be a lowercase SHA-256 digest")
-        return cache_key
 
 
 class ProviderError(ContractModel):

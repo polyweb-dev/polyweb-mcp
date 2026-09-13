@@ -24,7 +24,7 @@ class FakeAdapter(ProviderAdapter):
 
     @property
     def capabilities(self) -> ProviderCapabilities:
-        return ProviderCapabilities(fetch=True, cost_estimate=True, health=True, quota=True)
+        return ProviderCapabilities(fetch=True, cost_estimate=True, quota=True)
 
     async def search(self, request: SearchRequest) -> SearchResponse:
         return SearchResponse(

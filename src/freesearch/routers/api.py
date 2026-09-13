@@ -21,10 +21,11 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 
 from freesearch.adapters.base import ProviderAdapter
+from freesearch.adapters.registry import build_adapters, close_adapters
 from freesearch.configuration.config import get_settings
 from freesearch.infrastructure.http import create_async_client
 from freesearch.infrastructure.secrets import KeyringSecretStore, SecretStore
-from freesearch.mcp.server import _apply_parallel_seed, build_adapters, close_adapters
+from freesearch.mcp.server import _apply_parallel_seed
 from freesearch.models.contracts import (
     CostPreset,
     FallbackPolicy,

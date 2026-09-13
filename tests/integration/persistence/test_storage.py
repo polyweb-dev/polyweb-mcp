@@ -1,6 +1,5 @@
 """Async SQLite repository tests for the stage-2 usage/data persistence layer."""
 
-import hashlib
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
@@ -13,7 +12,6 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from freesearch.models.contracts import (
-    CacheMetadata,
     HealthStatus,
     ProviderHealth,
     QuotaSnapshot,
@@ -23,12 +21,6 @@ from freesearch.models.contracts import (
 )
 from freesearch.persistence.database_migrations import DatabaseMigrationError
 from freesearch.persistence.storage import SQLiteRepository, UsageEventRow
-
-
-def _digest(label: str) -> str:
-    """Return a valid opaque cache key: a lowercase SHA-256 digest."""
-    return hashlib.sha256(label.encode()).hexdigest()
-
 
 # Baseline raw-SQL schema contract: column -> (SQLite type, PRAGMA notnull=0 -> nullable).
 _SCHEMA: dict[str, dict[str, object]] = {
@@ -76,20 +68,6 @@ _SCHEMA: dict[str, dict[str, object]] = {
         },
         "primary_key": ("id",),
         "indexes": {"provider_health_provider_checked_at": ["provider", "checked_at"]},
-    },
-    "cache_metadata": {
-        "columns": {
-            "cache_key": ("TEXT", True),
-            "provider": ("TEXT", False),
-            "operation": ("TEXT", False),
-            "created_at": ("TEXT", False),
-            "expires_at": ("TEXT", False),
-            "accessed_at": ("TEXT", False),
-            "hit_count": ("INTEGER", False),
-            "size_bytes": ("INTEGER", True),
-        },
-        "primary_key": ("cache_key",),
-        "indexes": {"cache_metadata_expires_at": ["expires_at"]},
     },
 }
 
@@ -280,126 +258,6 @@ async def test_health_history_and_latest_read(repository: SQLiteRepository) -> N
     assert await repository.latest_health("alpha") == later
     assert await repository.latest_health("beta") == other
     assert await repository.latest_health("gamma") is None
-
-
-async def test_cache_metadata_upserts_by_key_and_tracks_hits(
-    repository: SQLiteRepository,
-) -> None:
-    t0 = datetime(2026, 1, 1, 0, 0, tzinfo=UTC)
-    metadata = CacheMetadata(
-        cache_key=_digest("key-1"),
-        provider="alpha",
-        operation=UsageOperation.SEARCH,
-        created_at=t0,
-        expires_at=t0 + timedelta(minutes=5),
-        accessed_at=t0,
-        hit_count=0,
-        size_bytes=1024,
-    )
-    await repository.upsert_cache_metadata(metadata)
-    assert await repository.get_cache_metadata(metadata.cache_key) == metadata
-
-    updated = metadata.model_copy(update={"hit_count": 3, "accessed_at": t0 + timedelta(minutes=1)})
-    await repository.upsert_cache_metadata(updated)
-    assert await repository.get_cache_metadata(metadata.cache_key) == updated
-
-    assert (
-        await repository.touch_cache_metadata(metadata.cache_key, t0 + timedelta(minutes=2)) is True
-    )
-    current = await repository.get_cache_metadata(metadata.cache_key)
-    assert current is not None
-    assert current.hit_count == 4
-    assert current.accessed_at == t0 + timedelta(minutes=2)
-    assert await repository.touch_cache_metadata(_digest("missing"), t0) is False
-
-
-async def test_cache_upsert_replaces_all_mutable_fields(
-    repository: SQLiteRepository,
-) -> None:
-    cache_key = _digest("replace")
-    t0 = datetime(2026, 1, 1, 0, 0, tzinfo=UTC)
-    first = CacheMetadata(
-        cache_key=cache_key,
-        provider="alpha",
-        operation=UsageOperation.SEARCH,
-        created_at=t0,
-        expires_at=t0 + timedelta(minutes=5),
-        accessed_at=t0,
-        hit_count=0,
-        size_bytes=1024,
-    )
-    second = CacheMetadata(
-        cache_key=cache_key,
-        provider="beta",
-        operation=UsageOperation.FETCH,
-        created_at=t0 + timedelta(days=1),
-        expires_at=t0 + timedelta(days=2),
-        accessed_at=t0 + timedelta(hours=1),
-        hit_count=7,
-        size_bytes=None,
-    )
-    await repository.upsert_cache_metadata(first)
-    await repository.upsert_cache_metadata(second)
-
-    assert await repository.get_cache_metadata(cache_key) == second
-
-
-async def test_remove_expired_cache_metadata_uses_expiry_boundary(
-    repository: SQLiteRepository,
-) -> None:
-    t0 = datetime(2026, 1, 1, 0, 0, tzinfo=UTC)
-
-    def metadata(cache_key: str, expires_at: datetime) -> CacheMetadata:
-        return CacheMetadata(
-            cache_key=cache_key,
-            provider="alpha",
-            operation=UsageOperation.SEARCH,
-            created_at=t0,
-            expires_at=expires_at,
-            accessed_at=t0,
-            hit_count=0,
-            size_bytes=10,
-        )
-
-    live = metadata(_digest("live"), t0 + timedelta(seconds=1))
-    for entry in (
-        live,
-        metadata(_digest("at-now"), t0),
-        metadata(_digest("past"), t0 - timedelta(seconds=1)),
-    ):
-        await repository.upsert_cache_metadata(entry)
-
-    removed = await repository.remove_expired_cache_metadata(t0)
-
-    assert removed == 2
-    assert await repository.get_cache_metadata(live.cache_key) == live
-    assert await repository.get_cache_metadata(_digest("at-now")) is None
-    assert await repository.get_cache_metadata(_digest("past")) is None
-
-
-async def test_cache_expiration_uses_utc_instants(repository: SQLiteRepository) -> None:
-    t0 = datetime(2026, 1, 1, 10, 0, tzinfo=UTC)
-    plus_two = timezone(timedelta(hours=2))
-
-    def metadata(cache_key: str, expires_at: datetime) -> CacheMetadata:
-        return CacheMetadata(
-            cache_key=cache_key,
-            provider="alpha",
-            operation=UsageOperation.SEARCH,
-            created_at=t0,
-            expires_at=expires_at,
-            accessed_at=t0,
-            hit_count=0,
-        )
-
-    live = metadata(_digest("live"), t0 + timedelta(seconds=1))
-    boundary = metadata(_digest("boundary"), datetime(2026, 1, 1, 12, 0, tzinfo=plus_two))
-    await repository.upsert_cache_metadata(live)
-    await repository.upsert_cache_metadata(boundary)
-
-    assert await repository.remove_expired_cache_metadata(t0) == 1
-    assert await repository.get_cache_metadata(boundary.cache_key) is None
-    assert await repository.get_cache_metadata(live.cache_key) == live
 
 
 async def test_usage_metadata_blocklist_contract(

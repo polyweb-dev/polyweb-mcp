@@ -479,12 +479,14 @@ Existing tests remain behavioral constraints. They may be updated where they enc
 
 Alembic is now the schema authority. Repository startup resolves one absolute database path, obtains an adjacent cross-process migration lock, and upgrades that file before creating the async SQLAlchemy engine. Fresh databases run both revisions. An unversioned legacy or already-canonical database is preflight-validated, backed up with SQLite's online backup API, and adopted at head. A database already at head is validated without another backup or mutation.
 
-The migration chain is deliberately additive:
+The migration chain was additive through `0002`; `bf9f40b58cef` is the first
+destructive revision, limited to the retired cache table:
 
 1. `0001_legacy_baseline` creates missing operational tables and indexes and completes the older nullable usage columns.
 2. `0002_canonical_quota_units` adds `usage_events.unit_kind` plus `quota_snapshots.unit_kind`, `display_unit`, and `metadata` as nullable text.
+3. `bf9f40b58cef_drop_cache_metadata` drops the `cache_metadata` table and its `cache_metadata_expires_at` index (guarded: no-op when already absent, so partial/legacy databases upgrade safely). The cache application API was removed in 0.1.0 and nothing writes this table anymore; the automatic pre-migration backup retains its rows for recovery, and downgrade recreates the exact table + index for rollback only.
 
-No revision rewrites IDs, timestamps, native `units`, provider names, runtime settings, health, cache metadata, or historical quota values. Old unit fields remain `NULL`; that is an honest unknown dimension, not data loss.
+No revision rewrites IDs, timestamps, native `units`, provider names, runtime settings, health, or historical quota values. Old unit fields remain `NULL`; that is an honest unknown dimension, not data loss.
 
 ### 7.1 Worktree and main-checkout behavior
 

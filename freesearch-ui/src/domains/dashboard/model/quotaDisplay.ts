@@ -1,5 +1,5 @@
 import { unitLabel, type UnitKind } from "@/shared/api/units"
-import type { ProviderConfig } from "@/domains/providers/model/types";import type { QuotaConfidence } from "./quotaTypes";
+import type { ProviderConfig } from "@/domains/providers/model/types";import type { DashboardQuota, QuotaConfidence } from "./quotaTypes";
 
 /**
  * The quota headline is deliberately provider-neutral: when both values are
@@ -142,10 +142,32 @@ export function quotaDisplay(input: QuotaDisplayInput): QuotaDisplay {
   }
 }
 
-/** Resolve one provider's dashboard-overlaid quota into display data. */
-export function providerQuotaDisplay(provider: ProviderConfig): QuotaDisplay {
+/** Keyless detection shared by every provider-only quota normalization. */
+export function isKeylessQuotaProvider(provider: ProviderConfig): boolean {
+  return (
+    provider.id === "keenable" &&
+    (provider.keyVaultStatus === "keyless_public" || provider.keySource === "none")
+  )
+}
+
+/**
+ * Absent-snapshot predicate shared by quota captions and row decisions.
+ * A snapshot with both natives null carries no budget signal, exactly like
+ * a missing snapshot; a half-null snapshot is still a snapshot and must
+ * flow through wholesale (never resurrect older balances).
+ */
+export function isMissingQuotaSnapshot(quota: DashboardQuota | undefined): boolean {
+  return quota === undefined || (quota.remaining === null && quota.limit === null)
+}
+
+/**
+ * Canonical provider-only quota input. Centralizes the confidence guard
+ * (unobserved base values carry no signal), the legacy "—" reset guard,
+ * and keyless detection so feature overlays never re-derive them.
+ */
+export function providerQuotaInput(provider: ProviderConfig): QuotaDisplayInput {
   const quota = provider.quota
-  return quotaDisplay({
+  return {
     remaining: quota.remaining,
     remainingPercent: quota.remainingPercent,
     limit: quota.limit,
@@ -154,9 +176,12 @@ export function providerQuotaDisplay(provider: ProviderConfig): QuotaDisplay {
     confidence: quota.observedAt ? quota.confidence : null,
     resetAt: quota.nextReset !== "—" ? quota.nextReset : null,
     providerId: provider.id,
-    keyless:
-      provider.id === "keenable" &&
-      (provider.keyVaultStatus === "keyless_public" || provider.keySource === "none"),
+    keyless: isKeylessQuotaProvider(provider),
     window: quota.window,
-  })
+  }
+}
+
+/** Resolve one provider's dashboard-overlaid quota into display data. */
+export function providerQuotaDisplay(provider: ProviderConfig): QuotaDisplay {
+  return quotaDisplay(providerQuotaInput(provider))
 }

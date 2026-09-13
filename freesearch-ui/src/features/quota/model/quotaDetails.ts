@@ -1,4 +1,4 @@
-import { quotaDisplay } from "@/domains/dashboard"
+import { isKeylessQuotaProvider, isMissingQuotaSnapshot, providerQuotaInput, quotaDisplay } from "@/domains/dashboard"
 import type { ProviderConfig } from "@/domains/providers"
 import type { DashboardQuota, QuotaConfidence } from "@/domains/dashboard"
 
@@ -27,18 +27,10 @@ export interface QuotaCaption {
 }
 
 export function quotaValues(provider: ProviderConfig, latest: DashboardQuota | undefined): QuotaValues {
-  const base = provider.quota
   if (!latest) {
-    return {
-      remaining: base.remaining,
-      remainingPercent: base.remainingPercent,
-      limit: base.limit,
-      unitKind: base.unitKind,
-      displayUnit: base.displayUnit,
-      confidence: base.observedAt ? base.confidence : null,
-      resetAt: base.nextReset !== "—" ? base.nextReset : null,
-      window: base.window,
-    }
+    const { remaining, remainingPercent, limit, unitKind, displayUnit, confidence, resetAt, window } =
+      providerQuotaInput(provider)
+    return { remaining, remainingPercent: remainingPercent ?? null, limit, unitKind, displayUnit, confidence, resetAt, window: window ?? null }
   }
   return {
     remaining: latest.remaining,
@@ -61,9 +53,7 @@ export function resolveQuota(
   const display = quotaDisplay({
     ...values,
     providerId: provider.id,
-    keyless:
-      provider.id === "keenable" &&
-      (provider.keyVaultStatus === "keyless_public" || provider.keySource === "none"),
+    keyless: isKeylessQuotaProvider(provider),
     isOAuthPaired,
   })
   return {
@@ -81,7 +71,7 @@ export function quotaCaptionFor(
   display: ReturnType<typeof quotaDisplay>,
   isOAuthPaired?: boolean
 ): QuotaCaption | null {
-  const noSnapshot = latestQuota === undefined || (latestQuota.remaining === null && latestQuota.limit === null)
+  const noSnapshot = isMissingQuotaSnapshot(latestQuota)
   if (!noSnapshot || display.remainingPercent !== null) return null
   if (provider.id === "parallel") {
     if (isOAuthPaired) {
