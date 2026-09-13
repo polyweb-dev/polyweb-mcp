@@ -17,6 +17,7 @@ import httpx
 
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.configuration.provider_config import get_provider_secret_resolver
+from freesearch.infrastructure.borrowed_transport import BorrowedTransport
 from freesearch.infrastructure.dates import parse_iso_datetime
 from freesearch.infrastructure.resilience import (
     RETRYABLE_STATUS_CODES,
@@ -101,14 +102,6 @@ def parse_seed(value: Decimal | None) -> Decimal | None:
     return None if value is None else parse_decimal(value)
 
 
-class _BorrowedTransport(httpx.AsyncBaseTransport):
-    def __init__(self, client: httpx.AsyncClient) -> None:
-        self._client = client
-
-    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-        return await self._client._transport_for_url(request.url).handle_async_request(request)
-
-
 def _parse_published_at(value: Any) -> datetime | None:
     return parse_iso_datetime(value)
 
@@ -129,7 +122,7 @@ class ParallelAdapter(ProviderAdapter):
             raise self._error("configuration_error", "no Parallel API key configured")
         self._api_key = resolved.get_secret_value()
         self._http = httpx.AsyncClient(
-            transport=_BorrowedTransport(client),
+            transport=BorrowedTransport(client, reassert_timeout=False),
             timeout=client.timeout,
             follow_redirects=client.follow_redirects,
             max_redirects=client.max_redirects,

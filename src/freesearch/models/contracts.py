@@ -433,12 +433,12 @@ def manual_quota_remaining_percent(allowance: Decimal, current_usage: Decimal) -
     return min(Decimal("100"), max(Decimal("0"), ratio))
 
 
-class ManualQuota(ContractModel):
-    """Operator-entered billing anchor; provider-agnostic and routing-neutral.
+class _ManualQuotaInputBase(ContractModel):
+    """Shared billing-anchor input fields and checks.
 
-    The unit is implied by the provider (Brave/Exa/Parallel use USD with
-    Brave costing $0.005/request; other providers use REQUEST/CREDIT). This
-    model never steers routing; it only feeds the ESTIMATED control response.
+    Owned jointly by ``ManualQuota`` and ``ManualQuotaUpdate`` (identical
+    input shape). ``ManualQuotaResponse`` is intentionally excluded: it
+    validates remaining/optional percent and lacks the window validator.
     """
 
     billing_start: date
@@ -462,28 +462,17 @@ class ManualQuota(ContractModel):
         return self
 
 
-class ManualQuotaUpdate(ContractModel):
+class ManualQuota(_ManualQuotaInputBase):
+    """Operator-entered billing anchor; provider-agnostic and routing-neutral.
+
+    The unit is implied by the provider (Brave/Exa/Parallel use USD with
+    Brave costing $0.005/request; other providers use REQUEST/CREDIT). This
+    model never steers routing; it only feeds the ESTIMATED control response.
+    """
+
+
+class ManualQuotaUpdate(_ManualQuotaInputBase):
     """Full billing-anchor input accepted by PUT; same shape as ManualQuota."""
-
-    billing_start: date
-    billing_end: date
-    allowance: Decimal = Field(ge=0)
-    current_usage: Decimal = Field(ge=0)
-    note: str | None = Field(default=None, max_length=500)
-
-    @field_validator("allowance", "current_usage", mode="before")
-    @classmethod
-    def validate_quota_decimal(cls, value: object) -> Decimal:
-        try:
-            return parse_decimal(value)
-        except TypeError as exc:
-            raise ValueError(str(exc)) from exc
-
-    @model_validator(mode="after")
-    def validate_billing_window(self) -> Self:
-        if self.billing_end <= self.billing_start:
-            raise ValueError("billing_end must be after billing_start")
-        return self
 
 
 class ManualQuotaResponse(ContractModel):

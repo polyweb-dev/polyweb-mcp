@@ -1,4 +1,5 @@
 import React, { useId } from "react"
+import { Switch as SwitchPrimitive } from "@base-ui/react/switch"
 import { cn } from "cn"
 
 export interface SwitchProps {
@@ -30,14 +31,14 @@ export const Switch: React.FC<SwitchProps> = ({
         disabled && "cursor-not-allowed opacity-45"
       )}
     >
-      <button
-        type="button"
+      <SwitchPrimitive.Root
         id={switchId}
-        role="switch"
-        aria-checked={checked}
-        aria-label={ariaLabel ?? label}
+        checked={checked}
         disabled={disabled}
-        onClick={() => onChange(!checked)}
+        onCheckedChange={(next) => onChange(next)}
+        aria-label={ariaLabel ?? label}
+        nativeButton
+        render={<button type="button" />}
         className={cn(
           "relative inline-flex h-5 w-9 shrink-0 items-center rounded-full border p-0.5 transition-all duration-200 ease-in-out outline-none motion-reduce:transition-none",
           "before:absolute before:-inset-2 before:content-['']",
@@ -48,14 +49,14 @@ export const Switch: React.FC<SwitchProps> = ({
           "disabled:cursor-not-allowed disabled:opacity-50"
         )}
       >
-        <span
+        <SwitchPrimitive.Thumb
           aria-hidden="true"
           className={cn(
             "pointer-events-none block h-4 w-4 rounded-full bg-[var(--text-strong)] shadow-sm transition-transform duration-200 ease-in-out motion-reduce:transition-none",
             checked && "translate-x-[14px]"
           )}
         />
-      </button>
+      </SwitchPrimitive.Root>
       {(label || description) && (
         <label
           htmlFor={switchId}

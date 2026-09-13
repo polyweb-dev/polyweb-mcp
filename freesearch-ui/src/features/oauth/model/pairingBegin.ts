@@ -12,7 +12,7 @@ export interface BeginPairingInput {
   setPhase: (phase: PairingPhase) => void
   setDevice: (device: BackendOAuthDeviceCode | null) => void
   setError: (error: string | null) => void
-  setCopied: (copied: boolean) => void
+  resetCopied: () => void
   setRevokedElsewhere: (revoked: boolean) => void
   setExpiresAt: (expiresAt: number | null) => void
   setNowMs: (nowMs: number) => void
@@ -38,7 +38,7 @@ export function useBeginPairing(input: BeginPairingInput): BeginPairingApi {
     setPhase,
     setDevice,
     setError,
-    setCopied,
+    resetCopied,
     setRevokedElsewhere,
     setExpiresAt,
     setNowMs,
@@ -69,7 +69,7 @@ export function useBeginPairing(input: BeginPairingInput): BeginPairingApi {
     clearPollTimer()
     setPhase("starting")
     setError(null)
-    setCopied(false)
+    resetCopied()
     setRevokedElsewhere(false)
     pollRoundRef.current = async (roundGen: number, delayMs: number): Promise<void> => {
       let next: BackendOAuthStatus
@@ -135,7 +135,7 @@ export function useBeginPairing(input: BeginPairingInput): BeginPairingApi {
     setNowMs(Date.now())
     setPhase("pending")
     schedulePoll(gen, callbacksRef.current.statusPollMs ?? Math.max(1, code.interval) * 1000)
-  }, [callbacksRef, clearPollTimer, schedulePoll, setPhase, setDevice, setError, setCopied, setRevokedElsewhere, setExpiresAt, setNowMs, alive])
+  }, [callbacksRef, clearPollTimer, schedulePoll, setPhase, setDevice, setError, resetCopied, setRevokedElsewhere, setExpiresAt, setNowMs, alive])
 
   const pollNow = useCallback((): void => {
     clearPollTimer()

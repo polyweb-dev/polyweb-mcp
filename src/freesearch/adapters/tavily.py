@@ -39,6 +39,7 @@ from tavily.errors import (
 
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.configuration.provider_config import get_provider_secret_resolver
+from freesearch.infrastructure.borrowed_transport import BorrowedTransport
 from freesearch.infrastructure.dates import parse_iso_datetime
 from freesearch.infrastructure.resilience import (
     RETRYABLE_STATUS_CODES,
@@ -248,21 +249,6 @@ _TAVILY_COUNTRIES = {
 }
 
 
-class _BorrowedTransport(httpx.AsyncBaseTransport):
-    """Route through a caller-owned client's pools without owning their lifecycle."""
-
-    def __init__(self, client: httpx.AsyncClient) -> None:
-        self._client = client
-
-    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-        # The SDK stamps its scalar per-call timeout onto the request, which
-        # would collapse the shared phase-specific timeout (connect/read/write/
-        # pool) to that single value; reassert the shared client's phases so
-        # the network call honors the shared transport policy.
-        request.extensions["timeout"] = self._client.timeout.as_dict()
-        return await self._client._transport_for_url(request.url).handle_async_request(request)
-
-
 def _parse_published_at(value: Any) -> datetime | None:
     """Parse Tavily's ISO-8601 ``published_date``; unparseable values are None."""
     return parse_iso_datetime(value)
@@ -356,7 +342,7 @@ class TavilyAdapter(ProviderAdapter):
             headers=forwarded,
             max_redirects=client.max_redirects,
             timeout=client.timeout,
-            transport=_BorrowedTransport(client),
+            transport=BorrowedTransport(client, reassert_timeout=True),
         )
         return AsyncTavilyClient(
             api_key=resolved.get_secret_value(),

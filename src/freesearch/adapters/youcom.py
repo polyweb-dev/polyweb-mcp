@@ -9,7 +9,6 @@ from freesearch.adapters._youcom_support import (
     _BALANCE_URL,
     _FETCH_UNIT_PRICE,
     _SEARCH_UNIT_PRICE,
-    _BorrowedTransport,
     _estimated_quota,
     _fetch_request,
     _match_page,
@@ -21,6 +20,7 @@ from freesearch.adapters._youcom_support import (
 from freesearch.adapters._youcom_support import _same_url as _same_url
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.configuration.provider_config import get_provider_secret_resolver
+from freesearch.infrastructure.borrowed_transport import BorrowedTransport
 from freesearch.infrastructure.resilience import (
     RETRYABLE_STATUS_CODES,
     ProviderOperationError,
@@ -64,7 +64,7 @@ class YoucomAdapter(ProviderAdapter):
             headers=forwarded,
             max_redirects=client.max_redirects,
             timeout=client.timeout,
-            transport=_BorrowedTransport(client),
+            transport=BorrowedTransport(client, reassert_timeout=True),
         )
 
     async def aclose(self) -> None:
