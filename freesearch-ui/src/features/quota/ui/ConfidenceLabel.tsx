@@ -1,4 +1,4 @@
-import type { QuotaConfidence } from "@/types/freesearch"
+import type { QuotaConfidence } from "@/domains/dashboard"
 
 /** Confidence chip with its vendor/observed/estimated explanation. */
 export function ConfidenceLabel({ confidence }: { confidence: QuotaConfidence }) {

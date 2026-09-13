@@ -1,7 +1,7 @@
 import { useState } from "react"
 import { useFreeSearch } from "@/context/useFreeSearch"
 import { getEligibleProviders } from "@/domains/routing"
-import type { ProviderConfig } from "@/types/freesearch"
+import type { ProviderConfig } from "@/domains/providers"
 
 export type SimulatorOperation = "Search" | "Fetch"
 

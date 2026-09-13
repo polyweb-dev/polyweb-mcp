@@ -18,7 +18,12 @@ import httpx
 
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.configuration.provider_config import get_provider_secret_resolver
-from freesearch.infrastructure.resilience import ProviderOperationError, ResilientRunner
+from freesearch.infrastructure.dates import parse_iso_datetime
+from freesearch.infrastructure.resilience import (
+    RETRYABLE_STATUS_CODES,
+    ProviderOperationError,
+    ResilientRunner,
+)
 from freesearch.infrastructure.secrets import ProviderName
 from freesearch.models.contracts import (
     CostEstimate,
@@ -42,7 +47,6 @@ __all__ = ["KeenableAdapter"]
 _NAME = "keenable"
 _BASE_URL = "https://api.keenable.ai"
 _MAX_SEARCH_RESULTS = 50
-_RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
 _KEYLESS = "keyless"
 _KEYED = "keyed"
 _TITLE_HEADER = "X-Keenable-Title"
@@ -70,12 +74,7 @@ def _next_month_start(value: datetime) -> datetime:
 
 def _parse_published_at(value: Any) -> datetime | None:
     """Parse an ISO-8601 timestamp; unparseable values are None."""
-    if not isinstance(value, str):
-        return None
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
+    return parse_iso_datetime(value)
 
 
 class KeenableAdapter(ProviderAdapter):
@@ -481,7 +480,7 @@ class KeenableAdapter(ProviderAdapter):
         return self._error(
             "quota_exhausted" if status == 402 else "http_error",
             f"HTTP {status}",
-            retryable=status in _RETRYABLE_STATUS_CODES,
+            retryable=status in RETRYABLE_STATUS_CODES,
             status=status,
         )
 

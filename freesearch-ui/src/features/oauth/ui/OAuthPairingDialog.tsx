@@ -1,9 +1,9 @@
-import { Modal } from "@/components/common/Modal"
+import { Modal } from "@/shared/ui/Modal"
 import { Loader2, CheckCircle2, AlertCircle } from "lucide-react"
 import type {
   BackendOAuthDeviceCode,
   BackendOAuthStatus,
-} from "@/services/api/backendTypes"
+} from "@/domains/providers/api/oauthWire"
 import { usePairingFlow } from "../model/usePairingFlow"
 import { PairedElsewhereView } from "./PairedElsewhereView"
 import { PairingDialogFooter } from "./PairingDialogFooter"

@@ -1,7 +1,7 @@
 import { useState } from "react"
 import type { FormEvent } from "react"
 import { ApiError } from "@/shared/api/http"
-import type { BackendManualQuotaPayload } from "@/services/api/backendTypes"
+import type { BackendManualQuotaPayload } from "@/domains/dashboard/api/manualQuotaWire"
 import {
   remainingPercent1dp,
   validateManualQuotaFields,

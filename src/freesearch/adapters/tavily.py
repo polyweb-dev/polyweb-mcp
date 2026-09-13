@@ -39,7 +39,12 @@ from tavily.errors import (
 
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.configuration.provider_config import get_provider_secret_resolver
-from freesearch.infrastructure.resilience import ProviderOperationError, ResilientRunner
+from freesearch.infrastructure.dates import parse_iso_datetime
+from freesearch.infrastructure.resilience import (
+    RETRYABLE_STATUS_CODES,
+    ProviderOperationError,
+    ResilientRunner,
+)
 from freesearch.infrastructure.secrets import ProviderName
 from freesearch.models.contracts import (
     CostEstimate,
@@ -62,9 +67,6 @@ __all__ = ["TavilyAdapter"]
 
 _NAME = "tavily"
 _MAX_SEARCH_RESULTS = 20
-# Retryable set mirrors the shared runner's HTTP policy; SDK errors outside it
-# are surfaced as non-retryable.
-_RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
 # Tavily bills basic extraction as one credit per five successful URLs.
 _FETCH_CREDIT_PER_URL = Decimal("0.2")
 # Scalar timeouts forwarded to the SDK are capped at the vendor maxima: the
@@ -263,12 +265,7 @@ class _BorrowedTransport(httpx.AsyncBaseTransport):
 
 def _parse_published_at(value: Any) -> datetime | None:
     """Parse Tavily's ISO-8601 ``published_date``; unparseable values are None."""
-    if not isinstance(value, str):
-        return None
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
+    return parse_iso_datetime(value)
 
 
 def _sdk_timeout_seconds(client: httpx.AsyncClient, *, cap: float) -> float:
@@ -516,7 +513,7 @@ class TavilyAdapter(ProviderAdapter):
                 raise self._error(
                     "http_error",
                     f"HTTP {status}",
-                    retryable=status in _RETRYABLE_STATUS_CODES,
+                    retryable=status in RETRYABLE_STATUS_CODES,
                     status=status,
                 ) from None
             return self._quota_snapshot(cast(dict[str, Any], response.json()))
@@ -706,7 +703,7 @@ class TavilyAdapter(ProviderAdapter):
             return self._error(
                 "http_error",
                 f"HTTP {status}",
-                retryable=status in _RETRYABLE_STATUS_CODES,
+                retryable=status in RETRYABLE_STATUS_CODES,
                 status=status,
             )
         return self._error("tavily_error", type(exc).__name__)

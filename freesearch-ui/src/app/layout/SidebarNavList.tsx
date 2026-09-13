@@ -7,7 +7,7 @@ import {
   Search,
   Settings,
 } from "lucide-react"
-import { cn } from "@/lib/utils"
+import { cn } from "cn"
 import { TAB_PATHS, type TabId } from "../routes"
 
 interface NavItem {

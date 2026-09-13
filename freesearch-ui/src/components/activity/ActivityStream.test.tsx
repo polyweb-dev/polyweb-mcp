@@ -10,7 +10,7 @@ import {
   routingConfigFixture,
   dashboardFixture,
 } from "@/test/backendFixtures"
-import type { UsageEvent } from "@/types/freesearch"
+import type { UsageEvent } from "@/domains/dashboard"
 
 /**
  * RED update: events are fed by GET /dashboard (mocked fetch) instead of

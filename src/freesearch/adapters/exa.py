@@ -25,7 +25,12 @@ from pydantic import AnyHttpUrl
 
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.configuration.provider_config import get_provider_secret_resolver
-from freesearch.infrastructure.resilience import ProviderOperationError, ResilientRunner
+from freesearch.infrastructure.dates import parse_iso_datetime
+from freesearch.infrastructure.resilience import (
+    RETRYABLE_STATUS_CODES,
+    ProviderOperationError,
+    ResilientRunner,
+)
 from freesearch.infrastructure.secrets import ProviderName
 from freesearch.models.contracts import (
     CostEstimate,
@@ -45,9 +50,6 @@ from freesearch.models.contracts import (
 __all__ = ["ExaAdapter"]
 
 _NAME = "exa"
-# Retryable set mirrors the shared runner's HTTP policy; SDK errors outside it
-# are surfaced as non-retryable.
-_RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
 # The SDK surfaces HTTP failures as ``ValueError("Request failed with status
 # code {status}: {body}")``; only the status code is parsed out - the body is
 # never included so provider text cannot leak.
@@ -56,12 +58,7 @@ _SDK_STATUS_RE = re.compile(r"Request failed with status code (\d+)")
 
 def _parse_published_at(value: str | None) -> datetime | None:
     """Parse Exa's ISO-8601 ``published_date``; unparseable values are None."""
-    if not value:
-        return None
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
+    return parse_iso_datetime(value)
 
 
 def _same_url(left: str, right: str) -> bool:
@@ -305,7 +302,7 @@ class ExaAdapter(ProviderAdapter):
             return self._error(
                 "http_error",
                 f"HTTP {status}",
-                retryable=status in _RETRYABLE_STATUS_CODES,
+                retryable=status in RETRYABLE_STATUS_CODES,
                 status=status,
             )
         if isinstance(exc, httpx.HTTPStatusError):
@@ -313,7 +310,7 @@ class ExaAdapter(ProviderAdapter):
             return self._error(
                 "http_error",
                 f"HTTP {status}",
-                retryable=status in _RETRYABLE_STATUS_CODES,
+                retryable=status in RETRYABLE_STATUS_CODES,
                 status=status,
             )
         return self._error("exa_error", type(exc).__name__)

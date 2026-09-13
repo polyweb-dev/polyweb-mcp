@@ -26,7 +26,12 @@ from firecrawl import AsyncFirecrawl  # type: ignore[import-untyped]
 
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.configuration.provider_config import get_provider_secret_resolver
-from freesearch.infrastructure.resilience import ProviderOperationError, ResilientRunner
+from freesearch.infrastructure.dates import parse_iso_datetime
+from freesearch.infrastructure.resilience import (
+    RETRYABLE_STATUS_CODES,
+    ProviderOperationError,
+    ResilientRunner,
+)
 from freesearch.infrastructure.secrets import ProviderName
 from freesearch.models.contracts import (
     CostEstimate,
@@ -49,9 +54,6 @@ from freesearch.models.contracts import (
 __all__ = ["FirecrawlAdapter"]
 
 _NAME = "firecrawl"
-# Retryable set mirrors the shared runner's HTTP policy; SDK errors outside it
-# are surfaced as non-retryable.
-_RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
 _CREDIT_USAGE_URL = "https://api.firecrawl.dev/v2/team/credit-usage"
 
 
@@ -89,7 +91,7 @@ def _credit_snapshot(payload: dict[str, Any], provider: str) -> QuotaSnapshot:
     reset_at: datetime | None = None
     if isinstance(reset, str):
         try:
-            reset_at = datetime.fromisoformat(reset.replace("Z", "+00:00"))
+            reset_at = datetime.fromisoformat(reset)
             if reset_at.tzinfo is None:
                 reset_at = reset_at.replace(tzinfo=UTC)
             reset_at = reset_at.astimezone(UTC)
@@ -110,12 +112,7 @@ def _credit_snapshot(payload: dict[str, Any], provider: str) -> QuotaSnapshot:
 
 def _parse_published_at(value: Any) -> datetime | None:
     """Parse Firecrawl's ISO-8601 ``date``; unparseable values are None."""
-    if not isinstance(value, str):
-        return None
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
+    return parse_iso_datetime(value)
 
 
 def _item_value(item: Any, key: str, default: Any = None) -> Any:
@@ -382,7 +379,7 @@ class FirecrawlAdapter(ProviderAdapter):
                 raise self._error(
                     "insufficient_credits" if status == 402 else "http_error",
                     f"HTTP {status}",
-                    retryable=status in _RETRYABLE_STATUS_CODES,
+                    retryable=status in RETRYABLE_STATUS_CODES,
                     status=status,
                 ) from None
             payload = response.json()
@@ -413,7 +410,7 @@ class FirecrawlAdapter(ProviderAdapter):
             return self._error(
                 "http_error",
                 f"HTTP {status}",
-                retryable=status in _RETRYABLE_STATUS_CODES,
+                retryable=status in RETRYABLE_STATUS_CODES,
                 status=status,
             )
         # The class name carries no payload or secret; raw exceptions are never

@@ -1,5 +1,5 @@
 import { ExternalLink } from "lucide-react"
-import type { SearchResult } from "@/types/freesearch"
+import type { SearchResult } from "@/domains/execution"
 
 /** Live result inspector: full metadata for the selected hit, or the empty prompt. */
 export function ResultInspector({ result }: { result: SearchResult | null }) {

@@ -6,7 +6,7 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@/shared/ui/dialog"
-import { cn } from "@/lib/utils"
+import { cn } from "cn"
 
 export interface ModalProps {
   isOpen: boolean

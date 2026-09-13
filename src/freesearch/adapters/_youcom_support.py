@@ -13,6 +13,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from freesearch.infrastructure.dates import parse_iso_datetime
 from freesearch.models.contracts import (
     FetchRequest,
     QuotaSnapshot,
@@ -72,12 +73,7 @@ async def _fetch_request(client: httpx.AsyncClient, request: FetchRequest) -> ht
 
 def _parse_published_at(value: Any) -> datetime | None:
     """Parse You.com's ISO-8601 date fields (``publish_date``, ``page_age``)."""
-    if not isinstance(value, str):
-        return None
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
+    return parse_iso_datetime(value)
 
 
 def _safe_url(value: Any) -> bool:

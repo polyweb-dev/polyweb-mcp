@@ -3,7 +3,7 @@ import { describe, it, expect, afterEach, vi } from "vitest"
 import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { FreeSearchProvider } from "@/context/FreeSearchContext"
-import { SearchPlayground } from "./SearchPlayground"
+import { PlaygroundPage as SearchPlayground } from "@/features/playground/ui/PlaygroundPage"
 import { installFetchStub, ok, err } from "@/test/fetchMock"
 import {
   allProvidersFixture,

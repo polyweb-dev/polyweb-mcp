@@ -1,12 +1,12 @@
 import { useState } from "react"
 import type { Dispatch, FormEvent, SetStateAction } from "react"
 import { useFreeSearch } from "@/context/useFreeSearch"
+import type { ProviderConfig } from "@/domains/providers"
 import type {
   FetchResponse,
-  ProviderConfig,
   SearchResponse,
   SearchResult,
-} from "@/types/freesearch"
+} from "@/domains/execution"
 import { useResultPreview } from "./useResultPreview"
 import { createExecuteHandler } from "./playgroundExecuteAction"
 import { createFetchResultHandler } from "./playgroundFetchAction"

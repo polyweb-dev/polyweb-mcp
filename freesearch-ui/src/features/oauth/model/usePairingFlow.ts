@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import type { BackendOAuthDeviceCode } from "@/services/api/backendTypes"
+import type { BackendOAuthDeviceCode } from "@/domains/providers/api/oauthWire"
 import type { FlowCallbacks, PairingPhase } from "./pairingFlow"
 import { useBeginPairing } from "./pairingBegin"
 import { oauthErrorMessage } from "./useOAuthPairing"

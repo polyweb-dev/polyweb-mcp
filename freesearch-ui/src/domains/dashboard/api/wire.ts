@@ -1,4 +1,4 @@
-import type { BackendUnitKind } from "@/shared/api/units"
+import type { UnitKind } from "@/shared/api/units"
 // Acyclic type-only edge: dashboard -> execution (execution never imports dashboard wire).
 import type { BackendUsageStatus } from "@/domains/execution/api/wire"
 // Acyclic type-only edge: dashboard -> providers (providers never imports dashboard wire).
@@ -10,7 +10,7 @@ export interface BackendDashboardUsage {
   operation: string
   total_units: string
   event_count: number
-  unit_kind?: BackendUnitKind | null
+  unit_kind?: UnitKind | null
 }
 
 export interface BackendDashboardHealth {
@@ -26,7 +26,7 @@ export interface BackendDashboard {
     provider: string
     operation: string
     units: string
-    unit_kind?: BackendUnitKind | null
+    unit_kind?: UnitKind | null
     display_unit?: string | null
     observed_at: string
     latency_ms: number | null

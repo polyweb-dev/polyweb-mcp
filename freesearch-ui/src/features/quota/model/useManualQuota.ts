@@ -5,7 +5,7 @@ import { apiService } from "@/services/api/freesearchApi"
 import type {
   BackendManualQuota,
   BackendManualQuotaPayload,
-} from "@/services/api/backendTypes"
+} from "@/domains/dashboard/api/manualQuotaWire"
 import { formatManualRange, formatPercent1dp, remainingPercent1dp } from "./manualQuotaMath"
 
 export interface ManualQuotaEstimate {

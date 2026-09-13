@@ -1,7 +1,7 @@
 import { ProviderLogo } from "@/components/common/ProviderLogo"
-import { TableCell, TableRow } from "@/components/ui/table"
-import { providerQuotaDisplay } from "@/services/quotaDisplay"
-import type { ProviderConfig } from "@/types/freesearch"
+import { TableCell, TableRow } from "@/shared/ui/table"
+import { providerQuotaDisplay } from "@/domains/dashboard"
+import type { ProviderConfig } from "@/domains/providers"
 
 export interface RankRowProps {
   provider: ProviderConfig

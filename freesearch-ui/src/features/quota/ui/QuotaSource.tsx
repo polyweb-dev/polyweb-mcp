@@ -1,4 +1,4 @@
-import type { QuotaConfidence } from "@/types/freesearch"
+import type { QuotaConfidence } from "@/domains/dashboard"
 import { ConfidenceLabel } from "./ConfidenceLabel"
 
 /** Quota source cell: confidence chip or the no-snapshot dash. */

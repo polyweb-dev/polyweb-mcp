@@ -1,22 +1,27 @@
 import type {
-  BackendDashboard,
-  BackendDashboardUsage,
-  BackendFetchResponse,
   BackendHealth,
   BackendProviderStatus,
-  BackendRoutingConfig,
+} from "@/domains/providers/api/wire"
+import type { BackendRoutingConfig } from "@/domains/routing/api/wire"
+import type {
+  BackendFetchResponse,
   BackendSearchResponse,
-} from "./backendTypes"
+} from "@/domains/execution/api/wire"
+import type {
+  BackendDashboard,
+  BackendDashboardUsage,
+} from "@/domains/dashboard/api/wire"
 import type { StaticProviderMeta } from "./providerCatalog"
 import type {
   DashboardQuota,
-  FetchResponse,
-  ProviderConfig,
-  ProviderHealthStatus,
-  SearchResponse,
   UsageEvent,
   UsageTotal,
-} from "@/types/freesearch"
+} from "@/domains/dashboard"
+import type {
+  FetchResponse,
+  SearchResponse,
+} from "@/domains/execution"
+import type { ProviderConfig, ProviderHealthStatus } from "@/domains/providers"
 import { normalizeUnitKind } from "@/shared/api/units"
 import { toUiId } from "@/domains/providers"
 

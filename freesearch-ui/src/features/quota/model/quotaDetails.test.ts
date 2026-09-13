@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
-import type { DashboardQuota, ProviderConfig } from "@/types/freesearch"
+import type { ProviderConfig } from "@/domains/providers"
+import type { DashboardQuota } from "@/domains/dashboard"
 import { isStaleRollingQuota, resolveQuota } from "./quotaDetails"
 
 function keenableProvider(overrides: Partial<ProviderConfig> = {}): ProviderConfig {

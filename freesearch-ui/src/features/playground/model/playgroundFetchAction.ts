@@ -1,5 +1,6 @@
 import { useFreeSearch } from "@/context/useFreeSearch"
-import type { ProviderConfig, SearchResult } from "@/types/freesearch"
+import type { ProviderConfig } from "@/domains/providers"
+import type { SearchResult } from "@/domains/execution"
 import type { PlaygroundMode } from "./playgroundTypes"
 
 export interface FetchResultDeps {

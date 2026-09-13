@@ -1,8 +1,8 @@
 import { useFreeSearch } from "@/context/useFreeSearch"
-import type { RoutingPreset } from "@/types/freesearch"
+import type { RoutingPreset } from "@/domains/routing"
 import { getEligibleProviders } from "@/domains/routing"
 import { ProviderLogo } from "@/components/common/ProviderLogo"
-import { cn } from "@/lib/utils"
+import { cn } from "cn"
 
 export interface StrategyCard {
   id: RoutingPreset

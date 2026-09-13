@@ -11,10 +11,10 @@ import userEvent from "@testing-library/user-event"
 import { MemoryRouter, useLocation } from "react-router"
 import { FreeSearchProvider } from "@/context/FreeSearchContext"
 import { Header } from "@/components/layout/Header"
-import { SearchPlayground } from "@/components/search/SearchPlayground"
+import { PlaygroundPage as SearchPlayground } from "@/features/playground/ui/PlaygroundPage"
 import { RoutingEngine } from "@/components/routing/RoutingEngine"
 import { SettingsView } from "@/components/settings/SettingsView"
-import { tabsListVariants } from "@/components/ui/tabs"
+import { tabsListVariants } from "@/shared/ui/tabs"
 import { installFetchStub, ok, err } from "@/test/fetchMock"
 import {
   allProvidersFixture,

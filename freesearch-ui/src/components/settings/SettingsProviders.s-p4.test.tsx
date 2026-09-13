@@ -1,5 +1,5 @@
 import React from "react"
-import { readFileSync } from "node:fs"
+import { readFileSync, existsSync } from "node:fs"
 import path from "node:path"
 import { describe, expect, it, afterEach, vi } from "vitest"
 import { render, screen, within, waitFor } from "@testing-library/react"
@@ -84,7 +84,7 @@ const settingsModalSource = readFileSync(
   path.resolve(testDir, "./ProviderTestModal.tsx"),
   "utf8"
 )
-const buttonShimSource = readFileSync(path.resolve(testDir, "../ui/button.tsx"), "utf8")
+const removedButtonShimPath = path.resolve(testDir, "../ui/button.tsx")
 const settingsFeatureSource = [
   settingsSource,
   settingsPrioritySource,
@@ -509,8 +509,8 @@ describe("S-P4-5: no regression — S-P1 table, S-P2 ranks, S-P3 buttons, Settin
       expect(btn.querySelector("svg")).not.toBeNull()
     }
     expect(settingsModalSource).toContain("@/shared/ui/button")
-    // Old ui path stays as a compat shim over the shared owner.
-    expect(buttonShimSource).toMatch(/from\s+["']@\/shared\/ui\/button["']/)
+    // Old ui path was a compat shim over the shared owner (removed in CLEANUP 1.1).
+    expect(existsSync(removedButtonShimPath)).toBe(false)
   })
 
   it("SettingsView pills stay Providers/Keys/Failover on the pill variant", async () => {

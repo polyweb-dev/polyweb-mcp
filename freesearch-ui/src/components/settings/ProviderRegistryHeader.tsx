@@ -1,5 +1,5 @@
 import React from "react"
-import type { ProviderConfig } from "@/types/freesearch"
+import type { ProviderConfig } from "@/domains/providers"
 
 export const ProviderRegistryHeader: React.FC<{
   providers: ProviderConfig[]

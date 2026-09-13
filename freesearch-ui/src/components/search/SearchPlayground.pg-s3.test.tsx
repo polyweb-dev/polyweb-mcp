@@ -4,7 +4,7 @@ import path from "node:path"
 import { describe, it, expect, afterEach, vi } from "vitest"
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react"
 import { FreeSearchProvider } from "@/context/FreeSearchContext"
-import { SearchPlayground } from "./SearchPlayground"
+import { PlaygroundPage as SearchPlayground } from "@/features/playground/ui/PlaygroundPage"
 import { installFetchStub, ok, err, deferred } from "@/test/fetchMock"
 import {
   allProvidersFixture,
@@ -84,9 +84,10 @@ import {
  */
 
 const testDir = import.meta.dirname
-// Slice 5 ownership: SearchPlayground.tsx is a compatibility shell over
-// features/playground. Read the joined owner sources (same strength as the
-// monolith read) plus the shell for the shim-compat assert below.
+// Slice 5 ownership: features/playground owns the playground UI (the
+// SearchPlayground compat shell was removed in CLEANUP 1.1). Read the joined
+// owner sources (same strength as the monolith read) plus DashboardShell for
+// the shim-compat assert below.
 const playgroundOwnerFiles = [
   "../../features/playground/model/usePlaygroundController.ts",
   "../../features/playground/model/playgroundFetchAction.ts",
@@ -108,8 +109,8 @@ const playgroundOwnerFiles = [
 const playgroundSource = playgroundOwnerFiles
   .map((file) => readFileSync(path.resolve(testDir, file), "utf8"))
   .join("\n")
-const playgroundShim = readFileSync(
-  path.resolve(testDir, "./SearchPlayground.tsx"),
+const dashboardShellSource = readFileSync(
+  path.resolve(testDir, "../../app/DashboardShell.tsx"),
   "utf8"
 )
 const searchDir = testDir
@@ -527,14 +528,14 @@ describe("PG-S3 AC-PG-S3-6 regressions: PG-S2 button lock intact inside the box"
   })
 })
 
-describe("Slice 5 shim compatibility: SearchPlayground shell re-exports the feature owner", () => {
+describe("Slice 5 shim compatibility: DashboardShell renders the canonical feature owner", () => {
   afterEach(() => {
     vi.unstubAllGlobals()
   })
 
-  it("re-exports PlaygroundPage as SearchPlayground without forking UI", () => {
-    expect(playgroundShim).toContain("PlaygroundPage")
-    expect(playgroundShim).toContain("SearchPlayground")
-    expect(playgroundShim).toContain("features/playground/ui/PlaygroundPage")
+  it("imports PlaygroundPage from features/playground directly (SearchPlayground shim removed)", () => {
+    expect(dashboardShellSource).toContain("PlaygroundPage")
+    expect(dashboardShellSource).toContain("features/playground/ui/PlaygroundPage")
+    expect(dashboardShellSource).not.toContain("components/search/SearchPlayground")
   })
 })

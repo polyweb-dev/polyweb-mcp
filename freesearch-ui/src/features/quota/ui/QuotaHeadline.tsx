@@ -1,5 +1,5 @@
-import { quotaDisplay } from "@/services/quotaDisplay"
-import type { ProviderConfig } from "@/types/freesearch"
+import { quotaDisplay } from "@/domains/dashboard"
+import type { ProviderConfig } from "@/domains/providers"
 
 export interface QuotaHeadlineProps {
   provider: ProviderConfig

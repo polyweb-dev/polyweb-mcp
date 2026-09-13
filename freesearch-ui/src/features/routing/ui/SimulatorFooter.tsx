@@ -1,4 +1,4 @@
-import { SegmentedControl } from "@/components/common/SegmentedControl"
+import { SegmentedControl } from "@/shared/ui/SegmentedControl"
 import { SIMULATOR_OPERATIONS, type SimulatorOperation } from "../model/useSimulatorController"
 
 export interface SimulatorFooterProps {

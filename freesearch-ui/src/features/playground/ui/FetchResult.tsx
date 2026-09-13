@@ -1,5 +1,5 @@
 import { ProviderLogo } from "@/components/common/ProviderLogo"
-import type { FetchResponse } from "@/types/freesearch"
+import type { FetchResponse } from "@/domains/execution"
 
 export interface FetchResultProps {
   result: FetchResponse

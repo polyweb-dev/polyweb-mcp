@@ -1,5 +1,5 @@
 import React from "react"
-import { readFileSync } from "node:fs"
+import { readFileSync, existsSync } from "node:fs"
 import path from "node:path"
 import { describe, expect, it, afterEach, vi } from "vitest"
 import { render, screen, within, waitFor } from "@testing-library/react"
@@ -83,7 +83,7 @@ const settingsFeatureSource = [
   readFileSync(path.resolve(testDir, "./providerDisplay.ts"), "utf8"),
 ].join("\n")
 const tableSource = readFileSync(path.resolve(testDir, "../../shared/ui/table.tsx"), "utf8")
-const tableShimSource = readFileSync(path.resolve(testDir, "../ui/table.tsx"), "utf8")
+const removedTableShimPath = path.resolve(testDir, "../ui/table.tsx")
 // P1-FINAL (blessed inversion): ProviderMatrix.tsx is DELETED by the merge —
 // no test may read it (the file is gone Green). Fleet-telemetry pins live in
 // SettingsProviders.p1-final.test.tsx.
@@ -232,8 +232,8 @@ afterEach(() => {
 describe("S-P1-1: registry is a ui/table with the merged 7 columns", () => {
   it("reuses ui/table primitives as-is (Table/Header/Body/Row/Head/Cell import)", () => {
     expect(settingsFeatureSource).toContain('from "@/shared/ui/table"')
-    // Old ui path stays as a compat shim over the shared owner.
-    expect(tableShimSource).toMatch(/from\s+["']@\/shared\/ui\/table["']/)
+    // Old ui path was a compat shim over the shared owner (removed in CLEANUP 1.1).
+    expect(existsSync(removedTableShimPath)).toBe(false)
     for (const symbol of [
       "Table",
       "TableHeader",

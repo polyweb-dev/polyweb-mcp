@@ -1,5 +1,5 @@
 import { ProviderLogo } from "@/components/common/ProviderLogo"
-import type { SearchResponse } from "@/types/freesearch"
+import type { SearchResponse } from "@/domains/execution"
 import type { PlaygroundController } from "../model/usePlaygroundController"
 import { ResultCard } from "./ResultCard"
 import { ResultInspector } from "./ResultInspector"

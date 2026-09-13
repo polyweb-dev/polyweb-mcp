@@ -1,5 +1,5 @@
 import React from "react"
-import type { UsageEvent } from "@/types/freesearch"
+import type { UsageEvent } from "@/domains/dashboard"
 
 function statusColor(status: UsageEvent["status"]): string {
   if (status === "success") return "var(--status-healthy)"

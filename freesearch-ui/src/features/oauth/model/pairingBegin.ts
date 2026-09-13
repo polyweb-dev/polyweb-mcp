@@ -2,7 +2,7 @@ import { useCallback, useRef } from "react"
 import type {
   BackendOAuthDeviceCode,
   BackendOAuthStatus,
-} from "@/services/api/backendTypes"
+} from "@/domains/providers/api/oauthWire"
 import { ApiError } from "@/shared/api/http"
 import { terminalPhaseFor, type FlowCallbacks, type PairingPhase } from "./pairingFlow"
 import { oauthErrorMessage } from "./useOAuthPairing"

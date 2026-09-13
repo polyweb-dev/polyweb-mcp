@@ -1,4 +1,4 @@
-import { PillTabsList } from "@/components/common/PillTabs"
+import { PillTabsList } from "@/shared/ui/PillTabsList"
 import type { PlaygroundController } from "../model/usePlaygroundController"
 
 const quickQueries = [

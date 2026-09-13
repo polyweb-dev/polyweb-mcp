@@ -1,5 +1,5 @@
 import { useState } from "react"
-import type { SearchResult } from "@/types/freesearch"
+import type { SearchResult } from "@/domains/execution"
 
 export interface ResultPreview {
   selectedResultForPreview: SearchResult | null

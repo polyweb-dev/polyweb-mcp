@@ -1,4 +1,4 @@
-import type { ProviderConfig } from "@/types/freesearch"
+import type { ProviderConfig } from "@/domains/providers"
 import { PROVIDER_CATALOG } from "@/services/api/providerCatalog"
 
 /**

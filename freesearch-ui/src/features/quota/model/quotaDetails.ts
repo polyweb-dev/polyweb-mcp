@@ -1,9 +1,6 @@
-import { quotaDisplay } from "@/services/quotaDisplay"
-import type {
-  DashboardQuota,
-  ProviderConfig,
-  QuotaConfidence,
-} from "@/types/freesearch"
+import { quotaDisplay } from "@/domains/dashboard"
+import type { ProviderConfig } from "@/domains/providers"
+import type { DashboardQuota, QuotaConfidence } from "@/domains/dashboard"
 
 export interface QuotaValues {
   remaining: string | null

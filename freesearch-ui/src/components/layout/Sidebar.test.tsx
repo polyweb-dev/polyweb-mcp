@@ -186,17 +186,18 @@ describe("AC-SB-1: Sidebar module contract", () => {
     expect(sidebarOwnerSource).toContain("onCollapsedChange")
   })
 
-  it("imports icons from lucide-react / hugeicons existing deps only", () => {
+  it("imports icons from lucide-react existing dep only", () => {
     expect(sidebarFeatureSource).toMatch(
-      /from\s+["'](lucide-react|@hugeicons\/react)["']/
+      /from\s+["']lucide-react["']/
     )
     expect(sidebarSource).not.toMatch(/from\s+["']react-icons["']/)
+    expect(sidebarFeatureSource).not.toMatch(/@hugeicons/)
     const allDeps = {
       ...(packageJson.dependencies ?? {}),
       ...(packageJson.devDependencies ?? {}),
     }
     expect(Object.keys(allDeps)).toContain("lucide-react")
-    expect(Object.keys(allDeps)).toContain("@hugeicons/react")
+    expect(Object.keys(allDeps)).not.toContain("@hugeicons/react")
   })
 
   it("renders a vector icon inside every nav link (asserted structurally, never by snapshot)", () => {

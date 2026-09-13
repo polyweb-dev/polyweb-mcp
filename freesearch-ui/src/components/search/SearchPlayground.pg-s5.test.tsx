@@ -5,7 +5,7 @@ import { describe, it, expect, afterEach, vi } from "vitest"
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { FreeSearchProvider } from "@/context/FreeSearchContext"
-import { SearchPlayground } from "./SearchPlayground"
+import { PlaygroundPage as SearchPlayground } from "@/features/playground/ui/PlaygroundPage"
 import { installFetchStub, ok, err } from "@/test/fetchMock"
 import {
   allProvidersFixture,
@@ -81,9 +81,10 @@ import {
  */
 
 const testDir = import.meta.dirname
-// Slice 5 ownership: SearchPlayground.tsx is a compatibility shell over
-// features/playground. Read the joined owner sources (same strength as the
-// monolith read) plus the shell for the shim-compat assert below.
+// Slice 5 ownership: features/playground owns the playground UI (the
+// SearchPlayground compat shell was removed in CLEANUP 1.1). Read the joined
+// owner sources (same strength as the monolith read) plus DashboardShell for
+// the shim-compat assert below.
 const playgroundOwnerFiles = [
   "../../features/playground/model/usePlaygroundController.ts",
   "../../features/playground/model/playgroundFetchAction.ts",
@@ -105,12 +106,12 @@ const playgroundOwnerFiles = [
 const playgroundSource = playgroundOwnerFiles
   .map((file) => readFileSync(path.resolve(testDir, file), "utf8"))
   .join("\n")
-const playgroundShim = readFileSync(
-  path.resolve(testDir, "./SearchPlayground.tsx"),
+const dashboardShellSource = readFileSync(
+  path.resolve(testDir, "../../app/DashboardShell.tsx"),
   "utf8"
 )
 const typesSource = readFileSync(
-  path.resolve(testDir, "../../types/freesearch.ts"),
+  path.resolve(testDir, "../../domains/execution/index.ts"),
   "utf8"
 )
 const executionTypesSource = readFileSync(
@@ -128,9 +129,9 @@ const executionStateSource = executionRunnerFiles
   path.resolve(testDir, "../../context/FreeSearchContext.tsx"),
   "utf8"
 )
-// Slice 4 ownership: the canonical primitive lives in shared/ui; common/
-// keeps a compatibility shell. Read the owner (same strength) plus the
-// shell for the shim-compat assert below.
+// Slice 4 ownership: the canonical primitive lives in shared/ui (the common/
+// compat shell was removed in CLEANUP 1.1). Read the owner (same strength);
+// the shim-compat assert below guards the absence.
 const segmentedPath = path.resolve(testDir, "../../shared/ui/SegmentedControl.tsx")
 const segmentedShimPath = path.resolve(testDir, "../common/SegmentedControl.tsx")
 
@@ -477,7 +478,7 @@ describe("PG-S5 AC-PG-S5-3: source number contract (playground/types/context)", 
     expect(playgroundSource).not.toContain("mode: searchDepth")
   })
 
-  it("types/freesearch SearchRequest drops mode (query + maxResults + timeoutMs only)", () => {
+  it("execution SearchRequest drops mode (query + maxResults + timeoutMs only)", () => {
     const match = executionTypesSource.match(/interface SearchRequest \{[\s\S]*?\}/)
     expect(match).not.toBeNull()
     const block = match![0]
@@ -529,10 +530,8 @@ describe("PG-S5 AC-PG-S5-3: source number contract (playground/types/context)", 
     expect(segmentedSource).toContain('role="group"')
     expect(segmentedSource).toContain("aria-pressed")
     expect(segmentedSource).toContain("SegmentedControl")
-    // Compatibility shell re-exports the canonical primitive.
-    const segmentedShim = readFileSync(segmentedShimPath, "utf8")
-    expect(segmentedShim).toContain("SegmentedControl")
-    expect(segmentedShim).toContain("shared/ui/SegmentedControl")
+    // Compat shell removed (CLEANUP 1.1): only the shared primitive remains.
+    expect(existsSync(segmentedShimPath)).toBe(false)
   })
 })
 
@@ -647,14 +646,14 @@ describe("PG-S5 AC-PG-S5-4 regressions: per-card fetch + composer + 422", () => 
   })
 })
 
-describe("Slice 5 shim compatibility: SearchPlayground shell re-exports the feature owner", () => {
+describe("Slice 5 shim compatibility: DashboardShell renders the canonical feature owner", () => {
   afterEach(() => {
     vi.unstubAllGlobals()
   })
 
-  it("re-exports PlaygroundPage as SearchPlayground without forking UI", () => {
-    expect(playgroundShim).toContain("PlaygroundPage")
-    expect(playgroundShim).toContain("SearchPlayground")
-    expect(playgroundShim).toContain("features/playground/ui/PlaygroundPage")
+  it("imports PlaygroundPage from features/playground directly (SearchPlayground shim removed)", () => {
+    expect(dashboardShellSource).toContain("PlaygroundPage")
+    expect(dashboardShellSource).toContain("features/playground/ui/PlaygroundPage")
+    expect(dashboardShellSource).not.toContain("components/search/SearchPlayground")
   })
 })

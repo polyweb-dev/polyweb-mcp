@@ -1,4 +1,4 @@
-import type { BackendUnitKind } from "@/shared/api/units"
+import type { UnitKind } from "@/shared/api/units"
 // Acyclic type-only edge: execution -> routing (routing never imports execution).
 import type { BackendRoutingPreference } from "@/domains/routing/api/wire"
 
@@ -27,7 +27,7 @@ export interface BackendUsageEvent {
   provider: string
   operation: string
   units: string
-  unit_kind?: BackendUnitKind | null
+  unit_kind?: UnitKind | null
   display_unit?: string | null
   observed_at: string
   request_id: string | null

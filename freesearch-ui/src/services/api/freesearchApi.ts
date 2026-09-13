@@ -1,18 +1,24 @@
 import type {
-  BackendDashboard,
-  BackendFetchRequest,
-  BackendFetchResponse,
-  BackendManualQuota,
-  BackendManualQuotaPayload,
-  BackendOAuthDeviceCode,
-  BackendOAuthStatus,
   BackendProviderStatus,
   BackendProviderTest,
-  BackendRoutingConfig,
+  BackendSecretStatus,
+} from "@/domains/providers/api/wire"
+import type {
+  BackendOAuthDeviceCode,
+  BackendOAuthStatus,
+} from "@/domains/providers/api/oauthWire"
+import type { BackendRoutingConfig } from "@/domains/routing/api/wire"
+import type {
+  BackendFetchRequest,
+  BackendFetchResponse,
   BackendSearchRequest,
   BackendSearchResponse,
-  BackendSecretStatus,
-} from "./backendTypes"
+} from "@/domains/execution/api/wire"
+import type { BackendDashboard } from "@/domains/dashboard/api/wire"
+import type {
+  BackendManualQuota,
+  BackendManualQuotaPayload,
+} from "@/domains/dashboard/api/manualQuotaWire"
 import { ApiError, parseDetail, toApiError } from "@/shared/api/http"
 
 const API_BASE = (import.meta.env.VITE_API_URL as string | undefined) ?? ""

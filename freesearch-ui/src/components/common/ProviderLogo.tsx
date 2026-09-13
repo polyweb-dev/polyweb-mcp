@@ -6,7 +6,7 @@ import keenableLogo from "@/assets/keenable.webp"
 import parallelLogo from "@/assets/parallel.webp"
 import tavilyLogo from "@/assets/tavily.webp"
 import youcomLogo from "@/assets/youcom.webp"
-import { cn } from "@/lib/utils"
+import { cn } from "cn"
 
 const LOGO_MAP: Record<string, string> = {
   brave: braveLogo,

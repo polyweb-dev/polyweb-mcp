@@ -1,6 +1,7 @@
 import type { ReactNode } from "react"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import type { DashboardQuota, ProviderConfig } from "@/types/freesearch"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/shared/ui/table"
+import type { ProviderConfig } from "@/domains/providers"
+import type { DashboardQuota } from "@/domains/dashboard"
 import { isManualQuotaEligible } from "../model/quotaEligibility"
 import { QuotaRow, type OAuthSlotArgs } from "./QuotaRow"
 

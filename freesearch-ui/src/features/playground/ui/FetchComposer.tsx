@@ -1,7 +1,7 @@
 import { FileText } from "lucide-react"
-import { Button } from "@/components/ui/button"
-import { ComposerShell } from "@/components/common/ComposerShell"
-import { PillTabsList } from "@/components/common/PillTabs"
+import { Button } from "@/shared/ui/button"
+import { ComposerShell } from "@/shared/ui/ComposerShell"
+import { PillTabsList } from "@/shared/ui/PillTabsList"
 import type { PlaygroundController } from "../model/usePlaygroundController"
 
 /**

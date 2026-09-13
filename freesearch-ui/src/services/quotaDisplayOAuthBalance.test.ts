@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { quotaDisplay } from "./quotaDisplay"
+import { quotaDisplay } from "@/domains/dashboard"
 
 /**
  * Parallel Account-API balance: an AUTHORITATIVE remaining-only USD snapshot

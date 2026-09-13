@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { DEFAULT_PROVIDERS } from "@/test/defaultProviders"
-import type { ProviderConfig } from "@/types/freesearch"
+import type { ProviderConfig } from "@/domains/providers"
 import { getEligibleProviders } from "./routingUtils"
 
 /**

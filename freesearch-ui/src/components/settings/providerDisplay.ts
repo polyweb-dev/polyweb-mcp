@@ -1,5 +1,5 @@
-import type { ProviderConfig } from "@/types/freesearch"
-import { providerQuotaDisplay } from "@/services/quotaDisplay"
+import type { ProviderConfig } from "@/domains/providers"
+import { providerQuotaDisplay } from "@/domains/dashboard"
 
 export const stripProtocol = (url: string) => url.replace(/^https?:\/\//, "")
 export const formatLatency = (latency: number | null) => latency === null ? "—" : `${latency}ms`

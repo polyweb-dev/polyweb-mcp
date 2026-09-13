@@ -2,7 +2,7 @@ import React from "react"
 import { describe, it, expect, afterEach, vi } from "vitest"
 import { render, screen, fireEvent, waitFor } from "@testing-library/react"
 import { FreeSearchProvider } from "@/context/FreeSearchContext"
-import { SearchPlayground } from "./SearchPlayground"
+import { PlaygroundPage as SearchPlayground } from "@/features/playground/ui/PlaygroundPage"
 import { installFetchStub, ok, err } from "@/test/fetchMock"
 import {
   allProvidersFixture,

@@ -1,8 +1,6 @@
-import {
-  PillTabs,
-  PillTabsList,
-  PillTabsPanel,
-} from "@/components/common/PillTabs"
+import { PillTabs } from "@/shared/ui/PillTabs"
+import { PillTabsList } from "@/shared/ui/PillTabsList"
+import { PillTabsPanel } from "@/shared/ui/PillTabsPanel"
 import { useFreeSearch } from "@/context/useFreeSearch"
 import { ProviderRanks } from "./ProviderRanks"
 import { ResiliencePolicy } from "./ResiliencePolicy"

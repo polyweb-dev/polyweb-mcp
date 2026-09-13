@@ -7,7 +7,7 @@ import {
   parseDecimal,
   remainingPercent1dp,
   validateManualQuotaFields,
-} from "./manualQuotaMath"
+} from "@/features/quota/model/manualQuotaMath"
 
 describe("manualQuotaMath (Decimal-safe, no float math)", () => {
   it("computes the Brave case 0.88/5.00 as 82.4% remaining", () => {

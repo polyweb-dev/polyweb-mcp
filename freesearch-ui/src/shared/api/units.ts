@@ -6,9 +6,6 @@
  */
 export type UnitKind = "REQUEST" | "CREDIT" | "USD" | "FREE";
 
-/** Canonical unit dimension (QUOTA.md Option A). Uppercase on the wire; null/absent = legacy. */
-export type BackendUnitKind = "REQUEST" | "CREDIT" | "USD" | "FREE";
-
 /** Normalize wire unit_kind (uppercase) to the UI UnitKind; unknown/absent → null (legacy). */
 export function normalizeUnitKind(value: unknown): UnitKind | null {
   if (typeof value !== "string") return null;

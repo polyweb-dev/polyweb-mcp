@@ -1,5 +1,5 @@
 import freesearchLogo from "@/assets/freesearch.webp"
-import { cn } from "@/lib/utils"
+import { cn } from "cn"
 
 interface BrandProps {
   collapsed?: boolean
