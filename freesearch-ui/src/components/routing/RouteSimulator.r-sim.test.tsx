@@ -78,10 +78,10 @@ import {
  */
 
 const testDir = import.meta.dirname
-// Slice 5 ownership: RouteSimulator.tsx, RoutingStrategy.tsx, and
-// SearchPlayground.tsx are compatibility shells over features/routing and
-// features/playground. Read the joined owner sources (same strength as the
-// monolith reads); app/pgf1 shells keep their paths.
+// Slice 5 ownership: RouteSimulator.tsx and RoutingStrategy.tsx stay
+// compatibility shells over features/routing (the SearchPlayground shell was
+// removed in CLEANUP 1.1). Read the joined owner sources (same strength as
+// the monolith reads); app/pgf1 shells keep their paths.
 const simulatorOwnerFiles = [
   "../../features/routing/model/useSimulatorController.ts",
   "../../features/routing/ui/RouteSimulator.tsx",
@@ -412,7 +412,7 @@ describe("R-SIM AC-R-SIM-4: Simulate composer via shared ComposerShell (no foote
 
   it("wires the shell via ComposerShell testIdPrefix=simulator with footer prop (source)", () => {
     expect(simulatorSource).toMatch(
-      /from\s+["']@\/components\/common\/ComposerShell["']/
+      /from\s+["']@\/shared\/ui\/ComposerShell["']/
     )
     expect(simulatorSource).toContain("ComposerShell")
     expect(simulatorSource).toMatch(/testIdPrefix\s*=\s*("simulator"|\{"simulator"\})/)
@@ -615,9 +615,10 @@ describe("Slice 5 shim compatibility: routing shells re-export feature owners", 
     expect(shim).toContain("features/routing/ui/RouteSimulator")
   })
 
-  it("SearchPlayground shell re-exports the playground feature without forking UI", () => {
-    const shim = readFileSync(path.resolve(testDir, "../search/SearchPlayground.tsx"), "utf8")
-    expect(shim).toContain("PlaygroundPage")
-    expect(shim).toContain("SearchPlayground")
+  it("DashboardShell imports the playground feature directly (SearchPlayground shim removed)", () => {
+    const shell = readFileSync(path.resolve(testDir, "../../app/DashboardShell.tsx"), "utf8")
+    expect(shell).toContain("PlaygroundPage")
+    expect(shell).toContain("features/playground/ui/PlaygroundPage")
+    expect(shell).not.toContain("components/search/SearchPlayground")
   })
 })

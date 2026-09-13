@@ -55,7 +55,6 @@ def test_adapter_implements_provider_adapter_interface() -> None:
     assert adapter.capabilities.fetch is True
     assert adapter.capabilities.cost_estimate is True
     assert adapter.capabilities.quota is True  # AC-1: USD-balance quota enabled
-    assert adapter.capabilities.health is False
 
 
 def test_init_wraps_caller_client_in_shared_runner() -> None:

@@ -1,5 +1,5 @@
 import React from "react"
-import { readFileSync } from "node:fs"
+import { readFileSync, existsSync } from "node:fs"
 import path from "node:path"
 import { describe, expect, it, afterEach, vi } from "vitest"
 import { render, screen, within, waitFor } from "@testing-library/react"
@@ -75,7 +75,7 @@ const settingsPrioritySource = readFileSync(
   path.resolve(testDir, "./ProviderPriorityControl.tsx"),
   "utf8"
 )
-const buttonShimSource = readFileSync(path.resolve(testDir, "../ui/button.tsx"), "utf8")
+const removedButtonShimPath = path.resolve(testDir, "../ui/button.tsx")
 const settingsFeatureSource = [
   settingsSource,
   settingsRowSource,
@@ -248,8 +248,8 @@ describe("S-P3-1: icon test buttons open the ProviderTestModal (affordance)", ()
     expect(window_).toMatch(/icon-sm/)
     expect(window_).toMatch(/onOpenTest/)
     expect(settingsModalSource).toContain("@/shared/ui/button")
-    // Old ui path stays as a compat shim over the shared owner.
-    expect(buttonShimSource).toMatch(/from\s+["']@\/shared\/ui\/button["']/)
+    // Old ui path was a compat shim over the shared owner (removed in CLEANUP 1.1).
+    expect(existsSync(removedButtonShimPath)).toBe(false)
     expect(settingsModalSource).toMatch(/onTest\(provider\.id\)/)
     expect(settingsSource).toContain("handleTest")
   })

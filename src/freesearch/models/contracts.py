@@ -1,6 +1,5 @@
 """Provider-neutral request, response, usage, and error models."""
 
-import re
 from datetime import date, datetime
 from decimal import Decimal
 from enum import StrEnum
@@ -267,7 +266,6 @@ class ProviderCapabilities(ContractModel):
     search: bool = True
     fetch: bool = False
     cost_estimate: bool = False
-    health: bool = False
     quota: bool = False
 
 
@@ -283,26 +281,6 @@ class ProviderHealth(ContractModel):
     status: HealthStatus
     checked_at: datetime
     message: str | None = None
-
-
-class CacheMetadata(ContractModel):
-    """Metadata for a cached operation; cached payloads are never persisted here."""
-
-    cache_key: str = Field(min_length=1)
-    provider: str
-    operation: UsageOperation
-    created_at: datetime
-    expires_at: datetime
-    accessed_at: datetime
-    hit_count: int = Field(default=0, ge=0)
-    size_bytes: int | None = Field(default=None, ge=0)
-
-    @field_validator("cache_key")
-    @classmethod
-    def validate_cache_key(cls, cache_key: str) -> str:
-        if re.fullmatch(r"[0-9a-f]{64}", cache_key) is None:
-            raise ValueError("cache_key must be a lowercase SHA-256 digest")
-        return cache_key
 
 
 class ProviderError(ContractModel):
@@ -433,12 +411,12 @@ def manual_quota_remaining_percent(allowance: Decimal, current_usage: Decimal) -
     return min(Decimal("100"), max(Decimal("0"), ratio))
 
 
-class ManualQuota(ContractModel):
-    """Operator-entered billing anchor; provider-agnostic and routing-neutral.
+class _ManualQuotaInputBase(ContractModel):
+    """Shared billing-anchor input fields and checks.
 
-    The unit is implied by the provider (Brave/Exa/Parallel use USD with
-    Brave costing $0.005/request; other providers use REQUEST/CREDIT). This
-    model never steers routing; it only feeds the ESTIMATED control response.
+    Owned jointly by ``ManualQuota`` and ``ManualQuotaUpdate`` (identical
+    input shape). ``ManualQuotaResponse`` is intentionally excluded: it
+    validates remaining/optional percent and lacks the window validator.
     """
 
     billing_start: date
@@ -462,28 +440,17 @@ class ManualQuota(ContractModel):
         return self
 
 
-class ManualQuotaUpdate(ContractModel):
+class ManualQuota(_ManualQuotaInputBase):
+    """Operator-entered billing anchor; provider-agnostic and routing-neutral.
+
+    The unit is implied by the provider (Brave/Exa/Parallel use USD with
+    Brave costing $0.005/request; other providers use REQUEST/CREDIT). This
+    model never steers routing; it only feeds the ESTIMATED control response.
+    """
+
+
+class ManualQuotaUpdate(_ManualQuotaInputBase):
     """Full billing-anchor input accepted by PUT; same shape as ManualQuota."""
-
-    billing_start: date
-    billing_end: date
-    allowance: Decimal = Field(ge=0)
-    current_usage: Decimal = Field(ge=0)
-    note: str | None = Field(default=None, max_length=500)
-
-    @field_validator("allowance", "current_usage", mode="before")
-    @classmethod
-    def validate_quota_decimal(cls, value: object) -> Decimal:
-        try:
-            return parse_decimal(value)
-        except TypeError as exc:
-            raise ValueError(str(exc)) from exc
-
-    @model_validator(mode="after")
-    def validate_billing_window(self) -> Self:
-        if self.billing_end <= self.billing_start:
-            raise ValueError("billing_end must be after billing_start")
-        return self
 
 
 class ManualQuotaResponse(ContractModel):

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest"
 import { PROVIDER_CATALOG } from "./providerCatalog"
-import type { Capability } from "@/types/freesearch"
+import type { Capability } from "@/domains/providers"
 
 /**
  * RED: `src/services/api/providerCatalog.ts` does not exist yet. The

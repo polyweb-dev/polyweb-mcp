@@ -1,4 +1,4 @@
-import { ComposerShell } from "@/components/common/ComposerShell"
+import { ComposerShell } from "@/shared/ui/ComposerShell"
 import { useSimulatorController } from "../model/useSimulatorController"
 import { SimulatorFooter } from "./SimulatorFooter"
 import { SimulatorInputRow } from "./SimulatorInputRow"

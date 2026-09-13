@@ -13,7 +13,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/shared/ui/table"
-import type { UsageEvent } from "@/types/freesearch"
+import type { UsageEvent } from "@/domains/dashboard"
 
 /**
  * Operational activity telemetry. Request targets (queries and URLs) are never

@@ -1,5 +1,5 @@
 import React from "react"
-import { cn } from "@/lib/utils"
+import { cn } from "cn"
 
 export interface SegmentedControlProps {
   /** Exclusive choices, rendered left to right in the given order. */

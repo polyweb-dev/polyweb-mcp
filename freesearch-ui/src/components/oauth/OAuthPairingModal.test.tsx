@@ -9,7 +9,7 @@ import { deferred } from "@/test/fetchMock"
 import type {
   BackendOAuthDeviceCode,
   BackendOAuthStatus,
-} from "@/services/api/backendTypes"
+} from "@/domains/providers/api/oauthWire"
 
 const deviceCode: BackendOAuthDeviceCode = {
   provider: "parallel",

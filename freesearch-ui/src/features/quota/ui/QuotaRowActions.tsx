@@ -1,6 +1,6 @@
 import type { ReactNode } from "react"
-import type { BackendManualQuota } from "@/services/api/backendTypes"
-import type { ProviderConfig } from "@/types/freesearch"
+import type { BackendManualQuota } from "@/domains/dashboard/api/manualQuotaWire"
+import type { ProviderConfig } from "@/domains/providers"
 import { ManualBudgetButton } from "./ManualBudgetButton"
 
 export interface QuotaRowActionsProps {

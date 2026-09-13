@@ -1,6 +1,6 @@
 import React from "react"
 import { ProviderLogo } from "@/components/common/ProviderLogo"
-import type { ProviderConfig } from "@/types/freesearch"
+import type { ProviderConfig } from "@/domains/providers"
 
 const STATUS_LABELS: Record<ProviderConfig["keyVaultStatus"], string> = {
   configured: "Stored",

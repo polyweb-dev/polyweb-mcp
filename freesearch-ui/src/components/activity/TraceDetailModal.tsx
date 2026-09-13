@@ -1,7 +1,7 @@
 import React from "react"
 import { Modal } from "@/shared/ui/Modal"
 import { ProviderLogo } from "@/components/common/ProviderLogo"
-import type { UsageEvent } from "@/types/freesearch"
+import type { UsageEvent } from "@/domains/dashboard"
 
 export const TraceDetailModal: React.FC<{ event: UsageEvent; onClose: () => void }> = ({
   event,

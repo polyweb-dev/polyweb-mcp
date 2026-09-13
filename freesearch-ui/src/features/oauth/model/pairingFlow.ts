@@ -1,7 +1,7 @@
 import type {
   BackendOAuthDeviceCode,
   BackendOAuthStatus,
-} from "@/services/api/backendTypes"
+} from "@/domains/providers/api/oauthWire"
 
 export type PairingPhase = "starting" | "pending" | "ready" | "denied" | "expired" | "failed" | "paired"
 

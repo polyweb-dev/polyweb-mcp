@@ -4,7 +4,7 @@ import path from "node:path"
 import { describe, it, expect, afterEach, vi } from "vitest"
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react"
 import { FreeSearchProvider } from "@/context/FreeSearchContext"
-import { SearchPlayground } from "./SearchPlayground"
+import { PlaygroundPage as SearchPlayground } from "@/features/playground/ui/PlaygroundPage"
 import { installFetchStub, ok, err, deferred } from "@/test/fetchMock"
 import {
   allProvidersFixture,
@@ -71,9 +71,10 @@ import {
  */
 
 const testDir = import.meta.dirname
-// Slice 5 ownership: SearchPlayground.tsx is a compatibility shell over
-// features/playground. Read the joined owner sources (same strength as the
-// monolith read) plus the shell for the shim-compat assert below.
+// Slice 5 ownership: features/playground owns the playground UI (the
+// SearchPlayground compat shell was removed in CLEANUP 1.1). Read the joined
+// owner sources (same strength as the monolith read) plus DashboardShell for
+// the shim-compat assert below.
 const playgroundOwnerFiles = [
   "../../features/playground/model/usePlaygroundController.ts",
   "../../features/playground/model/playgroundFetchAction.ts",
@@ -95,8 +96,8 @@ const playgroundOwnerFiles = [
 const playgroundSource = playgroundOwnerFiles
   .map((file) => readFileSync(path.resolve(testDir, file), "utf8"))
   .join("\n")
-const playgroundShim = readFileSync(
-  path.resolve(testDir, "./SearchPlayground.tsx"),
+const dashboardShellSource = readFileSync(
+  path.resolve(testDir, "../../app/DashboardShell.tsx"),
   "utf8"
 )
 const searchDir = testDir
@@ -833,7 +834,7 @@ describe("PG-S4 AC-PG-S4-7 regressions: PG-S1/S2/S3 guards + composer gating + f
     expect(playgroundSource).toContain("search-composer-footer")
     expect(playgroundSource).toContain("search-composer-divider")
     expect(playgroundSource).toMatch(/mode\s*===\s*["']search["']/)
-    // PG-F1 owns common/ComposerShell.tsx — no PG-S4 ban.
+    // PG-F1 owns shared/ui/ComposerShell.tsx — no PG-S4 ban.
     const searchFiles: string[] = existsSync(searchDir)
       ? readdirSync(searchDir)
       : []
@@ -858,8 +859,9 @@ describe("PG-S4 AC-PG-S4-7 regressions: PG-S1/S2/S3 guards + composer gating + f
 
   it("SearchPlayground-only diff: fetch-result seam lives only in SearchPlayground", () => {
     // The per-result seam must not leak into shared chrome or services.
-    // Slice 4 ownership: canonical tabs live in shared/ui; common/ keeps a
-    // shell. Read the joined owners (same strength) plus the shell below.
+    // Slice 4 ownership: canonical tabs live in shared/ui (the common/
+    // compat shell was removed in CLEANUP 1.1). Read the joined owners
+    // (same strength) for the seam assert below.
     expect(playgroundSource).toContain("search-composer")
     const pillTabsSource = [
       "../../shared/ui/PillTabs.tsx",
@@ -871,12 +873,9 @@ describe("PG-S4 AC-PG-S4-7 regressions: PG-S1/S2/S3 guards + composer gating + f
       .join("\n")
     expect(pillTabsSource).not.toContain("fetch-result-")
     expect(pillTabsSource).not.toContain("handleFetchResult")
-    const pillTabsShim = readFileSync(
-      path.resolve(testDir, "../common/PillTabs.tsx"),
-      "utf8"
-    )
-    expect(pillTabsShim).toContain("PillTabs")
-    expect(pillTabsShim).not.toContain("fetch-result-")
+    // Compat shell removed (CLEANUP 1.1): the canonical sources carry the switcher.
+    expect(existsSync(path.resolve(testDir, "../common/PillTabs.tsx"))).toBe(false)
+    expect(pillTabsSource).toContain("PillTabs")
     // No shared fetch-result component file was introduced.
     const searchFiles: string[] = existsSync(searchDir)
       ? readdirSync(searchDir)
@@ -893,14 +892,14 @@ describe("PG-S4 AC-PG-S4-7 regressions: PG-S1/S2/S3 guards + composer gating + f
   })
 })
 
-describe("Slice 5 shim compatibility: SearchPlayground shell re-exports the feature owner", () => {
+describe("Slice 5 shim compatibility: DashboardShell renders the canonical feature owner", () => {
   afterEach(() => {
     vi.unstubAllGlobals()
   })
 
-  it("re-exports PlaygroundPage as SearchPlayground without forking UI", () => {
-    expect(playgroundShim).toContain("PlaygroundPage")
-    expect(playgroundShim).toContain("SearchPlayground")
-    expect(playgroundShim).toContain("features/playground/ui/PlaygroundPage")
+  it("imports PlaygroundPage from features/playground directly (SearchPlayground shim removed)", () => {
+    expect(dashboardShellSource).toContain("PlaygroundPage")
+    expect(dashboardShellSource).toContain("features/playground/ui/PlaygroundPage")
+    expect(dashboardShellSource).not.toContain("components/search/SearchPlayground")
   })
 })

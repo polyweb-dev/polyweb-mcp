@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react"
 import { Search } from "lucide-react"
 import { useFreeSearch } from "@/context/useFreeSearch"
-import { SegmentedControl } from "@/components/common/SegmentedControl"
+import { SegmentedControl } from "@/shared/ui/SegmentedControl"
 import {
   Table,
   TableBody,
@@ -9,8 +9,8 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from "@/components/ui/table"
-import type { FallbackConfig } from "@/types/freesearch"
+} from "@/shared/ui/table"
+import type { FallbackConfig } from "@/domains/routing"
 import { getEligibleProviders } from "@/domains/routing"
 import { RankRow } from "./RankRow"
 

@@ -94,18 +94,19 @@ const sharedComposerShellPath = path.resolve(
 )
 const sidebarOwnerPath = path.resolve(testDir, "../../app/layout/Sidebar.tsx")
 const appPath = path.resolve(testDir, "../../App.tsx")
-// Slice 5 moved the playground/routing pages into features/: the old entry
-// points stay as compat shims, content asserts run against the feature
-// owners (playground page content is split across its feature, routing
-// through its workbench shell).
-const playgroundEntryPath = path.resolve(testDir, "../search/SearchPlayground.tsx")
+// Slice 5 moved the playground/routing pages into features/: the routing
+// entry point stays as a compat shim while the playground shell was removed
+// (CLEANUP 1.1, DashboardShell renders the feature directly). Content asserts
+// run against the feature owners (playground page content is split across
+// its feature, routing through its workbench shell).
+const removedPlaygroundShimPath = path.resolve(testDir, "../search/SearchPlayground.tsx")
 const playgroundOwnerDir = path.resolve(testDir, "../../features/playground")
 const routingEntryPath = path.resolve(testDir, "../routing/RoutingEngine.tsx")
 const routingOwnerPath = path.resolve(
   testDir,
   "../../features/routing/ui/RoutingEngine.tsx"
 )
-const composerShellPath = path.resolve(testDir, "../common/ComposerShell.tsx")
+const removedComposerShimPath = path.resolve(testDir, "../common/ComposerShell.tsx")
 const sidebarPath = path.resolve(testDir, "./Sidebar.tsx")
 const indexCssPath = path.resolve(testDir, "../../index.css")
 
@@ -131,11 +132,9 @@ function readDirSources(dir: string): string {
   return parts.join("\n")
 }
 
-const playgroundShimSource = readFileSync(playgroundEntryPath, "utf8")
 const routingShimSource = readFileSync(routingEntryPath, "utf8")
 const playgroundSource = readDirSources(playgroundOwnerDir)
 const routingSource = readFileSync(routingOwnerPath, "utf8")
-const composerShellSource = readFileSync(composerShellPath, "utf8")
 const sidebarSource = readFileSync(sidebarPath, "utf8")
 const indexCssSource = readFileSync(indexCssPath, "utf8")
 
@@ -649,10 +648,10 @@ describe("AC-R1-7: popover close (toggle / Esc + focus return / outside)", () =>
 })
 
 describe("AC-R1-8: page-level clusters removed, views intact", () => {
-  it("playground/routing entries stay as compat shims over the feature owners", () => {
-    expect(existsSync(playgroundEntryPath)).toBe(true)
-    expect(playgroundShimSource).toMatch(/from\s+["']@\/features\/playground/)
-    expect(playgroundShimSource).toContain("SearchPlayground")
+  it("playground entry is the canonical feature; routing entry stays as compat shim", () => {
+    expect(existsSync(removedPlaygroundShimPath)).toBe(false)
+    expect(dashboardShellSource).toMatch(/from\s+["']@\/features\/playground/)
+    expect(dashboardShellSource).toContain("PlaygroundPage")
     expect(existsSync(routingEntryPath)).toBe(true)
     expect(routingShimSource).toMatch(/from\s+["']@\/features\/routing/)
     expect(routingShimSource).toContain("RoutingEngine")
@@ -800,9 +799,8 @@ describe("AC-R1-10 regressions: ComposerShell, layouts, fetching, shell", () => 
     expect(sharedComposerShellSource).toContain("-composer-footer")
     expect(sharedComposerShellSource).toContain("bg-[var(--elevated)]")
     expect(sharedComposerShellSource).toContain("rounded-xl")
-    // Old common path stays as a compat shim over the shared owner.
-    expect(existsSync(composerShellPath)).toBe(true)
-    expect(composerShellSource).toMatch(/from\s+["']@\/shared\/ui\/ComposerShell["']/)
+    // Old common path was a compat shim over the shared owner (removed in CLEANUP 1.1).
+    expect(existsSync(removedComposerShimPath)).toBe(false)
     expect(playgroundSource).toMatch(/testIdPrefix\s*=\s*["']fetch["']/)
     expect(playgroundSource).not.toMatch(/testIdPrefix\s*=\s*["']search["']/)
   })

@@ -12,7 +12,6 @@ import freesearch.adapters.brave as brave_module
 from freesearch.adapters.brave import BraveAdapter
 from freesearch.infrastructure.resilience import ProviderOperationError
 from freesearch.infrastructure.secrets import PROVIDER_ENV_VARS, ProviderName
-from freesearch.mcp.surface import McpSurface, UnsupportedOperationError
 from freesearch.models.contracts import QuotaSource, SearchRequest, SearchResponse, UsageOperation
 
 
@@ -195,8 +194,6 @@ async def test_capabilities_fetch_rejection_and_search_cost(monkeypatch) -> None
         assert adapter.capabilities.search is True
         assert adapter.capabilities.fetch is False
         assert adapter.capabilities.cost_estimate is True
-        with pytest.raises(UnsupportedOperationError, match="does not support fetch"):
-            await McpSurface(adapter).fetch({"url": "https://example.com"})
         estimate = await adapter.estimate_cost(SearchRequest(query="query"))
     finally:
         await client.aclose()
@@ -204,6 +201,7 @@ async def test_capabilities_fetch_rejection_and_search_cost(monkeypatch) -> None
     assert estimate.operation is UsageOperation.SEARCH
     assert estimate.units == Decimal("1")
     assert estimate.currency == "queries"
+
 
 class TestBraveMonthlyCounter:
     """Local monthly ledger: bare headers fall back to request counting."""
@@ -279,4 +277,3 @@ class TestBraveMonthlyCounter:
             "rollover must reset usage so the new month starts at 999, "
             f"saw {response.quota_snapshot.remaining!r}"
         )
-

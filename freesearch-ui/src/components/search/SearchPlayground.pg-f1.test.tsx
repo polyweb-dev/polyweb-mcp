@@ -4,7 +4,7 @@ import path from "node:path"
 import { describe, it, expect, afterEach, vi } from "vitest"
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react"
 import { FreeSearchProvider } from "@/context/FreeSearchContext"
-import { SearchPlayground } from "./SearchPlayground"
+import { PlaygroundPage as SearchPlayground } from "@/features/playground/ui/PlaygroundPage"
 import { installFetchStub, ok, err, deferred } from "@/test/fetchMock"
 import {
   allProvidersFixture,
@@ -74,10 +74,11 @@ import {
  */
 
 const testDir = import.meta.dirname
-// Slice 5 ownership: SearchPlayground.tsx and RouteSimulator.tsx are
-// compatibility shells over features/playground and features/routing. Read
-// the joined owner sources (same strength as the monolith reads) plus the
-// shells for the shim-compat asserts below.
+// Slice 5 ownership: the SearchPlayground compat shell was removed (CLEANUP
+// 1.1) — DashboardShell renders features/playground directly; RouteSimulator.tsx
+// stays a compatibility shell over features/routing. Read the joined owner
+// sources (same strength as the monolith reads) plus DashboardShell and the
+// routing shell for the shim-compat asserts below.
 const playgroundOwnerFiles = [
   "../../features/playground/model/usePlaygroundController.ts",
   "../../features/playground/model/playgroundFetchAction.ts",
@@ -99,8 +100,8 @@ const playgroundOwnerFiles = [
 const playgroundSource = playgroundOwnerFiles
   .map((file) => readFileSync(path.resolve(testDir, file), "utf8"))
   .join("\n")
-const playgroundShim = readFileSync(
-  path.resolve(testDir, "./SearchPlayground.tsx"),
+const dashboardShellSource = readFileSync(
+  path.resolve(testDir, "../../app/DashboardShell.tsx"),
   "utf8"
 )
 const contextSource = readFileSync(
@@ -610,14 +611,12 @@ describe("PG-F1 AC-PG-F1-5: Fetch composer via shared ComposerShell (Fetch ONLY)
     expect(shellSource).toContain("motion-reduce:transition-none")
     expect(shellSource).toContain("text-[13px]")
     expect(shellSource).toContain("text-[var(--muted)]")
-    // Compatibility shell re-exports the canonical primitive.
-    const composerShim = readFileSync(composerShimPath, "utf8")
-    expect(composerShim).toContain("ComposerShell")
-    expect(composerShim).toContain("shared/ui/ComposerShell")
+    // Compat shell removed (CLEANUP 1.1): features import the shared owner directly.
+    expect(existsSync(composerShimPath)).toBe(false)
 
-    // Playground imports the shell for Fetch ONLY.
+    // Playground imports the shared shell for Fetch ONLY.
     expect(playgroundSource).toMatch(
-      /from\s+["']@\/components\/common\/ComposerShell["']|from\s+["']\.\.\/common\/ComposerShell["']/
+      /from\s+["']@\/shared\/ui\/ComposerShell["']/
     )
     expect(playgroundSource).toContain("ComposerShell")
     expect(playgroundSource).toMatch(/testIdPrefix\s*=\s*["']fetch["']/)
@@ -626,13 +625,11 @@ describe("PG-F1 AC-PG-F1-5: Fetch composer via shared ComposerShell (Fetch ONLY)
     expect(playgroundSource).toContain('data-testid="search-composer"')
     expect(playgroundSource).toContain('data-testid="fetch-layout"')
     expect(playgroundSource).toContain("hasFetchContent")
-    // No stray composer files: only the shared shell.
+    // No stray composer files: only the shared shell (compat shell removed).
     const commonFiles: string[] = existsSync(commonDir)
       ? readdirSync(commonDir)
       : []
-    expect(commonFiles.filter((f) => /composer/i.test(f))).toEqual([
-      "ComposerShell.tsx",
-    ])
+    expect(commonFiles.filter((f) => /composer/i.test(f))).toEqual([])
     const searchFiles: string[] = existsSync(searchDir)
       ? readdirSync(searchDir)
       : []
@@ -892,10 +889,10 @@ describe("Slice 5 shim compatibility: shells re-export the feature owners", () =
     vi.unstubAllGlobals()
   })
 
-  it("SearchPlayground shell re-exports PlaygroundPage without forking UI", () => {
-    expect(playgroundShim).toContain("PlaygroundPage")
-    expect(playgroundShim).toContain("SearchPlayground")
-    expect(playgroundShim).toContain("features/playground/ui/PlaygroundPage")
+  it("DashboardShell imports PlaygroundPage directly (SearchPlayground shim removed)", () => {
+    expect(dashboardShellSource).toContain("PlaygroundPage")
+    expect(dashboardShellSource).toContain("features/playground/ui/PlaygroundPage")
+    expect(dashboardShellSource).not.toContain("components/search/SearchPlayground")
   })
 
   it("RouteSimulator shell re-exports the routing feature without forking UI", () => {

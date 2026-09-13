@@ -1,8 +1,8 @@
 import { useFreeSearch } from "@/context/useFreeSearch"
 import { ProviderLogo } from "@/components/common/ProviderLogo"
 import { getProviderReason } from "@/domains/routing"
-import { providerQuotaDisplay } from "@/services/quotaDisplay"
-import type { ProviderConfig } from "@/types/freesearch"
+import { providerQuotaDisplay } from "@/domains/dashboard"
+import type { ProviderConfig } from "@/domains/providers"
 
 export interface FallbackCascadeProps {
   fallbacks: ProviderConfig[]

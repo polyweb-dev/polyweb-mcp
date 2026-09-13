@@ -1,7 +1,5 @@
-import {
-  PillTabs,
-  PillTabsPanel,
-} from "@/components/common/PillTabs"
+import { PillTabs } from "@/shared/ui/PillTabs"
+import { PillTabsPanel } from "@/shared/ui/PillTabsPanel"
 import { usePlaygroundController } from "../model/usePlaygroundController"
 import { FetchSection } from "./FetchSection"
 import { SearchSection } from "./SearchSection"

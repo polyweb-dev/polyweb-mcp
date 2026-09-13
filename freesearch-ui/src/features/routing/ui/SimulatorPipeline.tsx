@@ -1,6 +1,6 @@
 import { useFreeSearch } from "@/context/useFreeSearch"
 import { getProviderReason } from "@/domains/routing"
-import type { ProviderConfig } from "@/types/freesearch"
+import type { ProviderConfig } from "@/domains/providers"
 import { FallbackCascade } from "./FallbackCascade"
 import { PipelineStep } from "./PipelineStep"
 import { ProviderStep } from "./ProviderStep"

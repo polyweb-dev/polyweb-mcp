@@ -401,7 +401,7 @@ async def test_aclose_closes_owned_client_and_leaves_shared_client_open(monkeypa
 
 
 async def test_real_sdk_routes_borrowed_transport_end_to_end(monkeypatch) -> None:
-    """End-to-end over ``_BorrowedTransport`` with the real installed SDK.
+    """End-to-end over ``BorrowedTransport`` with the real installed SDK.
 
     Builds the official ``AsyncTavilyClient`` (no fake SDK seam) on the
     adapter-owned client whose transport borrows the shared caller client's

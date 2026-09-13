@@ -9,7 +9,11 @@ from pydantic import SecretStr
 
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.configuration.provider_config import get_provider_secret_resolver
-from freesearch.infrastructure.resilience import ProviderOperationError, ResilientRunner
+from freesearch.infrastructure.resilience import (
+    RETRYABLE_STATUS_CODES,
+    ProviderOperationError,
+    ResilientRunner,
+)
 from freesearch.infrastructure.secrets import ProviderName
 from freesearch.models.contracts import (
     CostEstimate,
@@ -30,7 +34,6 @@ from freesearch.models.contracts import (
 _NAME = "brave"
 _SEARCH_URL = "https://api.search.brave.com/res/v1/web/search"
 _MAX_SEARCH_RESULTS = 20
-_RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
 
 __all__ = [
     "BRAVE_EXHAUSTION_BODY_CODES",
@@ -480,7 +483,7 @@ class BraveAdapter(ProviderAdapter):
         return self._error(
             "http_error",
             f"HTTP {status}",
-            retryable=status in _RETRYABLE_STATUS_CODES,
+            retryable=status in RETRYABLE_STATUS_CODES,
             status=status,
         )
 

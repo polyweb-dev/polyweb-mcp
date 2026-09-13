@@ -1,5 +1,6 @@
-import { quotaDisplay } from "@/services/quotaDisplay"
-import type { DashboardQuota, ProviderConfig } from "@/types/freesearch"
+import { quotaDisplay } from "@/domains/dashboard"
+import type { ProviderConfig } from "@/domains/providers"
+import type { DashboardQuota } from "@/domains/dashboard"
 import type { QuotaCaption } from "../model/quotaDetails"
 
 export interface QuotaRowDetailProps {

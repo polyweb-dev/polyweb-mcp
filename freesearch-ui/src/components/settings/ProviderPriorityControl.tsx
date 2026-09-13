@@ -1,6 +1,6 @@
 import React from "react"
 import { ArrowDown, ArrowUp } from "lucide-react"
-import type { ProviderConfig } from "@/types/freesearch"
+import type { ProviderConfig } from "@/domains/providers"
 
 export const PriorityIndicator: React.FC<{
   provider: ProviderConfig

@@ -1,6 +1,6 @@
 import { ExternalLink, FileText } from "lucide-react"
 import { ProviderLogo } from "@/components/common/ProviderLogo"
-import type { SearchResult } from "@/types/freesearch"
+import type { SearchResult } from "@/domains/execution"
 
 export interface ResultCardProps {
   result: SearchResult

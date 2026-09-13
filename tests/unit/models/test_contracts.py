@@ -6,6 +6,8 @@ from pydantic import ValidationError
 
 from freesearch.models.contracts import (
     FetchRequest,
+    ManualQuota,
+    ManualQuotaUpdate,
     ProviderError,
     QuotaSnapshot,
     QuotaSource,
@@ -66,3 +68,85 @@ def test_provider_error_does_not_require_vendor_fields() -> None:
 def test_routing_preference_rejects_blank_provider_names() -> None:
     with pytest.raises(ValidationError):
         RoutingPreference(mode=RoutingMode.PREFER, providers=("",))
+
+
+@pytest.mark.parametrize(
+    "start,end",
+    [
+        ("2026-09-01", "2026-09-01"),
+        ("2026-09-02", "2026-09-01"),
+        ("2026-10-01", "2026-08-01"),
+    ],
+)
+def test_manual_quota_update_rejects_bad_window(start: str, end: str) -> None:
+    """Lock ManualQuotaUpdate window parity with ManualQuota (slice 2.1)."""
+    with pytest.raises(ValidationError):
+        ManualQuotaUpdate(
+            billing_start=start,  # type: ignore[arg-type]
+            billing_end=end,  # type: ignore[arg-type]
+            allowance="5.00",
+            current_usage="0.00",
+        )
+
+
+@pytest.mark.parametrize("bad", [True, False, 5.0, 0.88])
+@pytest.mark.parametrize("field", ["allowance", "current_usage"])
+def test_manual_quota_update_rejects_bool_and_float(bad: object, field: str) -> None:
+    """Lock TypeError->ValueError conversion parity on ManualQuotaUpdate."""
+    payload: dict[str, object] = {
+        "billing_start": "2026-08-01",
+        "billing_end": "2026-09-01",
+        "allowance": "5.00",
+        "current_usage": "0.00",
+    }
+    payload[field] = bad
+    with pytest.raises(ValidationError):
+        ManualQuotaUpdate.model_validate(payload)
+
+
+@pytest.mark.parametrize("model", [ManualQuota, ManualQuotaUpdate])
+def test_manual_quota_inputs_keep_note_optional(
+    model: type[ManualQuota] | type[ManualQuotaUpdate],
+) -> None:
+    """Lock optional note handling shared by both input models."""
+    assert (
+        model(
+            billing_start="2026-08-01",  # type: ignore[arg-type]
+            billing_end="2026-09-01",  # type: ignore[arg-type]
+            allowance="5.00",
+            current_usage="0.00",
+        ).note
+        is None
+    )
+    assert (
+        model(
+            billing_start="2026-08-01",  # type: ignore[arg-type]
+            billing_end="2026-09-01",  # type: ignore[arg-type]
+            allowance="5.00",
+            current_usage="0.00",
+            note="x" * 500,
+        ).note
+        == "x" * 500
+    )
+    with pytest.raises(ValidationError):
+        model(
+            billing_start="2026-08-01",  # type: ignore[arg-type]
+            billing_end="2026-09-01",  # type: ignore[arg-type]
+            allowance="5.00",
+            current_usage="0.00",
+            note="x" * 501,
+        )
+
+
+@pytest.mark.parametrize("model", [ManualQuota, ManualQuotaUpdate])
+def test_manual_quota_inputs_permit_zero_allowance(
+    model: type[ManualQuota] | type[ManualQuotaUpdate],
+) -> None:
+    """Lock backend zero-allowance acceptance (differs from client validation)."""
+    quota = model(
+        billing_start="2026-08-01",  # type: ignore[arg-type]
+        billing_end="2026-09-01",  # type: ignore[arg-type]
+        allowance="0",
+        current_usage="0",
+    )
+    assert quota.allowance == Decimal("0")

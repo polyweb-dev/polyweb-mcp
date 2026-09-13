@@ -1,8 +1,10 @@
 """Private helpers for the You.com (YDC Index) adapter.
 
-The borrowed HTTPX transport and the URL/date/metadata normalization helpers
-used by :mod:`freesearch.adapters.youcom`. The adapter module re-exports each
-name so imports of ``freesearch.adapters.youcom`` keep working unchanged.
+The URL/date/metadata normalization helpers used by
+:mod:`freesearch.adapters.youcom`. The adapter module re-exports each name
+so imports of ``freesearch.adapters.youcom`` keep working unchanged. The
+borrowed HTTPX transport lives in
+:mod:`freesearch.infrastructure.borrowed_transport`.
 """
 
 from datetime import UTC, datetime
@@ -13,6 +15,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from freesearch.infrastructure.dates import parse_iso_datetime
 from freesearch.models.contracts import (
     FetchRequest,
     QuotaSnapshot,
@@ -29,20 +32,6 @@ _BALANCE_URL = "https://api.you.com/v1/billing/account_balance"
 _MAX_SEARCH_RESULTS = 100
 _SEARCH_URL = "https://ydc-index.io/v1/search"
 _CONTENTS_URL = "https://ydc-index.io/v1/contents"
-
-
-class _BorrowedTransport(httpx.AsyncBaseTransport):
-    """Route through a caller-owned client's pools without owning their lifecycle."""
-
-    def __init__(self, client: httpx.AsyncClient) -> None:
-        self._client = client
-
-    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-        # The scoped client's own timeout equals the shared client's, but
-        # reassert it per request so nothing can substitute a scalar that
-        # collapses the phase-specific policy.
-        request.extensions["timeout"] = self._client.timeout.as_dict()
-        return await self._client._transport_for_url(request.url).handle_async_request(request)
 
 
 async def _search_request(client: httpx.AsyncClient, request: SearchRequest) -> httpx.Response:
@@ -72,12 +61,7 @@ async def _fetch_request(client: httpx.AsyncClient, request: FetchRequest) -> ht
 
 def _parse_published_at(value: Any) -> datetime | None:
     """Parse You.com's ISO-8601 date fields (``publish_date``, ``page_age``)."""
-    if not isinstance(value, str):
-        return None
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
+    return parse_iso_datetime(value)
 
 
 def _safe_url(value: Any) -> bool:

@@ -1,5 +1,5 @@
 import { Menu, PanelLeftClose, PanelLeftOpen, X } from "lucide-react"
-import { cn } from "@/lib/utils"
+import { cn } from "cn"
 import { Brand } from "./SidebarBrand"
 import { NavList } from "./SidebarNavList"
 import { useSidebarState } from "./useSidebarState"

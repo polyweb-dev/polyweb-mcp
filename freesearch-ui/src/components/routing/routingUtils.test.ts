@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { DEFAULT_PROVIDERS } from "@/test/defaultProviders"
-import type { ProviderConfig, RoutingPreset } from "@/types/freesearch"
+import type { ProviderConfig } from "@/domains/providers"
+import type { RoutingPreset } from "@/domains/routing"
 import { getEligibleProviders, getProviderReason } from "./routingUtils"
 
 const seedProviders = (): ProviderConfig[] =>

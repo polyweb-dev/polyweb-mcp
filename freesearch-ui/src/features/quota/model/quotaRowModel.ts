@@ -1,4 +1,6 @@
-import type { DashboardQuota, ProviderConfig } from "@/types/freesearch"
+import type { ProviderConfig } from "@/domains/providers"
+import { isMissingQuotaSnapshot } from "@/domains/dashboard"
+import type { DashboardQuota } from "@/domains/dashboard"
 import type { ManualQuotaEstimate } from "./useManualQuota"
 
 export interface QuotaRowEstimates {
@@ -16,9 +18,7 @@ export function manualBudgetMissing(
   latestQuota: DashboardQuota | undefined,
   remainingPercent: number | null
 ): boolean {
-  const noSnapshot =
-    latestQuota === undefined ||
-    (latestQuota.remaining === null && latestQuota.limit === null)
+  const noSnapshot = isMissingQuotaSnapshot(latestQuota)
   return (
     (provider.id === "exa" || provider.id === "parallel") &&
     noSnapshot &&

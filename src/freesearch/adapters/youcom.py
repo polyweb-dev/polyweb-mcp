@@ -9,7 +9,6 @@ from freesearch.adapters._youcom_support import (
     _BALANCE_URL,
     _FETCH_UNIT_PRICE,
     _SEARCH_UNIT_PRICE,
-    _BorrowedTransport,
     _estimated_quota,
     _fetch_request,
     _match_page,
@@ -21,7 +20,12 @@ from freesearch.adapters._youcom_support import (
 from freesearch.adapters._youcom_support import _same_url as _same_url
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.configuration.provider_config import get_provider_secret_resolver
-from freesearch.infrastructure.resilience import ProviderOperationError, ResilientRunner
+from freesearch.infrastructure.borrowed_transport import BorrowedTransport
+from freesearch.infrastructure.resilience import (
+    RETRYABLE_STATUS_CODES,
+    ProviderOperationError,
+    ResilientRunner,
+)
 from freesearch.infrastructure.secrets import ProviderName
 from freesearch.models.contracts import (
     CostEstimate,
@@ -40,7 +44,6 @@ from freesearch.models.contracts import (
 __all__ = ["YoucomAdapter"]
 
 _NAME = "you"
-_RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
 
 
 class YoucomAdapter(ProviderAdapter):
@@ -61,7 +64,7 @@ class YoucomAdapter(ProviderAdapter):
             headers=forwarded,
             max_redirects=client.max_redirects,
             timeout=client.timeout,
-            transport=_BorrowedTransport(client),
+            transport=BorrowedTransport(client, reassert_timeout=True),
         )
 
     async def aclose(self) -> None:
@@ -200,7 +203,7 @@ class YoucomAdapter(ProviderAdapter):
             400: ("bad_request", False),
             422: ("bad_request", False),
         }
-        code, retryable = mapping.get(status, ("http_error", status in _RETRYABLE_STATUS_CODES))
+        code, retryable = mapping.get(status, ("http_error", status in RETRYABLE_STATUS_CODES))
         return self._error(code, f"HTTP {status}", retryable=retryable, status=status)
 
     def _remap_error(self, exc: ProviderOperationError) -> ProviderOperationError:

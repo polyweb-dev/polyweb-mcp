@@ -1,7 +1,8 @@
 import { catalogNameOf } from "@/services/api/providerCatalog"
 import { unitLabel } from "@/services/api/mappers"
 import { ProviderLogo } from "@/components/common/ProviderLogo"
-import type { ProviderConfig, UsageTotal } from "@/types/freesearch"
+import type { ProviderConfig } from "@/domains/providers"
+import type { UsageTotal } from "@/domains/dashboard"
 import { formatUsageP95 } from "../model/quotaDetails"
 
 export interface UsageTotalsProps {

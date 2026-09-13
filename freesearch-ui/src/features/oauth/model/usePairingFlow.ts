@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import type { BackendOAuthDeviceCode } from "@/services/api/backendTypes"
+import type { BackendOAuthDeviceCode } from "@/domains/providers/api/oauthWire"
+import { useClipboard } from "@/shared/clipboard/useClipboard"
 import type { FlowCallbacks, PairingPhase } from "./pairingFlow"
 import { useBeginPairing } from "./pairingBegin"
 import { oauthErrorMessage } from "./useOAuthPairing"
@@ -28,7 +29,8 @@ export function usePairingFlow(callbacks: FlowCallbacks): PairingFlow {
   const [phase, setPhase] = useState<PairingPhase>("starting")
   const [device, setDevice] = useState<BackendOAuthDeviceCode | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [copied, setCopied] = useState(false)
+  // Sticky feedback: set on successful copy, retained until begin() resets.
+  const { copied, copy: copyText, reset: resetCopied } = useClipboard()
   const [revokedElsewhere, setRevokedElsewhere] = useState(false)
   const [unpairPending, setUnpairPending] = useState(false)
   const [expiresAt, setExpiresAt] = useState<number | null>(null)
@@ -46,7 +48,7 @@ export function usePairingFlow(callbacks: FlowCallbacks): PairingFlow {
     setPhase,
     setDevice,
     setError,
-    setCopied,
+    resetCopied,
     setRevokedElsewhere,
     setExpiresAt,
     setNowMs,
@@ -81,14 +83,9 @@ export function usePairingFlow(callbacks: FlowCallbacks): PairingFlow {
   }, [phase, pollNow])
 
   const copyCode = useCallback(async (): Promise<void> => {
-    if (!device || typeof navigator === "undefined" || !navigator.clipboard) return
-    try {
-      await navigator.clipboard.writeText(device.user_code)
-    } catch {
-      return
-    }
-    setCopied(true)
-  }, [device])
+    if (!device) return
+    await copyText(device.user_code)
+  }, [device, copyText])
 
   const unpair = useCallback(async (): Promise<void> => {
     const revoke = callbacksRef.current.onRevokePairing

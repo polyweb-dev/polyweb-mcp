@@ -1,7 +1,7 @@
 import React from "react"
 import { Modal } from "@/shared/ui/Modal"
 import { Button } from "@/shared/ui/button"
-import type { ProviderConfig } from "@/types/freesearch"
+import type { ProviderConfig } from "@/domains/providers"
 import { useFreeSearch } from "@/context/useFreeSearch"
 import { ModalDetail } from "./ProviderTestModalDetail"
 import { formatLatency, formatQuota, stripProtocol } from "./providerDisplay"

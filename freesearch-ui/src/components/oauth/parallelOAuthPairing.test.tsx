@@ -11,9 +11,9 @@ import { OAuthPairingModal } from "./OAuthPairingModal"
 import type {
   BackendOAuthDeviceCode,
   BackendOAuthStatus,
-} from "@/services/api/backendTypes"
+} from "@/domains/providers/api/oauthWire"
 import { ApiError } from "@/shared/api/http"
-import { quotaDisplay } from "@/services/quotaDisplay"
+import { quotaDisplay } from "@/domains/dashboard"
 import { installFetchStub, ok, err, deferred } from "@/test/fetchMock"
 import {
   allProvidersFixture,

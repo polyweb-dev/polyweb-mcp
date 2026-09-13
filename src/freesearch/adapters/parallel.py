@@ -17,7 +17,13 @@ import httpx
 
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.configuration.provider_config import get_provider_secret_resolver
-from freesearch.infrastructure.resilience import ProviderOperationError, ResilientRunner
+from freesearch.infrastructure.borrowed_transport import BorrowedTransport
+from freesearch.infrastructure.dates import parse_iso_datetime
+from freesearch.infrastructure.resilience import (
+    RETRYABLE_STATUS_CODES,
+    ProviderOperationError,
+    ResilientRunner,
+)
 from freesearch.infrastructure.secrets import ProviderName
 from freesearch.models.contracts import (
     CostEstimate,
@@ -44,7 +50,6 @@ __all__ = ["ParallelAdapter"]
 _NAME = "parallel"
 _SEARCH_URL = "https://api.parallel.ai/v1/search"
 _EXTRACT_URL = "https://api.parallel.ai/v1/extract"
-_RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
 _STATUS_ERROR_CODES = {
     400: "bad_request",
     401: "invalid_api_key",
@@ -97,21 +102,8 @@ def parse_seed(value: Decimal | None) -> Decimal | None:
     return None if value is None else parse_decimal(value)
 
 
-class _BorrowedTransport(httpx.AsyncBaseTransport):
-    def __init__(self, client: httpx.AsyncClient) -> None:
-        self._client = client
-
-    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-        return await self._client._transport_for_url(request.url).handle_async_request(request)
-
-
 def _parse_published_at(value: Any) -> datetime | None:
-    if not isinstance(value, str):
-        return None
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
+    return parse_iso_datetime(value)
 
 
 class ParallelAdapter(ProviderAdapter):
@@ -130,7 +122,7 @@ class ParallelAdapter(ProviderAdapter):
             raise self._error("configuration_error", "no Parallel API key configured")
         self._api_key = resolved.get_secret_value()
         self._http = httpx.AsyncClient(
-            transport=_BorrowedTransport(client),
+            transport=BorrowedTransport(client, reassert_timeout=False),
             timeout=client.timeout,
             follow_redirects=client.follow_redirects,
             max_redirects=client.max_redirects,
@@ -281,7 +273,7 @@ class ParallelAdapter(ProviderAdapter):
             raise self._error(
                 _STATUS_ERROR_CODES.get(status, "http_error"),
                 f"HTTP {status}",
-                retryable=status in _RETRYABLE_STATUS_CODES,
+                retryable=status in RETRYABLE_STATUS_CODES,
                 status=status,
             ) from None
         payload = response.json()

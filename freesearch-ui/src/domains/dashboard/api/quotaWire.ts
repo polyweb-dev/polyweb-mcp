@@ -1,4 +1,4 @@
-import type { BackendUnitKind } from "@/shared/api/units"
+import type { UnitKind } from "@/shared/api/units"
 
 export interface BackendDashboardQuota {
   provider: string
@@ -9,7 +9,7 @@ export interface BackendDashboardQuota {
   remaining_percent?: string | number | null
   limit: string | number | null
   reset_at: string | null
-  unit_kind?: BackendUnitKind | null
+  unit_kind?: UnitKind | null
   display_unit?: string | null
   /** Optional scope label for rolling/keyless windows (for example hourly). */
   window?: string | null

@@ -7,7 +7,7 @@ import {
   TableCell,
   TableRow,
 } from "@/shared/ui/table"
-import type { ProviderConfig } from "@/types/freesearch"
+import type { ProviderConfig } from "@/domains/providers"
 import { stripProtocol } from "./providerDisplay"
 import { HealthStatus } from "./ProviderHealthStatus"
 import { PriorityIndicator } from "./ProviderPriorityControl"

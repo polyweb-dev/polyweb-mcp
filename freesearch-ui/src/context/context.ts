@@ -1,17 +1,20 @@
 import { createContext } from "react"
 import type {
   CircuitBreakerStatus,
-  DashboardQuota,
-  FallbackConfig,
+  ProviderConfig,
+} from "@/domains/providers"
+import type { FallbackConfig, RoutingPreset } from "@/domains/routing"
+import type {
   FetchRequest,
   FetchResponse,
-  ProviderConfig,
-  RoutingPreset,
   SearchRequest,
   SearchResponse,
+} from "@/domains/execution"
+import type {
+  DashboardQuota,
   UsageEvent,
   UsageTotal,
-} from "@/types/freesearch"
+} from "@/domains/dashboard"
 
 import type { ToastNotification } from "@/shared/notifications/context";
 export type { ToastNotification } from "@/shared/notifications/context";

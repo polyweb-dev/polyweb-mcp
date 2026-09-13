@@ -1,5 +1,5 @@
-import { Button, buttonVariants } from "@/components/ui/button"
-import { cn } from "@/lib/utils"
+import { Button, buttonVariants } from "@/shared/ui/button"
+import { cn } from "cn"
 import { Check, Copy, ExternalLink, Clock } from "lucide-react"
 import { formatCountdown } from "../model/pairingFlow"
 

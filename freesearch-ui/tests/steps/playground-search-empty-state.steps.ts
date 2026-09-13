@@ -4,7 +4,7 @@ import { When, Then } from "./fixtures"
 /**
  * PG-S1 Search empty state (Red).
  *
- * Wrapper contract (Developer implements exactly this in SearchPlayground):
+ * Wrapper contract (Developer implements exactly this in PlaygroundPage):
  *   <div data-testid="search-layout" data-state="hero|docked" ...>
  * Idle -> hero (centered, min-h ~55-60vh, max-w-3xl); any search content
  * (activeSearch / isSearching / searchError) -> docked (top, results below).

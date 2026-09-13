@@ -1,5 +1,5 @@
 import React from "react"
-import { readFileSync } from "node:fs"
+import { readFileSync, existsSync } from "node:fs"
 import path from "node:path"
 import { describe, expect, it, afterEach, vi, beforeEach } from "vitest"
 import { render, screen, within, waitFor } from "@testing-library/react"
@@ -77,9 +77,9 @@ const settingsModalSource = readFileSync(
   path.resolve(testDir, "./ProviderTestModal.tsx"),
   "utf8"
 )
-const modalShimSource = readFileSync(path.resolve(testDir, "../common/Modal.tsx"), "utf8")
-const dialogShimSource = readFileSync(path.resolve(testDir, "../ui/dialog.tsx"), "utf8")
-const tableShimSource = readFileSync(path.resolve(testDir, "../ui/table.tsx"), "utf8")
+const removedModalShimPath = path.resolve(testDir, "../common/Modal.tsx")
+const removedDialogShimPath = path.resolve(testDir, "../ui/dialog.tsx")
+const removedTableShimPath = path.resolve(testDir, "../ui/table.tsx")
 const settingsFeatureSource = [
   settingsSource,
   settingsModalSource,
@@ -282,8 +282,8 @@ describe("P1F-1: Settings registry is ONE merged table with 7 columns", () => {
 
   it("reuses ui/table primitives for the merged table", () => {
     expect(settingsFeatureSource).toContain('from "@/shared/ui/table"')
-    // Old ui path stays as a compat shim over the shared owner.
-    expect(tableShimSource).toMatch(/from\s+["']@\/shared\/ui\/table["']/)
+    // Old ui path was a compat shim over the shared owner (removed in CLEANUP 1.1).
+    expect(existsSync(removedTableShimPath)).toBe(false)
     for (const symbol of ["Table", "TableHeader", "TableBody", "TableRow", "TableHead", "TableCell"]) {
       expect(settingsFeatureSource, `SettingsProviders must reuse ${symbol}`).toContain(symbol)
     }
@@ -417,9 +417,9 @@ describe("P1F-4: icon opens the ProviderTestModal (never fetches on open)", () =
         settingsModalSource.includes("@/shared/ui/dialog") ||
         settingsModalSource.includes("from \"@/shared/ui/dialog\"")
     ).toBe(true)
-    // Old Modal/Dialog paths stay as compat shims over the shared owners.
-    expect(modalShimSource).toMatch(/from\s+["']@\/shared\/ui\/Modal["']/)
-    expect(dialogShimSource).toMatch(/from\s+["']@\/shared\/ui\/dialog["']/)
+    // Old Modal/Dialog paths were compat shims over the shared owners (removed in CLEANUP 1.1).
+    expect(existsSync(removedModalShimPath)).toBe(false)
+    expect(existsSync(removedDialogShimPath)).toBe(false)
   })
 
   it("exposes one icon test button per row in the Test column", async () => {

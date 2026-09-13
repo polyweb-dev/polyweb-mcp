@@ -2,7 +2,7 @@ import type { ReactNode } from "react"
 import { Navigate, Route, Routes } from "react-router"
 import { Sidebar } from "@/app/layout/Sidebar"
 import { StatusBar } from "@/app/layout/StatusBar"
-import { SearchPlayground } from "@/components/search/SearchPlayground"
+import { PlaygroundPage } from "@/features/playground/ui/PlaygroundPage"
 import { RoutingEngine } from "@/components/routing/RoutingEngine"
 import { QuotaAnalytics } from "@/components/quota/QuotaAnalytics"
 import { ActivityStream } from "@/components/activity/ActivityStream"
@@ -11,7 +11,7 @@ import { ToastContainer } from "@/components/common/ToastContainer"
 import { workspaceRoutes, type TabId } from "./routes"
 
 const routeElements: Record<TabId, ReactNode> = {
-  playground: <SearchPlayground />,
+  playground: <PlaygroundPage />,
   routing: <RoutingEngine />,
   quotas: <QuotaAnalytics />,
   activity: <ActivityStream />,

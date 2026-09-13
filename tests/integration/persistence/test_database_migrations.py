@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from alembic.config import Config
 
 import freesearch.persistence.database_migrations as migration_module
 from freesearch.persistence.database_migrations import (
@@ -19,6 +20,8 @@ from freesearch.persistence.database_migrations import (
     validate_database_schema,
 )
 from freesearch.persistence.storage import SQLiteRepository
+
+_PREVIOUS_HEAD = "0002_canonical_quota_units"
 
 
 def _create_partial_legacy(database: Path, *, provider: str = "legacy") -> None:
@@ -84,6 +87,91 @@ def _usage_rows(database: Path) -> list[tuple[object, ...]]:
             FROM usage_events ORDER BY id
             """
         ).fetchall()
+
+
+def _config_for(database: Path) -> Config:
+    assert migration_module.__file__ is not None
+    config = Config()
+    config.set_main_option(
+        "script_location",
+        str(Path(migration_module.__file__).with_name("migrations").resolve()),
+    )
+    config.attributes["database_path"] = database
+    return config
+
+
+def _tables(database: Path) -> set[str]:
+    with sqlite3.connect(database) as connection:
+        return {
+            str(row[0])
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ).fetchall()
+            if not str(row[0]).startswith("sqlite_") and row[0] != "alembic_version"
+        }
+
+
+def _indexes(database: Path) -> set[str]:
+    with sqlite3.connect(database) as connection:
+        return {
+            str(row[0])
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'index' AND sql IS NOT NULL"
+            ).fetchall()
+        }
+
+
+def _seed_at_0002(database: Path) -> None:
+    migration_module.command.upgrade(_config_for(database), _PREVIOUS_HEAD)
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            """
+            INSERT INTO usage_events
+                (id, provider, operation, units, observed_at, request_id, metadata,
+                 latency_ms, status, unit_kind)
+            VALUES
+                (7, 'exa', 'search', '12.50', '2026-01-01T00:00:00+00:00',
+                 'r-7', '{}', 123, 'success', 'USD'),
+                (8, 'tavily', 'search', '0.007', '2026-01-02T00:00:00+00:00',
+                 NULL, '{"k": 1}', NULL, 'success', 'CREDIT')
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO quota_snapshots
+                (id, provider, source, remaining, limit_units, reset_at, observed_at,
+                 unit_kind, display_unit, metadata)
+            VALUES
+                (9, 'tavily', 'AUTHORITATIVE', '75.25', '100.00', NULL,
+                 '2026-01-01T00:00:00+00:00', 'CREDIT', 'credits', NULL)
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO provider_health (id, provider, status, checked_at, message)
+            VALUES (3, 'exa', 'ok', '2026-01-01T00:00:00+00:00', 'healthy')
+            """
+        )
+        connection.execute(
+            "INSERT INTO runtime_settings (key, value_json) VALUES ('theme', '\"dark\"')"
+        )
+        connection.execute(
+            """
+            INSERT INTO cache_metadata
+                (cache_key, provider, operation, created_at, expires_at,
+                 accessed_at, hit_count, size_bytes)
+            VALUES
+                ('k1', 'exa', 'search', '2026-01-01T00:00:00+00:00',
+                 '2026-02-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00', 2, 512),
+                ('k2', 'tavily', 'search', '2026-01-01T00:00:00+00:00',
+                 '2026-02-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00', 0, NULL)
+            """
+        )
+
+
+def _all_rows(database: Path, table: str, order: str) -> list[tuple[object, ...]]:
+    with sqlite3.connect(database) as connection:
+        return connection.execute(f"SELECT * FROM {table} ORDER BY {order}").fetchall()
 
 
 def test_upgrade_database_fresh_path_with_spaces_reaches_head(tmp_path: Path) -> None:
@@ -274,3 +362,88 @@ def test_upgrade_database_rejects_unrelated_or_incompatible_schema(tmp_path: Pat
     with pytest.raises(DatabaseMigrationError, match="missing core columns"):
         upgrade_database(incompatible)
     assert database_status(incompatible).current_revision is None
+
+
+def test_fresh_database_at_head_has_no_cache_metadata(tmp_path: Path) -> None:
+    database = tmp_path / "fresh-no-cache.db"
+
+    result = upgrade_database(database)
+
+    assert result.current_revision == migration_head()
+    assert "cache_metadata" not in _tables(database)
+    assert "cache_metadata_expires_at" not in _indexes(database)
+    assert _indexes(database) == {
+        "usage_events_provider_observed_at",
+        "quota_snapshots_provider_source_observed_at",
+        "provider_health_provider_checked_at",
+    }
+    validate_database_schema(database)
+
+
+def test_upgrade_from_0002_drops_seeded_cache_rows_preserving_unrelated_data(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "seeded-0002.db"
+    _seed_at_0002(database)
+    assert _revision(database) == [_PREVIOUS_HEAD]
+    assert "cache_metadata" in _tables(database)
+    usage_before = _all_rows(database, "usage_events", "id")
+    quota_before = _all_rows(database, "quota_snapshots", "id")
+    health_before = _all_rows(database, "provider_health", "id")
+    settings_before = _all_rows(database, "runtime_settings", "key")
+    indexes_before = _indexes(database)
+
+    result = upgrade_database(database)
+
+    assert result.previous_revision == _PREVIOUS_HEAD
+    assert result.current_revision == migration_head()
+    assert result.changed is True
+    assert result.backup is not None
+    assert result.backup.is_file()
+    assert _revision(database) == [migration_head()]
+    assert "cache_metadata" not in _tables(database)
+    assert "cache_metadata_expires_at" not in _indexes(database)
+    assert _all_rows(database, "usage_events", "id") == usage_before
+    assert _all_rows(database, "quota_snapshots", "id") == quota_before
+    assert _all_rows(database, "provider_health", "id") == health_before
+    assert _all_rows(database, "runtime_settings", "key") == settings_before
+    # Exact decimals survive the destructive revision untouched.
+    assert _all_rows(database, "usage_events", "id")[0][3] == "12.50"
+    assert _all_rows(database, "quota_snapshots", "id")[0][3] == "75.25"
+    assert _all_rows(database, "quota_snapshots", "id")[0][4] == "100.00"
+    assert _indexes(database) == indexes_before - {"cache_metadata_expires_at"}
+    # The pre-migration backup retains the dropped cache rows for recovery.
+    assert "cache_metadata" in _tables(result.backup)
+    assert len(_all_rows(result.backup, "cache_metadata", "cache_key")) == 2
+    with sqlite3.connect(result.backup) as connection:
+        assert connection.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+    validate_database_schema(database)
+
+
+def test_downgrade_recreates_cache_metadata_table_and_index(tmp_path: Path) -> None:
+    database = tmp_path / "downgrade-cache.db"
+    upgrade_database(database)
+
+    migration_module.command.downgrade(_config_for(database), "-1")
+
+    assert _revision(database) == [_PREVIOUS_HEAD]
+    assert "cache_metadata" in _tables(database)
+    assert _columns(database, "cache_metadata") == {
+        "cache_key",
+        "provider",
+        "operation",
+        "created_at",
+        "expires_at",
+        "accessed_at",
+        "hit_count",
+        "size_bytes",
+    }
+    assert "cache_metadata_expires_at" in _indexes(database)
+
+    result = upgrade_database(database)
+
+    assert result.previous_revision == _PREVIOUS_HEAD
+    assert result.current_revision == migration_head()
+    assert "cache_metadata" not in _tables(database)
+    assert "cache_metadata_expires_at" not in _indexes(database)
+    validate_database_schema(database)

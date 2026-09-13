@@ -1,4 +1,4 @@
-import type { ProviderWaterfallItem } from "@/types/freesearch"
+import type { ProviderWaterfallItem } from "@/domains/execution"
 
 /** Waterfall latency diagnostics for the executed provider fan-out. */
 export function WaterfallPanel({ waterfall }: { waterfall: ProviderWaterfallItem[] }) {

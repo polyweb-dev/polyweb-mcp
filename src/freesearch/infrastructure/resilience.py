@@ -24,7 +24,11 @@ from freesearch.models.contracts import ProviderError
 
 T = TypeVar("T")
 
-_RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
+# Single shared retryable HTTP status policy for the resilience runner and all
+# provider adapters: 429 (rate limit) plus the retryable 5xx set.
+RETRYABLE_STATUS_CODES: frozenset[int] = frozenset({429, 500, 502, 503, 504})
+# Backwards-compatible alias; prefer RETRYABLE_STATUS_CODES for new imports.
+_RETRYABLE_STATUS_CODES = RETRYABLE_STATUS_CODES
 
 # Credential-like key tokens, compared against keys with all non-alphanumeric
 # characters removed and lowercased, so ``api_key``, ``x-api-key``, ``access
@@ -80,7 +84,12 @@ _QUOTED_FIELD_RE = re.compile(
     r"|(?P<bare_value>[^\s,;\"'\]}]+))"
 )
 
-__all__ = ["CircuitOpenError", "ProviderOperationError", "ResilientRunner"]
+__all__ = [
+    "RETRYABLE_STATUS_CODES",
+    "CircuitOpenError",
+    "ProviderOperationError",
+    "ResilientRunner",
+]
 
 
 def _is_sensitive_key(key: str) -> bool:
@@ -564,7 +573,7 @@ class ResilientRunner:
             else:
                 if (
                     isinstance(result, httpx.Response)
-                    and result.status_code in _RETRYABLE_STATUS_CODES
+                    and result.status_code in RETRYABLE_STATUS_CODES
                 ):
                     status = result.status_code
                     retry_after = self._retry_after_seconds(result)

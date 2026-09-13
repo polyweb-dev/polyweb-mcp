@@ -210,7 +210,6 @@ def test_adapter_implements_provider_adapter_interface() -> None:
     assert capabilities.fetch is True
     assert capabilities.quota is False
     assert capabilities.cost_estimate is False  # declared; Exa publishes no price list
-    assert capabilities.health is False
 
 
 async def test_init_wraps_caller_client_in_shared_runner_with_seams() -> None:
