@@ -442,6 +442,7 @@ source = { editable = "." }
 dependencies = [
     { name = "aiosqlite" },
     { name = "alembic" },
+    { name = "cryptography" },
     { name = "exa-py" },
     { name = "fastapi" },
     { name = "firecrawl-py" },
@@ -469,6 +470,7 @@ dev = [
 requires-dist = [
     { name = "aiosqlite", specifier = ">=0.20,<1.0" },
     { name = "alembic", specifier = ">=1.14,<2.0" },
+    { name = "cryptography", specifier = ">=44,<51" },
     { name = "exa-py", specifier = ">=2.18.1,<3" },
     { name = "fastapi", specifier = ">=0.141.1" },
     { name = "firecrawl-py", specifier = ">=4.0,<5.0" },

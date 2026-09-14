@@ -91,7 +91,7 @@ function installBackend(server: FakeBackend): FetchStub {
     if (req.url.endsWith("/secret") && req.method === "PUT") {
       const id = backendIdFromUrl(req.url)
       return ok(
-        secretStatusFixture({ provider: id, fingerprint: `FP_${id}_a1b2`, source: "keyring" })
+        secretStatusFixture({ provider: id, fingerprint: `FP_${id}_a1b2`, source: "encrypted_db" })
       )
     }
     if (req.url.endsWith("/secret") && req.method === "DELETE") {
@@ -414,7 +414,9 @@ describe("FreeSearchContext (live backend)", () => {
     const row = result.current.providers.find((p) => p.id === "tavily")!
     expect(row.hasKey).toBe(true)
     expect(row.keyMasked).toBe("FP_tavily_a1b2")
-    expect(row.keySource).toBe("keyring")
+    expect(row.keySource).toBe("encrypted_db")
+    const successToast = result.current.toasts.find((t) => t.type === "success")
+    expect(successToast?.message).toBe("Key stored in the encrypted vault.")
 
     const callsBefore = stub.requests.length
     await act(async () => {

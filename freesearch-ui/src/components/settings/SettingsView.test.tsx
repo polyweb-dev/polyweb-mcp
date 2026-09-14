@@ -3,6 +3,7 @@ import { describe, expect, it, afterEach, vi } from "vitest"
 import { render, screen, within, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { FreeSearchProvider } from "@/context/FreeSearchContext"
+import { ToastContainer } from "@/components/common/ToastContainer"
 import { SettingsView } from "./SettingsView"
 import { installFetchStub, ok, err, deferred, type FetchStub } from "@/test/fetchMock"
 import {
@@ -16,8 +17,9 @@ import {
  * RED update: every control is async against the live backend (mocked fetch).
  * Global switches PATCH with pending/disabled states + error toasts,
  * per-operation switches stay local-only and capability-gated, the key vault
- * renders server fingerprints with a Delete button and an
- * environment/dotenv-shadowing note, and the invented "3,000 ms" copy is gone.
+ * renders server fingerprints with a Delete button and NO environment/dotenv
+ * hint of any kind (vault-only) plus the exact "Key stored in the encrypted
+ * vault." toast, and the invented "3,000 ms" copy is gone.
  */
 const seedProviderNames = [
   "Brave Search",
@@ -29,11 +31,11 @@ const seedProviderNames = [
   "Parallel",
 ]
 
-let secretSource: string = "keyring"
+let secretSource: string = "encrypted_db"
 let patchGate: Promise<Response> | null = null
 
 function renderSettings(): FetchStub {
-  secretSource = "keyring"
+  secretSource = "encrypted_db"
   patchGate = null
   const stub = installFetchStub((req) => {
     if (req.url === "/api/v1/providers" && req.method === "GET") {
@@ -86,6 +88,7 @@ function renderSettings(): FetchStub {
   render(
     <FreeSearchProvider>
       <SettingsView />
+      <ToastContainer />
     </FreeSearchProvider>
   )
   return stub
@@ -266,9 +269,9 @@ describe("SettingsView (live backend)", () => {
     expect(deletes[0].method).toBe("DELETE")
   })
 
-  it("surfaces an environment/dotenv shadowing note for shadowed keys", async () => {
+  it("shows no environment/dotenv hint and the exact vault toast after save", async () => {
     const user = userEvent.setup()
-    secretSource = "keyring"
+    secretSource = "encrypted_db"
     renderSettings()
     await waitForProviders()
     await user.click(screen.getByRole("tab", { name: /^Keys$/ }))
@@ -280,7 +283,17 @@ describe("SettingsView (live backend)", () => {
     await user.click(within(card).getByRole("button", { name: /^Save$/ }))
 
     await waitFor(() => {
-      expect(card.textContent).toMatch(/environment|dotenv|shadow/i)
+      expect(
+        within(card).getByText("EXA_••••••••a1b2", { exact: true })
+      ).toBeInTheDocument()
+    })
+    // Vault-only: no legacy-source hint may appear anywhere in the UI.
+    expect(card.textContent).not.toMatch(/environment|dotenv/i)
+    expect(document.body.textContent).not.toMatch(/shadow/i)
+    await waitFor(() => {
+      expect(
+        screen.getByText("Key stored in the encrypted vault.", { exact: true })
+      ).toBeInTheDocument()
     })
   })
 

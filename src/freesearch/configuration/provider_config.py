@@ -23,12 +23,7 @@ from pydantic import (
 )
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from freesearch.configuration.config import get_settings
-from freesearch.infrastructure.secrets import (
-    KeyringSecretStore,
-    ProviderName,
-    ProviderSecretResolver,
-)
+from freesearch.infrastructure.secrets import ProviderName, ProviderSecretResolver
 from freesearch.models.contracts import QuotaSource, UsageOperation
 
 
@@ -237,11 +232,6 @@ get_provider_configs.cache_clear = _provider_registry.cache_clear  # type: ignor
 
 @lru_cache(maxsize=1)
 def get_provider_secret_resolver() -> ProviderSecretResolver:
-    """Return the process-wide credential resolver for the configured service.
+    """Compatibility seam returning an unbound, vault-only resolver."""
 
-    Credentials are never settings fields or configuration record data; lookup
-    flows only through :class:`freesearch.secrets.ProviderSecretResolver`, bound
-    to ``Settings.secret_service_name``.
-    """
-
-    return ProviderSecretResolver(store=KeyringSecretStore(get_settings().secret_service_name))
+    return ProviderSecretResolver()

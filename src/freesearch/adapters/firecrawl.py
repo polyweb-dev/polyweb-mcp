@@ -23,16 +23,15 @@ from typing import Any
 
 import httpx
 from firecrawl import AsyncFirecrawl  # type: ignore[import-untyped]
+from pydantic import SecretStr
 
 from freesearch.adapters.base import ProviderAdapter
-from freesearch.configuration.provider_config import get_provider_secret_resolver
 from freesearch.infrastructure.dates import parse_iso_datetime
 from freesearch.infrastructure.resilience import (
     RETRYABLE_STATUS_CODES,
     ProviderOperationError,
     ResilientRunner,
 )
-from freesearch.infrastructure.secrets import ProviderName
 from freesearch.models.contracts import (
     CostEstimate,
     FetchedDocument,
@@ -131,6 +130,7 @@ class FirecrawlAdapter(ProviderAdapter):
         *,
         runner: ResilientRunner | None = None,
         sdk_client: AsyncFirecrawl | None = None,
+        api_key: SecretStr | None = None,
     ) -> None:
         """Wrap the caller-owned ``client`` in the shared resilience runner.
 
@@ -140,7 +140,8 @@ class FirecrawlAdapter(ProviderAdapter):
         """
         self._client = client
         self._runner = runner or ResilientRunner(client)
-        self._sdk = sdk_client or self._build_sdk()
+        self._api_key = api_key
+        self._sdk = sdk_client or self._build_sdk(api_key)
         # Legacy injected doubles predate Firecrawl's credit endpoint; a real
         # SDK (or the explicit endpoint-only seam) uses current pricing.
         self._supports_credit_quota = sdk_client is None or type(sdk_client) is object
@@ -148,14 +149,14 @@ class FirecrawlAdapter(ProviderAdapter):
         # an injected SDK is caller-owned and must never be closed here.
         self._owns_sdk = sdk_client is None
 
-    def _build_sdk(self) -> AsyncFirecrawl:
+    def _build_sdk(self, api_key: SecretStr | None = None) -> AsyncFirecrawl:
         """Build the SDK with the resolver key only.
 
         The key comes only from the shared resolver; absent credentials fail
         closed rather than letting the SDK fall back to ambient
         ``FIRECRAWL_API_KEY`` or keyless mode.
         """
-        resolved = get_provider_secret_resolver().get(ProviderName.FIRECRAWL)
+        resolved = api_key
         if resolved is None:
             raise self._error("configuration_error", "no Firecrawl API key configured")
         return AsyncFirecrawl(api_key=resolved.get_secret_value())
@@ -367,7 +368,7 @@ class FirecrawlAdapter(ProviderAdapter):
     async def quota(self) -> QuotaSnapshot | None:
         """Poll Firecrawl's authoritative credit-usage endpoint."""
 
-        resolved = get_provider_secret_resolver().get(ProviderName.FIRECRAWL)
+        resolved = self._api_key
         if resolved is None:
             raise self._error("configuration_error", "no Firecrawl API key configured")
         response = await self._runner.run(

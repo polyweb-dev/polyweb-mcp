@@ -13,18 +13,30 @@ provider, secret, and routing-policy endpoints.
 """
 
 import asyncio
+import os
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
 from pathlib import Path
 
+import httpx
 from fastapi import FastAPI, HTTPException
 
 from freesearch.adapters.base import ProviderAdapter
-from freesearch.adapters.registry import build_adapters, close_adapters
+from freesearch.adapters.registry import adapter_factory, build_adapters, close_adapters
 from freesearch.configuration.config import get_settings
+from freesearch.infrastructure.encrypted_store import (
+    EncryptedDbSecretStore,
+    migrate_legacy_secrets_to_encrypted_db,
+)
 from freesearch.infrastructure.http import create_async_client
-from freesearch.infrastructure.secrets import KeyringSecretStore, SecretStore
+from freesearch.infrastructure.secret_crypto import SecretCodec, load_or_create_master_key
+from freesearch.infrastructure.secrets import (
+    AsyncSecretStore,
+    KeyringSecretStore,
+    ProviderName,
+    SecretStore,
+)
 from freesearch.mcp.server import _apply_parallel_seed
 from freesearch.models.contracts import (
     CostPreset,
@@ -39,6 +51,8 @@ from freesearch.models.contracts import (
 )
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.control import (
+    _build_with_resolved_secret,
+    _resolve_secret,
     effective_config_for_name,
     register_control_routes,
     routing_policy,
@@ -57,28 +71,49 @@ from freesearch.services.monitoring import (
 from freesearch.services.routing import RoutingError, select_route
 
 
+async def _build_app_adapters(
+    repository: SQLiteRepository,
+    routes: list[ProviderAdapter],
+    client: httpx.AsyncClient | None,
+    store: SecretStore | AsyncSecretStore,
+) -> None:
+    """Build enabled adapters from app-scoped encrypted vault secrets."""
+
+    for provider in ProviderName:
+        config = await effective_config_for_name(repository, provider)
+        if not config.enabled:
+            continue
+        key, _source = await _resolve_secret(provider, store)
+        if key is None and provider is not ProviderName.KEENABLE:
+            continue
+        factory = adapter_factory(provider.value)
+        if factory is None:
+            continue
+        try:
+            routes.append(_build_with_resolved_secret(factory, client, key))
+        except Exception:
+            continue
+
+
 def create_app(
     adapters: Sequence[ProviderAdapter] | None = None,
     repository: SQLiteRepository | None = None,
     *,
     database: str | Path | None = None,
-    secret_store: SecretStore | None = None,
+    secret_store: SecretStore | AsyncSecretStore | None = None,
 ) -> FastAPI:
     """Create the FastAPI app routing every operation to a configured adapter.
 
-    The default secret store is the OS keyring under
-    ``Settings.secret_service_name``, keeping control-plane secret writes and
-    the adapters' own credential resolution on the same service; an injected
-    ``secret_store`` is a test-only seam (offline doubles) and is never used by
-    the production composition root. On-demand adapter construction resolves
-    credentials through the global provider secret resolver (environment >
-    ``.env`` > keyring), and a failed construction degrades to an actionable
-    503 rather than failing the request.
+    After the repository opens, the default store is encrypted runtime settings
+    backed by the local master key. A local keyring is consulted only for the
+    one-shot legacy import; injected ``secret_store`` values remain offline seams.
+    On-demand adapter construction receives the resolved app-scoped vault key.
     """
 
     owns_client = adapters is None
+    environ_snapshot = dict(os.environ)
     client = create_async_client() if owns_client else None
-    routes = list(adapters) if adapters is not None else build_adapters(client)
+    routes = list(adapters) if adapters is not None else []
     # The repository is owned only when neither adapters nor a repository was
     # injected: the composition root then opens (and closes) its own database.
     owns_repository = repository is None and adapters is None
@@ -90,6 +125,43 @@ def create_app(
             if owns_repository:
                 repo = await SQLiteRepository.open(resolve_database_path(database))
                 app.state.repository = repo
+            if isinstance(repo, SQLiteRepository) and app.state._uses_default_secret_store:
+                settings = get_settings()
+                passphrase = (
+                    settings.encryption_key.get_secret_value()
+                    if settings.encryption_key is not None
+                    else None
+                )
+                app.state.secret_store = EncryptedDbSecretStore(
+                    repo,
+                    SecretCodec(
+                        load_or_create_master_key(
+                            key_file=settings.encryption_key_file, passphrase_env=passphrase
+                        )
+                    ),
+                )
+            if (
+                owns_repository
+                and repo is not None
+                and isinstance(app.state.secret_store, EncryptedDbSecretStore)
+            ):
+                legacy_store = KeyringSecretStore(get_settings().secret_service_name)
+                await migrate_legacy_secrets_to_encrypted_db(
+                    repository=repo,
+                    encrypted_store=app.state.secret_store,
+                    legacy_store=legacy_store,
+                    environ_snapshot=environ_snapshot,
+                )
+            if adapters is None:
+                if isinstance(repo, SQLiteRepository):
+                    await _build_app_adapters(
+                        repo,
+                        routes,
+                        app.state._client,
+                        app.state.secret_store,
+                    )
+                else:
+                    routes.extend(build_adapters(app.state._client))
             # Restore locally derived quota state before the first dashboard
             # read.  This hydrates Keenable's rolling-hour keyless counter and
             # applies any persisted Parallel monthly budget without requiring
@@ -109,7 +181,8 @@ def create_app(
     app.state.repository = repository
     app.state._routes = routes
     app.state._client = client
-    app.state.secret_store = secret_store or KeyringSecretStore(get_settings().secret_service_name)
+    app.state.secret_store = secret_store
+    app.state._uses_default_secret_store = secret_store is None
     app.state._control_lock = asyncio.Lock()
     register_control_routes(app)
 
@@ -122,6 +195,7 @@ def create_app(
             lambda target, req: target.search(req),
             routes=app.state._routes,
             repository=app.state.repository,
+            secret_store=app.state.secret_store,
         )
 
     @app.post("/fetch", response_model=FetchResponse)
@@ -133,6 +207,7 @@ def create_app(
             lambda target, req: target.fetch(req),
             routes=app.state._routes,
             repository=app.state.repository,
+            secret_store=app.state.secret_store,
         )
 
     @app.get("/stats", response_model=StatsResponse)
@@ -200,13 +275,14 @@ def _pin_free_first(ordered: list[ProviderAdapter], preset: CostPreset) -> list[
 async def _routing_state(
     repository: SQLiteRepository | None,
     routes: Sequence[ProviderAdapter],
+    secret_store: SecretStore | AsyncSecretStore,
 ) -> tuple[dict[str, ProviderHealth], dict[str, QuotaSnapshot]]:
     """Refresh bounded quota state and collect health/quota maps for routing."""
 
     if repository is None:
         return {}, {}
     with suppress(Exception):
-        await refresh_quotas(repository, routes)
+        await refresh_quotas(repository, routes, secret_store=secret_store)
     health: dict[str, ProviderHealth] = {}
     quotas: dict[str, QuotaSnapshot] = {}
     for adapter in routes:
@@ -226,6 +302,7 @@ async def _plan_route(
     request: SearchRequest | FetchRequest,
     routes: Sequence[ProviderAdapter],
     repository: SQLiteRepository | None,
+    secret_store: SecretStore | AsyncSecretStore,
 ) -> tuple[ProviderAdapter, ...]:
     """Return the ordered adapters to attempt for ``request``.
 
@@ -238,13 +315,16 @@ async def _plan_route(
     if not routes:
         raise HTTPException(
             status_code=503,
-            detail="no provider is configured: set a FREESEARCH_*_API_KEY",
+            detail=(
+                "no provider is configured: store a key in the encrypted vault "
+                "(PUT /api/v1/providers/{id}/secret)"
+            ),
         )
     policy = await routing_policy(repository)
     ordered = await _order_routes(routes, repository, policy.cost_optimization_preset)
     if policy.fallback_policy is FallbackPolicy.FIRST_ONLY:
         ordered = ordered[:1]
-    health_snapshots, quota_snapshots = await _routing_state(repository, ordered)
+    health_snapshots, quota_snapshots = await _routing_state(repository, ordered, secret_store)
     try:
         candidates = select_route(request, ordered, health_snapshots, quota_snapshots)
     except RoutingError as exc:
@@ -270,6 +350,7 @@ async def _dispatch[
     *,
     routes: Sequence[ProviderAdapter],
     repository: SQLiteRepository | None,
+    secret_store: SecretStore | AsyncSecretStore,
 ) -> ResponseT:
     """Run the routed adapter call for the best policy-ordered candidate.
 
@@ -279,7 +360,7 @@ async def _dispatch[
     on failure, pinned by the offline BDD failure scenario).
     """
 
-    attempts = await _plan_route(request, routes, repository)
+    attempts = await _plan_route(request, routes, repository, secret_store)
     return await tracked_call(
         repository,
         attempts[0],
@@ -297,12 +378,9 @@ def _clamped_limit(limit: int) -> int:
 def main() -> None:
     """Serve the API with uvicorn on loopback:8001 (Swagger at /docs).
 
-    The app default secret store is the OS keyring under
-    ``Settings.secret_service_name``, so control-plane secret writes and the
-    adapters' credential resolution share one service; injected secret stores
-    are a test-only seam. On-demand adapter construction resolves credentials
-    through the global provider secret resolver and degrades to 503 when a
-    provider cannot be constructed.
+    The default store encrypts provider and OAuth secrets in local SQLite.
+    The keyring is consulted only for the one-shot legacy import; injected
+    stores remain available for offline tests.
     """
     import uvicorn
 

@@ -10,7 +10,6 @@ from __future__ import annotations
 import re
 from datetime import UTC, datetime
 from decimal import Decimal
-from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
@@ -21,8 +20,11 @@ from pydantic import ValidationError
 
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.configuration.config import get_settings
-from freesearch.configuration.provider_config import ProviderConfigUpdate
-from freesearch.infrastructure.secrets import PROVIDER_ENV_VARS, KeyringSecretStore, ProviderName
+from freesearch.configuration.provider_config import (
+    ProviderConfigUpdate,
+    get_provider_secret_resolver,
+)
+from freesearch.infrastructure.secrets import PROVIDER_ENV_VARS, ProviderName
 from freesearch.mcp.server import create_server
 from freesearch.models.contracts import (
     CostEstimate,
@@ -153,13 +155,30 @@ async def repository(tmp_path: Path):
         await repo.close()
 
 
+_VAULT_PASSPHRASE = "control-api-vault-passphrase-9f31"
+
+
+@pytest.fixture
+def vault_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):  # type: ignore[no-untyped-def]
+    """Hermetic vault wiring: passphrase-mode encryption, tmp key file, no keyring."""
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("FREESEARCH_ENCRYPTION_KEY", _VAULT_PASSPHRASE)
+    monkeypatch.setenv("FREESEARCH_ENCRYPTION_KEY_FILE", str(tmp_path / ".secret_key"))
+    monkeypatch.setenv("PYTHON_KEYRING_BACKEND", "keyring.backends.fail.Keyring")
+    for var in PROVIDER_ENV_VARS.values():
+        monkeypatch.delenv(var, raising=False)
+    get_settings.cache_clear()
+    get_provider_secret_resolver.cache_clear()
+    try:
+        yield
+    finally:
+        get_settings.cache_clear()
+        get_provider_secret_resolver.cache_clear()
+
+
 def _json_decimal(value: Any) -> Decimal:
     return Decimal(str(value))
-
-
-def _expected_fingerprint(provider: ProviderName, key: str) -> str:
-    digest = sha256(key.encode()).hexdigest()[-4:]
-    return f"{provider.value.upper()}_••••••••{digest}"
 
 
 def _provider(body: list[dict[str, Any]], provider_id: str) -> dict[str, Any]:
@@ -368,10 +387,15 @@ async def test_provider_test_unavailable_is_not_ok(repository: SQLiteRepository)
 
 
 @pytest.mark.asyncio
-async def test_provider_test_without_constructed_adapter_returns_503_restart_hint(
+async def test_provider_test_without_constructed_adapter_returns_503(
     repository: SQLiteRepository, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """AC-3: a provider absent at startup reports an actionable 503."""
+    """AC-3: a provider absent at startup reports an actionable 503.
+
+    Only the status and provider identity are pinned here, never the exact
+    hint wording — the vault-only 503 copy is owned by the Developer (plan
+    Q2), so this test must survive the copy change.
+    """
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv(PROVIDER_ENV_VARS[ProviderName.EXA], raising=False)
     app = create_app([], repository=repository)
@@ -380,7 +404,6 @@ async def test_provider_test_without_constructed_adapter_returns_503_restart_hin
         response = client.post("/api/v1/providers/exa/test")
 
     assert response.status_code == 503
-    assert "restart" in response.text.lower()
     assert "exa" in response.text
 
 
@@ -406,21 +429,14 @@ async def test_circuit_breaker_reset_returns_closed_persisted_state(
 
 
 @pytest.mark.asyncio
-async def test_secret_put_uses_injected_store_and_never_exposes_raw_key(
+async def test_secret_put_writes_vault_and_never_exposes_raw_key(
     repository: SQLiteRepository,
+    vault_env: None,
     caplog: pytest.LogCaptureFixture,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
 ) -> None:
-    """AC-5: keyring-only writes return only a stable masked fingerprint."""
-    monkeypatch.chdir(tmp_path)
-    store = MemorySecretStore()
+    """AC-V2/AC-V5: vault-only writes return only a stable masked fingerprint."""
     raw_key = "secret-value-that-must-not-leak"
-    app = create_app(
-        [ControlAdapter("exa")],
-        repository=repository,
-        secret_store=store,  # type: ignore[call-arg]
-    )
+    app = create_app([ControlAdapter("exa")], repository=repository)
 
     with caplog.at_level("INFO"), TestClient(app) as client:
         response = client.put("/api/v1/providers/exa/secret", json={"key": raw_key})
@@ -430,7 +446,7 @@ async def test_secret_put_uses_injected_store_and_never_exposes_raw_key(
     assert set(body) == {"provider", "presence", "fingerprint", "updated_at", "source"}
     assert body["provider"] == "exa"
     assert body["presence"] == "configured"
-    assert body["source"] == "keyring"
+    assert body["source"] == "encrypted_db"
     assert re.fullmatch(r"[A-Z]{3}_•{8}[0-9a-f]{4}", body["fingerprint"])
     _assert_iso_timestamp(body["updated_at"])
     assert raw_key not in response.text
@@ -439,7 +455,11 @@ async def test_secret_put_uses_injected_store_and_never_exposes_raw_key(
     # The target response model must itself remain secret-free.
     model = SecretStatusResponse.model_validate(body)
     assert raw_key not in repr(model.model_dump())
-    assert store.values["exa"] == raw_key
+
+    # The vault row holds a ciphertext envelope, never the plaintext.
+    envelope = await repository.get_runtime_setting("secret.enc:exa")
+    assert isinstance(envelope, str)
+    assert raw_key not in envelope
 
     async with repository._engine.connect() as connection:
         table_rows = await connection.exec_driver_sql(
@@ -473,7 +493,7 @@ async def test_secret_put_rejects_empty_key(repository: SQLiteRepository) -> Non
 
 
 @pytest.mark.asyncio
-async def test_secret_delete_is_idempotent_and_removes_keyring_value(
+async def test_secret_delete_is_idempotent_and_removes_stored_value(
     repository: SQLiteRepository,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -501,112 +521,39 @@ async def test_secret_delete_is_idempotent_and_removes_keyring_value(
 
 
 @pytest.mark.asyncio
-async def test_secret_delete_cannot_shadow_environment_value(
-    repository: SQLiteRepository, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """AC-6/AC-11: environment precedence survives deletion of keyring data."""
-    env_name = PROVIDER_ENV_VARS[ProviderName.EXA]
-    monkeypatch.setenv(env_name, "environment-value")
-    store = MemorySecretStore()
-    store.set("exa", "keyring-value")
-    app = create_app(
-        [ControlAdapter("exa")],
-        repository=repository,
-        secret_store=store,  # type: ignore[call-arg]
-    )
-
-    with TestClient(app) as client:
-        response = client.delete("/api/v1/providers/exa/secret")
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["presence"] == "configured"
-    assert body["source"] == "environment"
-    assert store.get("exa") is None
-    assert "environment-value" not in response.text
-
-
-@pytest.mark.asyncio
-async def test_dotenv_only_secret_is_configured_and_reports_dotenv_source(
+async def test_env_key_is_ignored_empty_vault_reports_missing_and_503(
     repository: SQLiteRepository,
+    vault_env: None,
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
 ) -> None:
-    """AC-11: a .env-only key resolves as configured without keyring data."""
-    monkeypatch.chdir(tmp_path)
-    env_name = PROVIDER_ENV_VARS[ProviderName.EXA]
-    monkeypatch.delenv(env_name, raising=False)
-    (tmp_path / ".env").write_text(f"{env_name}=dotenv-only-key\n", encoding="utf-8")
-    app = create_app(
-        [ControlAdapter("exa")],
-        repository=repository,
-        secret_store=MemorySecretStore(),  # type: ignore[call-arg]
-    )
+    """AC-V3: a FREESEARCH_* env key with an empty vault is unconfigured.
+
+    Only the status/source are pinned, never the exact 503 wording — the
+    vault-only copy is owned by the Developer (plan Q2). Vendor egress is
+    stubbed to 404 so the Red-state probe fails fast without real network.
+    """
+    from tests.integration.services.oauth.oauth_stubs import install_http_stub
+
+    class _VendorBlackhole:
+        def handle(self, request: Any) -> Any:
+            import httpx
+
+            return httpx.Response(404, json={"error": "vault-proof-no-route"})
+
+    install_http_stub(monkeypatch, _VendorBlackhole())  # type: ignore[arg-type]
+    monkeypatch.setenv(PROVIDER_ENV_VARS[ProviderName.EXA], "env-value-that-must-not-win")
+    app = create_app([], repository=repository)
 
     with TestClient(app) as client:
         status = client.get("/api/v1/providers/exa")
-        secret = client.delete("/api/v1/providers/exa/secret")
+        probe = client.post("/api/v1/providers/exa/test")
 
     assert status.status_code == 200
-    assert status.json()["secret_presence"] == "configured"
-    assert secret.status_code == 200
-    secret_body = secret.json()
-    assert SecretStatusResponse.model_validate(secret_body).source == "dotenv"
-    assert secret_body["presence"] == "configured"
-    assert secret_body["source"] == "dotenv"
-    assert secret_body["fingerprint"] == _expected_fingerprint(ProviderName.EXA, "dotenv-only-key")
-
-
-@pytest.mark.asyncio
-async def test_put_key_is_shadowed_by_dotenv_and_reports_effective_fingerprint(
-    repository: SQLiteRepository,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    """AC-5/AC-11: dotenv precedence controls the PUT response after store write."""
-    monkeypatch.chdir(tmp_path)
-    env_name = PROVIDER_ENV_VARS[ProviderName.EXA]
-    monkeypatch.delenv(env_name, raising=False)
-    dotenv_key = "dotenv-effective-key"
-    store_key = "store-shadowed-key"
-    (tmp_path / ".env").write_text(f"{env_name}={dotenv_key}\n", encoding="utf-8")
-    store = MemorySecretStore()
-    app = create_app(
-        [ControlAdapter("exa")],
-        repository=repository,
-        secret_store=store,  # type: ignore[call-arg]
-    )
-
-    with TestClient(app) as client:
-        response = client.put("/api/v1/providers/exa/secret", json={"key": store_key})
-
-    assert response.status_code == 200
-    body = response.json()
-    assert SecretStatusResponse.model_validate(body).source == "dotenv"
-    assert body["presence"] == "configured"
-    assert body["source"] == "dotenv"
-    assert body["fingerprint"] == _expected_fingerprint(ProviderName.EXA, dotenv_key)
-    assert store.values[ProviderName.EXA.value] == store_key
-    assert store_key not in response.text
-
-
-@pytest.mark.asyncio
-async def test_default_keyring_store_uses_configured_secret_service_name(
-    repository: SQLiteRepository,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    """AC-11: the app default store honors Settings.secret_service_name."""
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("FREESEARCH_SECRET_SERVICE_NAME", "control-test-service")
-    get_settings.cache_clear()
-    try:
-        app = create_app([], repository=repository)
-        store = app.state.secret_store
-        assert isinstance(store, KeyringSecretStore)
-        assert getattr(store, "_service_name", None) == get_settings().secret_service_name
-    finally:
-        get_settings.cache_clear()
+    assert status.json()["secret_presence"] == "missing"
+    assert "env-value-that-must-not-win" not in status.text
+    assert probe.status_code == 503
+    assert "exa" in probe.text
+    assert "env-value-that-must-not-win" not in probe.text
 
 
 @pytest.mark.asyncio

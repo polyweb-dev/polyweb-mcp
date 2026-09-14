@@ -24,6 +24,7 @@ from typing import Any, cast
 from urllib.parse import urlsplit
 
 import httpx
+from pydantic import SecretStr
 from tavily import AsyncTavilyClient  # type: ignore[import-untyped]
 from tavily.errors import (  # type: ignore[import-untyped]
     BadRequestError,
@@ -38,7 +39,6 @@ from tavily.errors import (
 )
 
 from freesearch.adapters.base import ProviderAdapter
-from freesearch.configuration.provider_config import get_provider_secret_resolver
 from freesearch.infrastructure.borrowed_transport import BorrowedTransport
 from freesearch.infrastructure.dates import parse_iso_datetime
 from freesearch.infrastructure.resilience import (
@@ -46,7 +46,6 @@ from freesearch.infrastructure.resilience import (
     ProviderOperationError,
     ResilientRunner,
 )
-from freesearch.infrastructure.secrets import ProviderName
 from freesearch.models.contracts import (
     CostEstimate,
     FetchedDocument,
@@ -301,6 +300,7 @@ class TavilyAdapter(ProviderAdapter):
         *,
         runner: ResilientRunner | None = None,
         sdk_client: AsyncTavilyClient | None = None,
+        api_key: SecretStr | None = None,
     ) -> None:
         """Wrap the caller-owned ``client`` in the shared resilience runner.
 
@@ -313,9 +313,11 @@ class TavilyAdapter(ProviderAdapter):
         self._owned_http: httpx.AsyncClient | None = None
         self._sdk_search_timeout = _sdk_timeout_seconds(client, cap=_SDK_SEARCH_TIMEOUT_MAX)
         self._sdk_extract_timeout = _sdk_timeout_seconds(client, cap=_SDK_EXTRACT_TIMEOUT_MAX)
-        self._sdk = sdk_client or self._build_sdk(client)
+        self._sdk = sdk_client or self._build_sdk(client, api_key)
 
-    def _build_sdk(self, client: httpx.AsyncClient) -> AsyncTavilyClient:
+    def _build_sdk(
+        self, client: httpx.AsyncClient, api_key: SecretStr | None = None
+    ) -> AsyncTavilyClient:
         """Build the official SDK scoped to an adapter-owned HTTPX client.
 
         The SDK stamps its Authorization header and base URL onto whatever
@@ -331,7 +333,7 @@ class TavilyAdapter(ProviderAdapter):
         than letting the SDK fall back to ambient ``TAVILY_API_KEY`` or keyless
         mode.
         """
-        resolved = get_provider_secret_resolver().get(ProviderName.TAVILY)
+        resolved = api_key
         if resolved is None:
             raise self._error("configuration_error", "no Tavily API key configured")
         forwarded = {

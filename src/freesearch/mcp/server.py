@@ -28,7 +28,11 @@ from freesearch.adapters.registry import (
     build_adapters,
     close_adapters,
 )
+from freesearch.configuration.config import get_settings
+from freesearch.infrastructure.encrypted_store import EncryptedDbSecretStore
 from freesearch.infrastructure.http import create_async_client
+from freesearch.infrastructure.secret_crypto import SecretCodec, load_or_create_master_key
+from freesearch.infrastructure.secrets import AsyncSecretStore, SecretStore
 from freesearch.models.contracts import (
     FetchRequest,
     ProviderHealth,
@@ -58,6 +62,7 @@ class _ServerState(TypedDict):
     repository: SQLiteRepository | None
     client: httpx.AsyncClient | None
     routes: list[ProviderAdapter] | None
+    secret_store: SecretStore | AsyncSecretStore | None
 
 
 def _quota_state_changed(current: QuotaSnapshot | None, projected: QuotaSnapshot) -> bool:
@@ -105,6 +110,23 @@ async def _apply_parallel_seed(
             continue
 
 
+def _encrypted_store(repository: SQLiteRepository) -> EncryptedDbSecretStore:
+    """Build the local encrypted store used by OAuth balance polling."""
+
+    settings = get_settings()
+    passphrase = (
+        settings.encryption_key.get_secret_value() if settings.encryption_key is not None else None
+    )
+    return EncryptedDbSecretStore(
+        repository,
+        SecretCodec(
+            load_or_create_master_key(
+                key_file=settings.encryption_key_file, passphrase_env=passphrase
+            )
+        ),
+    )
+
+
 async def _build_generation(
     state: _ServerState,
     *,
@@ -119,7 +141,10 @@ async def _build_generation(
         owned_routes = build_adapters(client)
         if owns_repository:
             state["repository"] = await SQLiteRepository.open(resolve_database_path(database))
-        await _apply_parallel_seed(owned_routes, state["repository"])
+        repository = state["repository"]
+        if isinstance(repository, SQLiteRepository):
+            state["secret_store"] = _encrypted_store(repository)
+        await _apply_parallel_seed(owned_routes, repository)
     except BaseException:
         # A failed enter never increments: close the freshly built client and
         # adapters so a failed open cannot leak a partial generation.
@@ -137,6 +162,7 @@ async def _detach_generation(state: _ServerState, *, owns_repository: bool) -> N
     owned_repo = state["repository"] if owns_repository else None
     state["client"] = None
     state["routes"] = None
+    state["secret_store"] = None
     if owned_repo is not None:
         clear_quota_poll_cache(owned_repo, owned_routes or [])
         state["repository"] = None
@@ -145,12 +171,14 @@ async def _detach_generation(state: _ServerState, *, owns_repository: bool) -> N
 
 
 async def _route_state(
-    repository: SQLiteRepository | None, active: Sequence[ProviderAdapter]
+    repository: SQLiteRepository | None,
+    active: Sequence[ProviderAdapter],
+    secret_store: SecretStore | AsyncSecretStore | None,
 ) -> tuple[dict[str, ProviderHealth], dict[str, QuotaSnapshot]]:
     """Collect routing state while degrading quota failures to unknown."""
 
     with suppress(Exception):
-        await refresh_quotas(repository, active)
+        await refresh_quotas(repository, active, secret_store=secret_store)
     health: dict[str, ProviderHealth] = {}
     quotas: dict[str, QuotaSnapshot] = {}
     if repository is None:
@@ -188,7 +216,14 @@ def create_server(
     # every 1→0 transition detaches exactly that generation for teardown, so
     # sequential sessions — and sessions entering during a still-running
     # teardown — never inherit closed or stale resources.
-    state: _ServerState = {"repository": repository, "client": None, "routes": routes}
+    state: _ServerState = {
+        "repository": repository,
+        "client": None,
+        "routes": routes,
+        "secret_store": _encrypted_store(repository)
+        if isinstance(repository, SQLiteRepository)
+        else None,
+    }
     # Streamable-HTTP MCP runs one lifespan per concurrent session, so the
     # owned resources are refcounted (serialized by a lock): the first enter
     # builds the generation and the last exit tears it down.
@@ -232,10 +267,13 @@ def create_server(
         # not entered a lifespan yet has no generation, hence no provider.
         active = state["routes"] if owns_client else routes
         if not active:
-            raise RuntimeError("no provider is configured: set a FREESEARCH_*_API_KEY")
+            raise RuntimeError(
+                "no provider is configured: store a key in the encrypted vault "
+                "(PUT /api/v1/providers/{id}/secret)"
+            )
         repository = state["repository"]
         await _apply_parallel_seed(active, repository)
-        health, quotas = await _route_state(repository, active)
+        health, quotas = await _route_state(repository, active, state["secret_store"])
         return select_route(request, active, health, quotas)[0].adapter
 
     @server.tool()
