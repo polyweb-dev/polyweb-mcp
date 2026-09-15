@@ -26,6 +26,7 @@ from behave import given, then, when  # type: ignore[import-untyped]
 from pydantic import SecretStr, ValidationError
 
 import freesearch.adapters.brave as brave_module
+import freesearch.adapters.exa as exa_module
 import freesearch.adapters.firecrawl as firecrawl_module
 import freesearch.adapters.keenable as keenable_module
 import freesearch.adapters.parallel as parallel_module
@@ -33,6 +34,7 @@ import freesearch.adapters.youcom as youcom_module
 from freesearch.adapters._youcom_support import _estimated_quota
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.adapters.brave import BraveAdapter
+from freesearch.adapters.exa import ExaAdapter
 from freesearch.adapters.firecrawl import FirecrawlAdapter, fetch_credits
 from freesearch.adapters.keenable import KeenableAdapter
 from freesearch.adapters.parallel import ParallelAdapter, extract_cost_usd, search_cost_usd
@@ -2190,6 +2192,184 @@ def step_then_no_oauth_poll(context: Any) -> None:
     assert _opt(context, "parallel_oauth_calls", []) == [], (
         "AC-PA-4: no request may target the OAuth-only balance endpoint with an API key"
     )
+
+
+# --------------------------------------------------------------------------
+# AC-EXA: Exa
+# --------------------------------------------------------------------------
+
+
+@when("I enable the Exa USD {budget} monthly budget and record USD {spend} of successful spend")
+def step_when_exa_budget(context: Any, budget: str, spend: str) -> None:
+    unit_kind = _require_unit_kind_model()
+    context.exa_budget = Decimal(budget)
+    context.exa_spend = Decimal(spend)
+    assert context.exa_budget == Decimal("10.00")
+    _run(
+        context,
+        context.repository.record_usage(
+            UsageEvent(
+                provider="exa",
+                operation=UsageOperation.SEARCH,
+                units=Decimal(spend),
+                observed_at=FIXED_AT,
+                status=UsageStatus.SUCCESS,
+                unit_kind=_opt(unit_kind, "USD"),
+                display_unit="USD",
+            )
+        ),
+    )
+    _run(
+        context,
+        context.repository.record_usage(
+            UsageEvent(
+                provider="exa",
+                operation=UsageOperation.SEARCH,
+                units=Decimal("0"),
+                observed_at=FIXED_AT + timedelta(seconds=10),
+                status=UsageStatus.FAILURE,
+            )
+        ),
+    )
+    remaining = max(Decimal("0"), context.exa_budget - context.exa_spend)
+    _run(
+        context,
+        context.repository.record_quota(
+            QuotaSnapshot(
+                provider="exa",
+                source=QuotaSource.ESTIMATED,
+                remaining=remaining,
+                limit=context.exa_budget,
+                observed_at=FIXED_AT + timedelta(seconds=20),
+                unit_kind=_opt(unit_kind, "USD"),
+                display_unit="USD",
+                metadata={"window": "monthly", "spend_usd": context.exa_spend, "soft_zero": False},
+            )
+        ),
+    )
+
+
+@then("the Exa remaining should be USD {remaining} of USD {limit}")
+def step_then_exa_budget_remaining(context: Any, remaining: str, limit: str) -> None:
+    latest = _run(context, context.repository.latest_quota("exa"))
+    assert latest is not None, "AC-EXA: no Exa budget snapshot recorded"
+    assert latest.remaining == Decimal(remaining), (
+        f"AC-EXA: budget remaining must be USD {remaining}, saw {latest.remaining!r}"
+    )
+    assert latest.limit == Decimal(limit), (
+        f"AC-EXA: budget limit must be USD {limit}, saw {latest.limit!r}"
+    )
+    assert str(_opt(latest, "unit_kind", None)).upper().endswith("USD"), (
+        "AC-EXA: Exa budget snapshots must be unit_kind USD "
+        f"(saw {_opt(latest, 'unit_kind', None)!r})"
+    )
+
+
+@when("an Exa 402 soft signal arrives")
+def step_when_exa_402(context: Any) -> None:
+    _patch_resolver(context, exa_module)
+    client = httpx.AsyncClient(timeout=30.0)
+    adapter = ExaAdapter(client, monthly_budget=context.exa_budget)
+    snapshot = adapter.quota_after_error(402)
+    assert snapshot is not None
+    _run(context, context.repository.record_quota(snapshot))
+    context.exa_adapter = adapter
+    context.exa_client = client
+
+
+@then("the Exa remaining should read soft zero without a hard lockout")
+def step_then_exa_soft_zero(context: Any) -> None:
+    effective = _opt(monitoring_module, "effective_quota", None)
+    assert effective is not None
+    view = _run(context, effective(context.repository, "exa"))
+    assert view is not None
+    assert view.remaining == Decimal("0")
+    assert contracts_module.is_soft_quota_zero("exa", view) is True
+
+
+@when("a later Exa billed operation succeeds")
+def step_when_exa_success_after_soft(context: Any) -> None:
+    class _DummyResponse:
+        usage = UsageEvent(
+            provider="exa",
+            operation=UsageOperation.SEARCH,
+            units=Decimal("0.005"),
+            observed_at=FIXED_AT + timedelta(minutes=1),
+            status=UsageStatus.SUCCESS,
+            unit_kind=_require_unit_kind_model().USD,
+            display_unit="USD",
+        )
+    adapter = context.exa_adapter
+    snapshot = adapter.quota_after_success(_DummyResponse(), operation=UsageOperation.SEARCH)
+    assert snapshot is not None
+    _run(context, context.repository.record_quota(snapshot))
+    _run(context, context.repository.record_usage(_DummyResponse.usage))
+
+
+@then("the Exa soft zero should be cleared")
+def step_then_exa_soft_cleared(context: Any) -> None:
+    effective = _opt(monitoring_module, "effective_quota", None)
+    view = _run(context, effective(context.repository, "exa"))
+    assert view is not None
+    assert view.remaining > Decimal("0")
+    assert contracts_module.is_soft_quota_zero("exa", view) is False
+
+
+@when("an Exa 429 transient signal arrives")
+def step_when_exa_429(context: Any) -> None:
+    adapter = context.exa_adapter
+    snapshot = adapter.quota_after_error(429)
+    context.exa_429_snapshot = snapshot
+
+
+@then("the Exa 429 should never become quota exhaustion")
+def step_then_exa_429_transient(context: Any) -> None:
+    assert context.exa_429_snapshot is None, "429 must not produce a quota snapshot"
+    effective = _opt(monitoring_module, "effective_quota", None)
+    view = _run(context, effective(context.repository, "exa"))
+    assert view is not None
+    assert view.remaining > Decimal("0")
+
+
+@when("I inspect Exa quota capabilities")
+def step_when_exa_capabilities(context: Any) -> None:
+    _patch_resolver(context, exa_module)
+    client = httpx.AsyncClient(timeout=30.0)
+    context.exa_client = client
+    context.exa_capabilities = ExaAdapter(client).capabilities
+
+
+@then("Exa capabilities quota should stay false")
+def step_then_exa_caps(context: Any) -> None:
+    assert context.exa_capabilities.quota is False, (
+        "AC-EXA: Exa capabilities.quota must stay False"
+    )
+
+
+@when("I record Exa spend without enabling the monthly budget")
+def step_when_exa_unbudgeted_spend(context: Any) -> None:
+    _patch_resolver(context, exa_module)
+    client = httpx.AsyncClient(timeout=30.0)
+    adapter = ExaAdapter(client, monthly_budget=None)
+    context.exa_unbudgeted = adapter
+    class _DummyResponse:
+        usage = UsageEvent(
+            provider="exa",
+            operation=UsageOperation.SEARCH,
+            units=Decimal("0.007"),
+            observed_at=FIXED_AT,
+            status=UsageStatus.SUCCESS,
+            unit_kind=_require_unit_kind_model().USD,
+            display_unit="USD",
+        )
+    context.exa_unbudgeted_snapshot = adapter.quota_after_success(_DummyResponse())
+
+
+@then("the Exa quota should report remaining unknown with limit unknown")
+def step_then_exa_unbudgeted_unknown(context: Any) -> None:
+    assert context.exa_unbudgeted_snapshot is None
+    latest = _run(context, context.repository.latest_quota("exa"))
+    assert latest is None or (latest.remaining is None and latest.limit is None)
 
 
 # --------------------------------------------------------------------------

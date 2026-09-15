@@ -93,6 +93,11 @@ async def _apply_parallel_seed(
                 setter = getattr(adapter, "set_free_seed", None)
                 if callable(setter):
                     setter(config.parallel_free_seed_usd)
+            if adapter.name == "exa":
+                config = await effective_config_for_name(repository, adapter.name)
+                setter = getattr(adapter, "set_monthly_budget", None)
+                if callable(setter):
+                    setter(config.exa_monthly_budget_usd)
             hydrator = getattr(adapter, "hydrate_quota", None)
             if not callable(hydrator):
                 continue

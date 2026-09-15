@@ -39,6 +39,8 @@ from freesearch.models.contracts import (
     FetchResponse,
     ProviderCapabilities,
     ProviderError,
+    QuotaSnapshot,
+    QuotaSource,
     SearchRequest,
     SearchResponse,
     SearchResult,
@@ -47,9 +49,10 @@ from freesearch.models.contracts import (
     UsageOperation,
 )
 
-__all__ = ["ExaAdapter"]
+__all__ = ["EXA_DEFAULT_MONTHLY_BUDGET_USD", "ExaAdapter"]
 
 _NAME = "exa"
+EXA_DEFAULT_MONTHLY_BUDGET_USD = Decimal("10.00")
 # The SDK surfaces HTTP failures as ``ValueError("Request failed with status
 # code {status}: {body}")``; only the status code is parsed out - the body is
 # never included so provider text cannot leak.
@@ -86,6 +89,16 @@ def _path_without_root_slash(path: str) -> str:
     return "" if path == "/" else path
 
 
+def _month_start(value: datetime) -> datetime:
+    return datetime(value.year, value.month, 1, tzinfo=UTC)
+
+
+def _next_month_start(value: datetime) -> datetime:
+    if value.month == 12:
+        return datetime(value.year + 1, 1, 1, tzinfo=UTC)
+    return datetime(value.year, value.month + 1, 1, tzinfo=UTC)
+
+
 class ExaAdapter(ProviderAdapter):
     """Search, fetch, and cost operations against the Exa API."""
 
@@ -95,6 +108,7 @@ class ExaAdapter(ProviderAdapter):
         *,
         runner: ResilientRunner | None = None,
         sdk_client: AsyncExa | None = None,
+        monthly_budget: Decimal | None = None,
     ) -> None:
         """Wrap operations in the shared resilience runner.
 
@@ -103,6 +117,7 @@ class ExaAdapter(ProviderAdapter):
         :meth:`aclose`. ``sdk_client`` is a test-only seam replacing the real
         SDK client. The SDK owns its own HTTPX client carrying the resolver
         key; the caller's client is never mutated or closed here.
+        ``monthly_budget`` seeds the local monthly USD spend allowance.
         """
         sdk = sdk_client or self._build_sdk()
         if client is None:
@@ -113,6 +128,123 @@ class ExaAdapter(ProviderAdapter):
         self._client = client
         self._runner = runner or ResilientRunner(client)
         self._sdk = sdk
+        self._monthly_budget = (
+            self._validate_budget(monthly_budget) if monthly_budget is not None else None
+        )
+        self._spend = Decimal("0")
+        self._soft_zero = False
+        self._ledger_month = _month_start(datetime.now(UTC))
+        self._hydrated_month: datetime | None = None
+
+    @staticmethod
+    def _validate_budget(budget: Any) -> Decimal:
+        if isinstance(budget, (bool, float)):
+            raise ValueError("Exa budget must be an exact Decimal input")
+        parsed = Decimal(str(budget)) if not isinstance(budget, Decimal) else budget
+        if not parsed.is_finite() or parsed < 0:
+            raise ValueError("Exa budget must be finite and non-negative")
+        return parsed
+
+    def set_monthly_budget(self, budget: Decimal | None) -> None:
+        """Apply a validated local monthly budget without mutating other state."""
+        parsed = self._validate_budget(budget) if budget is not None else None
+        if parsed == self._monthly_budget:
+            return
+        self._monthly_budget = parsed
+        self._spend = Decimal("0")
+        self._soft_zero = False
+        self._ledger_month = _month_start(datetime.now(UTC))
+        self._hydrated_month = None
+
+    def _rollover_if_needed(self, now: datetime) -> None:
+        month = _month_start(now)
+        if month == self._ledger_month:
+            return
+        self._ledger_month = month
+        self._spend = Decimal("0")
+        self._soft_zero = False
+        self._hydrated_month = None
+
+    def _current_snapshot(self, *, now: datetime | None = None) -> QuotaSnapshot | None:
+        if self._monthly_budget is None:
+            return None
+        observed_at = now or datetime.now(UTC)
+        self._rollover_if_needed(observed_at)
+        metadata: dict[str, Any] = {
+            "window": "monthly",
+            "spend_usd": self._spend,
+            "soft_zero": self._soft_zero,
+        }
+
+        limit = self._monthly_budget
+        remaining = Decimal("0") if self._soft_zero else max(Decimal("0"), limit - self._spend)
+        return QuotaSnapshot(
+            provider=self.name,
+            source=QuotaSource.ESTIMATED,
+            remaining=remaining,
+            limit=limit,
+            unit_kind=UnitKind.USD,
+            display_unit="USD",
+            observed_at=observed_at,
+            reset_at=_next_month_start(observed_at),
+            metadata=metadata,
+        )
+
+    async def quota(self) -> QuotaSnapshot | None:
+        """Return the current local monthly USD snapshot."""
+        return self._current_snapshot()
+
+    def quota_after_success(
+        self, response: object, *, operation: UsageOperation | None = None
+    ) -> QuotaSnapshot | None:
+        """Update spend from response usage event and return updated snapshot."""
+        usage = getattr(response, "usage", None)
+        units = getattr(usage, "units", None)
+        if units is not None and isinstance(units, Decimal) and units.is_finite() and units > 0:
+            now = datetime.now(UTC)
+            self._rollover_if_needed(now)
+            self._spend += units
+            self._soft_zero = False
+        return self._current_snapshot()
+
+    def quota_after_error(self, status: int | None) -> QuotaSnapshot | None:
+        """Record soft zero on 402; 429 stays transient rate limit."""
+        if status == 402:
+            self._soft_zero = True
+            return self._current_snapshot()
+        return None
+
+    async def hydrate_quota(self, repository: Any) -> QuotaSnapshot | None:
+        """Restore monthly spend ledger from database usage events."""
+        if self._monthly_budget is None:
+            return None
+        now = datetime.now(UTC)
+        month_start = _month_start(now)
+        self._rollover_if_needed(now)
+        if self._hydrated_month == month_start:
+            return None
+        latest = await repository.latest_quota(self.name)
+        events = await repository.list_usage(provider=self.name)
+        current = [
+            event
+            for event in events
+            if event.observed_at >= month_start
+            and event.status.value == "success"
+            and event.unit_kind is UnitKind.USD
+        ]
+        self._spend = sum((event.units for event in current), Decimal("0"))
+        later_success = any(
+            event.observed_at > latest.observed_at for event in current if latest is not None
+        )
+        self._soft_zero = bool(
+            latest is not None
+            and latest.remaining == Decimal("0")
+            and not later_success
+            and latest.observed_at >= month_start
+            and latest.metadata.get("soft_zero") is True
+        )
+        self._hydrated_month = month_start
+        return self._current_snapshot(now=now)
 
     def _build_sdk(self) -> AsyncExa:
         """Build the official SDK with the resolver key.

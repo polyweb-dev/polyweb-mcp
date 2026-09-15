@@ -78,6 +78,7 @@ class ProviderConfig(BaseModel):
     )
     reset_schedule: str | None = Field(default=None, min_length=1)
     parallel_free_seed_usd: Decimal | None = Field(default=None, ge=0)
+    exa_monthly_budget_usd: Decimal | None = Field(default=None, ge=0)
 
     @field_validator("free_tier_estimates", mode="before")
     @classmethod
@@ -103,6 +104,18 @@ class ProviderConfig(BaseModel):
             raise ValueError("Parallel seed must be finite and non-negative")
         return parsed
 
+    @field_validator("exa_monthly_budget_usd", mode="before")
+    @classmethod
+    def _exa_budget_must_be_exact(cls, value: Any) -> Any:
+        if value is None:
+            return None
+        if isinstance(value, (bool, float)):
+            raise ValueError("Exa monthly budget must be an exact Decimal input")
+        parsed = Decimal(value)
+        if not parsed.is_finite() or parsed < 0:
+            raise ValueError("Exa monthly budget must be finite and non-negative")
+        return parsed
+
     @property
     def quota_source(self) -> QuotaSource:
         """Provenance for these figures: local estimates, never authoritative."""
@@ -124,6 +137,7 @@ class ProviderConfigUpdate(BaseModel):
     free_tier_estimates: dict[UsageOperation, Decimal] | None = None
     reset_schedule: str | None = Field(default=None, min_length=1)
     parallel_free_seed_usd: Decimal | None = Field(default=None, ge=0)
+    exa_monthly_budget_usd: Decimal | None = Field(default=None, ge=0)
 
     @field_validator("free_tier_estimates", mode="before")
     @classmethod
@@ -151,6 +165,18 @@ class ProviderConfigUpdate(BaseModel):
             raise ValueError("Parallel seed must be finite and non-negative")
         return parsed
 
+    @field_validator("exa_monthly_budget_usd", mode="before")
+    @classmethod
+    def _exa_budget_must_be_exact(cls, value: Any) -> Any:
+        if value is None:
+            return None
+        if isinstance(value, (bool, float)):
+            raise ValueError("Exa monthly budget must be an exact Decimal input")
+        parsed = Decimal(value)
+        if not parsed.is_finite() or parsed < 0:
+            raise ValueError("Exa monthly budget must be finite and non-negative")
+        return parsed
+
     def apply_to(self, base: ProviderConfig) -> ProviderConfig:
         """Return ``base`` with each set field of this override applied.
 
@@ -163,6 +189,8 @@ class ProviderConfigUpdate(BaseModel):
         overrides = self.model_dump(exclude_none=True)
         if "parallel_free_seed_usd" in self.model_fields_set:
             overrides["parallel_free_seed_usd"] = self.parallel_free_seed_usd
+        if "exa_monthly_budget_usd" in self.model_fields_set:
+            overrides["exa_monthly_budget_usd"] = self.exa_monthly_budget_usd
         estimates = overrides.pop("free_tier_estimates", None)
         if estimates:
             merged["free_tier_estimates"].update(estimates)

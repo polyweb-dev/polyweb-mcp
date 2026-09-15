@@ -256,6 +256,32 @@ Feature: Quota and usage accounting (QUOTA.md acceptance)
     When I record Parallel spend without enabling the free seed
     Then the Parallel quota should report remaining unknown with limit unknown
 
+  # AC-EXA — Exa spend ledger, opt-in monthly budget, failure-aware
+  @exa @ac-exa
+  Scenario: Exa monthly budget is opt-in and failure-aware
+    Given an isolated quota repository
+    When I enable the Exa USD 10.00 monthly budget and record USD 0.007 of successful spend
+    Then the Exa remaining should be USD 9.993 of USD 10.00
+    When an Exa 402 soft signal arrives
+    Then the Exa remaining should read soft zero without a hard lockout
+    When a later Exa billed operation succeeds
+    Then the Exa soft zero should be cleared
+    When an Exa 429 transient signal arrives
+    Then the Exa 429 should never become quota exhaustion
+
+  @exa @ac-exa
+  Scenario: Exa capabilities stay quota-false with no balance endpoint poll
+    Given an isolated quota repository
+    When I inspect Exa quota capabilities
+    Then Exa capabilities quota should stay false
+
+  @exa @ac-exa
+  Scenario: Unbudgeted Exa accounts track spend without a fabricated balance
+    Given an isolated quota repository
+    When I record Exa spend without enabling the monthly budget
+    Then the Exa quota should report remaining unknown with limit unknown
+
+
   # B-QUOTA-BRAVE-REGRESSION — degenerate 0/0 is unknown and routable (AC-2/AC-6).
   @quota @ac2
   Scenario: Brave degenerate zero limit is treated as unknown and stays routable
