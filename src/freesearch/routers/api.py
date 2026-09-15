@@ -33,6 +33,7 @@ from freesearch.models.contracts import (
     FetchResponse,
     ProviderHealth,
     QuotaSnapshot,
+    RoutingMode,
     SearchRequest,
     SearchResponse,
     UsageOperation,
@@ -43,6 +44,7 @@ from freesearch.routers.control import (
     register_control_routes,
     routing_policy,
 )
+from freesearch.services.aggregation import reciprocal_rank_fusion
 from freesearch.services.monitoring import (
     MAX_RECENT_LIMIT,
     DashboardResponse,
@@ -115,7 +117,13 @@ def create_app(
 
     @app.post("/search", response_model=SearchResponse)
     async def search(request: SearchRequest) -> SearchResponse:
-        """Search the web through the best available provider."""
+        """Search the web through the best available provider or all providers concurrently."""
+        if request.fanout or request.routing.mode is RoutingMode.FANOUT:
+            return await _dispatch_fanout_search(
+                request,
+                routes=app.state._routes,
+                repository=app.state.repository,
+            )
         return await _dispatch(
             request,
             UsageOperation.SEARCH,
@@ -285,6 +293,76 @@ async def _dispatch[
         attempts[0],
         lambda target: invoke(target, request),
         operation=operation,
+    )
+
+
+async def _dispatch_fanout_search(
+    request: SearchRequest,
+    *,
+    routes: Sequence[ProviderAdapter],
+    repository: SQLiteRepository | None,
+) -> SearchResponse:
+    """Execute search across all eligible configured providers concurrently and fuse results."""
+    if not routes:
+        raise HTTPException(
+            status_code=503,
+            detail="no provider is configured: set a FREESEARCH_*_API_KEY",
+        )
+    policy = await routing_policy(repository)
+    ordered = await _order_routes(routes, repository, policy.cost_optimization_preset)
+    health_snapshots, quota_snapshots = await _routing_state(repository, ordered)
+    fanout_request = request.model_copy(
+        update={"routing": request.routing.model_copy(update={"mode": RoutingMode.FANOUT})}
+    )
+    try:
+        candidates = select_route(fanout_request, ordered, health_snapshots, quota_snapshots)
+    except RoutingError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    if not candidates:
+        raise HTTPException(status_code=503, detail="no eligible provider is available for search")
+
+    async def _call(candidate_adapter: ProviderAdapter) -> tuple[str, SearchResponse]:
+        res = await tracked_call(
+            repository,
+            candidate_adapter,
+            lambda target: target.search(request),
+            operation=UsageOperation.SEARCH,
+        )
+        return (candidate_adapter.name, res)
+
+    tasks = [_call(c.adapter) for c in candidates]
+    outcomes = await asyncio.gather(*tasks, return_exceptions=True)
+
+    successful_results: list[tuple[str, SearchResponse]] = []
+    errors: list[BaseException] = []
+    for outcome in outcomes:
+        if isinstance(outcome, BaseException):
+            errors.append(outcome)
+        elif isinstance(outcome, tuple):
+            successful_results.append(outcome)
+
+    if not successful_results:
+        first_err = errors[0] if errors else RuntimeError("all providers failed")
+        if isinstance(first_err, HTTPException):
+            raise first_err
+        raise HTTPException(
+            status_code=500,
+            detail=f"all search providers failed: {first_err}",
+        ) from first_err
+
+    fused_results = reciprocal_rank_fusion(
+        successful_results,
+        limit=request.limit,
+    )
+    participating = [name for name, _ in successful_results]
+
+    return SearchResponse(
+        query=request.query,
+        results=fused_results,
+        provider="aggregated" if len(successful_results) > 1 else successful_results[0][0],
+        total_results=len(fused_results),
+        participating_providers=participating,
     )
 
 

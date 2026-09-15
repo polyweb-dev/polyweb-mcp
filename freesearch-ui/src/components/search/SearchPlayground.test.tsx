@@ -233,4 +233,49 @@ describe("SearchPlayground (live backend)", () => {
     })
     expect(screen.getByText(`${expectedBytes} bytes`)).toBeInTheDocument()
   })
+
+  it("executes fanout search across all providers when All Providers is selected", async () => {
+    let capturedBody: any = null
+    renderWithBackend((req) => {
+      capturedBody = (req as any).body
+      return ok({
+        query: "fanout test",
+        provider: "aggregated",
+        total_results: 1,
+        results: [
+          {
+            title: "Fused Multi-Engine Hit",
+            url: "https://example.com/consensus",
+            snippet: "Verified snippet content",
+            score: 0.95,
+            source: "exa, brave",
+            metadata: { sources: ["exa", "brave"], source_ranks: { exa: 1, brave: 2 }, rrf_score: 0.032 },
+          },
+        ],
+        participating_providers: ["exa", "brave"],
+      })
+    })
+
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText(/Search across all providers/i)).toBeInTheDocument()
+    })
+
+    const select = screen.getByRole("combobox") as HTMLSelectElement
+    fireEvent.change(select, { target: { value: "all" } })
+    expect(select.value).toBe("all")
+
+    await submitQuery("fanout test")
+
+    await waitFor(() => {
+      expect(screen.getByText("Fused Multi-Engine Hit")).toBeInTheDocument()
+    })
+    expect(capturedBody).toMatchObject({
+      query: "fanout test",
+      fanout: true,
+      routing: { mode: "fanout" },
+    })
+    expect(screen.getByText(/2 engines/)).toBeInTheDocument()
+    expect(screen.getByText(/All Providers \(2 fused\)/i)).toBeInTheDocument()
+  })
 })
+

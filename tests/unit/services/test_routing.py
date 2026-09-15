@@ -470,3 +470,38 @@ def test_duplicate_adapter_names_are_rejected() -> None:
 
     assert exc_info.value.code == "duplicate_adapter"
     assert exc_info.value.providers == ("alpha",)
+
+
+def test_fanout_returns_all_eligible_candidates_ignoring_allow_fallback() -> None:
+    adapters = [adapter("alpha"), adapter("beta"), adapter("gamma")]
+    snapshots = {
+        "alpha": health("alpha", HealthStatus.DEGRADED),
+        "beta": health("beta", HealthStatus.HEALTHY),
+        "gamma": health("gamma", HealthStatus.UNKNOWN),
+    }
+
+    candidates = route(
+        search_request(RoutingMode.FANOUT, allow_fallback=False),
+        adapters,
+        snapshots,
+    )
+
+    assert names(candidates) == ["beta", "alpha", "gamma"]
+
+
+def test_fanout_filters_to_requested_providers_when_specified() -> None:
+    adapters = [adapter("alpha"), adapter("beta"), adapter("gamma")]
+    snapshots = {
+        "alpha": health("alpha", HealthStatus.HEALTHY),
+        "beta": health("beta", HealthStatus.HEALTHY),
+        "gamma": health("gamma", HealthStatus.HEALTHY),
+    }
+
+    candidates = route(
+        search_request(RoutingMode.FANOUT, ("alpha", "gamma")),
+        adapters,
+        snapshots,
+    )
+
+    assert names(candidates) == ["alpha", "gamma"]
+

@@ -37,10 +37,24 @@ export function ResultCard({ result: res, selected, isSearching, isFetching, onS
           </p>
 
           <div className="flex items-center gap-3 text-[12px] text-[var(--muted)] pt-1">
-            <span className="inline-flex items-center gap-1.5 text-[var(--text-strong)]">
-              <ProviderLogo providerId={res.providerId} name={res.providerName} className="size-3.5" />
-              {res.providerName}
-            </span>
+            {res.sources && res.sources.length > 1 ? (
+              <span className="inline-flex flex-wrap items-center gap-1.5 text-[var(--text-strong)]">
+                <span className="rounded bg-[var(--surface-muted)] px-1.5 py-0.5 text-[11px] font-medium text-[var(--signal)]">
+                  {res.sources.length} engines
+                </span>
+                {res.sources.map((s) => (
+                  <span key={s} className="inline-flex items-center gap-1 text-[11px] text-[var(--muted)]">
+                    <ProviderLogo providerId={s} className="size-3" />
+                    {s}
+                  </span>
+                ))}
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1.5 text-[var(--text-strong)]">
+                <ProviderLogo providerId={res.providerId} name={res.providerName} className="size-3.5" />
+                {res.providerName}
+              </span>
+            )}
             <span className="tnum">
               {Math.round(res.relevanceScore * 100)}% match
             </span>

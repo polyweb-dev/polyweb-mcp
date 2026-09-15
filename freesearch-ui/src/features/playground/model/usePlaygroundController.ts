@@ -99,8 +99,11 @@ export function usePlaygroundController(): PlaygroundController {
   })
 
   const switchMode = (next: PlaygroundMode) => {
-    if (
+    if (next === "fetch" && selectedProviderId === "all") {
+      setSelectedProviderId("auto")
+    } else if (
       selectedProviderId !== "auto" &&
+      selectedProviderId !== "all" &&
       !providers.some((provider) =>
         provider.id === selectedProviderId && isEligibleForOperation(provider, next)
       )

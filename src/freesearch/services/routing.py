@@ -88,6 +88,16 @@ def select_route(
                 code="no_eligible_provider",
                 providers=preference.providers,
             )
+    elif preference.mode is RoutingMode.FANOUT:
+        if preference.providers:
+            required = set(preference.providers)
+            candidates = [candidate for candidate in candidates if candidate.adapter.name in required]
+        if not candidates:
+            raise RoutingError(
+                "no eligible provider is available for fanout",
+                code="no_eligible_provider",
+                providers=preference.providers,
+            )
 
     ranked = sorted(
         candidates,
@@ -97,7 +107,7 @@ def select_route(
         ),
     )
 
-    if preference.allow_fallback:
+    if preference.mode is RoutingMode.FANOUT or preference.allow_fallback:
         return tuple(ranked)
     return tuple(ranked[:1])
 

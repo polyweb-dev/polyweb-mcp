@@ -154,14 +154,17 @@ def test_main_cli_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
 
     def fake_run(self: object, transport: str = "stdio") -> None:
         settings = getattr(self, "settings", None)
-        invocations.append((
-            transport,
-            getattr(settings, "stateless_http", False),
-            getattr(settings, "host", ""),
-            getattr(settings, "port", 0),
-        ))
+        invocations.append(
+            (
+                transport,
+                getattr(settings, "stateless_http", False),
+                getattr(settings, "host", ""),
+                getattr(settings, "port", 0),
+            )
+        )
 
     from mcp.server.fastmcp import FastMCP
+
     monkeypatch.setattr(FastMCP, "run", fake_run)
 
     # 1. Test stdio dispatch
@@ -172,3 +175,14 @@ def test_main_cli_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
     main(["--transport", "streamable-http", "--stateless", "--port", "8888"])
     assert invocations[-1] == ("streamable-http", True, "127.0.0.1", 8888)
 
+
+async def test_search_fanout_runs_multiple_adapters_and_fuses() -> None:
+    server = create_server([_StubAdapter("brave", fetch=False), _StubAdapter("exa", fetch=False)])
+    response = await server.call_tool("search", {"request": {"query": "python", "fanout": True}})
+    data = response[1]
+    assert data["provider"] == "aggregated"
+    assert set(data["participating_providers"]) == {"brave", "exa"}
+    assert (
+        len(data["results"]) == 1
+    )  # Both returned "https://example.com/r" so canonical deduplication fused them
+    assert set(data["results"][0]["sources"]) == {"brave", "exa"}

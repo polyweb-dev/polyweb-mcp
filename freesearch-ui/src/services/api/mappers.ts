@@ -52,17 +52,25 @@ export function mapSearchResponse(
   const providerId = toUiId(wire.provider)
   const cost = parseUnits(wire.usage?.units)
   const latency = wire.usage?.latency_ms ?? options.wallClockMs
-  const results = wire.results.map((result, index) => ({
-    id: `${wire.provider}-${index}`,
-    providerId,
-    providerName: result.source ?? wire.provider,
-    title: result.title,
-    url: result.url,
-    snippet: result.snippet,
-    relevanceScore: result.score ?? 0,
-    ...(result.published_at ? { publishedDate: result.published_at.slice(0, 10) } : {}),
-    rawMetadata: result.metadata,
-  }))
+  const results = wire.results.map((result, index) => {
+    const rawSources = Array.isArray(result.metadata?.sources)
+      ? (result.metadata.sources as string[])
+      : (result.sources ?? (result.source ? [result.source] : [wire.provider]))
+    const primarySource = rawSources[0] ?? wire.provider
+    const itemProviderId = toUiId(primarySource)
+    return {
+      id: `${wire.provider}-${index}`,
+      providerId: itemProviderId,
+      providerName: result.source ?? (rawSources.length > 1 ? rawSources.join(", ") : wire.provider),
+      title: result.title,
+      url: result.url,
+      snippet: result.snippet,
+      relevanceScore: result.score ?? 0,
+      ...(result.published_at ? { publishedDate: result.published_at.slice(0, 10) } : {}),
+      rawMetadata: result.metadata,
+      sources: rawSources.map(toUiId),
+    }
+  })
   const providerName = providerDisplayName(providerId, options.catalogNameOf)
 
   return {
@@ -70,6 +78,7 @@ export function mapSearchResponse(
     results,
     totalResults: wire.total_results ?? results.length,
     selectedProviderId: providerId,
+    participatingProviders: wire.participating_providers?.map(toUiId),
     fallbackChain: [providerId],
     waterfall: [
       {

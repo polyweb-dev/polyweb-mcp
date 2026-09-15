@@ -11,6 +11,7 @@ export interface BackendSearchRequest {
   country_code: string | null
   domains: string[]
   routing: BackendRoutingPreference
+  fanout?: boolean
 }
 
 export interface BackendSearchResult {
@@ -21,6 +22,7 @@ export interface BackendSearchResult {
   source: string | null
   score: number | null
   metadata: Record<string, unknown>
+  sources?: string[]
 }
 
 export interface BackendUsageEvent {
@@ -42,6 +44,7 @@ export interface BackendSearchResponse {
   provider: string
   total_results: number | null
   usage: BackendUsageEvent | null
+  participating_providers?: string[]
 }
 
 export interface BackendFetchRequest {

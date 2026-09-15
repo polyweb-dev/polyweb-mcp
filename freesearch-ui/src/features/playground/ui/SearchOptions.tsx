@@ -39,6 +39,7 @@ export function SearchOptions({ controller }: { controller: PlaygroundController
               onChange={(e) => setSelectedProviderId(e.target.value)}
               className="rounded border border-[var(--border-subtle)] bg-[var(--elevated)] px-2.5 py-1 text-[13px] text-[var(--text)] outline-none"
             >
+              <option value="all">All Providers (Ranked Fusion)</option>
               <option value="auto">Auto arbitration</option>
               {eligibleProviders.map((provider) => (
                 <option key={provider.id} value={provider.id}>
