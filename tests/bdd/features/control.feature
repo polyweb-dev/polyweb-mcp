@@ -16,7 +16,7 @@ Feature: Provider control plane and routing settings
     Then the control-plane GET for "exa" should report enabled false
     And a fresh control-plane read should still report enabled false
 
-  Scenario: Secret write is masked and delete removes the keyring value
+  Scenario: Secret write is masked and delete removes the vault value
     Given an offline control API with an in-memory secret store
     When I write a secret for "exa" through the control API
     Then the secret response should be configured with a masked fingerprint

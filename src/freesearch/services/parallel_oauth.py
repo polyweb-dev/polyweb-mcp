@@ -9,7 +9,7 @@ The bearer access token authorizes GET on the account balance path. A standard
 Parallel search API key is rejected there, so the balance poll never uses the
 x-api-key credential.
 
-Credential placement (recommended default: OS keyring):
+Credential placement (recommended default: encrypted database):
 
 Bearer material (access token, refresh token, the pending device code, and an
 optional client secret) lives ONLY in the SecretStore under namespaced keys
@@ -22,15 +22,10 @@ Non-secret metadata (client id, access/device expiry instants, poll interval,
 scope, pairing status) lives in the runtime_settings table under oauth.parallel
 and self-heals to unpaired when corrupt.
 
-Keyring versus alternatives: the OS keyring (the current KeyringSecretStore:
-Windows Credential Manager, macOS Keychain, Linux Secret Service) is the
-recommended default for desktop bearer tokens because the platform ACLs the
-bytes, nothing lands in plaintext at rest, and it is already the established
-secret seam. Process environment and .env files leak through dumps, shell
-history, and file copies (CI injection only). The SQLite runtime_settings table
-stores plaintext JSON, so it is correct for non-secret metadata only. An
-encrypted file vault would need a key-management bootstrap this codebase does
-not have.
+The encrypted database SecretStore keeps bearer slots as AES-GCM envelopes in
+``runtime_settings``; only non-secret pairing metadata remains plaintext JSON.
+The encrypted database vault is the only runtime credential source; there is
+no legacy fallback.
 
 Balance mapping is Decimal-exact (whole cents, never float math): the wire
 schema types both cent fields as JSON numbers, so integral floats (1250.0)
@@ -47,6 +42,7 @@ injectable so tests never touch the live platform.
 """
 
 import asyncio
+import inspect
 import logging
 import os
 import platform
@@ -61,10 +57,9 @@ from typing import Any, Literal
 import httpx
 from pydantic import Field, SecretStr, ValidationError, field_validator
 
-from freesearch.configuration.config import get_settings
 from freesearch.infrastructure.http import create_async_client
 from freesearch.infrastructure.logging import redact_secrets
-from freesearch.infrastructure.secrets import KeyringSecretStore, SecretStore
+from freesearch.infrastructure.secrets import AsyncSecretStore
 from freesearch.models.contracts import ContractModel, QuotaSnapshot, QuotaSource, UnitKind
 from freesearch.persistence.storage import SQLiteRepository
 
@@ -508,12 +503,38 @@ def _token_grant(payload: dict[str, Any]) -> TokenGrant:
     )
 
 
-def _resolve_secret_store(explicit: SecretStore | None) -> SecretStore:
+SecretBackend = AsyncSecretStore
+
+
+class _UnboundSecretStore:
+    """Fail closed until an encrypted vault is explicitly supplied."""
+
+    async def get(self, name: str) -> None:
+        del name
+        return None
+
+    async def set(self, name: str, value: str) -> None:
+        del name, value
+        raise RuntimeError("encrypted secret store is not configured")
+
+    async def delete(self, name: str) -> None:
+        del name
+        raise RuntimeError("encrypted secret store is not configured")
+
+
+def _resolve_secret_store(explicit: SecretBackend | None) -> SecretBackend:
     if explicit is not None:
         return explicit
     if _test_secret_store is not None:
         return _test_secret_store
-    return KeyringSecretStore(get_settings().secret_service_name)
+    return _UnboundSecretStore()
+
+
+async def _require_writable_store(store: SecretBackend) -> None:
+    """Fail closed when no encrypted vault is bound; preflight before vendor HTTP."""
+
+    if isinstance(store, _UnboundSecretStore):
+        raise RuntimeError("encrypted secret store is not configured")
 
 
 @asynccontextmanager
@@ -531,16 +552,25 @@ async def _client_session(
         await client.aclose()
 
 
-def _store_get_secret(store: SecretStore, key: str) -> SecretStr | None:
+async def _store_get_secret(store: SecretBackend, key: str) -> SecretStr | None:
     try:
         value = store.get(key)
+        stored = await value if inspect.isawaitable(value) else value
     except Exception:
         return None
-    return SecretStr(value) if value else None
+    return SecretStr(stored) if stored else None
 
 
-def _store_set_secret(store: SecretStore, key: str, value: SecretStr) -> None:
-    store.set(key, value.get_secret_value())
+async def _store_set_secret(store: SecretBackend, key: str, value: SecretStr) -> None:
+    result = store.set(key, value.get_secret_value())
+    if inspect.isawaitable(result):
+        await result
+
+
+async def _store_delete_secret(store: SecretBackend, key: str) -> None:
+    result = store.delete(key)
+    if inspect.isawaitable(result):
+        await result
 
 
 def _remaining_seconds(expiry: datetime | None, now: datetime) -> int | None:
@@ -585,35 +615,35 @@ async def _save_metadata_best_effort(
         logger.warning("parallel oauth metadata could not be persisted")
 
 
-async def _clear_vault(store: SecretStore, repository: SQLiteRepository | None) -> None:
+async def _clear_vault(store: SecretBackend, repository: SQLiteRepository | None) -> None:
     for key in (ACCESS_SECRET_KEY, REFRESH_SECRET_KEY, DEVICE_SECRET_KEY, CLIENT_SECRET_KEY):
         with suppress(Exception):
-            store.delete(key)
+            await _store_delete_secret(store, key)
     await _save_metadata_best_effort(repository, OAuthMetadata())
 
 
-async def _revoke_stored_tokens(oauth: ParallelOAuthClient, store: SecretStore) -> None:
-    access = _store_get_secret(store, ACCESS_SECRET_KEY)
+async def _revoke_stored_tokens(oauth: ParallelOAuthClient, store: SecretBackend) -> None:
+    access = await _store_get_secret(store, ACCESS_SECRET_KEY)
     if access is not None:
         await oauth.revoke_token(access, "access_token")
-    refresh = _store_get_secret(store, REFRESH_SECRET_KEY)
+    refresh = await _store_get_secret(store, REFRESH_SECRET_KEY)
     if refresh is not None:
         await oauth.revoke_token(refresh, "refresh_token")
 
 
 async def _persist_token_grant(
-    store: SecretStore,
+    store: SecretBackend,
     repository: SQLiteRepository | None,
     metadata: OAuthMetadata,
     grant: TokenGrant,
     observed_at: datetime,
 ) -> OAuthMetadata:
-    _store_set_secret(store, ACCESS_SECRET_KEY, grant.access_token)
+    await _store_set_secret(store, ACCESS_SECRET_KEY, grant.access_token)
     if grant.refresh_token is not None:
-        _store_set_secret(store, REFRESH_SECRET_KEY, grant.refresh_token)
+        await _store_set_secret(store, REFRESH_SECRET_KEY, grant.refresh_token)
     else:
         with suppress(Exception):
-            store.delete(REFRESH_SECRET_KEY)
+            await _store_delete_secret(store, REFRESH_SECRET_KEY)
     updated = OAuthMetadata(
         client_id=metadata.client_id,
         scope=grant.scope or metadata.scope,
@@ -625,7 +655,7 @@ async def _persist_token_grant(
     )
     await _save_metadata(repository, updated)
     with suppress(Exception):
-        store.delete(DEVICE_SECRET_KEY)
+        await _store_delete_secret(store, DEVICE_SECRET_KEY)
     return updated
 
 
@@ -666,7 +696,7 @@ async def _neutralize_stale_authoritative(
 async def _refresh_grant(
     *,
     oauth: ParallelOAuthClient,
-    store: SecretStore,
+    store: SecretBackend,
     repository: SQLiteRepository | None,
     observed_at: datetime,
 ) -> TokenGrant | None:
@@ -683,11 +713,11 @@ async def _refresh_grant(
         if (
             remaining is not None
             and remaining > REFRESH_SKEW_SECONDS
-            and _store_get_secret(store, ACCESS_SECRET_KEY) is not None
+            and await _store_get_secret(store, ACCESS_SECRET_KEY) is not None
         ):
             return None
-        refresh = _store_get_secret(store, REFRESH_SECRET_KEY)
-        client_secret = _store_get_secret(store, CLIENT_SECRET_KEY)
+        refresh = await _store_get_secret(store, REFRESH_SECRET_KEY)
+        client_secret = await _store_get_secret(store, CLIENT_SECRET_KEY)
         if refresh is None or metadata.client_id is None:
             raise _NoOAuthPairing("no refresh material") from None
         try:
@@ -703,7 +733,7 @@ async def _refresh_grant(
 async def _valid_access_token(
     *,
     oauth: ParallelOAuthClient,
-    store: SecretStore,
+    store: SecretBackend,
     repository: SQLiteRepository | None,
     metadata: OAuthMetadata,
     observed_at: datetime,
@@ -711,7 +741,7 @@ async def _valid_access_token(
     """Return a fresh bearer, refreshing once inside the skew window."""
 
     remaining = _remaining_seconds(metadata.access_expires_at, observed_at)
-    access = _store_get_secret(store, ACCESS_SECRET_KEY)
+    access = await _store_get_secret(store, ACCESS_SECRET_KEY)
     if access is not None and remaining is not None and remaining > REFRESH_SKEW_SECONDS:
         return access
     grant = await _refresh_grant(
@@ -719,7 +749,7 @@ async def _valid_access_token(
     )
     if grant is not None:
         return grant.access_token
-    current = _store_get_secret(store, ACCESS_SECRET_KEY)
+    current = await _store_get_secret(store, ACCESS_SECRET_KEY)
     if current is not None:
         return current
     raise _NoOAuthPairing("refresh produced no bearer") from None
@@ -731,7 +761,7 @@ def _status_view(status: OAuthStatusName, expires_in: int | None) -> OAuthStatus
 
 async def start_device_flow(
     *,
-    secret_store: SecretStore | None = None,
+    secret_store: SecretBackend | None = None,
     repository: SQLiteRepository | None = None,
     http_client: httpx.AsyncClient | None = None,
     platform_base_url: str = PARALLEL_PLATFORM_BASE_URL,
@@ -747,7 +777,8 @@ async def start_device_flow(
     """
 
     store = _resolve_secret_store(secret_store)
-    if _store_get_secret(store, ACCESS_SECRET_KEY) is not None:
+    await _require_writable_store(store)
+    if await _store_get_secret(store, ACCESS_SECRET_KEY) is not None:
         raise OAuthAlreadyPaired(
             "parallel OAuth is already paired; disconnect before starting a new device flow"
         ) from None
@@ -758,16 +789,16 @@ async def start_device_flow(
         )
         client_id, client_secret = await oauth.register_client(scope=scope)
         grant = await oauth.request_device_code(client_id, scope=scope)
-        _store_set_secret(store, DEVICE_SECRET_KEY, grant.device_code)
+        await _store_set_secret(store, DEVICE_SECRET_KEY, grant.device_code)
         if client_secret is not None:
-            _store_set_secret(store, CLIENT_SECRET_KEY, client_secret)
+            await _store_set_secret(store, CLIENT_SECRET_KEY, client_secret)
         else:
             with suppress(Exception):
-                store.delete(CLIENT_SECRET_KEY)
+                await _store_delete_secret(store, CLIENT_SECRET_KEY)
         await _revoke_stored_tokens(oauth, store)
         for key in (ACCESS_SECRET_KEY, REFRESH_SECRET_KEY):
             with suppress(Exception):
-                store.delete(key)
+                await _store_delete_secret(store, key)
         await _save_metadata(
             repository,
             OAuthMetadata(
@@ -792,7 +823,7 @@ async def start_device_flow(
 
 async def query_oauth_status(
     *,
-    secret_store: SecretStore | None = None,
+    secret_store: SecretBackend | None = None,
     repository: SQLiteRepository | None = None,
     http_client: httpx.AsyncClient | None = None,
     platform_base_url: str = PARALLEL_PLATFORM_BASE_URL,
@@ -810,14 +841,14 @@ async def query_oauth_status(
         oauth = ParallelOAuthClient(
             client, platform_base_url=platform_base_url, api_base_url=api_base_url
         )
-        access = _store_get_secret(store, ACCESS_SECRET_KEY)
+        access = await _store_get_secret(store, ACCESS_SECRET_KEY)
         remaining = _remaining_seconds(metadata.access_expires_at, observed)
         if access is not None and remaining is not None and remaining > REFRESH_SKEW_SECONDS:
             if metadata.status != "ready":
                 metadata.status = "ready"
                 await _save_metadata_best_effort(repository, metadata)
             return _status_view("ready", remaining)
-        refresh = _store_get_secret(store, REFRESH_SECRET_KEY)
+        refresh = await _store_get_secret(store, REFRESH_SECRET_KEY)
         if refresh is not None and metadata.client_id is not None:
             try:
                 grant = await _refresh_grant(
@@ -852,7 +883,7 @@ async def query_oauth_status(
 async def _poll_device_once(
     *,
     oauth: ParallelOAuthClient,
-    store: SecretStore,
+    store: SecretBackend,
     repository: SQLiteRepository | None,
     metadata: OAuthMetadata,
     observed_at: datetime,
@@ -866,19 +897,19 @@ async def _poll_device_once(
         metadata.status = "expired"
         await _save_metadata_best_effort(repository, metadata)
         with suppress(Exception):
-            store.delete(DEVICE_SECRET_KEY)
+            await _store_delete_secret(store, DEVICE_SECRET_KEY)
         return _status_view("expired", None)
     interval = metadata.interval or _DEFAULT_DEVICE_INTERVAL_SECONDS
     if metadata.last_poll_at is not None:
         elapsed = _elapsed_seconds(metadata.last_poll_at, observed_at)
         if elapsed is not None and elapsed < interval:
             return _status_view("pending", device_remaining)
-    device = _store_get_secret(store, DEVICE_SECRET_KEY)
+    device = await _store_get_secret(store, DEVICE_SECRET_KEY)
     if device is None:
         metadata.status = "expired"
         await _save_metadata_best_effort(repository, metadata)
         return _status_view("expired", None)
-    client_secret = _store_get_secret(store, CLIENT_SECRET_KEY)
+    client_secret = await _store_get_secret(store, CLIENT_SECRET_KEY)
     try:
         grant = await oauth.poll_token(metadata.client_id, device, client_secret)
     except DeviceSlowDown:
@@ -895,13 +926,13 @@ async def _poll_device_once(
         metadata.last_poll_at = observed_at
         await _save_metadata_best_effort(repository, metadata)
         with suppress(Exception):
-            store.delete(DEVICE_SECRET_KEY)
+            await _store_delete_secret(store, DEVICE_SECRET_KEY)
         return _status_view("denied", None)
     except DeviceCodeExpired:
         metadata.status = "expired"
         await _save_metadata_best_effort(repository, metadata)
         with suppress(Exception):
-            store.delete(DEVICE_SECRET_KEY)
+            await _store_delete_secret(store, DEVICE_SECRET_KEY)
         return _status_view("expired", None)
     except ParallelOAuthError as exc:
         logger.warning(redact_secrets(exc))
@@ -931,7 +962,7 @@ def _elapsed_seconds(earlier: datetime, later: datetime) -> int | None:
 
 async def disconnect_oauth(
     *,
-    secret_store: SecretStore | None = None,
+    secret_store: SecretBackend | None = None,
     repository: SQLiteRepository | None = None,
     http_client: httpx.AsyncClient | None = None,
     platform_base_url: str = PARALLEL_PLATFORM_BASE_URL,
@@ -1010,13 +1041,13 @@ def _get_refresh_lock() -> asyncio.Lock:
     return lock
 
 
-_test_secret_store: SecretStore | None = None
+_test_secret_store: SecretBackend | None = None
 _test_http_client: httpx.AsyncClient | None = None
 
 
 def set_oauth_test_seams(
     *,
-    secret_store: SecretStore | None = None,
+    secret_store: SecretBackend | None = None,
     http_client: httpx.AsyncClient | None = None,
 ) -> None:
     """Inject offline doubles for the monitoring hook; production leaves these unset."""
@@ -1070,7 +1101,7 @@ def _oauth_backoff_seconds() -> int:
 async def poll_oauth_balance_snapshot(
     repository: SQLiteRepository | None,
     *,
-    secret_store: SecretStore | None = None,
+    secret_store: SecretBackend | None = None,
     http_client: httpx.AsyncClient | None = None,
     platform_base_url: str = PARALLEL_PLATFORM_BASE_URL,
     api_base_url: str = PARALLEL_API_BASE_URL,
@@ -1124,7 +1155,7 @@ def _age_seconds(earlier: datetime, later: datetime) -> int:
 async def _fetch_and_record_oauth_balance(
     repository: SQLiteRepository,
     *,
-    secret_store: SecretStore | None,
+    secret_store: SecretBackend | None,
     http_client: httpx.AsyncClient | None,
     platform_base_url: str,
     api_base_url: str,

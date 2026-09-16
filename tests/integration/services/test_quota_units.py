@@ -2025,6 +2025,7 @@ class TestBraveExhaustionMapping:
         assert "brave" not in names, f"AC-6: genuine 0/1000 must steer away: {names!r}"
         assert names[0] == "tavily", f"AC-6: fallback must lead: {names!r}"
 
+
 class TestBraveMonthlyCounterLedger:
     async def test_tracked_bare_search_persists_bounded_quota(
         self, static_resolver: None, repo: SQLiteRepository
@@ -2106,4 +2107,3 @@ class TestBraveMonthlyCounterLedger:
         assert latest.remaining == Decimal("1990")
         assert latest.limit == Decimal("2000")
         assert latest.source == QuotaSource.OBSERVED
-

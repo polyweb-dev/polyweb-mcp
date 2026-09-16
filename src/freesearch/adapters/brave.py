@@ -8,13 +8,11 @@ import httpx
 from pydantic import SecretStr
 
 from freesearch.adapters.base import ProviderAdapter
-from freesearch.configuration.provider_config import get_provider_secret_resolver
 from freesearch.infrastructure.resilience import (
     RETRYABLE_STATUS_CODES,
     ProviderOperationError,
     ResilientRunner,
 )
-from freesearch.infrastructure.secrets import ProviderName
 from freesearch.models.contracts import (
     CostEstimate,
     FetchRequest,
@@ -137,8 +135,14 @@ parse_monthly_element = monthly_header_value
 class BraveAdapter(ProviderAdapter):
     """Normalize Brave web search responses without owning client lifecycle."""
 
-    def __init__(self, client: httpx.AsyncClient, *, runner: ResilientRunner | None = None) -> None:
-        resolved = get_provider_secret_resolver().get(ProviderName.BRAVE)
+    def __init__(
+        self,
+        client: httpx.AsyncClient,
+        *,
+        runner: ResilientRunner | None = None,
+        api_key: SecretStr | None = None,
+    ) -> None:
+        resolved = api_key
         if resolved is None:
             raise self._error("configuration_error", "no Brave API key configured")
         self._client = client

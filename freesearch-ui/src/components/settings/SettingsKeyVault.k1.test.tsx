@@ -5,6 +5,7 @@ import { describe, expect, it, afterEach, vi } from "vitest"
 import { render, screen, within, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { FreeSearchProvider } from "@/context/FreeSearchContext"
+import { ToastContainer } from "@/components/common/ToastContainer"
 import { SettingsView } from "./SettingsView"
 import { installFetchStub, ok, err, deferred, type FetchStub } from "@/test/fetchMock"
 import {
@@ -59,8 +60,9 @@ import {
  *           Save disabled on blank/whitespace, save PUTs exactly {key} and
  *           renders the SERVER fingerprint while clearing the write-only
  *           input, save pending shows Saving..., delete DELETEs and marks
- *           Missing, delete pending shows Working..., environment/dotenv
- *           shadowing note, loading skeleton (aria-busy + disabled Delete
+ *           Missing, delete pending shows Working..., NO environment/dotenv
+ *           hint of any kind plus the exact "Key stored in the encrypted vault."
+ *           success toast, loading skeleton (aria-busy + disabled Delete
  *           key), exact status pills (6x Stored + 1x Keyless, no Missing),
  *           masked fingerprints with no reveal actions, exact placeholders.
  *   K1-6  regression guards (must stay GREEN before and after):
@@ -105,7 +107,7 @@ const KEYLESS_PLACEHOLDER = "Optional — store a key to bypass the free tier"
 
 const ORIGINAL_INNER_WIDTH = window.innerWidth
 
-let secretSource: string = "keyring"
+let secretSource: string = "encrypted_db"
 let putGate: Promise<Response> | null = null
 let deleteGate: Promise<Response> | null = null
 const gateHolder: { providers: ReturnType<typeof deferred<Response>> | null } = {
@@ -113,7 +115,7 @@ const gateHolder: { providers: ReturnType<typeof deferred<Response>> | null } = 
 }
 
 function renderSettings(deferProviders = false): FetchStub {
-  secretSource = "keyring"
+  secretSource = "encrypted_db"
   putGate = null
   deleteGate = null
   gateHolder.providers = deferProviders ? deferred<Response>() : null
@@ -167,6 +169,7 @@ function renderSettings(deferProviders = false): FetchStub {
   render(
     <FreeSearchProvider>
       <SettingsView />
+      <ToastContainer />
     </FreeSearchProvider>
   )
   return stub
@@ -511,7 +514,7 @@ describe("K1-5: key vault behavior contract", () => {
       expect(within(card).getByRole("button", { name: /^Saving\.\.\.$/ })).toBeInTheDocument()
     })
     gate.resolve(
-      ok(secretStatusFixture({ provider: "you", fingerprint: "YOU_••••••••a1b2", source: "keyring" }))
+      ok(secretStatusFixture({ provider: "you", fingerprint: "YOU_••••••••a1b2", source: "encrypted_db" }))
     )
     await waitFor(() => {
       expect(within(card).getByText("YOU_••••••••a1b2", { exact: true })).toBeInTheDocument()
@@ -553,7 +556,7 @@ describe("K1-5: key vault behavior contract", () => {
     })
   })
 
-  it("surfaces the exact environment/dotenv shadowing note for shadowed keys", async () => {
+  it("shows no environment/dotenv hint and the exact vault toast after save", async () => {
     const user = userEvent.setup()
     renderSettings()
     await waitForProviders()
@@ -564,7 +567,15 @@ describe("K1-5: key vault behavior contract", () => {
     await user.click(within(card).getByRole("button", { name: /^Save$/ }))
     await waitFor(() => {
       expect(
-        within(card).getByText("environment key shadows vault", { exact: true })
+        within(card).getByText("EXA_••••••••a1b2", { exact: true })
+      ).toBeInTheDocument()
+    })
+    // Vault-only: no legacy-source hint may appear anywhere in the UI.
+    expect(card.textContent).not.toMatch(/environment|dotenv/i)
+    expect(document.body.textContent).not.toMatch(/shadow/i)
+    await waitFor(() => {
+      expect(
+        screen.getByText("Key stored in the encrypted vault.", { exact: true })
       ).toBeInTheDocument()
     })
   })

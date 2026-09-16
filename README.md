@@ -48,24 +48,15 @@ cp .env.example .env
 Copy-Item .env.example .env
 ```
 
-Open `.env` and fill in any provider API keys you plan to use:
+Keep `.env` for non-secret runtime settings. Store provider credentials in the encrypted vault:
 
-```ini
-FREESEARCH_ENVIRONMENT=development
-FREESEARCH_LOG_LEVEL=INFO
-
-# Provider API Keys (leave blank if not using that provider)
-FREESEARCH_BRAVE_SEARCH_API_KEY=
-FREESEARCH_BRAVE_ANSWERS_API_KEY=
-FREESEARCH_EXA_API_KEY=
-FREESEARCH_FIRECRAWL_API_KEY=
-FREESEARCH_TAVILY_API_KEY=
-FREESEARCH_PARALLEL_API_KEY=
-FREESEARCH_YOU_API_KEY=
-FREESEARCH_KEENABLE_API_KEY= # Optional: Keenable provides a keyless tier
+```bash
+curl -X PUT http://127.0.0.1:8001/api/v1/providers/exa/secret \
+  -H 'content-type: application/json' \
+  -d '{"key":"your-provider-key"}'
 ```
 
-*(Note: Provider credentials can also be configured dynamically through the web dashboard, which stores them securely in your system keyring.)*
+The settings dashboard uses the same encrypted-vault API. Keenable can remain keyless.
 
 ---
 

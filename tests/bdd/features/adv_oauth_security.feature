@@ -1,7 +1,7 @@
 @control @adv-oauth @oauth-security
 Feature: Parallel OAuth token confinement
   As a FreeSearch operator
-  I want bearer tokens confined to the OS keyring vault
+  I want bearer tokens confined to the encrypted vault
   So that logs, responses, and database rows stay fingerprint-only
 
   Background:

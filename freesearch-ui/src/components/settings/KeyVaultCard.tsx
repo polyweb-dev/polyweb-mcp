@@ -37,7 +37,6 @@ export const KeyCard: React.FC<KeyCardProps> = ({
     : provider.keyMasked === "—" && provider.keyVaultStatus === "configured"
       ? "••••••••"
       : provider.keyMasked
-  const shadowed = provider.keySource === "environment" || provider.keySource === "dotenv"
 
   return (
     <div className="p-4 rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] hover:bg-[var(--elevated)] transition-colors space-y-2.5">
@@ -59,12 +58,6 @@ export const KeyCard: React.FC<KeyCardProps> = ({
       </div>
 
       <span className="block font-mono text-[13px] text-[var(--text)] truncate">{fingerprint}</span>
-      {shadowed && (
-        <span className="block text-[12px] text-[var(--status-warning)]">
-          {provider.keySource} key shadows vault
-        </span>
-      )}
-
       <div className="flex flex-wrap items-center gap-2">
         <input
           type="password"

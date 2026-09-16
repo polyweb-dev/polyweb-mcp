@@ -15,7 +15,6 @@ from behave import given, then, when  # type: ignore[import-untyped]
 from fastapi.testclient import TestClient
 
 from freesearch.adapters.base import ProviderAdapter
-from freesearch.infrastructure.secrets import MemorySecretStore
 from freesearch.models.contracts import (
     CostEstimate,
     FetchRequest,
@@ -72,18 +71,24 @@ class _PatchShim:
         self._originals.clear()
 
 
-class _AdvStore(MemorySecretStore):
-    """Recording keyring double for revoke-before-delete ordering."""
+class _AdvStore:
+    """Recording dict-backed vault double for revoke-before-delete ordering."""
 
     def __init__(self, order: list[str]) -> None:
-        super().__init__()
+        self.values: dict[str, str] = {}
         self.order = order
         self.delete_calls = 0
+
+    def get(self, name: str) -> str | None:
+        return self.values.get(name)
+
+    def set(self, name: str, value: str) -> None:
+        self.values[name] = value
 
     def delete(self, name: str) -> None:
         self.delete_calls += 1
         self.order.append("store-delete:" + name)
-        super().delete(name)
+        self.values.pop(name, None)
 
 
 class _ParallelStubAdapter(ProviderAdapter):

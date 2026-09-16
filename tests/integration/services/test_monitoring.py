@@ -1156,7 +1156,12 @@ async def test_server_owned_lifespan_refcounted_across_overlapping_sessions(
     tmp_path: Path,
     exit_order: tuple[str, str],
 ) -> None:
-    monkeypatch.setattr("freesearch.mcp.server.build_adapters", lambda _client: [_StubAdapter("x")])
+    monkeypatch.setattr(
+        "freesearch.mcp.server.adapter_factory",
+        lambda name: (
+            (lambda client, api_key=None: _StubAdapter("x")) if name == "keenable" else None
+        ),
+    )
     opened: list[SQLiteRepository] = []
     real_open = SQLiteRepository.open
 
@@ -1243,13 +1248,19 @@ async def test_server_owned_lifespan_sequential_sessions_reuse_fresh_generation(
     build_count = 0
     build_clients: list[Any] = []
 
-    def build_spy(_client: Any) -> list[ProviderAdapter]:
-        nonlocal build_count
-        build_count += 1
-        build_clients.append(_client)
-        return [_StubAdapter("x")]
+    def factory_spy(name: str) -> Any:
+        if name != "keenable":
+            return None
 
-    monkeypatch.setattr("freesearch.mcp.server.build_adapters", build_spy)
+        def build(client: Any, api_key: Any = None) -> ProviderAdapter:
+            nonlocal build_count
+            build_count += 1
+            build_clients.append(client)
+            return _StubAdapter("x")
+
+        return build
+
+    monkeypatch.setattr("freesearch.mcp.server.adapter_factory", factory_spy)
     opened: list[SQLiteRepository] = []
     real_open = SQLiteRepository.open
 
@@ -1311,13 +1322,19 @@ async def test_server_owned_lifespan_delayed_teardown_does_not_close_new_session
     build_count = 0
     build_clients: list[Any] = []
 
-    def build_spy(_client: Any) -> list[ProviderAdapter]:
-        nonlocal build_count
-        build_count += 1
-        build_clients.append(_client)
-        return [_StubAdapter("x")]
+    def factory_spy(name: str) -> Any:
+        if name != "keenable":
+            return None
 
-    monkeypatch.setattr("freesearch.mcp.server.build_adapters", build_spy)
+        def build(client: Any, api_key: Any = None) -> ProviderAdapter:
+            nonlocal build_count
+            build_count += 1
+            build_clients.append(client)
+            return _StubAdapter("x")
+
+        return build
+
+    monkeypatch.setattr("freesearch.mcp.server.adapter_factory", factory_spy)
     opened: list[SQLiteRepository] = []
     real_open = SQLiteRepository.open
 

@@ -14,9 +14,9 @@ from decimal import Decimal
 from typing import Any
 
 import httpx
+from pydantic import SecretStr
 
 from freesearch.adapters.base import ProviderAdapter
-from freesearch.configuration.provider_config import get_provider_secret_resolver
 from freesearch.infrastructure.borrowed_transport import BorrowedTransport
 from freesearch.infrastructure.dates import parse_iso_datetime
 from freesearch.infrastructure.resilience import (
@@ -24,7 +24,6 @@ from freesearch.infrastructure.resilience import (
     ProviderOperationError,
     ResilientRunner,
 )
-from freesearch.infrastructure.secrets import ProviderName
 from freesearch.models.contracts import (
     CostEstimate,
     FetchedDocument,
@@ -115,9 +114,10 @@ class ParallelAdapter(ProviderAdapter):
         *,
         runner: ResilientRunner | None = None,
         free_seed: Decimal | None = None,
+        api_key: SecretStr | None = None,
     ) -> None:
         """Wrap the caller-owned ``client`` in the shared resilience runner."""
-        resolved = get_provider_secret_resolver().get(ProviderName.PARALLEL)
+        resolved = api_key
         if resolved is None:
             raise self._error("configuration_error", "no Parallel API key configured")
         self._api_key = resolved.get_secret_value()
