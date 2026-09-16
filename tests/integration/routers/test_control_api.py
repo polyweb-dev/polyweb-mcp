@@ -20,10 +20,7 @@ from pydantic import ValidationError
 
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.configuration.config import get_settings
-from freesearch.configuration.provider_config import (
-    ProviderConfigUpdate,
-    get_provider_secret_resolver,
-)
+from freesearch.configuration.provider_config import ProviderConfigUpdate
 from freesearch.infrastructure.secrets import PROVIDER_ENV_VARS, ProviderName
 from freesearch.mcp.server import create_server
 from freesearch.models.contracts import (
@@ -47,19 +44,19 @@ from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
 
 
-class MemorySecretStore:
-    """Deterministic keyring replacement used by control-plane tests."""
+class AsyncVaultDouble:
+    """Inline async dict double for the encrypted-DB vault (no keyring shim)."""
 
     def __init__(self) -> None:
         self.values: dict[str, str] = {}
 
-    def get(self, name: str) -> str | None:
+    async def get(self, name: str) -> str | None:
         return self.values.get(name)
 
-    def set(self, name: str, value: str) -> None:
+    async def set(self, name: str, value: str) -> None:
         self.values[name] = value
 
-    def delete(self, name: str) -> None:
+    async def delete(self, name: str) -> None:
         self.values.pop(name, None)
 
 
@@ -160,21 +157,18 @@ _VAULT_PASSPHRASE = "control-api-vault-passphrase-9f31"
 
 @pytest.fixture
 def vault_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):  # type: ignore[no-untyped-def]
-    """Hermetic vault wiring: passphrase-mode encryption, tmp key file, no keyring."""
+    """Hermetic vault wiring: passphrase-mode encryption, tmp key file, vault-only."""
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("FREESEARCH_ENCRYPTION_KEY", _VAULT_PASSPHRASE)
     monkeypatch.setenv("FREESEARCH_ENCRYPTION_KEY_FILE", str(tmp_path / ".secret_key"))
-    monkeypatch.setenv("PYTHON_KEYRING_BACKEND", "keyring.backends.fail.Keyring")
     for var in PROVIDER_ENV_VARS.values():
         monkeypatch.delenv(var, raising=False)
     get_settings.cache_clear()
-    get_provider_secret_resolver.cache_clear()
     try:
         yield
     finally:
         get_settings.cache_clear()
-        get_provider_secret_resolver.cache_clear()
 
 
 def _json_decimal(value: Any) -> Decimal:
@@ -478,7 +472,7 @@ async def test_secret_put_writes_vault_and_never_exposes_raw_key(
 @pytest.mark.asyncio
 async def test_secret_put_rejects_empty_key(repository: SQLiteRepository) -> None:
     """AC-5: SecretStr(min_length=1) rejects empty JSON strings."""
-    store = MemorySecretStore()
+    store = AsyncVaultDouble()
     app = create_app(
         [ControlAdapter("exa")],
         repository=repository,
@@ -500,8 +494,8 @@ async def test_secret_delete_is_idempotent_and_removes_stored_value(
 ) -> None:
     """AC-6: repeated deletes are successful and leave a missing presence."""
     monkeypatch.chdir(tmp_path)
-    store = MemorySecretStore()
-    store.set("exa", "keyring-only-value")
+    store = AsyncVaultDouble()
+    await store.set("exa", "vault-only-value")
     app = create_app(
         [ControlAdapter("exa")],
         repository=repository,
@@ -517,7 +511,7 @@ async def test_secret_delete_is_idempotent_and_removes_stored_value(
     assert first.json()["presence"] == "missing"
     assert second.json()["presence"] == "missing"
     assert first.json()["source"] == "none"
-    assert store.get("exa") is None
+    assert await store.get("exa") is None
 
 
 @pytest.mark.asyncio
@@ -565,7 +559,7 @@ async def test_secret_write_constructs_missing_adapter_on_demand(
     """AC-3/AC-5: a key written after startup makes a missing adapter testable."""
     from freesearch.adapters import registry as registry_module
 
-    store = MemorySecretStore()
+    store = AsyncVaultDouble()
     replacement = ControlAdapter("exa", health_status=HealthStatus.UNKNOWN)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(
@@ -817,3 +811,67 @@ async def test_provider_config_update_shape_remains_strict_and_partial() -> None
     assert update.priority == 4
     with pytest.raises(ValidationError):
         ProviderConfigUpdate(enabled=True, unexpected=True)  # type: ignore[call-arg]
+
+
+# --- Vault-only migration contracts (AC-1..AC-5) ------------------------------
+
+
+def test_settings_has_no_secret_service_name() -> None:
+    """AC-1: configuration/config.py must delete secret_service_name."""
+
+    from freesearch.configuration.config import Settings
+
+    assert "secret_service_name" not in Settings.model_fields, (
+        "RED (AC-1): Settings.secret_service_name must be deleted (vault-only)"
+    )
+    assert "encryption_key" in Settings.model_fields
+    assert "encryption_key_file" in Settings.model_fields
+
+
+def test_provider_config_has_no_resolver_seam() -> None:
+    """AC-1: configuration/provider_config.py must delete the resolver seam."""
+
+    import freesearch.configuration.provider_config as provider_config_module
+
+    assert not hasattr(provider_config_module, "get_provider_secret_resolver"), (
+        "RED (AC-1): get_provider_secret_resolver must be deleted; "
+        "adapters call the vault resolver injected"
+    )
+
+
+def test_control_secret_backend_is_async_vault_only() -> None:
+    """AC-1: routers/control.py SecretBackend must be AsyncSecretStore only."""
+
+    from freesearch.routers import control as control_module
+
+    assert control_module.SecretBackend is not None
+    backend_name = repr(control_module.SecretBackend)
+    assert "AsyncSecretStore" in backend_name, (
+        f"RED: SecretBackend must be AsyncSecretStore, got {backend_name}"
+    )
+    assert callable(getattr(control_module, "_resolve_secret", None))
+    assert callable(getattr(control_module, "_build_with_resolved_secret", None))
+
+
+def test_api_module_has_no_keyring_or_environ_snapshot() -> None:
+    """AC-1: routers/api.py must not import keyring or snapshot environ."""
+
+    from pathlib import Path as _Path
+
+    api_path = _Path(__file__).resolve().parents[3] / "src" / "freesearch" / "routers" / "api.py"
+    source = api_path.read_text(encoding="utf-8")
+    assert "KeyringSecretStore" not in source, "RED (AC-1): api.py must not use KeyringSecretStore"
+    assert "environ_snapshot" not in source, "RED (AC-1): api.py must not snapshot environ"
+    assert "import keyring" not in source
+
+
+def test_pyproject_has_no_keyring_or_dotenv() -> None:
+    """AC-1: pyproject.toml must drop keyring and python-dotenv deps."""
+
+    from pathlib import Path as _Path
+
+    pyproject = (_Path(__file__).resolve().parents[3] / "pyproject.toml").read_text(
+        encoding="utf-8"
+    )
+    assert "keyring" not in pyproject.lower(), "RED (AC-1): pyproject must drop keyring"
+    assert "python-dotenv" not in pyproject.lower(), "RED (AC-1): pyproject must drop python-dotenv"

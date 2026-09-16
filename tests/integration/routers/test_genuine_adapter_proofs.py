@@ -24,7 +24,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import httpx
-import keyring
 import pytest
 import pytest_asyncio
 from fastapi.testclient import TestClient
@@ -38,7 +37,6 @@ from freesearch.adapters.parallel import ParallelAdapter
 from freesearch.adapters.tavily import TavilyAdapter
 from freesearch.adapters.youcom import YoucomAdapter
 from freesearch.configuration.config import get_settings
-from freesearch.configuration.provider_config import get_provider_secret_resolver
 from freesearch.infrastructure.secrets import PROVIDER_ENV_VARS, ProviderName
 from freesearch.models.contracts import SearchRequest
 from freesearch.persistence.storage import SQLiteRepository
@@ -209,29 +207,18 @@ def _assert_key_on_wire(wire: _VendorWire, provider: ProviderName, sentinel: str
 
 @pytest.fixture
 def hermetic(monkeypatch, tmp_path):  # type: ignore[no-untyped-def]
-    """Clean env, isolated cwd, passphrase wiring pinned to tmp_path.
-
-    The OS keyring is neutralized to empty (None/no-op), mirroring
-    production-with-no-legacy-keys: legacy reads degrade to absent instead of
-    raising backend noise, isolating the encrypted-path gap under proof.
-    """
+    """Clean env, isolated cwd, passphrase wiring pinned to tmp_path (vault-only)."""
 
     monkeypatch.setenv("FREESEARCH_ENCRYPTION_KEY", PASSPHRASE)
     monkeypatch.setenv("FREESEARCH_ENCRYPTION_KEY_FILE", str(tmp_path / ".secret_key"))
-    monkeypatch.setenv("PYTHON_KEYRING_BACKEND", "keyring.backends.fail.Keyring")
-    monkeypatch.setattr(keyring, "get_password", lambda *args, **kwargs: None)
-    monkeypatch.setattr(keyring, "set_password", lambda *args, **kwargs: None)
-    monkeypatch.setattr(keyring, "delete_password", lambda *args, **kwargs: None)
     for var in PROVIDER_ENV_VARS.values():
         monkeypatch.delenv(var, raising=False)
     monkeypatch.chdir(tmp_path)
     get_settings.cache_clear()
-    get_provider_secret_resolver.cache_clear()
     try:
         yield tmp_path
     finally:
         get_settings.cache_clear()
-        get_provider_secret_resolver.cache_clear()
 
 
 @pytest_asyncio.fixture
@@ -274,7 +261,6 @@ async def test_canned_wire_shapes_satisfy_genuine_adapters(
             _assert_key_on_wire(wire, provider, SENTINEL_PROVIDER_KEYS[provider.value])
     finally:
         await client.aclose()
-        get_provider_secret_resolver.cache_clear()
 
 
 # --- Proof 1a: PUT -> on-demand /test constructs the genuine adapter --------
@@ -386,7 +372,6 @@ async def test_env_key_is_ignored_vault_key_reaches_wire(
     vault_sentinel = SENTINEL_PROVIDER_KEYS[provider.value]
     env_decoy = f"ENV-DECOY-that-must-never-resolve-{provider.value}-9f31"
     monkeypatch.setenv(PROVIDER_ENV_VARS[provider], env_decoy)
-    get_provider_secret_resolver.cache_clear()
 
     app = create_app(None, repository=repository)
     with TestClient(app) as client:

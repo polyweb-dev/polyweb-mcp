@@ -1,10 +1,8 @@
-"""Provider credential resolution and migration-only legacy storage."""
+"""Vault-only provider credential resolution."""
 
-from contextlib import suppress
 from enum import StrEnum
 from typing import Protocol
 
-import keyring
 from pydantic import SecretStr
 
 
@@ -31,19 +29,6 @@ PROVIDER_ENV_VARS: dict[ProviderName, str] = {
 }
 
 
-class SecretStore(Protocol):
-    """Minimal storage contract for replaceable local/cloud secret backends."""
-
-    def get(self, name: str) -> str | None:
-        """Read a secret without logging or exposing it in a model dump."""
-
-    def set(self, name: str, value: str) -> None:
-        """Create or replace a secret."""
-
-    def delete(self, name: str) -> None:
-        """Delete a secret if it exists."""
-
-
 class AsyncSecretStore(Protocol):
     """Async counterpart for repository-backed secret stores."""
 
@@ -52,44 +37,6 @@ class AsyncSecretStore(Protocol):
     async def set(self, name: str, value: str) -> None: ...
 
     async def delete(self, name: str) -> None: ...
-
-
-class KeyringSecretStore:
-    """Store secrets in the platform's native credential manager."""
-
-    def __init__(self, service_name: str = "freesearch") -> None:
-        self._service_name = service_name
-
-    def get(self, name: str) -> str | None:
-        return keyring.get_password(self._service_name, name)
-
-    def set(self, name: str, value: str) -> None:
-        keyring.set_password(self._service_name, name, value)
-
-    def delete(self, name: str) -> None:
-        with suppress(keyring.errors.PasswordDeleteError):
-            keyring.delete_password(self._service_name, name)
-
-
-class MemorySecretStore(SecretStore):
-    """Dict-backed in-process store mirroring the OS keyring for tests and tools.
-
-    Implements the same :class:`SecretStore` protocol as
-    :class:`KeyringSecretStore` without touching the platform credential
-    manager, so offline callers can inject it where the keyring would be used.
-    """
-
-    def __init__(self) -> None:
-        self.values: dict[str, str] = {}
-
-    def get(self, name: str) -> str | None:
-        return self.values.get(name)
-
-    def set(self, name: str, value: str) -> None:
-        self.values[name] = value
-
-    def delete(self, name: str) -> None:
-        self.values.pop(name, None)
 
 
 class ProviderSecretResolver:

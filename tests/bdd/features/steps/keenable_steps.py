@@ -1,13 +1,13 @@
 """Step definitions for Keenable BDD live scenarios."""
 
+import os
 from decimal import Decimal
 from typing import Any
 
 from behave import given, then, when  # type: ignore[import-untyped]
 from pydantic import HttpUrl
 
-from freesearch.configuration.provider_config import get_provider_secret_resolver
-from freesearch.infrastructure.secrets import ProviderName
+from freesearch.infrastructure.secrets import PROVIDER_ENV_VARS, ProviderName
 from freesearch.models.contracts import FetchRequest, SearchRequest, UsageOperation
 
 
@@ -18,7 +18,7 @@ def step_given_keenable_adapter(context: Any) -> None:
     assert context.adapter.name == "keenable", (
         f"Expected Keenable adapter, got '{context.adapter.name}'"
     )
-    assert get_provider_secret_resolver().get(ProviderName.KEENABLE) is None, (
+    assert os.environ.get(PROVIDER_ENV_VARS[ProviderName.KEENABLE]) is None, (
         "Keyless live scenario requires FREESEARCH_KEENABLE_API_KEY to be absent."
     )
 
@@ -101,7 +101,7 @@ def step_given_keenable_keyed_adapter(context: Any) -> None:
     assert context.adapter.name == "keenable", (
         f"Expected Keenable adapter, got '{context.adapter.name}'"
     )
-    assert get_provider_secret_resolver().get(ProviderName.KEENABLE) is not None, (
+    assert os.environ.get(PROVIDER_ENV_VARS[ProviderName.KEENABLE]) is not None, (
         "Keyed live scenario requires FREESEARCH_KEENABLE_API_KEY to be configured."
     )
 

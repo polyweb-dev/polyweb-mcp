@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import secrets
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -84,11 +85,14 @@ def _create_secret_file(path: Path, data: bytes) -> bool:
             os.link(temporary, path)
         except FileExistsError:
             return False
-        directory = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
+        # Opening a directory fd fails on Windows (PermissionError); the file
+        # data is already fsynced above, so the directory fsync is best-effort.
+        with suppress(OSError):
+            directory = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
         return True
     finally:
         if temporary.exists():

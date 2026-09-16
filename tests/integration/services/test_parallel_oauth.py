@@ -23,7 +23,6 @@ import pytest_asyncio
 from fastapi.testclient import TestClient
 from pydantic import SecretStr, ValidationError
 
-from freesearch.infrastructure.secrets import MemorySecretStore
 from freesearch.models.contracts import QuotaSnapshot, QuotaSource, UnitKind, UsageOperation
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
@@ -56,6 +55,22 @@ from freesearch.services.parallel_oauth import (
 )
 
 FIXED_NOW = datetime(2026, 9, 10, 12, 0, 0, tzinfo=UTC)
+
+
+class AsyncVaultDouble:
+    """Inline async dict double for the encrypted-DB vault (no keyring shim)."""
+
+    def __init__(self) -> None:
+        self.values: dict[str, str] = {}
+
+    async def get(self, name: str) -> str | None:
+        return self.values.get(name)
+
+    async def set(self, name: str, value: str) -> None:
+        self.values[name] = value
+
+    async def delete(self, name: str) -> None:
+        self.values.pop(name, None)
 
 
 @pytest_asyncio.fixture(autouse=True)
@@ -457,7 +472,7 @@ async def test_start_device_flow_persists_only_public_metadata(
     repository: SQLiteRepository,
 ) -> None:
     stub = _StubPlatform()
-    store = MemorySecretStore()
+    store = AsyncVaultDouble()
     caller = _client_for(stub)
     try:
         response = await start_device_flow(
@@ -474,9 +489,9 @@ async def test_start_device_flow_persists_only_public_metadata(
     assert response.user_code == "STUB-4821"
     assert response.expires_in == 1800
     assert response.interval == 5
-    assert store.get(DEVICE_SECRET_KEY) == "stub-device-code-1"
-    assert store.get(ACCESS_SECRET_KEY) is None
-    assert store.get(REFRESH_SECRET_KEY) is None
+    assert await store.get(DEVICE_SECRET_KEY) == "stub-device-code-1"
+    assert await store.get(ACCESS_SECRET_KEY) is None
+    assert await store.get(REFRESH_SECRET_KEY) is None
     payload = await repository.get_runtime_setting(METADATA_RUNTIME_KEY)
     assert isinstance(payload, dict)
     assert payload["status"] == "pending"
@@ -489,7 +504,7 @@ async def test_status_pending_then_ready_with_bounded_attempts(
     repository: SQLiteRepository,
 ) -> None:
     stub = _StubPlatform()
-    store = MemorySecretStore()
+    store = AsyncVaultDouble()
     caller = _client_for(stub)
     try:
         await start_device_flow(
@@ -523,8 +538,8 @@ async def test_status_pending_then_ready_with_bounded_attempts(
         assert fresh.status == "ready"
         assert fresh.expires_in == 3600
         assert len(stub.calls_to("/getServiceKeys/token")) == 2
-        assert store.get(ACCESS_SECRET_KEY) == "stub-access-token-1"
-        assert store.get(DEVICE_SECRET_KEY) is None
+        assert await store.get(ACCESS_SECRET_KEY) == "stub-access-token-1"
+        assert await store.get(DEVICE_SECRET_KEY) is None
         assert await is_oauth_ready(repository) is True
         again = await query_oauth_status(
             secret_store=store,
@@ -542,7 +557,7 @@ async def test_status_pending_then_ready_with_bounded_attempts(
 
 async def test_status_denied_is_terminal(repository: SQLiteRepository) -> None:
     stub = _StubPlatform()
-    store = MemorySecretStore()
+    store = AsyncVaultDouble()
     caller = _client_for(stub)
     try:
         await start_device_flow(
@@ -583,7 +598,7 @@ async def test_disconnect_revokes_before_deleting_and_is_idempotent(
     repository: SQLiteRepository,
 ) -> None:
     stub = _StubPlatform()
-    store = MemorySecretStore()
+    store = AsyncVaultDouble()
     caller = _client_for(stub)
     try:
         await start_device_flow(
@@ -622,9 +637,9 @@ async def test_disconnect_revokes_before_deleting_and_is_idempotent(
         assert "token_type_hint" not in revoke_bodies[1]
         assert dict(parse_qsl(revoke_bodies[0])).get("refresh_token") == "stub-access-token-1"
         assert dict(parse_qsl(revoke_bodies[1])).get("refresh_token") == "stub-refresh-token-1"
-        assert store.get(ACCESS_SECRET_KEY) is None
-        assert store.get(REFRESH_SECRET_KEY) is None
-        assert store.get(DEVICE_SECRET_KEY) is None
+        assert await store.get(ACCESS_SECRET_KEY) is None
+        assert await store.get(REFRESH_SECRET_KEY) is None
+        assert await store.get(DEVICE_SECRET_KEY) is None
         assert await is_oauth_ready(repository) is False
         await disconnect_oauth(
             secret_store=store,
@@ -641,14 +656,14 @@ async def test_disconnect_revokes_before_deleting_and_is_idempotent(
 
 
 async def _seed_ready_pair(
-    store: MemorySecretStore,
+    store: AsyncVaultDouble,
     repository: SQLiteRepository,
     *,
     access_expires_in: int,
     now: datetime = FIXED_NOW,
 ) -> None:
-    store.set(ACCESS_SECRET_KEY, "stub-access-token-1")
-    store.set(REFRESH_SECRET_KEY, "stub-refresh-token-1")
+    await store.set(ACCESS_SECRET_KEY, "stub-access-token-1")
+    await store.set(REFRESH_SECRET_KEY, "stub-refresh-token-1")
     await repository.set_runtime_setting(
         METADATA_RUNTIME_KEY,
         OAuthMetadata(
@@ -664,7 +679,7 @@ async def test_refresh_skew_avoids_network_when_fresh(
     repository: SQLiteRepository,
 ) -> None:
     stub = _StubPlatform()
-    store = MemorySecretStore()
+    store = AsyncVaultDouble()
     await _seed_ready_pair(store, repository, access_expires_in=61)
     caller = _client_for(stub)
     try:
@@ -688,7 +703,7 @@ async def test_refresh_skew_triggers_one_refresh_at_boundary(
 ) -> None:
     stub = _StubPlatform()
     stub.token_queue.append(_StubPlatform.token_success(expires_in=3600))
-    store = MemorySecretStore()
+    store = AsyncVaultDouble()
     await _seed_ready_pair(store, repository, access_expires_in=60)
     caller = _client_for(stub)
     try:
@@ -712,7 +727,7 @@ async def test_concurrent_refresh_is_single_flight(
 ) -> None:
     stub = _StubPlatform()
     stub.token_queue.append(_StubPlatform.token_success(expires_in=3600))
-    store = MemorySecretStore()
+    store = AsyncVaultDouble()
     await _seed_ready_pair(store, repository, access_expires_in=10)
     caller = _client_for(stub)
     try:
@@ -746,7 +761,7 @@ async def test_refresh_invalid_grant_unpairs_vault(
 ) -> None:
     stub = _StubPlatform()
     stub.token_queue.append(httpx.Response(400, json={"error": "invalid_grant"}))
-    store = MemorySecretStore()
+    store = AsyncVaultDouble()
     await _seed_ready_pair(store, repository, access_expires_in=10)
     caller = _client_for(stub)
     try:
@@ -761,8 +776,8 @@ async def test_refresh_invalid_grant_unpairs_vault(
     finally:
         await caller.aclose()
     assert status.status == "unpaired"
-    assert store.get(ACCESS_SECRET_KEY) is None
-    assert store.get(REFRESH_SECRET_KEY) is None
+    assert await store.get(ACCESS_SECRET_KEY) is None
+    assert await store.get(REFRESH_SECRET_KEY) is None
 
 
 # --- bounded balance poll: TTL, backoff, 401 ---
@@ -772,7 +787,7 @@ async def test_balance_poll_records_authoritative_snapshot(
     repository: SQLiteRepository,
 ) -> None:
     stub = _StubPlatform()
-    store = MemorySecretStore()
+    store = AsyncVaultDouble()
     await _seed_ready_pair(store, repository, access_expires_in=3600)
     caller = _client_for(stub)
     try:
@@ -815,7 +830,7 @@ async def test_balance_poll_accepts_float_cents_from_wire(
             },
         )
     )
-    store = MemorySecretStore()
+    store = AsyncVaultDouble()
     await _seed_ready_pair(store, repository, access_expires_in=3600)
     caller = _client_for(stub)
     try:
@@ -840,7 +855,7 @@ async def test_balance_poll_401_unpairs_and_backs_off(
 ) -> None:
     stub = _StubPlatform()
     stub.balance_queue.append(httpx.Response(401, json={"error": "denied"}))
-    store = MemorySecretStore()
+    store = AsyncVaultDouble()
     await _seed_ready_pair(store, repository, access_expires_in=3600)
     caller = _client_for(stub)
     try:
@@ -855,7 +870,7 @@ async def test_balance_poll_401_unpairs_and_backs_off(
             )
             is None
         )
-        assert store.get(ACCESS_SECRET_KEY) is None
+        assert await store.get(ACCESS_SECRET_KEY) is None
         assert await is_oauth_ready(repository) is False
         assert (
             await poll_oauth_balance_snapshot(
@@ -878,7 +893,7 @@ async def test_balance_poll_transient_failure_backs_off(
 ) -> None:
     stub = _StubPlatform()
     stub.balance_queue.append(httpx.Response(500, json={"error": "busy"}))
-    store = MemorySecretStore()
+    store = AsyncVaultDouble()
     await _seed_ready_pair(store, repository, access_expires_in=3600)
     caller = _client_for(stub)
     try:
@@ -921,7 +936,7 @@ async def test_balance_poll_skips_without_network_when_unpaired(
         assert (
             await poll_oauth_balance_snapshot(
                 repository,
-                secret_store=MemorySecretStore(),
+                secret_store=AsyncVaultDouble(),
                 http_client=caller,
                 now=FIXED_NOW,
             )
@@ -955,7 +970,7 @@ class _SeedLedgerDouble:
 async def test_seed_ledger_suppressed_while_oauth_ready(
     repository: SQLiteRepository,
 ) -> None:
-    store = MemorySecretStore()
+    store = AsyncVaultDouble()
     await _seed_ready_pair(store, repository, access_expires_in=3600)
     set_oauth_test_seams(secret_store=store)
     try:
@@ -975,7 +990,7 @@ async def test_oauth_balance_flows_through_refresh_quotas(
     repository: SQLiteRepository,
 ) -> None:
     stub = _StubPlatform()
-    store = MemorySecretStore()
+    store = AsyncVaultDouble()
     await _seed_ready_pair(store, repository, access_expires_in=3600)
     caller = _client_for(stub)
     set_oauth_test_seams(secret_store=store, http_client=caller)
@@ -993,7 +1008,7 @@ async def test_oauth_balance_flows_through_refresh_quotas(
 
 
 def _control_app(
-    repository: SQLiteRepository, store: MemorySecretStore, stub: _StubPlatform
+    repository: SQLiteRepository, store: AsyncVaultDouble, stub: _StubPlatform
 ) -> TestClient:
     app = create_app([], repository=repository, secret_store=store)
     client = _client_for(stub)
@@ -1005,7 +1020,7 @@ async def test_control_device_code_shape_and_presence(
     repository: SQLiteRepository,
 ) -> None:
     stub = _StubPlatform()
-    store = MemorySecretStore()
+    store = AsyncVaultDouble()
     app = _control_app(repository, store, stub)
     with app as client:
         response = client.post("/api/v1/providers/parallel/oauth/device-code")
@@ -1025,7 +1040,7 @@ async def test_control_status_shape_and_terminal_views(
     repository: SQLiteRepository,
 ) -> None:
     stub = _StubPlatform()
-    store = MemorySecretStore()
+    store = AsyncVaultDouble()
     app = _control_app(repository, store, stub)
     with app as client:
         assert client.get("/api/v1/providers/parallel/oauth/status").json() == {
@@ -1043,7 +1058,7 @@ async def test_control_rejects_other_and_unknown_providers(
     repository: SQLiteRepository,
 ) -> None:
     stub = _StubPlatform()
-    store = MemorySecretStore()
+    store = AsyncVaultDouble()
     app = _control_app(repository, store, stub)
     with app as client:
         for method, path in (
@@ -1063,7 +1078,7 @@ async def test_control_disconnect_is_idempotent_204(
     repository: SQLiteRepository,
 ) -> None:
     stub = _StubPlatform()
-    store = MemorySecretStore()
+    store = AsyncVaultDouble()
     app = _control_app(repository, store, stub)
     with app as client:
         assert client.delete("/api/v1/providers/parallel/oauth").status_code == 204
@@ -1079,7 +1094,7 @@ async def test_start_device_flow_conflicts_when_paired(
     from freesearch.services.parallel_oauth import OAuthAlreadyPaired
 
     stub = _StubPlatform()
-    store = MemorySecretStore()
+    store = AsyncVaultDouble()
     caller = _client_for(stub)
     try:
         await start_device_flow(
@@ -1111,7 +1126,7 @@ async def test_start_device_flow_conflicts_when_paired(
                 now=FIXED_NOW + timedelta(seconds=11),
             )
         assert len(stub.requests) == calls_before, "409 path must not touch the vendor"
-        assert store.get(ACCESS_SECRET_KEY) == "stub-access-token-1"
+        assert await store.get(ACCESS_SECRET_KEY) == "stub-access-token-1"
         assert await is_oauth_ready(repository) is True
     finally:
         await caller.aclose()
@@ -1121,7 +1136,7 @@ async def test_control_device_code_409_when_paired(
     repository: SQLiteRepository,
 ) -> None:
     stub = _StubPlatform()
-    store = MemorySecretStore()
+    store = AsyncVaultDouble()
     app = _control_app(repository, store, stub)
     with app as client:
         assert client.post("/api/v1/providers/parallel/oauth/device-code").status_code == 200
@@ -1138,7 +1153,7 @@ async def test_device_invalid_grant_fails_closed_to_expired(
 ) -> None:
     stub = _StubPlatform()
     stub.token_queue.append(httpx.Response(400, json={"error": "invalid_grant"}))
-    store = MemorySecretStore()
+    store = AsyncVaultDouble()
     caller = _client_for(stub)
     try:
         await start_device_flow(
@@ -1159,7 +1174,7 @@ async def test_device_invalid_grant_fails_closed_to_expired(
         )
         assert first.status == "expired"
         assert first.expires_in is None
-        assert store.get(DEVICE_SECRET_KEY) is None
+        assert await store.get(DEVICE_SECRET_KEY) is None
         calls = len(stub.calls_to("/getServiceKeys/token"))
         second = await query_oauth_status(
             secret_store=store,
@@ -1206,7 +1221,7 @@ async def test_will_invoice_tombstones_stale_authoritative(
             },
         )
     )
-    store = MemorySecretStore()
+    store = AsyncVaultDouble()
     await _seed_ready_pair(store, repository, access_expires_in=3600)
     await _record_authoritative(repository, "10.00")
     caller = _client_for(stub)
@@ -1235,7 +1250,7 @@ async def test_balance_401_tombstones_stale_authoritative(
 ) -> None:
     stub = _StubPlatform()
     stub.balance_queue.append(httpx.Response(401, json={"error": "denied"}))
-    store = MemorySecretStore()
+    store = AsyncVaultDouble()
     await _seed_ready_pair(store, repository, access_expires_in=3600)
     await _record_authoritative(repository, "10.00")
     caller = _client_for(stub)
@@ -1264,7 +1279,7 @@ async def test_disconnect_tombstones_stale_authoritative(
     repository: SQLiteRepository,
 ) -> None:
     stub = _StubPlatform()
-    store = MemorySecretStore()
+    store = AsyncVaultDouble()
     await _seed_ready_pair(store, repository, access_expires_in=3600)
     await _record_authoritative(repository, "10.00")
     caller = _client_for(stub)
@@ -1280,5 +1295,102 @@ async def test_disconnect_tombstones_stale_authoritative(
         assert stored is not None
         assert stored.source is QuotaSource.ESTIMATED
         assert stored.remaining is None
+    finally:
+        await caller.aclose()
+
+
+# --- Vault-only AC-5: unbound preflight fails closed before vendor HTTP ------
+
+
+async def test_unbound_store_resolves_fail_closed() -> None:
+    """AC-5: _resolve_secret_store(None) with no seam is the unbound store."""
+
+    from freesearch.services import parallel_oauth as oauth_module
+
+    oauth_module.clear_oauth_test_seams()
+    try:
+        from pydantic import SecretStr as _SecretStr
+
+        store = oauth_module._resolve_secret_store(None)
+        assert type(store).__name__ == "_UnboundSecretStore"
+        assert await oauth_module._store_get_secret(store, ACCESS_SECRET_KEY) is None
+        with pytest.raises(RuntimeError):
+            await oauth_module._store_set_secret(store, ACCESS_SECRET_KEY, _SecretStr("x"))
+    finally:
+        oauth_module.clear_oauth_test_seams()
+
+
+async def test_start_device_flow_preflights_writable_store_before_vendor_http(
+    repository: SQLiteRepository,
+) -> None:
+    """AC-5: unbound start_device_flow must fail before any vendor HTTP."""
+
+    from freesearch.services import parallel_oauth as oauth_module
+
+    oauth_module.clear_oauth_test_seams()
+    stub = _StubPlatform()
+    caller = _client_for(stub)
+    try:
+        require = getattr(oauth_module, "_require_writable_store", None)
+        assert callable(require), (
+            "RED (AC-5): parallel_oauth._require_writable_store must exist and be "
+            "awaited at start_device_flow entry before vendor HTTP"
+        )
+        with pytest.raises(RuntimeError):
+            await oauth_module.start_device_flow(
+                secret_store=None,
+                repository=repository,
+                http_client=caller,
+                platform_base_url="https://platform.test",
+                api_base_url="https://api.test",
+                now=FIXED_NOW,
+            )
+        assert stub.requests == [], (
+            "RED (AC-5): unbound preflight must run before vendor HTTP; "
+            f"got {len(stub.requests)} vendor calls"
+        )
+    finally:
+        await caller.aclose()
+        oauth_module.clear_oauth_test_seams()
+
+
+async def test_clear_vault_deletes_four_slots_with_tombstones(
+    repository: SQLiteRepository,
+) -> None:
+    """AC-5: _clear_vault deletes 4 slots; encrypted stores leave tombstones."""
+
+    from freesearch.services import parallel_oauth as oauth_module
+
+    store = AsyncVaultDouble()
+    await store.set(ACCESS_SECRET_KEY, "stub-access-token-1")
+    await store.set(REFRESH_SECRET_KEY, "stub-refresh-token-1")
+    await store.set(DEVICE_SECRET_KEY, "stub-device-code-1")
+    await store.set(oauth_module.CLIENT_SECRET_KEY, "stub-client-secret-1")
+
+    await oauth_module._clear_vault(store, repository)
+
+    assert await store.get(ACCESS_SECRET_KEY) is None
+    assert await store.get(REFRESH_SECRET_KEY) is None
+    assert await store.get(DEVICE_SECRET_KEY) is None
+    assert await store.get(oauth_module.CLIENT_SECRET_KEY) is None
+
+
+async def test_disconnect_unbound_returns_cleanly_without_vault_writes(
+    repository: SQLiteRepository,
+) -> None:
+    stub = _StubPlatform()
+    caller = _client_for(stub)
+    try:
+        assert (
+            await disconnect_oauth(
+                secret_store=None,
+                repository=repository,
+                http_client=caller,
+                platform_base_url="https://platform.test",
+                api_base_url="https://api.test",
+            )
+            is None
+        )
+        assert stub.requests == []
     finally:
         await caller.aclose()

@@ -9,6 +9,7 @@ local telemetry (usage and health observations) through
 """
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
@@ -29,10 +30,10 @@ from freesearch.adapters.registry import (
     close_adapters,
 )
 from freesearch.configuration.config import get_settings
+from freesearch.infrastructure.cryptography import SecretCodec, load_or_create_master_key
 from freesearch.infrastructure.encrypted_store import EncryptedDbSecretStore
 from freesearch.infrastructure.http import create_async_client
-from freesearch.infrastructure.secret_crypto import SecretCodec, load_or_create_master_key
-from freesearch.infrastructure.secrets import AsyncSecretStore, SecretStore
+from freesearch.infrastructure.secrets import AsyncSecretStore, ProviderName
 from freesearch.models.contracts import (
     FetchRequest,
     ProviderHealth,
@@ -55,6 +56,8 @@ from freesearch.services.routing import select_route
 # paths (e.g. ``build_adapters``/``close_adapters`` in lifecycle tests) keep
 # working. ``adapter_factory`` is consumed by ``routers/control.py``.
 
+logger = logging.getLogger(__name__)
+
 
 class _ServerState(TypedDict):
     """Tool-visible shared cells: the active repository and owned generation."""
@@ -62,7 +65,7 @@ class _ServerState(TypedDict):
     repository: SQLiteRepository | None
     client: httpx.AsyncClient | None
     routes: list[ProviderAdapter] | None
-    secret_store: SecretStore | AsyncSecretStore | None
+    secret_store: AsyncSecretStore | None
 
 
 def _quota_state_changed(current: QuotaSnapshot | None, projected: QuotaSnapshot) -> bool:
@@ -133,17 +136,46 @@ async def _build_generation(
     database: str | Path | None,
     owns_repository: bool,
 ) -> None:
-    """Create one owned generation (client, adapters, repository) and publish it."""
+    """Create one owned generation (client, adapters, repository) and publish it.
+
+    Adapters resolve their keys from the encrypted vault via the control-plane
+    helpers; providers without a vault key are skipped (Keenable's keyless
+    public tier excepted).
+    """
+
+    from freesearch.routers.control import (
+        _build_with_resolved_secret,
+        _resolve_secret,
+        effective_config_for_name,
+    )
 
     client = create_async_client()
     owned_routes: list[ProviderAdapter] = []
     try:
-        owned_routes = build_adapters(client)
         if owns_repository:
             state["repository"] = await SQLiteRepository.open(resolve_database_path(database))
         repository = state["repository"]
         if isinstance(repository, SQLiteRepository):
             state["secret_store"] = _encrypted_store(repository)
+        store = state["secret_store"]
+        if isinstance(repository, SQLiteRepository) and store is not None:
+            for provider in ProviderName:
+                config = await effective_config_for_name(repository, provider)
+                if not config.enabled:
+                    continue
+                key, _source = await _resolve_secret(provider, store)
+                if key is None and provider is not ProviderName.KEENABLE:
+                    continue
+                factory = adapter_factory(provider.value)
+                if factory is None:
+                    logger.warning("no adapter factory for provider %s", provider.value)
+                    continue
+                try:
+                    owned_routes.append(_build_with_resolved_secret(factory, client, key))
+                except Exception:
+                    continue
+        else:
+            owned_routes = build_adapters(client)
         await _apply_parallel_seed(owned_routes, repository)
     except BaseException:
         # A failed enter never increments: close the freshly built client and
@@ -173,7 +205,7 @@ async def _detach_generation(state: _ServerState, *, owns_repository: bool) -> N
 async def _route_state(
     repository: SQLiteRepository | None,
     active: Sequence[ProviderAdapter],
-    secret_store: SecretStore | AsyncSecretStore | None,
+    secret_store: AsyncSecretStore | None,
 ) -> tuple[dict[str, ProviderHealth], dict[str, QuotaSnapshot]]:
     """Collect routing state while degrading quota failures to unknown."""
 

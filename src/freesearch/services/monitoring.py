@@ -26,7 +26,7 @@ from pydantic import AwareDatetime, model_serializer
 
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.adapters.brave import COST_USD_PER_REQUEST, FREE_CREDITS_USD, brave_spend_usd
-from freesearch.infrastructure.secrets import AsyncSecretStore, ProviderName, SecretStore
+from freesearch.infrastructure.secrets import AsyncSecretStore, ProviderName
 from freesearch.models.contracts import (
     ContractModel,
     FetchResponse,
@@ -395,7 +395,7 @@ async def refresh_quotas(
     *,
     force: bool = False,
     now: datetime | None = None,
-    secret_store: SecretStore | AsyncSecretStore | None = None,
+    secret_store: AsyncSecretStore | None = None,
 ) -> list[QuotaSnapshot]:
     """Poll quota-capable adapters once per bounded TTL and persist snapshots."""
 
@@ -426,7 +426,7 @@ async def refresh_quotas(
 async def _poll_parallel_oauth_balance(
     repository: SQLiteRepository,
     observed_at: datetime,
-    secret_store: SecretStore | AsyncSecretStore | None,
+    secret_store: AsyncSecretStore | None,
 ) -> QuotaSnapshot | None:
     """Poll the paired Parallel Account API balance without touching adapter quotas."""
 

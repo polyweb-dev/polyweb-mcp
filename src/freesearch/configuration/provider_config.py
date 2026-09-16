@@ -4,8 +4,8 @@ This module is the provider-neutral runtime configuration surface for the
 planned routing and dashboard slices. It holds non-secret configuration only:
 provider enablement, deterministic priorities (lower values are preferred),
 local free-tier usage estimates, optional reset schedules, and a non-secret
-reference to the shared credential resolver. Provider credentials never appear
-here; they are resolved exclusively through :mod:`freesearch.secrets`.
+reference to the injected vault key. Provider credentials never appear
+here; they are resolved exclusively through the encrypted vault.
 """
 
 import json
@@ -23,7 +23,7 @@ from pydantic import (
 )
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from freesearch.infrastructure.secrets import ProviderName, ProviderSecretResolver
+from freesearch.infrastructure.secrets import ProviderName
 from freesearch.models.contracts import QuotaSource, UsageOperation
 
 
@@ -228,10 +228,3 @@ def get_provider_configs() -> dict[ProviderName, ProviderConfig]:
 
 # Public alias so tests and callers can reset the cached registry.
 get_provider_configs.cache_clear = _provider_registry.cache_clear  # type: ignore[attr-defined]
-
-
-@lru_cache(maxsize=1)
-def get_provider_secret_resolver() -> ProviderSecretResolver:
-    """Compatibility seam returning an unbound, vault-only resolver."""
-
-    return ProviderSecretResolver()

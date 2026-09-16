@@ -31,8 +31,8 @@ from freesearch.services.parallel_oauth import (
 from tests.encrypted_secrets_helpers import (
     assert_no_sentinels,
     maybe_await,
+    require_cryptography,
     require_encrypted_store_module,
-    require_secret_crypto,
 )
 from tests.integration.services.oauth.oauth_stubs import (
     ACCESS_TOKEN_VALUE,
@@ -79,7 +79,7 @@ def make_enc_store(repository, tmp_path):  # type: ignore[no-untyped-def]
     """Build the encrypted store inside the test body so Red shows as FAIL."""
 
     def _build():  # type: ignore[no-untyped-def]
-        crypto = require_secret_crypto()
+        crypto = require_cryptography()
         store_module = require_encrypted_store_module()
         master = crypto.load_or_create_master_key(key_file=tmp_path / ".secret_key")
         return store_module.EncryptedDbSecretStore(repository, crypto.SecretCodec(master))

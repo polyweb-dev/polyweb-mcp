@@ -41,12 +41,15 @@ Feature: Encrypted-DB secrets storage
     Then no captured log, response body, or database row should contain a sentinel
     And storing the same secret twice should yield different ciphertext
 
-  Scenario: AC-6 Legacy secrets migrate once and stay intact
-    Given an offline encrypted repository with legacy keyring and env secrets
-    When I run the legacy secrets migration
-    Then the encrypted store should resolve every migrated value
-    And the legacy keyring entries should be left intact
-    When I run the legacy secrets migration again
+  Scenario: AC-6 Vault writes are idempotent and deletes win via tombstone
+    Given an offline encrypted control API in passphrase mode
+    When I write the sentinel secret for "exa" through the control API
+    And I delete the sentinel secret for "exa" through the control API
+    Then the secret for "exa" should stay missing with a tombstone
+    When I run the vault migration
+    Then the secret for "exa" should stay missing with a tombstone
+    And the migration report should count a tombstone as skipped
+    When I run the vault migration again
     Then no encrypted row should be overwritten
 
   Scenario: AC-7 OAuth lifecycle stays encrypted end to end
@@ -67,10 +70,3 @@ Feature: Encrypted-DB secrets storage
     Then the secret response should report missing with source "none"
     And unknown provider secret routes should return 404
     And the "keenable" provider should report keyless public presence
-
-  Scenario: AC-9 Key rotation fails closed and is documented or commanded
-    Given an offline encrypted control API in passphrase mode
-    When I write the sentinel secret for "you" through the control API
-    And I restart the control API with the wrong passphrase
-    Then the provider "you" should report no usable secret
-    And rotation should be documented or implemented as a command

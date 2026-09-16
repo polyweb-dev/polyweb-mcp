@@ -13,7 +13,6 @@ provider, secret, and routing-policy endpoints.
 """
 
 import asyncio
-import os
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
@@ -25,18 +24,13 @@ from fastapi import FastAPI, HTTPException
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.adapters.registry import adapter_factory, build_adapters, close_adapters
 from freesearch.configuration.config import get_settings
+from freesearch.infrastructure.cryptography import SecretCodec, load_or_create_master_key
 from freesearch.infrastructure.encrypted_store import (
     EncryptedDbSecretStore,
     migrate_legacy_secrets_to_encrypted_db,
 )
 from freesearch.infrastructure.http import create_async_client
-from freesearch.infrastructure.secret_crypto import SecretCodec, load_or_create_master_key
-from freesearch.infrastructure.secrets import (
-    AsyncSecretStore,
-    KeyringSecretStore,
-    ProviderName,
-    SecretStore,
-)
+from freesearch.infrastructure.secrets import AsyncSecretStore, ProviderName
 from freesearch.mcp.server import _apply_parallel_seed
 from freesearch.models.contracts import (
     CostPreset,
@@ -75,7 +69,7 @@ async def _build_app_adapters(
     repository: SQLiteRepository,
     routes: list[ProviderAdapter],
     client: httpx.AsyncClient | None,
-    store: SecretStore | AsyncSecretStore,
+    store: AsyncSecretStore,
 ) -> None:
     """Build enabled adapters from app-scoped encrypted vault secrets."""
 
@@ -100,18 +94,17 @@ def create_app(
     repository: SQLiteRepository | None = None,
     *,
     database: str | Path | None = None,
-    secret_store: SecretStore | AsyncSecretStore | None = None,
+    secret_store: AsyncSecretStore | None = None,
 ) -> FastAPI:
     """Create the FastAPI app routing every operation to a configured adapter.
 
     After the repository opens, the default store is encrypted runtime settings
-    backed by the local master key. A local keyring is consulted only for the
-    one-shot legacy import; injected ``secret_store`` values remain offline seams.
-    On-demand adapter construction receives the resolved app-scoped vault key.
+    backed by the local master key; injected ``secret_store`` values remain
+    offline seams. On-demand adapter construction receives the resolved
+    app-scoped vault key.
     """
 
     owns_client = adapters is None
-    environ_snapshot = dict(os.environ)
     client = create_async_client() if owns_client else None
     routes = list(adapters) if adapters is not None else []
     # The repository is owned only when neither adapters nor a repository was
@@ -145,12 +138,9 @@ def create_app(
                 and repo is not None
                 and isinstance(app.state.secret_store, EncryptedDbSecretStore)
             ):
-                legacy_store = KeyringSecretStore(get_settings().secret_service_name)
                 await migrate_legacy_secrets_to_encrypted_db(
                     repository=repo,
                     encrypted_store=app.state.secret_store,
-                    legacy_store=legacy_store,
-                    environ_snapshot=environ_snapshot,
                 )
             if adapters is None:
                 if isinstance(repo, SQLiteRepository):
@@ -275,7 +265,7 @@ def _pin_free_first(ordered: list[ProviderAdapter], preset: CostPreset) -> list[
 async def _routing_state(
     repository: SQLiteRepository | None,
     routes: Sequence[ProviderAdapter],
-    secret_store: SecretStore | AsyncSecretStore,
+    secret_store: AsyncSecretStore,
 ) -> tuple[dict[str, ProviderHealth], dict[str, QuotaSnapshot]]:
     """Refresh bounded quota state and collect health/quota maps for routing."""
 
@@ -302,7 +292,7 @@ async def _plan_route(
     request: SearchRequest | FetchRequest,
     routes: Sequence[ProviderAdapter],
     repository: SQLiteRepository | None,
-    secret_store: SecretStore | AsyncSecretStore,
+    secret_store: AsyncSecretStore,
 ) -> tuple[ProviderAdapter, ...]:
     """Return the ordered adapters to attempt for ``request``.
 
@@ -350,7 +340,7 @@ async def _dispatch[
     *,
     routes: Sequence[ProviderAdapter],
     repository: SQLiteRepository | None,
-    secret_store: SecretStore | AsyncSecretStore,
+    secret_store: AsyncSecretStore,
 ) -> ResponseT:
     """Run the routed adapter call for the best policy-ordered candidate.
 
@@ -379,8 +369,7 @@ def main() -> None:
     """Serve the API with uvicorn on loopback:8001 (Swagger at /docs).
 
     The default store encrypts provider and OAuth secrets in local SQLite.
-    The keyring is consulted only for the one-shot legacy import; injected
-    stores remain available for offline tests.
+    Injected stores remain available for offline tests.
     """
     import uvicorn
 

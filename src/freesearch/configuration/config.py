@@ -7,7 +7,7 @@ from typing import Literal
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from freesearch.infrastructure.secret_crypto import DEFAULT_KEY_FILE
+from freesearch.infrastructure.cryptography import DEFAULT_KEY_FILE
 
 
 class Settings(BaseSettings):
@@ -33,7 +33,6 @@ class Settings(BaseSettings):
     http_max_connections: int = Field(default=20, gt=0)
     http_max_keepalive_connections: int = Field(default=10, gt=0)
     user_agent: str = "FreeSearch/0.1"
-    secret_service_name: str = "freesearch"
     encryption_key: SecretStr | None = Field(default=None, repr=False)
     encryption_key_file: Path = DEFAULT_KEY_FILE
 

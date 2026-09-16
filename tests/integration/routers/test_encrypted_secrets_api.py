@@ -22,7 +22,6 @@ from fastapi.testclient import TestClient
 
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.configuration.config import get_settings
-from freesearch.configuration.provider_config import get_provider_secret_resolver
 from freesearch.infrastructure.secrets import PROVIDER_ENV_VARS, ProviderName
 from freesearch.models.contracts import (
     CostEstimate,
@@ -121,7 +120,7 @@ async def repository(tmp_path: Path):  # type: ignore[no-untyped-def]
 
 @pytest.fixture
 def passphrase_env(monkeypatch, tmp_path):  # type: ignore[no-untyped-def]
-    """Pin passphrase-mode wiring with hermetic caches and no real keyring.
+    """Pin passphrase-mode wiring with hermetic caches (vault-only, no keyring).
 
     The key-file/salt path is pinned inside ``tmp_path`` so passphrase-mode
     salt files never touch the real home directory.
@@ -129,15 +128,12 @@ def passphrase_env(monkeypatch, tmp_path):  # type: ignore[no-untyped-def]
 
     monkeypatch.setenv("FREESEARCH_ENCRYPTION_KEY", PASSPHRASE)
     monkeypatch.setenv("FREESEARCH_ENCRYPTION_KEY_FILE", str(tmp_path / ".secret_key"))
-    monkeypatch.setenv("PYTHON_KEYRING_BACKEND", "keyring.backends.fail.Keyring")
     monkeypatch.delenv(PROVIDER_ENV_VARS[ProviderName.EXA], raising=False)
     get_settings.cache_clear()
-    get_provider_secret_resolver.cache_clear()
     try:
         yield
     finally:
         get_settings.cache_clear()
-        get_provider_secret_resolver.cache_clear()
 
 
 def _put_secret(client: TestClient, provider: str, key: str):  # type: ignore[no-untyped-def]
@@ -324,7 +320,6 @@ async def test_wrong_passphrase_degrades_reads_without_crash_or_leak(
 
     monkeypatch.setenv("FREESEARCH_ENCRYPTION_KEY", WRONG_PASSPHRASE)
     get_settings.cache_clear()
-    get_provider_secret_resolver.cache_clear()
     second = await SQLiteRepository.open(db_path)
     try:
         app = create_app([ControlAdapter("exa")], repository=second)

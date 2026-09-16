@@ -36,14 +36,14 @@ _STORE_ATTRS = (
 )
 
 
-def require_secret_crypto() -> Any:
-    """Return the ``secret_crypto`` module or fail Red while it is missing."""
+def require_cryptography() -> Any:
+    """Return the ``cryptography`` module or fail Red while it is missing."""
 
     try:
-        return import_module("freesearch.infrastructure.secret_crypto")
+        return import_module("freesearch.infrastructure.cryptography")
     except ImportError as exc:
         raise AssertionError(
-            "RED (AC-1/AC-2/AC-4): freesearch.infrastructure.secret_crypto "
+            "RED (AC-1/AC-2/AC-4): freesearch.infrastructure.cryptography "
             "is not implemented yet (PLAN.md section 2a)"
         ) from exc
 

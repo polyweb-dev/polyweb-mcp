@@ -24,8 +24,8 @@ and self-heals to unpaired when corrupt.
 
 The encrypted database SecretStore keeps bearer slots as AES-GCM envelopes in
 ``runtime_settings``; only non-secret pairing metadata remains plaintext JSON.
-The encrypted database vault is the only runtime credential source; a local
-keyring is consulted only during the one-shot legacy import.
+The encrypted database vault is the only runtime credential source; there is
+no legacy fallback.
 
 Balance mapping is Decimal-exact (whole cents, never float math): the wire
 schema types both cent fields as JSON numbers, so integral floats (1250.0)
@@ -59,7 +59,7 @@ from pydantic import Field, SecretStr, ValidationError, field_validator
 
 from freesearch.infrastructure.http import create_async_client
 from freesearch.infrastructure.logging import redact_secrets
-from freesearch.infrastructure.secrets import AsyncSecretStore, SecretStore
+from freesearch.infrastructure.secrets import AsyncSecretStore
 from freesearch.models.contracts import ContractModel, QuotaSnapshot, QuotaSource, UnitKind
 from freesearch.persistence.storage import SQLiteRepository
 
@@ -503,22 +503,23 @@ def _token_grant(payload: dict[str, Any]) -> TokenGrant:
     )
 
 
-SecretBackend = SecretStore | AsyncSecretStore
+SecretBackend = AsyncSecretStore
 
 
 class _UnboundSecretStore:
     """Fail closed until an encrypted vault is explicitly supplied."""
 
-    def get(self, name: str) -> None:
+    async def get(self, name: str) -> None:
         del name
         return None
 
-    def set(self, name: str, value: str) -> None:
+    async def set(self, name: str, value: str) -> None:
         del name, value
         raise RuntimeError("encrypted secret store is not configured")
 
-    def delete(self, name: str) -> None:
+    async def delete(self, name: str) -> None:
         del name
+        raise RuntimeError("encrypted secret store is not configured")
 
 
 def _resolve_secret_store(explicit: SecretBackend | None) -> SecretBackend:
@@ -527,6 +528,13 @@ def _resolve_secret_store(explicit: SecretBackend | None) -> SecretBackend:
     if _test_secret_store is not None:
         return _test_secret_store
     return _UnboundSecretStore()
+
+
+async def _require_writable_store(store: SecretBackend) -> None:
+    """Fail closed when no encrypted vault is bound; preflight before vendor HTTP."""
+
+    if isinstance(store, _UnboundSecretStore):
+        raise RuntimeError("encrypted secret store is not configured")
 
 
 @asynccontextmanager
@@ -769,6 +777,7 @@ async def start_device_flow(
     """
 
     store = _resolve_secret_store(secret_store)
+    await _require_writable_store(store)
     if await _store_get_secret(store, ACCESS_SECRET_KEY) is not None:
         raise OAuthAlreadyPaired(
             "parallel OAuth is already paired; disconnect before starting a new device flow"

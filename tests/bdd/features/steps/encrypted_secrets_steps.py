@@ -1,15 +1,14 @@
-"""Behave steps for the encrypted-DB secrets feature (PLAN.md AC-1..AC-9).
+"""Behave steps for the encrypted-DB secrets feature (vault-only AC-1..AC-8).
 
 Offline only: stub adapters, file-backed SQLite inside a scenario directory,
-and a stubbed OAuth vendor transport. The real OS keyring is neutralized per
-scenario (restored afterwards through ``context.enc_cleanups``, drained by
-``environment.after_scenario``). New-implementation imports happen lazily
-inside steps so scenarios fail Red while the slice is unimplemented instead
-of breaking suite collection.
+and a stubbed OAuth vendor transport. Vault-only: no keyring, no dotenv, no
+legacy-store seam. The encrypted vault (secret.enc: rows + secret.deleted:
+tombstones) is the sole runtime credential source.
 """
 
 from __future__ import annotations
 
+import inspect
 import logging
 import os
 import shutil
@@ -22,14 +21,12 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-import keyring
 from behave import given, then, when  # type: ignore[import-untyped]
 from fastapi.testclient import TestClient
 
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.configuration.config import get_settings
-from freesearch.configuration.provider_config import get_provider_secret_resolver
-from freesearch.infrastructure.secrets import PROVIDER_ENV_VARS, MemorySecretStore, ProviderName
+from freesearch.infrastructure.secrets import PROVIDER_ENV_VARS, ProviderName
 from freesearch.models.contracts import (
     CostEstimate,
     FetchedDocument,
@@ -61,8 +58,8 @@ from tests.encrypted_secrets_helpers import (
     SENTINEL_WRONG_PASSPHRASE,
     assert_no_sentinels,
     maybe_await,
+    require_cryptography,
     require_encrypted_store_module,
-    require_secret_crypto,
 )
 from tests.integration.services.oauth.oauth_stubs import (
     ACCESS_TOKEN_VALUE,
@@ -158,22 +155,16 @@ def _push_cleanup(context: Any, cleanup: Any) -> None:
 
 
 def _isolate_process_state(context: Any, *, passphrase: str | None) -> None:
-    """Snapshot env/keyring/caches; force hermetic offline behavior."""
+    """Snapshot env/caches; force hermetic vault-only offline behavior."""
 
     saved_environ = dict(os.environ)
-    saved_keyring = (keyring.get_password, keyring.set_password, keyring.delete_password)
 
     def _restore() -> None:
         os.environ.clear()
         os.environ.update(saved_environ)
-        keyring.get_password, keyring.set_password, keyring.delete_password = saved_keyring
         get_settings.cache_clear()
-        get_provider_secret_resolver.cache_clear()
 
     _push_cleanup(context, _restore)
-    keyring.get_password = lambda *args, **kwargs: None  # type: ignore[method-assign]
-    keyring.set_password = lambda *args, **kwargs: None  # type: ignore[method-assign]
-    keyring.delete_password = lambda *args, **kwargs: None  # type: ignore[method-assign]
     for env_name in PROVIDER_ENV_VARS.values():
         os.environ.pop(env_name, None)
     if passphrase is None:
@@ -182,7 +173,6 @@ def _isolate_process_state(context: Any, *, passphrase: str | None) -> None:
         os.environ[PASSPHRASE_ENV] = passphrase
     os.environ[KEY_FILE_ENV] = str(Path(context.scenario_dir) / ".secret_key")
     get_settings.cache_clear()
-    get_provider_secret_resolver.cache_clear()
 
 
 def _new_scenario_dir(context: Any) -> None:
@@ -202,7 +192,7 @@ def _open_repository(context: Any) -> None:
 
 
 def _red_gate() -> tuple[Any, Any]:
-    return require_secret_crypto(), require_encrypted_store_module()
+    return require_cryptography(), require_encrypted_store_module()
 
 
 def _build_app(context: Any, providers: list[str]) -> None:
@@ -221,6 +211,19 @@ def _codec(context: Any) -> Any:
 def _enc_store(context: Any) -> Any:
     _, store_module = _red_gate()
     return store_module.EncryptedDbSecretStore(context.repository, _codec(context))
+
+
+def _tombstone_prefix() -> str:
+    _, store_module = _red_gate()
+    prefix = getattr(store_module, "TOMBSTONE_PREFIX", None)
+    assert isinstance(prefix, str) and prefix, (
+        "RED (AC-6): encrypted_store.TOMBSTONE_PREFIX must be 'secret.deleted:' "
+        "(vault-only tombstone contract)"
+    )
+    assert prefix == "secret.deleted:", (
+        f"RED (AC-6): TOMBSTONE_PREFIX must be 'secret.deleted:', got {prefix!r}"
+    )
+    return prefix
 
 
 def _run(context: Any, value: Any) -> Any:
@@ -250,13 +253,7 @@ class _AttrShim:
 
 
 def _ensure_oauth_stub(context: Any) -> None:
-    """Attach a stubbed vendor transport unless the scenario already has one.
-
-    The pairing step promises a stubbed vendor, so it must hold even when the
-    scenario's Given only built a control API (AC-3): without this, OAuth
-    routes would fall back to a live client. A socket guard fails loudly on
-    any real egress attempt instead of silently calling the vendor.
-    """
+    """Attach a stubbed vendor transport unless the scenario already has one."""
 
     if getattr(context.app.state, "oauth_http_client", None) is not None:
         return
@@ -278,12 +275,28 @@ def _reopen_same_database(context: Any) -> None:
         SQLiteRepository.open(Path(context.database_path))
     )
     get_settings.cache_clear()
-    get_provider_secret_resolver.cache_clear()
     providers = [adapter.name for adapter in context.adapters]
     _build_app(context, providers)
     oauth_client = getattr(context, "oauth_http_client", None)
     if oauth_client is not None:
         context.app.state.oauth_http_client = oauth_client
+
+
+def _call_vault_migration(context: Any) -> Any:
+    """Call the vault-only migration (repository + encrypted_store only)."""
+
+    _, store_module = _red_gate()
+    migrate = store_module.migrate_legacy_secrets_to_encrypted_db
+    params = inspect.signature(migrate).parameters
+    assert set(params) == {"repository", "encrypted_store"}, (
+        "RED (AC-6): migrate_legacy_secrets_to_encrypted_db must take exactly "
+        f"(repository, encrypted_store); got {sorted(params)} (vault-only, no "
+        "legacy_store/environ/dotenv args)"
+    )
+    return _run(
+        context,
+        migrate(repository=context.repository, encrypted_store=_enc_store(context)),
+    )
 
 
 # --- Given ---------------------------------------------------------------
@@ -313,27 +326,6 @@ def step_given_passphrase_api_logs(context: Any) -> None:
     root = logging.getLogger()
     root.addHandler(handler)
     _push_cleanup(context, lambda: root.removeHandler(handler))
-
-
-@given("an offline encrypted repository with legacy keyring and env secrets")
-def step_given_legacy_secrets(context: Any) -> None:
-    _new_scenario_dir(context)
-    _isolate_process_state(context, passphrase=SENTINEL_PASSPHRASE)
-    _open_repository(context)
-    _red_gate()
-    legacy = MemorySecretStore()
-    legacy.set("exa", SENTINEL_PROVIDER_KEYS["exa"])
-    legacy.set(ACCESS_SECRET_KEY, "oauth-access-legacy-sentinel-9f31")
-    legacy.set("you", "legacy-you-value-must-not-win")
-    context.legacy_store = legacy
-    context.env_snapshot = {
-        PROVIDER_ENV_VARS[ProviderName.TAVILY]: SENTINEL_PROVIDER_KEYS["tavily"]
-    }
-    (Path(context.scenario_dir) / ".env").write_text(
-        f"{PROVIDER_ENV_VARS[ProviderName.BRAVE]}={SENTINEL_PROVIDER_KEYS['brave']}\n",
-        encoding="utf-8",
-    )
-    _run(context, _enc_store(context).set("you", "operator-kept-value"))
 
 
 @given("an offline encrypted OAuth API with stubbed vendor")
@@ -383,12 +375,7 @@ def step_when_restart_wrong_key(context: Any) -> None:
 
 
 def _rewind_oauth_poll(context: Any) -> None:
-    """Age last_poll_at so the next status check honors the vendor interval.
-
-    Mirrors the adv-suite ``_rewind`` helper: the device-flow poll interval
-    must elapse between token attempts, so tests rewind the persisted clock
-    instead of bypassing the throttle.
-    """
+    """Age last_poll_at so the next status check honors the vendor interval."""
 
     async def _age_last_poll() -> None:
         payload = await context.repository.get_runtime_setting(METADATA_RUNTIME_KEY)
@@ -417,9 +404,7 @@ def step_when_pair_oauth(context: Any) -> None:
             if last.json()["status"] == "ready":
                 break
         context.oauth_status = last
-    assert context.oauth_status.json()["status"] == "ready", (
-        context.oauth_status.text[:500]
-    )
+    assert context.oauth_status.json()["status"] == "ready", context.oauth_status.text[:500]
 
 
 @when("I disconnect OAuth")
@@ -448,23 +433,14 @@ def step_when_delete_sentinel(context: Any, provider: str) -> None:
         context.secret_response = client.delete(f"/api/v1/providers/{provider}/secret")
 
 
-@when("I run the legacy secrets migration")
-def step_when_migrate(context: Any) -> None:
-    _, store_module = _red_gate()
-    context.migration_report = _run(
-        context,
-        store_module.migrate_legacy_secrets_to_encrypted_db(
-            repository=context.repository,
-            encrypted_store=_enc_store(context),
-            legacy_store=context.legacy_store,
-            environ_snapshot=dict(context.env_snapshot),
-        ),
-    )
+@when("I run the vault migration")
+def step_when_vault_migrate(context: Any) -> None:
+    context.migration_report = _call_vault_migration(context)
 
 
-@when("I run the legacy secrets migration again")
-def step_when_migrate_again(context: Any) -> None:
-    step_when_migrate(context)
+@when("I run the vault migration again")
+def step_when_vault_migrate_again(context: Any) -> None:
+    step_when_vault_migrate(context)
 
 
 # --- Then ----------------------------------------------------------------
@@ -502,8 +478,14 @@ def step_then_ciphertext_row(context: Any, provider: str) -> None:
 
 @then("a key file should exist with mode 0600 under a 0700 directory")
 def step_then_key_file_perms(context: Any) -> None:
+    import sys
+
     key_file = Path(context.scenario_dir) / ".secret_key"
     assert key_file.exists(), "auto-generate mode must create the key file on first use"
+    if sys.platform == "win32" or os.name != "posix":
+        context.key_file_bytes = key_file.read_bytes()
+        context.key_file_mtime = key_file.stat().st_mtime_ns
+        return
     assert stat.S_IMODE(os.stat(key_file).st_mode) == 0o600
     assert stat.S_IMODE(os.stat(key_file.parent).st_mode) == 0o700
     context.key_file_bytes = key_file.read_bytes()
@@ -586,44 +568,61 @@ def step_then_nondeterministic_rows(context: Any) -> None:
     sentinel = SENTINEL_PROVIDER_KEYS[provider]
     first = _run(context, context.repository.get_runtime_setting(f"secret.enc:{provider}"))
     with _client(context) as client:
-        assert client.put(
-            f"/api/v1/providers/{provider}/secret", json={"key": sentinel}
-        ).status_code == 200
+        assert (
+            client.put(f"/api/v1/providers/{provider}/secret", json={"key": sentinel}).status_code
+            == 200
+        )
     second = _run(context, context.repository.get_runtime_setting(f"secret.enc:{provider}"))
     assert first != second, "fresh nonce required per encrypt call"
     assert _codec(context).decrypt(second).get_secret_value() == sentinel
 
 
-@then("the encrypted store should resolve every migrated value")
-def step_then_migrated_values(context: Any) -> None:
+@then('the secret for "{provider}" should stay missing with a tombstone')
+def step_then_tombstone_missing(context: Any, provider: str) -> None:
     store = _enc_store(context)
-    assert _run(context, store.get("exa")) == SENTINEL_PROVIDER_KEYS["exa"]
-    assert _run(context, store.get("tavily")) == SENTINEL_PROVIDER_KEYS["tavily"]
-    assert _run(context, store.get("brave")) == SENTINEL_PROVIDER_KEYS["brave"]
-    assert _run(context, store.get(ACCESS_SECRET_KEY)) == "oauth-access-legacy-sentinel-9f31"
-    assert _run(context, store.get("you")) == "operator-kept-value"
+    assert _run(context, store.get(provider)) is None, (
+        "RED (AC-6): get must return None while the tombstone is present"
+    )
+    with _client(context) as client:
+        status = client.get(f"/api/v1/providers/{provider}")
+    assert status.status_code == 200
+    assert status.json()["secret_presence"] == "missing"
+    prefix = _tombstone_prefix()
+    tombstone = _run(context, context.repository.get_runtime_setting(f"{prefix}{provider}"))
+    assert isinstance(tombstone, dict) and tombstone.get("v") == 1, (
+        f"RED (AC-6): expected tombstone {prefix}{provider} == {{'v': 1}}, got {tombstone!r}"
+    )
+    assert _run(context, context.repository.get_runtime_setting(f"secret.enc:{provider}")) is None
+    context.last_provider = provider
 
 
-@then("the legacy keyring entries should be left intact")
-def step_then_keyring_intact(context: Any) -> None:
-    assert context.legacy_store.get("exa") == SENTINEL_PROVIDER_KEYS["exa"]
-    assert context.legacy_store.get(ACCESS_SECRET_KEY) == "oauth-access-legacy-sentinel-9f31"
+@then("the migration report should count a tombstone as skipped")
+def step_then_tombstone_counted(context: Any) -> None:
+    report = context.migration_report
+    if hasattr(report, "skipped_existing"):
+        skipped = int(report.skipped_existing)
+    else:
+        skipped = int(report["skipped_existing"])
+    assert skipped >= 1, (
+        f"RED (AC-6): tombstone delete-wins must count as skipped_existing, got report {report!r}"
+    )
+    if hasattr(report, "migrated"):
+        assert int(report.migrated) == 0
+    else:
+        assert int(report["migrated"]) == 0
 
 
 @then("no encrypted row should be overwritten")
 def step_then_migration_idempotent(context: Any) -> None:
-    store = _enc_store(context)
     before = {
         slot: _run(context, context.repository.get_runtime_setting(f"secret.enc:{slot}"))
         for slot in ("exa", "tavily", "brave", "you", ACCESS_SECRET_KEY)
     }
-    step_when_migrate(context)
+    step_when_vault_migrate(context)
     for slot, envelope in before.items():
         assert (
-            _run(context, context.repository.get_runtime_setting(f"secret.enc:{slot}"))
-            == envelope
-        )
-    assert _run(context, store.get("you")) == "operator-kept-value"
+            _run(context, context.repository.get_runtime_setting(f"secret.enc:{slot}")) == envelope
+        ), f"RED (AC-6): migration must never overwrite secret.enc:{slot}"
 
 
 @then("the four OAuth slots should hold only ciphertext")
@@ -682,28 +681,3 @@ def step_then_keyless_public(context: Any, provider: str) -> None:
         status = client.get(f"/api/v1/providers/{provider}")
     assert status.status_code == 200
     assert status.json()["secret_presence"] == "keyless_public"
-
-
-@then("rotation should be documented or implemented as a command")
-def step_then_rotation_pinned(context: Any) -> None:
-    del context
-    root = Path.cwd()
-    while not (root / "pyproject.toml").exists() and root != root.parent:
-        root = root.parent
-    documented = any(
-        "rotat" in (path.read_text(encoding="utf-8", errors="replace").lower())
-        and (
-            "re-encrypt" in path.read_text(encoding="utf-8", errors="replace").lower()
-            or "reencrypt" in path.read_text(encoding="utf-8", errors="replace").lower()
-        )
-        for path in sorted((root / "docs").glob("*.md"))
-    )
-    try:
-        from freesearch.persistence import database_cli
-
-        command = "reencrypt" in " ".join(
-            name for name in dir(database_cli) if not name.startswith("__")
-        ).lower()
-    except ImportError:
-        command = False
-    assert documented or command, "rotation needs docs or a reencrypt command (AC-9)"

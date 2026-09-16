@@ -18,7 +18,6 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from freesearch.adapters.base import ProviderAdapter
-from freesearch.infrastructure.secrets import MemorySecretStore
 from freesearch.models.contracts import (
     CostEstimate,
     FetchedDocument,
@@ -85,18 +84,24 @@ class _ParallelStubAdapter(ProviderAdapter):
 VAULT_KEYS = (ACCESS_SECRET_KEY, REFRESH_SECRET_KEY, DEVICE_SECRET_KEY, CLIENT_SECRET_KEY)
 
 
-class RecordingSecretStore(MemorySecretStore):
-    """Keyring double that observes delete ordering for revoke-before-delete."""
+class RecordingSecretStore:
+    """Dict-backed vault double that observes delete ordering for revoke-before-delete."""
 
     def __init__(self) -> None:
-        super().__init__()
+        self.values: dict[str, str] = {}
         self.order: list[str] = []
         self.delete_calls: int = 0
+
+    def get(self, name: str) -> str | None:
+        return self.values.get(name)
+
+    def set(self, name: str, value: str) -> None:
+        self.values[name] = value
 
     def delete(self, name: str) -> None:
         self.delete_calls += 1
         self.order.append("store-delete:" + name)
-        super().delete(name)
+        self.values.pop(name, None)
 
 
 @pytest.fixture

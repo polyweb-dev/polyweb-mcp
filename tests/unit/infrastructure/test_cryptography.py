@@ -1,9 +1,8 @@
 """Unit acceptance for the encrypted-DB master key and AES-256-GCM codec.
 
-Covers PLAN.md AC-1 (passphrase mode + KDF), AC-2 (auto-generated key file
-with strict perms + atomic write), AC-4 (wrong key fails closed + redacted),
-AC-5 (opaque non-deterministic envelopes), and the AC-9 no-silent-regeneration
-pin. Fails Red while ``secret_crypto.py`` is unimplemented.
+Covers vault-only AC-3 (passphrase via FREESEARCH_ENCRYPTION_KEY with
+PBKDF2+salt, file fallback via Settings.encryption_key_file, strict perms).
+Focused: PBKDF2/env-vs-file, wrong-key None, nondeterministic envelopes.
 """
 
 from __future__ import annotations
@@ -19,14 +18,14 @@ from pydantic import SecretStr
 from tests.encrypted_secrets_helpers import (
     SENTINEL_PASSPHRASE,
     SENTINEL_WRONG_PASSPHRASE,
-    require_secret_crypto,
+    require_cryptography,
 )
 
 
 def _crypto():
     """Load the implementation module; fails Red with a clear message until then."""
 
-    return require_secret_crypto()
+    return require_cryptography()
 
 
 def _load(crypto, monkeypatch, tmp_path, *, passphrase=None):  # type: ignore[no-untyped-def]
@@ -46,7 +45,8 @@ def test_master_key_env_var_name() -> None:
 
 
 def test_passphrase_derives_32_byte_key_via_kdf_not_raw(  # AC-1
-    monkeypatch, tmp_path  # type: ignore[no-untyped-def]
+    monkeypatch,
+    tmp_path,  # type: ignore[no-untyped-def]
 ) -> None:
     crypto = _crypto()
     master = _load(crypto, monkeypatch, tmp_path, passphrase=SENTINEL_PASSPHRASE)
@@ -61,7 +61,8 @@ def test_passphrase_derives_32_byte_key_via_kdf_not_raw(  # AC-1
 
 
 def test_passphrase_mode_decrypts_across_reloads_without_key_file(  # AC-1
-    monkeypatch, tmp_path  # type: ignore[no-untyped-def]
+    monkeypatch,
+    tmp_path,  # type: ignore[no-untyped-def]
 ) -> None:
     crypto = _crypto()
     key_file = tmp_path / ".secret_key"
@@ -80,7 +81,8 @@ def test_passphrase_mode_decrypts_across_reloads_without_key_file(  # AC-1
 
 
 def test_master_key_repr_and_errors_reveal_nothing(  # AC-1/AC-5
-    monkeypatch, tmp_path  # type: ignore[no-untyped-def]
+    monkeypatch,
+    tmp_path,  # type: ignore[no-untyped-def]
 ) -> None:
     crypto = _crypto()
     master = _load(crypto, monkeypatch, tmp_path, passphrase=SENTINEL_PASSPHRASE)
@@ -101,7 +103,8 @@ def test_default_key_file_is_local_dev_not_docker_data() -> None:
 
 
 def test_auto_generate_creates_strict_perm_key_file_despite_umask(  # AC-2
-    monkeypatch, tmp_path  # type: ignore[no-untyped-def]
+    monkeypatch,
+    tmp_path,  # type: ignore[no-untyped-def]
 ) -> None:
     crypto = _crypto()
     previous_umask = os.umask(0o022)
@@ -112,6 +115,8 @@ def test_auto_generate_creates_strict_perm_key_file_despite_umask(  # AC-2
         os.umask(previous_umask)
 
     assert len(master.key) == 32
+    if os.name != "posix":
+        pytest.skip("POSIX-only 0600/0700 mode assert; reuse covered below on all platforms")
     assert stat.S_IMODE(os.stat(key_file).st_mode) == 0o600
     assert stat.S_IMODE(os.stat(key_file.parent).st_mode) == 0o700
     leftovers = [p.name for p in key_file.parent.iterdir() if p != key_file]
@@ -119,7 +124,8 @@ def test_auto_generate_creates_strict_perm_key_file_despite_umask(  # AC-2
 
 
 def test_second_startup_reuses_key_file_unchanged(  # AC-2
-    monkeypatch, tmp_path  # type: ignore[no-untyped-def]
+    monkeypatch,
+    tmp_path,  # type: ignore[no-untyped-def]
 ) -> None:
     crypto = _crypto()
     key_file = tmp_path / ".secret_key"
@@ -133,7 +139,8 @@ def test_second_startup_reuses_key_file_unchanged(  # AC-2
 
 
 def test_two_installations_generate_distinct_keys(  # AC-2
-    monkeypatch, tmp_path  # type: ignore[no-untyped-def]
+    monkeypatch,
+    tmp_path,  # type: ignore[no-untyped-def]
 ) -> None:
     crypto = _crypto()
     first_dir = tmp_path / "a"
@@ -149,7 +156,8 @@ def test_two_installations_generate_distinct_keys(  # AC-2
 
 
 def test_corrupt_key_file_fails_closed_without_regeneration(  # AC-9
-    monkeypatch, tmp_path  # type: ignore[no-untyped-def]
+    monkeypatch,
+    tmp_path,  # type: ignore[no-untyped-def]
 ) -> None:
     crypto = _crypto()
     key_file = tmp_path / ".secret_key"
@@ -167,7 +175,8 @@ def test_corrupt_key_file_fails_closed_without_regeneration(  # AC-9
 
 
 def test_codec_round_trip_returns_secret_str(  # AC-3
-    monkeypatch, tmp_path  # type: ignore[no-untyped-def]
+    monkeypatch,
+    tmp_path,  # type: ignore[no-untyped-def]
 ) -> None:
     crypto = _crypto()
     master = _load(crypto, monkeypatch, tmp_path, passphrase=SENTINEL_PASSPHRASE)
@@ -180,7 +189,8 @@ def test_codec_round_trip_returns_secret_str(  # AC-3
 
 
 def test_envelopes_are_opaque_and_nondeterministic(  # AC-5
-    monkeypatch, tmp_path  # type: ignore[no-untyped-def]
+    monkeypatch,
+    tmp_path,  # type: ignore[no-untyped-def]
 ) -> None:
     crypto = _crypto()
     master = _load(crypto, monkeypatch, tmp_path, passphrase=SENTINEL_PASSPHRASE)
@@ -197,7 +207,8 @@ def test_envelopes_are_opaque_and_nondeterministic(  # AC-5
 
 
 def test_wrong_passphrase_cannot_decrypt_and_error_is_redacted(  # AC-4
-    monkeypatch, tmp_path  # type: ignore[no-untyped-def]
+    monkeypatch,
+    tmp_path,  # type: ignore[no-untyped-def]
 ) -> None:
     crypto = _crypto()
     right_dir = tmp_path / "right"
@@ -221,7 +232,9 @@ def test_wrong_passphrase_cannot_decrypt_and_error_is_redacted(  # AC-4
 
 @pytest.mark.parametrize("corrupt", ["", "not-an-envelope", "eyJ2Ijo5OTl9", "a" * 24])
 def test_corrupt_envelopes_raise_redacted_error(  # AC-4/AC-5
-    monkeypatch, tmp_path, corrupt: str  # type: ignore[no-untyped-def]
+    monkeypatch,
+    tmp_path,
+    corrupt: str,  # type: ignore[no-untyped-def]
 ) -> None:
     crypto = _crypto()
     master = _load(crypto, monkeypatch, tmp_path, passphrase=SENTINEL_PASSPHRASE)
@@ -238,3 +251,46 @@ def test_corrupt_envelopes_raise_redacted_error(  # AC-4/AC-5
 def test_secret_decrypt_error_is_an_exception() -> None:
     crypto = _crypto()
     assert issubclass(crypto.SecretDecryptError, Exception)
+
+
+def test_explicit_passphrase_env_param_wins_over_process_env(
+    monkeypatch,
+    tmp_path,  # type: ignore[no-untyped-def]
+) -> None:
+    """AC-3: explicit passphrase_env beats FREESEARCH_ENCRYPTION_KEY."""
+
+    crypto = _crypto()
+    monkeypatch.setenv("FREESEARCH_ENCRYPTION_KEY", SENTINEL_WRONG_PASSPHRASE)
+    key_file = tmp_path / ".secret_key"
+
+    explicit = crypto.load_or_create_master_key(
+        key_file=key_file, passphrase_env=SENTINEL_PASSPHRASE
+    )
+    envelope = crypto.SecretCodec(explicit).encrypt("explicit-param-wins")
+
+    monkeypatch.delenv("FREESEARCH_ENCRYPTION_KEY", raising=False)
+    reloaded = crypto.load_or_create_master_key(
+        key_file=key_file, passphrase_env=SENTINEL_PASSPHRASE
+    )
+    assert crypto.SecretCodec(reloaded).decrypt(envelope).get_secret_value() == (
+        "explicit-param-wins"
+    )
+
+
+def test_settings_encryption_key_file_overrides_default(
+    monkeypatch,
+    tmp_path,  # type: ignore[no-untyped-def]
+) -> None:
+    """AC-3: Settings.encryption_key_file overrides DEFAULT_KEY_FILE (/data mount)."""
+
+    from freesearch.configuration.config import get_settings
+
+    monkeypatch.chdir(tmp_path)
+    get_settings.cache_clear()
+    try:
+        monkeypatch.setenv("FREESEARCH_ENCRYPTION_KEY_FILE", "/data/.secret_key")
+        assert get_settings().encryption_key_file == Path("/data/.secret_key")
+    finally:
+        monkeypatch.delenv("FREESEARCH_ENCRYPTION_KEY_FILE", raising=False)
+        get_settings.cache_clear()
+    assert get_settings().encryption_key_file != Path("/data/.secret_key")

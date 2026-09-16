@@ -29,7 +29,7 @@ from freesearch.configuration.provider_config import (
 )
 from freesearch.infrastructure.http import create_async_client
 from freesearch.infrastructure.logging import redact_secrets
-from freesearch.infrastructure.secrets import AsyncSecretStore, ProviderName, SecretStore
+from freesearch.infrastructure.secrets import AsyncSecretStore, ProviderName
 from freesearch.models.contracts import (
     BreakerState,
     CircuitBreakerState,
@@ -404,7 +404,7 @@ def secret_fingerprint(provider: str, key: str) -> str:
     return f"{prefix}_{'•' * 8}{suffix}"
 
 
-SecretBackend = SecretStore | AsyncSecretStore
+SecretBackend = AsyncSecretStore
 
 
 async def _store_get(store: SecretBackend, name: str) -> str | None:
