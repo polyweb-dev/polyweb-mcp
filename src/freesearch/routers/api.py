@@ -365,15 +365,35 @@ def _clamped_limit(limit: int) -> int:
     return min(max(limit, 1), MAX_RECENT_LIMIT)
 
 
-def main() -> None:
-    """Serve the API with uvicorn on loopback:8001 (Swagger at /docs).
+def main(argv: Sequence[str] | None = None) -> None:
+    """Serve the API with uvicorn (Swagger at /docs).
 
     The default store encrypts provider and OAuth secrets in local SQLite.
     Injected stores remain available for offline tests.
+
+    The bind address is loopback by default for local development; containers
+    override it with ``--host 0.0.0.0`` (or ``FREESEARCH_API_HOST``).
     """
+    import argparse
+    import os
+
     import uvicorn
 
-    uvicorn.run(create_app(), host="127.0.0.1", port=8001)
+    parser = argparse.ArgumentParser(description="FreeSearch REST API")
+    parser.add_argument(
+        "--host",
+        default=os.getenv("FREESEARCH_API_HOST", "127.0.0.1"),
+        help="HTTP host (default: 127.0.0.1, env: FREESEARCH_API_HOST)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=int(os.getenv("FREESEARCH_API_PORT", "8001")),
+        help="HTTP port (default: 8001, env: FREESEARCH_API_PORT)",
+    )
+    args = parser.parse_args(argv)
+
+    uvicorn.run(create_app(), host=args.host, port=args.port)
 
 
 if __name__ == "__main__":
