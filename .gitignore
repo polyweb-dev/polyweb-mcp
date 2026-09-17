@@ -20,3 +20,7 @@ coverage/
 .runtime-tmp/
 FEEDBACK/
 .tmp/
+.secret_key
+.secret_salt
+*.secret_key
+*.secret_salt

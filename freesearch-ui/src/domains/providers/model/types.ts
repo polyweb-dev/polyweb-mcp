@@ -20,7 +20,7 @@ export type ProviderHealthStatus =
 
 export type CircuitBreakerStatus = "closed" | "open" | "half_open";
 
-export type KeySource = "environment" | "dotenv" | "keyring" | "none";
+export type KeySource = "encrypted_db" | "none";
 
 export interface ProviderQuota {
   used: number | null;

@@ -69,8 +69,12 @@ class _NullKeyResolver:
 @pytest.fixture
 def static_resolver(monkeypatch: pytest.MonkeyPatch) -> None:
     for module in (brave_module, exa_module, firecrawl_module, keenable_module, parallel_module):
-        monkeypatch.setattr(module, "get_provider_secret_resolver", lambda: _StaticKeyResolver())
-    monkeypatch.setattr(youcom_module, "get_provider_secret_resolver", lambda: _StaticKeyResolver())
+        monkeypatch.setattr(
+            module, "get_provider_secret_resolver", lambda: _StaticKeyResolver(), raising=False
+        )
+    monkeypatch.setattr(
+        youcom_module, "get_provider_secret_resolver", lambda: _StaticKeyResolver(), raising=False
+    )
 
 
 @pytest_asyncio.fixture
@@ -2027,6 +2031,7 @@ class TestBraveExhaustionMapping:
         assert "brave" not in names, f"AC-6: genuine 0/1000 must steer away: {names!r}"
         assert names[0] == "tavily", f"AC-6: fallback must lead: {names!r}"
 
+
 class TestBraveMonthlyCounterLedger:
     async def test_tracked_bare_search_persists_bounded_quota(
         self, static_resolver: None, repo: SQLiteRepository
@@ -2365,5 +2370,3 @@ class TestExaMonthlyLedger:
         finally:
             await adapter.aclose()
             await client.aclose()
-
-

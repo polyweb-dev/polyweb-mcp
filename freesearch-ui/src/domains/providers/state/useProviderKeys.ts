@@ -32,15 +32,10 @@ export function useProviderKeys({ setProviders, showToast }: KeysDeps) {
     async (id: string, rawKey: string): Promise<boolean> => {
       const trimmed = rawKey.trim();
       if (!trimmed) return false;
-      // GAP: 13 — environment and dotenv sources can shadow a vault write.
       try {
         const secret = await apiService.putSecret(toBackendId(id), trimmed);
         updateSecretRow(id, secret);
-        if (secret.source === "environment" || secret.source === "dotenv") {
-          showToast(`Stored key for "${id}" — env key shadows vault`, "warning");
-        } else {
-          showToast(`API key stored for "${id}"`, "success");
-        }
+        showToast("Key stored in the encrypted vault.", "success");
         return true;
       } catch (error) {
         showToast(errorMessage(error, "Unable to store API key"), "error");

@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import httpx
+from pydantic import SecretStr
 
 from freesearch.adapters._youcom_support import (
     _BALANCE_URL,
@@ -19,14 +20,12 @@ from freesearch.adapters._youcom_support import (
 )
 from freesearch.adapters._youcom_support import _same_url as _same_url
 from freesearch.adapters.base import ProviderAdapter
-from freesearch.configuration.provider_config import get_provider_secret_resolver
 from freesearch.infrastructure.borrowed_transport import BorrowedTransport
 from freesearch.infrastructure.resilience import (
     RETRYABLE_STATUS_CODES,
     ProviderOperationError,
     ResilientRunner,
 )
-from freesearch.infrastructure.secrets import ProviderName
 from freesearch.models.contracts import (
     CostEstimate,
     FetchedDocument,
@@ -47,12 +46,20 @@ _NAME = "you"
 
 
 class YoucomAdapter(ProviderAdapter):
-    def __init__(self, client: httpx.AsyncClient, *, runner: ResilientRunner | None = None) -> None:
+    def __init__(
+        self,
+        client: httpx.AsyncClient,
+        *,
+        runner: ResilientRunner | None = None,
+        api_key: SecretStr | None = None,
+    ) -> None:
         self._runner = runner or ResilientRunner(client)
-        self._owned_http = self._build_client(client)
+        self._owned_http = self._build_client(client, api_key)
 
-    def _build_client(self, client: httpx.AsyncClient) -> httpx.AsyncClient:
-        resolved = get_provider_secret_resolver().get(ProviderName.YOU)
+    def _build_client(
+        self, client: httpx.AsyncClient, api_key: SecretStr | None = None
+    ) -> httpx.AsyncClient:
+        resolved = api_key
         if resolved is None:
             raise self._error("configuration_error", "no You.com API key configured")
         forwarded = {

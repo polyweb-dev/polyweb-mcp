@@ -365,7 +365,7 @@ class SecretStatusResponse(ContractModel):
     presence: SecretPresence
     fingerprint: str | None = None
     updated_at: datetime | None = None
-    source: Literal["environment", "dotenv", "keyring", "none"]
+    source: Literal["encrypted_db", "none"]
 
 
 class FallbackPolicy(StrEnum):

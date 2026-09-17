@@ -5,9 +5,11 @@ import gc
 import os
 import time
 from collections.abc import Iterable
+from contextlib import suppress
 from typing import Any
 
 import httpx  # noqa: F401  # kept: locked BDD tests monkeypatch environment.httpx.AsyncClient
+from pydantic import SecretStr
 
 from freesearch.adapters.brave import BraveAdapter
 from freesearch.adapters.exa import ExaAdapter
@@ -15,23 +17,33 @@ from freesearch.adapters.firecrawl import FirecrawlAdapter
 from freesearch.adapters.keenable import KeenableAdapter
 from freesearch.adapters.parallel import ParallelAdapter
 from freesearch.adapters.tavily import TavilyAdapter
-from freesearch.configuration.provider_config import get_provider_secret_resolver
 from freesearch.infrastructure.http import create_async_client
-from freesearch.infrastructure.secrets import ProviderName
+from freesearch.infrastructure.secrets import PROVIDER_ENV_VARS, ProviderName
 
 _LIVE_GATE = "FREESEARCH_RUN_LIVE"
 
 
+def _harness_env_key(provider: ProviderName) -> str | None:
+    """Read the operator's process env directly (harness-only live-gate).
+
+    This is explicitly NOT production resolution: vault-only production code
+    never reads ``FREESEARCH_*`` at runtime. The harness reads the env only
+    to decide whether a ``@live`` scenario can run and to inject the key
+    explicitly via the adapter ``api_key`` seam.
+    """
+
+    return os.environ.get(PROVIDER_ENV_VARS[provider])
+
+
 def before_all(context: Any) -> None:
     """Verify provider secrets availability before running feature suites."""
-    resolver = get_provider_secret_resolver()
-    context.has_tavily_key = resolver.get(ProviderName.TAVILY) is not None
-    context.has_brave_key = resolver.get(ProviderName.BRAVE) is not None
-    context.has_exa_key = resolver.get(ProviderName.EXA) is not None
-    context.has_firecrawl_key = resolver.get(ProviderName.FIRECRAWL) is not None
-    context.has_parallel_key = resolver.get(ProviderName.PARALLEL) is not None
-    context.has_youcom_key = resolver.get(ProviderName.YOU) is not None
-    context.has_keenable_key = resolver.get(ProviderName.KEENABLE) is not None
+    context.has_tavily_key = _harness_env_key(ProviderName.TAVILY) is not None
+    context.has_brave_key = _harness_env_key(ProviderName.BRAVE) is not None
+    context.has_exa_key = _harness_env_key(ProviderName.EXA) is not None
+    context.has_firecrawl_key = _harness_env_key(ProviderName.FIRECRAWL) is not None
+    context.has_parallel_key = _harness_env_key(ProviderName.PARALLEL) is not None
+    context.has_youcom_key = _harness_env_key(ProviderName.YOU) is not None
+    context.has_keenable_key = _harness_env_key(ProviderName.KEENABLE) is not None
 
 
 def before_scenario(context: Any, scenario: Any) -> None:
@@ -86,36 +98,42 @@ def before_scenario(context: Any, scenario: Any) -> None:
         if not context.has_youcom_key:
             scenario.skip(
                 reason=(
-                    "FREESEARCH_YOU_API_KEY is not configured in .env or environment. "
-                    "You.com live BDD scenarios are skipped without a resolver key."
+                    "FREESEARCH_YOU_API_KEY is not set "
+                    "(harness live-gate reads the process env only). "
+                    "You.com live BDD scenarios are skipped without a harness env key."
                 )
             )
             return
         from freesearch.adapters.youcom import YoucomAdapter
 
-        context.youcom_adapter = YoucomAdapter(context.http_client)
+        context.youcom_adapter = YoucomAdapter(
+            context.http_client, api_key=_explicit_api_key(ProviderName.YOU)
+        )
     else:
         if _has_brave_tag(scenario) and not getattr(context, "has_brave_key", True):
             scenario.skip(
                 reason=(
-                    "FREESEARCH_BRAVE_SEARCH_API_KEY is not configured in .env or environment. "
-                    "Brave live BDD scenarios are skipped without a resolver key."
+                    "FREESEARCH_BRAVE_SEARCH_API_KEY is not set "
+                    "(harness live-gate reads the process env only). "
+                    "Brave live BDD scenarios are skipped without a harness env key."
                 )
             )
             return
         if _has_parallel_tag(scenario) and not getattr(context, "has_parallel_key", True):
             scenario.skip(
                 reason=(
-                    "FREESEARCH_PARALLEL_API_KEY is not configured in .env or environment. "
-                    "Parallel live BDD scenarios are skipped without a resolver key."
+                    "FREESEARCH_PARALLEL_API_KEY is not set "
+                    "(harness live-gate reads the process env only). "
+                    "Parallel live BDD scenarios are skipped without a harness env key."
                 )
             )
             return
         if _has_keenable_keyed_tag(scenario) and not getattr(context, "has_keenable_key", True):
             scenario.skip(
                 reason=(
-                    "FREESEARCH_KEENABLE_API_KEY is not configured in .env or environment. "
-                    "Keenable keyed live BDD scenarios are skipped without a resolver key."
+                    "FREESEARCH_KEENABLE_API_KEY is not set "
+                    "(harness live-gate reads the process env only). "
+                    "Keenable keyed live BDD scenarios are skipped without a harness env key."
                 )
             )
             return
@@ -126,19 +144,30 @@ def before_scenario(context: Any, scenario: Any) -> None:
     context.last_error = None
 
 
+def _explicit_api_key(provider: ProviderName) -> SecretStr | None:
+    """Build the explicit adapter key from the harness env (never a resolver)."""
+
+    raw = _harness_env_key(provider)
+    return SecretStr(raw) if raw else None
+
+
 def _adapter_for(client: Any, scenario: Any) -> Any:
-    """Build the provider adapter declared by the live feature or scenario tags."""
+    """Build the provider adapter declared by the live feature or scenario tags.
+
+    Keys come only from the harness env via the explicit ``api_key``
+    constructor seam; production resolution is never consulted.
+    """
     if _has_parallel_tag(scenario):
-        return ParallelAdapter(client)
+        return ParallelAdapter(client, api_key=_explicit_api_key(ProviderName.PARALLEL))
     if _has_firecrawl_tag(scenario):
-        return FirecrawlAdapter(client)
+        return FirecrawlAdapter(client, api_key=_explicit_api_key(ProviderName.FIRECRAWL))
     if _has_keenable_tag(scenario) or _has_keenable_keyed_tag(scenario):
-        return KeenableAdapter(client)
+        return KeenableAdapter(client, api_key=_explicit_api_key(ProviderName.KEENABLE))
     if _has_brave_tag(scenario):
-        return BraveAdapter(client)
+        return BraveAdapter(client, api_key=_explicit_api_key(ProviderName.BRAVE))
     if _is_exa_scenario(scenario):
-        return ExaAdapter(client)
-    return TavilyAdapter(client)
+        return ExaAdapter(client, api_key=_explicit_api_key(ProviderName.EXA))
+    return TavilyAdapter(client, api_key=_explicit_api_key(ProviderName.TAVILY))
 
 
 def _is_exa_scenario(scenario: Any) -> bool:
@@ -148,6 +177,11 @@ def _is_exa_scenario(scenario: Any) -> bool:
 
 def after_scenario(context: Any, scenario: Any) -> None:
     """Clean up adapter resources, test repositories, and the async event loop."""
+    cleanups = getattr(context, "enc_cleanups", [])
+    context.enc_cleanups = []
+    for cleanup in cleanups:
+        with suppress(Exception):
+            cleanup()
     repository = getattr(context, "repository", None)
     loop = getattr(context, "loop", None)
     if repository is not None and loop is not None and callable(getattr(repository, "close", None)):

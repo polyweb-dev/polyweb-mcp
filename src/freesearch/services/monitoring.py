@@ -26,7 +26,7 @@ from pydantic import AwareDatetime, model_serializer
 
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.adapters.brave import COST_USD_PER_REQUEST, FREE_CREDITS_USD, brave_spend_usd
-from freesearch.infrastructure.secrets import ProviderName
+from freesearch.infrastructure.secrets import AsyncSecretStore, ProviderName
 from freesearch.models.contracts import (
     ContractModel,
     FetchResponse,
@@ -395,6 +395,7 @@ async def refresh_quotas(
     *,
     force: bool = False,
     now: datetime | None = None,
+    secret_store: AsyncSecretStore | None = None,
 ) -> list[QuotaSnapshot]:
     """Poll quota-capable adapters once per bounded TTL and persist snapshots."""
 
@@ -413,7 +414,7 @@ async def refresh_quotas(
         if snapshot is not None:
             snapshots.append(snapshot)
     try:
-        oauth_snapshot = await _poll_parallel_oauth_balance(repository, observed_at)
+        oauth_snapshot = await _poll_parallel_oauth_balance(repository, observed_at, secret_store)
     except Exception:
         logger.warning("quota poll could not be completed")
         oauth_snapshot = None
@@ -423,13 +424,15 @@ async def refresh_quotas(
 
 
 async def _poll_parallel_oauth_balance(
-    repository: SQLiteRepository, observed_at: datetime
+    repository: SQLiteRepository,
+    observed_at: datetime,
+    secret_store: AsyncSecretStore | None,
 ) -> QuotaSnapshot | None:
     """Poll the paired Parallel Account API balance without touching adapter quotas."""
 
     from freesearch.services.parallel_oauth import poll_oauth_balance_snapshot
 
-    return await poll_oauth_balance_snapshot(repository, now=observed_at)
+    return await poll_oauth_balance_snapshot(repository, now=observed_at, secret_store=secret_store)
 
 
 async def _poll_one_quota(

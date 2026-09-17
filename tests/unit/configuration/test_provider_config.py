@@ -3,8 +3,8 @@
 Coverage maps to the stage contract (AC-1..AC-6) and the stage-2 remediation
 review findings: partial estimate merges, strict typed fields, registry
 isolation from caller mutation, secret input redaction in validation errors,
-resolver delegation to ``Settings.secret_service_name``, and ``.env``/cache
-isolation.
+and ``.env``/cache isolation. Credentials live only in the encrypted vault;
+this module pins that no secret seam exists here.
 """
 
 import json
@@ -14,20 +14,17 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-import freesearch.infrastructure.secrets as secrets_module
 from freesearch.configuration.config import get_settings
 from freesearch.configuration.provider_config import (
     ProviderConfig,
     ProviderConfigSettings,
     ProviderConfigUpdate,
     get_provider_configs,
-    get_provider_secret_resolver,
 )
-from freesearch.infrastructure.secrets import ProviderName, ProviderSecretResolver
+from freesearch.infrastructure.secrets import ProviderName
 from freesearch.models.contracts import QuotaSource, UsageOperation
 
 OVERRIDES_ENV = "FREESEARCH_PROVIDER_CONFIG_OVERRIDES"
-SECRET_SERVICE_ENV = "FREESEARCH_SECRET_SERVICE_NAME"
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -46,11 +43,9 @@ def isolate_environment(monkeypatch, tmp_path) -> None:
     monkeypatch.chdir(tmp_path)
     get_settings.cache_clear()
     get_provider_configs.cache_clear()
-    get_provider_secret_resolver.cache_clear()
     yield
     get_settings.cache_clear()
     get_provider_configs.cache_clear()
-    get_provider_secret_resolver.cache_clear()
 
 
 # AC-1: defaults for every provider, strict unknown-field rejection.
@@ -205,8 +200,8 @@ def test_quota_source_is_estimated_and_not_configurable() -> None:
         ProviderConfig(quota_source=QuotaSource.AUTHORITATIVE)
 
 
-# AC-4: no secret fields on records; public resolver accessor bound to
-# Settings.secret_service_name; validation errors never echo secret input.
+# AC-4: no secret fields on records and no resolver seam; validation errors
+# never echo secret input.
 
 
 def test_configuration_records_contain_no_secret_fields() -> None:
@@ -218,36 +213,12 @@ def test_configuration_records_contain_no_secret_fields() -> None:
         assert "api_key" not in dumped and "secret" not in dumped
 
 
-def test_public_secret_resolver_accessor() -> None:
-    resolver = get_provider_secret_resolver()
+def test_provider_config_has_no_resolver_seam() -> None:
+    """Vault-only: adapters receive injected vault keys; no resolver lives here."""
 
-    assert isinstance(resolver, ProviderSecretResolver)
-    assert get_provider_secret_resolver() is resolver  # cached accessor
+    import freesearch.configuration.provider_config as provider_config_module
 
-
-def test_resolver_delegates_to_settings_secret_service_name(monkeypatch) -> None:
-    """The accessor must bind its keyring store to Settings.secret_service_name.
-
-    The native keyring is never touched: ``keyring.get_password`` is replaced
-    with an observer that records the service/account arguments.
-    """
-
-    seen: dict[str, str] = {}
-
-    def record_service(service: str, name: str) -> None:
-        seen["service"] = service
-        seen["name"] = name
-
-    monkeypatch.setattr(secrets_module.keyring, "get_password", record_service)
-    monkeypatch.setenv(SECRET_SERVICE_ENV, "unit-test-service")
-    monkeypatch.delenv("FREESEARCH_EXA_API_KEY", raising=False)
-    get_settings.cache_clear()
-    get_provider_secret_resolver.cache_clear()
-
-    resolver = get_provider_secret_resolver()
-
-    assert resolver.get(ProviderName.EXA) is None
-    assert seen == {"service": "unit-test-service", "name": ProviderName.EXA.value}
+    assert not hasattr(provider_config_module, "get_provider_secret_resolver")
 
 
 @pytest.mark.parametrize(

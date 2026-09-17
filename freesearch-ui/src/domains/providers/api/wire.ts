@@ -1,7 +1,7 @@
 export type BackendBreakerState = "closed" | "open" | "half_open"
 export type BackendHealth = "healthy" | "degraded" | "unavailable" | "unknown"
 export type BackendSecretPresence = "configured" | "missing" | "keyless_public"
-export type BackendSecretSource = "environment" | "dotenv" | "keyring" | "none"
+export type BackendSecretSource = "encrypted_db" | "none"
 
 export type BackendCircuitBreaker = {
   state: BackendBreakerState

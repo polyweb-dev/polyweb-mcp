@@ -8,16 +8,17 @@ are written only through the injected :class:`SecretStore`; fingerprints are
 derived in memory and are the only secret-adjacent value ever persisted.
 """
 
-import os
+import inspect
 import time
+from collections.abc import Callable
 from contextlib import suppress
 from datetime import UTC, datetime
 from hashlib import sha256
 from typing import Any, Literal
 
-from dotenv import dotenv_values
+import httpx
 from fastapi import FastAPI, HTTPException, Request
-from pydantic import ValidationError
+from pydantic import SecretStr, ValidationError
 
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.adapters.registry import adapter_factory
@@ -28,7 +29,7 @@ from freesearch.configuration.provider_config import (
 )
 from freesearch.infrastructure.http import create_async_client
 from freesearch.infrastructure.logging import redact_secrets
-from freesearch.infrastructure.secrets import PROVIDER_ENV_VARS, ProviderName, SecretStore
+from freesearch.infrastructure.secrets import AsyncSecretStore, ProviderName
 from freesearch.models.contracts import (
     BreakerState,
     CircuitBreakerState,
@@ -63,7 +64,7 @@ from freesearch.services.parallel_oauth import (
     start_device_flow,
 )
 
-SecretSource = Literal["environment", "dotenv", "keyring", "none"]
+SecretSource = Literal["encrypted_db", "none"]
 
 _ROUTING_KEY = "routing"
 
@@ -85,7 +86,11 @@ def register_control_routes(app: FastAPI) -> None:
         repository: SQLiteRepository | None = request.app.state.repository
         policy = await routing_policy(repository)
         entries = [
-            await _provider_entry(repository, name, request.app.state.secret_store)
+            await _provider_entry(
+                repository,
+                name,
+                request.app.state.secret_store,
+            )
             for name in ProviderName
         ]
         ordered = sorted(entries, key=lambda entry: (entry.priority, entry.provider_id))
@@ -167,22 +172,18 @@ def register_control_routes(app: FastAPI) -> None:
     async def put_secret(
         provider_id: str, body: SetSecretRequest, request: Request
     ) -> SecretStatusResponse:
-        """Store the key write-only, then report the effective secret status.
-
-        The raw key goes only to the secret store. The response resolves the
-        effective key/source afterwards (environment and ``.env`` outrank the
-        store), so a shadowing environment or ``.env`` key is visible through
-        its source label and masked fingerprint instead of being silently
-        overridden by the write.
-        """
+        """Store the key write-only in the encrypted vault and report its status."""
 
         name = _require_provider(provider_id)
         raw_key = body.key.get_secret_value()
-        request.app.state.secret_store.set(name.value, raw_key)
+        store = request.app.state.secret_store
+        await _store_set(store, name.value, raw_key)
         now = datetime.now(UTC)
-        key, source = _resolve_secret(name, request.app.state.secret_store)
+        key, source = await _resolve_secret(name, store)
         fingerprint = secret_fingerprint(name.value, key) if key is not None else None
         await persist_secret_record(request.app.state.repository, name, fingerprint, now)
+        with suppress(HTTPException):
+            await _ensure_provider_adapter(request, name)
         return SecretStatusResponse(
             provider=name.value,
             presence=_secret_presence(name, key),
@@ -193,18 +194,13 @@ def register_control_routes(app: FastAPI) -> None:
 
     @app.delete("/api/v1/providers/{provider_id}/secret", response_model=SecretStatusResponse)
     async def delete_secret(provider_id: str, request: Request) -> SecretStatusResponse:
-        """Remove the stored key idempotently, then report the effective status.
-
-        Higher-precedence keys (environment, ``.env``) survive the deletion and
-        are reported with their source; when nothing resolves the response
-        reports ``source="none"`` with no fingerprint.
-        """
+        """Remove the encrypted vault key idempotently and report its status."""
 
         name = _require_provider(provider_id)
-        store: SecretStore = request.app.state.secret_store
-        store.delete(name.value)
+        store = request.app.state.secret_store
+        await _store_delete(store, name.value)
         now = datetime.now(UTC)
-        key, source = _resolve_secret(name, store)
+        key, source = await _resolve_secret(name, store)
         fingerprint = secret_fingerprint(name.value, key) if key is not None else None
         await persist_secret_record(request.app.state.repository, name, fingerprint, now)
         return SecretStatusResponse(
@@ -408,36 +404,38 @@ def secret_fingerprint(provider: str, key: str) -> str:
     return f"{prefix}_{'•' * 8}{suffix}"
 
 
-def _store_get(store: SecretStore, name: str) -> str | None:
-    """Read ``name`` from the store, degrading store failures to ``None``."""
-
-    with suppress(Exception):
-        return store.get(name)
-    return None
+SecretBackend = AsyncSecretStore
 
 
-def _resolve_secret(provider: ProviderName, store: SecretStore) -> tuple[str | None, SecretSource]:
-    """Resolve a provider key as process environment -> ``.env`` -> store.
+async def _store_get(store: SecretBackend, name: str) -> str | None:
+    """Read sync or async stores, degrading storage failures to ``None``."""
 
-    Precedence mirrors :class:`~freesearch.secrets.ProviderSecretResolver`, so
-    control-plane presence matches actual adapter construction. Only the
-    requested provider's variable is read from ``.env`` (relative to the
-    working directory) and ``.env`` is never written; unreadable files and
-    store read failures degrade to absent.
-    """
+    try:
+        value = store.get(name)
+        return await value if inspect.isawaitable(value) else value
+    except Exception:
+        return None
 
-    env_var = PROVIDER_ENV_VARS[provider]
-    environment_value = os.environ.get(env_var)
-    if environment_value:
-        return environment_value, "environment"
-    with suppress(OSError, UnicodeDecodeError):
-        dotenv_value = dotenv_values(".env").get(env_var)
-        if dotenv_value:
-            return dotenv_value, "dotenv"
-    stored_value = _store_get(store, provider.value)
-    if stored_value:
-        return stored_value, "keyring"
-    return None, "none"
+
+async def _store_set(store: SecretBackend, name: str, value: str) -> None:
+    result = store.set(name, value)
+    if inspect.isawaitable(result):
+        await result
+
+
+async def _store_delete(store: SecretBackend, name: str) -> None:
+    result = store.delete(name)
+    if inspect.isawaitable(result):
+        await result
+
+
+async def _resolve_secret(
+    provider: ProviderName, store: SecretBackend
+) -> tuple[str | None, SecretSource]:
+    """Resolve a provider key from the encrypted vault only."""
+
+    stored_value = await _store_get(store, provider.value)
+    return (stored_value, "encrypted_db") if stored_value else (None, "none")
 
 
 def _secret_presence(provider: ProviderName, key: str | None) -> SecretPresence:
@@ -742,14 +740,16 @@ async def _latest_health(
 
 
 async def _provider_entry(
-    repository: SQLiteRepository | None, provider: ProviderName, store: SecretStore
+    repository: SQLiteRepository | None,
+    provider: ProviderName,
+    store: SecretBackend,
 ) -> ProviderStatusResponse:
     """Assemble one provider's control-plane status entry."""
 
     config = await effective_provider_config(repository, provider)
     breaker = await load_breaker(repository, provider)
     health = await _latest_health(repository, provider.value)
-    key, _source = _resolve_secret(provider, store)
+    key, _source = await _resolve_secret(provider, store)
     return ProviderStatusResponse(
         provider_id=provider.value,
         enabled=config.enabled,
@@ -777,8 +777,8 @@ def _restart_hint(provider: str) -> str:
     """Return the actionable 503 detail for an unconstructed provider."""
 
     return (
-        f"provider {provider} is not constructed: set its API key and restart "
-        "the API server to build it"
+        f"provider {provider} is not configured: store a key in the encrypted vault "
+        f"(PUT /api/v1/providers/{provider}/secret)"
     )
 
 
@@ -794,12 +794,22 @@ def _probe_detail(status: HealthStatus) -> str | None:
     return None
 
 
+def _build_with_resolved_secret(
+    factory: Callable[..., ProviderAdapter], client: httpx.AsyncClient | None, key: str | None
+) -> ProviderAdapter:
+    """Pass a resolved key only to constructors that explicitly accept it."""
+
+    if key is not None and "api_key" in inspect.signature(factory).parameters:
+        return factory(client, api_key=SecretStr(key))
+    return factory(client)
+
+
 async def _ensure_provider_adapter(request: Request, provider: ProviderName) -> ProviderAdapter:
     """Return the provider's adapter, constructing it on demand when possible.
 
     Construction happens under the app control lock and only when the provider
-    is enabled and a key resolves from the control plane's environment/store
-    surface (Keenable's keyless public tier counts). A constructed adapter is
+    is enabled and its vault key resolves (Keenable's keyless public tier
+    counts). A constructed adapter is
     appended once and never rebuilt, so teardown races are impossible; the MCP
     server's generation refcount is untouched.
     """
@@ -808,22 +818,29 @@ async def _ensure_provider_adapter(request: Request, provider: ProviderName) -> 
     routes: list[ProviderAdapter] = app.state._routes
     async with app.state._control_lock:
         existing = next((route for route in routes if route.name == provider.value), None)
-        if existing is not None:
+        key, _source = await _resolve_secret(provider, app.state.secret_store)
+        if existing is not None and not (
+            provider is ProviderName.KEENABLE
+            and key is not None
+            and not existing.capabilities.quota
+        ):
             return existing
+        if existing is not None:
+            routes.remove(existing)
+            await existing.aclose()
         config = await effective_provider_config(app.state.repository, provider)
         if not config.enabled:
             raise HTTPException(
                 status_code=503,
                 detail=f"provider {provider.value} is disabled; enable it before testing",
             )
-        key, _source = _resolve_secret(provider, app.state.secret_store)
         if key is None and provider is not ProviderName.KEENABLE:
             raise HTTPException(status_code=503, detail=_restart_hint(provider.value))
         factory = adapter_factory(provider.value)
         if factory is None:
             raise HTTPException(status_code=503, detail=_restart_hint(provider.value))
         try:
-            adapter = factory(app.state._client)
+            adapter = _build_with_resolved_secret(factory, app.state._client, key)
         except Exception:
             raise HTTPException(status_code=503, detail=_restart_hint(provider.value)) from None
         parallel_setter = getattr(adapter, "set_free_seed", None)

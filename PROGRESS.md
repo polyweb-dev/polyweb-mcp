@@ -826,3 +826,46 @@ wheel build with both Alembic revisions (`migration_head()` =
 `0002_canonical_quota_units`). Baseline for comparison: 1124 collected
 with 1 pre-existing `tests.adversarial` collection error (missing `tests`
 package marker; resolved by the new markers). `freesearch-ui/` untouched.
+
+## TO BE DONE (loop ended 2026-09-14 — vault-only slice + live verification)
+
+ Secrets storage upgrade is implemented (encrypted-DB vault, AES-256-GCM,
+ PBKDF2 master key, vault-only runtime reads, simplified
+ "Key stored in the encrypted vault." toast). Targeted suites green.
+ Remaining items, in order:
+
+1. **Tester update (in flight when loop ended):** 3 new proofs — genuine
+   MCP vault-key routing proof, DELETE→re-migrate tombstone proof
+   (provider + OAuth slot), unbound-store `start_device_flow` preflight
+   proof — plus stale-test rewrites T-A…T-D (unit adapters,
+   `test_quota_units.py`, unit-bdd ×6, `quota_steps.py`,
+   `keenable_steps.py`, hygiene). Full suite currently red on stale
+   legacy tests (209 failed + 145 errors, all adjudicated stale
+   Categories A–C) plus 2 pre-existing oauth backoff failures.
+2. **Developer CODE-A (P1, AC-V1):** MCP vault-keyed construction — open
+   repo → build encrypted store → resolve keys async → construct via
+   `control._build_with_resolved_secret` in `_build_generation`; keep
+   `build_adapters(client)` signature; genuine MCP proof must pass.
+3. **Developer CODE-B (P1, AC-V2/V6/V8):** delete-wins tombstones in
+   `EncryptedDbSecretStore` (`delete()` writes tombstone, `set()` clears
+   it, migration consults it) so DELETE survives restart; land before/with
+   CODE-A. Tombstone namespace must avoid `secret.enc:*` / `secret.*`
+   collision.
+4. **Developer CODE-C (P2, AC-7):** OAuth unbound preflight — writability
+   guard at top of `start_device_flow` (fail before vendor egress).
+5. **Developer CODE-D (P2):** delete `get_provider_secret_resolver`
+   (`provider_config.py`) + ~12-line test-import cleanup + rewrite
+   `test_provider_config.py` L222–249. CODE-E comments reword (P3,
+   non-blocking).
+6. **Approval gate:** CODE-A…D + proofs landed; full pytest green except
+   2 known pre-existing oauth failures; full behave green except 1
+   pre-existing invoice failure + keyless live-gating skips; ruff +
+   slice mypy clean.
+7. **Operator step:** restart backend (migration auto-imports legacy keys
+   once), then paste the you.com key via dashboard Key vault.
+8. **Live verification:** opt-in live you.com BDD (search + fetch, `@live`
+   tag, never in CI) + `docs/THREAT_MODEL.md` live-test section
+   (opt-in egress, call budget, redaction, no real-key fixtures).
+9. **Separate follow-ups (not this slice):** 2 oauth backoff-count
+   failures + invoice BDD @1.3 (pre-existing on HEAD); MCP/REST
+   pre-existing items per reviewer notes.

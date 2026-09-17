@@ -126,6 +126,23 @@ async def test_build_adapters_includes_keyless_keenable() -> None:
         await client.aclose()
 
 
+async def test_build_adapters_skips_failing_factory_keeps_others(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from freesearch.adapters import registry as _reg
+
+    monkeypatch.setitem(
+        _reg._ADAPTERS, ProviderName.EXA, lambda _c: (_ for _ in ()).throw(RuntimeError("boom"))
+    )
+    client = httpx.AsyncClient()
+    try:
+        with caplog.at_level("WARNING"):
+            names = [adapter.name for adapter in build_adapters(client)]
+    finally:
+        await client.aclose()
+    assert "exa" not in names and "keenable" in names
+
+
 async def test_server_lifespan_cleans_up() -> None:
     closed: list[str] = []
 

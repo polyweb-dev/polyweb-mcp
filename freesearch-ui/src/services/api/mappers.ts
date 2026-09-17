@@ -55,9 +55,9 @@ export function mapSearchResponse(
   const results = wire.results.map((result, index) => {
     const rawSources = Array.isArray(result.metadata?.sources)
       ? (result.metadata.sources as string[])
-      : (result.sources ?? (result.source ? [result.source] : [wire.provider]))
+      : (result.sources ?? [wire.provider])
     const primarySource = rawSources[0] ?? wire.provider
-    const itemProviderId = toUiId(primarySource)
+    const itemProviderId = toUiId(wire.provider === "aggregated" ? primarySource : wire.provider)
     return {
       id: `${wire.provider}-${index}`,
       providerId: itemProviderId,

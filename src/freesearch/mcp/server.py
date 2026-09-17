@@ -9,6 +9,7 @@ local telemetry (usage and health observations) through
 """
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
@@ -28,7 +29,11 @@ from freesearch.adapters.registry import (
     build_adapters,
     close_adapters,
 )
+from freesearch.configuration.config import get_settings
+from freesearch.infrastructure.cryptography import SecretCodec, load_or_create_master_key
+from freesearch.infrastructure.encrypted_store import EncryptedDbSecretStore
 from freesearch.infrastructure.http import create_async_client
+from freesearch.infrastructure.secrets import AsyncSecretStore, ProviderName
 from freesearch.models.contracts import (
     FetchRequest,
     ProviderHealth,
@@ -54,6 +59,8 @@ from freesearch.services.routing import select_route
 # paths (e.g. ``build_adapters``/``close_adapters`` in lifecycle tests) keep
 # working. ``adapter_factory`` is consumed by ``routers/control.py``.
 
+logger = logging.getLogger(__name__)
+
 
 class _ServerState(TypedDict):
     """Tool-visible shared cells: the active repository and owned generation."""
@@ -61,6 +68,7 @@ class _ServerState(TypedDict):
     repository: SQLiteRepository | None
     client: httpx.AsyncClient | None
     routes: list[ProviderAdapter] | None
+    secret_store: AsyncSecretStore | None
 
 
 def _quota_state_changed(current: QuotaSnapshot | None, projected: QuotaSnapshot) -> bool:
@@ -113,21 +121,70 @@ async def _apply_parallel_seed(
             continue
 
 
+def _encrypted_store(repository: SQLiteRepository) -> EncryptedDbSecretStore:
+    """Build the local encrypted store used by OAuth balance polling."""
+
+    settings = get_settings()
+    passphrase = (
+        settings.encryption_key.get_secret_value() if settings.encryption_key is not None else None
+    )
+    return EncryptedDbSecretStore(
+        repository,
+        SecretCodec(
+            load_or_create_master_key(
+                key_file=settings.encryption_key_file, passphrase_env=passphrase
+            )
+        ),
+    )
+
+
 async def _build_generation(
     state: _ServerState,
     *,
     database: str | Path | None,
     owns_repository: bool,
 ) -> None:
-    """Create one owned generation (client, adapters, repository) and publish it."""
+    """Create one owned generation (client, adapters, repository) and publish it.
+
+    Adapters resolve their keys from the encrypted vault via the control-plane
+    helpers; providers without a vault key are skipped (Keenable's keyless
+    public tier excepted).
+    """
+
+    from freesearch.routers.control import (
+        _build_with_resolved_secret,
+        _resolve_secret,
+        effective_config_for_name,
+    )
 
     client = create_async_client()
     owned_routes: list[ProviderAdapter] = []
     try:
-        owned_routes = build_adapters(client)
         if owns_repository:
             state["repository"] = await SQLiteRepository.open(resolve_database_path(database))
-        await _apply_parallel_seed(owned_routes, state["repository"])
+        repository = state["repository"]
+        if isinstance(repository, SQLiteRepository):
+            state["secret_store"] = _encrypted_store(repository)
+        store = state["secret_store"]
+        if isinstance(repository, SQLiteRepository) and store is not None:
+            for provider in ProviderName:
+                config = await effective_config_for_name(repository, provider)
+                if not config.enabled:
+                    continue
+                key, _source = await _resolve_secret(provider, store)
+                if key is None and provider is not ProviderName.KEENABLE:
+                    continue
+                factory = adapter_factory(provider.value)
+                if factory is None:
+                    logger.warning("no adapter factory for provider %s", provider.value)
+                    continue
+                try:
+                    owned_routes.append(_build_with_resolved_secret(factory, client, key))
+                except Exception:
+                    continue
+        else:
+            owned_routes = build_adapters(client)
+        await _apply_parallel_seed(owned_routes, repository)
     except BaseException:
         # A failed enter never increments: close the freshly built client and
         # adapters so a failed open cannot leak a partial generation.
@@ -145,6 +202,7 @@ async def _detach_generation(state: _ServerState, *, owns_repository: bool) -> N
     owned_repo = state["repository"] if owns_repository else None
     state["client"] = None
     state["routes"] = None
+    state["secret_store"] = None
     if owned_repo is not None:
         clear_quota_poll_cache(owned_repo, owned_routes or [])
         state["repository"] = None
@@ -153,12 +211,14 @@ async def _detach_generation(state: _ServerState, *, owns_repository: bool) -> N
 
 
 async def _route_state(
-    repository: SQLiteRepository | None, active: Sequence[ProviderAdapter]
+    repository: SQLiteRepository | None,
+    active: Sequence[ProviderAdapter],
+    secret_store: AsyncSecretStore | None,
 ) -> tuple[dict[str, ProviderHealth], dict[str, QuotaSnapshot]]:
     """Collect routing state while degrading quota failures to unknown."""
 
     with suppress(Exception):
-        await refresh_quotas(repository, active)
+        await refresh_quotas(repository, active, secret_store=secret_store)
     health: dict[str, ProviderHealth] = {}
     quotas: dict[str, QuotaSnapshot] = {}
     if repository is None:
@@ -180,10 +240,11 @@ async def _mcp_fanout_search(
     request: SearchRequest,
     active: Sequence[ProviderAdapter],
     repository: SQLiteRepository | None,
+    secret_store: AsyncSecretStore | None = None,
 ) -> dict[str, Any]:
     """Execute concurrent fanout search across active adapters for MCP."""
     await _apply_parallel_seed(active, repository)
-    health, quotas = await _route_state(repository, active)
+    health, quotas = await _route_state(repository, active, secret_store)
     fanout_req = request.model_copy(
         update={"routing": request.routing.model_copy(update={"mode": RoutingMode.FANOUT})}
     )
@@ -249,7 +310,14 @@ def create_server(
     # every 1→0 transition detaches exactly that generation for teardown, so
     # sequential sessions — and sessions entering during a still-running
     # teardown — never inherit closed or stale resources.
-    state: _ServerState = {"repository": repository, "client": None, "routes": routes}
+    state: _ServerState = {
+        "repository": repository,
+        "client": None,
+        "routes": routes,
+        "secret_store": _encrypted_store(repository)
+        if isinstance(repository, SQLiteRepository)
+        else None,
+    }
     # Streamable-HTTP MCP runs one lifespan per concurrent session, so the
     # owned resources are refcounted (serialized by a lock): the first enter
     # builds the generation and the last exit tears it down.
@@ -293,10 +361,13 @@ def create_server(
         # not entered a lifespan yet has no generation, hence no provider.
         active = state["routes"] if owns_client else routes
         if not active:
-            raise RuntimeError("no provider is configured: set a FREESEARCH_*_API_KEY")
+            raise RuntimeError(
+                "no provider is configured: store a key in the encrypted vault "
+                "(PUT /api/v1/providers/{id}/secret)"
+            )
         repository = state["repository"]
         await _apply_parallel_seed(active, repository)
-        health, quotas = await _route_state(repository, active)
+        health, quotas = await _route_state(repository, active, state["secret_store"])
         return select_route(request, active, health, quotas)[0].adapter
 
     @server.tool()
@@ -306,7 +377,9 @@ def create_server(
         if not active:
             raise RuntimeError("no provider is configured: set a FREESEARCH_*_API_KEY")
         if request.fanout or request.routing.mode is RoutingMode.FANOUT:
-            return await _mcp_fanout_search(request, active, state["repository"])
+            return await _mcp_fanout_search(
+                request, active, state["repository"], state["secret_store"]
+            )
 
         adapter = await _route(request)
         response = await tracked_call(

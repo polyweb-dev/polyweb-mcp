@@ -48,24 +48,7 @@ cp .env.example .env
 Copy-Item .env.example .env
 ```
 
-Open `.env` and fill in any provider API keys you plan to use:
-
-```ini
-FREESEARCH_ENVIRONMENT=development
-FREESEARCH_LOG_LEVEL=INFO
-
-# Provider API Keys (leave blank if not using that provider)
-FREESEARCH_BRAVE_SEARCH_API_KEY=
-FREESEARCH_BRAVE_ANSWERS_API_KEY=
-FREESEARCH_EXA_API_KEY=
-FREESEARCH_FIRECRAWL_API_KEY=
-FREESEARCH_TAVILY_API_KEY=
-FREESEARCH_PARALLEL_API_KEY=
-FREESEARCH_YOU_API_KEY=
-FREESEARCH_KEENABLE_API_KEY= # Optional: Keenable provides a keyless tier
-```
-
-*(Note: Provider credentials can also be configured dynamically through the web dashboard, which stores them securely in your system keyring.)*
+Keep `.env` for non-secret runtime settings. Store provider credentials in the encrypted vault through the settings dashboard (the same encrypted-vault API the dashboard itself uses). Keenable can remain keyless.
 
 ---
 
@@ -113,7 +96,67 @@ pnpm install
 
 ---
 
-## Running the Services
+## Running with Docker (homelab / LAN)
+
+There is no prebuilt image on Docker Hub yet, so you clone the repo and build locally:
+
+```bash
+git clone <repository-url>
+cd freesearch
+cp .env.example .env   # optional, non-secret settings only
+
+# First build takes a few minutes (Python deps + UI bundle), later runs are cached.
+docker compose up --build -d
+docker compose ps
+docker compose logs -f   # Ctrl+C to detach from logs; containers keep running
+```
+
+- **Dashboard:** `http://<host>:3000` (nginx serves the built UI and proxies `/api`, `/search`, `/fetch`, `/dashboard`, `/stats` to the API — nginx is Docker-only, local dev keeps using `pnpm dev`)
+- **API + Swagger:** `http://<host>:8001/docs`
+- **MCP for coding agents (streamable HTTP):** `http://<host>:8000/mcp`
+
+  ```json
+  { "type": "streamable-http", "url": "http://<host>:8000/mcp" }
+  ```
+
+  STDIO cannot be served over a network (the client must spawn the server), so remote agents must use the URL above. STDIO remains a local-only option on the Docker host itself: `docker exec -i freesearch-mcp uv run freesearch-mcp --transport stdio`.
+
+To stop everything (state is kept): `docker compose down`.
+
+### Encryption key (random, automatic)
+
+Provider keys are encrypted in SQLite with a master key. On first start the containers auto-generate a random 32-byte key and store it as `/data/.secret_key` on the shared volume (readable only by the container, mode `0600`). There is nothing to configure.
+
+Back it up once, so a lost volume doesn't mean re-entering every provider key:
+
+```bash
+docker cp freesearch-api:/data/.secret_key ./freesearch-secret-key.bak
+```
+
+Keep that file somewhere safe (password manager / offline backup) — whoever holds it can decrypt your vault, and without it (or the volume) stored keys are unrecoverable and must be re-entered via the dashboard.
+
+### Persistent data
+
+`api` and `mcp` share one SQLite database and the key file on the `freesearch-data` **named volume** (`/data/freesearch.db`, `/data/.secret_key`). Single-node only — do not scale replicas without moving off SQLite.
+
+- `docker compose down` / rebuilds / image updates all **keep** the volume: your keys, quotas, and telemetry survive.
+- `docker compose down -v` **deletes** it. You will have to re-enter provider keys afterwards.
+- Back up any time (Linux/macOS):
+  ```bash
+  docker run --rm -v freesearch_freesearch-data:/data -v "$(pwd):/backup" \
+    alpine tar czf /backup/freesearch-data-backup.tar.gz -C /data .
+  ```
+  Windows PowerShell:
+  ```powershell
+  docker run --rm -v freesearch_freesearch-data:/data -v "${PWD}:/backup" `
+    alpine tar czf /backup/freesearch-data-backup.tar.gz -C /data .
+  ```
+  Restore into a fresh volume with the reverse (`tar xzf`), then `docker compose up -d`.
+  (The `freesearch_` volume prefix follows the project folder name — check yours with `docker volume ls` if you cloned into a different directory.)
+
+Store provider keys in the encrypted vault via the dashboard — never in `.env` or the Compose file.
+
+## Running the Services (local development)
 
 ### Start the REST API Backend
 

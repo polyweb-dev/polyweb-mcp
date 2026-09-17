@@ -1011,7 +1011,11 @@ async def test_transport_error_message_is_redacted_by_shared_runner() -> None:
 # --- quota --------------------------------------------------------------------
 
 
-async def test_quota_is_inherited_none() -> None:
+async def test_quota_defaults_to_monthly_budget_or_none_when_unbudgeted() -> None:
     adapter = make_adapter()
+    snapshot = await adapter.quota()
+    assert snapshot is not None
+    assert snapshot.limit == Decimal("10.00")
 
-    assert await adapter.quota() is None
+    unbudgeted = ExaAdapter(_FakeClient(), sdk_client=_FakeSDK(), monthly_budget=None)
+    assert await unbudgeted.quota() is None

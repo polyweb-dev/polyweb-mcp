@@ -77,7 +77,7 @@ export function formatManualRange(start: string, end: string): string {
   const formatted = [start, end].map((iso) => {
     const date = new Date(iso + "T00:00:00")
     if (Number.isNaN(date.getTime())) return iso
-    return date.toLocaleDateString(undefined, { month: "short", day: "numeric" })
+    return date.toLocaleDateString("en-US", { month: "short", day: "numeric" })
   })
   return formatted[0] + "–" + formatted[1]
 }
