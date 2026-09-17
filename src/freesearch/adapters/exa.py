@@ -47,10 +47,9 @@ from freesearch.models.contracts import (
     UsageOperation,
 )
 
-__all__ = ["EXA_DEFAULT_MONTHLY_BUDGET_USD", "ExaAdapter"]
+__all__ = ["ExaAdapter"]
 
 _NAME = "exa"
-EXA_DEFAULT_MONTHLY_BUDGET_USD = Decimal("10.00")
 # The SDK surfaces HTTP failures as ``ValueError("Request failed with status
 # code {status}: {body}")``; only the status code is parsed out - the body is
 # never included so provider text cannot leak.
@@ -107,7 +106,7 @@ class ExaAdapter(ProviderAdapter):
         runner: ResilientRunner | None = None,
         sdk_client: AsyncExa | None = None,
         api_key: SecretStr | None = None,
-        monthly_budget: Decimal | None = EXA_DEFAULT_MONTHLY_BUDGET_USD,
+        monthly_budget: Decimal | None = None,
     ) -> None:
         """Wrap operations in the shared resilience runner.
 

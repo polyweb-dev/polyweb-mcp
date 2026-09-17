@@ -73,7 +73,7 @@ class ProviderConfig(BaseModel):
     )
     reset_schedule: str | None = Field(default=None, min_length=1)
     parallel_free_seed_usd: Decimal | None = Field(default=None, ge=0)
-    exa_monthly_budget_usd: Decimal | None = Field(default=Decimal("10.00"), ge=0)
+    exa_monthly_budget_usd: Decimal | None = Field(default=None, ge=0)
 
     @field_validator("free_tier_estimates", mode="before")
     @classmethod
