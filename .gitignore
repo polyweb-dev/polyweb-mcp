@@ -24,3 +24,4 @@ FEEDBACK/
 .secret_salt
 *.secret_key
 *.secret_salt
+.agents/communication/
