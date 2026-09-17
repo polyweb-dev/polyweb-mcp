@@ -198,10 +198,11 @@ class ExaAdapter(ProviderAdapter):
         """Update spend from response usage event and return updated snapshot."""
         usage = getattr(response, "usage", None)
         units = getattr(usage, "units", None)
-        if units is not None and isinstance(units, Decimal) and units.is_finite() and units > 0:
+        if isinstance(units, Decimal) and units.is_finite():
             now = datetime.now(UTC)
             self._rollover_if_needed(now)
-            self._spend += units
+            if units > 0:
+                self._spend += units
             self._soft_zero = False
         return self._current_snapshot()
 
