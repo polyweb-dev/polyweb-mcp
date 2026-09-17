@@ -23,7 +23,7 @@ from pydantic import (
 )
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from freesearch.infrastructure.secrets import ProviderName, ProviderSecretResolver
+from freesearch.infrastructure.secrets import ProviderName
 from freesearch.models.contracts import QuotaSource, UsageOperation
 
 
@@ -256,10 +256,3 @@ def get_provider_configs() -> dict[ProviderName, ProviderConfig]:
 
 # Public alias so tests and callers can reset the cached registry.
 get_provider_configs.cache_clear = _provider_registry.cache_clear  # type: ignore[attr-defined]
-
-
-@lru_cache(maxsize=1)
-def get_provider_secret_resolver() -> ProviderSecretResolver:
-    """Compatibility seam returning an unbound, vault-only resolver."""
-
-    return ProviderSecretResolver()

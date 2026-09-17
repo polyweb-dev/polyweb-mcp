@@ -24,14 +24,12 @@ from exa_py.api import SearchResponse as ExaSearchResponse
 from pydantic import AnyHttpUrl, SecretStr
 
 from freesearch.adapters.base import ProviderAdapter
-from freesearch.configuration.provider_config import get_provider_secret_resolver
 from freesearch.infrastructure.dates import parse_iso_datetime
 from freesearch.infrastructure.resilience import (
     RETRYABLE_STATUS_CODES,
     ProviderOperationError,
     ResilientRunner,
 )
-from freesearch.infrastructure.secrets import ProviderName
 from freesearch.models.contracts import (
     CostEstimate,
     FetchedDocument,
@@ -256,11 +254,6 @@ class ExaAdapter(ProviderAdapter):
         as a confusing provider error).
         """
         resolved = api_key
-        if resolved is None:
-            try:
-                resolved = get_provider_secret_resolver().get(ProviderName.EXA)
-            except Exception:
-                resolved = None
         if resolved is None:
             raise self._error("configuration_error", "no Exa API key configured")
         return AsyncExa(api_key=resolved.get_secret_value())
