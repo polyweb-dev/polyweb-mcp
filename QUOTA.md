@@ -388,6 +388,8 @@ Docs:
 
 Current Exa search responses can include a `costDollars.total` breakdown. Record that returned amount as Decimal USD and do not replace it with a blanket request estimate. A normal Exa API key does not expose its remaining balance or monthly denominator. Exa's Team Management API can return per-key USD usage and configured key budgets, but it requires a separate service API key plus the target API-key UUID and is not wired in V1. Therefore Exa shows tracked USD spend with **Budget not configured** and no normalized percentage until either an explicit local monthly budget or the admin integration is configured. The shared model labels reported spend as `unit_kind=USD` and prevents it being added to request or credit counts.
 
+The optional monthly budget is a local, estimated ledger that only includes responses carrying `costDollars` telemetry; it is not an authoritative Exa account balance.
+
 Docs:
 - [Exa search response (`costDollars`)](https://exa.ai/docs/reference/search)
 - [Exa Team Management API-key usage](https://exa.ai/docs/reference/team-management/get-api-key-usage)
