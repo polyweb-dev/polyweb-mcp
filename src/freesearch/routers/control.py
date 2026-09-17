@@ -562,6 +562,11 @@ async def persist_provider_config(
                 if config.parallel_free_seed_usd is not None
                 else None
             ),
+            "exa_monthly_budget_usd": (
+                str(config.exa_monthly_budget_usd)
+                if config.exa_monthly_budget_usd is not None
+                else None
+            ),
         }
     }
     await repository.set_runtime_setting(_provider_key(provider), payload)
@@ -838,5 +843,11 @@ async def _ensure_provider_adapter(request: Request, provider: ProviderName) -> 
             adapter = _build_with_resolved_secret(factory, app.state._client, key)
         except Exception:
             raise HTTPException(status_code=503, detail=_restart_hint(provider.value)) from None
+        parallel_setter = getattr(adapter, "set_free_seed", None)
+        if callable(parallel_setter):
+            parallel_setter(config.parallel_free_seed_usd)
+        exa_setter = getattr(adapter, "set_monthly_budget", None)
+        if callable(exa_setter):
+            exa_setter(config.exa_monthly_budget_usd)
         routes.append(adapter)
         return adapter

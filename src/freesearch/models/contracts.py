@@ -243,7 +243,7 @@ def is_soft_quota_zero(provider: str, snapshot: QuotaSnapshot) -> bool:
         # let the provider's 429 response remain the authoritative pressure.
         return True
     return (
-        provider == "parallel"
+        provider in ("parallel", "exa")
         and snapshot.source is QuotaSource.ESTIMATED
         and (snapshot.metadata.get("soft_zero") is not False)
     )
