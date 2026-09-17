@@ -11,8 +11,21 @@ Frozen contract under test:
 - Only `parallel` is supported; every other provider id → `404`.
 - Balance flows via existing dashboard `latest_quota` as AUTHORITATIVE USD
   remaining-only (`limit` null).
-- Bearer tokens live ONLY in SecretStore (OS keyring); metadata only in
+- Bearer tokens live ONLY in SecretStore (encrypted-DB SecretStore); metadata only in
   `runtime_settings`; status is fingerprint-only.
+
+## Manual encrypted-store rotation
+
+1. Back up the database separately from the master-key material. Preserve the old
+   passphrase **and** its `.secret_salt`, or preserve the old `.secret_key`; neither
+   is useful alone for decrypting all existing envelopes.
+2. With the old key available, export each secret through an operator-approved source
+   and record only its replacement input; do not copy ciphertext into a new install.
+3. Stop the service, switch `FREESEARCH_ENCRYPTION_KEY` (or the configured key file),
+   restart and clear process configuration caches, then re-encrypt by re-PUTting every
+   provider secret and re-pairing OAuth. Each write creates a new AES-GCM envelope.
+4. Verify the new database decrypts with the new key, then retire the old key and salt.
+   A mismatched key fails closed and never silently generates over an existing key file.
 
 ## Threats → attacks → covering tests
 

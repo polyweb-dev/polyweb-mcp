@@ -21,7 +21,7 @@ import httpx
 from exa_py import AsyncExa
 from exa_py.api import Result
 from exa_py.api import SearchResponse as ExaSearchResponse
-from pydantic import AnyHttpUrl
+from pydantic import AnyHttpUrl, SecretStr
 
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.configuration.provider_config import get_provider_secret_resolver
@@ -108,7 +108,8 @@ class ExaAdapter(ProviderAdapter):
         *,
         runner: ResilientRunner | None = None,
         sdk_client: AsyncExa | None = None,
-        monthly_budget: Decimal | None = None,
+        api_key: SecretStr | None = None,
+        monthly_budget: Decimal | None = EXA_DEFAULT_MONTHLY_BUDGET_USD,
     ) -> None:
         """Wrap operations in the shared resilience runner.
 
@@ -119,7 +120,7 @@ class ExaAdapter(ProviderAdapter):
         key; the caller's client is never mutated or closed here.
         ``monthly_budget`` seeds the local monthly USD spend allowance.
         """
-        sdk = sdk_client or self._build_sdk()
+        sdk = sdk_client or self._build_sdk(api_key)
         if client is None:
             client = httpx.AsyncClient()
             self._owns_client = True
@@ -246,7 +247,7 @@ class ExaAdapter(ProviderAdapter):
         self._hydrated_month = month_start
         return self._current_snapshot(now=now)
 
-    def _build_sdk(self) -> AsyncExa:
+    def _build_sdk(self, api_key: SecretStr | None = None) -> AsyncExa:
         """Build the official SDK with the resolver key.
 
         The key comes only from the shared resolver; absent credentials fail
@@ -254,7 +255,12 @@ class ExaAdapter(ProviderAdapter):
         (the SDK raises ``ValueError`` for a missing key, which would surface
         as a confusing provider error).
         """
-        resolved = get_provider_secret_resolver().get(ProviderName.EXA)
+        resolved = api_key
+        if resolved is None:
+            try:
+                resolved = get_provider_secret_resolver().get(ProviderName.EXA)
+            except Exception:
+                resolved = None
         if resolved is None:
             raise self._error("configuration_error", "no Exa API key configured")
         return AsyncExa(api_key=resolved.get_secret_value())

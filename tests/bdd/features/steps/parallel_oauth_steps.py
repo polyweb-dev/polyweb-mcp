@@ -13,7 +13,6 @@ from behave import given, then, when  # type: ignore[import-untyped]
 from fastapi.testclient import TestClient
 
 from freesearch.adapters.base import ProviderAdapter
-from freesearch.infrastructure.secrets import MemorySecretStore
 from freesearch.models.contracts import (
     CostEstimate,
     FetchedDocument,
@@ -35,6 +34,22 @@ from freesearch.services.parallel_oauth import (
 )
 
 _BALANCE_PATH = "/account/service/v1/balance"
+
+
+class _VaultDouble:
+    """Dict-backed offline vault double for the OAuth BDD scenarios."""
+
+    def __init__(self) -> None:
+        self.values: dict[str, str] = {}
+
+    def get(self, name: str) -> str | None:
+        return self.values.get(name)
+
+    def set(self, name: str, value: str) -> None:
+        self.values[name] = value
+
+    def delete(self, name: str) -> None:
+        self.values.pop(name, None)
 
 
 class _OAuthStubAdapter(ProviderAdapter):
@@ -147,7 +162,7 @@ def _open_oauth_api(context: Any, stub: _PlatformStub | None = None) -> None:
     context.repository = context.loop.run_until_complete(
         SQLiteRepository.open(Path(context.database_path))
     )
-    context.secret_store = MemorySecretStore()
+    context.secret_store = _VaultDouble()
     context.app = create_app(
         [_OAuthStubAdapter()],
         repository=context.repository,

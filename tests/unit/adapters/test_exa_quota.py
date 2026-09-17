@@ -99,6 +99,11 @@ def test_default_monthly_budget_constant() -> None:
     assert Decimal("10.00") == EXA_DEFAULT_MONTHLY_BUDGET_USD
 
 
+def test_default_adapter_has_default_monthly_budget() -> None:
+    adapter = ExaAdapter(_FakeClient(), runner=_DirectRunner(), sdk_client=_FakeSDK())
+    assert adapter._monthly_budget == EXA_DEFAULT_MONTHLY_BUDGET_USD
+
+
 def test_unbudgeted_adapter_returns_none_quota() -> None:
     adapter = _make_adapter(budget=None)
     assert adapter._monthly_budget is None

@@ -15,16 +15,15 @@ from decimal import Decimal
 from typing import Any
 
 import httpx
+from pydantic import SecretStr
 
 from freesearch.adapters.base import ProviderAdapter
-from freesearch.configuration.provider_config import get_provider_secret_resolver
 from freesearch.infrastructure.dates import parse_iso_datetime
 from freesearch.infrastructure.resilience import (
     RETRYABLE_STATUS_CODES,
     ProviderOperationError,
     ResilientRunner,
 )
-from freesearch.infrastructure.secrets import ProviderName
 from freesearch.models.contracts import (
     CostEstimate,
     FetchedDocument,
@@ -85,10 +84,12 @@ class KeenableAdapter(ProviderAdapter):
         client: httpx.AsyncClient,
         *,
         runner: ResilientRunner | None = None,
+        api_key: SecretStr | None = None,
     ) -> None:
         """Wrap the caller-owned ``client`` in the shared resilience runner."""
         self._client = client
         self._runner = runner or ResilientRunner(client)
+        self._api_key = api_key
         self._allowance_limit = Decimal("100000")
         self._allowance_spend = Decimal("0")
         self._paid_spend = Decimal("0")
@@ -115,7 +116,7 @@ class KeenableAdapter(ProviderAdapter):
 
     def _auth(self) -> tuple[str, dict[str, str]]:
         """Resolve the API key lazily; absent or blank keys select keyless mode."""
-        resolved = get_provider_secret_resolver().get(ProviderName.KEENABLE)
+        resolved = self._api_key
         if resolved is None or not resolved.get_secret_value():
             return _KEYLESS, {_TITLE_HEADER: "freesearch"}
         return _KEYED, {_API_KEY_HEADER: resolved.get_secret_value()}

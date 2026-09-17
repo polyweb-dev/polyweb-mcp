@@ -126,6 +126,23 @@ async def test_build_adapters_includes_keyless_keenable() -> None:
         await client.aclose()
 
 
+async def test_build_adapters_skips_failing_factory_keeps_others(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from freesearch.adapters import registry as _reg
+
+    monkeypatch.setitem(
+        _reg._ADAPTERS, ProviderName.EXA, lambda _c: (_ for _ in ()).throw(RuntimeError("boom"))
+    )
+    client = httpx.AsyncClient()
+    try:
+        with caplog.at_level("WARNING"):
+            names = [adapter.name for adapter in build_adapters(client)]
+    finally:
+        await client.aclose()
+    assert "exa" not in names and "keenable" in names
+
+
 async def test_server_lifespan_cleans_up() -> None:
     closed: list[str] = []
 
@@ -154,14 +171,17 @@ def test_main_cli_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
 
     def fake_run(self: object, transport: str = "stdio") -> None:
         settings = getattr(self, "settings", None)
-        invocations.append((
-            transport,
-            getattr(settings, "stateless_http", False),
-            getattr(settings, "host", ""),
-            getattr(settings, "port", 0),
-        ))
+        invocations.append(
+            (
+                transport,
+                getattr(settings, "stateless_http", False),
+                getattr(settings, "host", ""),
+                getattr(settings, "port", 0),
+            )
+        )
 
     from mcp.server.fastmcp import FastMCP
+
     monkeypatch.setattr(FastMCP, "run", fake_run)
 
     # 1. Test stdio dispatch
@@ -171,4 +191,3 @@ def test_main_cli_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
     # 2. Test streamable-http with stateless flag and custom port
     main(["--transport", "streamable-http", "--stateless", "--port", "8888"])
     assert invocations[-1] == ("streamable-http", True, "127.0.0.1", 8888)
-

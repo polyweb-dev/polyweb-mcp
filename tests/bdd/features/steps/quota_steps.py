@@ -526,13 +526,12 @@ def step_then_brave_field_unknown(context: Any, field: str) -> None:
         f"AC-2: malformed/absent monthly {field} must become None, never 0 (saw {value!r})"
     )
 
+
 @then(
     "the Brave snapshot should be a {source:w} monthly counter "
     "with remaining {remaining:d} of limit {limit:d}"
 )
-def step_then_brave_monthly_counter(
-    context: Any, source: str, remaining: int, limit: int
-) -> None:
+def step_then_brave_monthly_counter(context: Any, source: str, remaining: int, limit: int) -> None:
     latest = _run(context, context.repository.latest_quota("brave"))
     assert latest is not None, "AC-2: no Brave quota snapshot recorded after a successful search"
     assert latest.source == QuotaSource[source], (
@@ -567,7 +566,6 @@ def step_when_billing_month_rolls_over(context: Any) -> None:
     # Test-only time travel: push the adapter ledger into a past month so the
     # next search exercises the rollover path.
     context.adapter._ledger_month = datetime(2000, 1, 1, tzinfo=UTC)
-
 
 
 # --------------------------------------------------------------------------
@@ -2419,6 +2417,7 @@ def step_then_brave_stays_eligible(context: Any) -> None:
         f"brave was removed from candidates (latest={latest!r})"
     )
 
+
 @then("Brave should stay eligible for search routing with counter headroom")
 def step_then_brave_counter_eligible(context: Any) -> None:
     latest = _run(context, context.repository.latest_quota("brave"))
@@ -2435,7 +2434,6 @@ def step_then_brave_counter_eligible(context: Any) -> None:
         "AC-6: counter-backed Brave quota must stay eligible; "
         f"brave was removed from candidates (latest={latest!r})"
     )
-
 
 
 @then(
