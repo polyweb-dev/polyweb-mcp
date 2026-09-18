@@ -82,6 +82,62 @@ class _StaticKeyResolver:
         return self._key
 
 
+class _ExaStubSDKClient:
+    """Closable stand-in for the SDK-owned HTTPX client."""
+
+    async def aclose(self) -> None:
+        pass
+
+
+class _ExaStubSDK:
+    """Injected stand-in for ``AsyncExa`` serving one canned SDK response.
+
+    The canned ``response`` is mutable so a scenario can answer a first call
+    costless and a later call metered without touching the network or the
+    secret resolver.
+    """
+
+    def __init__(self, response: Any) -> None:
+        self.response = response
+        self.client = _ExaStubSDKClient()
+
+    async def search(self, **kwargs: Any) -> Any:
+        return self.response
+
+    async def get_contents(self, urls: Any, **kwargs: Any) -> Any:
+        return self.response
+
+
+def _exa_bdd_result(index: int) -> Any:
+    """Build one SDK result row with the fields the adapter normalizes."""
+
+    from exa_py.api import Result
+
+    return Result(
+        id=f"bdd-{index}",
+        url=f"https://example.com/bdd-{index}",
+        title=f"BDD {index}",
+        text=f"BDD body {index}",
+    )
+
+
+def _exa_bdd_search_response(results: list[Any], cost_total: float | None) -> Any:
+    """Build one SDK search payload, costless when ``cost_total`` is None."""
+
+    from exa_py.api import SearchResponse as ExaSDKResponse
+
+    payload: dict[str, Any] = {
+        "results": results,
+        "resolved_search_type": None,
+        "auto_date": None,
+    }
+    if cost_total is not None:
+        from exa_py.api import CostDollars
+
+        payload["cost_dollars"] = CostDollars(total=cost_total)
+    return ExaSDKResponse(**payload)
+
+
 class _StubAdapter(ProviderAdapter):
     """Deterministic offline adapter double for routing/poll scenarios."""
 
@@ -2262,7 +2318,7 @@ def step_then_exa_budget_remaining(context: Any, remaining: str, limit: str) -> 
     )
 
 
-@when("an Exa 402 soft signal arrives")
+@when("an Exa 402 exhaustion signal arrives")
 def step_when_exa_402(context: Any) -> None:
     client = httpx.AsyncClient(timeout=30.0)
     adapter = ExaAdapter(
@@ -2270,19 +2326,20 @@ def step_when_exa_402(context: Any) -> None:
     )
     snapshot = adapter.quota_after_error(402)
     assert snapshot is not None
+    assert snapshot.source is QuotaSource.OBSERVED
     _run(context, context.repository.record_quota(snapshot))
     context.exa_adapter = adapter
     context.exa_client = client
 
 
-@then("the Exa remaining should read soft zero without a hard lockout")
-def step_then_exa_soft_zero(context: Any) -> None:
+@then("the Exa remaining should read observed zero")
+def step_then_exa_observed_zero(context: Any) -> None:
     effective = _opt(monitoring_module, "effective_quota", None)
     assert effective is not None
     view = _run(context, effective(context.repository, "exa"))
     assert view is not None
     assert view.remaining == Decimal("0")
-    assert contracts_module.is_soft_quota_zero("exa", view) is True
+    assert view.source is QuotaSource.OBSERVED
 
 
 @when("a later Exa billed operation succeeds")
@@ -2305,8 +2362,8 @@ def step_when_exa_success_after_soft(context: Any) -> None:
     _run(context, context.repository.record_usage(_DummyResponse.usage))
 
 
-@then("the Exa soft zero should be cleared")
-def step_then_exa_soft_cleared(context: Any) -> None:
+@then("the Exa exhaustion should be cleared")
+def step_then_exa_exhaustion_cleared(context: Any) -> None:
     effective = _opt(monitoring_module, "effective_quota", None)
     view = _run(context, effective(context.repository, "exa"))
     assert view is not None
@@ -2314,34 +2371,43 @@ def step_then_exa_soft_cleared(context: Any) -> None:
     assert contracts_module.is_soft_quota_zero("exa", view) is False
 
 
-@when("an Exa 429 transient signal arrives")
+@when("an Exa 429 exhaustion signal arrives")
 def step_when_exa_429(context: Any) -> None:
     adapter = context.exa_adapter
     snapshot = adapter.quota_after_error(429)
+    assert snapshot is not None
+    assert snapshot.source is QuotaSource.OBSERVED
+    _run(context, context.repository.record_quota(snapshot))
     context.exa_429_snapshot = snapshot
 
 
-@then("the Exa 429 should never become quota exhaustion")
-def step_then_exa_429_transient(context: Any) -> None:
-    assert context.exa_429_snapshot is None, "429 must not produce a quota snapshot"
+@then("the Exa 429 should surface observed zero")
+def step_then_exa_429_observed(context: Any) -> None:
+    assert context.exa_429_snapshot is not None
+    assert context.exa_429_snapshot.remaining == Decimal("0")
     effective = _opt(monitoring_module, "effective_quota", None)
     view = _run(context, effective(context.repository, "exa"))
     assert view is not None
-    assert view.remaining > Decimal("0")
+    assert view.remaining == Decimal("0")
 
 
 @when("I inspect Exa quota capabilities")
 def step_when_exa_capabilities(context: Any) -> None:
     client = httpx.AsyncClient(timeout=30.0)
+    adapter = ExaAdapter(client, api_key=SecretStr("quota-test-secret"))
     context.exa_client = client
-    context.exa_capabilities = ExaAdapter(
-        client, api_key=SecretStr("quota-test-secret")
-    ).capabilities
+    context.exa_capabilities = adapter.capabilities
+    context.exa_caps_snapshot = _run(context, adapter.quota())
 
 
-@then("Exa capabilities quota should stay false")
+@then("Exa capabilities quota should read true")
 def step_then_exa_caps(context: Any) -> None:
-    assert context.exa_capabilities.quota is False, "AC-EXA: Exa capabilities.quota must stay False"
+    assert context.exa_capabilities.quota is True, (
+        "AC-EXA: Exa capabilities.quota must read True (local ledger snapshots)"
+    )
+    assert context.exa_caps_snapshot is not None, (
+        "AC-EXA: Exa quota() must serve a local snapshot with no balance poll"
+    )
 
 
 @when("I record Exa spend without enabling the monthly budget")
@@ -2361,14 +2427,99 @@ def step_when_exa_unbudgeted_spend(context: Any) -> None:
             display_unit="USD",
         )
 
-    context.exa_unbudgeted_snapshot = adapter.quota_after_success(_DummyResponse())
+    snapshot = adapter.quota_after_success(_DummyResponse())
+    assert snapshot is not None
+    assert snapshot.source is QuotaSource.ESTIMATED
+    assert snapshot.remaining is None and snapshot.limit is None
+    _run(context, context.repository.record_quota(snapshot))
+    context.exa_unbudgeted_snapshot = snapshot
 
 
 @then("the Exa quota should report remaining unknown with limit unknown")
 def step_then_exa_unbudgeted_unknown(context: Any) -> None:
-    assert context.exa_unbudgeted_snapshot is None
+    snapshot = context.exa_unbudgeted_snapshot
+    assert snapshot.source is QuotaSource.ESTIMATED
     latest = _run(context, context.repository.latest_quota("exa"))
-    assert latest is None or (latest.remaining is None and latest.limit is None)
+    assert latest is not None
+    assert latest.remaining is None and latest.limit is None
+
+
+@when("I run an Exa search with {count:d} results and no cost telemetry")
+def step_when_exa_fallback_search(context: Any, count: int) -> None:
+    stub = _ExaStubSDK(
+        _exa_bdd_search_response([_exa_bdd_result(index) for index in range(count)], None)
+    )
+    client = httpx.AsyncClient(timeout=30.0)
+    adapter = ExaAdapter(client, api_key=SecretStr("quota-test-secret"), sdk_client=stub)
+    context.exa_client = client
+    context.exa_adapter = adapter
+    context.exa_sdk = stub
+    context.exa_response = _run(
+        context,
+        tracked_call(
+            context.repository,
+            adapter,
+            lambda running: running.search(SearchRequest(query="bdd-fallback", limit=count)),
+            operation=UsageOperation.SEARCH,
+        ),
+    )
+
+
+@then("the Exa usage should carry fallback estimate USD {amount}")
+def step_then_exa_fallback_usage(context: Any, amount: str) -> None:
+    usage = context.exa_response.usage
+    assert usage is not None, "AC-EXA: untelemetered search must still report usage"
+    assert usage.units == Decimal(amount), (
+        f"AC-EXA: fallback estimate must be USD {amount}, saw {usage.units!r}"
+    )
+    assert usage.metadata.get("provenance") == "exa_pricing_fallback"
+
+
+@when("I run an Exa metered search costing USD {amount}")
+def step_when_exa_metered_search(context: Any, amount: str) -> None:
+    context.exa_sdk.response = _exa_bdd_search_response([_exa_bdd_result(1)], float(amount))
+    context.exa_response = _run(
+        context,
+        tracked_call(
+            context.repository,
+            context.exa_adapter,
+            lambda running: running.search(SearchRequest(query="bdd-metered", limit=1)),
+            operation=UsageOperation.SEARCH,
+        ),
+    )
+
+
+@when("I hydrate the Exa monthly ledger against a USD {budget} budget")
+def step_when_exa_hydrate_ledger(context: Any, budget: str) -> None:
+    adapter = context.exa_adapter
+    adapter.set_monthly_budget(Decimal(budget))
+    snapshot = _run(context, adapter.hydrate_quota(context.repository))
+    assert snapshot is not None
+    _run(context, context.repository.record_quota(snapshot))
+
+
+@when("I set Exa manual starting credits to USD {credits} and record USD {spend} of spend")
+def step_when_exa_manual_credits(context: Any, credits: str, spend: str) -> None:
+    assert Decimal(spend) == Decimal("0.007")
+    stub = _ExaStubSDK(_exa_bdd_search_response([_exa_bdd_result(1)], None))
+    client = httpx.AsyncClient(timeout=30.0)
+    adapter = ExaAdapter(
+        client,
+        api_key=SecretStr("quota-test-secret"),
+        sdk_client=stub,
+        manual_starting_credits=Decimal(credits),
+    )
+    context.exa_client = client
+    context.exa_adapter = adapter
+    _run(
+        context,
+        tracked_call(
+            context.repository,
+            adapter,
+            lambda running: running.search(SearchRequest(query="bdd-credits", limit=1)),
+            operation=UsageOperation.SEARCH,
+        ),
+    )
 
 
 # --------------------------------------------------------------------------

@@ -6,7 +6,8 @@ key fallback and no leakage into the caller's HTTPX client, credential scoped
 to the SDK only), declared name/capabilities and the inherited ``quota() is
 None``, search request mapping (exact query/limit/domains passthrough and
 ``contents={"highlights": True}``) with result normalization and real numeric
-``cost_dollars.total`` usage, missing telemetry yielding no usage, malformed
+``cost_dollars.total`` usage, missing telemetry falling back to the published
+pricing table, malformed
 payloads/costs sanitized as the redaction-safe ``invalid_response`` with the
 cause suppressed, fetch via ``get_contents([url], text=True)`` with normalized
 URL matching (case-insensitive scheme/host, root-slash equivalence, case-
@@ -37,7 +38,13 @@ import freesearch.adapters.exa as exa_module
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.adapters.exa import ExaAdapter
 from freesearch.infrastructure.resilience import ProviderOperationError, ResilientRunner
-from freesearch.models.contracts import FetchRequest, SearchRequest, UsageOperation
+from freesearch.models.contracts import (
+    FetchRequest,
+    QuotaSource,
+    SearchRequest,
+    UnitKind,
+    UsageOperation,
+)
 
 
 class _FakeClient:
@@ -184,8 +191,8 @@ def test_adapter_implements_provider_adapter_interface() -> None:
     capabilities = adapter.capabilities
     assert capabilities.search is True
     assert capabilities.fetch is True
-    assert capabilities.quota is False
-    assert capabilities.cost_estimate is False  # declared; Exa publishes no price list
+    assert capabilities.quota is True  # local ledger snapshots flow through refresh_quotas
+    assert capabilities.cost_estimate is False  # declared; estimates project fallback, no poll
 
 
 async def test_init_wraps_caller_client_in_shared_runner_with_seams() -> None:
@@ -495,14 +502,20 @@ async def test_search_reports_real_numeric_cost_dollars_total() -> None:
     assert response.usage.observed_at.utcoffset() == timedelta(0)
 
 
-async def test_search_missing_telemetry_produces_no_usage() -> None:
+async def test_search_missing_telemetry_uses_pricing_fallback() -> None:
     sdk = _FakeSDK()
     sdk.search_response = _response([_result()])
     adapter = make_adapter(sdk=sdk)
 
     response = await adapter.search(SearchRequest(query="telemetry"))
 
-    assert response.usage is None
+    assert response.usage is not None
+    assert response.usage.operation is UsageOperation.SEARCH
+    assert response.usage.units == Decimal("0.007")
+    assert response.usage.unit_kind is UnitKind.USD
+    assert response.usage.metadata["provenance"] == "exa_pricing_fallback"
+    assert response.usage.metadata["result_count"] == 1
+    assert response.usage.metadata["summary_count"] == 0
 
 
 async def test_search_negative_cost_is_dropped_not_reported() -> None:
@@ -760,7 +773,7 @@ async def test_fetch_reports_only_real_usage() -> None:
     assert response.usage.observed_at.utcoffset() == timedelta(0)
 
 
-async def test_fetch_missing_telemetry_produces_no_usage() -> None:
+async def test_fetch_missing_telemetry_uses_pricing_fallback() -> None:
     sdk = _FakeSDK()
     sdk.contents_response = _response(
         [_result(url="https://example.com/doc", id="c-1", text="body")]
@@ -769,7 +782,12 @@ async def test_fetch_missing_telemetry_produces_no_usage() -> None:
 
     response = await adapter.fetch(FetchRequest(url="https://example.com/doc"))
 
-    assert response.usage is None
+    assert response.usage is not None
+    assert response.usage.operation is UsageOperation.FETCH
+    assert response.usage.units == Decimal("0.001")
+    assert response.usage.unit_kind is UnitKind.USD
+    assert response.usage.metadata["provenance"] == "exa_pricing_fallback"
+    assert response.usage.metadata["page_count"] == 1
 
 
 async def test_fetch_invokes_shared_runner_exactly_once() -> None:
@@ -789,7 +807,7 @@ async def test_fetch_invokes_shared_runner_exactly_once() -> None:
 # --- cost estimation --------------------------------------------------------
 
 
-async def test_estimate_cost_is_transparent_and_network_free() -> None:
+async def test_estimate_cost_projects_published_fallback_network_free() -> None:
     sdk = _FakeSDK()
     runner = _RecordingRunner()
     adapter = make_adapter(sdk=sdk, runner=runner)
@@ -799,11 +817,13 @@ async def test_estimate_cost_is_transparent_and_network_free() -> None:
 
     assert search_estimate.operation is UsageOperation.SEARCH
     assert fetch_estimate.operation is UsageOperation.FETCH
-    assert search_estimate.units == Decimal("0")
-    assert fetch_estimate.units == Decimal("0")
+    assert search_estimate.units == Decimal("0.007")
+    assert fetch_estimate.units == Decimal("0.001")
     assert search_estimate.currency == "USD"
-    assert "does not publish" in search_estimate.notes
-    assert "does not publish" in fetch_estimate.notes
+    assert search_estimate.notes is not None
+    assert fetch_estimate.notes is not None
+    assert "costDollars wins" in search_estimate.notes
+    assert "costDollars wins" in fetch_estimate.notes
     assert runner.entries == []
     assert sdk.search_calls == []
     assert sdk.contents_calls == []
@@ -967,13 +987,18 @@ async def test_transport_error_message_is_redacted_by_shared_runner() -> None:
 # --- quota --------------------------------------------------------------------
 
 
-async def test_quota_defaults_to_unbudgeted_opt_in() -> None:
+async def test_quota_defaults_to_estimated_unknown_when_unbudgeted() -> None:
     adapter = make_adapter()
     assert adapter._monthly_budget is None
-    assert await adapter.quota() is None
+    assert adapter._manual_starting_credits is None
+    snapshot = await adapter.quota()
+    assert snapshot is not None
+    assert snapshot.source is QuotaSource.ESTIMATED
+    assert snapshot.remaining is None
+    assert snapshot.limit is None
 
     budgeted = ExaAdapter(_FakeClient(), sdk_client=_FakeSDK(), monthly_budget=Decimal("10.00"))
-    snapshot = await budgeted.quota()
-    assert snapshot is not None
-    assert snapshot.limit == Decimal("10.00")
-    assert snapshot.remaining == Decimal("10.00")
+    budgeted_snapshot = await budgeted.quota()
+    assert budgeted_snapshot is not None
+    assert budgeted_snapshot.limit == Decimal("10.00")
+    assert budgeted_snapshot.remaining == Decimal("10.00")

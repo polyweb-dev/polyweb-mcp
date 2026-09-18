@@ -2172,13 +2172,18 @@ class TestExaMonthlyLedger:
             assert response.usage is not None
             assert response.usage.units == Decimal("0.007")
             assert response.usage.unit_kind == _opt(_unit_kind(), "USD")
-            assert await adapter.quota() is None
+            snapshot = await adapter.quota()
+            assert snapshot is not None
+            assert snapshot.source is QuotaSource.ESTIMATED
+            assert snapshot.remaining is None
+            assert snapshot.limit is None
         finally:
             await adapter.aclose()
             await client.aclose()
 
         latest = await repo.latest_quota("exa")
-        assert latest is None or (latest.remaining is None and latest.limit is None)
+        assert latest is not None
+        assert latest.remaining is None and latest.limit is None
 
     async def test_budgeted_spend_tracks_remaining_and_derived_percent(
         self, static_resolver: None, repo: SQLiteRepository, monkeypatch: pytest.MonkeyPatch
@@ -2240,7 +2245,7 @@ class TestExaMonthlyLedger:
         assert exa_quota["unit_kind"] == "USD"
         assert Decimal(exa_quota["remaining_percent"]) == Decimal("99.9")
 
-    async def test_soft_zero_on_402_cleared_on_subsequent_success(
+    async def test_observed_zero_on_402_cleared_on_subsequent_success(
         self, static_resolver: None, repo: SQLiteRepository, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         from exa_py.api import CostDollars, Result
@@ -2264,13 +2269,19 @@ class TestExaMonthlyLedger:
                     operation=UsageOperation.SEARCH,
                 )
             assert exc_info.value.error.status_code == 402
+            assert exc_info.value.error.code == "quota_exhausted"
+            assert exc_info.value.error.retryable is False
 
             latest = await repo.latest_quota("exa")
             assert latest is not None
+            assert latest.source is QuotaSource.OBSERVED
             assert latest.remaining == Decimal("0")
             assert latest.limit == Decimal("10.00")
+            assert latest.reset_at is None
             assert latest.metadata.get("soft_zero") is True
-            assert contracts_module.is_soft_quota_zero("exa", latest) is True
+            assert latest.metadata.get("exhaustion") is True
+            assert latest.metadata.get("exhaustion_status") == 402
+            assert contracts_module.is_soft_quota_zero("exa", latest) is False
 
             # Subsequent successful operation clears soft zero
             sdk.search_error = None
@@ -2296,7 +2307,7 @@ class TestExaMonthlyLedger:
             await adapter.aclose()
             await client.aclose()
 
-    async def test_transient_429_does_not_zero_quota(
+    async def test_429_records_observed_zero_and_stays_retryable(
         self, static_resolver: None, repo: SQLiteRepository, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         sdk = _FakeExaSDK(
@@ -2317,9 +2328,13 @@ class TestExaMonthlyLedger:
                     operation=UsageOperation.SEARCH,
                 )
             assert exc_info.value.error.status_code == 429
+            assert exc_info.value.error.code == "rate_limited"
             assert exc_info.value.error.retryable is True
             latest = await repo.latest_quota("exa")
-            assert latest is None
+            assert latest is not None
+            assert latest.source is QuotaSource.OBSERVED
+            assert latest.remaining == Decimal("0")
+            assert latest.metadata.get("exhaustion_status") == 429
         finally:
             await adapter.aclose()
             await client.aclose()
@@ -2377,6 +2392,101 @@ class TestExaMonthlyLedger:
             assert snapshot.remaining == Decimal("9.987")
             assert snapshot.unit_kind == _opt(kind, "USD")
             assert snapshot.display_unit == "USD"
+        finally:
+            await adapter.aclose()
+            await client.aclose()
+
+    async def test_fallback_spend_with_manual_credits_round_trip(
+        self, static_resolver: None, repo: SQLiteRepository, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from exa_py.api import Result
+        from exa_py.api import SearchResponse as ExaSDKResponse
+
+        sdk = _FakeExaSDK(
+            search_response=ExaSDKResponse(
+                results=[
+                    Result(id="1", url="https://example.com/1", title="Exa 1"),
+                    Result(id="2", url="https://example.com/2", title="Exa 2"),
+                ],
+                resolved_search_type=None,
+                auto_date=None,
+            )
+        )
+        monkeypatch.setattr(exa_module, "AsyncExa", lambda **kw: sdk)
+
+        client = httpx.AsyncClient(timeout=30.0)
+        try:
+            adapter = ExaAdapter(
+                client,
+                api_key=SecretStr("quota-unit-secret"),
+                manual_starting_credits=Decimal("10.00"),
+            )
+            response = await tracked_call(
+                repo,
+                adapter,
+                lambda running: running.search(SearchRequest(query="fallback", limit=5)),
+                operation=UsageOperation.SEARCH,
+            )
+            assert response.usage is not None
+            assert response.usage.units == Decimal("0.007")
+            assert response.usage.metadata.get("provenance") == "exa_pricing_fallback"
+        finally:
+            await adapter.aclose()
+            await client.aclose()
+
+        latest = await repo.latest_quota("exa")
+        assert latest is not None
+        assert latest.limit == Decimal("10.00")
+        assert latest.remaining == Decimal("9.993")
+        assert latest.unit_kind == _opt(_unit_kind(), "USD")
+        assert latest.metadata.get("limit_source") == "manual_starting_credits"
+
+    async def test_429_zero_cleared_by_later_success_via_tracked_call(
+        self, static_resolver: None, repo: SQLiteRepository, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from exa_py.api import CostDollars, Result
+        from exa_py.api import SearchResponse as ExaSDKResponse
+
+        sdk = _FakeExaSDK(
+            search_error=ValueError("Request failed with status code 429: Too Many Requests")
+        )
+        monkeypatch.setattr(exa_module, "AsyncExa", lambda **kw: sdk)
+
+        client = httpx.AsyncClient(timeout=30.0)
+        try:
+            adapter = ExaAdapter(
+                client, api_key=SecretStr("quota-unit-secret"), monthly_budget=Decimal("10.00")
+            )
+            with pytest.raises(ProviderOperationError):
+                await tracked_call(
+                    repo,
+                    adapter,
+                    lambda running: running.search(SearchRequest(query="limited", limit=1)),
+                    operation=UsageOperation.SEARCH,
+                )
+            latest = await repo.latest_quota("exa")
+            assert latest is not None
+            assert latest.source is QuotaSource.OBSERVED
+            assert latest.remaining == Decimal("0")
+
+            sdk.search_error = None
+            sdk.search_response = ExaSDKResponse(
+                results=[Result(id="1", url="https://example.com/1", title="Exa 1")],
+                resolved_search_type=None,
+                auto_date=None,
+                cost_dollars=CostDollars(total=0.005),
+            )
+            await tracked_call(
+                repo,
+                adapter,
+                lambda running: running.search(SearchRequest(query="recovered", limit=1)),
+                operation=UsageOperation.SEARCH,
+            )
+            latest_after = await repo.latest_quota("exa")
+            assert latest_after is not None
+            assert latest_after.source is QuotaSource.ESTIMATED
+            assert latest_after.remaining == Decimal("9.995")
+            assert latest_after.metadata.get("soft_zero") is not True
         finally:
             await adapter.aclose()
             await client.aclose()
