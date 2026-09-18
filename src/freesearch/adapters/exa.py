@@ -203,10 +203,8 @@ class ExaAdapter(ProviderAdapter):
         self._soft_zero = False
         self._hydrated_month = None
 
-    def _current_snapshot(self, *, now: datetime | None = None) -> QuotaSnapshot | None:
+    def _current_snapshot(self, *, now: datetime | None = None) -> QuotaSnapshot:
         limit, limit_source = self._effective_limit()
-        if limit is None:
-            return None
         observed_at = now or datetime.now(UTC)
         self._rollover_if_needed(observed_at)
         metadata: dict[str, Any] = {
@@ -216,7 +214,9 @@ class ExaAdapter(ProviderAdapter):
             "limit_source": limit_source,
         }
 
-        remaining = Decimal("0") if self._soft_zero else max(Decimal("0"), limit - self._spend)
+        remaining = None
+        if limit is not None:
+            remaining = Decimal("0") if self._soft_zero else max(Decimal("0"), limit - self._spend)
         return QuotaSnapshot(
             provider=self.name,
             source=QuotaSource.ESTIMATED,
@@ -280,8 +280,6 @@ class ExaAdapter(ProviderAdapter):
 
     async def hydrate_quota(self, repository: Any) -> QuotaSnapshot | None:
         """Restore monthly spend ledger from database usage events."""
-        if self._effective_limit()[0] is None:
-            return None
         now = datetime.now(UTC)
         month_start = _month_start(now)
         self._rollover_if_needed(now)
