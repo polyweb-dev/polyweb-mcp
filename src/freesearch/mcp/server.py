@@ -88,7 +88,7 @@ def _quota_state_changed(current: QuotaSnapshot | None, projected: QuotaSnapshot
 async def _apply_parallel_seed(
     routes: Sequence[ProviderAdapter], repository: SQLiteRepository | None
 ) -> None:
-    """Apply persisted Parallel seed state after the repository is available."""
+    """Apply persisted local quota settings after the repository is available."""
 
     if repository is None:
         return
