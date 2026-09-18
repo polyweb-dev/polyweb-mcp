@@ -100,9 +100,7 @@ class ProviderConfig(BaseModel):
             raise ValueError("Parallel seed must be finite and non-negative")
         return parsed
 
-    @field_validator(
-        "exa_monthly_budget_usd", "exa_manual_starting_credits_usd", mode="before"
-    )
+    @field_validator("exa_monthly_budget_usd", "exa_manual_starting_credits_usd", mode="before")
     @classmethod
     def _exa_budget_must_be_exact(cls, value: Any) -> Any:
         if value is None:
@@ -164,9 +162,7 @@ class ProviderConfigUpdate(BaseModel):
             raise ValueError("Parallel seed must be finite and non-negative")
         return parsed
 
-    @field_validator(
-        "exa_monthly_budget_usd", "exa_manual_starting_credits_usd", mode="before"
-    )
+    @field_validator("exa_monthly_budget_usd", "exa_manual_starting_credits_usd", mode="before")
     @classmethod
     def _exa_budget_must_be_exact(cls, value: Any) -> Any:
         if value is None:
@@ -193,9 +189,7 @@ class ProviderConfigUpdate(BaseModel):
         if "exa_monthly_budget_usd" in self.model_fields_set:
             overrides["exa_monthly_budget_usd"] = self.exa_monthly_budget_usd
         if "exa_manual_starting_credits_usd" in self.model_fields_set:
-            overrides["exa_manual_starting_credits_usd"] = (
-                self.exa_manual_starting_credits_usd
-            )
+            overrides["exa_manual_starting_credits_usd"] = self.exa_manual_starting_credits_usd
         estimates = overrides.pop("free_tier_estimates", None)
         if estimates:
             merged["free_tier_estimates"].update(estimates)

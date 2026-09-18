@@ -534,9 +534,7 @@ class ExaAdapter(ProviderAdapter):
                     "rate_limited", "rate limit exceeded", retryable=True, status=429
                 )
             if status == 402:
-                return self._error(
-                    "quota_exhausted", "quotaExceeded", retryable=False, status=402
-                )
+                return self._error("quota_exhausted", "quotaExceeded", retryable=False, status=402)
             if status == 401:
                 return self._error("invalid_api_key", "invalid API key", status=401)
             if status == 403:
@@ -556,9 +554,7 @@ class ExaAdapter(ProviderAdapter):
                     "rate_limited", "rate limit exceeded", retryable=True, status=429
                 )
             if status == 402:
-                return self._error(
-                    "quota_exhausted", "quotaExceeded", retryable=False, status=402
-                )
+                return self._error("quota_exhausted", "quotaExceeded", retryable=False, status=402)
             return self._error(
                 "http_error",
                 f"HTTP {status}",
