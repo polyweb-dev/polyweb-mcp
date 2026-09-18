@@ -16,6 +16,7 @@ set "TARGET="
 set "FORCE=0"
 set "KEEP_BRANCH=0"
 set "AUTO_YES=0"
+set "CLEAN_IMAGES=0"
 
 :parse_args
 if "%~1"=="" goto :args_done
@@ -30,6 +31,10 @@ if /i "%~1"=="--force" (
     set "KEEP_BRANCH=1"
 ) else if /i "%~1"=="-k" (
     set "KEEP_BRANCH=1"
+) else if /i "%~1"=="--clean-images" (
+    set "CLEAN_IMAGES=1"
+) else if /i "%~1"=="--rmi" (
+    set "CLEAN_IMAGES=1"
 ) else if /i "%~1"=="--yes" (
     set "AUTO_YES=1"
 ) else if /i "%~1"=="-y" (
@@ -179,25 +184,57 @@ if "!AUTO_YES!"=="0" (
 )
 
 REM ------------------------------------------------------------------------------
-REM 4. Remove Worktree from Git
+REM 4. Tear down Docker Compose resources (containers, networks, volumes)
 REM ------------------------------------------------------------------------------
 if defined WORKTREE_PATH (
-    echo [1/4] Unregistering worktree from Git...
+    if exist "!WORKTREE_PATH!" (
+        where docker >nul 2>&1
+        if not errorlevel 1 (
+            set "HAS_COMPOSE=0"
+            if exist "!WORKTREE_PATH!\compose.yaml" set "HAS_COMPOSE=1"
+            if exist "!WORKTREE_PATH!\docker-compose.yml" set "HAS_COMPOSE=1"
+            if "!HAS_COMPOSE!"=="1" (
+                echo [1/5] Tearing down Docker Compose containers, networks, and volumes...
+                pushd "!WORKTREE_PATH!"
+                if "!CLEAN_IMAGES!"=="1" (
+                    call docker compose down --volumes --remove-orphans --rmi local >nul 2>&1
+                ) else (
+                    call docker compose down --volumes --remove-orphans >nul 2>&1
+                )
+                popd
+            ) else (
+                echo [1/5] [SKIP] No Docker Compose file found in worktree.
+            )
+        ) else (
+            echo [1/5] [SKIP] Docker CLI not found.
+        )
+    ) else (
+        echo [1/5] [SKIP] Worktree directory does not exist.
+    )
+) else (
+    echo [1/5] [SKIP] No worktree directory found.
+)
+
+REM ------------------------------------------------------------------------------
+REM 5. Remove Worktree from Git
+REM ------------------------------------------------------------------------------
+if defined WORKTREE_PATH (
+    echo [2/5] Unregistering worktree from Git...
     if "!FORCE!"=="1" (
         call git worktree remove --force "!WORKTREE_PATH!" >nul 2>&1
     ) else (
         call git worktree remove "!WORKTREE_PATH!" >nul 2>&1
     )
 ) else (
-    echo [1/4] [SKIP] No registered worktree path found in Git.
+    echo [2/5] [SKIP] No registered worktree path found in Git.
 )
 
 REM ------------------------------------------------------------------------------
-REM 5. Clean up filesystem leftovers (node_modules, .venv, .stryker-tmp, etc.)
+REM 6. Clean up filesystem leftovers (node_modules, .venv, .stryker-tmp, etc.)
 REM ------------------------------------------------------------------------------
 if defined WORKTREE_PATH (
     if exist "!WORKTREE_PATH!" (
-        echo [2/4] Removing filesystem directory and leftovers '!WORKTREE_PATH!'...
+        echo [3/5] Removing filesystem directory and leftovers '!WORKTREE_PATH!'...
         cmd /c rmdir /s /q "!WORKTREE_PATH!" >nul 2>&1
         if exist "!WORKTREE_PATH!" (
             timeout /t 1 /nobreak >nul 2>&1
@@ -210,27 +247,27 @@ if defined WORKTREE_PATH (
             echo [OK] Worktree directory removed completely.
         )
     ) else (
-        echo [2/4] [OK] Directory already removed from disk.
+        echo [3/5] [OK] Directory already removed from disk.
     )
 ) else (
-    echo [2/4] [SKIP] No worktree directory to remove.
+    echo [3/5] [SKIP] No worktree directory to remove.
 )
 
 REM ------------------------------------------------------------------------------
-REM 6. Prune stale worktree metadata
+REM 7. Prune stale worktree metadata
 REM ------------------------------------------------------------------------------
-echo [3/4] Pruning stale Git worktree metadata...
+echo [4/5] Pruning stale Git worktree metadata...
 call git worktree prune
 
 REM ------------------------------------------------------------------------------
-REM 7. Delete Git Branch
+REM 8. Delete Git Branch
 REM ------------------------------------------------------------------------------
 if "!KEEP_BRANCH!"=="1" (
-    echo [4/4] [SKIP] Keeping branch '!BRANCH!' [--keep-branch].
+    echo [5/5] [SKIP] Keeping branch '!BRANCH!' [--keep-branch].
 ) else (
     git show-ref --verify --quiet "refs/heads/%BRANCH%"
     if not errorlevel 1 (
-        echo [4/4] Deleting Git branch '!BRANCH!'...
+        echo [5/5] Deleting Git branch '!BRANCH!'...
         if "!FORCE!"=="1" (
             call git branch -D "!BRANCH!"
         ) else (
@@ -242,7 +279,7 @@ if "!KEEP_BRANCH!"=="1" (
             )
         )
     ) else (
-        echo [4/4] [INFO] Branch '!BRANCH!' does not exist in local Git.
+        echo [5/5] [INFO] Branch '!BRANCH!' does not exist in local Git.
     )
 )
 
@@ -260,12 +297,14 @@ echo Usage:
 echo   delete_worktree.bat ^<branch-or-folder^> [options]
 echo.
 echo Options:
-echo   -f, --force        Force removal [even if dirty or unmerged]
-echo   -k, --keep-branch  Delete worktree directory and registration, but keep the branch
-echo   -y, --yes          Skip confirmation prompt
+echo   -f, --force         Force removal [even if dirty or unmerged]
+echo   -k, --keep-branch   Delete worktree directory and registration, but keep the branch
+echo   --clean-images      Also remove locally built Docker images (--rmi local)
+echo   -y, --yes           Skip confirmation prompt
 echo.
 echo Examples:
 echo   delete_worktree.bat quota-fix
 echo   delete_worktree.bat ui-cq-refactor --force
 echo   delete_worktree.bat freesearch-quota-fix --keep-branch
+echo   delete_worktree.bat feature/AllSearchRanked --force --clean-images
 exit /b 1

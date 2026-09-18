@@ -23,8 +23,8 @@ WORKDIR /ui
 # Install pnpm, then dependencies first for optimal layer caching.
 RUN npm install -g pnpm@11
 COPY freesearch-ui/package.json freesearch-ui/pnpm-lock.yaml freesearch-ui/pnpm-workspace.yaml ./
-RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
-    pnpm install --frozen-lockfile
+RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
+    pnpm install --frozen-lockfile --store-dir /pnpm/store
 
 # Build the static bundle (VITE_API_URL stays empty → same-origin calls,
 # so nginx can reverse-proxy /api/* to the backend with no rebuild per env).
@@ -47,7 +47,7 @@ ENV PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring
 # Dependency layer first for optimal Docker layer caching.
 # --no-dev: production image skips pytest/behave/mypy/ruff (dev group).
 COPY pyproject.toml uv.lock ./
-RUN --mount=type=cache,target=/root/.cache/uv \
+RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-install-project
 
 # Runtime source: package, migrations (alembic.ini points at
@@ -55,7 +55,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 COPY src/ ./src/
 COPY alembic.ini README.md ./
 
-RUN --mount=type=cache,target=/root/.cache/uv \
+RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev
 
 # Persistent state (SQLite DB + master-key file) lives here in Compose via a

@@ -24,6 +24,9 @@ if /i "%ARG2%"=="frontend" set "MODE=ui"
 if /i "%ARG2%"=="fe" set "MODE=ui"
 if /i "%ARG2%"=="full" set "MODE=full"
 if /i "%ARG2%"=="fullstack" set "MODE=full"
+if /i "%ARG2%"=="docker" set "MODE=docker"
+if /i "%ARG2%"=="bare" set "MODE=docker"
+if /i "%ARG2%"=="none" set "MODE=docker"
 
 REM If ARG2 was not a recognized mode, it is a custom folder name
 if /i not "%MODE%"=="full" (
@@ -40,6 +43,9 @@ if /i not "%MODE%"=="full" (
         if /i "%ARG3%"=="fe" set "MODE=ui"
         if /i "%ARG3%"=="full" set "MODE=full"
         if /i "%ARG3%"=="fullstack" set "MODE=full"
+        if /i "%ARG3%"=="docker" set "MODE=docker"
+        if /i "%ARG3%"=="bare" set "MODE=docker"
+        if /i "%ARG3%"=="none" set "MODE=docker"
     )
 )
 
@@ -68,14 +74,20 @@ echo Path: %TARGET_PATH%
 echo Target mode: [%TARGET_MODE%]
 echo -------------------------------------------------------
 
-REM 1. Create Git Worktree (creates branch if it doesn't exist)
+REM 1. Create Git Worktree (checks local, then remote, else creates new from main)
 git show-ref --verify --quiet refs/heads/%TARGET_BRANCH%
-if errorlevel 1 (
-    echo [1/4] Creating branch '%TARGET_BRANCH%' and worktree at '%TARGET_PATH%'...
-    git worktree add -b "%TARGET_BRANCH%" "%TARGET_PATH%" main
-) else (
-    echo [1/4] Checking out existing branch '%TARGET_BRANCH%' in worktree '%TARGET_PATH%'...
+if not errorlevel 1 (
+    echo [1/5] Checking out existing local branch '%TARGET_BRANCH%' in worktree '%TARGET_PATH%'...
     git worktree add "%TARGET_PATH%" "%TARGET_BRANCH%"
+) else (
+    git show-ref --verify --quiet refs/remotes/origin/%TARGET_BRANCH%
+    if not errorlevel 1 (
+        echo [1/5] Checking out remote branch 'origin/%TARGET_BRANCH%' in worktree '%TARGET_PATH%'...
+        git worktree add --track -b "%TARGET_BRANCH%" "%TARGET_PATH%" "origin/%TARGET_BRANCH%"
+    ) else (
+        echo [1/5] Branch not found locally or remotely. Creating new branch '%TARGET_BRANCH%' from main...
+        git worktree add -b "%TARGET_BRANCH%" "%TARGET_PATH%" main
+    )
 )
 
 if errorlevel 1 (
@@ -85,17 +97,19 @@ if errorlevel 1 (
 
 REM 2. Copy .env file if present in main repo
 if exist ".env" (
-    echo [2/4] Copying root .env file to '%TARGET_PATH%\.env'...
+    echo [2/5] Copying root .env file to '%TARGET_PATH%\.env'...
     copy /Y ".env" "%TARGET_PATH%\.env" >nul
 ) else (
-    echo [2/4] Warning: No .env file found in root repository. Skipping copy.
+    echo [2/5] Warning: No .env file found in root repository. Skipping copy.
 )
 
 REM 3. Backend Setup (uv sync)
 if /i "%TARGET_MODE%"=="ui" (
-    echo [3/4] [SKIP] Mode is 'ui' - skipping backend 'uv sync'.
+    echo [3/5] [SKIP] Mode is 'ui' - skipping backend 'uv sync'.
+) else if /i "%TARGET_MODE%"=="docker" (
+    echo [3/5] [SKIP] Mode is 'docker' - skipping backend 'uv sync'.
 ) else (
-    echo [3/4] Initializing backend virtualenv with 'uv sync' in '%TARGET_PATH%'...
+    echo [3/5] Initializing backend virtualenv with 'uv sync' in '%TARGET_PATH%'...
     pushd "%TARGET_PATH%"
     call uv sync
     if errorlevel 1 (
@@ -108,10 +122,18 @@ if /i "%TARGET_MODE%"=="ui" (
 
 REM 4. UI Setup (pnpm install + bddgen)
 if /i "%TARGET_MODE%"=="backend" (
-    echo [4/4] [SKIP] Mode is 'backend' - skipping UI dependency setup.
+    echo [4/5] [SKIP] Mode is 'backend' - skipping UI dependency setup.
+) else if /i "%TARGET_MODE%"=="docker" (
+    echo [4/5] [SKIP] Mode is 'docker' - skipping UI dependencies.
+    if exist "%TARGET_PATH%\freesearch-ui" (
+        if exist "%~dp0..\..\freesearch-ui\.env.local" (
+            echo [4/5] Copying UI .env.local to '%TARGET_PATH%\freesearch-ui\.env.local'...
+            copy /Y "%~dp0..\..\freesearch-ui\.env.local" "%TARGET_PATH%\freesearch-ui\.env.local" >nul
+        )
+    )
 ) else (
     if exist "%TARGET_PATH%\freesearch-ui\package.json" (
-        echo [4/4] Setting up UI dependencies in '%TARGET_PATH%\freesearch-ui'...
+        echo [4/5] Setting up UI dependencies in '%TARGET_PATH%\freesearch-ui'...
         pushd "%TARGET_PATH%\freesearch-ui"
         if exist "%~dp0..\..\freesearch-ui\.env.local" (
             copy /Y "%~dp0..\..\freesearch-ui\.env.local" ".env.local" >nul
@@ -122,12 +144,23 @@ if /i "%TARGET_MODE%"=="backend" (
             popd
             exit /b 1
         )
-        echo [4/4] Generating Playwright BDD specs with 'pnpm bddgen'...
+        echo [4/5] Generating Playwright BDD specs with 'pnpm bddgen'...
         call pnpm bddgen
         popd
     ) else (
-        echo [4/4] [INFO] No freesearch-ui directory found on this branch. Skipping UI setup.
+        echo [4/5] [INFO] No freesearch-ui directory found on this branch. Skipping UI setup.
     )
+)
+
+REM 5. CodeGraph Initialization
+where codegraph >nul 2>&1
+if not errorlevel 1 (
+    echo [5/5] Initializing CodeGraph index in '%TARGET_PATH%' with 'codegraph init -y'...
+    pushd "%TARGET_PATH%"
+    call codegraph init -y
+    popd
+) else (
+    echo [5/5] [SKIP] 'codegraph' CLI not found. Skipping CodeGraph initialization.
 )
 
 echo.
@@ -141,13 +174,15 @@ echo Usage:
 echo   create_worktree.bat ^<branch-name^> [mode^|folder-name] [mode]
 echo.
 echo Modes:
+echo   docker (or bare) - Fast passthrough: git checkout + .env only (skips uv & pnpm)
 echo   backend (or be)  - Setup backend only (uv sync)
 echo   ui (or frontend) - Setup UI only (pnpm install + bddgen)
 echo   full (default)   - Setup both backend and UI
 echo.
 echo Examples:
+echo   create_worktree.bat my-feature docker
 echo   create_worktree.bat my-feature ui
 echo   create_worktree.bat my-feature backend
 echo   create_worktree.bat my-feature full
-echo   create_worktree.bat my-feature custom-folder-name ui
+echo   create_worktree.bat my-feature custom-folder-name docker
 exit /b 1
