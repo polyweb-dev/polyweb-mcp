@@ -13,6 +13,7 @@ import time
 from collections.abc import Callable
 from contextlib import suppress
 from datetime import UTC, datetime
+from decimal import Decimal
 from hashlib import sha256
 from typing import Any, Literal
 
@@ -266,9 +267,11 @@ def _register_manual_quota_routes(app: FastAPI) -> None:
         """Store the billing anchor and return the ESTIMATED capacity view."""
 
         name = _require_provider(provider_id)
-        return await persist_manual_quota(
+        response = await persist_manual_quota(
             request.app.state.repository, name, update, datetime.now(UTC)
         )
+        await _apply_exa_manual_credits(request, name, update.allowance)
+        return response
 
     @app.delete("/api/v1/providers/{provider_id}/manual-quota", status_code=204)
     async def delete_manual_quota(provider_id: str, request: Request) -> None:
@@ -276,6 +279,23 @@ def _register_manual_quota_routes(app: FastAPI) -> None:
 
         name = _require_provider(provider_id)
         await clear_manual_quota(request.app.state.repository, name)
+        await _apply_exa_manual_credits(request, name, None)
+
+
+async def _apply_exa_manual_credits(
+    request: Request, provider: ProviderName, credits: Decimal | None
+) -> None:
+    """Persist and apply Exa prepaid credits through the existing manual route."""
+    if provider is not ProviderName.EXA:
+        return
+    current = await effective_provider_config(request.app.state.repository, provider)
+    updated = ProviderConfigUpdate(exa_manual_starting_credits_usd=credits).apply_to(current)
+    await persist_provider_config(request.app.state.repository, provider, updated)
+    routes: list[ProviderAdapter] = request.app.state._routes
+    adapter = next((route for route in routes if route.name == provider.value), None)
+    setter = getattr(adapter, "set_manual_starting_credits", None)
+    if callable(setter):
+        setter(credits)
 
 
 def _require_oauth_provider(provider_id: str) -> ProviderName:
@@ -567,6 +587,11 @@ async def persist_provider_config(
                 if config.exa_monthly_budget_usd is not None
                 else None
             ),
+            "exa_manual_starting_credits_usd": (
+                str(config.exa_manual_starting_credits_usd)
+                if config.exa_manual_starting_credits_usd is not None
+                else None
+            ),
         }
     }
     await repository.set_runtime_setting(_provider_key(provider), payload)
@@ -849,5 +874,8 @@ async def _ensure_provider_adapter(request: Request, provider: ProviderName) -> 
         exa_setter = getattr(adapter, "set_monthly_budget", None)
         if callable(exa_setter):
             exa_setter(config.exa_monthly_budget_usd)
+        credits_setter = getattr(adapter, "set_manual_starting_credits", None)
+        if callable(credits_setter):
+            credits_setter(config.exa_manual_starting_credits_usd)
         routes.append(adapter)
         return adapter

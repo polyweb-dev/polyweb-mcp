@@ -106,6 +106,9 @@ async def _apply_parallel_seed(
                 setter = getattr(adapter, "set_monthly_budget", None)
                 if callable(setter):
                     setter(config.exa_monthly_budget_usd)
+                credits_setter = getattr(adapter, "set_manual_starting_credits", None)
+                if callable(credits_setter):
+                    credits_setter(config.exa_manual_starting_credits_usd)
             hydrator = getattr(adapter, "hydrate_quota", None)
             if not callable(hydrator):
                 continue

@@ -127,6 +127,7 @@ class ExaAdapter(ProviderAdapter):
         sdk_client: AsyncExa | None = None,
         api_key: SecretStr | None = None,
         monthly_budget: Decimal | None = None,
+        manual_starting_credits: Decimal | None = None,
     ) -> None:
         """Wrap operations in the shared resilience runner.
 
@@ -135,7 +136,8 @@ class ExaAdapter(ProviderAdapter):
         :meth:`aclose`. ``sdk_client`` is a test-only seam replacing the real
         SDK client. The SDK owns its own HTTPX client carrying the resolver
         key; the caller's client is never mutated or closed here.
-        ``monthly_budget`` seeds the local monthly USD spend allowance.
+        ``manual_starting_credits`` takes precedence over ``monthly_budget``
+        when the operator stores a prepaid balance through the manual-quota route.
         """
         sdk = sdk_client or self._build_sdk(api_key)
         if client is None:
@@ -148,6 +150,11 @@ class ExaAdapter(ProviderAdapter):
         self._sdk = sdk
         self._monthly_budget = (
             self._validate_budget(monthly_budget) if monthly_budget is not None else None
+        )
+        self._manual_starting_credits = (
+            self._validate_budget(manual_starting_credits)
+            if manual_starting_credits is not None
+            else None
         )
         self._spend = Decimal("0")
         self._soft_zero = False
@@ -174,6 +181,19 @@ class ExaAdapter(ProviderAdapter):
         self._ledger_month = _month_start(datetime.now(UTC))
         self._hydrated_month = None
 
+    def set_manual_starting_credits(self, credits: Decimal | None) -> None:
+        """Apply the operator-entered prepaid balance without resetting spend."""
+        self._manual_starting_credits = (
+            self._validate_budget(credits) if credits is not None else None
+        )
+
+    def _effective_limit(self) -> tuple[Decimal | None, str | None]:
+        if self._manual_starting_credits is not None:
+            return self._manual_starting_credits, "manual_starting_credits"
+        if self._monthly_budget is not None:
+            return self._monthly_budget, "monthly_budget"
+        return None, None
+
     def _rollover_if_needed(self, now: datetime) -> None:
         month = _month_start(now)
         if month == self._ledger_month:
@@ -184,7 +204,8 @@ class ExaAdapter(ProviderAdapter):
         self._hydrated_month = None
 
     def _current_snapshot(self, *, now: datetime | None = None) -> QuotaSnapshot | None:
-        if self._monthly_budget is None:
+        limit, limit_source = self._effective_limit()
+        if limit is None:
             return None
         observed_at = now or datetime.now(UTC)
         self._rollover_if_needed(observed_at)
@@ -192,9 +213,9 @@ class ExaAdapter(ProviderAdapter):
             "window": "monthly",
             "spend_usd": self._spend,
             "soft_zero": self._soft_zero,
+            "limit_source": limit_source,
         }
 
-        limit = self._monthly_budget
         remaining = Decimal("0") if self._soft_zero else max(Decimal("0"), limit - self._spend)
         return QuotaSnapshot(
             provider=self.name,
@@ -235,7 +256,7 @@ class ExaAdapter(ProviderAdapter):
 
     async def hydrate_quota(self, repository: Any) -> QuotaSnapshot | None:
         """Restore monthly spend ledger from database usage events."""
-        if self._monthly_budget is None:
+        if self._effective_limit()[0] is None:
             return None
         now = datetime.now(UTC)
         month_start = _month_start(now)

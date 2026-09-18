@@ -74,6 +74,7 @@ class ProviderConfig(BaseModel):
     reset_schedule: str | None = Field(default=None, min_length=1)
     parallel_free_seed_usd: Decimal | None = Field(default=None, ge=0)
     exa_monthly_budget_usd: Decimal | None = Field(default=None, ge=0)
+    exa_manual_starting_credits_usd: Decimal | None = Field(default=None, ge=0)
 
     @field_validator("free_tier_estimates", mode="before")
     @classmethod
@@ -99,7 +100,9 @@ class ProviderConfig(BaseModel):
             raise ValueError("Parallel seed must be finite and non-negative")
         return parsed
 
-    @field_validator("exa_monthly_budget_usd", mode="before")
+    @field_validator(
+        "exa_monthly_budget_usd", "exa_manual_starting_credits_usd", mode="before"
+    )
     @classmethod
     def _exa_budget_must_be_exact(cls, value: Any) -> Any:
         if value is None:
@@ -133,6 +136,7 @@ class ProviderConfigUpdate(BaseModel):
     reset_schedule: str | None = Field(default=None, min_length=1)
     parallel_free_seed_usd: Decimal | None = Field(default=None, ge=0)
     exa_monthly_budget_usd: Decimal | None = Field(default=None, ge=0)
+    exa_manual_starting_credits_usd: Decimal | None = Field(default=None, ge=0)
 
     @field_validator("free_tier_estimates", mode="before")
     @classmethod
@@ -160,7 +164,9 @@ class ProviderConfigUpdate(BaseModel):
             raise ValueError("Parallel seed must be finite and non-negative")
         return parsed
 
-    @field_validator("exa_monthly_budget_usd", mode="before")
+    @field_validator(
+        "exa_monthly_budget_usd", "exa_manual_starting_credits_usd", mode="before"
+    )
     @classmethod
     def _exa_budget_must_be_exact(cls, value: Any) -> Any:
         if value is None:
@@ -186,6 +192,10 @@ class ProviderConfigUpdate(BaseModel):
             overrides["parallel_free_seed_usd"] = self.parallel_free_seed_usd
         if "exa_monthly_budget_usd" in self.model_fields_set:
             overrides["exa_monthly_budget_usd"] = self.exa_monthly_budget_usd
+        if "exa_manual_starting_credits_usd" in self.model_fields_set:
+            overrides["exa_manual_starting_credits_usd"] = (
+                self.exa_manual_starting_credits_usd
+            )
         estimates = overrides.pop("free_tier_estimates", None)
         if estimates:
             merged["free_tier_estimates"].update(estimates)
