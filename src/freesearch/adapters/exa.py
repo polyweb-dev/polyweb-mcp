@@ -1,13 +1,13 @@
 """Exa provider adapter built on the official ``exa-py`` async SDK.
 
 The adapter wraps every SDK call in the shared :class:`ResilientRunner` and
-resolves the API key only through the process-wide provider secret resolver.
-The SDK owns its HTTPX client (``AsyncExa.client``), created lazily with the
-resolver key, so the caller's shared client is never mutated or closed; the
-adapter closes the SDK-owned client in :meth:`aclose`. Exa exposes no quota
-endpoint, so :meth:`quota` stays inherited (``None``), and request-cost
-evidence is surfaced only from the ``costDollars`` telemetry the API reports
-per response - never fabricated.
+receives its API key only through vault-backed dependency injection. The SDK
+owns its HTTPX client (``AsyncExa.client``), created lazily with that injected
+key, so the caller's shared client is never mutated or closed; the
+adapter closes the SDK-owned client in :meth:`aclose`. Exa exposes no remote
+quota endpoint, so :meth:`quota` returns only local spend state and never polls
+the provider. Measured ``costDollars`` telemetry wins; published pricing is used
+only when that response telemetry is absent.
 """
 
 import re
@@ -229,8 +229,32 @@ class ExaAdapter(ProviderAdapter):
             metadata=metadata,
         )
 
+    def _exhaustion_snapshot(self, status: int) -> QuotaSnapshot:
+        """Return an observed zero without inventing a prepaid limit."""
+        observed_at = datetime.now(UTC)
+        self._rollover_if_needed(observed_at)
+        limit, limit_source = self._effective_limit()
+        return QuotaSnapshot(
+            provider=self.name,
+            source=QuotaSource.OBSERVED,
+            remaining=Decimal("0"),
+            limit=limit,
+            unit_kind=UnitKind.USD,
+            display_unit="USD",
+            observed_at=observed_at,
+            reset_at=None,
+            metadata={
+                "window": "monthly",
+                "spend_usd": self._spend,
+                "soft_zero": True,
+                "limit_source": limit_source,
+                "exhaustion": True,
+                "exhaustion_status": status,
+            },
+        )
+
     async def quota(self) -> QuotaSnapshot | None:
-        """Return the current local monthly USD snapshot."""
+        """Return the current local monthly USD snapshot without a network poll."""
         return self._current_snapshot()
 
     def quota_after_success(
@@ -248,11 +272,11 @@ class ExaAdapter(ProviderAdapter):
         return self._current_snapshot()
 
     def quota_after_error(self, status: int | None) -> QuotaSnapshot | None:
-        """Record soft zero on 402; 429 stays transient rate limit."""
-        if status == 402:
-            self._soft_zero = True
-            return self._current_snapshot()
-        return None
+        """Mirror Brave's observed exhaustion snapshot for Exa 402 and 429."""
+        if status not in (402, 429):
+            return None
+        self._soft_zero = True
+        return self._exhaustion_snapshot(status)
 
     async def hydrate_quota(self, repository: Any) -> QuotaSnapshot | None:
         """Restore monthly spend ledger from database usage events."""
@@ -287,9 +311,9 @@ class ExaAdapter(ProviderAdapter):
         return self._current_snapshot(now=now)
 
     def _build_sdk(self, api_key: SecretStr | None = None) -> AsyncExa:
-        """Build the official SDK with the resolver key.
+        """Build the official SDK with the injected vault key.
 
-        The key comes only from the shared resolver; absent credentials fail
+        The key comes only from dependency injection; absent credentials fail
         closed rather than letting the SDK fall back to ambient ``EXA_API_KEY``
         (the SDK raises ``ValueError`` for a missing key, which would surface
         as a confusing provider error).
@@ -311,7 +335,7 @@ class ExaAdapter(ProviderAdapter):
 
     @property
     def capabilities(self) -> ProviderCapabilities:
-        return ProviderCapabilities(search=True, fetch=True, quota=False)
+        return ProviderCapabilities(search=True, fetch=True, quota=True)
 
     async def search(self, request: SearchRequest) -> SearchResponse:
         response = await self._runner.run(self.name, lambda: self._search_sdk(request))
@@ -507,7 +531,11 @@ class ExaAdapter(ProviderAdapter):
         if status is not None:
             if status == 429:
                 return self._error(
-                    "rate_limited", "usage limit exceeded", retryable=True, status=429
+                    "rate_limited", "rate limit exceeded", retryable=True, status=429
+                )
+            if status == 402:
+                return self._error(
+                    "quota_exhausted", "quotaExceeded", retryable=False, status=402
                 )
             if status == 401:
                 return self._error("invalid_api_key", "invalid API key", status=401)
@@ -523,6 +551,14 @@ class ExaAdapter(ProviderAdapter):
             )
         if isinstance(exc, httpx.HTTPStatusError):
             status = exc.response.status_code
+            if status == 429:
+                return self._error(
+                    "rate_limited", "rate limit exceeded", retryable=True, status=429
+                )
+            if status == 402:
+                return self._error(
+                    "quota_exhausted", "quotaExceeded", retryable=False, status=402
+                )
             return self._error(
                 "http_error",
                 f"HTTP {status}",
