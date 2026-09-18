@@ -26,7 +26,6 @@ from behave import given, then, when  # type: ignore[import-untyped]
 from pydantic import SecretStr, ValidationError
 
 import freesearch.adapters.brave as brave_module
-import freesearch.adapters.exa as exa_module
 import freesearch.adapters.firecrawl as firecrawl_module
 import freesearch.adapters.keenable as keenable_module
 import freesearch.adapters.parallel as parallel_module
@@ -2265,9 +2264,10 @@ def step_then_exa_budget_remaining(context: Any, remaining: str, limit: str) -> 
 
 @when("an Exa 402 soft signal arrives")
 def step_when_exa_402(context: Any) -> None:
-    _patch_resolver(context, exa_module)
     client = httpx.AsyncClient(timeout=30.0)
-    adapter = ExaAdapter(client, monthly_budget=context.exa_budget)
+    adapter = ExaAdapter(
+        client, api_key=SecretStr("quota-test-secret"), monthly_budget=context.exa_budget
+    )
     snapshot = adapter.quota_after_error(402)
     assert snapshot is not None
     _run(context, context.repository.record_quota(snapshot))
@@ -2297,6 +2297,7 @@ def step_when_exa_success_after_soft(context: Any) -> None:
             unit_kind=_require_unit_kind_model().USD,
             display_unit="USD",
         )
+
     adapter = context.exa_adapter
     snapshot = adapter.quota_after_success(_DummyResponse(), operation=UsageOperation.SEARCH)
     assert snapshot is not None
@@ -2331,25 +2332,24 @@ def step_then_exa_429_transient(context: Any) -> None:
 
 @when("I inspect Exa quota capabilities")
 def step_when_exa_capabilities(context: Any) -> None:
-    _patch_resolver(context, exa_module)
     client = httpx.AsyncClient(timeout=30.0)
     context.exa_client = client
-    context.exa_capabilities = ExaAdapter(client).capabilities
+    context.exa_capabilities = ExaAdapter(
+        client, api_key=SecretStr("quota-test-secret")
+    ).capabilities
 
 
 @then("Exa capabilities quota should stay false")
 def step_then_exa_caps(context: Any) -> None:
-    assert context.exa_capabilities.quota is False, (
-        "AC-EXA: Exa capabilities.quota must stay False"
-    )
+    assert context.exa_capabilities.quota is False, "AC-EXA: Exa capabilities.quota must stay False"
 
 
 @when("I record Exa spend without enabling the monthly budget")
 def step_when_exa_unbudgeted_spend(context: Any) -> None:
-    _patch_resolver(context, exa_module)
     client = httpx.AsyncClient(timeout=30.0)
-    adapter = ExaAdapter(client, monthly_budget=None)
+    adapter = ExaAdapter(client, api_key=SecretStr("quota-test-secret"), monthly_budget=None)
     context.exa_unbudgeted = adapter
+
     class _DummyResponse:
         usage = UsageEvent(
             provider="exa",
@@ -2360,6 +2360,7 @@ def step_when_exa_unbudgeted_spend(context: Any) -> None:
             unit_kind=_require_unit_kind_model().USD,
             display_unit="USD",
         )
+
     context.exa_unbudgeted_snapshot = adapter.quota_after_success(_DummyResponse())
 
 

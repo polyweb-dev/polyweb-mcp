@@ -2160,7 +2160,9 @@ class TestExaMonthlyLedger:
 
         client = httpx.AsyncClient(timeout=30.0)
         try:
-            adapter = ExaAdapter(client, monthly_budget=None)
+            adapter = ExaAdapter(
+                client, api_key=SecretStr("quota-unit-secret"), monthly_budget=None
+            )
             response = await tracked_call(
                 repo,
                 adapter,
@@ -2196,7 +2198,9 @@ class TestExaMonthlyLedger:
 
         client = httpx.AsyncClient(timeout=30.0)
         try:
-            adapter = ExaAdapter(client, monthly_budget=Decimal("10.00"))
+            adapter = ExaAdapter(
+                client, api_key=SecretStr("quota-unit-secret"), monthly_budget=Decimal("10.00")
+            )
             await tracked_call(
                 repo,
                 adapter,
@@ -2249,7 +2253,9 @@ class TestExaMonthlyLedger:
 
         client = httpx.AsyncClient(timeout=30.0)
         try:
-            adapter = ExaAdapter(client, monthly_budget=Decimal("10.00"))
+            adapter = ExaAdapter(
+                client, api_key=SecretStr("quota-unit-secret"), monthly_budget=Decimal("10.00")
+            )
             with pytest.raises(ProviderOperationError) as exc_info:
                 await tracked_call(
                     repo,
@@ -2300,7 +2306,9 @@ class TestExaMonthlyLedger:
 
         client = httpx.AsyncClient(timeout=30.0)
         try:
-            adapter = ExaAdapter(client, monthly_budget=Decimal("10.00"))
+            adapter = ExaAdapter(
+                client, api_key=SecretStr("quota-unit-secret"), monthly_budget=Decimal("10.00")
+            )
             with pytest.raises(ProviderOperationError) as exc_info:
                 await tracked_call(
                     repo,
@@ -2360,7 +2368,9 @@ class TestExaMonthlyLedger:
 
         client = httpx.AsyncClient(timeout=30.0)
         try:
-            adapter = ExaAdapter(client, monthly_budget=Decimal("10.00"))
+            adapter = ExaAdapter(
+                client, api_key=SecretStr("quota-unit-secret"), monthly_budget=Decimal("10.00")
+            )
             snapshot = await adapter.hydrate_quota(repo)
             assert snapshot is not None
             assert snapshot.limit == Decimal("10.00")

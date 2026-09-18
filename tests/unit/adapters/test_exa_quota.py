@@ -6,7 +6,7 @@ from decimal import Decimal
 import pytest
 from exa_py.api import CostDollars, Result, SearchResponse
 
-from freesearch.adapters.exa import EXA_DEFAULT_MONTHLY_BUDGET_USD, ExaAdapter
+from freesearch.adapters.exa import ExaAdapter, _next_month_start
 from freesearch.models.contracts import (
     QuotaSnapshot,
     QuotaSource,
@@ -95,13 +95,15 @@ def _make_search_response(cost_total: float = 0.007) -> SearchResponse:
 # --- Budget Configuration & Validation ----------------------------------------
 
 
-def test_default_monthly_budget_constant() -> None:
-    assert Decimal("10.00") == EXA_DEFAULT_MONTHLY_BUDGET_USD
-
-
-def test_default_adapter_has_default_monthly_budget() -> None:
+def test_default_adapter_is_unbudgeted_opt_in() -> None:
     adapter = ExaAdapter(_FakeClient(), runner=_DirectRunner(), sdk_client=_FakeSDK())
-    assert adapter._monthly_budget == EXA_DEFAULT_MONTHLY_BUDGET_USD
+    assert adapter._monthly_budget is None
+
+
+@pytest.mark.asyncio
+async def test_default_adapter_quota_is_none() -> None:
+    adapter = ExaAdapter(_FakeClient(), runner=_DirectRunner(), sdk_client=_FakeSDK())
+    assert await adapter.quota() is None
 
 
 def test_unbudgeted_adapter_returns_none_quota() -> None:
@@ -290,3 +292,15 @@ async def test_month_rollover_resets_ledger() -> None:
     assert snapshot.remaining == Decimal("10.00")
     assert snapshot.metadata["spend_usd"] == Decimal("0")
     assert adapter._ledger_month == datetime(2026, 9, 1, tzinfo=UTC)
+
+
+@pytest.mark.parametrize(
+    ("observed", "expected"),
+    [
+        (datetime(2026, 12, 15, 12, 0, 0, tzinfo=UTC), datetime(2027, 1, 1, tzinfo=UTC)),
+        (datetime(2026, 1, 31, 23, 59, 59, tzinfo=UTC), datetime(2026, 2, 1, tzinfo=UTC)),
+        (datetime(2026, 2, 28, 0, 0, 0, tzinfo=UTC), datetime(2026, 3, 1, tzinfo=UTC)),
+    ],
+)
+def test_next_month_start_rolls_over_year_boundary(observed: datetime, expected: datetime) -> None:
+    assert _next_month_start(observed) == expected
