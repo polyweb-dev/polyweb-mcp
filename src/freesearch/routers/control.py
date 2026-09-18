@@ -242,7 +242,7 @@ def register_control_routes(app: FastAPI) -> None:
 
 
 def _register_manual_quota_routes(app: FastAPI) -> None:
-    """Register the routing-neutral billing-anchor overlay routes."""
+    """Register billing anchors; Exa allowance also seeds its local quota."""
 
     @app.get(
         "/api/v1/providers/{provider_id}/manual-quota",
@@ -275,7 +275,7 @@ def _register_manual_quota_routes(app: FastAPI) -> None:
 
     @app.delete("/api/v1/providers/{provider_id}/manual-quota", status_code=204)
     async def delete_manual_quota(provider_id: str, request: Request) -> None:
-        """Clear the billing anchor idempotently; the overlay never steers routing."""
+        """Clear the billing anchor and any Exa manual-credit limit idempotently."""
 
         name = _require_provider(provider_id)
         await clear_manual_quota(request.app.state.repository, name)

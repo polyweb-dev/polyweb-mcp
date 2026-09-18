@@ -134,8 +134,8 @@ class ExaAdapter(ProviderAdapter):
         ``client`` is the caller-owned shared HTTPX client; when omitted the
         adapter creates a fallback client it owns and closes in
         :meth:`aclose`. ``sdk_client`` is a test-only seam replacing the real
-        SDK client. The SDK owns its own HTTPX client carrying the resolver
-        key; the caller's client is never mutated or closed here.
+        SDK client. The SDK owns its own HTTPX client carrying the injected
+        vault key; the caller's client is never mutated or closed here.
         ``manual_starting_credits`` takes precedence over ``monthly_budget``
         when the operator stores a prepaid balance through the manual-quota route.
         """
@@ -455,18 +455,20 @@ class ExaAdapter(ProviderAdapter):
             raise self._normalize_error(exc) from None
 
     async def estimate_cost(self, request: SearchRequest | FetchRequest) -> CostEstimate:
-        operation = (
-            UsageOperation.SEARCH if isinstance(request, SearchRequest) else UsageOperation.FETCH
-        )
+        if isinstance(request, SearchRequest):
+            operation = UsageOperation.SEARCH
+            units = _search_fallback_cost(request.limit, 0)
+            notes = "published fallback estimate; response costDollars wins; summaries excluded"
+        else:
+            operation = UsageOperation.FETCH
+            units = _contents_fallback_cost(request.url_count, 1)
+            notes = "published text-content fallback estimate; response costDollars wins"
         return CostEstimate(
             provider=self.name,
             operation=operation,
-            units=Decimal("0"),
+            units=units,
             currency="USD",
-            notes=(
-                "Exa does not publish a per-request price; actual cost is "
-                "reported per response in costDollars telemetry when present"
-            ),
+            notes=notes,
         )
 
     def _usage_event(

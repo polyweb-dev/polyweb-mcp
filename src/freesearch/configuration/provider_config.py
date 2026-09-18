@@ -106,10 +106,10 @@ class ProviderConfig(BaseModel):
         if value is None:
             return None
         if isinstance(value, (bool, float)):
-            raise ValueError("Exa monthly budget must be an exact Decimal input")
+            raise ValueError("Exa quota amount must be an exact Decimal input")
         parsed = Decimal(value)
         if not parsed.is_finite() or parsed < 0:
-            raise ValueError("Exa monthly budget must be finite and non-negative")
+            raise ValueError("Exa quota amount must be finite and non-negative")
         return parsed
 
     @property
@@ -168,10 +168,10 @@ class ProviderConfigUpdate(BaseModel):
         if value is None:
             return None
         if isinstance(value, (bool, float)):
-            raise ValueError("Exa monthly budget must be an exact Decimal input")
+            raise ValueError("Exa quota amount must be an exact Decimal input")
         parsed = Decimal(value)
         if not parsed.is_finite() or parsed < 0:
-            raise ValueError("Exa monthly budget must be finite and non-negative")
+            raise ValueError("Exa quota amount must be finite and non-negative")
         return parsed
 
     def apply_to(self, base: ProviderConfig) -> ProviderConfig:

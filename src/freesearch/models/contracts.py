@@ -441,11 +441,11 @@ class _ManualQuotaInputBase(ContractModel):
 
 
 class ManualQuota(_ManualQuotaInputBase):
-    """Operator-entered billing anchor; provider-agnostic and routing-neutral.
+    """Operator-entered billing anchor shared by the provider control routes.
 
     The unit is implied by the provider (Brave/Exa/Parallel use USD with
-    Brave costing $0.005/request; other providers use REQUEST/CREDIT). This
-    model never steers routing; it only feeds the ESTIMATED control response.
+    Brave costing $0.005/request; other providers use REQUEST/CREDIT). Exa also
+    treats ``allowance`` as manual starting credits for its local quota ledger.
     """
 
 
