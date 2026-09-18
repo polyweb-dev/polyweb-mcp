@@ -386,7 +386,18 @@ Docs:
 
 ### 3.7 Exa — response-reported USD usage, no fabricated quota
 
-Current Exa search responses can include a `costDollars.total` breakdown. Record that returned amount as Decimal USD and do not replace it with a blanket request estimate. A normal Exa API key does not expose its remaining balance or monthly denominator. Exa's Team Management API can return per-key USD usage and configured key budgets, but it requires a separate service API key plus the target API-key UUID and is not wired in V1. Therefore Exa shows tracked USD spend with **Budget not configured** and no normalized percentage until either an explicit local monthly budget or the admin integration is configured. The shared model labels reported spend as `unit_kind=USD` and prevents it being added to request or credit counts.
+Current Exa responses can include a `costDollars.total` breakdown. That measured Decimal USD amount always wins and is never overwritten. When the field is absent, successful calls use this published-price fallback (source: [Exa pricing](https://exa.ai/pricing), accessed 2026-09-18):
+
+| Operation | Estimated fallback |
+|---|---|
+| `/search` | USD 0.007 base, including zero through 10 returned results; USD 0.001 for each returned result above 10; USD 0.001 for each non-empty AI summary. Missing summary fields count as zero. |
+| `/contents` | USD 0.001 per returned page per requested content type. Text plus highlights is two content types (2x); the current single-page text fetch is 1x. A response with no matching page fails rather than recording fabricated spend. |
+
+Fallback events are marked `estimated` with pricing provenance, while measured `costDollars` events retain their vendor-reported value. Both remain Decimal USD and monthly spend is summed only from successful USD events.
+
+For Exa, the existing manual-quota route's `allowance` is the operator-entered `manual_starting_credits`. It takes precedence over the optional `monthly_budget`; if neither is configured, remaining and limit stay unknown. Remaining is `max(0, manual_starting_credits - monthly spend)`. These local snapshots are `ESTIMATED`, exhaustion observations are `OBSERVED`, and Exa quota is never `AUTHORITATIVE`.
+
+HTTP 429 (`rate limit exceeded`) and HTTP 402 (`quotaExceeded`) both publish an observed zero-remaining snapshot until a later successful metered operation clears the signal. No monthly budget is inferred from rate-limit headers. Team Management usage/`budgetCents` integration and header-based QPS throttling remain deferred upgrades.
 
 Docs:
 - [Exa search response (`costDollars`)](https://exa.ai/docs/reference/search)

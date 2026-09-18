@@ -1,13 +1,13 @@
 """Exa provider adapter built on the official ``exa-py`` async SDK.
 
 The adapter wraps every SDK call in the shared :class:`ResilientRunner` and
-resolves the API key only through the process-wide provider secret resolver.
-The SDK owns its HTTPX client (``AsyncExa.client``), created lazily with the
-resolver key, so the caller's shared client is never mutated or closed; the
-adapter closes the SDK-owned client in :meth:`aclose`. Exa exposes no quota
-endpoint, so :meth:`quota` stays inherited (``None``), and request-cost
-evidence is surfaced only from the ``costDollars`` telemetry the API reports
-per response - never fabricated.
+receives its API key only through vault-backed dependency injection. The SDK
+owns its HTTPX client (``AsyncExa.client``), created lazily with that injected
+key, so the caller's shared client is never mutated or closed; the
+adapter closes the SDK-owned client in :meth:`aclose`. Exa exposes no remote
+quota endpoint, so :meth:`quota` returns only local spend state and never polls
+the provider. Measured ``costDollars`` telemetry wins; published pricing is used
+only when that response telemetry is absent.
 """
 
 import re
@@ -37,6 +37,8 @@ from freesearch.models.contracts import (
     FetchResponse,
     ProviderCapabilities,
     ProviderError,
+    QuotaSnapshot,
+    QuotaSource,
     SearchRequest,
     SearchResponse,
     SearchResult,
@@ -48,6 +50,10 @@ from freesearch.models.contracts import (
 __all__ = ["ExaAdapter"]
 
 _NAME = "exa"
+_SEARCH_BASE_USD = Decimal("0.007")
+_SEARCH_INCREMENT_USD = Decimal("0.001")
+_CONTENTS_PAGE_USD = Decimal("0.001")
+_FALLBACK_PRICING_DATE = "2026-09-18"
 # The SDK surfaces HTTP failures as ``ValueError("Request failed with status
 # code {status}: {body}")``; only the status code is parsed out - the body is
 # never included so provider text cannot leak.
@@ -84,6 +90,32 @@ def _path_without_root_slash(path: str) -> str:
     return "" if path == "/" else path
 
 
+def _month_start(value: datetime) -> datetime:
+    return datetime(value.year, value.month, 1, tzinfo=UTC)
+
+
+def _next_month_start(value: datetime) -> datetime:
+    if value.month == 12:
+        return datetime(value.year + 1, 1, 1, tzinfo=UTC)
+    return datetime(value.year, value.month + 1, 1, tzinfo=UTC)
+
+
+def _search_fallback_cost(result_count: int, summary_count: int) -> Decimal:
+    """Return the published search fallback price using exact USD decimals."""
+    extra_results = max(0, result_count - 10)
+    return _SEARCH_BASE_USD + _SEARCH_INCREMENT_USD * Decimal(extra_results + summary_count)
+
+
+def _contents_fallback_cost(page_count: int, content_type_count: int) -> Decimal:
+    """Return the published contents fallback price per page and content type."""
+    return _CONTENTS_PAGE_USD * Decimal(page_count) * Decimal(content_type_count)
+
+
+def _summary_count(results: list[Result]) -> int:
+    """Count non-empty AI summaries; omitted summary fields cost nothing."""
+    return sum(1 for item in results if bool(getattr(item, "summary", None)))
+
+
 class ExaAdapter(ProviderAdapter):
     """Search, fetch, and cost operations against the Exa API."""
 
@@ -94,14 +126,18 @@ class ExaAdapter(ProviderAdapter):
         runner: ResilientRunner | None = None,
         sdk_client: AsyncExa | None = None,
         api_key: SecretStr | None = None,
+        monthly_budget: Decimal | None = None,
+        manual_starting_credits: Decimal | None = None,
     ) -> None:
         """Wrap operations in the shared resilience runner.
 
         ``client`` is the caller-owned shared HTTPX client; when omitted the
         adapter creates a fallback client it owns and closes in
         :meth:`aclose`. ``sdk_client`` is a test-only seam replacing the real
-        SDK client. The SDK owns its own HTTPX client carrying the resolver
-        key; the caller's client is never mutated or closed here.
+        SDK client. The SDK owns its own HTTPX client carrying the injected
+        vault key; the caller's client is never mutated or closed here.
+        ``manual_starting_credits`` takes precedence over ``monthly_budget``
+        when the operator stores a prepaid balance through the manual-quota route.
         """
         sdk = sdk_client or self._build_sdk(api_key)
         if client is None:
@@ -112,11 +148,170 @@ class ExaAdapter(ProviderAdapter):
         self._client = client
         self._runner = runner or ResilientRunner(client)
         self._sdk = sdk
+        self._monthly_budget = (
+            self._validate_budget(monthly_budget) if monthly_budget is not None else None
+        )
+        self._manual_starting_credits = (
+            self._validate_budget(manual_starting_credits)
+            if manual_starting_credits is not None
+            else None
+        )
+        self._spend = Decimal("0")
+        self._soft_zero = False
+        self._ledger_month = _month_start(datetime.now(UTC))
+        self._hydrated_month: datetime | None = None
+
+    @staticmethod
+    def _validate_budget(budget: Any) -> Decimal:
+        if isinstance(budget, (bool, float)):
+            raise ValueError("Exa budget must be an exact Decimal input")
+        parsed = Decimal(str(budget)) if not isinstance(budget, Decimal) else budget
+        if not parsed.is_finite() or parsed < 0:
+            raise ValueError("Exa budget must be finite and non-negative")
+        return parsed
+
+    def set_monthly_budget(self, budget: Decimal | None) -> None:
+        """Apply a validated local monthly budget without mutating other state."""
+        parsed = self._validate_budget(budget) if budget is not None else None
+        if parsed == self._monthly_budget:
+            return
+        self._monthly_budget = parsed
+        self._spend = Decimal("0")
+        self._soft_zero = False
+        self._ledger_month = _month_start(datetime.now(UTC))
+        self._hydrated_month = None
+
+    def set_manual_starting_credits(self, credits: Decimal | None) -> None:
+        """Apply the operator-entered prepaid balance without resetting spend."""
+        self._manual_starting_credits = (
+            self._validate_budget(credits) if credits is not None else None
+        )
+
+    def _effective_limit(self) -> tuple[Decimal | None, str | None]:
+        if self._manual_starting_credits is not None:
+            return self._manual_starting_credits, "manual_starting_credits"
+        if self._monthly_budget is not None:
+            return self._monthly_budget, "monthly_budget"
+        return None, None
+
+    def _rollover_if_needed(self, now: datetime) -> None:
+        month = _month_start(now)
+        if month == self._ledger_month:
+            return
+        self._ledger_month = month
+        self._spend = Decimal("0")
+        self._soft_zero = False
+        self._hydrated_month = None
+
+    def _current_snapshot(self, *, now: datetime | None = None) -> QuotaSnapshot:
+        limit, limit_source = self._effective_limit()
+        observed_at = now or datetime.now(UTC)
+        self._rollover_if_needed(observed_at)
+        metadata: dict[str, Any] = {
+            "window": "monthly",
+            "spend_usd": self._spend,
+            "soft_zero": self._soft_zero,
+            "limit_source": limit_source,
+        }
+
+        remaining = None
+        if limit is not None:
+            remaining = Decimal("0") if self._soft_zero else max(Decimal("0"), limit - self._spend)
+        return QuotaSnapshot(
+            provider=self.name,
+            source=QuotaSource.ESTIMATED,
+            remaining=remaining,
+            limit=limit,
+            unit_kind=UnitKind.USD,
+            display_unit="USD",
+            observed_at=observed_at,
+            reset_at=_next_month_start(observed_at),
+            metadata=metadata,
+        )
+
+    def _exhaustion_snapshot(self, status: int) -> QuotaSnapshot:
+        """Return an observed zero without inventing a prepaid limit."""
+        observed_at = datetime.now(UTC)
+        self._rollover_if_needed(observed_at)
+        limit, limit_source = self._effective_limit()
+        return QuotaSnapshot(
+            provider=self.name,
+            source=QuotaSource.OBSERVED,
+            remaining=Decimal("0"),
+            limit=limit,
+            unit_kind=UnitKind.USD,
+            display_unit="USD",
+            observed_at=observed_at,
+            reset_at=None,
+            metadata={
+                "window": "monthly",
+                "spend_usd": self._spend,
+                "soft_zero": True,
+                "limit_source": limit_source,
+                "exhaustion": True,
+                "exhaustion_status": status,
+            },
+        )
+
+    async def quota(self) -> QuotaSnapshot | None:
+        """Return the current local monthly USD snapshot without a network poll."""
+        return self._current_snapshot()
+
+    def quota_after_success(
+        self, response: object, *, operation: UsageOperation | None = None
+    ) -> QuotaSnapshot | None:
+        """Update spend from response usage event and return updated snapshot."""
+        usage = getattr(response, "usage", None)
+        units = getattr(usage, "units", None)
+        if isinstance(units, Decimal) and units.is_finite():
+            now = datetime.now(UTC)
+            self._rollover_if_needed(now)
+            if units > 0:
+                self._spend += units
+            self._soft_zero = False
+        return self._current_snapshot()
+
+    def quota_after_error(self, status: int | None) -> QuotaSnapshot | None:
+        """Mirror Brave's observed exhaustion snapshot for Exa 402 and 429."""
+        if status not in (402, 429):
+            return None
+        self._soft_zero = True
+        return self._exhaustion_snapshot(status)
+
+    async def hydrate_quota(self, repository: Any) -> QuotaSnapshot | None:
+        """Restore monthly spend ledger from database usage events."""
+        now = datetime.now(UTC)
+        month_start = _month_start(now)
+        self._rollover_if_needed(now)
+        if self._hydrated_month == month_start:
+            return None
+        latest = await repository.latest_quota(self.name)
+        events = await repository.list_usage(provider=self.name)
+        current = [
+            event
+            for event in events
+            if event.observed_at >= month_start
+            and event.status.value == "success"
+            and event.unit_kind is UnitKind.USD
+        ]
+        self._spend = sum((event.units for event in current), Decimal("0"))
+        later_success = any(
+            event.observed_at > latest.observed_at for event in current if latest is not None
+        )
+        self._soft_zero = bool(
+            latest is not None
+            and latest.remaining == Decimal("0")
+            and not later_success
+            and latest.observed_at >= month_start
+            and latest.metadata.get("soft_zero") is True
+        )
+        self._hydrated_month = month_start
+        return self._current_snapshot(now=now)
 
     def _build_sdk(self, api_key: SecretStr | None = None) -> AsyncExa:
-        """Build the official SDK with the resolver key.
+        """Build the official SDK with the injected vault key.
 
-        The key comes only from the shared resolver; absent credentials fail
+        The key comes only from dependency injection; absent credentials fail
         closed rather than letting the SDK fall back to ambient ``EXA_API_KEY``
         (the SDK raises ``ValueError`` for a missing key, which would surface
         as a confusing provider error).
@@ -138,13 +333,22 @@ class ExaAdapter(ProviderAdapter):
 
     @property
     def capabilities(self) -> ProviderCapabilities:
-        return ProviderCapabilities(search=True, fetch=True, quota=False)
+        return ProviderCapabilities(search=True, fetch=True, quota=True)
 
     async def search(self, request: SearchRequest) -> SearchResponse:
         response = await self._runner.run(self.name, lambda: self._search_sdk(request))
         try:
             results = [self._normalize_result(item) for item in response.results]
-            usage = self._usage_event(response, UsageOperation.SEARCH)
+            summary_count = _summary_count(response.results)
+            usage = self._usage_event_with_fallback(
+                response,
+                UsageOperation.SEARCH,
+                units=_search_fallback_cost(len(response.results), summary_count),
+                metadata={
+                    "result_count": len(response.results),
+                    "summary_count": summary_count,
+                },
+            )
         except ProviderOperationError:
             raise
         except Exception:
@@ -220,7 +424,15 @@ class ExaAdapter(ProviderAdapter):
                     fetched_at=datetime.now(UTC),
                     metadata={"truncated": True} if truncated else {},
                 ),
-                usage=self._usage_event(response, UsageOperation.FETCH),
+                usage=self._usage_event_with_fallback(
+                    response,
+                    UsageOperation.FETCH,
+                    units=_contents_fallback_cost(len(response.results), 1),
+                    metadata={
+                        "page_count": len(response.results),
+                        "content_type_count": 1,
+                    },
+                ),
             )
         except ProviderOperationError:
             raise
@@ -243,18 +455,20 @@ class ExaAdapter(ProviderAdapter):
             raise self._normalize_error(exc) from None
 
     async def estimate_cost(self, request: SearchRequest | FetchRequest) -> CostEstimate:
-        operation = (
-            UsageOperation.SEARCH if isinstance(request, SearchRequest) else UsageOperation.FETCH
-        )
+        if isinstance(request, SearchRequest):
+            operation = UsageOperation.SEARCH
+            units = _search_fallback_cost(request.limit, 0)
+            notes = "published fallback estimate; response costDollars wins; summaries excluded"
+        else:
+            operation = UsageOperation.FETCH
+            units = _contents_fallback_cost(request.url_count, 1)
+            notes = "published text-content fallback estimate; response costDollars wins"
         return CostEstimate(
             provider=self.name,
             operation=operation,
-            units=Decimal("0"),
+            units=units,
             currency="USD",
-            notes=(
-                "Exa does not publish a per-request price; actual cost is "
-                "reported per response in costDollars telemetry when present"
-            ),
+            notes=notes,
         )
 
     def _usage_event(
@@ -285,13 +499,42 @@ class ExaAdapter(ProviderAdapter):
             metadata={},
         )
 
+    def _usage_event_with_fallback(
+        self,
+        response: ExaSearchResponse[Result],
+        operation: UsageOperation,
+        *,
+        units: Decimal,
+        metadata: dict[str, Any],
+    ) -> UsageEvent | None:
+        """Prefer measured costDollars; estimate only when telemetry is absent."""
+        measured = self._usage_event(response, operation)
+        if response.cost_dollars is not None:
+            return measured
+        return UsageEvent(
+            provider=self.name,
+            operation=operation,
+            units=units,
+            unit_kind=UnitKind.USD,
+            display_unit="USD",
+            observed_at=datetime.now(UTC),
+            metadata={
+                "provenance": "exa_pricing_fallback",
+                "source": QuotaSource.ESTIMATED.value,
+                "pricing_date": _FALLBACK_PRICING_DATE,
+                **metadata,
+            },
+        )
+
     def _normalize_error(self, exc: Exception) -> ProviderOperationError:
         status = _sdk_status_code(exc)
         if status is not None:
             if status == 429:
                 return self._error(
-                    "rate_limited", "usage limit exceeded", retryable=True, status=429
+                    "rate_limited", "rate limit exceeded", retryable=True, status=429
                 )
+            if status == 402:
+                return self._error("quota_exhausted", "quotaExceeded", retryable=False, status=402)
             if status == 401:
                 return self._error("invalid_api_key", "invalid API key", status=401)
             if status == 403:
@@ -306,6 +549,12 @@ class ExaAdapter(ProviderAdapter):
             )
         if isinstance(exc, httpx.HTTPStatusError):
             status = exc.response.status_code
+            if status == 429:
+                return self._error(
+                    "rate_limited", "rate limit exceeded", retryable=True, status=429
+                )
+            if status == 402:
+                return self._error("quota_exhausted", "quotaExceeded", retryable=False, status=402)
             return self._error(
                 "http_error",
                 f"HTTP {status}",

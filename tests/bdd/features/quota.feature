@@ -256,6 +256,47 @@ Feature: Quota and usage accounting (QUOTA.md acceptance)
     When I record Parallel spend without enabling the free seed
     Then the Parallel quota should report remaining unknown with limit unknown
 
+  # AC-EXA — Exa spend ledger, pricing fallback, manual credits, exhaustion-aware
+  @exa @ac-exa
+  Scenario: Exa monthly budget is opt-in and exhaustion-aware
+    Given an isolated quota repository
+    When I enable the Exa USD 10.00 monthly budget and record USD 0.007 of successful spend
+    Then the Exa remaining should be USD 9.993 of USD 10.00
+    When an Exa 402 exhaustion signal arrives
+    Then the Exa remaining should read observed zero
+    When a later Exa billed operation succeeds
+    Then the Exa exhaustion should be cleared
+    When an Exa 429 exhaustion signal arrives
+    Then the Exa 429 should surface observed zero
+
+  @exa @ac-exa
+  Scenario: Exa capabilities report quota with local snapshots and no balance poll
+    Given an isolated quota repository
+    When I inspect Exa quota capabilities
+    Then Exa capabilities quota should read true
+
+  @exa @ac-exa
+  Scenario: Unbudgeted Exa accounts track spend without a fabricated balance
+    Given an isolated quota repository
+    When I record Exa spend without enabling the monthly budget
+    Then the Exa quota should report remaining unknown with limit unknown
+
+  @exa @ac-exa
+  Scenario: Exa fallback pricing values untelemetered spend into the monthly sum
+    Given an isolated quota repository
+    When I run an Exa search with 3 results and no cost telemetry
+    Then the Exa usage should carry fallback estimate USD 0.007
+    When I run an Exa metered search costing USD 0.005
+    And I hydrate the Exa monthly ledger against a USD 10.00 budget
+    Then the Exa remaining should be USD 9.988 of USD 10.00
+
+  @exa @ac-exa
+  Scenario: Exa manual starting credits anchor remaining spend
+    Given an isolated quota repository
+    When I set Exa manual starting credits to USD 5.00 and record USD 0.007 of spend
+    Then the Exa remaining should be USD 4.993 of USD 5.00
+
+
   # B-QUOTA-BRAVE-REGRESSION — degenerate 0/0 is unknown and routable (AC-2/AC-6).
   @quota @ac2
   Scenario: Brave degenerate zero limit is treated as unknown and stays routable

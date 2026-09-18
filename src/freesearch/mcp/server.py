@@ -88,7 +88,7 @@ def _quota_state_changed(current: QuotaSnapshot | None, projected: QuotaSnapshot
 async def _apply_parallel_seed(
     routes: Sequence[ProviderAdapter], repository: SQLiteRepository | None
 ) -> None:
-    """Apply persisted Parallel seed state after the repository is available."""
+    """Apply persisted local quota settings after the repository is available."""
 
     if repository is None:
         return
@@ -101,6 +101,14 @@ async def _apply_parallel_seed(
                 setter = getattr(adapter, "set_free_seed", None)
                 if callable(setter):
                     setter(config.parallel_free_seed_usd)
+            if adapter.name == "exa":
+                config = await effective_config_for_name(repository, adapter.name)
+                setter = getattr(adapter, "set_monthly_budget", None)
+                if callable(setter):
+                    setter(config.exa_monthly_budget_usd)
+                credits_setter = getattr(adapter, "set_manual_starting_credits", None)
+                if callable(credits_setter):
+                    credits_setter(config.exa_manual_starting_credits_usd)
             hydrator = getattr(adapter, "hydrate_quota", None)
             if not callable(hydrator):
                 continue
