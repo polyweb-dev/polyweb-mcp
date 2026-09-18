@@ -88,6 +88,14 @@ def build_adapters(client: httpx.AsyncClient | None = None) -> list[ProviderAdap
                 adapters.append(
                     ParallelAdapter(http_client, free_seed=record.parallel_free_seed_usd)
                 )
+            elif name is ProviderName.EXA:
+                adapters.append(
+                    ExaAdapter(
+                        http_client,
+                        monthly_budget=record.exa_monthly_budget_usd,
+                        manual_starting_credits=record.exa_manual_starting_credits_usd,
+                    )
+                )
             else:
                 adapters.append(adapter_cls(http_client))
         except Exception:

@@ -243,7 +243,7 @@ def is_soft_quota_zero(provider: str, snapshot: QuotaSnapshot) -> bool:
         # let the provider's 429 response remain the authoritative pressure.
         return True
     return (
-        provider == "parallel"
+        provider in ("parallel", "exa")
         and snapshot.source is QuotaSource.ESTIMATED
         and (snapshot.metadata.get("soft_zero") is not False)
     )
@@ -441,11 +441,11 @@ class _ManualQuotaInputBase(ContractModel):
 
 
 class ManualQuota(_ManualQuotaInputBase):
-    """Operator-entered billing anchor; provider-agnostic and routing-neutral.
+    """Operator-entered billing anchor shared by the provider control routes.
 
     The unit is implied by the provider (Brave/Exa/Parallel use USD with
-    Brave costing $0.005/request; other providers use REQUEST/CREDIT). This
-    model never steers routing; it only feeds the ESTIMATED control response.
+    Brave costing $0.005/request; other providers use REQUEST/CREDIT). Exa also
+    treats ``allowance`` as manual starting credits for its local quota ledger.
     """
 
 

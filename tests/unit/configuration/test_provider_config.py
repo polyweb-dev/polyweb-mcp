@@ -336,3 +336,199 @@ def test_env_example_documents_valid_json_override(monkeypatch) -> None:
     assert set(registry) == set(ProviderName)
     assert registry[ProviderName.EXA].priority == 10
     assert registry[ProviderName.TAVILY].enabled is False
+
+
+# EXA monthly budget (opt-in local USD ledger): validator branches, the None
+# default, apply_to set/unset carry, and env-override round-trip.
+
+
+def test_exa_monthly_budget_defaults_to_none_opt_in() -> None:
+    assert ProviderConfig().exa_monthly_budget_usd is None
+    assert ProviderConfigUpdate().exa_monthly_budget_usd is None
+    assert get_provider_configs()[ProviderName.EXA].exa_monthly_budget_usd is None
+
+
+@pytest.mark.parametrize("raw", [True, False, 10.5, 0.0])
+def test_exa_monthly_budget_rejects_bool_and_float(raw: object) -> None:
+    """Bool/float input is rejected: budgets must be exact Decimal input."""
+
+    for model in (ProviderConfig, ProviderConfigUpdate):
+        with pytest.raises(ValidationError):
+            model(exa_monthly_budget_usd=raw)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        Decimal("-5.00"),
+        "-5.00",
+        -1,
+        "NaN",
+        "Infinity",
+        "-Infinity",
+        Decimal("NaN"),
+        Decimal("Infinity"),
+    ],
+)
+def test_exa_monthly_budget_rejects_negative_and_non_finite(raw: object) -> None:
+    for model in (ProviderConfig, ProviderConfigUpdate):
+        with pytest.raises(ValidationError):
+            model(exa_monthly_budget_usd=raw)
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("10.00", Decimal("10.00")),
+        (10, Decimal("10")),
+        (Decimal("10.00"), Decimal("10.00")),
+        ("0.007", Decimal("0.007")),
+    ],
+)
+def test_exa_monthly_budget_accepts_exact_str_int_decimal(raw: object, expected: Decimal) -> None:
+    for model in (ProviderConfig, ProviderConfigUpdate):
+        assert model(exa_monthly_budget_usd=raw).exa_monthly_budget_usd == expected
+
+
+@pytest.mark.parametrize("raw", [Decimal("0"), "0", 0])
+def test_exa_monthly_budget_zero_is_budgeted(raw: object) -> None:
+    """Zero is an explicit budget, distinct from unbudgeted None."""
+
+    for model in (ProviderConfig, ProviderConfigUpdate):
+        record = model(exa_monthly_budget_usd=raw)
+        assert record.exa_monthly_budget_usd == Decimal("0")
+        assert record.exa_monthly_budget_usd is not None
+
+
+def test_exa_budget_apply_to_explicit_none_clears_base() -> None:
+    base = ProviderConfig(exa_monthly_budget_usd=Decimal("10.00"))
+
+    cleared = ProviderConfigUpdate(exa_monthly_budget_usd=None).apply_to(base)
+
+    assert cleared.exa_monthly_budget_usd is None
+
+
+def test_exa_budget_apply_to_unset_carries_base() -> None:
+    base = ProviderConfig(exa_monthly_budget_usd=Decimal("10.00"))
+
+    carried = ProviderConfigUpdate(priority=5).apply_to(base)
+
+    assert carried.exa_monthly_budget_usd == Decimal("10.00")
+    assert carried.priority == 5
+
+
+def test_exa_budget_apply_to_set_overrides_base() -> None:
+    base = ProviderConfig(exa_monthly_budget_usd=Decimal("10.00"))
+
+    overridden = ProviderConfigUpdate(exa_monthly_budget_usd=Decimal("25.00")).apply_to(base)
+
+    assert overridden.exa_monthly_budget_usd == Decimal("25.00")
+
+
+def test_exa_budget_env_override_round_trip(monkeypatch) -> None:
+    monkeypatch.setenv(OVERRIDES_ENV, json.dumps({"exa": {"exa_monthly_budget_usd": "10.00"}}))
+    get_provider_configs.cache_clear()
+
+    assert get_provider_configs()[ProviderName.EXA].exa_monthly_budget_usd == Decimal("10.00")
+
+
+# EXA manual starting credits (operator-pasted prepaid balance): validator
+# branches, the None default, apply_to set/unset carry, env-override round-trip.
+
+
+def test_exa_credits_defaults_to_none() -> None:
+    assert ProviderConfig().exa_manual_starting_credits_usd is None
+    assert ProviderConfigUpdate().exa_manual_starting_credits_usd is None
+    assert get_provider_configs()[ProviderName.EXA].exa_manual_starting_credits_usd is None
+
+
+@pytest.mark.parametrize("raw", [True, False, 7.5, 0.0])
+def test_exa_credits_rejects_bool_and_float(raw: object) -> None:
+    """Bool/float input is rejected: credits must be exact Decimal input."""
+
+    for model in (ProviderConfig, ProviderConfigUpdate):
+        with pytest.raises(ValidationError):
+            model(exa_manual_starting_credits_usd=raw)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        Decimal("-1.00"),
+        "-1.00",
+        -1,
+        "NaN",
+        "Infinity",
+        "-Infinity",
+        Decimal("NaN"),
+        Decimal("Infinity"),
+    ],
+)
+def test_exa_credits_rejects_negative_and_non_finite(raw: object) -> None:
+    for model in (ProviderConfig, ProviderConfigUpdate):
+        with pytest.raises(ValidationError):
+            model(exa_manual_starting_credits_usd=raw)
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("5.00", Decimal("5.00")),
+        (5, Decimal("5")),
+        (Decimal("5.00"), Decimal("5.00")),
+        ("0.007", Decimal("0.007")),
+    ],
+)
+def test_exa_credits_accepts_exact_str_int_decimal(raw: object, expected: Decimal) -> None:
+    for model in (ProviderConfig, ProviderConfigUpdate):
+        assert model(exa_manual_starting_credits_usd=raw).exa_manual_starting_credits_usd == (
+            expected
+        )
+
+
+@pytest.mark.parametrize("raw", [Decimal("0"), "0", 0])
+def test_exa_credits_zero_is_explicit(raw: object) -> None:
+    """Zero is an explicit credit anchor, distinct from unset None."""
+
+    for model in (ProviderConfig, ProviderConfigUpdate):
+        record = model(exa_manual_starting_credits_usd=raw)
+        assert record.exa_manual_starting_credits_usd == Decimal("0")
+        assert record.exa_manual_starting_credits_usd is not None
+
+
+def test_exa_credits_apply_to_explicit_none_clears_base() -> None:
+    base = ProviderConfig(exa_manual_starting_credits_usd=Decimal("5.00"))
+
+    cleared = ProviderConfigUpdate(exa_manual_starting_credits_usd=None).apply_to(base)
+
+    assert cleared.exa_manual_starting_credits_usd is None
+
+
+def test_exa_credits_apply_to_unset_carries_base() -> None:
+    base = ProviderConfig(exa_manual_starting_credits_usd=Decimal("5.00"))
+
+    carried = ProviderConfigUpdate(priority=5).apply_to(base)
+
+    assert carried.exa_manual_starting_credits_usd == Decimal("5.00")
+    assert carried.priority == 5
+
+
+def test_exa_credits_apply_to_set_overrides_base() -> None:
+    base = ProviderConfig(exa_manual_starting_credits_usd=Decimal("5.00"))
+
+    overridden = ProviderConfigUpdate(exa_manual_starting_credits_usd=Decimal("8.00")).apply_to(
+        base
+    )
+
+    assert overridden.exa_manual_starting_credits_usd == Decimal("8.00")
+
+
+def test_exa_credits_env_override_round_trip(monkeypatch) -> None:
+    monkeypatch.setenv(
+        OVERRIDES_ENV, json.dumps({"exa": {"exa_manual_starting_credits_usd": "5.00"}})
+    )
+    get_provider_configs.cache_clear()
+
+    assert get_provider_configs()[ProviderName.EXA].exa_manual_starting_credits_usd == Decimal(
+        "5.00"
+    )
