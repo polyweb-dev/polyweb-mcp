@@ -50,6 +50,10 @@ from freesearch.models.contracts import (
 __all__ = ["ExaAdapter"]
 
 _NAME = "exa"
+_SEARCH_BASE_USD = Decimal("0.007")
+_SEARCH_INCREMENT_USD = Decimal("0.001")
+_CONTENTS_PAGE_USD = Decimal("0.001")
+_FALLBACK_PRICING_DATE = "2026-09-18"
 # The SDK surfaces HTTP failures as ``ValueError("Request failed with status
 # code {status}: {body}")``; only the status code is parsed out - the body is
 # never included so provider text cannot leak.
@@ -94,6 +98,22 @@ def _next_month_start(value: datetime) -> datetime:
     if value.month == 12:
         return datetime(value.year + 1, 1, 1, tzinfo=UTC)
     return datetime(value.year, value.month + 1, 1, tzinfo=UTC)
+
+
+def _search_fallback_cost(result_count: int, summary_count: int) -> Decimal:
+    """Return the published search fallback price using exact USD decimals."""
+    extra_results = max(0, result_count - 10)
+    return _SEARCH_BASE_USD + _SEARCH_INCREMENT_USD * Decimal(extra_results + summary_count)
+
+
+def _contents_fallback_cost(page_count: int, content_type_count: int) -> Decimal:
+    """Return the published contents fallback price per page and content type."""
+    return _CONTENTS_PAGE_USD * Decimal(page_count) * Decimal(content_type_count)
+
+
+def _summary_count(results: list[Result]) -> int:
+    """Count non-empty AI summaries; omitted summary fields cost nothing."""
+    return sum(1 for item in results if bool(getattr(item, "summary", None)))
 
 
 class ExaAdapter(ProviderAdapter):
@@ -276,7 +296,16 @@ class ExaAdapter(ProviderAdapter):
         response = await self._runner.run(self.name, lambda: self._search_sdk(request))
         try:
             results = [self._normalize_result(item) for item in response.results]
-            usage = self._usage_event(response, UsageOperation.SEARCH)
+            summary_count = _summary_count(response.results)
+            usage = self._usage_event_with_fallback(
+                response,
+                UsageOperation.SEARCH,
+                units=_search_fallback_cost(len(response.results), summary_count),
+                metadata={
+                    "result_count": len(response.results),
+                    "summary_count": summary_count,
+                },
+            )
         except ProviderOperationError:
             raise
         except Exception:
@@ -352,7 +381,15 @@ class ExaAdapter(ProviderAdapter):
                     fetched_at=datetime.now(UTC),
                     metadata={"truncated": True} if truncated else {},
                 ),
-                usage=self._usage_event(response, UsageOperation.FETCH),
+                usage=self._usage_event_with_fallback(
+                    response,
+                    UsageOperation.FETCH,
+                    units=_contents_fallback_cost(len(response.results), 1),
+                    metadata={
+                        "page_count": len(response.results),
+                        "content_type_count": 1,
+                    },
+                ),
             )
         except ProviderOperationError:
             raise
@@ -415,6 +452,33 @@ class ExaAdapter(ProviderAdapter):
             display_unit="USD",
             observed_at=datetime.now(UTC),
             metadata={},
+        )
+
+    def _usage_event_with_fallback(
+        self,
+        response: ExaSearchResponse[Result],
+        operation: UsageOperation,
+        *,
+        units: Decimal,
+        metadata: dict[str, Any],
+    ) -> UsageEvent | None:
+        """Prefer measured costDollars; estimate only when telemetry is absent."""
+        measured = self._usage_event(response, operation)
+        if response.cost_dollars is not None:
+            return measured
+        return UsageEvent(
+            provider=self.name,
+            operation=operation,
+            units=units,
+            unit_kind=UnitKind.USD,
+            display_unit="USD",
+            observed_at=datetime.now(UTC),
+            metadata={
+                "provenance": "exa_pricing_fallback",
+                "source": QuotaSource.ESTIMATED.value,
+                "pricing_date": _FALLBACK_PRICING_DATE,
+                **metadata,
+            },
         )
 
     def _normalize_error(self, exc: Exception) -> ProviderOperationError:
