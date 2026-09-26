@@ -38,10 +38,13 @@ from freesearch.models.contracts import (
     FetchRequest,
     ProviderHealth,
     QuotaSnapshot,
+    RoutingMode,
     SearchRequest,
+    SearchResponse,
     UsageOperation,
 )
 from freesearch.persistence.storage import SQLiteRepository
+from freesearch.services.aggregation import reciprocal_rank_fusion
 from freesearch.services.monitoring import (
     clear_quota_poll_cache,
     effective_quota,
@@ -236,6 +239,60 @@ async def _route_state(
     return health, quotas
 
 
+async def _mcp_fanout_search(
+    request: SearchRequest,
+    active: Sequence[ProviderAdapter],
+    repository: SQLiteRepository | None,
+    secret_store: AsyncSecretStore | None = None,
+) -> dict[str, Any]:
+    """Execute concurrent fanout search across active adapters for MCP."""
+    await _apply_parallel_seed(active, repository)
+    health, quotas = await _route_state(repository, active, secret_store)
+    fanout_req = request.model_copy(
+        update={"routing": request.routing.model_copy(update={"mode": RoutingMode.FANOUT})}
+    )
+    candidates = select_route(fanout_req, active, health, quotas)
+    if not candidates:
+        raise RuntimeError("no eligible provider is available for search")
+
+    async def _call(candidate_adapter: ProviderAdapter) -> tuple[str, SearchResponse]:
+        res = await tracked_call(
+            repository,
+            candidate_adapter,
+            lambda target: target.search(request),
+            operation=UsageOperation.SEARCH,
+        )
+        return (candidate_adapter.name, res)
+
+    tasks = [_call(c.adapter) for c in candidates]
+    outcomes = await asyncio.gather(*tasks, return_exceptions=True)
+    successful_results: list[tuple[str, SearchResponse]] = []
+    errors: list[BaseException] = []
+    for outcome in outcomes:
+        if isinstance(outcome, BaseException):
+            errors.append(outcome)
+        elif isinstance(outcome, tuple):
+            successful_results.append(outcome)
+
+    if not successful_results:
+        first_err = errors[0] if errors else RuntimeError("all providers failed")
+        raise first_err
+
+    fused_results = reciprocal_rank_fusion(
+        successful_results,
+        limit=request.limit,
+    )
+    participating = [name for name, _ in successful_results]
+    resp = SearchResponse(
+        query=request.query,
+        results=fused_results,
+        provider="aggregated" if len(successful_results) > 1 else successful_results[0][0],
+        total_results=len(fused_results),
+        participating_providers=participating,
+    )
+    return resp.model_dump(mode="json")
+
+
 def create_server(
     adapters: Sequence[ProviderAdapter] | None = None,
     repository: SQLiteRepository | None = None,
@@ -318,7 +375,15 @@ def create_server(
 
     @server.tool()
     async def search(request: SearchRequest) -> dict[str, Any]:
-        """Search the web through the best available provider."""
+        """Search the web through the best available provider or all providers concurrently."""
+        active = state["routes"] if owns_client else routes
+        if not active:
+            raise RuntimeError("no provider is configured: set a FREESEARCH_*_API_KEY")
+        if request.fanout or request.routing.mode is RoutingMode.FANOUT:
+            return await _mcp_fanout_search(
+                request, active, state["repository"], state["secret_store"]
+            )
+
         adapter = await _route(request)
         response = await tracked_call(
             state["repository"],

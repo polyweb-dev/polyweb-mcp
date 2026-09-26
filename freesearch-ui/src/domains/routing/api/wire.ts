@@ -1,4 +1,4 @@
-export type BackendRoutingMode = "auto" | "prefer" | "require"
+export type BackendRoutingMode = "auto" | "prefer" | "require" | "fanout"
 
 export interface BackendRoutingPreference {
   mode: BackendRoutingMode

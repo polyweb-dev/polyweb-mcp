@@ -171,6 +171,67 @@ describe("mapSearchResponse", () => {
     const ids = new Set(first.results.map((r) => r.id))
     expect(ids.size).toBe(first.results.length)
   })
+
+  it("maps aggregated fanout wire to multi-source results with participating providers", () => {
+    const wire = searchResponseFixture({
+      provider: "aggregated",
+      total_results: 1,
+      results: [
+        {
+          title: "Fused Multi-Engine Hit",
+          url: "https://example.com/consensus",
+          snippet: "Verified snippet content",
+          published_at: null,
+          source: null,
+          score: 0.95,
+          metadata: {
+            sources: ["exa", "brave"],
+            source_ranks: { exa: 1, brave: 2 },
+            rrf_score: 0.032,
+          },
+        },
+      ],
+      participating_providers: ["exa", "brave"],
+    })
+    const mapped = mapSearchResponse(wire as never, { wallClockMs, catalogNameOf })
+
+    expect(mapped.selectedProviderId).toBe("aggregated")
+    expect(mapped.participatingProviders).toEqual(["exa", "brave"])
+    expect(mapped.results).toHaveLength(1)
+    const [fused] = mapped.results
+    // aggregated resolves to the primary source via toUiId
+    expect(fused.providerId).toBe("exa")
+    expect(fused.providerName).toBe("exa, brave")
+    expect(fused.sources).toEqual(["exa", "brave"])
+    expect(fused.relevanceScore).toBe(0.95)
+    expect(fused.rawMetadata).toMatchObject({ rrf_score: 0.032 })
+  })
+
+  it("falls back to result.sources when metadata.sources is absent", () => {
+    const wire = searchResponseFixture({
+      provider: "tavily",
+      total_results: 1,
+      results: [
+        {
+          title: "Single-engine hit",
+          url: "https://example.com/solo",
+          snippet: "Solo snippet.",
+          published_at: null,
+          source: null,
+          score: 0.5,
+          metadata: {},
+          sources: ["tavily"],
+        },
+      ],
+    })
+    const mapped = mapSearchResponse(wire as never, { wallClockMs, catalogNameOf })
+
+    expect(mapped.results).toHaveLength(1)
+    const [solo] = mapped.results
+    expect(solo.providerId).toBe("tavily")
+    expect(solo.providerName).toBe("tavily")
+    expect(solo.sources).toEqual(["tavily"])
+  })
 })
 
 describe("mapFetchResponse", () => {

@@ -99,6 +99,18 @@ async def test_search_without_any_adapter_raises() -> None:
         await server.call_tool("search", {"request": {"query": "anything"}})
 
 
+async def test_search_fanout_runs_multiple_adapters_and_fuses() -> None:
+    server = create_server([_StubAdapter("brave", fetch=False), _StubAdapter("exa", fetch=False)])
+    response = await server.call_tool("search", {"request": {"query": "python", "fanout": True}})
+    data = response[1]
+    assert data["provider"] == "aggregated"
+    assert set(data["participating_providers"]) == {"brave", "exa"}
+    assert (
+        len(data["results"]) == 1
+    )  # Both returned "https://example.com/r" so canonical deduplication fused them
+    assert set(data["results"][0]["sources"]) == {"brave", "exa"}
+
+
 def test_adapters_registry_covers_all_providers() -> None:
     assert set(_ADAPTERS.keys()) == set(ProviderName)
 

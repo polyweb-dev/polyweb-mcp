@@ -35,8 +35,10 @@ export function createExecuteHandler(deps: ExecuteActionDeps): (e?: FormEvent) =
       showResult,
     } = deps
 
+    const isFanout = selectedProviderId === "all"
     const selectedProvider =
       selectedProviderId !== "auto" &&
+      selectedProviderId !== "all" &&
       eligibleProviders.some((provider) => provider.id === selectedProviderId)
         ? selectedProviderId
         : undefined
@@ -48,6 +50,7 @@ export function createExecuteHandler(deps: ExecuteActionDeps): (e?: FormEvent) =
         ...(selectedProvider !== undefined
           ? { providerIds: [selectedProvider] }
           : {}),
+        fanout: isFanout,
         maxResults: resultCount,
         timeoutMs: 5000,
       })

@@ -3,6 +3,7 @@ export interface SearchRequest {
   providerIds?: string[];
   maxResults: number;
   timeoutMs: number;
+  fanout?: boolean;
 }
 
 export interface SearchResult {
@@ -15,6 +16,7 @@ export interface SearchResult {
   relevanceScore: number;
   publishedDate?: string;
   rawMetadata?: Record<string, unknown>;
+  sources?: string[];
 }
 
 export interface ProviderWaterfallItem {
@@ -37,6 +39,7 @@ export interface SearchResponse {
   executionTimeMs: number;
   costEstimateCredits: number;
   timestamp: string;
+  participatingProviders?: string[];
 }
 
 export interface FetchRequest {

@@ -45,6 +45,7 @@ export function useSearchRunner({
       const startedAt = performance.now();
       const requestedProviderIds = request.providerIds ?? [];
 
+      const isFanout = Boolean(request.fanout);
       const attempt = async (providerIds: string[]) => {
         const body: BackendSearchRequest = {
           query: request.query.trim(),
@@ -53,10 +54,11 @@ export function useSearchRunner({
           country_code: null,
           domains: [],
           routing: {
-            mode: providerIds.length > 0 ? "require" : "auto",
+            mode: isFanout ? "fanout" : providerIds.length > 0 ? "require" : "auto",
             providers: providerIds.map(toBackendId),
             allow_fallback: fallbackEnabled,
           },
+          ...(isFanout ? { fanout: true } : {}),
         };
         // Fresh timeout budget per attempt: a hung primary must not steal
         // the fallback's time.
