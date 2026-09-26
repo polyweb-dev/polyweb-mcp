@@ -134,7 +134,58 @@ Batch work; run the suites only after significant chunks, not per-edit.
 2. **Chunk 2 — encrypted store + migration**: create `EncryptedDbSecretStore` on `runtime_settings` (`secret.enc:*` keys) + `migrate_legacy_secrets_to_encrypted_db`; wire composition root (`create_app` default store + `lifespan` migration hook) and `get_provider_secret_resolver`. Resolve the sync/async protocol decision first — it touches every call site. Tests after: store unit/integration tests (ciphertext-only rows, idempotent migration from keyring/env/`.env` doubles, skip-existing) + resolver precedence tests. Run: `pytest tests/unit/infrastructure tests/integration/routers/test_control_api.py tests/integration/routers/test_runtime_settings.py`.
 3. **Chunk 3 — control plane + adapters + OAuth cutover**: migrate `control.py` (`put/delete/_resolve_secret` + `SecretSource`), `parallel_oauth.py` store resolution, adapter path (no adapter code changes expected — they consume the resolver/`SecretStr`). Update the `THREAT_MODEL.md` bearer sentence. Tests after: FULL target suites — `pytest tests/unit tests/integration` + `behave tests/bdd/features/control.feature adv_oauth_* parallel_oauth` + sentinel no-leak sweeps (AC-3/AC-5/AC-7) + AC-4 wrong-key + AC-9 rotation pin. Finish with `ruff check`, `ruff format --check` (if configured), `mypy` strict clean.
 
-## Risks & open questions for the orchestrator
+## 8) Next Phase: Granular Observability & Tracing Integration (OpenTelemetry / Phoenix / Langfuse / LangSmith)
+
+### 8a) Objective & Rationale
+
+- **Outsource granular monitoring to dedicated observability platforms**: Instead of spending engineering cycles building a complex internal query inspector, payload debugger, trace waterfall viewer, and retrieval evaluation dashboard, FreeSearch will integrate with external LLM observability tools (**Arize Phoenix**, **Langfuse**, **LangSmith**, **Helicone**).
+- **Universal OpenTelemetry (OTel) / OpenInference foundation**: FreeSearch will emit standard OTel spans using OpenInference semantic conventions (`RETRIEVER` and `TOOL` span kinds) over standard OTLP (OpenTelemetry Protocol). This single integration enables zero-code-change support across Arize Phoenix (local or cloud), Langfuse OTLP ingest, LangSmith OTLP ingest, and standard APMs (Datadog, New Relic) without vendor-specific SDK lock-in.
+- **Architectural separation of concerns**:
+  - *Internal control loop (FreeSearch core)*: Lightweight SQLite/in-memory ledger remains responsible for synchronous routing decisions, real-time quota/rate-limit cutoffs, circuit breaking (429 backoff), and local health status.
+  - *External observability (Phoenix / Langfuse)*: Receives detailed traces, latency waterfalls (DNS/routing/provider HTTP/fusion), error bodies, and retrieval outputs for developer inspection and search quality evals.
+- **Privacy & payload controls**: In keeping with FreeSearch's privacy commitments, query text, URLs, and scraped Markdown content will only be captured when explicitly enabled via configuration (`FREESEARCH_TRACE_RECORD_PAYLOADS=true`). When disabled (the default), traces capture only operational metadata (provider, latency, status, counts, costs).
+
+### 8b) Target Files & Signatures
+
+- **NEW `src/freesearch/infrastructure/observability.py`**:
+  - `init_tracer(settings: Settings) -> Tracer`: Configures OpenTelemetry `TracerProvider`, resource attributes (`service.name="freesearch"`), batch/simple span processor, and `OTLPSpanExporter` if endpoint is configured.
+  - `class TracingContext`: Helper context manager / decorator to create `RETRIEVER` and `TOOL` spans adhering to OpenInference semantic conventions.
+  - `def extract_parent_context(headers: Mapping[str, str]) -> Context`: Extracts incoming W3C `traceparent` or custom trace headers for distributed tracing.
+- **Modify `src/freesearch/configuration/config.py`**:
+  - Add fields to `Settings`:
+    - `otel_enabled: bool = False` (or auto-enabled when `OTEL_EXPORTER_OTLP_ENDPOINT` is present)
+    - `otel_exporter_otlp_endpoint: str | None = None` (e.g., `http://localhost:6006/v1/traces` for local Phoenix)
+    - `otel_exporter_otlp_headers: str | None = None` (for Langfuse / LangSmith API authentication)
+    - `trace_record_payloads: bool = False` (privacy toggle: record query text & fetched markdown vs metadata-only)
+- **Modify `src/freesearch/routers/api.py` & `src/freesearch/mcp/server.py`**:
+  - Extract incoming trace context (`traceparent`) in FastAPI middleware / request handlers so search spans nest directly inside caller agent traces (LangChain, LlamaIndex, Claude Desktop, Cursor).
+  - Wrap `_dispatch` and `_dispatch_fanout_search`:
+    - Root span: `freesearch.search` / `freesearch.fetch`
+    - Child spans: `freesearch.adapter.<provider>` per candidate call (capturing provider-specific latency, HTTP status, and raw error messages upon failure).
+    - Fusion span: `freesearch.reciprocal_rank_fusion` (capturing scoring and participating provider count).
+
+### 8c) Contracts & OpenInference Mapping
+
+- **Span Kind**: `RETRIEVER` for `search` operations, `TOOL` for `fetch` operations.
+- **Span Attributes**:
+  - `openinference.span.kind`: `"RETRIEVER"` | `"TOOL"`
+  - `input.value`: `request.query` or `request.url` (if `trace_record_payloads=True`, else redacted string `[REDACTED]`)
+  - `output.value`: Top search result URLs/snippets or document markdown (if `trace_record_payloads=True`, else result count)
+  - `provider.name`: Adapter name (`exa`, `brave`, `firecrawl`, etc.)
+  - `routing.mode`: `single` | `fanout` | `chained`
+  - `search.result_count`: `len(response.results)`
+  - `usage.units`: `response.usage.units` (if present)
+  - `usage.unit_kind`: `response.usage.unit_kind`
+- **Error Spans**: When a provider returns 429/500 or times out, the child span records exception details, error status, and HTTP payload (with secrets redacted via `redact_secrets`), while the root span marks fallback progression.
+
+### 8d) Acceptance Criteria for Observability Phase
+
+- **AC-O1 (OTel Exporter)**: When `OTEL_EXPORTER_OTLP_ENDPOINT` is configured, executing a search or fetch request emits an OTLP trace batch containing the operation span and adapter child spans without failing the user request if the exporter is unreachable.
+- **AC-O2 (OpenInference Compliance)**: Emitted spans parse successfully into Arize Phoenix and Langfuse as `RETRIEVER` and `TOOL` entities with correct latency waterfalls and result counts.
+- **AC-O3 (Payload Privacy Guard)**: With `FREESEARCH_TRACE_RECORD_PAYLOADS=false` (default), emitted spans contain zero query text or document content; with `true`, query text and snippets are captured. Secrets (API keys, OAuth tokens) are never emitted in span attributes or event logs under any configuration.
+- **AC-O4 (Distributed Trace Propagation)**: Supplying a valid W3C `traceparent` header links the FreeSearch span as a child of the external caller's trace ID.
+
+## 9) Risks & open questions for the orchestrator
 
 - **R1 (blocking design choice)**: sync `SecretStore` Protocol vs async `SQLiteRepository` backend — Developer must adopt the async-store option (§5) or propose an equivalent; estimate hinges on it.
 - **R2**: `cryptography` is currently only a transitive dep (via `secretstorage`); adding it direct is low-risk but requires a lockfile refresh and a floor version supporting `AESGCM` (any modern release does).
