@@ -123,6 +123,55 @@ docker compose logs -f   # Ctrl+C to detach from logs; containers keep running
 
 To stop everything (state is kept): `docker compose down`.
 
+### Development with Docker
+
+This starts the dashboard, API, and MCP server together for local development.
+
+Before you start:
+
+- Start Docker Desktop.
+- Make sure this worktree has a `.env` file. On Windows,
+  `scripts/windows/create_worktree.bat` copies it from the main checkout.
+- Add provider API keys through the dashboard, not `.env`.
+
+Docker reads `.env` when it starts the containers. It does not copy the file into
+an image or store it in the `freesearch-data` volume.
+
+From the repository root, run:
+
+```bash
+docker compose -f compose.yaml -f compose.dev.yaml up --build -d
+```
+
+Open:
+
+- Dashboard: `http://localhost:3000`
+- API documentation: `http://localhost:8001/docs`
+- MCP server: `http://localhost:8000/mcp`
+
+Check that the containers are running:
+
+```bash
+docker compose -f compose.yaml -f compose.dev.yaml ps
+```
+
+To stop the app:
+
+```bash
+docker compose -f compose.yaml -f compose.dev.yaml down
+```
+
+The plain `down` command keeps your saved data and API keys, so you do not need
+to enter them again. Using `down -v` wipes all local data, so your keys must be
+re-entered.
+
+To check the Compose files without printing their contents, run
+`docker compose -f compose.yaml -f compose.dev.yaml config --quiet`. Never share
+the output of plain `docker compose config`: it prints your real API keys.
+
+After rotating an API key with its provider, enter the new key once in the
+dashboard.
+
 ### Encryption key (random, automatic)
 
 Provider keys are encrypted in SQLite with a master key. On first start the containers auto-generate a random 32-byte key and store it as `/data/.secret_key` on the shared volume (readable only by the container, mode `0600`). There is nothing to configure.

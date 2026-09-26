@@ -1,0 +1,23 @@
+# FreeSearch backend development image.
+#
+# Source is bind-mounted by compose.dev.yaml; this image contains dependency
+# manifests only. Runtime .env values are injected by Compose and never copied
+# into the build context or an image layer.
+
+FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS dev
+
+WORKDIR /app
+
+ENV PYTHONUNBUFFERED=1
+ENV UV_COMPILE_BYTECODE=1
+ENV UV_LINK_MODE=copy
+ENV PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring
+
+# Match the production cache id/order, but include the dev dependency group.
+COPY pyproject.toml uv.lock ./
+RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
+    uv sync --frozen --no-install-project
+
+RUN mkdir -p /data
+
+CMD ["uv", "run", "--no-sync", "python", "-m", "freesearch.routers.api", "--host", "0.0.0.0", "--port", "8001"]

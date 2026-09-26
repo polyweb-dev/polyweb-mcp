@@ -1,0 +1,80 @@
+# FreeSearch explicit development override (never auto-loaded).
+#
+# Usage:
+#   docker compose -f compose.yaml -f compose.dev.yaml up --build -d
+#   docker compose -f compose.yaml -f compose.dev.yaml down
+#
+# dev-only: WARNING: `docker compose config` renders live .env values inline in
+# dev-only: each service's environment output. Never run it with secrets present
+# dev-only: for output you intend to share, never paste its output, and use canary
+# dev-only: names only.
+#
+# Compose injects the worktree .env into api/mcp process environments at run
+# time; Dockerfile.dev never copies it. Provider credentials remain encrypted
+# vault data on the `freesearch-data` volume, not .env settings. Plain `down`
+# preserves that vault and avoids key re-entry. `down -v` intentionally deletes
+# the database, master key, and provider vault, so credentials must be re-entered.
+# Keep one canonical laptop-only .env; worktree copies are convenience copies
+# that should be removed with their worktrees.
+
+services:
+  api:
+    # dev-only: dependency image plus bind-mounted backend source.
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+      target: dev
+    # dev-only: do not overwrite the production backend image tag.
+    image: ${COMPOSE_PROJECT_NAME:-freesearch}-backend-dev:latest
+    env_file:
+      - path: .env
+        required: true
+    environment:
+      # dev-only: make the bind-mounted src layout importable without installing it.
+      PYTHONPATH: /app/src
+    volumes:
+      - freesearch-data:/data
+      # dev-only: live backend edits; no source is baked into the image.
+      - ./src:/app/src
+    healthcheck:
+      # dev-only: avoid an implicit project sync because source is bind-mounted.
+      test:
+        [
+          "CMD-SHELL",
+          "uv run --no-sync python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/stats?limit=1')\"",
+        ]
+
+  mcp:
+    # dev-only: dependency image plus bind-mounted backend source.
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+      target: dev
+    # dev-only: do not overwrite the production backend image tag.
+    image: ${COMPOSE_PROJECT_NAME:-freesearch}-backend-dev:latest
+    env_file:
+      - path: .env
+        required: true
+    environment:
+      # dev-only: make the bind-mounted src layout importable without installing it.
+      PYTHONPATH: /app/src
+    volumes:
+      - freesearch-data:/data
+      # dev-only: live backend edits; no source is baked into the image.
+      - ./src:/app/src
+    # dev-only: run the module directly without installing bind-mounted source.
+    command:
+      [
+        "uv",
+        "run",
+        "--no-sync",
+        "python",
+        "-m",
+        "freesearch.mcp.server",
+        "--transport",
+        "streamable-http",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000",
+      ]
