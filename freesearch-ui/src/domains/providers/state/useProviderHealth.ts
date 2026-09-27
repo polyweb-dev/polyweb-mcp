@@ -76,6 +76,16 @@ export function useProviderHealth({ providers, setProviders, showToast }: Health
         return { success: result.ok, latencyMs: result.latency_ms, message };
       } catch (error) {
         const message = errorMessage(error, "Provider test failed");
+        setProviders((previous) =>
+          previous.map((candidate) =>
+            candidate.id === id
+              ? {
+                  ...candidate,
+                  healthStatus: "offline",
+                }
+              : candidate,
+          ),
+        );
         showToast(`Test failed for ${provider.name}: ${message}`, "error");
         return { success: false, latencyMs: provider.latencyP95Ms ?? 0, message };
       }

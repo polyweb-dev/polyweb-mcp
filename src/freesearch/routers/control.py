@@ -206,6 +206,17 @@ def register_control_routes(app: FastAPI) -> None:
         fingerprint = secret_fingerprint(name.value, key) if key is not None else None
         await persist_secret_record(request.app.state.repository, name, fingerprint, now)
         await _eject_provider_adapter(request, name)
+        repo: SQLiteRepository | None = request.app.state.repository
+        if repo is not None and key is None and name is not ProviderName.KEENABLE:
+            with suppress(Exception):
+                await repo.record_health(
+                    ProviderHealth(
+                        provider=name.value,
+                        status=HealthStatus.UNAVAILABLE,
+                        checked_at=now,
+                        message="API key deleted",
+                    )
+                )
         return SecretStatusResponse(
             provider=name.value,
             presence=_secret_presence(name, key),
@@ -777,11 +788,14 @@ async def _provider_entry(
     breaker = await load_breaker(repository, provider)
     health = await _latest_health(repository, provider.value)
     key, _source = await _resolve_secret(provider, store)
+    reported_health = health.status if health is not None else None
+    if key is None and provider is not ProviderName.KEENABLE:
+        reported_health = None
     return ProviderStatusResponse(
         provider_id=provider.value,
         enabled=config.enabled,
         priority=config.priority,
-        health=health.status if health is not None else None,
+        health=reported_health,
         circuit_breaker=breaker,
         latency_p95_ms=await latency_p95_ms(repository, provider.value),
         secret_presence=_secret_presence(provider, key),

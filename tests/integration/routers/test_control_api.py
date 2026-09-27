@@ -556,6 +556,14 @@ async def test_secret_delete_ejects_adapter_and_disables_routing(
         test_res = client.post("/api/v1/providers/exa/test")
         assert test_res.status_code == 503
 
+        provider_res = client.get("/api/v1/providers/exa")
+        assert provider_res.status_code == 200
+        assert provider_res.json()["health"] is None
+
+    latest_h = await repository.latest_health("exa")
+    assert latest_h is not None
+    assert latest_h.status == HealthStatus.UNAVAILABLE
+
 
 @pytest.mark.asyncio
 async def test_secret_delete_keenable_reverts_to_keyless_mode(
