@@ -515,6 +515,84 @@ async def test_secret_delete_is_idempotent_and_removes_stored_value(
 
 
 @pytest.mark.asyncio
+async def test_secret_delete_ejects_adapter_and_disables_routing(
+    repository: SQLiteRepository,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Deleting a provider secret ejects it from routes and blocks search/test."""
+    monkeypatch.chdir(tmp_path)
+    store = AsyncVaultDouble()
+    await store.set("exa", "test-key-value")
+    adapter = ControlAdapter("exa")
+    fallback = ControlAdapter("brave")
+    app = create_app(
+        [adapter, fallback],
+        repository=repository,
+        secret_store=store,  # type: ignore[call-arg]
+    )
+
+    with TestClient(app) as client:
+        assert any(r.name == "exa" for r in app.state._routes)
+        search_res = client.post(
+            "/search",
+            json={"query": "test query", "routing": {"mode": "require", "providers": ["exa"]}},
+        )
+        assert search_res.status_code == 200
+
+        delete_res = client.delete("/api/v1/providers/exa/secret")
+        assert delete_res.status_code == 200
+        assert delete_res.json()["presence"] == "missing"
+
+        assert not any(r.name == "exa" for r in app.state._routes)
+
+        post_delete_search = client.post(
+            "/search",
+            json={"query": "test query", "routing": {"mode": "require", "providers": ["exa"]}},
+        )
+        assert post_delete_search.status_code == 503
+        assert "no required provider is eligible" in post_delete_search.text
+
+        test_res = client.post("/api/v1/providers/exa/test")
+        assert test_res.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_secret_delete_keenable_reverts_to_keyless_mode(
+    repository: SQLiteRepository,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Deleting Keenable secret downgrades the adapter to keyless public tier."""
+    import httpx
+    from pydantic import SecretStr
+
+    from freesearch.adapters.keenable import KeenableAdapter
+
+    monkeypatch.chdir(tmp_path)
+    store = AsyncVaultDouble()
+    await store.set("keenable", "keenable-api-key")
+
+    keenable_adapter = KeenableAdapter(httpx.AsyncClient(), api_key=SecretStr("keenable-api-key"))
+    assert keenable_adapter.capabilities.quota is True
+
+    app = create_app(
+        [keenable_adapter],
+        repository=repository,
+        secret_store=store,  # type: ignore[call-arg]
+    )
+
+    with TestClient(app) as client:
+        delete_res = client.delete("/api/v1/providers/keenable/secret")
+        assert delete_res.status_code == 200
+        assert delete_res.json()["presence"] == "keyless_public"
+
+        active = next((r for r in app.state._routes if r.name == "keenable"), None)
+        assert active is not None
+        assert active.capabilities.quota is False
+
+
+@pytest.mark.asyncio
 async def test_env_key_is_ignored_empty_vault_reports_missing_and_503(
     repository: SQLiteRepository,
     vault_env: None,
