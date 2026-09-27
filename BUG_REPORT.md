@@ -35,3 +35,25 @@ S1. Switching tabs loses the query — will address with Redux (keep the playgro
 - PR #22 was closed without merging. Discussion: [PR #22 comment](https://github.com/sharathnirmala16/freesearch/pull/22#issuecomment-5850710473)
 - No dev work started on this (per user instruction).
 - File names describe each screenshot's content (verified by viewing all 5). The attached order was wrong; the A-to-E order above is the true sequence, so no files were renamed.
+
+## Root Causes Found & Resolutions
+
+- **B1 (Exa-only fusion / secret failover)**:
+  - *Cause*: Playground used a strict 5,000ms client timeout. Live multi-provider fanout occasionally exceeded 5s, throwing an abort error. `useSearchRunner` caught this and silently fell back to single-provider search, selecting Exa alone (`Resolved by exa` with `Failover active`).
+  - *Fix*: Increased fanout client timeout to 15,000ms and bypassed single-provider fallback retries on fanout errors so aggregated semantics are preserved.
+
+- **B2 (Exa off still shows up in fanout)**:
+  - *Cause*: Playground passed an empty `providerIds: []` to `/search` when "All Providers" was selected, causing the backend route selector to dispatch to all registered adapters regardless of UI toggles.
+  - *Fix*: Forwarded the active `eligibleProviders` list so toggled-off providers (like Exa Search off) are excluded from fanout execution and attribution badges.
+
+- **B3 (Waterfall shows only `aggregated` & no Activity entry)**:
+  - *Cause*: Backend `SearchResponse` only returned fused results without per-provider latency metrics. The waterfall UI hardcoded "Trace unavailable from backend". The repository only logged individual candidate usage events without an aggregated run event.
+  - *Fix*: Added `waterfall: list[ProviderTraceItem]` to backend contracts and measured per-candidate latency during fanout; logged an overall `aggregated` `UsageEvent` to SQLite for Activity stream visibility; updated UI waterfall to render per-provider latency bars and display "Live execution trace".
+
+- **B4 (Operation toggles don't persist across reload)**:
+  - *Cause*: `searchEnabled` and `fetchEnabled` were stored only in ephemeral React component state; page reloads reset them to the server-wide default.
+  - *Fix*: Persisted operation toggles in `localStorage` under `freesearch:operation_toggles` and hydrated them upon `refreshProviders()`.
+
+- **Key Deletion Lifecycle (Follow-up bug identified)**:
+  - *Cause*: `DELETE /api/v1/providers/{id}/secret` removes the key from the vault database, but does not evict the initialized `ProviderAdapter` from the backend's in-memory `routes` list. Furthermore, the frontend's `isEligibleForOperation` checks only `globalEnabled`/`searchEnabled` without verifying `provider.hasKey`.
+  - *Next step*: Eject and close in-memory adapters upon secret deletion and gate frontend provider eligibility on credential availability.
