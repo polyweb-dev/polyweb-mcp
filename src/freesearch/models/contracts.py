@@ -85,6 +85,15 @@ class SearchResult(ContractModel):
     sources: list[str] = Field(default_factory=list)
 
 
+class ProviderTraceItem(ContractModel):
+    provider: str
+    latency_ms: int = Field(default=0, ge=0)
+    status: str = "success"
+    results_count: int = Field(default=0, ge=0)
+    cost_credits: float = 0.0
+    error: str | None = None
+
+
 class SearchResponse(ContractModel):
     query: str
     results: list[SearchResult]
@@ -96,6 +105,7 @@ class SearchResponse(ContractModel):
     # It is intentionally excluded from wire serialization for compatibility.
     usage_gap: dict[str, Any] | None = Field(default=None, exclude=True)
     participating_providers: list[str] = Field(default_factory=list)
+    waterfall: list[ProviderTraceItem] = Field(default_factory=list)
 
 
 class FetchRequest(ContractModel):

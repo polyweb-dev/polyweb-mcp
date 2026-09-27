@@ -13,13 +13,58 @@ interface StatusDeps {
   showToast: ShowToast;
 }
 
+export const OPERATION_TOGGLES_STORAGE_KEY = "freesearch:operation_toggles";
+
+export interface StoredOperationToggle {
+  searchEnabled?: boolean;
+  fetchEnabled?: boolean;
+}
+
+export type StoredTogglesMap = Record<string, StoredOperationToggle>;
+
+export function loadOperationToggles(): StoredTogglesMap {
+  if (typeof window === "undefined" || !window.localStorage) return {};
+  try {
+    const raw = window.localStorage.getItem(OPERATION_TOGGLES_STORAGE_KEY);
+    return raw ? (JSON.parse(raw) as StoredTogglesMap) : {};
+  } catch {
+    return {};
+  }
+}
+
+export function saveOperationToggle(id: string, update: Partial<StoredOperationToggle>): void {
+  if (typeof window === "undefined" || !window.localStorage) return;
+  try {
+    const current = loadOperationToggles();
+    current[id] = { ...current[id], ...update };
+    window.localStorage.setItem(OPERATION_TOGGLES_STORAGE_KEY, JSON.stringify(current));
+  } catch {
+    // Ignore storage quota or security errors
+  }
+}
+
 export function useProviderStatus({ setProviders, setProvidersLoading, setProvidersError, showToast }: StatusDeps) {
   const refreshProviders = useCallback(async () => {
     setProvidersLoading(true);
     setProvidersError(null);
     try {
       const rows = await apiService.listProviders();
-      setProviders(mapProviderRows(rows));
+      const mapped = mapProviderRows(rows);
+      const savedToggles = loadOperationToggles();
+      const hydrated = mapped.map((provider) => {
+        const saved = savedToggles[provider.id];
+        if (!saved) return provider;
+        return {
+          ...provider,
+          ...(typeof saved.searchEnabled === "boolean" && provider.capabilities.includes("search")
+            ? { searchEnabled: saved.searchEnabled }
+            : {}),
+          ...(typeof saved.fetchEnabled === "boolean" && provider.capabilities.includes("fetch")
+            ? { fetchEnabled: saved.fetchEnabled }
+            : {}),
+        };
+      });
+      setProviders(hydrated);
     } catch (error) {
       const message = errorMessage(error, "Unable to load providers");
       setProviders([]);
@@ -45,7 +90,7 @@ export function useProviderStatus({ setProviders, setProvidersLoading, setProvid
 
   const toggleProviderSearch = useCallback(
     (id: string, enabled: boolean) => {
-      // GAP: 4 — the backend exposes global enable only; operation toggles are session-only.
+      saveOperationToggle(id, { searchEnabled: enabled });
       setProviders((previous) =>
         previous.map((provider) =>
           provider.id === id && provider.capabilities.includes("search")
@@ -59,7 +104,7 @@ export function useProviderStatus({ setProviders, setProvidersLoading, setProvid
 
   const toggleProviderFetch = useCallback(
     (id: string, enabled: boolean) => {
-      // GAP: 4 — the backend exposes global enable only; operation toggles are session-only.
+      saveOperationToggle(id, { fetchEnabled: enabled });
       setProviders((previous) =>
         previous.map((provider) =>
           provider.id === id && provider.capabilities.includes("fetch")
@@ -73,3 +118,4 @@ export function useProviderStatus({ setProviders, setProvidersLoading, setProvid
 
   return { refreshProviders, toggleProvider, toggleProviderSearch, toggleProviderFetch };
 }
+

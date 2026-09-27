@@ -10,6 +10,7 @@ local telemetry (usage and health observations) through
 
 import asyncio
 import logging
+import time
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
@@ -37,6 +38,7 @@ from freesearch.infrastructure.secrets import AsyncSecretStore, ProviderName
 from freesearch.models.contracts import (
     FetchRequest,
     ProviderHealth,
+    ProviderTraceItem,
     QuotaSnapshot,
     RoutingMode,
     SearchRequest,
@@ -255,28 +257,52 @@ async def _mcp_fanout_search(
     if not candidates:
         raise RuntimeError("no eligible provider is available for search")
 
-    async def _call(candidate_adapter: ProviderAdapter) -> tuple[str, SearchResponse]:
-        res = await tracked_call(
-            repository,
-            candidate_adapter,
-            lambda target: target.search(request),
-            operation=UsageOperation.SEARCH,
-        )
-        return (candidate_adapter.name, res)
+    async def _call(
+        candidate_adapter: ProviderAdapter,
+    ) -> tuple[str, SearchResponse | None, int, str, int, str | None]:
+        call_start = time.perf_counter()
+        try:
+            res = await tracked_call(
+                repository,
+                candidate_adapter,
+                lambda target: target.search(request),
+                operation=UsageOperation.SEARCH,
+            )
+            elapsed = int((time.perf_counter() - call_start) * 1000)
+            return (candidate_adapter.name, res, elapsed, "success", len(res.results), None)
+        except Exception as exc:
+            elapsed = int((time.perf_counter() - call_start) * 1000)
+            status = "failed"
+            status_code = getattr(getattr(exc, "error", None), "status_code", None)
+            if status_code == 429:
+                status = "rate_limited"
+            return (candidate_adapter.name, None, elapsed, status, 0, str(exc))
 
     tasks = [_call(c.adapter) for c in candidates]
-    outcomes = await asyncio.gather(*tasks, return_exceptions=True)
+    outcomes = await asyncio.gather(*tasks)
     successful_results: list[tuple[str, SearchResponse]] = []
-    errors: list[BaseException] = []
-    for outcome in outcomes:
-        if isinstance(outcome, BaseException):
-            errors.append(outcome)
-        elif isinstance(outcome, tuple):
-            successful_results.append(outcome)
+    errors: list[str] = []
+    waterfall: list[ProviderTraceItem] = []
+
+    for name, res, elapsed, status, count, err in outcomes:
+        waterfall.append(
+            ProviderTraceItem(
+                provider=name,
+                latency_ms=elapsed,
+                status=status,
+                results_count=count,
+                cost_credits=0.0,
+                error=err,
+            )
+        )
+        if res is not None:
+            successful_results.append((name, res))
+        elif err is not None:
+            errors.append(err)
 
     if not successful_results:
-        first_err = errors[0] if errors else RuntimeError("all providers failed")
-        raise first_err
+        first_err = errors[0] if errors else "all providers failed"
+        raise RuntimeError(f"all search providers failed: {first_err}")
 
     fused_results = reciprocal_rank_fusion(
         successful_results,
@@ -289,6 +315,7 @@ async def _mcp_fanout_search(
         provider="aggregated" if len(successful_results) > 1 else successful_results[0][0],
         total_results=len(fused_results),
         participating_providers=participating,
+        waterfall=waterfall,
     )
     return resp.model_dump(mode="json")
 

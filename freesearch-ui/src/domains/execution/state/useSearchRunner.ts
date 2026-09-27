@@ -86,11 +86,10 @@ export function useSearchRunner({
       try {
         return succeed(await attempt(requestedProviderIds));
       } catch (primaryError) {
-        // Single-shot dispatch has no server-side cross-provider retry, so a
-        // failed primary (abort/timeout or ApiError) retries once here
-        // against the next-best available provider when fallback is enabled.
-        // The primary failure stays silent: only the final outcome toasts.
-        if (!fallbackEnabled) return fail(primaryError);
+        // Fanout searches handle partial failures on the server via ranked fusion;
+        // a total fanout failure must surface directly without falling back to an
+        // arbitrary single provider.
+        if (isFanout || !fallbackEnabled) return fail(primaryError);
         // Auto mode pins nothing, so the arbitrated pick is unknown — assume
         // the backend tried the head of the same policy ordering and walk to
         // the next provider, never retrying the failed one.

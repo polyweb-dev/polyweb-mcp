@@ -720,6 +720,46 @@ describe("FreeSearchContext (live backend)", () => {
     })
   })
 
+  it("runSearch does not fall back to a single provider when fanout search fails", async () => {
+    const server = createServer()
+    const { result } = await mountLoaded(server)
+    let searchCalls = 0
+    const retried = installFetchStub((req) => {
+      if (req.url === "/api/v1/providers" && req.method === "GET") {
+        return ok(server.providers)
+      }
+      if (req.url === "/api/v1/routing/config" && req.method === "GET") {
+        return ok(server.routing)
+      }
+      if (req.url.startsWith("/dashboard") && req.method === "GET") {
+        return ok(server.dashboard)
+      }
+      if (req.url === "/search" && req.method === "POST") {
+        searchCalls += 1
+        return err(500, { detail: "all search providers failed" })
+      }
+      return err(404, { detail: "unhandled test route" })
+    })
+
+    let response: unknown = "unset"
+    await act(async () => {
+      response = await result.current.runSearch({
+        query: "failing fanout",
+        providerIds: ["brave", "tavily", "exa"],
+        fanout: true,
+        maxResults: 6,
+        timeoutMs: 15000,
+      })
+    })
+
+    expect(response).toBeNull()
+    expect(result.current.searchError).toContain("all search providers failed")
+    const searches = retried.requestsTo("/search")
+    // Fanout failures do NOT retry with a single provider fallback
+    expect(searches).toHaveLength(1)
+    expect(searchCalls).toBe(1)
+  })
+
   it("runFetch uses routing require when a providerId is set", async () => {
     const { stub, result } = await mountLoaded()
 

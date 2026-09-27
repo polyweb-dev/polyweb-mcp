@@ -81,5 +81,6 @@ export function catalogEntryForId(id: string): StaticProviderMeta | undefined {
 }
 
 export function catalogNameOf(id: string): string | undefined {
+  if (id === "aggregated") return "All Providers";
   return catalogEntryForId(id)?.name;
 }

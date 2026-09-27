@@ -2,11 +2,15 @@ import type { ProviderWaterfallItem } from "@/domains/execution"
 
 /** Waterfall latency diagnostics for the executed provider fan-out. */
 export function WaterfallPanel({ waterfall }: { waterfall: ProviderWaterfallItem[] }) {
+  const hasDetailedTrace = waterfall.length > 1
+
   return (
     <div className="p-4 rounded-lg border border-[var(--border-subtle)] bg-[var(--elevated)] space-y-3">
       <div className="flex items-center justify-between text-[13px]">
         <span className="font-medium text-[var(--text-strong)]">Execution waterfall</span>
-        <span className="text-[12px] text-[var(--muted)]">Trace unavailable from backend</span>
+        <span className="text-[12px] text-[var(--muted)]">
+          {hasDetailedTrace ? "Live execution trace" : "Trace unavailable from backend"}
+        </span>
       </div>
 
       <div className="space-y-2">

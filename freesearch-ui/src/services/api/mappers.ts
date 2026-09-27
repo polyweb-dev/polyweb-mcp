@@ -19,6 +19,7 @@ import type {
 } from "@/domains/dashboard"
 import type {
   FetchResponse,
+  ProviderWaterfallItem,
   SearchResponse,
 } from "@/domains/execution"
 import type { ProviderConfig, ProviderHealthStatus } from "@/domains/providers"
@@ -42,6 +43,7 @@ function providerDisplayName(
   providerId: string,
   catalogNameOf: (id: string) => string | undefined
 ): string {
+  if (providerId === "aggregated") return "All Providers"
   return catalogNameOf(providerId) ?? providerId
 }
 
@@ -73,6 +75,31 @@ export function mapSearchResponse(
   })
   const providerName = providerDisplayName(providerId, options.catalogNameOf)
 
+  const waterfall: ProviderWaterfallItem[] =
+    wire.waterfall && wire.waterfall.length > 0
+      ? wire.waterfall.map((item) => {
+          const itemUiId = toUiId(item.provider)
+          return {
+            providerId: itemUiId,
+            providerName: providerDisplayName(itemUiId, options.catalogNameOf),
+            latencyMs: item.latency_ms,
+            status: item.status,
+            resultsCount: item.results_count,
+            costCredits: item.cost_credits ?? 0,
+            ...(item.error ? { error: item.error } : {}),
+          }
+        })
+      : [
+          {
+            providerId,
+            providerName,
+            latencyMs: latency,
+            status: "success",
+            resultsCount: results.length,
+            costCredits: cost,
+          },
+        ]
+
   return {
     query: wire.query,
     results,
@@ -80,16 +107,7 @@ export function mapSearchResponse(
     selectedProviderId: providerId,
     participatingProviders: wire.participating_providers?.map(toUiId),
     fallbackChain: [providerId],
-    waterfall: [
-      {
-        providerId,
-        providerName,
-        latencyMs: latency,
-        status: "success",
-        resultsCount: results.length,
-        costCredits: cost,
-      },
-    ],
+    waterfall,
     executionTimeMs: latency,
     costEstimateCredits: cost,
     timestamp: wire.usage?.observed_at ?? new Date().toISOString(),

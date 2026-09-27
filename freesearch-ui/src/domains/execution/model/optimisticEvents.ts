@@ -2,7 +2,10 @@ import type { FetchResponse, SearchResponse } from "./types";
 import type { UsageEvent } from "@/domains/dashboard/model/types";
 
 export function makeSearchEvent(response: SearchResponse): UsageEvent {
-  const providerName = response.waterfall[0]?.providerName ?? response.selectedProviderId;
+  const providerName =
+    response.selectedProviderId === "aggregated"
+      ? "All Providers"
+      : (response.waterfall[0]?.providerName ?? response.selectedProviderId);
   return {
     id: `${response.timestamp}-${response.selectedProviderId}-local`,
     timestamp: response.timestamp,
@@ -13,7 +16,7 @@ export function makeSearchEvent(response: SearchResponse): UsageEvent {
     latencyMs: response.executionTimeMs,
     costCredits: response.costEstimateCredits,
     status: "success",
-    routeReason: `Recorded search via ${response.selectedProviderId}`,
+    routeReason: `Recorded search via ${providerName}`,
     fallbackChain: response.fallbackChain,
     // Canonical units arrive via the dashboard refresh below; local
     // optimistic events carry no unit claim rather than a fabricated one.

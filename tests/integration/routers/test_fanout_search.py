@@ -320,3 +320,43 @@ async def test_single_provider_require_does_not_fanout(
     assert data["provider"] == "p2"
     assert p1.search_calls == 0
     assert p2.search_calls == 1
+
+
+async def test_fanout_search_returns_waterfall_and_records_activity_telemetry(
+    repository: SQLiteRepository,
+) -> None:
+    """Fanout search returns structured per-provider waterfall trace and
+    records aggregated usage.
+    """
+    p1 = FakeSearchAdapter(
+        "p1",
+        [SearchResult(title="P1", url=AnyHttpUrl("https://example.com/1"), snippet="1")],
+    )
+    p2 = FakeSearchAdapter(
+        "p2",
+        [SearchResult(title="P2", url=AnyHttpUrl("https://example.com/2"), snippet="2")],
+    )
+    app = create_app([p1, p2], repository=repository)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/search",
+            json={"query": "waterfall trace query", "fanout": True},
+        )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert "waterfall" in data
+    assert len(data["waterfall"]) == 2
+    providers_in_waterfall = {item["provider"] for item in data["waterfall"]}
+    assert providers_in_waterfall == {"p1", "p2"}
+    for item in data["waterfall"]:
+        assert item["status"] == "success"
+        assert item["results_count"] == 1
+        assert item["latency_ms"] >= 0
+
+    recent = await repository.recent_usage(limit=10)
+    aggregated_events = [e for e in recent if e.provider == "aggregated"]
+    assert len(aggregated_events) == 1
+    assert aggregated_events[0].status.value == "success"
+    assert aggregated_events[0].operation.value == "search"

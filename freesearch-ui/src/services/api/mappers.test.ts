@@ -207,6 +207,43 @@ describe("mapSearchResponse", () => {
     expect(fused.rawMetadata).toMatchObject({ rrf_score: 0.032 })
   })
 
+  it("maps multi-provider wire waterfall trace items when provided", () => {
+    const wire = {
+      ...searchResponseFixture(),
+      provider: "aggregated",
+      waterfall: [
+        {
+          provider: "brave",
+          latency_ms: 320,
+          status: "success",
+          results_count: 5,
+        },
+        {
+          provider: "exa",
+          latency_ms: 1200,
+          status: "success",
+          results_count: 4,
+        },
+      ],
+    }
+    const mapped = mapSearchResponse(wire as never, { wallClockMs, catalogNameOf })
+    expect(mapped.waterfall).toHaveLength(2)
+    expect(mapped.waterfall[0]).toMatchObject({
+      providerId: "brave",
+      providerName: "Brave Search",
+      latencyMs: 320,
+      status: "success",
+      resultsCount: 5,
+    })
+    expect(mapped.waterfall[1]).toMatchObject({
+      providerId: "exa",
+      providerName: "Exa",
+      latencyMs: 1200,
+      status: "success",
+      resultsCount: 4,
+    })
+  })
+
   it("falls back to result.sources when metadata.sources is absent", () => {
     const wire = searchResponseFixture({
       provider: "tavily",
