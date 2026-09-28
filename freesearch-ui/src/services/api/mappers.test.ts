@@ -397,6 +397,41 @@ describe("mergeProviderStatus", () => {
     expect(merged.healthStatus).toBe("circuit_broken")
   })
 
+  it("forces healthStatus to offline when secret is missing on non-keyless providers even if wire reports healthy", () => {
+    const merged = mergeProviderStatus(
+      catalogEntry,
+      providerStatus("tavily", {
+        health: "healthy",
+        circuit_breaker: { state: "closed", updated_at: "2026-09-06T00:00:00Z" },
+        secret_presence: "missing",
+      }) as never
+    )
+
+    expect(merged.hasKey).toBe(false)
+    expect(merged.healthStatus).toBe("offline")
+  })
+
+  it("allows Keenable to remain healthy when keyless without an API key", () => {
+    const keenableEntry = {
+      id: "keenable",
+      name: "Keenable",
+      description: "Fast keyless search",
+      baseUrl: "https://api.keenable.ai/v1",
+      authHeaderName: "X-API-Key",
+      capabilities: ["search", "fetch", "keyless_tier"],
+    } as never
+    const merged = mergeProviderStatus(
+      keenableEntry,
+      providerStatus("keenable", {
+        health: "healthy",
+        circuit_breaker: { state: "closed", updated_at: "2026-09-06T00:00:00Z" },
+        secret_presence: "keyless_public",
+      }) as never
+    )
+
+    expect(merged.healthStatus).toBe("healthy")
+  })
+
   it("projects quota from free-tier estimates with null limit and estimated confidence", () => {
     const merged = mergeProviderStatus(catalogEntry, providerStatus("tavily") as never)
 

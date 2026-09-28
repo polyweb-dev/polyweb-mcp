@@ -49,6 +49,8 @@ function isEligibleForOperation(
   operation: "search" | "fetch"
 ): boolean {
   if (!provider.globalEnabled) return false
+  const hasCredential = provider.hasKey || provider.capabilities.includes("keyless_tier")
+  if (!hasCredential) return false
   return operation === "search"
     ? provider.searchEnabled && provider.capabilities.includes("search")
     : provider.fetchEnabled && provider.capabilities.includes("fetch")
@@ -82,6 +84,14 @@ export function usePlaygroundController(): PlaygroundController {
   const eligibleProviders = providers.filter((provider) =>
     isEligibleForOperation(provider, mode)
   )
+
+  const isSelectedEligible =
+    selectedProviderId === "auto" ||
+    selectedProviderId === "all" ||
+    eligibleProviders.some((p) => p.id === selectedProviderId)
+
+  const effectiveSelectedProviderId = isSelectedEligible ? selectedProviderId : "auto"
+
   const hasSearchContent =
     activeSearch !== null || isSearching || searchError !== null
   const hasFetchContent = activeFetch !== null || isFetching || fetchError !== null
@@ -90,7 +100,7 @@ export function usePlaygroundController(): PlaygroundController {
     mode,
     query,
     fetchUrl,
-    selectedProviderId,
+    selectedProviderId: effectiveSelectedProviderId,
     resultCount,
     eligibleProviders,
     runSearch,
@@ -99,13 +109,13 @@ export function usePlaygroundController(): PlaygroundController {
   })
 
   const switchMode = (next: PlaygroundMode) => {
-    if (next === "fetch" && selectedProviderId === "all") {
+    if (next === "fetch" && effectiveSelectedProviderId === "all") {
       setSelectedProviderId("auto")
     } else if (
-      selectedProviderId !== "auto" &&
-      selectedProviderId !== "all" &&
+      effectiveSelectedProviderId !== "auto" &&
+      effectiveSelectedProviderId !== "all" &&
       !providers.some((provider) =>
-        provider.id === selectedProviderId && isEligibleForOperation(provider, next)
+        provider.id === effectiveSelectedProviderId && isEligibleForOperation(provider, next)
       )
     ) {
       setSelectedProviderId("auto")
@@ -115,7 +125,7 @@ export function usePlaygroundController(): PlaygroundController {
   }
 
   const handleFetchResult = createFetchResultHandler({
-    selectedProviderId,
+    selectedProviderId: effectiveSelectedProviderId,
     providers,
     isSearching,
     isFetching,
@@ -130,7 +140,7 @@ export function usePlaygroundController(): PlaygroundController {
     mode,
     query,
     fetchUrl,
-    selectedProviderId,
+    selectedProviderId: effectiveSelectedProviderId,
     resultCount,
     eligibleProviders,
     hasSearchContent,

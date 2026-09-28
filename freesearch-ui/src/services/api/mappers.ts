@@ -170,7 +170,12 @@ export function mergeProviderStatus(
     searchEnabled,
     fetchEnabled,
     priority: wire.priority,
-    healthStatus: mapBackendHealth(wire.health, wire.circuit_breaker.state),
+    healthStatus:
+      wire.circuit_breaker.state === "open"
+        ? "circuit_broken"
+        : wire.secret_presence === "missing" && !catalogEntry.capabilities.includes("keyless_tier")
+          ? "offline"
+          : mapBackendHealth(wire.health, wire.circuit_breaker.state),
     circuitBreaker: wire.circuit_breaker.state,
     consecutiveFailures: 0,
     latencyP95Ms: wire.latency_p95_ms,
