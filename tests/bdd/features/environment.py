@@ -62,6 +62,7 @@ def before_scenario(context: Any, scenario: Any) -> None:
     if (
         _has_monitoring_tag(scenario)
         or _has_control_tag(scenario)
+        or _has_fanout_tag(scenario)
         or (_has_quota_tag(scenario) and not _has_live_tag(scenario))
     ):
         context.loop = asyncio.new_event_loop()
@@ -260,6 +261,27 @@ def _tags_include_control(tags: Iterable[Any]) -> bool:
     """Return True when ``tags`` carries 'control' (str or Tag forms)."""
 
     return any(str(getattr(tag, "name", tag)).lstrip("@") == "control" for tag in tags)
+
+
+def _has_fanout_tag(scenario: Any) -> bool:
+    """Return True for offline fanout scenarios, including feature-level tags.
+
+    Fanout scenarios run fully offline against stub adapters built in their
+    own steps; they must never construct live provider adapters.
+    """
+
+    effective_tags = getattr(scenario, "effective_tags", None)
+    if effective_tags:
+        return _tags_include_fanout(effective_tags)
+    tags = getattr(scenario, "tags", None) or ()
+    feature_tags = getattr(getattr(scenario, "feature", None), "tags", None) or ()
+    return _tags_include_fanout((*tags, *feature_tags))
+
+
+def _tags_include_fanout(tags: Iterable[Any]) -> bool:
+    """Return True when ``tags`` carries 'fanout' (str or Tag forms)."""
+
+    return any(str(getattr(tag, "name", tag)).lstrip("@") == "fanout" for tag in tags)
 
 
 def _has_brave_tag(scenario: Any) -> bool:

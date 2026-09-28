@@ -193,7 +193,7 @@ describe("QuotaAnalytics OAuth pairing", () => {
     })
     const row = screen.getByText("Parallel quota", { exact: true }).closest("tr")!
     expect(await within(row).findByTestId("oauth-device-disconnect")).toBeInTheDocument()
-    expect(within(row).getByText("Balance pending")).toBeInTheDocument()
+    expect(await within(row).findByText("Balance pending")).toBeInTheDocument()
     expect(within(row).getByText("Account balance")).toBeInTheDocument()
     expect(within(row).getByText("Balance will appear after first use.")).toBeInTheDocument()
     expect(within(row).queryByText("Budget not configured")).toBeNull()

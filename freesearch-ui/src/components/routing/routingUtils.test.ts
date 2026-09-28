@@ -80,6 +80,15 @@ describe("getEligibleProviders", () => {
 
     expect(idsFor(providers, "search", "priority")).not.toContain("brave")
   })
+
+  it("excludes providers with missing keys unless they support keyless tier", () => {
+    const providers = seedProviders().map((provider) =>
+      provider.id === "exa" ? { ...provider, hasKey: false } : provider
+    )
+
+    expect(idsFor(providers, "search", "priority")).not.toContain("exa")
+    expect(idsFor(providers, "search", "priority")).toContain("keenable")
+  })
 })
 
 describe("getProviderReason", () => {

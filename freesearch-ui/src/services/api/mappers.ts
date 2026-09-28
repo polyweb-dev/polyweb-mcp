@@ -19,6 +19,7 @@ import type {
 } from "@/domains/dashboard"
 import type {
   FetchResponse,
+  ProviderWaterfallItem,
   SearchResponse,
 } from "@/domains/execution"
 import type { ProviderConfig, ProviderHealthStatus } from "@/domains/providers"
@@ -42,6 +43,7 @@ function providerDisplayName(
   providerId: string,
   catalogNameOf: (id: string) => string | undefined
 ): string {
+  if (providerId === "aggregated") return "All Providers"
   return catalogNameOf(providerId) ?? providerId
 }
 
@@ -52,35 +54,60 @@ export function mapSearchResponse(
   const providerId = toUiId(wire.provider)
   const cost = parseUnits(wire.usage?.units)
   const latency = wire.usage?.latency_ms ?? options.wallClockMs
-  const results = wire.results.map((result, index) => ({
-    id: `${wire.provider}-${index}`,
-    providerId,
-    providerName: result.source ?? wire.provider,
-    title: result.title,
-    url: result.url,
-    snippet: result.snippet,
-    relevanceScore: result.score ?? 0,
-    ...(result.published_at ? { publishedDate: result.published_at.slice(0, 10) } : {}),
-    rawMetadata: result.metadata,
-  }))
+  const results = wire.results.map((result, index) => {
+    const rawSources = Array.isArray(result.metadata?.sources)
+      ? (result.metadata.sources as string[])
+      : (result.sources ?? [wire.provider])
+    const primarySource = rawSources[0] ?? wire.provider
+    const itemProviderId = toUiId(wire.provider === "aggregated" ? primarySource : wire.provider)
+    return {
+      id: `${wire.provider}-${index}`,
+      providerId: itemProviderId,
+      providerName: result.source ?? (rawSources.length > 1 ? rawSources.join(", ") : wire.provider),
+      title: result.title,
+      url: result.url,
+      snippet: result.snippet,
+      relevanceScore: result.score ?? 0,
+      ...(result.published_at ? { publishedDate: result.published_at.slice(0, 10) } : {}),
+      rawMetadata: result.metadata,
+      sources: rawSources.map(toUiId),
+    }
+  })
   const providerName = providerDisplayName(providerId, options.catalogNameOf)
+
+  const waterfall: ProviderWaterfallItem[] =
+    wire.waterfall && wire.waterfall.length > 0
+      ? wire.waterfall.map((item) => {
+          const itemUiId = toUiId(item.provider)
+          return {
+            providerId: itemUiId,
+            providerName: providerDisplayName(itemUiId, options.catalogNameOf),
+            latencyMs: item.latency_ms,
+            status: item.status,
+            resultsCount: item.results_count,
+            costCredits: item.cost_credits ?? 0,
+            ...(item.error ? { error: item.error } : {}),
+          }
+        })
+      : [
+          {
+            providerId,
+            providerName,
+            latencyMs: latency,
+            status: "success",
+            resultsCount: results.length,
+            costCredits: cost,
+          },
+        ]
 
   return {
     query: wire.query,
     results,
     totalResults: wire.total_results ?? results.length,
     selectedProviderId: providerId,
+    participatingProviders: wire.participating_providers?.map(toUiId),
     fallbackChain: [providerId],
-    waterfall: [
-      {
-        providerId,
-        providerName,
-        latencyMs: latency,
-        status: "success",
-        resultsCount: results.length,
-        costCredits: cost,
-      },
-    ],
+    waterfall,
     executionTimeMs: latency,
     costEstimateCredits: cost,
     timestamp: wire.usage?.observed_at ?? new Date().toISOString(),
@@ -143,7 +170,12 @@ export function mergeProviderStatus(
     searchEnabled,
     fetchEnabled,
     priority: wire.priority,
-    healthStatus: mapBackendHealth(wire.health, wire.circuit_breaker.state),
+    healthStatus:
+      wire.circuit_breaker.state === "open"
+        ? "circuit_broken"
+        : wire.secret_presence === "missing" && !catalogEntry.capabilities.includes("keyless_tier")
+          ? "offline"
+          : mapBackendHealth(wire.health, wire.circuit_breaker.state),
     circuitBreaker: wire.circuit_breaker.state,
     consecutiveFailures: 0,
     latencyP95Ms: wire.latency_p95_ms,

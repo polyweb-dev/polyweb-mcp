@@ -171,6 +171,104 @@ describe("mapSearchResponse", () => {
     const ids = new Set(first.results.map((r) => r.id))
     expect(ids.size).toBe(first.results.length)
   })
+
+  it("maps aggregated fanout wire to multi-source results with participating providers", () => {
+    const wire = searchResponseFixture({
+      provider: "aggregated",
+      total_results: 1,
+      results: [
+        {
+          title: "Fused Multi-Engine Hit",
+          url: "https://example.com/consensus",
+          snippet: "Verified snippet content",
+          published_at: null,
+          source: null,
+          score: 0.95,
+          metadata: {
+            sources: ["exa", "brave"],
+            source_ranks: { exa: 1, brave: 2 },
+            rrf_score: 0.032,
+          },
+        },
+      ],
+      participating_providers: ["exa", "brave"],
+    })
+    const mapped = mapSearchResponse(wire as never, { wallClockMs, catalogNameOf })
+
+    expect(mapped.selectedProviderId).toBe("aggregated")
+    expect(mapped.participatingProviders).toEqual(["exa", "brave"])
+    expect(mapped.results).toHaveLength(1)
+    const [fused] = mapped.results
+    // aggregated resolves to the primary source via toUiId
+    expect(fused.providerId).toBe("exa")
+    expect(fused.providerName).toBe("exa, brave")
+    expect(fused.sources).toEqual(["exa", "brave"])
+    expect(fused.relevanceScore).toBe(0.95)
+    expect(fused.rawMetadata).toMatchObject({ rrf_score: 0.032 })
+  })
+
+  it("maps multi-provider wire waterfall trace items when provided", () => {
+    const wire = {
+      ...searchResponseFixture(),
+      provider: "aggregated",
+      waterfall: [
+        {
+          provider: "brave",
+          latency_ms: 320,
+          status: "success",
+          results_count: 5,
+        },
+        {
+          provider: "exa",
+          latency_ms: 1200,
+          status: "success",
+          results_count: 4,
+        },
+      ],
+    }
+    const mapped = mapSearchResponse(wire as never, { wallClockMs, catalogNameOf })
+    expect(mapped.waterfall).toHaveLength(2)
+    expect(mapped.waterfall[0]).toMatchObject({
+      providerId: "brave",
+      providerName: "Brave Search",
+      latencyMs: 320,
+      status: "success",
+      resultsCount: 5,
+    })
+    expect(mapped.waterfall[1]).toMatchObject({
+      providerId: "exa",
+      providerName: "Exa",
+      latencyMs: 1200,
+      status: "success",
+      resultsCount: 4,
+    })
+  })
+
+  it("falls back to result.sources when metadata.sources is absent", () => {
+    const wire = searchResponseFixture({
+      provider: "tavily",
+      total_results: 1,
+      results: [
+        {
+          title: "Single-engine hit",
+          url: "https://example.com/solo",
+          snippet: "Solo snippet.",
+          published_at: null,
+          source: null,
+          score: 0.5,
+          metadata: {},
+          sources: ["tavily"],
+        },
+      ],
+    })
+    const mapped = mapSearchResponse(wire as never, { wallClockMs, catalogNameOf })
+
+    expect(mapped.results).toHaveLength(1)
+    const [solo] = mapped.results
+    expect(solo.providerId).toBe("tavily")
+    expect(solo.providerName).toBe("tavily")
+    expect(solo.sources).toEqual(["tavily"])
+  })
 })
 
 describe("mapFetchResponse", () => {
@@ -297,6 +395,41 @@ describe("mergeProviderStatus", () => {
     expect(merged.keyVaultStatus).toBe("missing")
     expect(merged.circuitBreaker).toBe("open")
     expect(merged.healthStatus).toBe("circuit_broken")
+  })
+
+  it("forces healthStatus to offline when secret is missing on non-keyless providers even if wire reports healthy", () => {
+    const merged = mergeProviderStatus(
+      catalogEntry,
+      providerStatus("tavily", {
+        health: "healthy",
+        circuit_breaker: { state: "closed", updated_at: "2026-09-06T00:00:00Z" },
+        secret_presence: "missing",
+      }) as never
+    )
+
+    expect(merged.hasKey).toBe(false)
+    expect(merged.healthStatus).toBe("offline")
+  })
+
+  it("allows Keenable to remain healthy when keyless without an API key", () => {
+    const keenableEntry = {
+      id: "keenable",
+      name: "Keenable",
+      description: "Fast keyless search",
+      baseUrl: "https://api.keenable.ai/v1",
+      authHeaderName: "X-API-Key",
+      capabilities: ["search", "fetch", "keyless_tier"],
+    } as never
+    const merged = mergeProviderStatus(
+      keenableEntry,
+      providerStatus("keenable", {
+        health: "healthy",
+        circuit_breaker: { state: "closed", updated_at: "2026-09-06T00:00:00Z" },
+        secret_presence: "keyless_public",
+      }) as never
+    )
+
+    expect(merged.healthStatus).toBe("healthy")
   })
 
   it("projects quota from free-tier estimates with null limit and estimated confidence", () => {

@@ -11,6 +11,8 @@ export function getEligibleProviders(
 ): ProviderConfig[] {
   const eligible = providers.filter((provider) => {
     if (!provider.globalEnabled || provider.circuitBreaker === "open") return false;
+    const hasCredential = provider.hasKey || provider.capabilities.includes("keyless_tier");
+    if (!hasCredential) return false;
     return op === "search"
       ? provider.searchEnabled && provider.capabilities.includes("search")
       : provider.fetchEnabled && provider.capabilities.includes("fetch");

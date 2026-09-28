@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { PROVIDER_CATALOG } from "./providerCatalog"
+import { PROVIDER_CATALOG, catalogNameOf } from "./providerCatalog"
 import type { Capability } from "@/domains/providers"
 
 /**
@@ -68,5 +68,12 @@ describe("PROVIDER_CATALOG", () => {
     for (const extra of ["google", "bing", "openai", "custom"]) {
       expect(ids.has(extra)).toBe(false)
     }
+  })
+
+  it("maps aggregated provider id to 'All Providers' and known providers to their name", () => {
+    expect(catalogNameOf("aggregated")).toBe("All Providers")
+    expect(catalogNameOf("brave")).toBe("Brave Search")
+    expect(catalogNameOf("exa")).toBe("Exa")
+    expect(catalogNameOf("unknown_id")).toBeUndefined()
   })
 })

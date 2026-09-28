@@ -44,6 +44,7 @@ class RoutingMode(StrEnum):
     AUTO = "auto"
     PREFER = "prefer"
     REQUIRE = "require"
+    FANOUT = "fanout"
 
 
 class RoutingPreference(ContractModel):
@@ -70,6 +71,7 @@ class SearchRequest(ContractModel):
     country_code: str | None = Field(default=None, min_length=2, max_length=2)
     domains: tuple[str, ...] = ()
     routing: RoutingPreference = Field(default_factory=RoutingPreference)
+    fanout: bool = False
 
 
 class SearchResult(ContractModel):
@@ -80,6 +82,16 @@ class SearchResult(ContractModel):
     source: str | None = None
     score: float | None = Field(default=None, ge=0, le=1)
     metadata: dict[str, Any] = Field(default_factory=dict)
+    sources: list[str] = Field(default_factory=list)
+
+
+class ProviderTraceItem(ContractModel):
+    provider: str
+    latency_ms: int = Field(default=0, ge=0)
+    status: str = "success"
+    results_count: int = Field(default=0, ge=0)
+    cost_credits: float = 0.0
+    error: str | None = None
 
 
 class SearchResponse(ContractModel):
@@ -92,6 +104,8 @@ class SearchResponse(ContractModel):
     # Internal marker for a successful response whose vendor omitted metering.
     # It is intentionally excluded from wire serialization for compatibility.
     usage_gap: dict[str, Any] | None = Field(default=None, exclude=True)
+    participating_providers: list[str] = Field(default_factory=list)
+    waterfall: list[ProviderTraceItem] = Field(default_factory=list)
 
 
 class FetchRequest(ContractModel):

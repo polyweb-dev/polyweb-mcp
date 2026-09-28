@@ -13,9 +13,11 @@ provider, secret, and routing-policy endpoints.
 """
 
 import asyncio
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 
 import httpx
@@ -38,10 +40,14 @@ from freesearch.models.contracts import (
     FetchRequest,
     FetchResponse,
     ProviderHealth,
+    ProviderTraceItem,
     QuotaSnapshot,
+    RoutingMode,
     SearchRequest,
     SearchResponse,
+    UsageEvent,
     UsageOperation,
+    UsageStatus,
 )
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.control import (
@@ -51,6 +57,7 @@ from freesearch.routers.control import (
     register_control_routes,
     routing_policy,
 )
+from freesearch.services.aggregation import reciprocal_rank_fusion
 from freesearch.services.monitoring import (
     MAX_RECENT_LIMIT,
     DashboardResponse,
@@ -178,7 +185,14 @@ def create_app(
 
     @app.post("/search", response_model=SearchResponse)
     async def search(request: SearchRequest) -> SearchResponse:
-        """Search the web through the best available provider."""
+        """Search the web through the best available provider or all providers concurrently."""
+        if request.fanout or request.routing.mode is RoutingMode.FANOUT:
+            return await _dispatch_fanout_search(
+                request,
+                routes=app.state._routes,
+                repository=app.state.repository,
+                secret_store=app.state.secret_store,
+            )
         return await _dispatch(
             request,
             UsageOperation.SEARCH,
@@ -356,6 +370,123 @@ async def _dispatch[
         attempts[0],
         lambda target: invoke(target, request),
         operation=operation,
+    )
+
+
+async def _dispatch_fanout_search(
+    request: SearchRequest,
+    *,
+    routes: Sequence[ProviderAdapter],
+    repository: SQLiteRepository | None,
+    secret_store: AsyncSecretStore,
+) -> SearchResponse:
+    """Execute search across all eligible configured providers concurrently and fuse results."""
+    if not routes:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "no provider is configured: store a key in the encrypted vault "
+                "(PUT /api/v1/providers/{id}/secret)"
+            ),
+        )
+    policy = await routing_policy(repository)
+    ordered = await _order_routes(routes, repository, policy.cost_optimization_preset)
+    health_snapshots, quota_snapshots = await _routing_state(repository, ordered, secret_store)
+    fanout_request = request.model_copy(
+        update={"routing": request.routing.model_copy(update={"mode": RoutingMode.FANOUT})}
+    )
+    try:
+        candidates = select_route(fanout_request, ordered, health_snapshots, quota_snapshots)
+    except RoutingError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    if not candidates:
+        raise HTTPException(status_code=503, detail="no eligible provider is available for search")
+
+    overall_start = time.perf_counter()
+
+    async def _call(
+        candidate_adapter: ProviderAdapter,
+    ) -> tuple[str, SearchResponse | None, int, str, int, str | None]:
+        call_start = time.perf_counter()
+        try:
+            res = await tracked_call(
+                repository,
+                candidate_adapter,
+                lambda target: target.search(request),
+                operation=UsageOperation.SEARCH,
+            )
+            elapsed = int((time.perf_counter() - call_start) * 1000)
+            return (candidate_adapter.name, res, elapsed, "success", len(res.results), None)
+        except Exception as exc:
+            elapsed = int((time.perf_counter() - call_start) * 1000)
+            status = "failed"
+            status_code = getattr(getattr(exc, "error", None), "status_code", None)
+            if status_code == 429:
+                status = "rate_limited"
+            return (candidate_adapter.name, None, elapsed, status, 0, str(exc))
+
+    tasks = [_call(c.adapter) for c in candidates]
+    outcomes = await asyncio.gather(*tasks)
+
+    successful_results: list[tuple[str, SearchResponse]] = []
+    errors: list[str] = []
+    waterfall: list[ProviderTraceItem] = []
+
+    for name, res, elapsed, status, count, err in outcomes:
+        waterfall.append(
+            ProviderTraceItem(
+                provider=name,
+                latency_ms=elapsed,
+                status=status,
+                results_count=count,
+                cost_credits=0.0,
+                error=err,
+            )
+        )
+        if res is not None:
+            successful_results.append((name, res))
+        elif err is not None:
+            errors.append(err)
+
+    if not successful_results:
+        first_err = errors[0] if errors else "all providers failed"
+        raise HTTPException(
+            status_code=500,
+            detail=f"all search providers failed: {first_err}",
+        )
+
+    fused_results = reciprocal_rank_fusion(
+        successful_results,
+        limit=request.limit,
+    )
+    participating = [name for name, _ in successful_results]
+    total_elapsed_ms = int((time.perf_counter() - overall_start) * 1000)
+
+    if repository is not None:
+        with suppress(Exception):
+            await repository.record_usage(
+                UsageEvent(
+                    provider="aggregated",
+                    operation=UsageOperation.SEARCH,
+                    units=Decimal("0"),
+                    observed_at=datetime.now(UTC),
+                    latency_ms=total_elapsed_ms,
+                    status=UsageStatus.SUCCESS,
+                    metadata={
+                        "participating_providers": participating,
+                        "fused_count": len(fused_results),
+                    },
+                )
+            )
+
+    return SearchResponse(
+        query=request.query,
+        results=fused_results,
+        provider="aggregated" if len(successful_results) > 1 else successful_results[0][0],
+        total_results=len(fused_results),
+        participating_providers=participating,
+        waterfall=waterfall,
     )
 
 

@@ -10,6 +10,7 @@ local telemetry (usage and health observations) through
 
 import asyncio
 import logging
+import time
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
@@ -37,11 +38,15 @@ from freesearch.infrastructure.secrets import AsyncSecretStore, ProviderName
 from freesearch.models.contracts import (
     FetchRequest,
     ProviderHealth,
+    ProviderTraceItem,
     QuotaSnapshot,
+    RoutingMode,
     SearchRequest,
+    SearchResponse,
     UsageOperation,
 )
 from freesearch.persistence.storage import SQLiteRepository
+from freesearch.services.aggregation import reciprocal_rank_fusion
 from freesearch.services.monitoring import (
     clear_quota_poll_cache,
     effective_quota,
@@ -236,6 +241,85 @@ async def _route_state(
     return health, quotas
 
 
+async def _mcp_fanout_search(
+    request: SearchRequest,
+    active: Sequence[ProviderAdapter],
+    repository: SQLiteRepository | None,
+    secret_store: AsyncSecretStore | None = None,
+) -> dict[str, Any]:
+    """Execute concurrent fanout search across active adapters for MCP."""
+    await _apply_parallel_seed(active, repository)
+    health, quotas = await _route_state(repository, active, secret_store)
+    fanout_req = request.model_copy(
+        update={"routing": request.routing.model_copy(update={"mode": RoutingMode.FANOUT})}
+    )
+    candidates = select_route(fanout_req, active, health, quotas)
+    if not candidates:
+        raise RuntimeError("no eligible provider is available for search")
+
+    async def _call(
+        candidate_adapter: ProviderAdapter,
+    ) -> tuple[str, SearchResponse | None, int, str, int, str | None]:
+        call_start = time.perf_counter()
+        try:
+            res = await tracked_call(
+                repository,
+                candidate_adapter,
+                lambda target: target.search(request),
+                operation=UsageOperation.SEARCH,
+            )
+            elapsed = int((time.perf_counter() - call_start) * 1000)
+            return (candidate_adapter.name, res, elapsed, "success", len(res.results), None)
+        except Exception as exc:
+            elapsed = int((time.perf_counter() - call_start) * 1000)
+            status = "failed"
+            status_code = getattr(getattr(exc, "error", None), "status_code", None)
+            if status_code == 429:
+                status = "rate_limited"
+            return (candidate_adapter.name, None, elapsed, status, 0, str(exc))
+
+    tasks = [_call(c.adapter) for c in candidates]
+    outcomes = await asyncio.gather(*tasks)
+    successful_results: list[tuple[str, SearchResponse]] = []
+    errors: list[str] = []
+    waterfall: list[ProviderTraceItem] = []
+
+    for name, res, elapsed, status, count, err in outcomes:
+        waterfall.append(
+            ProviderTraceItem(
+                provider=name,
+                latency_ms=elapsed,
+                status=status,
+                results_count=count,
+                cost_credits=0.0,
+                error=err,
+            )
+        )
+        if res is not None:
+            successful_results.append((name, res))
+        elif err is not None:
+            errors.append(err)
+
+    if not successful_results:
+        first_err = errors[0] if errors else "all providers failed"
+        raise RuntimeError(f"all search providers failed: {first_err}")
+
+    fused_results = reciprocal_rank_fusion(
+        successful_results,
+        limit=request.limit,
+    )
+    participating = [name for name, _ in successful_results]
+    resp = SearchResponse(
+        query=request.query,
+        results=fused_results,
+        provider="aggregated" if len(successful_results) > 1 else successful_results[0][0],
+        total_results=len(fused_results),
+        participating_providers=participating,
+        waterfall=waterfall,
+    )
+    return resp.model_dump(mode="json")
+
+
 def create_server(
     adapters: Sequence[ProviderAdapter] | None = None,
     repository: SQLiteRepository | None = None,
@@ -318,7 +402,15 @@ def create_server(
 
     @server.tool()
     async def search(request: SearchRequest) -> dict[str, Any]:
-        """Search the web through the best available provider."""
+        """Search the web through the best available provider or all providers concurrently."""
+        active = state["routes"] if owns_client else routes
+        if not active:
+            raise RuntimeError("no provider is configured: set a FREESEARCH_*_API_KEY")
+        if request.fanout or request.routing.mode is RoutingMode.FANOUT:
+            return await _mcp_fanout_search(
+                request, active, state["repository"], state["secret_store"]
+            )
+
         adapter = await _route(request)
         response = await tracked_call(
             state["repository"],

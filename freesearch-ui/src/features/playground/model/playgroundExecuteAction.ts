@@ -16,6 +16,28 @@ export interface ExecuteActionDeps {
   showResult: (result: SearchResult | null) => void
 }
 
+export function resolvePinnedProvider(
+  selectedProviderId: string,
+  eligibleProviders: ProviderConfig[]
+): string | undefined {
+  if (selectedProviderId === "auto" || selectedProviderId === "all") {
+    return undefined
+  }
+  return eligibleProviders.some((p) => p.id === selectedProviderId)
+    ? selectedProviderId
+    : undefined
+}
+
+export function resolveSearchProviderIds(
+  selectedProvider: string | undefined,
+  isFanout: boolean,
+  eligibleProviders: ProviderConfig[]
+): string[] | undefined {
+  if (selectedProvider !== undefined) return [selectedProvider]
+  if (isFanout) return eligibleProviders.map((p) => p.id)
+  return undefined
+}
+
 /**
  * Playground submit: pinned providers run as require, otherwise auto. Search
  * previews its first hit; fetch keeps the document view for the new run.
@@ -35,27 +57,26 @@ export function createExecuteHandler(deps: ExecuteActionDeps): (e?: FormEvent) =
       showResult,
     } = deps
 
-    const selectedProvider =
-      selectedProviderId !== "auto" &&
-      eligibleProviders.some((provider) => provider.id === selectedProviderId)
-        ? selectedProviderId
-        : undefined
+    const isFanout = selectedProviderId === "all"
+    const selectedProvider = resolvePinnedProvider(selectedProviderId, eligibleProviders)
 
     if (mode === "search") {
-      if (!query.trim()) return
+      const trimmedQuery = query.trim()
+      if (!trimmedQuery) return
+      const providerIds = resolveSearchProviderIds(selectedProvider, isFanout, eligibleProviders)
       const res: SearchResponse | null = await runSearch({
-        query: query.trim(),
-        ...(selectedProvider !== undefined
-          ? { providerIds: [selectedProvider] }
-          : {}),
+        query: trimmedQuery,
+        ...(providerIds ? { providerIds } : {}),
+        fanout: isFanout,
         maxResults: resultCount,
-        timeoutMs: 5000,
+        ...(isFanout ? { timeoutMs: 15000 } : { timeoutMs: 5000 }),
       })
       showResult(res?.results[0] ?? null)
     } else {
-      if (!fetchUrl.trim()) return
+      const trimmedUrl = fetchUrl.trim()
+      if (!trimmedUrl) return
       await runFetch({
-        url: fetchUrl.trim(),
+        url: trimmedUrl,
         ...(selectedProvider !== undefined ? { providerId: selectedProvider } : {}),
         format: "markdown",
         timeoutMs: 4000,

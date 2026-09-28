@@ -39,8 +39,14 @@ export function SearchResults({ controller, result: activeSearch }: SearchResult
           <div className="flex items-center gap-2">
             <span>Resolved by</span>
             <span className="inline-flex items-center gap-1.5 font-medium text-[var(--signal)]">
-              <ProviderLogo providerId={activeSearch.selectedProviderId} className="size-3.5" />
-              {activeSearch.selectedProviderId}
+              {activeSearch.selectedProviderId === "aggregated" ? (
+                <span>All Providers ({activeSearch.participatingProviders?.length ?? "multiple"} fused)</span>
+              ) : (
+                <>
+                  <ProviderLogo providerId={activeSearch.selectedProviderId} className="size-3.5" />
+                  {activeSearch.selectedProviderId}
+                </>
+              )}
             </span>
           </div>
           <div className="flex items-center gap-2">

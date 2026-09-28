@@ -11,6 +11,7 @@ export interface BackendSearchRequest {
   country_code: string | null
   domains: string[]
   routing: BackendRoutingPreference
+  fanout?: boolean
 }
 
 export interface BackendSearchResult {
@@ -21,6 +22,7 @@ export interface BackendSearchResult {
   source: string | null
   score: number | null
   metadata: Record<string, unknown>
+  sources?: string[]
 }
 
 export interface BackendUsageEvent {
@@ -36,12 +38,23 @@ export interface BackendUsageEvent {
   status: BackendUsageStatus
 }
 
+export interface BackendProviderTraceItem {
+  provider: string
+  latency_ms: number
+  status: "success" | "failed" | "rate_limited" | "skipped"
+  results_count: number
+  cost_credits?: number
+  error?: string | null
+}
+
 export interface BackendSearchResponse {
   query: string
   results: BackendSearchResult[]
   provider: string
   total_results: number | null
   usage: BackendUsageEvent | null
+  participating_providers?: string[]
+  waterfall?: BackendProviderTraceItem[]
 }
 
 export interface BackendFetchRequest {

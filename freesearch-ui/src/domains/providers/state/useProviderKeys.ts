@@ -22,6 +22,12 @@ export function useProviderKeys({ setProviders, showToast }: KeysDeps) {
               keyVaultStatus: secret.presence,
               keyMasked: secret.fingerprint ?? "—",
               keySource: secret.source,
+              healthStatus:
+                provider.circuitBreaker === "open"
+                  ? "circuit_broken"
+                  : secret.presence === "missing" && !provider.capabilities.includes("keyless_tier")
+                    ? "offline"
+                    : provider.healthStatus,
             }
           : provider,
       ),

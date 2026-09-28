@@ -8,6 +8,7 @@ are written only through the injected :class:`SecretStore`; fingerprints are
 derived in memory and are the only secret-adjacent value ever persisted.
 """
 
+import asyncio
 import inspect
 import time
 from collections.abc import Callable
@@ -184,7 +185,7 @@ def register_control_routes(app: FastAPI) -> None:
         fingerprint = secret_fingerprint(name.value, key) if key is not None else None
         await persist_secret_record(request.app.state.repository, name, fingerprint, now)
         with suppress(HTTPException):
-            await _ensure_provider_adapter(request, name)
+            await _ensure_provider_adapter(request, name, force_rebuild=True)
         return SecretStatusResponse(
             provider=name.value,
             presence=_secret_presence(name, key),
@@ -204,6 +205,18 @@ def register_control_routes(app: FastAPI) -> None:
         key, source = await _resolve_secret(name, store)
         fingerprint = secret_fingerprint(name.value, key) if key is not None else None
         await persist_secret_record(request.app.state.repository, name, fingerprint, now)
+        await _eject_provider_adapter(request, name)
+        repo: SQLiteRepository | None = request.app.state.repository
+        if repo is not None and key is None and name is not ProviderName.KEENABLE:
+            with suppress(Exception):
+                await repo.record_health(
+                    ProviderHealth(
+                        provider=name.value,
+                        status=HealthStatus.UNAVAILABLE,
+                        checked_at=now,
+                        message="API key deleted",
+                    )
+                )
         return SecretStatusResponse(
             provider=name.value,
             presence=_secret_presence(name, key),
@@ -775,11 +788,14 @@ async def _provider_entry(
     breaker = await load_breaker(repository, provider)
     health = await _latest_health(repository, provider.value)
     key, _source = await _resolve_secret(provider, store)
+    reported_health = health.status if health is not None else None
+    if key is None and provider is not ProviderName.KEENABLE:
+        reported_health = None
     return ProviderStatusResponse(
         provider_id=provider.value,
         enabled=config.enabled,
         priority=config.priority,
-        health=health.status if health is not None else None,
+        health=reported_health,
         circuit_breaker=breaker,
         latency_p95_ms=await latency_p95_ms(repository, provider.value),
         secret_presence=_secret_presence(provider, key),
@@ -829,14 +845,53 @@ def _build_with_resolved_secret(
     return factory(client)
 
 
-async def _ensure_provider_adapter(request: Request, provider: ProviderName) -> ProviderAdapter:
+async def _eject_provider_adapter(request: Request, provider: ProviderName) -> None:
+    """Eject or rebuild an adapter after its secret is removed from the vault.
+
+    For non-keyless providers, any live adapter is removed from app routes and closed.
+    For Keenable, if enabled, it reverts to the keyless public tier adapter.
+    """
+
+    app = request.app
+    routes: list[ProviderAdapter] = getattr(app.state, "_routes", None) or []
+    lock: asyncio.Lock | None = getattr(app.state, "_control_lock", None)
+
+    async def _eject() -> None:
+        existing = next((route for route in routes if route.name == provider.value), None)
+        existing_client = getattr(existing, "_client", None)
+        if existing is not None:
+            routes.remove(existing)
+            await existing.aclose()
+        if provider is ProviderName.KEENABLE:
+            config = await effective_provider_config(app.state.repository, provider)
+            if config.enabled:
+                factory = adapter_factory(provider.value)
+                if factory is not None:
+                    client = getattr(app.state, "_client", None) or existing_client
+                    if client is None:
+                        client = create_async_client()
+                        app.state._client = client
+                    with suppress(Exception):
+                        adapter = _build_with_resolved_secret(factory, client, None)
+                        routes.append(adapter)
+
+    if lock is not None:
+        async with lock:
+            await _eject()
+    else:
+        await _eject()
+
+
+async def _ensure_provider_adapter(
+    request: Request, provider: ProviderName, *, force_rebuild: bool = False
+) -> ProviderAdapter:
     """Return the provider's adapter, constructing it on demand when possible.
 
     Construction happens under the app control lock and only when the provider
     is enabled and its vault key resolves (Keenable's keyless public tier
-    counts). A constructed adapter is
-    appended once and never rebuilt, so teardown races are impossible; the MCP
-    server's generation refcount is untouched.
+    counts). A constructed adapter is appended once and never rebuilt unless
+    its key status changes (e.g. key added/removed) or force_rebuild is True;
+    the MCP server's generation refcount is untouched.
     """
 
     app = request.app
@@ -844,15 +899,21 @@ async def _ensure_provider_adapter(request: Request, provider: ProviderName) -> 
     async with app.state._control_lock:
         existing = next((route for route in routes if route.name == provider.value), None)
         key, _source = await _resolve_secret(provider, app.state.secret_store)
-        if existing is not None and not (
-            provider is ProviderName.KEENABLE
-            and key is not None
-            and not existing.capabilities.quota
-        ):
-            return existing
+
+        if existing is not None and not force_rebuild:
+            if provider is ProviderName.KEENABLE:
+                is_keyed = key is not None
+                has_quota = bool(existing.capabilities.quota)
+                if is_keyed == has_quota:
+                    return existing
+            else:
+                return existing
+
+        existing_client = getattr(existing, "_client", None)
         if existing is not None:
             routes.remove(existing)
             await existing.aclose()
+
         config = await effective_provider_config(app.state.repository, provider)
         if not config.enabled:
             raise HTTPException(
@@ -864,8 +925,12 @@ async def _ensure_provider_adapter(request: Request, provider: ProviderName) -> 
         factory = adapter_factory(provider.value)
         if factory is None:
             raise HTTPException(status_code=503, detail=_restart_hint(provider.value))
+        client = getattr(app.state, "_client", None) or existing_client
+        if client is None:
+            client = create_async_client()
+            app.state._client = client
         try:
-            adapter = _build_with_resolved_secret(factory, app.state._client, key)
+            adapter = _build_with_resolved_secret(factory, client, key)
         except Exception:
             raise HTTPException(status_code=503, detail=_restart_hint(provider.value)) from None
         parallel_setter = getattr(adapter, "set_free_seed", None)
