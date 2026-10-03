@@ -18,6 +18,8 @@ import {
   type WireProviderStatus,
 } from "@/test/backendFixtures"
 
+describe("RouteSimulator.r-sim.test.tsx", () => {
+
 /**
  * R-Simulator hero/dock + shared ComposerShell (BDD Acceptance, RED phase).
  *
@@ -83,39 +85,39 @@ const testDir = import.meta.dirname
 // removed in CLEANUP 1.1). Read the joined owner sources (same strength as
 // the monolith reads); app/pgf1 shells keep their paths.
 const simulatorOwnerFiles = [
-  "../../features/routing/model/useSimulatorController.ts",
-  "../../features/routing/ui/RouteSimulator.tsx",
-  "../../features/routing/ui/SimulatorInputRow.tsx",
-  "../../features/routing/ui/SimulatorFooter.tsx",
-  "../../features/routing/ui/SimulatorPipeline.tsx",
-  "../../features/routing/ui/PipelineStep.tsx",
-  "../../features/routing/ui/ProviderStep.tsx",
-  "../../features/routing/ui/FallbackCascade.tsx",
+  "../model/useSimulatorController.ts",
+  "./RouteSimulator.tsx",
+  "./SimulatorInputRow.tsx",
+  "./SimulatorFooter.tsx",
+  "./SimulatorPipeline.tsx",
+  "./PipelineStep.tsx",
+  "./ProviderStep.tsx",
+  "./FallbackCascade.tsx",
 ]
 const strategyOwnerFiles = [
-  "../../features/routing/ui/RoutingStrategy.tsx",
-  "../../features/routing/ui/StrategyCardButton.tsx",
+  "./RoutingStrategy.tsx",
+  "./StrategyCardButton.tsx",
 ]
 const playgroundOwnerFiles = [
-  "../../features/playground/model/usePlaygroundController.ts",
-  "../../features/playground/model/playgroundFetchAction.ts",
-  "../../features/playground/model/playgroundExecuteAction.ts",
-  "../../features/playground/model/useResultPreview.ts",
-  "../../features/playground/ui/PlaygroundPage.tsx",
-  "../../features/playground/ui/SearchSection.tsx",
-  "../../features/playground/ui/FetchSection.tsx",
-  "../../features/playground/ui/SearchComposer.tsx",
-  "../../features/playground/ui/SearchOptions.tsx",
-  "../../features/playground/ui/FetchComposer.tsx",
-  "../../features/playground/ui/SearchResults.tsx",
-  "../../features/playground/ui/ResultCard.tsx",
-  "../../features/playground/ui/ResultInspector.tsx",
-  "../../features/playground/ui/WaterfallPanel.tsx",
-  "../../features/playground/ui/FetchResult.tsx",
+  "../../playground/model/usePlaygroundController.ts",
+  "../../playground/model/playgroundFetchAction.ts",
+  "../../playground/model/playgroundExecuteAction.ts",
+  "../../playground/model/useResultPreview.ts",
+  "../../playground/ui/PlaygroundPage.tsx",
+  "../../playground/ui/SearchSection.tsx",
+  "../../playground/ui/FetchSection.tsx",
+  "../../playground/ui/SearchComposer.tsx",
+  "../../playground/ui/SearchOptions.tsx",
+  "../../playground/ui/FetchComposer.tsx",
+  "../../playground/ui/SearchResults.tsx",
+  "../../playground/ui/ResultCard.tsx",
+  "../../playground/ui/ResultInspector.tsx",
+  "../../playground/ui/WaterfallPanel.tsx",
+  "../../playground/ui/FetchResult.tsx",
 ]
-const appPath = path.resolve(testDir, "../../App.tsx")
-const statusBarPath = path.resolve(testDir, "../../app/layout/StatusBar.tsx")
-const pgf1Path = path.resolve(testDir, "../search/SearchPlayground.pg-f1.test.tsx")
+const appPath = path.resolve(testDir, "../../../App.tsx")
+const statusBarPath = path.resolve(testDir, "../../../app/layout/StatusBar.tsx")
+const pgf1Path = path.resolve(testDir, "../../playground/ui/PlaygroundPage.test.tsx")
 
 const simulatorSource = simulatorOwnerFiles
   .map((file) => readFileSync(path.resolve(testDir, file), "utf8"))
@@ -130,7 +132,7 @@ const appSource = readFileSync(appPath, "utf8")
 // Slice 4: the Routes table + shell live in app/DashboardShell.tsx; App.tsx
 // is a thin AppProviders>DashboardShell shim.
 const dashboardShellSource = readFileSync(
-  path.resolve(testDir, "../../app/DashboardShell.tsx"),
+  path.resolve(testDir, "../../../app/DashboardShell.tsx"),
   "utf8"
 )
 const pgf1Source = readFileSync(pgf1Path, "utf8")
@@ -609,15 +611,16 @@ describe("R-SIM AC-R-REG-1: regressions stay GREEN (Search/Fetch, bar, tabs, log
 
 describe("Slice 5 shim compatibility: routing shells re-export feature owners", () => {
   it("RouteSimulator shell re-exports the routing feature without forking UI", () => {
-    const shim = readFileSync(path.resolve(testDir, "./RouteSimulator.tsx"), "utf8")
+    const shim = readFileSync(path.resolve(testDir, "../../../components/routing/RouteSimulator.tsx"), "utf8")
     expect(shim).toContain("RouteSimulator")
     expect(shim).toContain("features/routing/ui/RouteSimulator")
   })
 
   it("DashboardShell imports the playground feature directly (SearchPlayground shim removed)", () => {
-    const shell = readFileSync(path.resolve(testDir, "../../app/DashboardShell.tsx"), "utf8")
+    const shell = readFileSync(path.resolve(testDir, "../../../app/DashboardShell.tsx"), "utf8")
     expect(shell).toContain("PlaygroundPage")
     expect(shell).toContain("features/playground/ui/PlaygroundPage")
     expect(shell).not.toContain("components/search/SearchPlayground")
   })
+})
 })

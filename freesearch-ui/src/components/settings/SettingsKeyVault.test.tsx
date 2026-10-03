@@ -15,6 +15,8 @@ import {
   secretStatusFixture,
 } from "@/test/backendFixtures"
 
+describe("SettingsKeyVault.k1.test.tsx", () => {
+
 /**
  * K1 Keys wasted space — BDD Acceptance (RED phase).
  *
@@ -695,4 +697,5 @@ describe("K1-6: no regression — Providers S-P4, Failover cap, pills, theme, sc
     expect(keyVaultSource).not.toMatch(/src\/freesearch/)
     expect(keyVaultSource).not.toMatch(/127\.0\.0\.1/)
   })
+})
 })

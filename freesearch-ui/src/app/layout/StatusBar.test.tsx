@@ -16,6 +16,8 @@ import {
   type WireProviderStatus,
 } from "@/test/backendFixtures"
 
+describe("StatusBar.r1.test.tsx", () => {
+
 /**
  * R1 bottom status bar — BDD Acceptance (RED phase).
  *
@@ -99,15 +101,15 @@ const appPath = path.resolve(testDir, "../../App.tsx")
 // (CLEANUP 1.1, DashboardShell renders the feature directly). Content asserts
 // run against the feature owners (playground page content is split across
 // its feature, routing through its workbench shell).
-const removedPlaygroundShimPath = path.resolve(testDir, "../search/SearchPlayground.tsx")
+const removedPlaygroundShimPath = path.resolve(testDir, "../../components/search/SearchPlayground.tsx")
 const playgroundOwnerDir = path.resolve(testDir, "../../features/playground")
-const routingEntryPath = path.resolve(testDir, "../routing/RoutingEngine.tsx")
+const routingEntryPath = path.resolve(testDir, "../../components/routing/RoutingEngine.tsx")
 const routingOwnerPath = path.resolve(
   testDir,
   "../../features/routing/ui/RoutingEngine.tsx"
 )
-const removedComposerShimPath = path.resolve(testDir, "../common/ComposerShell.tsx")
-const sidebarPath = path.resolve(testDir, "./Sidebar.tsx")
+const removedComposerShimPath = path.resolve(testDir, "../../components/common/ComposerShell.tsx")
+const sidebarPath = path.resolve(testDir, "../../components/layout/Sidebar.tsx")
 const indexCssPath = path.resolve(testDir, "../../index.css")
 
 const appSource = readFileSync(appPath, "utf8")
@@ -859,4 +861,5 @@ describe("AC-R1-10 regressions: ComposerShell, layouts, fetching, shell", () => 
       within(screen.getByRole("navigation", { name: "Primary" })).getAllByRole("link")
     ).toHaveLength(5)
   })
+})
 })

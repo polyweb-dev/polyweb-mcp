@@ -13,6 +13,8 @@ import {
   dashboardFixture,
 } from "@/test/backendFixtures"
 
+describe("SettingsFailover.f1f2.test.tsx", () => {
+
 /**
  * F1+F2 Failover failover — BDD Acceptance (RED phase).
  *
@@ -865,4 +867,5 @@ describe("G-5: P1-FINAL page merge (inverted — fleet merged, matrix retired)",
     expect(failoverSource).not.toMatch(/127\.0\.0\.1:8001/)
     expect(failoverSource).not.toMatch(/localhost:8001/)
   })
+})
 })
