@@ -16,6 +16,8 @@ import {
   type WireProviderStatus,
 } from "@/test/backendFixtures"
 
+describe("StatusBar.r1.test.tsx", () => {
+
 /**
  * R1 bottom status bar — BDD Acceptance (RED phase).
  *
@@ -99,15 +101,15 @@ const appPath = path.resolve(testDir, "../../App.tsx")
 // (CLEANUP 1.1, DashboardShell renders the feature directly). Content asserts
 // run against the feature owners (playground page content is split across
 // its feature, routing through its workbench shell).
-const removedPlaygroundShimPath = path.resolve(testDir, "../search/SearchPlayground.tsx")
+const removedPlaygroundShimPath = path.resolve(testDir, "../../components/search/SearchPlayground.tsx")
 const playgroundOwnerDir = path.resolve(testDir, "../../features/playground")
-const routingEntryPath = path.resolve(testDir, "../routing/RoutingEngine.tsx")
+const routingEntryPath = path.resolve(testDir, "../../components/routing/RoutingEngine.tsx")
 const routingOwnerPath = path.resolve(
   testDir,
   "../../features/routing/ui/RoutingEngine.tsx"
 )
-const removedComposerShimPath = path.resolve(testDir, "../common/ComposerShell.tsx")
-const sidebarPath = path.resolve(testDir, "./Sidebar.tsx")
+const removedComposerShimPath = path.resolve(testDir, "../../components/common/ComposerShell.tsx")
+const sidebarPath = path.resolve(testDir, "../../components/layout/Sidebar.tsx")
 const indexCssPath = path.resolve(testDir, "../../index.css")
 
 const appSource = readFileSync(appPath, "utf8")
@@ -191,18 +193,20 @@ function stubBackend(opts: {
   })
 }
 
-function renderAppAt(route: string) {
+async function renderAppAt(route: string) {
   stubBackend()
-  return render(
+  const result = render(
     <MemoryRouter initialEntries={[route]}>
       <App />
     </MemoryRouter>
   )
+  await screen.findByTestId("status-bar")
+  return result
 }
 
 /** Mount App and wait until the bar shows live counts + Failover wording. */
 async function renderAppReady(route: string): Promise<HTMLElement> {
-  renderAppAt(route)
+  await renderAppAt(route)
   await waitFor(() => {
     expect(screen.getByTestId("status-bar")).toBeInTheDocument()
   })
@@ -316,25 +320,25 @@ describe("AC-R1-1: StatusBar module contract", () => {
 })
 
 describe("AC-R1-2: bar geometry tokens", () => {
-  it("renders data-testid=status-bar on the playground route", () => {
-    renderAppAt("/playground")
+  it("renders data-testid=status-bar on the playground route", async () => {
+    await renderAppAt("/playground")
     expect(screen.getByTestId("status-bar")).toBeInTheDocument()
   })
 
-  it("renders data-testid=status-bar on the routing route", () => {
-    renderAppAt("/routing")
+  it("renders data-testid=status-bar on the routing route", async () => {
+    await renderAppAt("/routing")
     expect(screen.getByTestId("status-bar")).toBeInTheDocument()
   })
 
-  it("is a tiny h-6 bar with 12px type", () => {
-    renderAppAt("/playground")
+  it("is a tiny h-6 bar with 12px type", async () => {
+    await renderAppAt("/playground")
     const bar = barEl()
     expect(bar.className).toContain("h-6")
     expect(bar.className).toMatch(/text-(\[12px\]|12px)/)
   })
 
-  it("uses the elevated surface, top border, muted text, and tabular numerals", () => {
-    renderAppAt("/playground")
+  it("uses the elevated surface, top border, muted text, and tabular numerals", async () => {
+    await renderAppAt("/playground")
     const bar = barEl()
     // FINAL REVIEW: resolving arbitrary-value forms ONLY — the bare aliases
     // (bg-elevated / border-subtle / text-muted) never resolve to CSS tokens.
@@ -357,8 +361,8 @@ describe("AC-R1-2: bar geometry tokens", () => {
     expect(norm(statusBarSource())).toContain(norm("text-[var(--muted)]"))
   })
 
-  it("is in-flow (never fixed/absolute on the bar root)", () => {
-    renderAppAt("/playground")
+  it("is in-flow (never fixed/absolute on the bar root)", async () => {
+    await renderAppAt("/playground")
     const bar = barEl()
     expect(bar.className).not.toContain("fixed")
     expect(bar.className.split(/\s+/).includes("absolute")).toBe(false)
@@ -367,7 +371,7 @@ describe("AC-R1-2: bar geometry tokens", () => {
 
 describe("AC-R1-3: bar content (unified wording)", () => {
   it('shows the exact unified count "7 of 7 providers" on playground', async () => {
-    renderAppAt("/playground")
+    await renderAppAt("/playground")
     expect(screen.getByTestId("status-bar")).toBeInTheDocument()
     await waitFor(() => {
       expect(barEl().textContent).toContain("7 of 7 providers")
@@ -375,7 +379,7 @@ describe("AC-R1-3: bar content (unified wording)", () => {
   })
 
   it('shows the unified "Failover active" wording on playground', async () => {
-    renderAppAt("/playground")
+    await renderAppAt("/playground")
     expect(screen.getByTestId("status-bar")).toBeInTheDocument()
     await waitFor(() => {
       expect(barEl().textContent).toContain("Failover active")
@@ -385,7 +389,7 @@ describe("AC-R1-3: bar content (unified wording)", () => {
   })
 
   it('shows the same unified content on routing ("7 of 7 providers" + "Failover active")', async () => {
-    renderAppAt("/routing")
+    await renderAppAt("/routing")
     expect(screen.getByTestId("status-bar")).toBeInTheDocument()
     await waitFor(() => {
       expect(barEl().textContent).toContain("7 of 7 providers")
@@ -396,7 +400,7 @@ describe("AC-R1-3: bar content (unified wording)", () => {
   })
 
   it("never shows the legacy playground Fallback wording anywhere", async () => {
-    renderAppAt("/playground")
+    await renderAppAt("/playground")
     expect(screen.getByTestId("status-bar")).toBeInTheDocument()
     await waitFor(() => {
       expect(barEl().textContent).toContain("7 of 7 providers")
@@ -415,7 +419,7 @@ describe("AC-R1-4: single source on both routes", () => {
   })
 
   it("playground shows exactly one count and exactly one Failover claim", async () => {
-    renderAppAt("/playground")
+    await renderAppAt("/playground")
     expect(screen.getByTestId("status-bar")).toBeInTheDocument()
     await waitFor(() => {
       expect(screen.getByText(/\d+ of \d+ providers/)).toBeInTheDocument()
@@ -426,7 +430,7 @@ describe("AC-R1-4: single source on both routes", () => {
   })
 
   it("routing shows exactly one count and exactly one Failover claim", async () => {
-    renderAppAt("/routing")
+    await renderAppAt("/routing")
     expect(screen.getByTestId("status-bar")).toBeInTheDocument()
     await waitFor(() => {
       expect(screen.getByText(/\d+ of \d+ providers/)).toBeInTheDocument()
@@ -471,8 +475,8 @@ describe("AC-R1-5: placement (right column, borders, shell intact)", () => {
     expect(appSource).toContain("DashboardShell")
   })
 
-  it("outer shell still lays out horizontally with aside + main", () => {
-    renderAppAt("/playground")
+  it("outer shell still lays out horizontally with aside + main", async () => {
+    await renderAppAt("/playground")
     expect(screen.getByTestId("status-bar")).toBeInTheDocument()
     const aside = document.querySelector("aside") as HTMLElement
     const shell = aside.parentElement as HTMLElement
@@ -482,8 +486,8 @@ describe("AC-R1-5: placement (right column, borders, shell intact)", () => {
     expect(shell.contains(screen.getByRole("main"))).toBe(true)
   })
 
-  it("bar lives in the right column: same parent as main, after main, outside aside", () => {
-    renderAppAt("/playground")
+  it("bar lives in the right column: same parent as main, after main, outside aside", async () => {
+    await renderAppAt("/playground")
     const bar = barEl()
     const main = screen.getByRole("main")
     expect(bar.parentElement).toBe(main.parentElement)
@@ -491,8 +495,8 @@ describe("AC-R1-5: placement (right column, borders, shell intact)", () => {
     expect((document.querySelector("aside") as HTMLElement).contains(bar)).toBe(false)
   })
 
-  it("bar sticks to the bottom in-flow with a top border", () => {
-    renderAppAt("/playground")
+  it("bar sticks to the bottom in-flow with a top border", async () => {
+    await renderAppAt("/playground")
     const bar = barEl()
     expect(bar.className).toContain("sticky")
     expect(bar.className).toContain("bottom-0")
@@ -692,7 +696,7 @@ describe("AC-R1-8: page-level clusters removed, views intact", () => {
   })
 
   it("playground DOM keeps heading, tabs, and composer with no page-level status", async () => {
-    renderAppAt("/playground")
+    await renderAppAt("/playground")
     expect(screen.getByTestId("status-bar")).toBeInTheDocument()
     await waitFor(() => {
       expect(screen.getByText("7 of 7 providers")).toBeInTheDocument()
@@ -704,7 +708,7 @@ describe("AC-R1-8: page-level clusters removed, views intact", () => {
   })
 
   it("routing DOM keeps heading plus Strategy/Simulator/Ranks/Resilience with no page-level status", async () => {
-    renderAppAt("/routing")
+    await renderAppAt("/routing")
     expect(screen.getByTestId("status-bar")).toBeInTheDocument()
     await waitFor(() => {
       expect(screen.getByText("7 of 7 providers")).toBeInTheDocument()
@@ -737,7 +741,7 @@ describe("AC-R1-9: edge states (loading neutral, error muted, 0-of-N)", () => {
       </MemoryRouter>
     )
 
-    expect(screen.queryByTestId("status-bar")).not.toBeNull()
+    await screen.findByTestId("status-bar")
     const bar = screen.getByTestId("status-bar") as HTMLElement
     expect(bar.textContent ?? "").not.toMatch(/Failover (active|inactive)/)
     expect((bar.textContent ?? "").length).toBeGreaterThan(0)
@@ -765,7 +769,7 @@ describe("AC-R1-9: edge states (loading neutral, error muted, 0-of-N)", () => {
       </MemoryRouter>
     )
 
-    expect(screen.queryByTestId("status-bar")).not.toBeNull()
+    await screen.findByTestId("status-bar")
     await waitFor(() => {
       expect(screen.getByText("7 of 7 providers")).toBeInTheDocument()
     })
@@ -782,7 +786,7 @@ describe("AC-R1-9: edge states (loading neutral, error muted, 0-of-N)", () => {
       </MemoryRouter>
     )
 
-    expect(screen.queryByTestId("status-bar")).not.toBeNull()
+    await screen.findByTestId("status-bar")
     await waitFor(() => {
       expect(barEl().textContent).toContain("0 of 7 providers")
     })
@@ -806,7 +810,7 @@ describe("AC-R1-10 regressions: ComposerShell, layouts, fetching, shell", () => 
   })
 
   it("search + fetch hero layouts intact with the same docked transition", async () => {
-    renderAppAt("/playground")
+    await renderAppAt("/playground")
     expect(screen.getByTestId("status-bar")).toBeInTheDocument()
     const searchHero = screen.getByTestId("search-layout")
     expect(searchHero).toHaveAttribute("data-state", "hero")
@@ -828,7 +832,7 @@ describe("AC-R1-10 regressions: ComposerShell, layouts, fetching, shell", () => 
         <App />
       </MemoryRouter>
     )
-    expect(screen.queryByTestId("status-bar")).not.toBeNull()
+    await screen.findByTestId("status-bar")
     await waitFor(() => {
       expect(screen.getByPlaceholderText(/Search across all providers/i)).toBeInTheDocument()
     })
@@ -847,8 +851,8 @@ describe("AC-R1-10 regressions: ComposerShell, layouts, fetching, shell", () => 
     expect(playgroundSource).toContain("runFetch")
   })
 
-  it("app shell intact: aside + main, five links (P1-FINAL: no providers page), no legacy header", () => {
-    renderAppAt("/playground")
+  it("app shell intact: aside + main, five links (P1-FINAL: no providers page), no legacy header", async () => {
+    await renderAppAt("/playground")
     expect(screen.getByTestId("status-bar")).toBeInTheDocument()
     expect(document.querySelector("aside")).not.toBeNull()
     expect(screen.getByRole("main")).toBeInTheDocument()
@@ -857,4 +861,5 @@ describe("AC-R1-10 regressions: ComposerShell, layouts, fetching, shell", () => 
       within(screen.getByRole("navigation", { name: "Primary" })).getAllByRole("link")
     ).toHaveLength(5)
   })
+})
 })

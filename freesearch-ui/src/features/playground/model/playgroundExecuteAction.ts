@@ -2,7 +2,7 @@ import type { FormEvent } from "react"
 import { useFreeSearch } from "@/context/useFreeSearch"
 import type { ProviderConfig } from "@/domains/providers"
 import type { SearchResponse, SearchResult } from "@/domains/execution"
-import type { PlaygroundMode } from "./playgroundTypes"
+import type { PlaygroundMode } from "@/store/playgroundSlice"
 
 export interface ExecuteActionDeps {
   mode: PlaygroundMode

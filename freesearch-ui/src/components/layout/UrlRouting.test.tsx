@@ -47,7 +47,7 @@ function LocationProbe() {
   return <div data-testid="test-location">{location.pathname}</div>
 }
 
-function renderAt(route: string) {
+async function renderAt(route: string) {
   installFetchStub((req) => {
     if (req.url === "/api/v1/providers" && req.method === "GET") {
       return ok(allProvidersFixture())
@@ -58,12 +58,14 @@ function renderAt(route: string) {
     if (req.url.startsWith("/dashboard")) return ok(dashboardFixture())
     return err(404, { detail: "unhandled test route" })
   })
-  return render(
+  const result = render(
     <MemoryRouter initialEntries={[route]}>
       <App />
       <LocationProbe />
     </MemoryRouter>
   )
+  await screen.findByRole("navigation", { name: "Primary" })
+  return result
 }
 
 function testPath(): string {
@@ -117,14 +119,14 @@ afterEach(() => {
 
 describe("C4-1: router install + URL changes on nav", () => {
   it("clicking a sidebar link moves the router location and swaps the view", async () => {
-    renderAt("/playground")
+    await renderAt("/playground")
     await expectView("Playground", "Search Playground", "/playground")
     await followLink("Routing")
     await expectView("Routing", "Routing", "/routing")
   })
 
-  it("every sidebar link advertises its exact route href", () => {
-    renderAt("/playground")
+  it("every sidebar link advertises its exact route href", async () => {
+    await renderAt("/playground")
     const nav = screen.getByRole("navigation", { name: "Primary" })
     for (const { link, path } of ROUTE_TABLE) {
       expect(
@@ -136,7 +138,7 @@ describe("C4-1: router install + URL changes on nav", () => {
 
 describe("C4-2: route table + / redirect + catch-all", () => {
   it("root path redirects to /playground", async () => {
-    renderAt("/")
+    await renderAt("/")
     await waitFor(() => {
       expect(
         screen.getByRole("heading", { name: "Search Playground" })
@@ -146,7 +148,7 @@ describe("C4-2: route table + / redirect + catch-all", () => {
   })
 
   it("unknown paths fall back to /playground", async () => {
-    renderAt("/no-such-view")
+    await renderAt("/no-such-view")
     await waitFor(() => {
       expect(
         screen.getByRole("heading", { name: "Search Playground" })
@@ -156,17 +158,20 @@ describe("C4-2: route table + / redirect + catch-all", () => {
   })
 
   it("legacy /providers redirects to the merged Settings registry", async () => {
-    renderAt("/providers")
-    await waitFor(() => {
-      expect(
-        screen.getByRole("heading", { name: "Settings" })
-      ).toBeInTheDocument()
-    })
+    await renderAt("/providers")
+    // Redirect plus Settings registry render under full-suite parallel load:
+    // budget above the default 1000ms (assertion unchanged).
+    await waitFor(
+      () => {
+        expect(screen.getByRole("heading", { name: "Settings" })).toBeInTheDocument()
+      },
+      { timeout: 5000 }
+    )
     expect(testPath()).toBe("/settings")
   })
 
   it("there is no /quotas route — quotas renders at /usage", async () => {
-    renderAt("/quotas")
+    await renderAt("/quotas")
     await waitFor(() => {
       expect(
         screen.getByRole("heading", { name: "Search Playground" })
@@ -180,7 +185,7 @@ describe("C4-3: deep links render their view", () => {
   it.each(ROUTE_TABLE)(
     "deep-link $path renders the '$heading' view with '$link' current",
     async ({ link, heading, path }) => {
-      renderAt(path)
+      await renderAt(path)
       await expectView(link, heading, path)
     }
   )
@@ -188,7 +193,7 @@ describe("C4-3: deep links render their view", () => {
 
 describe("C4-4: navigation restores view + exactly one current marker", () => {
   it("sequential navigation keeps view, URL, and marker in sync", async () => {
-    renderAt("/settings")
+    await renderAt("/settings")
     await expectView("Settings", "Settings", "/settings")
     await followLink("Routing")
     await expectView("Routing", "Routing", "/routing")
@@ -201,7 +206,7 @@ describe("C4-4: navigation restores view + exactly one current marker", () => {
 
 describe("C4-5: sidebar active sync, collapse/drawer/persistence preserved", () => {
   it("exactly one link is current after every navigation", async () => {
-    renderAt("/playground")
+    await renderAt("/playground")
     for (const { link, heading, path } of ROUTE_TABLE) {
       await followLink(link)
       await waitFor(() => {
@@ -222,7 +227,7 @@ describe("C4-5: sidebar active sync, collapse/drawer/persistence preserved", () 
 
   it("collapse toggle still works without touching the URL", async () => {
     const user = userEvent.setup()
-    renderAt("/routing")
+    await renderAt("/routing")
     await expectView("Routing", "Routing", "/routing")
     await user.click(
       screen.getByRole("button", { name: "Collapse sidebar", exact: true })
@@ -241,7 +246,7 @@ describe("C4-5: sidebar active sync, collapse/drawer/persistence preserved", () 
 
   it("selecting a drawer item navigates and closes the drawer", async () => {
     const user = userEvent.setup()
-    renderAt("/playground")
+    await renderAt("/playground")
     await expectView("Playground", "Search Playground", "/playground")
     await user.click(
       screen.getByRole("button", { name: "Open navigation", exact: true })
@@ -259,7 +264,7 @@ describe("C4-5: sidebar active sync, collapse/drawer/persistence preserved", () 
 
   it("collapse persistence key survives the router migration", async () => {
     const user = userEvent.setup()
-    renderAt("/playground")
+    await renderAt("/playground")
     await user.click(
       screen.getByRole("button", { name: "Collapse sidebar", exact: true })
     )
@@ -271,7 +276,7 @@ describe("C4-5: sidebar active sync, collapse/drawer/persistence preserved", () 
 describe("C4-6: PillTabs switching leaves the URL unchanged", () => {
   it("Routing pill tabs switch panels without pushing history", async () => {
     const user = userEvent.setup()
-    renderAt("/routing")
+    await renderAt("/routing")
     await expectView("Routing", "Routing", "/routing")
     for (const tab of ["Simulator", "Ranks", "Resilience"]) {
       await user.click(screen.getByRole("tab", { name: tab, exact: true }))
@@ -286,7 +291,7 @@ describe("C4-6: PillTabs switching leaves the URL unchanged", () => {
 
   it("Settings pill tabs switch panels without pushing history", async () => {
     const user = userEvent.setup()
-    renderAt("/settings")
+    await renderAt("/settings")
     await expectView("Settings", "Settings", "/settings")
     for (const tab of ["Keys", "Failover"]) {
       await user.click(screen.getByRole("tab", { name: tab, exact: true }))
@@ -298,7 +303,7 @@ describe("C4-6: PillTabs switching leaves the URL unchanged", () => {
 
   it("Playground Search/Fetch tabs switch without pushing history", async () => {
     const user = userEvent.setup()
-    renderAt("/playground")
+    await renderAt("/playground")
     await expectView("Playground", "Search Playground", "/playground")
     await user.click(screen.getByRole("tab", { name: "Fetch", exact: true }))
     expect(testPath()).toBe("/playground")
@@ -308,8 +313,8 @@ describe("C4-6: PillTabs switching leaves the URL unchanged", () => {
 })
 
 describe("C4-7: no regression — shell, providers, views", () => {
-  it("shell keeps the flex-row aside+main layout with no header", () => {
-    renderAt("/playground")
+  it("shell keeps the flex-row aside+main layout with no header", async () => {
+    await renderAt("/playground")
     const aside = document.querySelector("aside")
     expect(aside).not.toBeNull()
     expect((aside!.parentElement as HTMLElement).className).toMatch(/flex-row/)
@@ -318,7 +323,7 @@ describe("C4-7: no regression — shell, providers, views", () => {
   })
 
   it("legacy /providers URL redirects into the merged Settings registry", async () => {
-    renderAt("/providers")
+    await renderAt("/providers")
     await expectView("Settings", "Settings", "/settings")
     await waitFor(() => {
       expect(screen.getByText("Brave Search")).toBeInTheDocument()
@@ -326,7 +331,7 @@ describe("C4-7: no regression — shell, providers, views", () => {
   })
 
   it("Routing + Settings PillTabs gold standard is intact", async () => {
-    renderAt("/routing")
+    await renderAt("/routing")
     await expectView("Routing", "Routing", "/routing")
     const routingPills = document.querySelector(
       '[data-slot="tabs-list"][data-variant="pill"]'

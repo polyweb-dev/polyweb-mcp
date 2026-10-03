@@ -13,6 +13,8 @@ import {
   dashboardFixture,
 } from "@/test/backendFixtures"
 
+describe("RoutingStrategy.r-strat.test.tsx", () => {
+
 /**
  * R-Strategy full-width section (BDD Acceptance, RED phase).
  *
@@ -43,8 +45,8 @@ const testDir = import.meta.dirname
 // Slice 5 ownership: strategy UI lives in features/routing (shell removed
 // at migration completion). Read the joined owner sources.
 const strategyOwnerFiles = [
-  "../../features/routing/ui/RoutingStrategy.tsx",
-  "../../features/routing/ui/StrategyCardButton.tsx",
+  "./RoutingStrategy.tsx",
+  "./StrategyCardButton.tsx",
 ]
 const strategySource = strategyOwnerFiles
   .map((file) => readFileSync(path.resolve(testDir, file), "utf8"))
@@ -175,8 +177,12 @@ describe("R-STRAT AC-R-STRAT-2: strategy cards and selection logic intact", () =
     await readyForStrategy()
 
     const strict = screen.getByRole("button", { name: /^Strict priority/ })
-    expect(within(strict).getByText("Primary")).toBeInTheDocument()
-    expect(within(strict).getByText("Brave Search")).toBeInTheDocument()
+    // The Primary badge and the arbitrated provider name both arrive with the
+    // asynchronous catalog — await the data together, not the static card.
+    await waitFor(() => {
+      expect(within(strict).getByText("Primary")).toBeInTheDocument()
+      expect(within(strict).getByText("Brave Search")).toBeInTheDocument()
+    })
     expect(strict.textContent).toMatch(/ms.*p95|p95/)
   })
 
@@ -190,4 +196,5 @@ describe("R-STRAT AC-R-STRAT-2: strategy cards and selection logic intact", () =
     expect(strategySource).toContain("free_first")
     expect(strategySource).toContain("balanced")
   })
+})
 })

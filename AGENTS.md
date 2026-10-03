@@ -8,3 +8,10 @@ In repositories indexed by CodeGraph (a `.codegraph/` directory exists at the re
 
 If there is no `.codegraph/` directory, skip CodeGraph entirely — indexing is the user's decision.
 <!-- CODEGRAPH_END -->
+
+## UI unit tests
+
+- In `freesearch-ui/src`, colocate each unit/component test with its source as `<basename>.test.ts` or `<basename>.test.tsx`; keep one canonical test file per source and never add suffix variants.
+- When consolidating historical suites, keep each origin traceable as `describe("<old filename>", ...)` and preserve test titles, bodies, and assertions.
+- Keep shared fixtures/helpers shared; deduplicate imports and change paths only when relocation requires it.
+- Preserve the before/after Vitest case count, then run `pnpm depcruise`, `pnpm knip`, `pnpm lint`, `pnpm typecheck`, and `pnpm build` with zero new findings.
