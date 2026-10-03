@@ -17,6 +17,7 @@ from freesearch.adapters.firecrawl import FirecrawlAdapter
 from freesearch.adapters.keenable import KeenableAdapter
 from freesearch.adapters.parallel import ParallelAdapter
 from freesearch.adapters.tavily import TavilyAdapter
+from freesearch.adapters.tinyfish import TinyfishAdapter
 from freesearch.infrastructure.http import create_async_client
 from freesearch.infrastructure.secrets import PROVIDER_ENV_VARS, ProviderName
 
@@ -44,6 +45,7 @@ def before_all(context: Any) -> None:
     context.has_parallel_key = _harness_env_key(ProviderName.PARALLEL) is not None
     context.has_youcom_key = _harness_env_key(ProviderName.YOU) is not None
     context.has_keenable_key = _harness_env_key(ProviderName.KEENABLE) is not None
+    context.has_tinyfish_key = _harness_env_key(ProviderName.TINYFISH) is not None
 
 
 def before_scenario(context: Any, scenario: Any) -> None:
@@ -64,6 +66,7 @@ def before_scenario(context: Any, scenario: Any) -> None:
         or _has_control_tag(scenario)
         or _has_fanout_tag(scenario)
         or (_has_quota_tag(scenario) and not _has_live_tag(scenario))
+        or (_has_tinyfish_tag(scenario) and not _has_live_tag(scenario))
     ):
         context.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(context.loop)
@@ -138,6 +141,15 @@ def before_scenario(context: Any, scenario: Any) -> None:
                 )
             )
             return
+        if _has_tinyfish_tag(scenario) and not getattr(context, "has_tinyfish_key", True):
+            scenario.skip(
+                reason=(
+                    "FREESEARCH_TINYFISH_API_KEY is not set "
+                    "(harness live-gate reads the process env only). "
+                    "Tinyfish live BDD scenarios are skipped without a harness env key."
+                )
+            )
+            return
         context.adapter = _adapter_for(context.http_client, scenario)
     context.search_response = None
     context.fetch_response = None
@@ -168,6 +180,8 @@ def _adapter_for(client: Any, scenario: Any) -> Any:
         return BraveAdapter(client, api_key=_explicit_api_key(ProviderName.BRAVE))
     if _is_exa_scenario(scenario):
         return ExaAdapter(client, api_key=_explicit_api_key(ProviderName.EXA))
+    if _has_tinyfish_tag(scenario):
+        return TinyfishAdapter(client, api_key=_explicit_api_key(ProviderName.TINYFISH))
     return TavilyAdapter(client, api_key=_explicit_api_key(ProviderName.TAVILY))
 
 
@@ -306,6 +320,15 @@ def _has_keenable_keyed_tag(scenario: Any) -> bool:
     if not tags:
         return False
     return any(str(getattr(tag, "name", tag)).lstrip("@") == "keenable-keyed" for tag in tags)
+
+
+def _has_tinyfish_tag(scenario: Any) -> bool:
+    """Return True when the scenario carries the 'tinyfish' tag (str or Tag forms)."""
+    tags = getattr(scenario, "tags", None) or ()
+    feature_tags = getattr(getattr(scenario, "feature", None), "tags", None) or ()
+    return any(
+        str(getattr(tag, "name", tag)).lstrip("@") == "tinyfish" for tag in (*tags, *feature_tags)
+    )
 
 
 def _has_firecrawl_tag(scenario: Any) -> bool:

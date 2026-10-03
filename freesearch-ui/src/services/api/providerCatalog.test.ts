@@ -1,12 +1,7 @@
 import { describe, it, expect } from "vitest"
-import { PROVIDER_CATALOG, catalogNameOf } from "./providerCatalog"
+import { PROVIDER_CATALOG, catalogNameOf, catalogEntryForId } from "./providerCatalog"
 import type { Capability } from "@/domains/providers"
 
-/**
- * RED: `src/services/api/providerCatalog.ts` does not exist yet. The
- * Developer creates `StaticProviderMeta` + `PROVIDER_CATALOG` with exactly
- * the 7 entries below (UI ids; youcom maps to backend id "you").
- */
 describe("PROVIDER_CATALOG", () => {
   const expected: Array<{ id: string; backendId: string; capabilities: Capability[] }> = [
     { id: "brave", backendId: "brave", capabilities: ["search"] },
@@ -24,10 +19,11 @@ describe("PROVIDER_CATALOG", () => {
       capabilities: ["search", "fetch", "live_crawl"],
     },
     { id: "parallel", backendId: "parallel", capabilities: ["search", "extract", "fetch"] },
+    { id: "tinyfish", backendId: "tinyfish", capabilities: ["search", "fetch"] },
   ]
 
-  it("contains exactly 7 static entries", () => {
-    expect(PROVIDER_CATALOG).toHaveLength(7)
+  it("contains exactly 8 static entries", () => {
+    expect(PROVIDER_CATALOG).toHaveLength(8)
   })
 
   it("uses the pinned UI ids in registry order", () => {
@@ -62,9 +58,9 @@ describe("PROVIDER_CATALOG", () => {
     }
   })
 
-  it("never invents providers beyond the canonical seven", () => {
+  it("never invents providers beyond the canonical eight", () => {
     const ids = new Set(PROVIDER_CATALOG.map((entry) => entry.id))
-    expect(ids.size).toBe(7)
+    expect(ids.size).toBe(8)
     for (const extra of ["google", "bing", "openai", "custom"]) {
       expect(ids.has(extra)).toBe(false)
     }
@@ -74,6 +70,50 @@ describe("PROVIDER_CATALOG", () => {
     expect(catalogNameOf("aggregated")).toBe("All Providers")
     expect(catalogNameOf("brave")).toBe("Brave Search")
     expect(catalogNameOf("exa")).toBe("Exa")
+    expect(catalogNameOf("tinyfish")).toBe("Tinyfish")
     expect(catalogNameOf("unknown_id")).toBeUndefined()
+  })
+
+  describe("Tinyfish catalog specification", () => {
+    it("exposes canonical metadata for tinyfish", () => {
+      const entry = PROVIDER_CATALOG.find((p) => p.id === "tinyfish")
+      expect(entry).toBeDefined()
+      expect(entry).toEqual({
+        id: "tinyfish",
+        backendId: "tinyfish",
+        name: "Tinyfish",
+        description:
+          "Web infrastructure for AI agents with structured search and clean markdown content extraction.",
+        baseUrl: "https://api.search.tinyfish.ai",
+        authHeaderName: "X-API-Key",
+        capabilities: ["search", "fetch"],
+      })
+    })
+
+    it("resolves tinyfish via catalogEntryForId by UI id and backend id", () => {
+      const byUiId = catalogEntryForId("tinyfish")
+      expect(byUiId).toBeDefined()
+      expect(byUiId?.name).toBe("Tinyfish")
+
+      const byBackendId = catalogEntryForId("tinyfish")
+      expect(byBackendId?.id).toBe("tinyfish")
+      expect(byBackendId?.capabilities).toEqual(["search", "fetch"])
+    })
+
+    it("verifies capabilities include both search and fetch but exclude quota, keyless, and live_crawl", () => {
+      const entry = PROVIDER_CATALOG.find((p) => p.id === "tinyfish")!
+      expect(entry.capabilities).toContain("search")
+      expect(entry.capabilities).toContain("fetch")
+      expect(entry.capabilities).not.toContain("quota" as Capability)
+      expect(entry.capabilities).not.toContain("live_crawl" as Capability)
+      expect(entry.capabilities).not.toContain("keyless_tier" as Capability)
+      expect(entry.capabilities).toHaveLength(2)
+    })
+
+    it("verifies HTTPS baseUrl and exact header name X-API-Key", () => {
+      const entry = PROVIDER_CATALOG.find((p) => p.id === "tinyfish")!
+      expect(entry.baseUrl).toBe("https://api.search.tinyfish.ai")
+      expect(entry.authHeaderName).toBe("X-API-Key")
+    })
   })
 })

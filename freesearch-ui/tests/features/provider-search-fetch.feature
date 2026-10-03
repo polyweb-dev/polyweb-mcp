@@ -46,6 +46,19 @@ Feature: Provider search and fetch against the stubbed backend
     And I submit the playground fetch URL "https://example.com"
     Then the playground should show fetch content or an error banner
 
+  @stub @tinyfish @search
+  Scenario: Tinyfish pinned search returns stubbed results or an honest error
+    When I pin the playground provider to "Tinyfish"
+    And I submit the playground search query "open data documentation"
+    Then the playground should show search results or an error banner
+
+  @stub @tinyfish @fetch
+  Scenario: Tinyfish pinned fetch returns stubbed content or an honest error
+    When I open the playground tab "Fetch"
+    And I pin the playground fetch provider to "Tinyfish"
+    And I submit the playground fetch URL "https://example.com"
+    Then the playground should show fetch content or an error banner
+
   # S1 — Ranks fetch table must include Parallel (not just the picker).
   # Brave stays fetch-incapable everywhere (picker + Ranks).
   @stub @parallel @fetch
@@ -61,3 +74,10 @@ Feature: Provider search and fetch against the stubbed backend
     And I open the "Ranks" routing tab
     And I choose the "Fetch" ranks operation
     Then the ranks fetch table should not show provider "Brave Search"
+
+  @stub @tinyfish @fetch
+  Scenario: Tinyfish appears in the Ranks fetch table
+    When I select the "Routing" header tab
+    And I open the "Ranks" routing tab
+    And I choose the "Fetch" ranks operation
+    Then the ranks fetch table should show provider "Tinyfish"

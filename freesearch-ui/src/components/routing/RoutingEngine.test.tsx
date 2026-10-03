@@ -129,12 +129,12 @@ describe("RoutingEngine (live backend)", () => {
     await user.click(screen.getByRole("tab", { name: /^Ranks$/ }))
 
     const table = screen.getByRole("table")
-    // 7 search-capable providers + header row (all backend rows enabled)
-    expect(within(table).getAllByRole("row")).toHaveLength(8)
+    // 8 search-capable providers + header row (all backend rows enabled)
+    expect(within(table).getAllByRole("row")).toHaveLength(9)
 
     await user.click(screen.getByRole("button", { name: /^Fetch$/ }))
-    // 6 fetch-capable (keenable, tavily, exa, firecrawl, youcom, parallel) + header
-    expect(within(table).getAllByRole("row")).toHaveLength(7)
+    // 7 fetch-capable (keenable, tavily, exa, firecrawl, youcom, parallel, tinyfish) + header
+    expect(within(table).getAllByRole("row")).toHaveLength(8)
     // S1: Parallel is fetch-capable via plain includes("fetch"); Brave stays fetch-incapable.
     expect(
       within(table).getByRole("row", { name: /Parallel/ })
@@ -144,7 +144,7 @@ describe("RoutingEngine (live backend)", () => {
     ).not.toBeInTheDocument()
 
     await user.click(screen.getByRole("button", { name: /^Search$/ }))
-    expect(within(table).getAllByRole("row")).toHaveLength(8)
+    expect(within(table).getAllByRole("row")).toHaveLength(9)
     const filter = screen.getByRole("textbox")
     await user.clear(filter)
     await user.type(filter, "Keenable")

@@ -113,6 +113,7 @@ const SEED_PROVIDER_NAMES = [
   "Firecrawl",
   "You.com",
   "Parallel",
+  "Tinyfish",
 ] as const
 
 const EXPECTED_MERGED_HEADERS = [
@@ -260,11 +261,11 @@ describe("P1F-1: Settings registry is ONE merged table with 7 columns", () => {
     expect(headerNames()).toEqual([...EXPECTED_MERGED_HEADERS])
   })
 
-  it("renders a single table with 7 body rows", async () => {
+  it("renders a single table with 8 body rows", async () => {
     renderSettings()
     await waitForProviders()
     expect(screen.getAllByRole("table")).toHaveLength(1)
-    expect(mergedTable().querySelectorAll("tbody tr")).toHaveLength(7)
+    expect(mergedTable().querySelectorAll("tbody tr")).toHaveLength(8)
     for (const name of SEED_PROVIDER_NAMES) {
       expect(findProviderRowTr(name)).toBeInTheDocument()
     }
@@ -274,7 +275,7 @@ describe("P1F-1: Settings registry is ONE merged table with 7 columns", () => {
     renderSettings()
     await waitForProviders()
     const rows = Array.from(mergedTable().querySelectorAll("tbody tr"))
-    expect(rows).toHaveLength(7)
+    expect(rows).toHaveLength(8)
     for (const row of rows) {
       expect(row.children).toHaveLength(EXPECTED_MERGED_HEADERS.length)
     }
@@ -295,7 +296,7 @@ describe("P1F-1: Settings registry is ONE merged table with 7 columns", () => {
 // ---------------------------------------------------------------------------
 
 describe("P1F-2: registry controls preserved in the merged table", () => {
-  it("keeps 7 global Switches with provider-qualified labels", async () => {
+  it("keeps 8 global Switches with provider-qualified labels", async () => {
     renderSettings()
     await waitForProviders()
     // 7-col header must exist AND the 7 switches must sit in Global cells.
@@ -320,10 +321,10 @@ describe("P1F-2: registry controls preserved in the merged table", () => {
     expect(stub.requests.filter((r) => r.method === "PATCH")).toHaveLength(0)
   })
 
-  it("shows priorities P1..P7 with bounded up/down controls per row", async () => {
+  it("shows priorities P1..P8 with bounded up/down controls per row", async () => {
     renderSettings()
     await waitForProviders()
-    for (let rank = 1; rank <= 7; rank += 1) {
+    for (let rank = 1; rank <= 8; rank += 1) {
       expect(screen.getByText(`P${rank}`, { exact: true })).toBeInTheDocument()
     }
     expect(screen.queryByText("P100", { exact: true })).toBeNull()
@@ -331,7 +332,7 @@ describe("P1F-2: registry controls preserved in the merged table", () => {
       screen.getByRole("button", { name: "Move Brave Search priority up" })
     ).toBeDisabled()
     expect(
-      screen.getByRole("button", { name: "Move Parallel priority down" })
+      screen.getByRole("button", { name: "Move Tinyfish priority down" })
     ).toBeDisabled()
   })
 })
@@ -369,7 +370,7 @@ describe("P1F-3: endpoint/health ride in the merged row", () => {
     expect(headerNames()).not.toContain("p95")
     expect(headerNames()).toEqual([...EXPECTED_MERGED_HEADERS])
     const rows = Array.from(mergedTable().querySelectorAll("tbody tr"))
-    expect(rows).toHaveLength(7)
+    expect(rows).toHaveLength(8)
     for (const row of rows) {
       expect(row.children).toHaveLength(EXPECTED_MERGED_HEADERS.length)
     }
@@ -615,7 +616,7 @@ describe("P1F-7: merged table scrolls horizontally from 960px", () => {
     renderSettings()
     await waitForProviders()
     const cells = Array.from(mergedTable().querySelectorAll("th, td")) as HTMLElement[]
-    expect(cells.length).toBe(EXPECTED_MERGED_HEADERS.length + 7 * EXPECTED_MERGED_HEADERS.length)
+    expect(cells.length).toBe(EXPECTED_MERGED_HEADERS.length + 8 * EXPECTED_MERGED_HEADERS.length)
     for (const cell of cells) {
       expect(cell.className).toMatch(/whitespace-nowrap/)
     }

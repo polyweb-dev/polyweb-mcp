@@ -49,10 +49,16 @@ export function parseDetail(body: unknown): string {
 export function isAbortOrTimeout(error: unknown): boolean {
   if (typeof error === "string") return /abort|timeout/i.test(error)
   if (!error || typeof error !== "object") return false
-  const candidate = error as { name?: unknown; message?: unknown }
+  const candidate = error as { name?: unknown; message?: unknown; cause?: unknown }
   const name = typeof candidate.name === "string" ? candidate.name : ""
   const message = typeof candidate.message === "string" ? candidate.message : ""
-  return /abort|timeout/i.test(`${name} ${message}`)
+  const cause =
+    candidate.cause && typeof candidate.cause === "object"
+      ? `${(candidate.cause as { name?: unknown }).name ?? ""} ${(candidate.cause as { message?: unknown }).message ?? ""}`
+      : typeof candidate.cause === "string"
+        ? candidate.cause
+        : ""
+  return /abort|timeout/i.test(`${name} ${message} ${cause}`)
 }
 
 export function statusMessage(status: number, detail: string): string {
@@ -82,15 +88,56 @@ export function toApiError(error: unknown): never {
   throw error;
 }
 
+export function prettifyErrorMessage(message: string): string {
+  if (!message || typeof message !== "string") return message
+
+  // 1. All search providers unconfigured or disabled
+  if (/no provider is configured/i.test(message)) {
+    return "no provider is configured: please add an API key in Settings → Keys or enable a provider in Settings → Providers."
+  }
+
+  // 2. Specific provider not configured
+  const providerMatch = message.match(/provider\s+([a-z0-9_-]+)\s+is\s+not\s+configured/i)
+  if (providerMatch) {
+    const pName = providerMatch[1]
+    return `provider "${pName}" is not configured: please add an API key in Settings → Keys.`
+  }
+
+  // 3. Provider eligibility routing failure
+  if (/no (?:required )?provider is eligible/i.test(message)) {
+    return "The selected provider is currently unavailable or disabled. Check its status in Settings → Providers."
+  }
+
+  // 4. Timeouts & signal aborts
+  if (isAbortOrTimeout(message) || /signal timed out/i.test(message)) {
+    return "The request timed out. The provider or target site took too long to respond. Please try again."
+  }
+
+  // 5. Anti-bot / scraper blocks
+  if (/bot_blocked/i.test(message) || /blocked by anti-bot/i.test(message)) {
+    return "Extraction blocked: The target website has anti-bot protection blocking automated access."
+  }
+
+  // 6. Generic cleanup of any remaining raw HTTP paths like (PUT /api/v1/...) or (GET /api/v1/...)
+  const sanitized = message.replace(/\s*\((?:GET|POST|PUT|PATCH|DELETE)\s+\/api\/[^)]+\)/gi, "")
+
+  return sanitized
+}
+
 export function errorMessage(error: unknown, fallback: string): string {
-  if (error instanceof ApiError) return error.detail;
-  if (isAbortOrTimeout(error)) {
+  let raw: string
+  if (error instanceof ApiError) {
+    raw = error.detail
+  } else if (isAbortOrTimeout(error)) {
     const detail =
       error && typeof error === "object" && "message" in error
         ? String((error as { message?: unknown }).message ?? "timeout")
-        : "timeout";
-    return statusMessage(0, detail);
+        : "timeout"
+    raw = statusMessage(0, detail)
+  } else if (error instanceof Error && error.message) {
+    raw = error.message
+  } else {
+    raw = fallback
   }
-  if (error instanceof Error && error.message) return error.message;
-  return fallback;
+  return prettifyErrorMessage(raw)
 }

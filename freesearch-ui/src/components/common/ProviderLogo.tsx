@@ -5,6 +5,7 @@ import firecrawlLogo from "@/assets/firecrawl.webp"
 import keenableLogo from "@/assets/keenable.webp"
 import parallelLogo from "@/assets/parallel.webp"
 import tavilyLogo from "@/assets/tavily.webp"
+import tinyfishLogo from "@/assets/tinyfish.webp"
 import youcomLogo from "@/assets/youcom.webp"
 import { cn } from "cn"
 
@@ -16,6 +17,7 @@ const LOGO_MAP: Record<string, string> = {
   keenable: keenableLogo,
   parallel: parallelLogo,
   tavily: tavilyLogo,
+  tinyfish: tinyfishLogo,
   youcom: youcomLogo,
   "you.com": youcomLogo,
 }
@@ -31,11 +33,13 @@ export const ProviderLogo: React.FC<ProviderLogoProps> = ({
   name,
   className,
 }) => {
+  const [hasError, setHasError] = React.useState(false)
+
   if (!providerId && !name) return null
   const key = (providerId || name || "").toLowerCase().trim()
   const logo = LOGO_MAP[key]
 
-  if (!logo) {
+  if (!logo || hasError) {
     const fallbackLetter = (name || providerId || "?").trim().charAt(0).toUpperCase()
     return (
       <span
@@ -56,6 +60,7 @@ export const ProviderLogo: React.FC<ProviderLogoProps> = ({
       src={logo}
       alt=""
       aria-hidden="true"
+      onError={() => setHasError(true)}
       data-testid={`provider-logo-${key}`}
       className={cn("size-4 rounded-sm object-contain shrink-0", className)}
     />

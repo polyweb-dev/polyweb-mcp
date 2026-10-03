@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { ApiError, parseDetail, statusMessage } from "@/shared/api/http"
+import { ApiError, errorMessage, parseDetail, statusMessage } from "@/shared/api/http"
 
 /**
  * RED: `src/services/api/httpErrors.ts` does not exist yet. The Developer
@@ -114,5 +114,50 @@ describe("statusMessage", () => {
 
     expect(message).toMatch(/timed out|timeout/i)
     expect(message).not.toMatch(/unreachable/i)
+  })
+})
+
+describe("prettifyErrorMessage and errorMessage", () => {
+  it("prettifies raw 'no provider is configured' with API route hint into user-friendly copy", () => {
+    const raw =
+      "no provider is configured: store a key in the encrypted vault (PUT /api/v1/providers/{id}/secret)"
+    const error = new ApiError(503, raw, { detail: raw })
+    const result = errorMessage(error, "Fallback error")
+
+    expect(result).not.toContain("PUT /api/v1")
+    expect(result).toContain("no provider is configured")
+    expect(result).toContain("Settings → Keys")
+  })
+
+  it("prettifies specific unconfigured provider messages", () => {
+    const raw =
+      "provider tinyfish is not configured: store a key in the encrypted vault (PUT /api/v1/providers/tinyfish/secret)"
+    const error = new ApiError(503, raw, { detail: raw })
+    const result = errorMessage(error, "Fallback error")
+
+    expect(result).not.toContain("PUT /api/v1")
+    expect(result).toContain('provider "tinyfish" is not configured')
+  })
+
+  it("prettifies ineligible provider messages", () => {
+    const raw = "no required provider is eligible: tinyfish"
+    const error = new ApiError(503, raw, { detail: raw })
+    const result = errorMessage(error, "Fallback error")
+
+    expect(result).toContain("The selected provider is currently unavailable or disabled")
+  })
+
+  it("prettifies timeout errors", () => {
+    const raw = "The operation was aborted due to timeout"
+    const result = errorMessage(new Error(raw), "Fallback error")
+
+    expect(result).toMatch(/timed out/i)
+  })
+
+  it("prettifies anti-bot blocked responses", () => {
+    const raw = "bot_blocked: target website blocked extraction"
+    const result = errorMessage(new ApiError(403, raw, { detail: raw }), "Fallback error")
+
+    expect(result).toContain("Extraction blocked: The target website has anti-bot protection")
   })
 })

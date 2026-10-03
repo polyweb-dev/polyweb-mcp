@@ -63,7 +63,10 @@ export function useProviderHealth({ providers, setProviders, showToast }: Health
               ? {
                   ...candidate,
                   latencyP95Ms: result.latency_ms,
-                  healthStatus: mapBackendHealth(result.status, candidate.circuitBreaker),
+                  healthStatus:
+                    result.ok && candidate.circuitBreaker !== "open"
+                      ? "healthy"
+                      : mapBackendHealth(result.status, candidate.circuitBreaker),
                 }
               : candidate,
           ),

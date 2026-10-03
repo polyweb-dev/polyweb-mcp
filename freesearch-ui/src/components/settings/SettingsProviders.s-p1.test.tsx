@@ -110,10 +110,19 @@ const SEED_PROVIDER_NAMES = [
   "Firecrawl",
   "You.com",
   "Parallel",
+  "Tinyfish",
 ] as const
 
 const FETCH_UNSUPPORTED = ["Brave Search"] as const
-const FETCH_SUPPORTED = ["Keenable", "Tavily", "Exa", "Firecrawl", "You.com", "Parallel"] as const
+const FETCH_SUPPORTED = [
+  "Keenable",
+  "Tavily",
+  "Exa",
+  "Firecrawl",
+  "You.com",
+  "Parallel",
+  "Tinyfish",
+] as const
 
 const EXPECTED_HEADERS = [
   "Provider",
@@ -276,11 +285,11 @@ describe("S-P1-1: registry is a ui/table with the merged 7 columns", () => {
     expect(headerNames()).toEqual([...EXPECTED_HEADERS])
   })
 
-  it("renders 7 body rows (one per backend provider)", async () => {
+  it("renders 8 body rows (one per backend provider)", async () => {
     renderSettings()
     await waitForProviders()
     const rows = providerTable().querySelectorAll("tbody tr")
-    expect(rows).toHaveLength(7)
+    expect(rows).toHaveLength(8)
     for (const name of SEED_PROVIDER_NAMES) {
       expect(findProviderRowTr(name)).toBeInTheDocument()
     }
@@ -290,7 +299,7 @@ describe("S-P1-1: registry is a ui/table with the merged 7 columns", () => {
     renderSettings()
     await waitForProviders()
     const rows = Array.from(providerTable().querySelectorAll("tbody tr"))
-    expect(rows).toHaveLength(7)
+    expect(rows).toHaveLength(8)
     for (const row of rows) {
       expect(row.children).toHaveLength(EXPECTED_HEADERS.length)
     }
@@ -298,16 +307,16 @@ describe("S-P1-1: registry is a ui/table with the merged 7 columns", () => {
 })
 
 // ---------------------------------------------------------------------------
-// S-P1-2: per-column x-position equality (<=1px across 7 rows)
+// S-P1-2: per-column x-position equality (<=1px across 8 rows)
 // ---------------------------------------------------------------------------
 
-describe("S-P1-2: per-column x-position equality across 7 rows (<=1px)", () => {
+describe("S-P1-2: per-column x-position equality across 8 rows (<=1px)", () => {
   it("structural invariant: shared table + uniform columns + nowrap cells", async () => {
     renderSettings()
     await waitForProviders()
     const table = providerTable()
     const rows = Array.from(table.querySelectorAll("tbody tr"))
-    expect(rows).toHaveLength(7)
+    expect(rows).toHaveLength(8)
     // Every row lives in the SAME table/tbody (single column grid).
     for (const row of rows) {
       expect(row.closest("table")).toBe(table)
@@ -315,19 +324,19 @@ describe("S-P1-2: per-column x-position equality across 7 rows (<=1px)", () => {
     }
     // Nowrap cells: ui/table TableHead/TableCell carry whitespace-nowrap.
     const cells = Array.from(table.querySelectorAll("th, td")) as HTMLElement[]
-    expect(cells.length).toBe(EXPECTED_HEADERS.length + 7 * EXPECTED_HEADERS.length)
+    expect(cells.length).toBe(EXPECTED_HEADERS.length + 8 * EXPECTED_HEADERS.length)
     for (const cell of cells) {
       expect(cell.className).toMatch(/whitespace-nowrap/)
     }
   })
 
-  it("measured left edges match within 1px per column across all 7 rows", async () => {
+  it("measured left edges match within 1px per column across all 8 rows", async () => {
     renderSettings()
     await waitForProviders()
     const table = providerTable()
     for (let col = 0; col < EXPECTED_HEADERS.length; col += 1) {
       const lefts = columnLefts(table, col)
-      expect(lefts).toHaveLength(7)
+      expect(lefts).toHaveLength(8)
       for (const left of lefts) {
         expect(Number.isFinite(left)).toBe(true)
       }
@@ -428,7 +437,7 @@ describe("S-P1-4: 375px viewport scrolls horizontally without wrapping", () => {
     const container = table.closest('[data-slot="table-container"]') as HTMLElement
     expect(container.className).toMatch(/overflow-x-auto/)
     const cells = Array.from(table.querySelectorAll("th, td")) as HTMLElement[]
-    expect(cells.length).toBe(EXPECTED_HEADERS.length + 7 * EXPECTED_HEADERS.length)
+    expect(cells.length).toBe(EXPECTED_HEADERS.length + 8 * EXPECTED_HEADERS.length)
     for (const cell of cells) {
       expect(cell.className).toMatch(/whitespace-nowrap/)
     }
@@ -442,10 +451,10 @@ describe("S-P1-4: 375px viewport scrolls horizontally without wrapping", () => {
 // ---------------------------------------------------------------------------
 
 describe("S-P1-5: all SettingsProviders contracts preserved in the table", () => {
-  it("shows priorities P1..P7 with bounded up/down controls per row", async () => {
+  it("shows priorities P1..P8 with bounded up/down controls per row", async () => {
     renderSettings()
     await waitForProviders()
-    for (let priority = 1; priority <= 7; priority += 1) {
+    for (let priority = 1; priority <= 8; priority += 1) {
       expect(screen.getByText(`P${priority}`, { exact: true })).toBeInTheDocument()
     }
     for (const name of SEED_PROVIDER_NAMES) {
@@ -461,13 +470,13 @@ describe("S-P1-5: all SettingsProviders contracts preserved in the table", () =>
       screen.getByRole("button", { name: "Move Brave Search priority up" })
     ).toBeDisabled()
     expect(
-      screen.getByRole("button", { name: "Move Parallel priority down" })
+      screen.getByRole("button", { name: "Move Tinyfish priority down" })
     ).toBeDisabled()
     expect(
       screen.getByRole("button", { name: "Move Brave Search priority down" })
     ).not.toBeDisabled()
     expect(
-      screen.getByRole("button", { name: "Move Parallel priority up" })
+      screen.getByRole("button", { name: "Move Tinyfish priority up" })
     ).not.toBeDisabled()
   })
 

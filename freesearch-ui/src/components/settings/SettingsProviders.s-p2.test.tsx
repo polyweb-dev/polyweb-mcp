@@ -92,9 +92,10 @@ const SEED_PROVIDER_NAMES = [
   "Firecrawl",
   "You.com",
   "Parallel",
+  "Tinyfish",
 ] as const
 
-const EXPECTED_RANKS = ["P1", "P2", "P3", "P4", "P5", "P6", "P7"] as const
+const EXPECTED_RANKS = ["P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8"] as const
 
 /** Scrambled backend priorities: rank must come from sorted order, not raw. */
 const SCRAMBLED_PRIORITIES: Record<string, number> = {
@@ -105,6 +106,7 @@ const SCRAMBLED_PRIORITIES: Record<string, number> = {
   firecrawl: 70,
   you: 40,
   parallel: 60,
+  tinyfish: 80,
 }
 
 /** Expected row->rank mapping for the scrambled fixture (ascending sort). */
@@ -116,6 +118,7 @@ const SCRAMBLED_RANKS: Record<string, string> = {
   Tavily: "P5",
   Parallel: "P6",
   Firecrawl: "P7",
+  Tinyfish: "P8",
 }
 
 function all100Fixture(): WireProviderStatus[] {
@@ -129,7 +132,7 @@ function scrambledFixture(): WireProviderStatus[] {
   }))
 }
 
-/** Partial tie: brave:1, keenable:2, tavily/exa/firecrawl tied at 5, you:6, parallel:7. */
+/** Partial tie: brave:1, keenable:2, tavily/exa/firecrawl tied at 5, you:6, parallel:7, tinyfish:8. */
 const PARTIAL_TIE_PRIORITIES: Record<string, number> = {
   brave: 1,
   keenable: 2,
@@ -138,6 +141,7 @@ const PARTIAL_TIE_PRIORITIES: Record<string, number> = {
   firecrawl: 5,
   you: 6,
   parallel: 7,
+  tinyfish: 8,
 }
 
 function partialTieFixture(): WireProviderStatus[] {
@@ -155,6 +159,7 @@ const PARTIAL_TIE_PRE_NAMES = [
   "Firecrawl",
   "You.com",
   "Parallel",
+  "Tinyfish",
 ] as const
 
 function renderSettingsWith(providers: WireProviderStatus[]): FetchStub {
@@ -294,7 +299,7 @@ describe("S-P2-1: all-100 backend renders rank display P1..P7 (never raw P100)",
   it("shows each rank exactly once with zero P100 labels", async () => {
     renderSettingsWith(all100Fixture())
     await waitForProviders()
-    for (let rank = 1; rank <= 7; rank += 1) {
+    for (let rank = 1; rank <= 8; rank += 1) {
       expect(screen.queryAllByText(`P${rank}`, { exact: true })).toHaveLength(1)
     }
     expect(screen.queryByText("P100", { exact: true })).toBeNull()
@@ -326,7 +331,7 @@ describe("S-P2-2: rank follows sorted order with dispatch-order tooltip", () => 
     renderSettingsWith(scrambledFixture())
     await waitForProviders()
     expect(allRankLabelsInRowOrder()).toEqual([...EXPECTED_RANKS])
-    for (const raw of ["P10", "P20", "P30", "P40", "P50", "P60", "P70"]) {
+    for (const raw of ["P10", "P20", "P30", "P40", "P50", "P60", "P70", "P80"]) {
       expect(screen.queryByText(raw, { exact: true })).toBeNull()
     }
   })
@@ -334,9 +339,9 @@ describe("S-P2-2: rank follows sorted order with dispatch-order tooltip", () => 
   it("exposes an exact dispatch-order tooltip on every rank label", async () => {
     renderSettingsWith(all100Fixture())
     await waitForProviders()
-    for (let rank = 1; rank <= 7; rank += 1) {
+    for (let rank = 1; rank <= 8; rank += 1) {
       const label = screen.getByText(`P${rank}`, { exact: true })
-      expect(label.getAttribute("title")).toBe(`Dispatch order ${rank} of 7`)
+      expect(label.getAttribute("title")).toBe(`Dispatch order ${rank} of 8`)
     }
   })
 
@@ -347,18 +352,18 @@ describe("S-P2-2: rank follows sorted order with dispatch-order tooltip", () => 
   it("derives arrow boundaries from sorted order on scrambled priorities", async () => {
     renderSettingsWith(scrambledFixture())
     await waitForProviders()
-    // Sorted first = Keenable (10), sorted last = Firecrawl (70).
+    // Sorted first = Keenable (10), sorted last = Tinyfish (80).
     expect(
       screen.getByRole("button", { name: "Move Keenable priority up" })
     ).toBeDisabled()
     expect(
-      screen.getByRole("button", { name: "Move Firecrawl priority down" })
+      screen.getByRole("button", { name: "Move Tinyfish priority down" })
     ).toBeDisabled()
     expect(
       screen.getByRole("button", { name: "Move Keenable priority down" })
     ).not.toBeDisabled()
     expect(
-      screen.getByRole("button", { name: "Move Firecrawl priority up" })
+      screen.getByRole("button", { name: "Move Tinyfish priority up" })
     ).not.toBeDisabled()
   })
 })
@@ -371,7 +376,7 @@ describe("S-P2-3: priority indicator never clips at the card edge", () => {
   it("indicator keeps shrink-0 and gains a min-w-* floor (non-zero width proxy)", async () => {
     renderSettingsWith(all100Fixture())
     await waitForProviders()
-    for (let rank = 1; rank <= 7; rank += 1) {
+    for (let rank = 1; rank <= 8; rank += 1) {
       const label = screen.getByText(`P${rank}`, { exact: true })
       const indicator = label.parentElement as HTMLElement | null
       expect(indicator, `P${rank} indicator wrapper must exist`).not.toBeNull()
@@ -400,12 +405,12 @@ describe("S-P2-3: priority indicator never clips at the card edge", () => {
     }
   })
 
-  it("table + scroller stay intact: single 7x7 merged table, overflow-x-auto, nowrap", async () => {
+  it("table + scroller stay intact: single 8x7 merged table, overflow-x-auto, nowrap", async () => {
     renderSettingsWith(all100Fixture())
     await waitForProviders()
     expect(screen.getAllByRole("table")).toHaveLength(1)
     const table = screen.getByRole("table")
-    expect(table.querySelectorAll("tbody tr")).toHaveLength(7)
+    expect(table.querySelectorAll("tbody tr")).toHaveLength(8)
     for (const row of Array.from(table.querySelectorAll("tbody tr"))) {
       expect(row.children).toHaveLength(7)
     }
@@ -413,7 +418,7 @@ describe("S-P2-3: priority indicator never clips at the card edge", () => {
     expect(container, "ui/table scroller must wrap the table").not.toBeNull()
     expect(container!.className).toMatch(/overflow-x-auto/)
     const cells = Array.from(table.querySelectorAll("th, td")) as HTMLElement[]
-    expect(cells.length).toBe(7 + 7 * 7)
+    expect(cells.length).toBe(7 + 8 * 7)
     for (const cell of cells) {
       expect(cell.className).toMatch(/whitespace-nowrap/)
     }
@@ -425,7 +430,7 @@ describe("S-P2-3: priority indicator never clips at the card edge", () => {
 // ---------------------------------------------------------------------------
 
 describe("S-P2-4: reorder arrows with tie-safe distinct PATCH + refresh", () => {
-  it("renders up/down arrows for all 7 rows with boundaries on the all-100 stub", async () => {
+  it("renders up/down arrows for all 8 rows with boundaries on the all-100 stub", async () => {
     renderSettingsWith(all100Fixture())
     await waitForProviders()
     for (const name of SEED_PROVIDER_NAMES) {
@@ -436,12 +441,12 @@ describe("S-P2-4: reorder arrows with tie-safe distinct PATCH + refresh", () => 
         screen.getByRole("button", { name: `Move ${name} priority down` })
       ).toBeInTheDocument()
     }
-    // Stable sorted order keeps fixture order on ties: Brave first, Parallel last.
+    // Stable sorted order keeps fixture order on ties: Brave first, Tinyfish last.
     expect(
       screen.getByRole("button", { name: "Move Brave Search priority up" })
     ).toBeDisabled()
     expect(
-      screen.getByRole("button", { name: "Move Parallel priority down" })
+      screen.getByRole("button", { name: "Move Tinyfish priority down" })
     ).toBeDisabled()
     expect(
       screen.getByRole("button", { name: "Move Tavily priority up" })
@@ -451,7 +456,7 @@ describe("S-P2-4: reorder arrows with tie-safe distinct PATCH + refresh", () => 
     ).not.toBeDisabled()
   })
 
-  it("a tie move PATCHes DISTINCT rank numbers (1..7, never 100) then refreshes", async () => {
+  it("a tie move PATCHes DISTINCT rank numbers (1..8, never 100) then refreshes", async () => {
     // Landed guard: the tied-value branch sends rank numbers, not the tied
     // raw value. Deliberately set-agnostic (no count/exact-value pin) so a
     // future full-renormalization (N PATCHes) still satisfies it — exact
@@ -471,7 +476,7 @@ describe("S-P2-4: reorder arrows with tie-safe distinct PATCH + refresh", () => 
     for (const value of values) {
       expect(Number.isInteger(value)).toBe(true)
       expect(value).toBeGreaterThanOrEqual(1)
-      expect(value).toBeLessThanOrEqual(7)
+      expect(value).toBeLessThanOrEqual(8)
     }
     expect(new Set(values).size).toBe(values.length)
     expect(values).not.toContain(100)
@@ -509,6 +514,7 @@ describe("S-P2-4: reorder arrows with tie-safe distinct PATCH + refresh", () => 
       "Firecrawl",
       "You.com",
       "Parallel",
+      "Tinyfish",
     ])
 
     await user.click(screen.getByRole("button", { name: "Move Tavily priority down" }))
@@ -525,6 +531,7 @@ describe("S-P2-4: reorder arrows with tie-safe distinct PATCH + refresh", () => 
       "firecrawl",
       "you",
       "parallel",
+      "tinyfish",
     ])
   })
 
@@ -554,6 +561,7 @@ describe("S-P2-4: reorder arrows with tie-safe distinct PATCH + refresh", () => 
         "Firecrawl",
         "You.com",
         "Parallel",
+        "Tinyfish",
       ])
     })
     expect(rankOfRow("Tavily")).toBe("P4")
@@ -583,7 +591,7 @@ describe("S-P2-4: reorder arrows with tie-safe distinct PATCH + refresh", () => 
     for (const value of values) {
       expect(Number.isInteger(value)).toBe(true)
       expect(value).toBeGreaterThanOrEqual(1)
-      expect(value).toBeLessThanOrEqual(7)
+      expect(value).toBeLessThanOrEqual(8)
     }
     const replayed = orderFromPatchSet(partialTieFixture(), patchIdAndPriority(stub))
     expect(replayed).toEqual([
@@ -594,6 +602,7 @@ describe("S-P2-4: reorder arrows with tie-safe distinct PATCH + refresh", () => 
       "exa",
       "you",
       "parallel",
+      "tinyfish",
     ])
   })
 
@@ -621,6 +630,7 @@ describe("S-P2-4: reorder arrows with tie-safe distinct PATCH + refresh", () => 
         "Exa",
         "You.com",
         "Parallel",
+        "Tinyfish",
       ])
     })
     expect(rankOfRow("Exa")).toBe("P5")

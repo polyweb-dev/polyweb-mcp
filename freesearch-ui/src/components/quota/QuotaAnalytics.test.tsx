@@ -86,9 +86,10 @@ describe("QuotaAnalytics (live backend)", () => {
       expect(screen.getByText("Tavily", { exact: true })).toBeInTheDocument()
     })
 
-    // RF2: null limits stay blank/— on every surface. 8 is retired.
+    expect(screen.getByText("8 configured")).toBeInTheDocument()
+    // RF2: null limits stay blank/— on every surface. Infinity symbol (8 / ∞) is retired.
     const body = document.body.textContent ?? ""
-    expect(body).not.toContain("8")
+    expect(body).not.toContain("∞")
     expect(screen.getAllByText(/—/).length).toBeGreaterThan(0)
   })
 

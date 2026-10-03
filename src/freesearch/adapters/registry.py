@@ -21,6 +21,7 @@ from freesearch.adapters.firecrawl import FirecrawlAdapter
 from freesearch.adapters.keenable import KeenableAdapter
 from freesearch.adapters.parallel import ParallelAdapter
 from freesearch.adapters.tavily import TavilyAdapter
+from freesearch.adapters.tinyfish import TinyfishAdapter
 from freesearch.adapters.youcom import YoucomAdapter
 from freesearch.configuration.provider_config import get_provider_configs
 from freesearch.infrastructure.http import create_async_client
@@ -33,6 +34,7 @@ _ADAPTERS: dict[ProviderName, Callable[[httpx.AsyncClient], ProviderAdapter]] = 
     ProviderName.KEENABLE: KeenableAdapter,
     ProviderName.PARALLEL: ParallelAdapter,
     ProviderName.TAVILY: TavilyAdapter,
+    ProviderName.TINYFISH: TinyfishAdapter,
     ProviderName.YOU: YoucomAdapter,
 }
 

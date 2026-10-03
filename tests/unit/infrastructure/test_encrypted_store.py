@@ -308,7 +308,7 @@ async def test_migration_report_counts_cover_all_slots_without_values(
         + _report_count(report, "skipped_existing")
         + _report_count(report, "absent")
     )
-    assert total == 11, "7 provider slots + 4 OAuth slots must all be accounted for"
+    assert total == 12, "8 provider slots + 4 OAuth slots must all be accounted for"
 
 
 # --- AC-9 pin removed: rotation is out of scope for the vault-only slice ----

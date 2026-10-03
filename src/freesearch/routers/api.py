@@ -21,7 +21,8 @@ from decimal import Decimal
 from pathlib import Path
 
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.adapters.registry import adapter_factory, build_adapters, close_adapters
@@ -32,6 +33,7 @@ from freesearch.infrastructure.encrypted_store import (
     migrate_legacy_secrets_to_encrypted_db,
 )
 from freesearch.infrastructure.http import create_async_client
+from freesearch.infrastructure.resilience import ProviderOperationError
 from freesearch.infrastructure.secrets import AsyncSecretStore, ProviderName
 from freesearch.mcp.server import _apply_parallel_seed
 from freesearch.models.contracts import (
@@ -182,6 +184,13 @@ def create_app(
     app.state._uses_default_secret_store = secret_store is None
     app.state._control_lock = asyncio.Lock()
     register_control_routes(app)
+
+    @app.exception_handler(ProviderOperationError)
+    async def _provider_operation_error(_req: Request, exc: ProviderOperationError) -> JSONResponse:
+        return JSONResponse(
+            status_code=500,
+            content={"detail": exc.error.message or f"{exc.error.provider} operation failed"},
+        )
 
     @app.post("/search", response_model=SearchResponse)
     async def search(request: SearchRequest) -> SearchResponse:

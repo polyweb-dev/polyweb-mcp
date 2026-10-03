@@ -100,6 +100,7 @@ const SEED_PROVIDER_NAMES = [
   "Firecrawl",
   "You.com",
   "Parallel",
+  "Tinyfish",
 ] as const
 
 const STANDARD_PLACEHOLDER = "Paste an API key to store"
@@ -359,15 +360,15 @@ describe("K1-3: 1440px viewport fills the Settings main column", () => {
     ).toContain("items-start")
   })
 
-  it("at 1440px all 7 key cards sit in the full-width grid", async () => {
+  it("at 1440px all 8 key cards sit in the full-width grid", async () => {
     ;(window.innerWidth as number) = 1440
     window.dispatchEvent(new Event("resize"))
     renderSettings()
     await waitForProviders()
     await openKeysTab()
     const grid = keyVaultGrid()
-    expect(grid.querySelectorAll('input[type="password"]')).toHaveLength(7)
-    expect(grid.children).toHaveLength(7)
+    expect(grid.querySelectorAll('input[type="password"]')).toHaveLength(8)
+    expect(grid.children).toHaveLength(8)
     for (const name of SEED_PROVIDER_NAMES) {
       expect(within(grid).getByText(name, { exact: true })).toBeInTheDocument()
     }
@@ -596,17 +597,17 @@ describe("K1-5: key vault behavior contract", () => {
     gateHolder.providers!.resolve(ok(allProvidersFixture()))
     await waitForProviders()
     expect(screen.queryByText("Loading provider keys...", { exact: true })).not.toBeInTheDocument()
-    expect(keyVaultGrid().querySelectorAll('input[type="password"]')).toHaveLength(7)
+    expect(keyVaultGrid().querySelectorAll('input[type="password"]')).toHaveLength(8)
   })
 
-  it("shows exact status pills (6x Stored + 1x Keyless, no Missing) with masked fingerprints and no reveal actions", async () => {
+  it("shows exact status pills (7x Stored + 1x Keyless, no Missing) with masked fingerprints and no reveal actions", async () => {
     renderSettings()
     await waitForProviders()
     await openKeysTab()
-    expect(screen.getAllByText("Stored", { exact: true })).toHaveLength(6)
+    expect(screen.getAllByText("Stored", { exact: true })).toHaveLength(7)
     expect(screen.getByText("Keyless", { exact: true })).toBeInTheDocument()
     expect(screen.queryByText("Missing", { exact: true })).not.toBeInTheDocument()
-    expect(screen.getAllByText(/••••••••/)).toHaveLength(6)
+    expect(screen.getAllByText(/••••••••/)).toHaveLength(7)
     const body = document.body.textContent ?? ""
     for (const forbidden of ["Copy", "Burn", "Reveal", "shown once"]) {
       expect(body).not.toContain(forbidden)

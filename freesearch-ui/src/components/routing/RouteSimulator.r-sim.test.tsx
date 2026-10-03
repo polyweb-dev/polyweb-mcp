@@ -593,7 +593,7 @@ describe("R-SIM AC-R-REG-1: regressions stay GREEN (Search/Fetch, bar, tabs, log
       expect(screen.getByTestId("status-bar")).toBeInTheDocument()
     })
     await waitFor(() => {
-      expect(screen.getByText("7 of 7 providers")).toBeInTheDocument()
+      expect(screen.getByText("8 of 8 providers")).toBeInTheDocument()
     })
     await waitFor(() => {
       expect(screen.getByText(/Failover (active|inactive)/)).toBeInTheDocument()

@@ -45,7 +45,8 @@ export function useFetchRunner({
       } as const;
 
       try {
-        const wire = await apiService.fetchDoc(body, createTimeoutSignal(request.timeoutMs));
+        const timeoutMs = request.timeoutMs && request.timeoutMs <= 4000 ? 20000 : request.timeoutMs;
+        const wire = await apiService.fetchDoc(body, createTimeoutSignal(timeoutMs));
         const response = mapFetchResponse(wire, {
           wallClockMs: Math.round(performance.now() - startedAt),
         });

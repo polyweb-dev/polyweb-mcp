@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { render, screen } from "@testing-library/react"
+import { render, screen, fireEvent } from "@testing-library/react"
 import { ProviderLogo } from "./ProviderLogo"
 
 describe("ProviderLogo", () => {
@@ -15,6 +15,31 @@ describe("ProviderLogo", () => {
     render(<ProviderLogo name="You.com" />)
     const img = screen.getByTestId("provider-logo-you.com")
     expect(img).toBeInTheDocument()
+  })
+
+  it("renders the correct webp logo for tinyfish by providerId", () => {
+    render(<ProviderLogo providerId="tinyfish" />)
+    const img = screen.getByTestId("provider-logo-tinyfish")
+    expect(img).toBeInTheDocument()
+    expect(img.tagName.toLowerCase()).toBe("img")
+    expect(img).toHaveAttribute("aria-hidden", "true")
+  })
+
+  it("renders the correct webp logo for tinyfish by name", () => {
+    render(<ProviderLogo name="Tinyfish" />)
+    const img = screen.getByTestId("provider-logo-tinyfish")
+    expect(img).toBeInTheDocument()
+  })
+
+  it("renders a fallback avatar letter when an image fails to load (onError)", () => {
+    render(<ProviderLogo providerId="tinyfish" name="Tinyfish" />)
+    const img = screen.getByTestId("provider-logo-tinyfish")
+    expect(img).toBeInTheDocument()
+    fireEvent.error(img)
+    const fallback = screen.getByTestId("provider-logo-fallback")
+    expect(fallback).toBeInTheDocument()
+    expect(fallback.textContent).toBe("T")
+    expect(screen.queryByTestId("provider-logo-tinyfish")).toBeNull()
   })
 
   it("renders a fallback avatar letter for unknown providers", () => {

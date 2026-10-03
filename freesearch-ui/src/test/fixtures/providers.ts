@@ -17,6 +17,7 @@ export const BACKEND_IDS = [
   "firecrawl",
   "you",
   "parallel",
+  "tinyfish",
 ] as const
 
 export type BackendId = (typeof BACKEND_IDS)[number]
@@ -29,6 +30,7 @@ export const BACKEND_DISPLAY_NAMES: Record<BackendId, string> = {
   firecrawl: "Firecrawl",
   you: "You.com",
   parallel: "Parallel",
+  tinyfish: "Tinyfish",
 }
 
 export const catalogNameOf = (backendId: string): string =>
@@ -58,6 +60,7 @@ export function providerStatus(
     firecrawl: 5,
     you: 6,
     parallel: 7,
+    tinyfish: 8,
   }
   return {
     provider_id: backendId,

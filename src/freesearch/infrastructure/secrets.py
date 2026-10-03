@@ -16,6 +16,7 @@ class ProviderName(StrEnum):
     YOU = "you"
     BRAVE = "brave"
     KEENABLE = "keenable"
+    TINYFISH = "tinyfish"
 
 
 PROVIDER_ENV_VARS: dict[ProviderName, str] = {
@@ -26,6 +27,7 @@ PROVIDER_ENV_VARS: dict[ProviderName, str] = {
     ProviderName.YOU: "FREESEARCH_YOU_API_KEY",
     ProviderName.BRAVE: "FREESEARCH_BRAVE_SEARCH_API_KEY",
     ProviderName.KEENABLE: "FREESEARCH_KEENABLE_API_KEY",
+    ProviderName.TINYFISH: "TINYFISH_API_KEY",
 }
 
 

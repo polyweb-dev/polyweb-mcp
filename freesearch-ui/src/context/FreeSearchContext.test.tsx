@@ -143,7 +143,7 @@ describe("FreeSearchContext (live backend)", () => {
     expect(urls).toContain("GET /api/v1/routing/config")
     expect(urls).toContain("GET /dashboard?limit=50")
 
-    expect(result.current.providers).toHaveLength(7)
+    expect(result.current.providers).toHaveLength(8)
     expect(result.current.providers.map((p) => p.id)).toContain("youcom")
     expect(result.current.providers.map((p) => p.id)).not.toContain("you")
     expect(result.current.providersLoading).toBe(false)
@@ -181,7 +181,7 @@ describe("FreeSearchContext (live backend)", () => {
     await waitFor(() => {
       expect(utils.result.current.providersLoading).toBe(false)
     })
-    expect(utils.result.current.providers).toHaveLength(7)
+    expect(utils.result.current.providers).toHaveLength(8)
     expect(stub.requestsTo("/api/v1/providers")).toHaveLength(1)
   })
 
@@ -220,7 +220,7 @@ describe("FreeSearchContext (live backend)", () => {
     })
     expect(utils.result.current.usageEvents).toEqual([])
     expect(utils.result.current.usageError).toContain("telemetry unavailable")
-    expect(utils.result.current.providers).toHaveLength(7)
+    expect(utils.result.current.providers).toHaveLength(8)
   })
 
   it("deletes removeProvider and cacheStats from the context API", async () => {

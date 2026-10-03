@@ -112,6 +112,7 @@ const SEED_PROVIDER_NAMES = [
   "Firecrawl",
   "You.com",
   "Parallel",
+  "Tinyfish",
 ] as const
 
 const EXPECTED_HEADERS = [
@@ -123,7 +124,7 @@ const EXPECTED_HEADERS = [
   "Fetch",
   "Global",
 ] as const
-const EXPECTED_RANKS = ["P1", "P2", "P3", "P4", "P5", "P6", "P7"] as const
+const EXPECTED_RANKS = ["P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8"] as const
 
 const ORIGINAL_INNER_WIDTH = window.innerWidth
 
@@ -355,14 +356,14 @@ describe("S-P4-3: 1440px viewport fills the Settings main column", () => {
     ).toContain("max-w-none")
   })
 
-  it("at 1440px the single 7-row merged table with min-w-[960px] sits inside the w-full scroller", async () => {
+  it("at 1440px the single 8-row merged table with min-w-[960px] sits inside the w-full scroller", async () => {
     ;(window.innerWidth as number) = 1440
     window.dispatchEvent(new Event("resize"))
     renderSettings()
     await waitForProviders()
     expect(screen.getAllByRole("table")).toHaveLength(1)
     const table = screen.getByRole("table")
-    expect(table.querySelectorAll("tbody tr")).toHaveLength(7)
+    expect(table.querySelectorAll("tbody tr")).toHaveLength(8)
     expect(table.className).toMatch(/min-w-\[960px\]/)
     const container = table.closest('[data-slot="table-container"]') as HTMLElement | null
     expect(container, "ui/table scroller must wrap the table at 1440px").not.toBeNull()
@@ -399,7 +400,7 @@ describe("S-P4-4: responsive horizontal scroll preserved (no wrap, 375px scrolls
     await waitForProviders()
     const table = screen.getByRole("table")
     const cells = Array.from(table.querySelectorAll("th, td")) as HTMLElement[]
-    expect(cells.length).toBe(EXPECTED_HEADERS.length + 7 * EXPECTED_HEADERS.length)
+    expect(cells.length).toBe(EXPECTED_HEADERS.length + 8 * EXPECTED_HEADERS.length)
     for (const cell of cells) {
       expect(cell.className).toMatch(/whitespace-nowrap/)
     }
@@ -415,7 +416,7 @@ describe("S-P4-4: responsive horizontal scroll preserved (no wrap, 375px scrolls
     expect(container.className).toMatch(/overflow-x-auto/)
     expect(table.className).toMatch(/min-w-\[960px\]/)
     const cells = Array.from(table.querySelectorAll("th, td")) as HTMLElement[]
-    expect(cells.length).toBe(EXPECTED_HEADERS.length + 7 * EXPECTED_HEADERS.length)
+    expect(cells.length).toBe(EXPECTED_HEADERS.length + 8 * EXPECTED_HEADERS.length)
     for (const cell of cells) {
       expect(cell.className).toMatch(/whitespace-nowrap/)
     }
@@ -428,7 +429,7 @@ describe("S-P4-4: responsive horizontal scroll preserved (no wrap, 375px scrolls
 // ---------------------------------------------------------------------------
 
 describe("S-P4-5: no regression — S-P1 table, S-P2 ranks, S-P3 buttons, SettingsView", () => {
-  it("S-P1 table invariant: single merged table, 7 headers, 7x7, scroller, nowrap", async () => {
+  it("S-P1 table invariant: single merged table, 7 headers, 8x7, scroller, nowrap", async () => {
     renderSettings()
     await waitForProviders()
     expect(screen.getAllByRole("table")).toHaveLength(1)
@@ -437,7 +438,7 @@ describe("S-P4-5: no regression — S-P1 table, S-P2 ranks, S-P3 buttons, Settin
       Array.from(table.querySelectorAll("thead th")).map((th) => th.textContent?.trim() ?? "")
     ).toEqual([...EXPECTED_HEADERS])
     const rows = Array.from(table.querySelectorAll("tbody tr"))
-    expect(rows).toHaveLength(7)
+    expect(rows).toHaveLength(8)
     for (const row of rows) {
       expect(row.children).toHaveLength(EXPECTED_HEADERS.length)
     }
@@ -445,19 +446,19 @@ describe("S-P4-5: no regression — S-P1 table, S-P2 ranks, S-P3 buttons, Settin
     expect(container, "ui/table scroller must wrap the table").not.toBeNull()
     expect(container!.className).toMatch(/overflow-x-auto/)
     const cells = Array.from(table.querySelectorAll("th, td")) as HTMLElement[]
-    expect(cells.length).toBe(EXPECTED_HEADERS.length + 7 * EXPECTED_HEADERS.length)
+    expect(cells.length).toBe(EXPECTED_HEADERS.length + 8 * EXPECTED_HEADERS.length)
     for (const cell of cells) {
       expect(cell.className).toMatch(/whitespace-nowrap/)
     }
   })
 
-  it("S-P2 ranks preserved: P1..P7 never P100 with dispatch-order tooltips", async () => {
+  it("S-P2 ranks preserved: P1..P8 never P100 with dispatch-order tooltips", async () => {
     renderSettings()
     await waitForProviders()
-    for (let rank = 1; rank <= 7; rank += 1) {
+    for (let rank = 1; rank <= 8; rank += 1) {
       expect(screen.queryAllByText(`P${rank}`, { exact: true })).toHaveLength(1)
       expect(screen.getByText(`P${rank}`, { exact: true }).getAttribute("title")).toBe(
-        `Dispatch order ${rank} of 7`
+        `Dispatch order ${rank} of 8`
       )
     }
     expect(screen.queryByText("P100", { exact: true })).toBeNull()
@@ -471,7 +472,7 @@ describe("S-P4-5: no regression — S-P1 table, S-P2 ranks, S-P3 buttons, Settin
     expect(settingsPrioritySource).toContain("lucide-react")
     expect(settingsPrioritySource).toContain("ArrowUp")
     expect(settingsPrioritySource).toContain("ArrowDown")
-    for (let rank = 1; rank <= 7; rank += 1) {
+    for (let rank = 1; rank <= 8; rank += 1) {
       const label = screen.getByText(`P${rank}`, { exact: true })
       const indicator = label.parentElement as HTMLElement | null
       expect(indicator, `P${rank} indicator wrapper must exist`).not.toBeNull()
@@ -492,7 +493,7 @@ describe("S-P4-5: no regression — S-P1 table, S-P2 ranks, S-P3 buttons, Settin
       screen.getByRole("button", { name: "Move Brave Search priority up" })
     ).toBeDisabled()
     expect(
-      screen.getByRole("button", { name: "Move Parallel priority down" })
+      screen.getByRole("button", { name: "Move Tinyfish priority down" })
     ).toBeDisabled()
     expect(screen.getAllByText([...EXPECTED_RANKS][0], { exact: true })).toHaveLength(1)
   })

@@ -127,9 +127,19 @@ const SECRET_PRESENCE: Record<string, SecretPresence> = {
   firecrawl: "configured",
   you: "missing",
   parallel: "missing",
+  tinyfish: "configured",
 }
 
-const PROVIDER_ORDER = ["brave", "keenable", "tavily", "exa", "firecrawl", "you", "parallel"]
+const PROVIDER_ORDER = [
+  "brave",
+  "keenable",
+  "tavily",
+  "exa",
+  "firecrawl",
+  "you",
+  "parallel",
+  "tinyfish",
+]
 
 function initialProviders(): StubProvider[] {
   return PROVIDER_ORDER.map((id, index) => ({

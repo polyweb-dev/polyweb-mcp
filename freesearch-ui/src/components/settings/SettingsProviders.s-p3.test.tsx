@@ -99,6 +99,7 @@ const SEED_PROVIDER_NAMES = [
   "Firecrawl",
   "You.com",
   "Parallel",
+  "Tinyfish",
 ] as const
 
 const EXPECTED_HEADERS = [
@@ -110,7 +111,7 @@ const EXPECTED_HEADERS = [
   "Fetch",
   "Global",
 ] as const
-const EXPECTED_RANKS = ["P1", "P2", "P3", "P4", "P5", "P6", "P7"] as const
+const EXPECTED_RANKS = ["P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8"] as const
 
 let testGate: Promise<Response> | null = null
 
@@ -345,7 +346,7 @@ describe("S-P3-2: modal Test interaction states (Test/Testing... + POST)", () =>
     })
   })
 
-  it("Test column keeps 7 icon buttons inside the Test cells (label stable)", async () => {
+  it("Test column keeps 8 icon buttons inside the Test cells (label stable)", async () => {
     renderSettings()
     await waitForProviders()
     const table = screen.getByRole("table")
@@ -355,7 +356,7 @@ describe("S-P3-2: modal Test interaction states (Test/Testing... + POST)", () =>
     const testIdx = headers.indexOf("Test")
     expect(testIdx).toBe(EXPECTED_HEADERS.indexOf("Test"))
     const rows = Array.from(table.querySelectorAll("tbody tr"))
-    expect(rows).toHaveLength(7)
+    expect(rows).toHaveLength(8)
     for (const name of SEED_PROVIDER_NAMES) {
       const row = findProviderRowTr(name)
       const cell = row.children[testIdx] as HTMLElement
@@ -367,11 +368,11 @@ describe("S-P3-2: modal Test interaction states (Test/Testing... + POST)", () =>
 })
 
 // ---------------------------------------------------------------------------
-// S-P3-3: no-regression â€” S-P1 table, S-P2 ranks, tokens, no merge
+// S-P3-3: no-regression — S-P1 table, S-P2 ranks, tokens, no merge
 // ---------------------------------------------------------------------------
 
-describe("S-P3-3: no regression â€” S-P1 table, S-P2 ranks, tokens, merge", () => {
-  it("S-P1 table invariant: single merged table, 7 headers, 7x7, scroller, nowrap", async () => {
+describe("S-P3-3: no regression — S-P1 table, S-P2 ranks, tokens, merge", () => {
+  it("S-P1 table invariant: single merged table, 7 headers, 8x7, scroller, nowrap", async () => {
     renderSettings()
     await waitForProviders()
     expect(screen.getAllByRole("table")).toHaveLength(1)
@@ -380,7 +381,7 @@ describe("S-P3-3: no regression â€” S-P1 table, S-P2 ranks, tokens, merge",
       Array.from(table.querySelectorAll("thead th")).map((th) => th.textContent?.trim() ?? "")
     ).toEqual([...EXPECTED_HEADERS])
     const rows = Array.from(table.querySelectorAll("tbody tr"))
-    expect(rows).toHaveLength(7)
+    expect(rows).toHaveLength(8)
     for (const row of rows) {
       expect(row.children).toHaveLength(EXPECTED_HEADERS.length)
     }
@@ -388,19 +389,19 @@ describe("S-P3-3: no regression â€” S-P1 table, S-P2 ranks, tokens, merge",
     expect(container, "ui/table scroller must wrap the table").not.toBeNull()
     expect(container!.className).toMatch(/overflow-x-auto/)
     const cells = Array.from(table.querySelectorAll("th, td")) as HTMLElement[]
-    expect(cells.length).toBe(EXPECTED_HEADERS.length + 7 * EXPECTED_HEADERS.length)
+    expect(cells.length).toBe(EXPECTED_HEADERS.length + 8 * EXPECTED_HEADERS.length)
     for (const cell of cells) {
       expect(cell.className).toMatch(/whitespace-nowrap/)
     }
   })
 
-  it("S-P2 ranks preserved: P1..P7 never P100 with dispatch-order tooltips", async () => {
+  it("S-P2 ranks preserved: P1..P8 never P100 with dispatch-order tooltips", async () => {
     renderSettings()
     await waitForProviders()
-    for (let rank = 1; rank <= 7; rank += 1) {
+    for (let rank = 1; rank <= 8; rank += 1) {
       expect(screen.queryAllByText(`P${rank}`, { exact: true })).toHaveLength(1)
       expect(screen.getByText(`P${rank}`, { exact: true }).getAttribute("title")).toBe(
-        `Dispatch order ${rank} of 7`
+        `Dispatch order ${rank} of 8`
       )
     }
     expect(screen.queryByText("P100", { exact: true })).toBeNull()
@@ -412,12 +413,12 @@ describe("S-P3-3: no regression â€” S-P1 table, S-P2 ranks, tokens, merge",
     renderSettings()
     await waitForProviders()
     // S-P2-5 scope: arrows stay lucide ArrowUp/ArrowDown with exact aria-labels.
-    // (Deliberately no "no Button in file" assertion â€” Green adds ui/Button
+    // (Deliberately no "no Button in file" assertion — Green adds ui/Button
     // to the Test cell; the restyle guard covers ONLY the arrows.)
     expect(settingsPrioritySource).toContain("lucide-react")
     expect(settingsPrioritySource).toContain("ArrowUp")
     expect(settingsPrioritySource).toContain("ArrowDown")
-    for (let rank = 1; rank <= 7; rank += 1) {
+    for (let rank = 1; rank <= 8; rank += 1) {
       const label = screen.getByText(`P${rank}`, { exact: true })
       const indicator = label.parentElement as HTMLElement | null
       expect(indicator, `P${rank} indicator wrapper must exist`).not.toBeNull()
@@ -438,7 +439,7 @@ describe("S-P3-3: no regression â€” S-P1 table, S-P2 ranks, tokens, merge",
       screen.getByRole("button", { name: "Move Brave Search priority up" })
     ).toBeDisabled()
     expect(
-      screen.getByRole("button", { name: "Move Parallel priority down" })
+      screen.getByRole("button", { name: "Move Tinyfish priority down" })
     ).toBeDisabled()
     expect(
       screen.getAllByText([...EXPECTED_RANKS][0], { exact: true })

@@ -316,11 +316,11 @@ describe("paired-parallel headline branches (no cross-talk)", () => {
     renderUsage([...canonicalQuotasFixture(), UNBUDGETED_PARALLEL_ROW])
     await screen.findByText("Provider quota view", { exact: true })
     await waitFor(() => {
-      expect(quotaRows().length).toBe(7)
+      expect(quotaRows().length).toBe(8)
     })
 
     const rows = quotaRows()
-    expect(rows.length).toBe(7)
+    expect(rows.length).toBe(8)
     let signalled = 0
     for (const row of rows) {
       const count = chipCount(row)

@@ -5,6 +5,6 @@
  */
 export function isManualQuotaEligible(providerId: string, budgetNotConfigured: boolean): boolean {
   if (providerId === "brave") return true
-  if (providerId === "exa" || providerId === "parallel") return budgetNotConfigured
+  if (["exa", "parallel", "tinyfish", "firecrawl", "tavily"].includes(providerId)) return budgetNotConfigured
   return false
 }

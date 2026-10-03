@@ -73,6 +73,56 @@ _ROUTING_KEY = "routing"
 _MANUAL_QUOTA_PREFIX = "manual_quota:"
 
 
+async def _record_configured_health(
+    repository: SQLiteRepository | None, provider: ProviderName, now: datetime
+) -> None:
+    if repository is not None:
+        with suppress(Exception):
+            await repository.record_health(
+                ProviderHealth(
+                    provider=provider.value,
+                    status=HealthStatus.HEALTHY,
+                    checked_at=now,
+                    message="API key configured",
+                )
+            )
+
+
+async def _record_probe_health(
+    repository: SQLiteRepository | None, provider: ProviderName, observation: ProviderHealth
+) -> None:
+    if repository is not None and observation.status is not HealthStatus.UNAVAILABLE:
+        effective_status = (
+            HealthStatus.HEALTHY
+            if observation.status == HealthStatus.UNKNOWN
+            else observation.status
+        )
+        with suppress(Exception):
+            await repository.record_health(
+                ProviderHealth(
+                    provider=provider.value,
+                    status=effective_status,
+                    checked_at=observation.checked_at,
+                    message=observation.message,
+                )
+            )
+
+
+async def _record_failed_probe_health(
+    repository: SQLiteRepository | None, provider: ProviderName, error_message: str
+) -> None:
+    if repository is not None:
+        with suppress(Exception):
+            await repository.record_health(
+                ProviderHealth(
+                    provider=provider.value,
+                    status=HealthStatus.UNAVAILABLE,
+                    checked_at=datetime.now(UTC),
+                    message=error_message,
+                )
+            )
+
+
 def register_control_routes(app: FastAPI) -> None:
     """Register the control-plane endpoints on ``app`` under ``/api/v1``.
 
@@ -137,14 +187,17 @@ def register_control_routes(app: FastAPI) -> None:
         try:
             observation = await adapter.health()
         except Exception as exc:
+            err_msg = redact_secrets(str(exc)) or "health probe failed"
+            await _record_failed_probe_health(request.app.state.repository, name, err_msg)
             return ProviderTestResponse(
                 provider=name.value,
                 ok=False,
                 status=HealthStatus.UNAVAILABLE,
                 latency_ms=_elapsed_ms(started_at),
-                detail=redact_secrets(str(exc)) or "health probe failed",
+                detail=err_msg,
                 checked_at=datetime.now(UTC),
             )
+        await _record_probe_health(request.app.state.repository, name, observation)
         return ProviderTestResponse(
             provider=name.value,
             ok=observation.status is not HealthStatus.UNAVAILABLE,
@@ -186,6 +239,8 @@ def register_control_routes(app: FastAPI) -> None:
         await persist_secret_record(request.app.state.repository, name, fingerprint, now)
         with suppress(HTTPException):
             await _ensure_provider_adapter(request, name, force_rebuild=True)
+        if key is not None:
+            await _record_configured_health(request.app.state.repository, name, now)
         return SecretStatusResponse(
             provider=name.value,
             presence=_secret_presence(name, key),
@@ -217,6 +272,23 @@ def register_control_routes(app: FastAPI) -> None:
                         message="API key deleted",
                     )
                 )
+        return SecretStatusResponse(
+            provider=name.value,
+            presence=_secret_presence(name, key),
+            fingerprint=fingerprint,
+            updated_at=now,
+            source=source,
+        )
+
+    @app.get("/api/v1/providers/{provider_id}/secret", response_model=SecretStatusResponse)
+    async def get_secret(provider_id: str, request: Request) -> SecretStatusResponse:
+        """Report the secret status (presence, masked fingerprint) from the encrypted vault."""
+
+        name = _require_provider(provider_id)
+        store = request.app.state.secret_store
+        now = datetime.now(UTC)
+        key, source = await _resolve_secret(name, store)
+        fingerprint = secret_fingerprint(name.value, key) if key is not None else None
         return SecretStatusResponse(
             provider=name.value,
             presence=_secret_presence(name, key),
