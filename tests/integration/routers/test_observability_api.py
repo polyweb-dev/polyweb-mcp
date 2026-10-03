@@ -60,7 +60,11 @@ def _seed(repository: SQLiteRepository, *names: str) -> None:
                     outcome=_Outcome(span["outcome"]),
                     error_type=span.get("error_type"),
                     operation=(TraceOperation(document["operation"]) if is_root else None),
-                    provider=document.get("provider") if is_root else None,
+                    # Fixture loader contract (PLAN §6.1 item 6 loader half):
+                    # the document provider seeds only the root summary row;
+                    # every child span reads its own span-level `provider`
+                    # field (None when the fixture records no identity).
+                    provider=(document.get("provider") if is_root else span.get("provider")),
                     input_text=document.get("input_text") if is_root else None,
                     output_json=(json.dumps(output) if is_root and output is not None else None),
                     result_count=document.get("result_count") if is_root else None,
@@ -193,6 +197,9 @@ async def test_detail_returns_full_input_output_and_spans(
             "name",
             "stage",
             "kind",
+            # RED (PLAN §6.1 item 4, additive): the API exposes the
+            # per-span provider identity. Fails because there is no API field.
+            "provider",
             "started_at",
             "ended_at",
             "duration_ms",
@@ -201,6 +208,14 @@ async def test_detail_returns_full_input_output_and_spans(
             "events",
         }
         assert span["duration_ms"] >= 0
+    # RED: the provider child preserves its span-level identity while
+    # non-provider spans stay null; the root span keeps the document provider.
+    # (Assumes the span fixture carries a span-level `provider` field per
+    # PLAN §6.1 item 6; `provider_error.json` already does.)
+    by_name = {span["name"]: span for span in detail["spans"]}
+    assert by_name["freesearch.provider"]["provider"] == "keenable"
+    assert by_name["freesearch.backend"]["provider"] is None
+    assert root["provider"] == "keenable"
 
 
 async def test_detail_error_trace_has_error_without_output(

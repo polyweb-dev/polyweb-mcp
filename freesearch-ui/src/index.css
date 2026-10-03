@@ -16,6 +16,13 @@
   --signal: #007acc;
   --signal-muted: rgba(0, 122, 204, 0.14);
 
+  /* Three restrained accents: provider/time keys and JSON keys (cyan),
+     FreeSearch processing and JSON strings (seafoam), rank/score emphasis and
+     JSON numbers/booleans (gold). Providers are never colored per-vendor. */
+  --accent-cyan: #4FC1FF;
+  --accent-seafoam: #4EC9B0;
+  --accent-gold: #D7BA7D;
+
   /* Functional status — used only on actual status indicators */
   --status-healthy: #22c55e;
   --status-warning: #eab308;

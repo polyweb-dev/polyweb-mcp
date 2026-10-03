@@ -1,42 +1,106 @@
+import {
+  deriveProviderAttempts,
+  type TraceDetail,
+  type TraceOutput,
+  type TraceProviderAttempt,
+} from "@/domains/activity"
+import { Button } from "@/shared/ui/button"
 import { Modal } from "@/shared/ui/Modal"
-import type { TraceDetail } from "@/domains/activity"
 import { TraceDetailError } from "./TraceDetailError"
 import { TraceDetailSection } from "./TraceDetailSection"
 import { TraceDetailSummary } from "./TraceDetailSummary"
-import { TraceDisclosure } from "./TraceDisclosure"
-import { TraceResults } from "./TraceResults"
-import { TraceTechnicalDetails } from "./TraceTechnicalDetails"
-import { TraceTimeline } from "./TraceTimeline"
+import type { RankingMode } from "./TraceRankingExplanation"
+import { TraceInspectionWorkspace } from "./TraceInspectionWorkspace"
 
 export interface TraceDetailDialogProps {
   trace: TraceDetail | null
   isOpen: boolean
   status: "loading" | "ready" | "error"
   error: string | null
+  /** Provider span this dialog is scoped to; null shows the whole trace. */
+  providerSpanId?: string | null
   onClose: () => void
   onRetry: () => void
 }
 
+/** Provider-scoped view reads the attempt's own results as a search output. */
+function scopedOutput(trace: TraceDetail, spanId: string | null): TraceOutput | null {
+  const attempt = deriveProviderAttempts(trace.stages, trace.provider).find(
+    (candidate) => candidate.spanId === spanId
+  )
+  if (attempt === undefined) return trace.output
+  return { kind: "search_results", query: trace.input ?? "", results: attempt.results }
+}
+
+function attemptFor(trace: TraceDetail, spanId: string | null): TraceProviderAttempt | null {
+  if (spanId === null) return null
+  return (
+    deriveProviderAttempts(trace.stages, trace.provider).find(
+      (candidate) => candidate.spanId === spanId
+    ) ?? null
+  )
+}
+
+interface ReadyViewOptions {
+  trace: TraceDetail
+  attempt: TraceProviderAttempt | null
+  providerSpanId: string | null
+}
+
+/** The decoded part of the detail: rail, failure, query, inspection workspace. */
+function readyView({ trace, attempt, providerSpanId }: ReadyViewOptions) {
+  // Only a fused fanout is ranking across providers; a single-provider trace
+  // (or one provider picked out of a fanout) shows that provider's own order.
+  const mode: RankingMode =
+    attempt !== null || trace.provider !== "aggregated" ? "provider" : "fusion"
+  return (
+    <div className="min-w-0 space-y-5 text-[13px]">
+      <TraceDetailSummary trace={trace} attempt={attempt} />
+      <TraceDetailError trace={trace} />
+
+      <TraceDetailSection title={trace.operation === "fetch" ? "URL fetched" : "Query sent"}>
+        <p className="mono rounded border border-[var(--border-subtle)] bg-[var(--elevated)] p-3 text-[var(--text)] whitespace-pre-wrap [overflow-wrap:anywhere]">
+          {trace.input ?? "—"}
+        </p>
+      </TraceDetailSection>
+
+      <TraceInspectionWorkspace
+        key={`${trace.traceId}:${providerSpanId ?? "all"}`}
+        trace={trace}
+        output={scopedOutput(trace, providerSpanId)}
+        attempt={attempt}
+        mode={mode}
+      />
+    </div>
+  )
+}
+
 /**
- * Trace detail: summary first, then input, results, stage timeline, and the
- * collapsed technical projection. Content is labelled as locally stored data.
+ * Trace detail. Fixed header and a vertically scrolling body: one telemetry
+ * rail, the query, and one inspection workspace that holds the recorded results
+ * and the recorded trajectory with the selected payload at its side. Scoped to
+ * a provider attempt, both views show that attempt's response instead (PLAN §5).
  */
 export function TraceDetailDialog({
   trace,
   isOpen,
   status,
   error,
+  providerSpanId = null,
   onClose,
   onRetry,
 }: TraceDetailDialogProps) {
   if (!isOpen) return null
+  const attempt = trace === null ? null : attemptFor(trace, providerSpanId)
+
   return (
     <Modal
       isOpen={isOpen}
       onClose={onClose}
       title="Trace detail"
       subtitle="Stored locally in this FreeSearch database; the query and its results are shown only here."
-      maxWidth="4xl"
+      maxWidth="7xl"
+      scrollBody
     >
       {status === "loading" && (
         <p className="text-[13px] text-[var(--muted)]" role="status">
@@ -49,42 +113,13 @@ export function TraceDetailDialog({
           <p role="alert" className="text-[13px]" style={{ color: "var(--status-danger)" }}>
             Trace detail unavailable — {error}
           </p>
-          <button
-            type="button"
-            onClick={onRetry}
-            className="rounded border border-[var(--border-subtle)] px-3 py-1 text-[13px] text-[var(--text-strong)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--signal)]/40"
-          >
+          <Button variant="outline" size="sm" onClick={onRetry}>
             Retry
-          </button>
+          </Button>
         </div>
       )}
 
-      {status === "ready" && trace !== null && (
-        <div className="space-y-5 text-[13px]">
-          <TraceDetailSummary trace={trace} />
-          <TraceDetailError trace={trace} />
-
-          <TraceDetailSection
-            title={trace.operation === "fetch" ? "URL fetched" : "Query sent"}
-          >
-            <p className="mono break-all rounded border border-[var(--border-subtle)] bg-[var(--elevated)] p-3 text-[var(--text)]">
-              {trace.input ?? "—"}
-            </p>
-          </TraceDetailSection>
-
-          <TraceDetailSection title="Results returned">
-            <TraceResults output={trace.output} />
-          </TraceDetailSection>
-
-          <TraceDisclosure title="Stage timeline" defaultOpen>
-            <TraceTimeline stages={trace.stages} totalMs={trace.totalMs} />
-          </TraceDisclosure>
-
-          <TraceDisclosure title="Technical details">
-            <TraceTechnicalDetails trace={trace} />
-          </TraceDisclosure>
-        </div>
-      )}
+      {status === "ready" && trace !== null && readyView({ trace, attempt, providerSpanId })}
     </Modal>
   )
 }

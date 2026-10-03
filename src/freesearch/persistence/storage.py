@@ -346,6 +346,7 @@ def _trace_span_detail(row: TraceSpanRow) -> TraceSpanDetail:
         parent_span_id=row.parent_span_id,
         name=row.name,
         stage=display_stage(row.name),
+        provider=row.provider,
         kind=kind,
         started_at=datetime.fromisoformat(row.started_at),
         ended_at=datetime.fromisoformat(row.ended_at),

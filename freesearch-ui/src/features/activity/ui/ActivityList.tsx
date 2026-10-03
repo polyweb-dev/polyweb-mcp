@@ -1,3 +1,6 @@
+import type { ReactNode } from "react"
+import { Fragment } from "react"
+import { ChevronRight } from "lucide-react"
 import {
   Table,
   TableBody,
@@ -6,10 +9,23 @@ import {
   TableHeader,
   TableRow,
 } from "@/shared/ui/table"
+import { Button } from "@/shared/ui/button"
 import type { TraceSummary } from "@/domains/activity"
+import type { TraceLoadState } from "../model/useActivityController"
+import { ActivityProviderRows } from "./ActivityProviderRows"
 import { TraceStatusPill } from "./TraceStatusPill"
 
-const COLUMNS = ["Time", "Operation", "Provider", "Status", "Latency", "Results"]
+const COLUMNS = [
+  { label: "Time", align: "" },
+  { label: "Operation", align: "" },
+  { label: "Provider", align: "" },
+  { label: "Status", align: "text-center" },
+  { label: "Latency", align: "text-right" },
+  { label: "Results", align: "text-right" },
+  { label: "Actions", align: "text-right" },
+]
+
+const CELL = "px-4 py-2.5"
 
 function timeLabel(startedAt: string): string {
   const parsed = new Date(startedAt)
@@ -17,84 +33,162 @@ function timeLabel(startedAt: string): string {
 }
 
 function resultLabel(summary: TraceSummary): string {
-  if (summary.resultCount === null) return "—"
-  return String(summary.resultCount)
+  return summary.resultCount === null ? "—" : String(summary.resultCount)
+}
+
+/** Chevron disclosure for an all-providers row: discloses one provider per call. */
+function providerExpander(
+  time: string,
+  expanded: boolean,
+  panelId: string,
+  onToggle: () => void
+): ReactNode {
+  return (
+    <button
+      type="button"
+      aria-expanded={expanded}
+      aria-controls={panelId}
+      onClick={(event) => {
+        // Row click and expander click are different intents.
+        event.stopPropagation()
+        onToggle()
+      }}
+      className="rounded-sm text-[var(--muted)] transition-colors hover:text-[var(--accent-cyan)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--signal)]/40"
+    >
+      <ChevronRight
+        aria-hidden="true"
+        className={`size-3.5 transition-transform motion-reduce:transition-none ${
+          expanded ? "rotate-90" : ""
+        }`}
+      />
+      <span className="sr-only">
+        {expanded ? "Hide" : "Show"} provider responses for {time}
+      </span>
+    </button>
+  )
+}
+
+interface TraceRowOptions {
+  summary: TraceSummary
+  time: string
+  expanded: boolean
+  panelId: string
+  onSelect: (traceId: string) => void
+  onToggleProviders: (traceId: string) => void
+}
+
+function traceRow(options: TraceRowOptions): ReactNode {
+  const { summary, time, expanded, panelId, onSelect, onToggleProviders } = options
+  return (
+    <TableRow
+      onClick={() => onSelect(summary.traceId)}
+      className="cursor-pointer border-b border-[var(--border-subtle)] last:border-b-0"
+    >
+      <TableCell className={`${CELL} text-[var(--muted)] tnum`}>{time}</TableCell>
+      <TableCell className={`${CELL} capitalize text-[var(--text)]`}>
+        {summary.operation ?? "—"}
+      </TableCell>
+      <TableCell className={`${CELL} font-medium text-[var(--text-strong)]`}>
+        <span className="inline-flex items-center gap-1.5">
+          {summary.provider === "aggregated" &&
+            providerExpander(time, expanded, panelId, () =>
+              onToggleProviders(summary.traceId)
+            )}
+          {summary.providerLabel}
+        </span>
+      </TableCell>
+      <TableCell className={`${CELL} text-center`}>
+        <TraceStatusPill outcome={summary.outcome} />
+      </TableCell>
+      <TableCell className={`${CELL} text-right text-[var(--text)] tnum`}>
+        {summary.durationMs}ms
+      </TableCell>
+      <TableCell className={`${CELL} text-right text-[var(--muted)] tnum`}>
+        {resultLabel(summary)}
+      </TableCell>
+      <TableCell className={`${CELL} text-right`}>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={(event) => {
+            // The row is a click target too: stop the bubble so one interaction
+            // selects the trace exactly once.
+            event.stopPropagation()
+            onSelect(summary.traceId)
+          }}
+        >
+          View details
+        </Button>
+      </TableCell>
+    </TableRow>
+  )
+}
+
+export interface ActivityListProps {
+  summaries: TraceSummary[]
+  expandedTraceId: string | null
+  detailsById: Readonly<Record<string, TraceLoadState>>
+  onSelect: (traceId: string) => void
+  onToggleProviders: (traceId: string) => void
+  onInspect: (traceId: string, providerSpanId: string) => void
+  onRetry: (traceId: string) => void
 }
 
 /**
- * Activity list: one scannable row per trace. Rows carry no query text and no
- * results — clicking a row is the convenience path into the detail, and "View
- * details" is the explicit, keyboard-reachable control that discloses the same
- * content (PLAN §6, REQUIREMENTS §3.4).
+ * Activity list: one scannable row per trace with a visible Actions column, so
+ * the detail is reachable by keyboard as well as by clicking the row. A fanout
+ * trace ("All providers") can disclose its per-provider attempts inline
+ * (PLAN §5, REQUIREMENTS §3.2–3.4).
  */
 export function ActivityList({
   summaries,
+  expandedTraceId,
+  detailsById,
   onSelect,
-}: {
-  summaries: TraceSummary[]
-  onSelect: (traceId: string) => void
-}) {
+  onToggleProviders,
+  onInspect,
+  onRetry,
+}: ActivityListProps) {
   return (
-    <div className="overflow-hidden rounded-lg border border-[var(--border-subtle)]">
+    <div className="min-w-0 overflow-hidden rounded-lg border border-[var(--border-subtle)]">
       <Table className="text-[13px]">
         <TableHeader>
           <TableRow className="border-b border-[var(--border-subtle)] bg-[var(--elevated)] hover:bg-[var(--elevated)]">
-            {COLUMNS.map((column, index) => (
+            {COLUMNS.map((column) => (
               <TableHead
-                key={column}
-                className={`h-9 px-4 text-[12px] text-[var(--muted)] ${
-                  index >= 4 ? "text-right" : index === 3 ? "text-center" : ""
-                }`}
+                key={column.label}
+                className={`h-9 px-4 text-[12px] text-[var(--muted)] ${column.align}`}
               >
-                {column}
+                {column.label}
               </TableHead>
             ))}
-            <TableHead className="h-9 px-4 text-[12px] text-[var(--muted)] text-right">
-              <span className="sr-only">Details</span>
-            </TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
-          {summaries.map((summary) => (
-            <TableRow
-              key={summary.traceId}
-              onClick={() => onSelect(summary.traceId)}
-              className="cursor-pointer border-b border-[var(--border-subtle)] last:border-b-0"
-            >
-              <TableCell className="px-4 py-2.5 text-[var(--muted)] tnum">
-                {timeLabel(summary.startedAt)}
-              </TableCell>
-              <TableCell className="px-4 py-2.5 capitalize text-[var(--text)]">
-                {summary.operation ?? "—"}
-              </TableCell>
-              <TableCell className="px-4 py-2.5 font-medium text-[var(--text-strong)]">
-                {summary.providerLabel}
-              </TableCell>
-              <TableCell className="px-4 py-2.5 text-center">
-                <TraceStatusPill outcome={summary.outcome} />
-              </TableCell>
-              <TableCell className="px-4 py-2.5 text-right text-[var(--text)] tnum">
-                {summary.durationMs}ms
-              </TableCell>
-              <TableCell className="px-4 py-2.5 text-right text-[var(--muted)] tnum">
-                {resultLabel(summary)}
-              </TableCell>
-              <TableCell className="px-4 py-2.5 text-right">
-                <button
-                  type="button"
-                  onClick={(event) => {
-                    // The row is a click target too: stop the bubble so one
-                    // interaction selects the trace exactly once.
-                    event.stopPropagation()
-                    onSelect(summary.traceId)
-                  }}
-                  className="rounded px-2 py-1 text-[12px] font-medium text-[var(--signal)] hover:text-[var(--text-strong)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--signal)]/40"
-                >
-                  View details
-                </button>
-              </TableCell>
-            </TableRow>
-          ))}
+          {summaries.map((summary) => {
+            const expanded = expandedTraceId === summary.traceId
+            const panelId = `trace-providers-${summary.traceId}`
+            return (
+              <Fragment key={summary.traceId}>
+                {traceRow({
+                  summary,
+                  time: timeLabel(summary.startedAt),
+                  expanded,
+                  panelId,
+                  onSelect,
+                  onToggleProviders,
+                })}
+                {expanded && (
+                  <ActivityProviderRows
+                    rowId={panelId}
+                    state={detailsById[summary.traceId]}
+                    onInspect={(providerSpanId) => onInspect(summary.traceId, providerSpanId)}
+                    onRetry={() => onRetry(summary.traceId)}
+                  />
+                )}
+              </Fragment>
+            )
+          })}
         </TableBody>
       </Table>
     </div>

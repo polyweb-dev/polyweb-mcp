@@ -7,17 +7,23 @@ import { TraceDetailDialog } from "./TraceDetailDialog"
 import { ActivityPage } from "./ActivityPage"
 import { installFetchStub, err, ok } from "@/test/fetchMock"
 import {
+  AGGREGATED_TRACE_ID,
+  aggregatedTraceDetailFixture,
   errorTraceDetailFixture,
   traceDetailFixture,
   traceListFixture,
 } from "@/test/fixtures/activity"
 
 /**
- * Trace detail is the single disclosure point for sensitive content: the
- * summary strip first, then the full query, the returned results, the stage
- * timeline, and finally the collapsed technical projection. Outside this
- * dialog the query and results never appear.
+ * Trace detail is the single disclosure point for sensitive content: a compact
+ * telemetry strip, the query, bounded results, the honest ranking explanation,
+ * the simplified provider-vs-FreeSearch latency, and the collapsed technical
+ * trajectory. Outside this dialog the query and results never appear.
  */
+function aggregatedDetail(): TraceDetail {
+  return mapTraceDetail(aggregatedTraceDetailFixture())
+}
+
 function searchDetail(): TraceDetail {
   return mapTraceDetail(traceDetailFixture())
 }
@@ -59,17 +65,16 @@ describe("TraceDetailDialog", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
   })
 
-  it("shows the summary strip with status, provider, latency, and count", () => {
-    renderDialog(searchDetail())
+  it("shows the compact summary strip with status, provider, latency, and count", () => {
+    renderDialog(aggregatedDetail())
 
-    expect(screen.getByText("Status")).toBeInTheDocument()
-    expect(screen.getByText("success")).toBeInTheDocument()
-    expect(screen.getByText("Provider")).toBeInTheDocument()
-    expect(screen.getByText("Keenable")).toBeInTheDocument()
-    const latencyCell = screen.getByText("Total latency").closest("div")!
-    expect(within(latencyCell).getByText("248ms")).toBeInTheDocument()
-    const resultsCell = screen.getByText("Results").closest("div")!
-    expect(within(resultsCell).getByText("2")).toBeInTheDocument()
+    const dialog = screen.getByRole("dialog")
+    expect(within(dialog).getAllByText("Provider").length).toBeGreaterThan(0)
+    expect(within(dialog).getByText("All providers")).toBeInTheDocument()
+    expect(within(dialog).getAllByText("Total latency").length).toBeGreaterThan(0)
+    expect(within(dialog).getAllByText("3381ms").length).toBeGreaterThan(0)
+    expect(within(dialog).getByText("success")).toBeInTheDocument()
+    expect(within(dialog).getAllByText("6").length).toBeGreaterThan(0)
   })
 
   it("discloses the full query under Query sent", () => {
@@ -89,20 +94,25 @@ describe("TraceDetailDialog", () => {
     ).toBeInTheDocument()
   })
 
-  it("lists returned results with title, URL, and snippet", () => {
-    renderDialog(searchDetail())
+  it("lists fused results as compact selectable rows with rank, source, and fusion scores", () => {
+    renderDialog(aggregatedDetail())
 
-    expect(screen.getByText("Results returned")).toBeInTheDocument()
-    expect(screen.getByText("Consensus algorithms explained")).toBeInTheDocument()
+    const ranked = screen.getByRole("list", { name: "Ranked results" })
+    expect(within(ranked).getAllByRole("button")).toHaveLength(6)
+    // Titles appear once, in the list only: the ranking explanation no longer repeats them.
     expect(
-      screen.getByText("https://docs.freesearch.dev/consensus")
-    ).toBeInTheDocument()
-    expect(screen.getByText("Raft, Paxos, and where each applies.")).toBeInTheDocument()
-    expect(screen.getByText("Raft vs Paxos")).toBeInTheDocument()
+      screen.getAllByText("Reuters Latest Finance News | Today Top Headlines")
+    ).toHaveLength(1)
+    expect(within(ranked).getByText("Fusion score 0.70")).toBeInTheDocument()
+    // The full snippet stays out of the rows until selection.
+    expect(
+      screen.queryByText(
+        "Exclusive news, data and analytics for financial market professionals."
+      )
+    ).not.toBeInTheDocument()
   })
 
-  it("bounds long result lists behind a show-all control", async () => {
-    const user = userEvent.setup()
+  it("renders every recorded result with no show-all control", () => {
     const results = Array.from({ length: 5 }, (_, index) => ({
       title: `Result ${index + 1}`,
       url: `https://example.com/${index + 1}`,
@@ -115,11 +125,114 @@ describe("TraceDetailDialog", () => {
     )
     renderDialog(detail)
 
-    expect(screen.getByText("Result 3")).toBeInTheDocument()
-    expect(screen.queryByText("Result 4")).not.toBeInTheDocument()
-    await user.click(screen.getByRole("button", { name: "Show all 5" }))
-    expect(screen.getByText("Result 4")).toBeInTheDocument()
-    expect(screen.getByText("Result 5")).toBeInTheDocument()
+    const ranked = screen.getByRole("list", { name: "Ranked results" })
+    for (const index of [1, 2, 3, 4, 5]) {
+      expect(within(ranked).getByText(`Result ${index}`)).toBeInTheDocument()
+    }
+    expect(screen.queryByRole("button", { name: /show all/i })).not.toBeInTheDocument()
+  })
+
+  it("explains fusion order once in the side inspector with the honest RRF note", () => {
+    renderDialog(aggregatedDetail())
+
+    expect(
+      screen.getByText(
+        "Select a result to inspect its full snippet, URL, and recorded score."
+      )
+    ).toBeInTheDocument()
+    expect(screen.getByText("Why this order")).toBeInTheDocument()
+    expect(
+      screen.getByText(/Results are shown in FreeSearch's final fused order/)
+    ).toBeInTheDocument()
+    expect(screen.getByText(/Raw reciprocal-rank inputs/)).toBeInTheDocument()
+    expect(
+      screen.queryByRole("list", { name: "Output order and scores" })
+    ).not.toBeInTheDocument()
+    expect(screen.queryByText(/contributor not recorded/i)).not.toBeInTheDocument()
+  })
+
+  it("scopes results, score, and summary to the inspected provider attempt", () => {
+    renderDialog(aggregatedDetail(), { providerSpanId: "a100000000000003" })
+
+    expect(screen.getByText("Keenable response")).toBeInTheDocument()
+    expect(screen.queryByText("Results returned")).not.toBeInTheDocument()
+    expect(
+      screen.getByText(/Results keep the order returned by Keenable/)
+    ).toBeInTheDocument()
+    expect(screen.getByText("Provider score 0.92")).toBeInTheDocument()
+    expect(screen.queryByText(/Fusion score/)).not.toBeInTheDocument()
+    expect(screen.getByText("Provider latency")).toBeInTheDocument()
+    expect(screen.getByText("2025ms")).toBeInTheDocument()
+    expect(
+      screen.getByText(/Showing this provider's response/)
+    ).toBeInTheDocument()
+  })
+
+  it("labels a single-provider trace with provider order, not fusion", () => {
+    renderDialog(searchDetail())
+
+    expect(
+      screen.getByText(/Results keep the order returned by Keenable/)
+    ).toBeInTheDocument()
+    expect(screen.getByText("Provider score 0.94")).toBeInTheDocument()
+    expect(screen.queryByText(/Fusion score/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/contributor not recorded/i)).not.toBeInTheDocument()
+  })
+
+  it("states the no-score fallback without inventing ranking arithmetic", () => {
+    const detail = mapTraceDetail(
+      traceDetailFixture({
+        output: {
+          kind: "search_results",
+          query: "q",
+          results: [
+            { title: "A", url: "https://example.com/a", snippet: "", source: null, score: null },
+            { title: "B", url: "https://example.com/b", snippet: "", source: null, score: null },
+          ],
+        },
+      })
+    )
+    renderDialog(detail)
+
+    expect(
+      screen.getByText(/This trace did not record provider scores, so returned order is the only ranking signal/)
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/Only the final score is shown/)).not.toBeInTheDocument()
+  })
+
+  it("fuses provider timing into trajectory rows instead of a separate latency panel", async () => {
+    const user = userEvent.setup()
+    renderDialog(aggregatedDetail())
+
+    expect(screen.queryByText("Latency")).not.toBeInTheDocument()
+    await user.click(screen.getByRole("button", { name: "Trajectory" }))
+    const trajectory = screen.getByRole("list", { name: "Trace trajectory" })
+    expect(within(trajectory).getByText("Keenable request")).toBeInTheDocument()
+    expect(within(trajectory).getByText("2025ms")).toBeInTheDocument()
+  })
+
+  it("keeps the approved narrow branches: 2×2 summary rail", () => {
+    renderDialog(aggregatedDetail())
+
+    const rail = screen.getByText("All providers").closest("dl")
+    expect(rail?.className.split(" ")).toEqual(
+      expect.arrayContaining(["grid-cols-2", "sm:grid-cols-4"])
+    )
+  })
+
+  it("selects a trajectory row and shows its payload in the side inspector", async () => {
+    const user = userEvent.setup()
+    renderDialog(aggregatedDetail())
+
+    await user.click(screen.getByRole("button", { name: "Trajectory" }))
+    expect(
+      screen.getByText("Select a trajectory row to inspect its timing and payload.")
+    ).toBeInTheDocument()
+    await user.click(screen.getByRole("button", { name: /Keenable request/ }))
+    expect(
+      screen.queryByText("Select a trajectory row to inspect its timing and payload.")
+    ).not.toBeInTheDocument()
+    expect(screen.getByText("freesearch.provider.request")).toBeInTheDocument()
   })
 
   it("shows an error callout with role=alert and no results for failed traces", () => {
@@ -130,15 +243,6 @@ describe("TraceDetailDialog", () => {
     expect(alert).toHaveTextContent("HTTP 502")
     expect(screen.getByText("URL fetched")).toBeInTheDocument()
     expect(screen.getByText(/no results were recorded/i)).toBeInTheDocument()
-  })
-
-  it("keeps Technical details collapsed while the timeline is disclosed", () => {
-    renderDialog(searchDetail())
-
-    const timeline = screen.getByText("Stage timeline").closest("details")!
-    expect(timeline.hasAttribute("open")).toBe(true)
-    const technical = screen.getByText("Technical details").closest("details")!
-    expect(technical.hasAttribute("open")).toBe(false)
   })
 
   it("shows a loading state while detail is in flight", () => {
@@ -162,6 +266,8 @@ describe("TraceDetailDialog", () => {
   it("closes on Escape and returns focus to the invoking control", async () => {
     installFetchStub((req) => {
       if (req.method === "GET" && req.url.startsWith("/api/v1/traces/")) {
+        const traceId = decodeURIComponent(req.url.split("/").pop() ?? "")
+        if (traceId === AGGREGATED_TRACE_ID) return ok(aggregatedTraceDetailFixture())
         return ok(traceDetailFixture())
       }
       if (req.method === "GET" && req.url.startsWith("/api/v1/traces")) {
@@ -173,19 +279,126 @@ describe("TraceDetailDialog", () => {
     render(<ActivityPage />)
 
     await waitFor(() => {
-      expect(screen.getAllByRole("button", { name: "View details" })).toHaveLength(2)
+      expect(screen.getAllByRole("button", { name: "View details" })).toHaveLength(3)
     })
     const trigger = screen.getAllByRole("button", { name: "View details" })[0]!
     await user.click(trigger)
     await waitFor(() => {
       expect(screen.getByRole("dialog")).toBeInTheDocument()
     })
-    expect(screen.getByText("distributed consensus algorithms")).toBeInTheDocument()
+    expect(screen.getByText("What is the latest financial news?")).toBeInTheDocument()
 
     await user.keyboard("{Escape}")
     await waitFor(() => {
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
     })
     expect(trigger).toHaveFocus()
+  })
+})
+
+/**
+ * The rebuilt dialog (PLAN §6.3 item 5): 7xl modal, one aligned `<dl>` summary
+ * rail, concise mode-specific order copy, a Results/Trajectory switch, and a
+ * selected side payload.
+ */
+describe("TraceDetailDialog inspector workspace", () => {
+  function renderAggregated(overrides = {}) {
+    const onClose = vi.fn()
+    const onRetry = vi.fn()
+    render(
+      <TraceDetailDialog
+        trace={mapTraceDetail(aggregatedTraceDetailFixture())}
+        isOpen
+        status="ready"
+        error={null}
+        onClose={onClose}
+        onRetry={onRetry}
+        {...overrides}
+      />
+    )
+    return { onClose, onRetry }
+  }
+
+  it("uses the wider 7xl modal with one aligned dl summary rail", () => {
+    renderAggregated()
+
+    expect(document.querySelector(".sm\\:max-w-7xl")).not.toBeNull()
+    const rail = document.querySelector("dl")
+    expect(rail).not.toBeNull()
+    expect(rail?.querySelectorAll(":scope > div")).toHaveLength(4)
+  })
+
+  it("states fusion order once with the concise copy and no duplicate list", () => {
+    renderAggregated()
+
+    expect(
+      screen.getByText(/Results are shown in FreeSearch.s final fused order/)
+    ).toBeInTheDocument()
+    expect(screen.getByText(/Raw reciprocal-rank inputs/)).toBeInTheDocument()
+    expect(
+      screen.queryByRole("list", { name: "Output order and scores" })
+    ).not.toBeInTheDocument()
+    expect(screen.queryByText(/contributor not recorded/i)).not.toBeInTheDocument()
+  })
+
+  it("switches between Results and Trajectory modes", async () => {
+    const user = userEvent.setup()
+    renderAggregated()
+
+    const switcher = screen.getByRole("group", { name: /trace detail view/i })
+    expect(within(switcher).getByRole("button", { name: "Results" })).toHaveAttribute(
+      "aria-pressed",
+      "true"
+    )
+    await user.click(within(switcher).getByRole("button", { name: "Trajectory" }))
+    expect(within(switcher).getByRole("button", { name: "Trajectory" })).toHaveAttribute(
+      "aria-pressed",
+      "true"
+    )
+  })
+
+  it("keeps rows compact and shows the full snippet only in the side inspector", async () => {
+    const user = userEvent.setup()
+    renderAggregated()
+
+    expect(
+      screen.queryByText("Exclusive news, data and analytics for financial market professionals.")
+    ).not.toBeInTheDocument()
+    await user.click(screen.getByRole("button", { name: /Reuters Latest Finance News/ }))
+    expect(
+      screen.getByText("Exclusive news, data and analytics for financial market professionals.")
+    ).toBeInTheDocument()
+  })
+
+  it("has no old duplicate panels: no separate Latency section or technical disclosure", () => {
+    renderAggregated()
+
+    expect(screen.queryByText("Latency")).not.toBeInTheDocument()
+    expect(screen.queryByText("Technical trajectory")).not.toBeInTheDocument()
+    expect(screen.queryByText("Results returned")).not.toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: /show all/i })).not.toBeInTheDocument()
+  })
+
+  it("preserves loading, error, and Escape behavior in the new shell", async () => {
+    const { onRetry } = (() => {
+      const onClose = vi.fn()
+      const retry = vi.fn()
+      render(
+        <TraceDetailDialog
+          trace={null}
+          isOpen
+          status="error"
+          error="boom"
+          onClose={onClose}
+          onRetry={retry}
+        />
+      )
+      return { onRetry: retry }
+    })()
+
+    expect(screen.getByRole("alert")).toHaveTextContent(/trace detail unavailable/i)
+    const user = userEvent.setup()
+    await user.click(screen.getByRole("button", { name: "Retry" }))
+    expect(onRetry).toHaveBeenCalledTimes(1)
   })
 })

@@ -82,6 +82,11 @@ function providerLabel(provider: string | null): string {
   return provider.charAt(0).toUpperCase() + provider.slice(1)
 }
 
+/** Display label for a provider id known outside a summary (e.g. a span). */
+export function traceProviderLabel(provider: string | null): string {
+  return providerLabel(provider)
+}
+
 /** Decode one list row; `null` means the payload was not a usable summary. */
 export function mapTraceSummary(payload: unknown): TraceSummary | null {
   const record = asRecord(payload)
@@ -119,7 +124,12 @@ export function mapTraceList(payload: unknown): TraceSummary[] {
   return summaries
 }
 
-function mapSearchResults(value: unknown): TraceSearchResult[] {
+/**
+ * Safe decoder for a list of normalized search results. Shared by the root
+ * output and by per-provider response events so both keep the same validation
+ * and the same original ordering.
+ */
+export function decodeSearchResults(value: unknown): TraceSearchResult[] {
   if (!Array.isArray(value)) return []
   const results: TraceSearchResult[] = []
   for (const item of value) {
@@ -144,7 +154,7 @@ function mapOutput(value: unknown): TraceOutput | null {
     return {
       kind: "search_results",
       query: asString(record.query) ?? "",
-      results: mapSearchResults(record.results),
+      results: decodeSearchResults(record.results),
     }
   }
   if (record.kind === "fetch_document") {
@@ -172,7 +182,9 @@ function mapEvents(value: unknown): TraceEvent[] {
     events.push({
       name,
       timestamp,
-      attributes: JSON.stringify(record.attributes ?? {}, null, 2),
+      // Kept structured: a provider response event carries `result_count` and
+      // the per-provider `results`, which the derivations decode in place.
+      attributes: asRecord(record.attributes) ?? {},
     })
   }
   return events
@@ -194,6 +206,7 @@ function mapStages(value: unknown, traceStart: number): TraceStage[] {
       parentSpanId: asString(record.parent_span_id),
       name,
       label: asString(record.stage) ?? "Stage",
+      providerId: asString(record.provider),
       kind: asKind(record.kind),
       startedAt,
       durationMs: asCount(record.duration_ms) ?? 0,

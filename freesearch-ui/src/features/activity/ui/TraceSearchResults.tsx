@@ -1,32 +1,46 @@
-import { useState } from "react"
-import type { TraceSearchOutput } from "@/domains/activity"
+import type { TraceSearchResult } from "@/domains/activity"
+import type { RankingMode } from "./TraceRankingExplanation"
 import { TraceResultRow } from "./TraceResultRow"
 
-const INITIAL_RESULTS = 3
+export interface TraceSearchResultsProps {
+  results: readonly TraceSearchResult[]
+  mode: RankingMode
+  /** Index of the selected result inside `results`; the selection identity. */
+  selectedIndex: number | null
+  onSelect: (index: number) => void
+}
 
-/** Normalized search results, bounded until the user asks for the full list. */
-export function TraceSearchResults({ output }: { output: TraceSearchOutput }) {
-  const [showAll, setShowAll] = useState(false)
-  if (output.results.length === 0) {
+const SCORE_LABELS: Record<RankingMode, string> = {
+  fusion: "Fusion score",
+  provider: "Provider score",
+}
+
+/**
+ * Every recorded result as one compact, selectable row, in recorded order. The
+ * full snippet is deliberately absent: it belongs to the side inspector, so a
+ * long payload never turns the list into a scroll wall (PLAN §5.3).
+ */
+export function TraceSearchResults({
+  results,
+  mode,
+  selectedIndex,
+  onSelect,
+}: TraceSearchResultsProps) {
+  if (results.length === 0) {
     return <p className="text-[13px] text-[var(--muted)]">No result was returned.</p>
   }
-  const visible = showAll ? output.results : output.results.slice(0, INITIAL_RESULTS)
   return (
-    <div className="space-y-2">
-      <ul className="space-y-2">
-        {visible.map((result, index) => (
-          <TraceResultRow key={`${result.url}-${index}`} result={result} />
-        ))}
-      </ul>
-      {!showAll && output.results.length > INITIAL_RESULTS && (
-        <button
-          type="button"
-          onClick={() => setShowAll(true)}
-          className="rounded px-2 py-1 text-[12px] font-medium text-[var(--signal)] hover:text-[var(--text-strong)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--signal)]/40"
-        >
-          Show all {output.results.length}
-        </button>
-      )}
-    </div>
+    <ul aria-label="Ranked results" className="m-0 min-w-0 list-none space-y-1 p-0">
+      {results.map((result, index) => (
+        <TraceResultRow
+          key={index}
+          result={result}
+          rank={index + 1}
+          selected={selectedIndex === index}
+          onSelect={() => onSelect(index)}
+          scoreLabel={SCORE_LABELS[mode]}
+        />
+      ))}
+    </ul>
   )
 }

@@ -70,7 +70,11 @@ def _records_from_fixture(document: dict[str, Any]) -> list[TraceSpanRecord]:
                 outcome=TraceOutcome(span["outcome"]),
                 error_type=span.get("error_type"),
                 operation=TraceOperation(document["operation"]) if is_root else None,
-                provider=document.get("provider") if is_root else None,
+                # Fixture loader contract (PLAN §6.1 item 6 loader half):
+                # the document provider seeds only the root summary row;
+                # every child span reads its own span-level `provider` field
+                # (None when the fixture records no identity for that span).
+                provider=(document.get("provider") if is_root else span.get("provider")),
                 input_text=document.get("input_text") if is_root else None,
                 output_json=json.dumps(output) if is_root and output is not None else None,
                 result_count=document.get("result_count") if is_root else None,
@@ -261,6 +265,12 @@ async def test_detail_orders_concurrent_fanout_children_stably(
             ended_at=moment,
             duration_ms=50,
             provider=name,
+            # The last child models a failed/zero-result provider attempt:
+            # identity must survive even when the call recorded an error.
+            status_code=(TraceStatusCode.ERROR if name == "brave" else TraceStatusCode.UNSET),
+            outcome=(TraceOutcome.ERROR if name == "brave" else TraceOutcome.SUCCESS),
+            error_type="http_error" if name == "brave" else None,
+            status_message="HTTP 502" if name == "brave" else None,
         )
         for span_id, name in [
             ("cc00000000000003", "brave"),
@@ -280,6 +290,18 @@ async def test_detail_orders_concurrent_fanout_children_stably(
         "bb00000000000002",
         "cc00000000000003",
     ]
+    # RED (PLAN §6.1 item 3): distinct child providers must survive the
+    # stable (started_at, span_id) ordering, including the failed span.
+    # Fails because storage drops row.provider when projecting the detail.
+    assert [span.provider for span in detail.spans[1:]] == [
+        "exa",
+        "tavily",
+        "brave",
+    ]
+    assert detail.spans[0].provider == "aggregated"
+    failed_child = next(span for span in detail.spans if span.span_id == "cc00000000000003")
+    assert failed_child.outcome is TraceOutcome.ERROR
+    assert failed_child.provider == "brave"
 
 
 async def test_get_trace_returns_none_for_unknown_id(

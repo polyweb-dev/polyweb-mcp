@@ -90,6 +90,11 @@ async def test_exported_root_and_children_round_trip(
 ) -> None:
     database = repository.database_path
     _provider, tracer = _exporting_tracer(database)
+    # Capture finished spans in-memory so the test can assert the
+    # span_record projection directly, alongside the persisted SQL row and
+    # the repository detail read.
+    capture = _CapturingExporter()
+    _provider.add_span_processor(SimpleSpanProcessor(capture))
 
     with tracer.start_as_current_span(
         "POST /search",
@@ -107,10 +112,32 @@ async def test_exported_root_and_children_round_trip(
         with tracer.start_as_current_span(
             "freesearch.provider",
             kind=SpanKind.CLIENT,
-            attributes={"error.type": "http_error"},
+            attributes={
+                "error.type": "http_error",
+                # RED (PLAN §6.1 item 2): the child provider span carries its
+                # own identity, distinct from the root summary provider.
+                "freesearch.provider.name": "brave",
+            },
         ) as failed:
             failed.record_exception(RuntimeError("HTTP 502"))
             failed.set_status(Status(StatusCode.ERROR))
+
+    # RED: span_record must project the child span's own provider attribute
+    # instead of dropping it (exporter only projects provider for the root).
+    child_finished = next(span for span in capture.spans if span.name == "freesearch.provider")
+    assert span_record(child_finished).provider == "brave"
+
+    # RED: the persisted child row must preserve the child provider
+    # independently of the root summary provider.
+    with sqlite3.connect(database) as connection:
+        child_row = connection.execute(
+            "SELECT provider FROM trace_spans WHERE name = 'freesearch.provider'"
+        ).fetchone()
+        root_row = connection.execute(
+            "SELECT provider FROM trace_spans WHERE parent_span_id IS NULL"
+        ).fetchone()
+    assert child_row[0] == "brave"
+    assert root_row[0] == "keenable"
 
     summaries = await repository.list_trace_summaries()
     assert len(summaries) == 1
@@ -143,6 +170,10 @@ async def test_exported_root_and_children_round_trip(
     assert failed_span.error is not None
     assert failed_span.error.type == "http_error"
     assert [event.name for event in failed_span.events] == ["exception"]
+    # RED: the repository detail must preserve the child provider identity
+    # independently of the root summary provider.
+    assert failed_span.provider == "brave"
+    assert summary.provider == "keenable"
 
 
 async def test_root_content_columns_stored_once_not_in_attributes_json(

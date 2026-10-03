@@ -6,8 +6,10 @@ import {
   mapTraceSummary,
 } from "./mappers"
 import {
+  AGGREGATED_TRACE_ID,
   ERROR_TRACE_ID,
   SUCCESS_TRACE_ID,
+  aggregatedTraceDetailFixture,
   errorTraceDetailFixture,
   errorTraceSummaryFixture,
   traceDetailFixture,
@@ -117,9 +119,17 @@ describe("mapTraceList", () => {
   it("decodes the list payload with newest-first rows", () => {
     const summaries = mapTraceList(traceListFixture())
 
-    expect(summaries).toHaveLength(2)
-    expect(summaries[0]?.traceId).toBe(SUCCESS_TRACE_ID)
-    expect(summaries[1]?.traceId).toBe(ERROR_TRACE_ID)
+    expect(summaries).toHaveLength(3)
+    expect(summaries[0]?.traceId).toBe(AGGREGATED_TRACE_ID)
+    expect(summaries[1]?.traceId).toBe(SUCCESS_TRACE_ID)
+    expect(summaries[2]?.traceId).toBe(ERROR_TRACE_ID)
+  })
+
+  it("labels the aggregated row as All providers", () => {
+    const summaries = mapTraceList(traceListFixture())
+
+    expect(summaries[0]?.provider).toBe("aggregated")
+    expect(summaries[0]?.providerLabel).toBe("All providers")
   })
 
   it("drops malformed rows while keeping usable ones", () => {
@@ -358,5 +368,262 @@ describe("mapTraceDetail", () => {
     expect(detail.stages[1]?.offsetMs).toBe(10)
     expect(detail.stages[2]?.offsetMs).toBe(12)
     expect(detail.stages[2]?.error).toMatchObject({ type: "http_error" })
+  })
+
+  it("keeps event attributes structured instead of stringifying them", () => {
+    const detail = mapTraceDetail(aggregatedTraceDetailFixture())
+    const providerStage = detail.stages.find(
+      (stage) => stage.name === "freesearch.provider"
+    )!
+
+    expect(providerStage).toBeDefined()
+    const response = providerStage.events.find(
+      (event) => event.name === "freesearch.provider.response"
+    )!
+    expect(response).toBeDefined()
+    expect(response.attributes.result_count).toBe(3)
+    expect(response.attributes.results).toHaveLength(3)
+    const first = (response.attributes.results as Record<string, unknown>[])[0]!
+    expect(first).toMatchObject({ source: "keenable", score: 0.92 })
+  })
+
+  it("decodes per-provider response results through the shared result decoder", () => {
+    const detail = mapTraceDetail(aggregatedTraceDetailFixture())
+    const attempts = detail.stages.filter(
+      (stage) => stage.name === "freesearch.provider"
+    )
+
+    expect(attempts).toHaveLength(7)
+    // Malformed entries inside an event payload never leak into the domain.
+    const hostile = mapTraceDetail(
+      aggregatedTraceDetailFixture({
+        spans: (aggregatedTraceDetailFixture().spans as Record<string, unknown>[]).map(
+          (span) =>
+            span.name === "freesearch.provider"
+              ? {
+                  ...span,
+                  events: [
+                    {
+                      name: "freesearch.provider.response",
+                      timestamp: "2026-09-29T09:10:02.045000Z",
+                      attributes: {
+                        result_count: 2,
+                        results: [
+                          { title: "No URL here" },
+                          {
+                            title: "Has URL",
+                            url: "https://example.com/a",
+                            source: "keenable",
+                            score: 0.5,
+                          },
+                        ],
+                      },
+                    },
+                  ],
+                }
+              : span
+        ),
+      })
+    )
+    const firstAttempt = hostile.stages.find(
+      (stage) => stage.name === "freesearch.provider"
+    )!
+    const decoded = firstAttempt.events.find(
+      (event) => event.name === "freesearch.provider.response"
+    )!
+    expect(decoded.attributes.results).toHaveLength(2)
+  })
+
+  it("drops events with unusable name or timestamp while keeping valid ones", () => {
+    const detail = mapTraceDetail(
+      traceDetailFixture({
+        spans: [
+          {
+            span_id: "aabbccddeeff0011",
+            parent_span_id: null,
+            name: "POST /search",
+            stage: "Search request",
+            kind: "server",
+            started_at: "2026-09-29T09:15:00.000000Z",
+            duration_ms: 10,
+            outcome: "success",
+            error: null,
+            events: [
+              { name: "good", timestamp: "2026-09-29T09:15:00.001000Z", attributes: { a: 1 } },
+              { name: null, timestamp: "2026-09-29T09:15:00.001000Z", attributes: {} },
+              { name: "bad-time", timestamp: "yesterday", attributes: {} },
+              "not-an-event",
+            ],
+          },
+        ],
+      })
+    )
+
+    expect(detail.stages[0]?.events.map((event) => event.name)).toEqual(["good"])
+    expect(detail.stages[0]?.events[0]?.attributes).toEqual({ a: 1 })
+  })
+
+  it("decodes non-record attributes objects to an empty record", () => {
+    const detail = mapTraceDetail(
+      traceDetailFixture({
+        spans: [
+          {
+            span_id: "aabbccddeeff0011",
+            parent_span_id: null,
+            name: "POST /search",
+            stage: "Search request",
+            kind: "server",
+            started_at: "2026-09-29T09:15:00.000000Z",
+            duration_ms: 10,
+            outcome: "success",
+            error: null,
+            events: [
+              {
+                name: "weird",
+                timestamp: "2026-09-29T09:15:00.001000Z",
+                attributes: "flattened",
+              },
+            ],
+          },
+        ],
+      })
+    )
+
+    expect(detail.stages[0]?.events[0]?.attributes).toEqual({})
+  })
+})
+
+describe("decodeSearchResults", () => {
+  it("decodes shared result lists with original order preserved", async () => {
+    const { decodeSearchResults } = await import("./mappers")
+    const results = decodeSearchResults([
+      { title: "B", url: "https://example.com/b", source: "tavily", score: 0.5 },
+      { title: "A", url: "https://example.com/a", source: "keenable", score: 0.9 },
+    ])
+
+    expect(results.map((result) => result.url)).toEqual([
+      "https://example.com/b",
+      "https://example.com/a",
+    ])
+  })
+
+  it("returns an empty list for non-array payloads", async () => {
+    const { decodeSearchResults } = await import("./mappers")
+
+    expect(decodeSearchResults(null)).toEqual([])
+    expect(decodeSearchResults("results")).toEqual([])
+    expect(decodeSearchResults({})).toEqual([])
+  })
+
+  it("coerces non-numeric scores to null instead of fabricating them", async () => {
+    const { decodeSearchResults } = await import("./mappers")
+    const [result] = decodeSearchResults([
+      { title: "A", url: "https://example.com/a", score: "0.9" },
+    ])
+
+    expect(result?.score).toBeNull()
+  })
+})
+
+/**
+ * The wire `spans[*].provider` field is the source of truth for provider
+ * identity (PLAN §6.3 item 2): `mapStages` decodes `record.provider` with
+ * `asString` (malformed/non-string → null) into `TraceStage.providerId`.
+ */
+describe("mapTraceDetail span provider identity", () => {
+  function stageById(detail: { stages: Array<Record<string, unknown>> }, spanId: string) {
+    const stage = detail.stages.find((candidate) => candidate.spanId === spanId)
+    if (stage === undefined) throw new Error(`missing stage ${spanId}`)
+    return stage
+  }
+
+  it("decodes the span-level provider field to TraceStage.providerId", () => {
+    const detail = mapTraceDetail(aggregatedTraceDetailFixture()) as unknown as {
+      stages: Array<Record<string, unknown>>
+    }
+
+    expect(stageById(detail, "a100000000000003")).toMatchObject({ providerId: "keenable" })
+    expect(stageById(detail, "a100000000000006")).toMatchObject({ providerId: "tavily" })
+  })
+
+  it("exposes all seven deterministic fanout identities in wire order", () => {
+    const detail = mapTraceDetail(aggregatedTraceDetailFixture()) as unknown as {
+      stages: Array<Record<string, unknown>>
+    }
+    const providerStages = detail.stages.filter(
+      (stage) => stage.name === "freesearch.provider"
+    )
+
+    expect(providerStages).toHaveLength(7)
+    expect(providerStages.map((stage) => stage.providerId)).toEqual([
+      "keenable",
+      "tavily",
+      "brave",
+      "exa",
+      "firecrawl",
+      "youcom",
+      "parallel",
+    ])
+  })
+
+  it("preserves provider on the failed/empty attempt that carries no results", () => {
+    const detail = mapTraceDetail(aggregatedTraceDetailFixture()) as unknown as {
+      stages: Array<Record<string, unknown>>
+    }
+
+    expect(stageById(detail, "f100000000000001")).toMatchObject({
+      providerId: "parallel",
+      outcome: "error",
+    })
+    expect(stageById(detail, "c100000000000001")).toMatchObject({ providerId: "exa" })
+  })
+
+  it("keeps providerId null when the span carries no provider (nullable legacy)", () => {
+    const detail = mapTraceDetail(
+      traceDetailFixture({
+        spans: [
+          {
+            span_id: "aabbccddeeff0011",
+            parent_span_id: null,
+            name: "POST /search",
+            stage: "Search request",
+            kind: "server",
+            started_at: "2026-09-29T09:15:00.000000Z",
+            duration_ms: 10,
+            outcome: "success",
+            error: null,
+            events: [],
+          },
+        ],
+      })
+    ) as unknown as { stages: Array<Record<string, unknown>> }
+
+    expect(detail.stages[0]?.providerId).toBeNull()
+  })
+
+  it("rejects malformed provider values to null instead of leaking them", () => {
+    for (const provider of [42, {}, [], true]) {
+      const detail = mapTraceDetail(
+        traceDetailFixture({
+          spans: [
+            {
+              span_id: "aabbccddeeff0011",
+              parent_span_id: null,
+              name: "freesearch.provider",
+              stage: "Provider request",
+              kind: "client",
+              provider,
+              started_at: "2026-09-29T09:15:00.000000Z",
+              duration_ms: 10,
+              outcome: "success",
+              error: null,
+              events: [],
+            },
+          ],
+        })
+      ) as unknown as { stages: Array<Record<string, unknown>> }
+
+      expect(detail.stages[0]?.providerId).toBeNull()
+    }
   })
 })

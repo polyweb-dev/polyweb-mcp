@@ -199,6 +199,28 @@ def test_span_detail_carries_stage_and_outcome() -> None:
     assert span.outcome is TraceOutcome.SUCCESS
     assert span.error is None
     assert span.events == []
+    # RED (PLAN §6.1 item 5): span-level provider identity is nullable and
+    # defaults to None when the exporter recorded no provider for the span.
+    assert span.provider is None
+
+
+def test_span_detail_provider_accepts_explicit_identity() -> None:
+    # RED (PLAN §6.1 item 5): an explicit per-span provider must survive the
+    # detail contract. Fails because TraceSpanDetail has no `provider` field.
+    span = TraceSpanDetail(
+        span_id="cc00000000000003",
+        parent_span_id="bb00000000000002",
+        name="freesearch.provider",
+        stage="Provider request",
+        kind=TraceSpanKind.CLIENT,
+        started_at=_aware(),
+        ended_at=_aware(),
+        duration_ms=208,
+        outcome=TraceOutcome.SUCCESS,
+        provider="brave",
+    )
+
+    assert span.provider == "brave"
 
 
 def test_span_detail_rejects_negative_duration() -> None:

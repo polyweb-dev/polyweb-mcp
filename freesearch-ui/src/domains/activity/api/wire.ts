@@ -64,6 +64,7 @@ export interface BackendTraceSpan {
   parent_span_id: string | null
   name: string
   stage: string
+  provider: string | null
   kind: BackendTraceSpanKind
   started_at: string
   ended_at: string

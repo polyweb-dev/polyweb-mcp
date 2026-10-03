@@ -95,9 +95,22 @@ describe("SearchPlayground (live backend)", () => {
     await waitFor(() => {
       expect(screen.getByText("Live backend result one")).toBeInTheDocument()
     })
-    // Single-entry waterfall: the raw JSON inspector carries exactly one entry
+    // Single-entry waterfall: the shared JsonViewer carries exactly one entry
+    // once its collapsed nodes are opened (lazy-mount contract).
     const inspectorToggle = screen.getByText(/Inspect raw JSON/i)
     fireEvent.click(inspectorToggle)
+    await waitFor(() => {
+      expect(screen.getByRole("group", { name: "Raw search response" })).toBeInTheDocument()
+    })
+    for (let round = 0; round < 6; round += 1) {
+      const closed = document.querySelectorAll(
+        '[aria-label="Raw search response"] details:not([open]) > summary'
+      )
+      if (closed.length === 0) break
+      closed.forEach((summary) => {
+        fireEvent.click(summary)
+      })
+    }
     await waitFor(() => {
       const occurrences = (document.body.textContent?.match(/resultsCount/g) ?? []).length
       expect(occurrences).toBe(1)
@@ -280,5 +293,81 @@ describe("SearchPlayground (live backend)", () => {
     })
     expect(screen.getByText(/2 engines/)).toBeInTheDocument()
     expect(screen.getByText(/All Providers \(2 fused\)/i)).toBeInTheDocument()
+  })
+})
+
+/**
+ * Characterization (PLAN §6.3 item 10): Playground selection, inspector,
+ * waterfall note, and raw-JSON behavior must stay unchanged when
+ * `SearchResults` adopts the shared `InspectorSplitPane` and
+ * `LatencyWaterfall` gains additive selectable rows. These pin the current
+ * behavior and SHOULD PASS both before and after that refactor.
+ */
+describe("SearchPlayground inspector contract (characterization)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it("shows the empty inspector prompt before a result is selected", async () => {
+    renderWithBackend()
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText(/Search across all providers/i)).toBeInTheDocument()
+    })
+
+    await submitQuery("live backend query")
+
+    await waitFor(() => {
+      expect(screen.getByText("Live backend result one")).toBeInTheDocument()
+    })
+    expect(screen.getByText("Returned results (2)")).toBeInTheDocument()
+    expect(screen.getByText("Select item to inspect")).toBeInTheDocument()
+    // The side inspector is always present: either the empty prompt or the
+    // auto-selected first result, depending on controller defaults.
+    expect(screen.getByText(/Result Inspector|Select a search result/i)).toBeInTheDocument()
+  })
+
+  it("selects a result into the side inspector on click", async () => {
+    renderWithBackend()
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText(/Search across all providers/i)).toBeInTheDocument()
+    })
+
+    await submitQuery("live backend query")
+
+    await waitFor(() => {
+      expect(screen.getByText("Live backend result one")).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByText("Live backend result one"))
+
+    await waitFor(() => {
+      expect(screen.getByText("Result Inspector")).toBeInTheDocument()
+    })
+    expect(screen.getByText("Target URL")).toBeInTheDocument()
+    expect(screen.getAllByText("https://example.com/one").length).toBeGreaterThanOrEqual(1)
+    expect(screen.getAllByText("First live snippet.").length).toBeGreaterThanOrEqual(1)
+  })
+
+  it("toggles the raw JSON inspector without losing results", async () => {
+    renderWithBackend()
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText(/Search across all providers/i)).toBeInTheDocument()
+    })
+
+    await submitQuery("live backend query")
+
+    await waitFor(() => {
+      expect(screen.getByText("Live backend result one")).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByText(/Inspect raw JSON/i))
+    await waitFor(() => {
+      expect(screen.getByRole("group", { name: "Raw search response" })).toBeInTheDocument()
+    })
+    expect(screen.getByText("Live backend result one")).toBeInTheDocument()
+
+    fireEvent.click(screen.getByText(/Hide raw JSON/i))
+    await waitFor(() => {
+      expect(screen.queryByRole("group", { name: "Raw search response" })).not.toBeInTheDocument()
+    })
+    expect(screen.getByText("Live backend result two")).toBeInTheDocument()
   })
 })

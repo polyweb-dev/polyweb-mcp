@@ -5,8 +5,10 @@ import {
   searchResponseFixture as canonicalSearchFixture,
 } from "../../src/test/backendFixtures"
 import {
+  AGGREGATED_TRACE_ID,
   ERROR_TRACE_ID,
   SUCCESS_TRACE_ID,
+  aggregatedTraceDetailFixture,
   errorTraceDetailFixture,
   traceDetailFixture,
   traceListFixture,
@@ -135,10 +137,266 @@ let dashboardQuotaOverride: unknown[] | null = null
 const stubbedTraceListRequests: string[] = []
 let stubbedTraceListFailure: string | null = null
 const stubbedTraceDetailFailures: Record<string, string> = {}
+const stubbedTraceDetailRequests: string[] = []
 
 /** Query strings (including the leading `?`, or `""`) of trace list requests. */
 export function traceListRequests(): string[] {
   return [...stubbedTraceListRequests]
+}
+
+/** Trace ids requested through `GET /api/v1/traces/{id}`, in order. */
+export function traceDetailRequests(): string[] {
+  return [...stubbedTraceDetailRequests]
+}
+
+// ---------------------------------------------------------------------------
+// Seven-provider fanout trace stub (Activity redesign acceptance, PLAN §6.2).
+//
+// Deterministic E2E-only fixture for the RED suite in
+// `tests/features/activity-traces.feature`. Production fixtures in
+// `src/test/fixtures/activity.ts` are intentionally untouched: this trace
+// lives here so the new acceptance scenarios run against span-level provider
+// identity (`span.provider`, lowercase ids) without changing any prod shape.
+//
+// - Seven `freesearch.provider` spans carry `provider` for
+//   brave/keenable/tavily/exa/firecrawl/youcom/parallel, in wire order.
+// - The `parallel` attempt FAILS (HTTP 502, zero results) but still records
+//   its name, proving identity comes from the span field and not from
+//   result-source inference (which has nothing to infer from).
+// - Six fused output results carry scores; the Keenable result carries the
+//   seeded long snippet used by the side-inspector scenarios.
+// ---------------------------------------------------------------------------
+
+/** Trace id of the seven-provider fanout stub (32-char lowercase hex). */
+export const SEVEN_PROVIDER_TRACE_ID = "f7a1c2d3e4f5061728394a5b6c7d8e90"
+
+/** Provider span identities, lowercase, in wire order. */
+export const SEVEN_PROVIDER_IDS = [
+  "brave",
+  "keenable",
+  "tavily",
+  "exa",
+  "firecrawl",
+  "youcom",
+  "parallel",
+] as const
+
+export type SevenProviderId = (typeof SEVEN_PROVIDER_IDS)[number]
+
+/** Query recorded on the seven-provider trace (list rows must never show it). */
+export const SEVEN_PROVIDER_QUERY = "seven-provider fanout acceptance probe"
+
+/**
+ * Seeded oversized snippet on the Keenable fused result. Compact result rows
+ * must NOT render it; the side inspector shows it after selection.
+ */
+export const SEVEN_PROVIDER_LONG_SNIPPET =
+  "Keenable recorded the full acceptance evidence for this seven-provider fanout probe. " +
+  "This seeded long snippet must never render inside the compact result rows: it belongs " +
+  "only in the side inspector after its result is selected. Repeating the core claim once " +
+  "more for length, the compact list stays scannable while oversized payloads wait behind " +
+  "an explicit selection in the side inspector."
+
+const SEVEN_STARTED_AT_MS = Date.parse("2026-09-29T09:05:00.000Z")
+const SEVEN_TOTAL_MS = 4520
+
+function sevenTs(offsetMs: number): string {
+  return new Date(SEVEN_STARTED_AT_MS + offsetMs).toISOString()
+}
+
+/** Display label the UI derives per provider id (mirrors traceProviderLabel). */
+export function sevenProviderLabel(provider: SevenProviderId): string {
+  return provider.charAt(0).toUpperCase() + provider.slice(1)
+}
+
+/** Nested-row latency per provider span (deterministic, distinct). */
+export const SEVEN_PROVIDER_DURATIONS: Record<SevenProviderId, number> = {
+  brave: 412,
+  keenable: 2025,
+  tavily: 3223,
+  exa: 618,
+  firecrawl: 940,
+  youcom: 755,
+  parallel: 410,
+}
+
+const SEVEN_PROVIDER_OFFSETS: Record<SevenProviderId, number> = {
+  brave: 20,
+  keenable: 30,
+  tavily: 46,
+  exa: 60,
+  firecrawl: 74,
+  youcom: 88,
+  parallel: 100,
+}
+
+const SEVEN_PROVIDER_SCORES: Record<Exclude<SevenProviderId, "parallel">, number> = {
+  brave: 0.55,
+  keenable: 0.92,
+  tavily: 0.71,
+  exa: 0.63,
+  firecrawl: 0.58,
+  youcom: 0.49,
+}
+
+export interface SevenProviderResultPayload {
+  title: string
+  url: string
+  snippet: string
+  source: SevenProviderId
+  score: number
+}
+
+/** The single recorded result for one successful provider (fused + attempt). */
+export function sevenProviderResult(provider: Exclude<SevenProviderId, "parallel">): SevenProviderResultPayload {
+  return {
+    title: `${sevenProviderLabel(provider)} acceptance result`,
+    url: `https://e2e.freesearch.dev/seven/${provider}`,
+    snippet:
+      provider === "keenable"
+        ? SEVEN_PROVIDER_LONG_SNIPPET
+        : `${sevenProviderLabel(provider)} returned one recorded result for the acceptance probe.`,
+    source: provider,
+    score: SEVEN_PROVIDER_SCORES[provider],
+  }
+}
+
+function sevenProviderSpan(provider: SevenProviderId, index: number): Record<string, unknown> {
+  const offset = SEVEN_PROVIDER_OFFSETS[provider]
+  const duration = SEVEN_PROVIDER_DURATIONS[provider]
+  const failed = provider === "parallel"
+  return {
+    span_id: `b70000000000001${index}`,
+    parent_span_id: "b700000000000001",
+    name: "freesearch.provider",
+    stage: "Provider request",
+    kind: "client",
+    started_at: sevenTs(offset),
+    ended_at: sevenTs(offset + duration),
+    duration_ms: duration,
+    outcome: failed ? "error" : "success",
+    error: failed ? { type: "http_error", message: "HTTP 502" } : null,
+    // Span-level identity: the new contract. The failed attempt records its
+    // name here while carrying zero results, so result-source inference
+    // cannot name it.
+    provider,
+    events: failed
+      ? [
+          {
+            name: "freesearch.provider.request",
+            timestamp: sevenTs(offset),
+            attributes: { query: SEVEN_PROVIDER_QUERY, limit: 6 },
+          },
+        ]
+      : [
+          {
+            name: "freesearch.provider.request",
+            timestamp: sevenTs(offset),
+            attributes: { query: SEVEN_PROVIDER_QUERY, limit: 6 },
+          },
+          {
+            name: "freesearch.provider.response",
+            timestamp: sevenTs(offset + duration),
+            attributes: { result_count: 1, results: [sevenProviderResult(provider)] },
+          },
+        ],
+  }
+}
+
+/** `GET /api/v1/traces` summary row for the seven-provider fanout. */
+export function sevenProviderTraceSummaryFixture(
+  overrides: Record<string, unknown> = {}
+): Record<string, unknown> {
+  return {
+    trace_id: SEVEN_PROVIDER_TRACE_ID,
+    operation: "search",
+    started_at: new Date(SEVEN_STARTED_AT_MS).toISOString(),
+    duration_ms: SEVEN_TOTAL_MS,
+    provider: "aggregated",
+    outcome: "success",
+    result_count: 6,
+    error: null,
+    ...overrides,
+  }
+}
+
+/** `GET /api/v1/traces/{seven}` detail: fused output + seven named spans. */
+export function sevenProviderTraceDetailFixture(
+  overrides: Record<string, unknown> = {}
+): Record<string, unknown> {
+  const successful = SEVEN_PROVIDER_IDS.filter((id) => id !== "parallel") as Exclude<
+    SevenProviderId,
+    "parallel"
+  >[]
+  return {
+    ...sevenProviderTraceSummaryFixture(),
+    input: SEVEN_PROVIDER_QUERY,
+    output: {
+      kind: "search_results",
+      query: SEVEN_PROVIDER_QUERY,
+      results: successful.map((id) => sevenProviderResult(id)),
+    },
+    spans: [
+      {
+        span_id: "b700000000000000",
+        parent_span_id: null,
+        name: "POST /search",
+        stage: "Search request",
+        kind: "server",
+        started_at: sevenTs(0),
+        ended_at: sevenTs(SEVEN_TOTAL_MS),
+        duration_ms: SEVEN_TOTAL_MS,
+        outcome: "success",
+        error: null,
+        provider: null,
+        events: [],
+      },
+      {
+        span_id: "b700000000000001",
+        parent_span_id: "b700000000000000",
+        name: "freesearch.backend",
+        stage: "Backend handling",
+        kind: "internal",
+        started_at: sevenTs(4),
+        ended_at: sevenTs(4512),
+        duration_ms: 4508,
+        outcome: "success",
+        error: null,
+        provider: null,
+        events: [],
+      },
+      ...SEVEN_PROVIDER_IDS.map((id, index) => sevenProviderSpan(id, index)),
+      {
+        span_id: "b700000000000020",
+        parent_span_id: "b700000000000001",
+        name: "freesearch.results",
+        stage: "Results assembly",
+        kind: "internal",
+        started_at: sevenTs(4400),
+        ended_at: sevenTs(4408),
+        duration_ms: 8,
+        outcome: "success",
+        error: null,
+        provider: null,
+        events: [],
+      },
+      {
+        span_id: "b700000000000021",
+        parent_span_id: "b700000000000000",
+        name: "freesearch.response",
+        stage: "Response to caller",
+        kind: "internal",
+        started_at: sevenTs(4512),
+        ended_at: sevenTs(SEVEN_TOTAL_MS),
+        duration_ms: 8,
+        outcome: "success",
+        error: null,
+        provider: null,
+        events: [],
+      },
+    ],
+    ...overrides,
+  }
 }
 
 /** Fail the next trace list reads with a 500, or clear the failure. */
@@ -250,6 +508,7 @@ export async function installBackendStub(page: Page): Promise<void> {
   dashboardQuotaOverride = null
   stubbedTraceListRequests.length = 0
   stubbedTraceListFailure = null
+  stubbedTraceDetailRequests.length = 0
   for (const key of Object.keys(stubbedTraceDetailFailures)) {
     delete stubbedTraceDetailFailures[key]
   }
@@ -477,10 +736,16 @@ export async function installBackendStub(page: Page): Promise<void> {
         items: Record<string, unknown>[]
         generated_at: string
       }
-      const items =
+      const base =
         operation === null
           ? list.items
           : list.items.filter((item) => item.operation === operation)
+      // The seven-provider acceptance trace leads the list (it is a search
+      // fanout, so the fetch filter still excludes it, like the backend).
+      const items =
+        operation === null || operation === "search"
+          ? [sevenProviderTraceSummaryFixture(), ...base]
+          : base
       return json(route, { items, generated_at: list.generated_at })
     }
   )
@@ -494,10 +759,15 @@ export async function installBackendStub(page: Page): Promise<void> {
       const traceId = decodeURIComponent(
         new URL(route.request().url()).pathname.split("/").pop() ?? ""
       )
+      stubbedTraceDetailRequests.push(traceId)
       const failure = stubbedTraceDetailFailures[traceId]
       if (failure !== undefined) return json(route, { detail: failure }, 500)
       if (traceId === SUCCESS_TRACE_ID) return json(route, traceDetailFixture())
       if (traceId === ERROR_TRACE_ID) return json(route, errorTraceDetailFixture())
+      if (traceId === AGGREGATED_TRACE_ID) return json(route, aggregatedTraceDetailFixture())
+      if (traceId === SEVEN_PROVIDER_TRACE_ID) {
+        return json(route, sevenProviderTraceDetailFixture())
+      }
       return json(route, { detail: `unknown trace '${traceId}'` }, 404)
     }
   )

@@ -212,6 +212,7 @@ class TraceSpanDetail(ContractModel):
     parent_span_id: str | None = None
     name: str
     stage: str
+    provider: str | None = None
     kind: TraceSpanKind
     started_at: AwareDatetime
     ended_at: AwareDatetime

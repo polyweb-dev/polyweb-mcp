@@ -31,6 +31,7 @@ Feature: OpenTelemetry trace observability for search and fetch
     Then the traced fanout search should succeed with the surviving provider results
     And the fanout trace detail should show one root with 2 sibling provider spans
     And the fanout trace detail should show outcome "partial" with the failed provider in ERROR
+    And the fanout trace detail should show sibling provider spans with identities "flaky" and "reliable"
 
   Scenario: Monitoring reads and trace reads create no additional traces
     Given an offline trace repository with a mock-transport Keenable search

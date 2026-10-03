@@ -200,15 +200,23 @@ def _summary_attributes(attributes: dict[str, Any], *, is_root: bool) -> dict[st
     result_count = attributes.get(TraceAttribute.RESPONSE_RESULT_COUNT)
     return {
         "operation": str(operation) if operation else None,
-        "provider": (
-            str(attributes[TraceAttribute.PROVIDER])
-            if attributes.get(TraceAttribute.PROVIDER)
-            else None
-        ),
         "input_text": str(input_text) if input_text is not None else None,
         "output_json": output if isinstance(output, str) else None,
         "result_count": int(result_count) if isinstance(result_count, (int, float)) else None,
     }
+
+
+def _provider(attributes: dict[str, Any]) -> str | None:
+    """Return the provider identity a span recorded, or ``None`` when absent.
+
+    Every span that talks to one provider (root summary and provider children
+    alike) attaches ``freesearch.provider.name``, so this reads the attribute
+    for all spans rather than only the root: a fanout child must keep its own
+    identity independently of the request-level summary provider.
+    """
+
+    value = attributes.get(TraceAttribute.PROVIDER)
+    return str(value) if value else None
 
 
 def span_record(span: ReadableSpan) -> TraceSpanRecord:
@@ -235,7 +243,7 @@ def span_record(span: ReadableSpan) -> TraceSpanRecord:
         outcome=_outcome(status, attributes, is_root=is_root, http_status=_http_status(attributes)),
         error_type=_error_type(span),
         operation=_operation(summary.get("operation")),
-        provider=summary.get("provider"),
+        provider=_provider(attributes),
         input_text=summary.get("input_text"),
         output_json=summary.get("output_json"),
         result_count=summary.get("result_count"),

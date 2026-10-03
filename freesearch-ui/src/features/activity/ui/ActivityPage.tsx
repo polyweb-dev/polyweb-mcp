@@ -1,6 +1,7 @@
+import { Button } from "@/shared/ui/button"
 import { SegmentedControl } from "@/shared/ui/SegmentedControl"
 import type { ActivityFilter } from "../model/useActivityController"
-import { useActivityController } from "../model/useActivityController"
+import { selectedTraceState, useActivityController } from "../model/useActivityController"
 import { ActivityList } from "./ActivityList"
 import { TraceDetailDialog } from "./TraceDetailDialog"
 
@@ -27,6 +28,8 @@ function filterFromLabel(label: string): ActivityFilter {
  */
 export function ActivityPage() {
   const controller = useActivityController()
+  const selection = controller.selection
+  const state = selectedTraceState(controller)
 
   return (
     <div className="space-y-6">
@@ -44,13 +47,9 @@ export function ActivityPage() {
             onChange={(label) => controller.setFilter(filterFromLabel(label))}
             ariaLabel="Activity operation filter"
           />
-          <button
-            type="button"
-            onClick={controller.refresh}
-            className="rounded border border-[var(--border-subtle)] px-3 py-1 text-[13px] text-[var(--text-strong)] hover:text-[var(--signal)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--signal)]/40"
-          >
+          <Button variant="outline" size="sm" onClick={controller.refresh}>
             Refresh
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -65,13 +64,9 @@ export function ActivityPage() {
           <p role="alert" className="text-[13px]" style={{ color: "var(--status-danger)" }}>
             Activity traces unavailable — {controller.listError}
           </p>
-          <button
-            type="button"
-            onClick={controller.refresh}
-            className="rounded border border-[var(--border-subtle)] px-3 py-1 text-[13px] text-[var(--text-strong)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--signal)]/40"
-          >
+          <Button variant="outline" size="sm" onClick={controller.refresh}>
             Retry
-          </button>
+          </Button>
         </div>
       )}
 
@@ -84,16 +79,25 @@ export function ActivityPage() {
       )}
 
       {controller.listStatus === "ready" && controller.summaries.length > 0 && (
-        <ActivityList summaries={controller.summaries} onSelect={controller.openTrace} />
+        <ActivityList
+          summaries={controller.summaries}
+          expandedTraceId={controller.expandedTraceId}
+          detailsById={controller.detailsById}
+          onSelect={controller.openTrace}
+          onToggleProviders={controller.toggleProviders}
+          onInspect={controller.openTrace}
+          onRetry={controller.retryTrace}
+        />
       )}
 
       <TraceDetailDialog
-        isOpen={controller.selectedTraceId !== null}
-        trace={controller.detail}
-        status={controller.detailStatus === "idle" ? "loading" : controller.detailStatus}
-        error={controller.detailError}
+        isOpen={selection !== null}
+        trace={state.detail}
+        providerSpanId={selection?.providerSpanId ?? null}
+        status={state.status === "idle" ? "loading" : state.status}
+        error={state.error}
         onClose={controller.closeTrace}
-        onRetry={controller.retryDetail}
+        onRetry={() => selection !== null && controller.retryTrace(selection.traceId)}
       />
     </div>
   )

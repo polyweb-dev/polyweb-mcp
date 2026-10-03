@@ -580,6 +580,35 @@ def step_then_fanout_partial(context: Any, outcome: str) -> None:
     assert exception_total == 1, f"expected one exception event, got {exception_total}"
 
 
+@then(
+    "the fanout trace detail should show sibling provider spans "
+    'with identities "{failed_provider}" and "{succeeded_provider}"'
+)
+def step_then_fanout_sibling_identities(
+    context: Any, failed_provider: str, succeeded_provider: str
+) -> None:
+    """Verify each sibling provider span exposes its exact provider identity.
+
+    RED: fails on current code because the read API drops the child-span
+    provider projection (TraceSpanDetail has no provider field yet), so both
+    lookups below resolve to None instead of the recorded identities.
+    """
+    assert context.otel_trace_id is not None
+    detail = _trace_detail(context, context.otel_trace_id)
+    grouped = _spans_by_name(detail)
+    providers = grouped.get("freesearch.provider", [])
+    assert len(providers) == 2, f"expected 2 sibling provider spans: {providers}"
+    by_outcome = {span["outcome"]: span.get("provider") for span in providers}
+    assert by_outcome.get("error") == failed_provider, (
+        f"failed provider span identity missing: expected {failed_provider!r}, "
+        f"got {by_outcome.get('error')!r} (child-span provider projection absent)"
+    )
+    assert by_outcome.get("success") == succeeded_provider, (
+        f"successful provider span identity missing: expected {succeeded_provider!r}, "
+        f"got {by_outcome.get('success')!r} (child-span provider projection absent)"
+    )
+
+
 @then("an unknown trace id should return 404 without creating a trace")
 def step_then_unknown_trace_404(context: Any) -> None:
     """Verify absent/invalid ids 404 and do not create traces."""
