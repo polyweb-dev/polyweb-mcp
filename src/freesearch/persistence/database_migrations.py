@@ -29,6 +29,31 @@ _APP_TABLES = frozenset(
         "runtime_settings",
         "quota_snapshots",
         "provider_health",
+        "trace_spans",
+    }
+)
+_TRACE_SPAN_COLUMNS = frozenset(
+    {
+        "span_id",
+        "trace_id",
+        "parent_span_id",
+        "name",
+        "kind",
+        "started_at",
+        "ended_at",
+        "duration_ms",
+        "status_code",
+        "status_message",
+        "outcome",
+        "error_type",
+        "operation",
+        "provider",
+        "input_text",
+        "output_json",
+        "result_count",
+        "attributes_json",
+        "events_json",
+        "resource_json",
     }
 )
 _CORE_COLUMNS: dict[str, frozenset[str]] = {
@@ -40,6 +65,7 @@ _CORE_COLUMNS: dict[str, frozenset[str]] = {
         {"id", "provider", "source", "remaining", "limit_units", "reset_at", "observed_at"}
     ),
     "provider_health": frozenset({"id", "provider", "status", "checked_at", "message"}),
+    "trace_spans": frozenset({"span_id", "trace_id", "name", "started_at", "outcome"}),
 }
 _HEAD_COLUMNS: dict[str, frozenset[str]] = {
     **_CORE_COLUMNS,
@@ -47,12 +73,15 @@ _HEAD_COLUMNS: dict[str, frozenset[str]] = {
     | frozenset({"latency_ms", "status", "unit_kind"}),
     "quota_snapshots": _CORE_COLUMNS["quota_snapshots"]
     | frozenset({"unit_kind", "display_unit", "metadata"}),
+    "trace_spans": _TRACE_SPAN_COLUMNS,
 }
 _HEAD_INDEXES = frozenset(
     {
         "usage_events_provider_observed_at",
         "quota_snapshots_provider_source_observed_at",
         "provider_health_provider_checked_at",
+        "trace_spans_trace_started_at",
+        "trace_spans_root_started_at",
     }
 )
 _LOCK_TIMEOUT_SECONDS = 30.0

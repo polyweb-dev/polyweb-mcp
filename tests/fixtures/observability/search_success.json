@@ -1,0 +1,147 @@
+{
+  "_comment": "Deterministic success trace for OpenTelemetry persistence tests: fixed ids, full query, two normalized results, and per-stage durations.",
+  "trace_id": "e1c2d3a4b5c6d7e8f9012345678abcde",
+  "operation": "search",
+  "provider": "keenable",
+  "outcome": "success",
+  "input_text": "distributed consensus algorithms",
+  "result_count": 2,
+  "output": {
+    "kind": "search_results",
+    "query": "distributed consensus algorithms",
+    "results": [
+      {
+        "title": "Consensus algorithms explained",
+        "url": "https://docs.freesearch.dev/consensus",
+        "snippet": "Raft, Paxos, and where each applies.",
+        "source": "keenable",
+        "score": 0.94
+      },
+      {
+        "title": "Raft vs Paxos",
+        "url": "https://docs.freesearch.dev/raft-vs-paxos",
+        "snippet": "A practical comparison.",
+        "source": "keenable",
+        "score": 0.81
+      }
+    ]
+  },
+  "spans": [
+    {
+      "span_id": "aa00000000000001",
+      "parent_span_id": null,
+      "name": "POST /search",
+      "kind": "server",
+      "stage": "Search request",
+      "started_at": "2026-09-29T09:15:00.000000+00:00",
+      "ended_at": "2026-09-29T09:15:00.248000+00:00",
+      "duration_ms": 248,
+      "status_code": "unset",
+      "outcome": "success",
+      "error_type": null,
+      "error": null,
+      "events": []
+    },
+    {
+      "span_id": "bb00000000000002",
+      "parent_span_id": "aa00000000000001",
+      "name": "freesearch.backend",
+      "kind": "internal",
+      "stage": "Backend handling",
+      "started_at": "2026-09-29T09:15:00.004000+00:00",
+      "ended_at": "2026-09-29T09:15:00.240000+00:00",
+      "duration_ms": 236,
+      "status_code": "unset",
+      "outcome": "success",
+      "error_type": null,
+      "error": null,
+      "events": []
+    },
+    {
+      "span_id": "cc00000000000003",
+      "parent_span_id": "bb00000000000002",
+      "name": "freesearch.provider",
+      "kind": "client",
+      "stage": "Provider request",
+      "started_at": "2026-09-29T09:15:00.020000+00:00",
+      "ended_at": "2026-09-29T09:15:00.228000+00:00",
+      "duration_ms": 208,
+      "status_code": "unset",
+      "outcome": "success",
+      "error_type": null,
+      "error": null,
+      "events": [
+        {
+          "name": "freesearch.provider.request",
+          "timestamp": "2026-09-29T09:15:00.020000+00:00",
+          "attributes": { "query": "distributed consensus algorithms", "limit": 10 }
+        },
+        {
+          "name": "freesearch.provider.response",
+          "timestamp": "2026-09-29T09:15:00.228000+00:00",
+          "attributes": { "result_count": 2 }
+        }
+      ]
+    },
+    {
+      "span_id": "dd00000000000004",
+      "parent_span_id": "cc00000000000003",
+      "name": "freesearch.provider.http",
+      "kind": "client",
+      "stage": "Provider HTTP call",
+      "started_at": "2026-09-29T09:15:00.022000+00:00",
+      "ended_at": "2026-09-29T09:15:00.224000+00:00",
+      "duration_ms": 202,
+      "status_code": "unset",
+      "outcome": "success",
+      "error_type": null,
+      "error": null,
+      "events": []
+    },
+    {
+      "span_id": "ee00000000000005",
+      "parent_span_id": "cc00000000000003",
+      "name": "freesearch.provider.parse",
+      "kind": "internal",
+      "stage": "Provider response parse",
+      "started_at": "2026-09-29T09:15:00.224000+00:00",
+      "ended_at": "2026-09-29T09:15:00.226000+00:00",
+      "duration_ms": 2,
+      "status_code": "unset",
+      "outcome": "success",
+      "error_type": null,
+      "error": null,
+      "events": []
+    },
+    {
+      "span_id": "ff00000000000006",
+      "parent_span_id": "bb00000000000002",
+      "name": "freesearch.results",
+      "kind": "internal",
+      "stage": "Results assembly",
+      "started_at": "2026-09-29T09:15:00.230000+00:00",
+      "ended_at": "2026-09-29T09:15:00.234000+00:00",
+      "duration_ms": 4,
+      "status_code": "unset",
+      "outcome": "success",
+      "error_type": null,
+      "error": null,
+      "events": []
+    },
+    {
+      "span_id": "1200000000000007",
+      "parent_span_id": "aa00000000000001",
+      "name": "freesearch.response",
+      "kind": "internal",
+      "stage": "Response to caller",
+      "started_at": "2026-09-29T09:15:00.240000+00:00",
+      "ended_at": "2026-09-29T09:15:00.248000+00:00",
+      "duration_ms": 8,
+      "status_code": "unset",
+      "outcome": "success",
+      "error_type": null,
+      "error": null,
+      "events": []
+    }
+  ]
+}

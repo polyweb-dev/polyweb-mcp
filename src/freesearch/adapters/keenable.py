@@ -13,12 +13,14 @@ from collections import deque
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 from pydantic import SecretStr
 
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.infrastructure.dates import parse_iso_datetime
+from freesearch.infrastructure.observability import SpanKindName, current_observability
 from freesearch.infrastructure.resilience import (
     RETRYABLE_STATUS_CODES,
     ProviderOperationError,
@@ -40,6 +42,7 @@ from freesearch.models.contracts import (
     UsageEvent,
     UsageOperation,
 )
+from freesearch.models.observability import TraceAttribute, TraceSpanName
 
 __all__ = ["KeenableAdapter"]
 
@@ -59,6 +62,9 @@ _PATHS = {
 }
 _KEYLESS_HOURLY_LIMIT = Decimal("1000")
 _KEYLESS_PER_SECOND_LIMIT = Decimal("10")
+_SERVER = urlsplit(_BASE_URL)
+_SERVER_ADDRESS = _SERVER.hostname or "api.keenable.ai"
+_SERVER_PORT = _SERVER.port or 443
 
 
 def _month_start(value: datetime) -> datetime:
@@ -143,28 +149,53 @@ class KeenableAdapter(ProviderAdapter):
         # auth=None so a caller client's default auth cannot add Authorization.
         return await self._client.send(request, auth=None)
 
+    @staticmethod
+    def _http_span_attributes(method: str, url: str) -> dict[str, Any]:
+        """Outbound HTTP child attributes; auth headers are never recorded."""
+
+        return {
+            TraceAttribute.HTTP_REQUEST_METHOD: method,
+            TraceAttribute.SERVER_ADDRESS: _SERVER_ADDRESS,
+            TraceAttribute.SERVER_PORT: _SERVER_PORT,
+            TraceAttribute.REQUEST_URL: url,
+        }
+
     async def search(self, request: SearchRequest) -> SearchResponse:
-        response = await self._runner.run(self.name, lambda: self._search_request(request))
-        try:
+        observability = current_observability()
+        mode, _headers = self._auth()
+        with observability.span(
+            TraceSpanName.PROVIDER_HTTP,
+            kind=SpanKindName.CLIENT,
+            attributes=self._http_span_attributes("POST", self._endpoint(mode, "search")),
+        ) as http_span:
+            response = await self._runner.run(self.name, lambda: self._search_request(request))
+            http_span.set_attributes(
+                {TraceAttribute.HTTP_RESPONSE_STATUS_CODE: response.status_code}
+            )
             if response.is_error:
                 raise self._http_error(response) from None
-            payload = response.json()
-            results = [self._normalize_result(item) for item in payload["results"]]
-            mode, _headers = self._auth()
-            return SearchResponse(
-                query=request.query,
-                provider=self.name,
-                results=results,
-                total_results=len(results),
-                usage=self._usage_event(UsageOperation.SEARCH, payload),
-                quota_snapshot=(self._keyless_snapshot() if mode == _KEYLESS else None),
-            )
-        except ProviderOperationError:
-            raise
-        except Exception:
-            # A structurally malformed payload must not escape as a raw
-            # AttributeError/KeyError/ValidationError/JSONDecodeError.
-            raise self._error("invalid_response", "malformed search response") from None
+        with observability.span(
+            TraceSpanName.PROVIDER_PARSE,
+            attributes={TraceAttribute.OPERATION: UsageOperation.SEARCH.value},
+        ) as parse_span:
+            try:
+                payload = response.json()
+                results = [self._normalize_result(item) for item in payload["results"]]
+                parse_span.set_attributes({TraceAttribute.RESPONSE_RESULT_COUNT: len(results)})
+                return SearchResponse(
+                    query=request.query,
+                    provider=self.name,
+                    results=results,
+                    total_results=len(results),
+                    usage=self._usage_event(UsageOperation.SEARCH, payload),
+                    quota_snapshot=(self._keyless_snapshot() if mode == _KEYLESS else None),
+                )
+            except ProviderOperationError:
+                raise
+            except Exception:
+                # A structurally malformed payload must not escape as a raw
+                # AttributeError/KeyError/ValidationError/JSONDecodeError.
+                raise self._error("invalid_response", "malformed search response") from None
 
     async def _search_request(self, request: SearchRequest) -> httpx.Response:
         mode, headers = self._auth()
@@ -192,35 +223,55 @@ class KeenableAdapter(ProviderAdapter):
         )
 
     async def fetch(self, request: FetchRequest) -> FetchResponse:
-        response = await self._runner.run(self.name, lambda: self._fetch_request(request))
-        try:
+        observability = current_observability()
+        mode, _headers = self._auth()
+        with observability.span(
+            TraceSpanName.PROVIDER_HTTP,
+            kind=SpanKindName.CLIENT,
+            attributes=self._http_span_attributes("GET", self._endpoint(mode, "fetch")),
+        ) as http_span:
+            response = await self._runner.run(self.name, lambda: self._fetch_request(request))
+            http_span.set_attributes(
+                {TraceAttribute.HTTP_RESPONSE_STATUS_CODE: response.status_code}
+            )
             if response.is_error:
                 raise self._http_error(response) from None
-            payload = response.json()
-            content = payload["content"]
-            if not isinstance(content, str):
+        with observability.span(
+            TraceSpanName.PROVIDER_PARSE,
+            attributes={TraceAttribute.OPERATION: UsageOperation.FETCH.value},
+        ) as parse_span:
+            try:
+                payload = response.json()
+                content = payload["content"]
+                if not isinstance(content, str):
+                    raise self._error("invalid_response", "malformed fetch response") from None
+                title = payload.get("title") if isinstance(payload.get("title"), str) else None
+                truncated = request.max_chars is not None and len(content) > request.max_chars
+                if truncated:
+                    content = content[: request.max_chars]
+                parse_span.set_attributes(
+                    {
+                        TraceAttribute.RESPONSE_RESULT_COUNT: 1,
+                        TraceAttribute.RESPONSE_CONTENT_LENGTH: len(content),
+                    }
+                )
+                return FetchResponse(
+                    provider=self.name,
+                    document=FetchedDocument(
+                        url=request.url,
+                        content=content,
+                        title=title,
+                        fetched_at=datetime.now(UTC),
+                        metadata={"truncated": True} if truncated else {},
+                    ),
+                    usage=self._usage_event(UsageOperation.FETCH, payload),
+                )
+            except ProviderOperationError:
+                raise
+            except Exception:
+                # A structurally malformed payload must not escape as a raw
+                # AttributeError/KeyError/TypeError/JSONDecodeError.
                 raise self._error("invalid_response", "malformed fetch response") from None
-            title = payload.get("title") if isinstance(payload.get("title"), str) else None
-            truncated = request.max_chars is not None and len(content) > request.max_chars
-            if truncated:
-                content = content[: request.max_chars]
-            return FetchResponse(
-                provider=self.name,
-                document=FetchedDocument(
-                    url=request.url,
-                    content=content,
-                    title=title,
-                    fetched_at=datetime.now(UTC),
-                    metadata={"truncated": True} if truncated else {},
-                ),
-                usage=self._usage_event(UsageOperation.FETCH, payload),
-            )
-        except ProviderOperationError:
-            raise
-        except Exception:
-            # A structurally malformed payload must not escape as a raw
-            # AttributeError/KeyError/TypeError/JSONDecodeError.
-            raise self._error("invalid_response", "malformed fetch response") from None
 
     async def _fetch_request(self, request: FetchRequest) -> httpx.Response:
         mode, headers = self._auth()

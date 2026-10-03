@@ -1,8 +1,9 @@
 """Focused unit and boundary matrix for the QUOTA.md acceptance criteria.
 
 Offline only: temp-file SQLite repositories (``tmp_path``), mocked HTTPX
-transports, and a static test resolver. No live network, no production
-``freesearch.db``, no port binds. Decimal assertions throughout — never float.
+transports, and one fixed fake API key injected explicitly at every keyed
+adapter constructor. No live network, no production ``freesearch.db``, no
+port binds. Decimal assertions throughout — never float.
 
 Red-state contract: tests probe new seams with ``getattr`` and fail as clean
 ``AssertionError``s naming the AC. ``SEAM PROBE`` marks a tester-proposed name
@@ -19,17 +20,12 @@ from pydantic import SecretStr
 
 import freesearch.adapters.brave as brave_module
 import freesearch.adapters.exa as exa_module
-import freesearch.adapters.firecrawl as firecrawl_module
-import freesearch.adapters.keenable as keenable_module
-import freesearch.adapters.parallel as parallel_module
-import freesearch.adapters.youcom as youcom_module
 from freesearch.adapters._youcom_support import _estimated_quota
 from freesearch.adapters.exa import ExaAdapter
 from freesearch.adapters.firecrawl import FirecrawlAdapter, fetch_credits
 from freesearch.adapters.keenable import KeenableAdapter
 from freesearch.adapters.parallel import ParallelAdapter
 from freesearch.infrastructure.resilience import ProviderOperationError
-from freesearch.infrastructure.secrets import ProviderName
 from freesearch.models import contracts as contracts_module
 from freesearch.models.contracts import (
     HealthStatus,
@@ -50,31 +46,10 @@ from freesearch.services.routing import select_route
 
 FIXED_AT = datetime(2026, 3, 10, 12, 0, 0, tzinfo=UTC)
 
-
-class _StaticKeyResolver:
-    def __init__(self, key: str = "quota-unit-secret") -> None:
-        self._key = SecretStr(key)
-
-    def get(self, provider: ProviderName) -> SecretStr | None:
-        del provider
-        return self._key
-
-
-class _NullKeyResolver:
-    def get(self, provider: ProviderName) -> SecretStr | None:
-        del provider
-        return None
-
-
-@pytest.fixture
-def static_resolver(monkeypatch: pytest.MonkeyPatch) -> None:
-    for module in (brave_module, exa_module, firecrawl_module, keenable_module, parallel_module):
-        monkeypatch.setattr(
-            module, "get_provider_secret_resolver", lambda: _StaticKeyResolver(), raising=False
-        )
-    monkeypatch.setattr(
-        youcom_module, "get_provider_secret_resolver", lambda: _StaticKeyResolver(), raising=False
-    )
+# Fixed fake key: adapters are keyed via explicit constructor injection
+# (``api_key=``), never through a global secret-resolver seam. Keyless
+# behavior is selected by passing no key at all (see the keyless cases).
+TEST_API_KEY = SecretStr("quota-unit-secret")
 
 
 @pytest_asyncio.fixture
@@ -478,7 +453,7 @@ class TestYoucomQuota:
             f"AC-4: metadata must carry floored fetch calls ({fetch}), saw {exposed!r}"
         )
 
-    def test_gap_marker_stays_off_wire(self, static_resolver: None) -> None:
+    def test_gap_marker_stays_off_wire(self) -> None:
         # Critic caveat: usage_gap is an in-memory marker; it must never leak
         # into serialized payloads.
         from freesearch.models.contracts import SearchResponse
@@ -509,7 +484,7 @@ class TestFirecrawlEstimates:
     @pytest.mark.parametrize(
         ("limit", "credits"), [(1, 2), (10, 2), (11, 4), (20, 4), (21, 6), (25, 6)]
     )
-    async def test_search_formula(self, static_resolver: None, limit: int, credits: int) -> None:
+    async def test_search_formula(self, limit: int, credits: int) -> None:
         client = httpx.AsyncClient(timeout=30.0)
         try:
             adapter = FirecrawlAdapter(client, sdk_client=object())
@@ -524,7 +499,7 @@ class TestFirecrawlEstimates:
             f"AC-FC-3: Firecrawl estimates are credits, saw {estimate.currency!r}"
         )
 
-    async def test_fetch_base_one_credit(self, static_resolver: None) -> None:
+    async def test_fetch_base_one_credit(self) -> None:
         from freesearch.models.contracts import FetchRequest as FetchReq
 
         client = httpx.AsyncClient(timeout=30.0)
@@ -543,7 +518,6 @@ class TestFirecrawlEstimates:
     )
     async def test_fetch_estimate_matches_executed_options(
         self,
-        static_resolver: None,
         pdf: int,
         json_extract: bool,
         enhanced: bool,
@@ -589,10 +563,10 @@ class TestFirecrawlEstimates:
 
 
 class TestCostEstimates:
-    async def test_keenable_keyed_usd_estimate(self, static_resolver: None) -> None:
+    async def test_keenable_keyed_usd_estimate(self) -> None:
         client = httpx.AsyncClient(timeout=30.0)
         try:
-            adapter = KeenableAdapter(client)
+            adapter = KeenableAdapter(client, api_key=TEST_API_KEY)
             estimate = await adapter.estimate_cost(SearchRequest(query="q", limit=3))
         finally:
             await client.aclose()
@@ -601,16 +575,18 @@ class TestCostEstimates:
         )
         assert estimate.currency == "USD", f"AC-5: currency must be USD, saw {estimate.currency!r}"
 
-    async def test_parallel_default_search_usd(self, static_resolver: None) -> None:
+    async def test_parallel_default_search_usd(self) -> None:
         def handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(200, json={})
 
         client = httpx.AsyncClient(transport=httpx.MockTransport(handler), timeout=30.0)
+        adapter: ParallelAdapter | None = None
         try:
-            adapter = ParallelAdapter(client)
+            adapter = ParallelAdapter(client, api_key=TEST_API_KEY)
             estimate = await adapter.estimate_cost(SearchRequest(query="q", limit=3))
         finally:
-            await adapter.aclose()
+            if adapter is not None:
+                await adapter.aclose()
             await client.aclose()
         assert estimate.currency == "USD", (
             f"AC-PA-2: Parallel estimates must be USD, saw {estimate.currency!r}"
@@ -649,7 +625,7 @@ class TestCostEstimates:
             f"AC-PA-2: extract_cost_usd({urls}) must be USD {expected}"
         )
 
-    async def test_parallel_mode_aware_estimate_cost(self, static_resolver: None) -> None:
+    async def test_parallel_mode_aware_estimate_cost(self) -> None:
         # T-5: estimate_cost driven with the P1-6 mode-aware request contract.
         from pydantic import ValidationError
 
@@ -659,8 +635,9 @@ class TestCostEstimates:
             return httpx.Response(200, json={})
 
         client = httpx.AsyncClient(transport=httpx.MockTransport(handler), timeout=30.0)
+        adapter: ParallelAdapter | None = None
         try:
-            adapter = ParallelAdapter(client)
+            adapter = ParallelAdapter(client, api_key=TEST_API_KEY)
             try:
                 request = SearchRequest(query="q", limit=3, mode="turbo", extra_bundles=0)
             except ValidationError as exc:
@@ -670,7 +647,8 @@ class TestCostEstimates:
                 ) from exc
             estimate = await adapter.estimate_cost(request)
         finally:
-            await adapter.aclose()
+            if adapter is not None:
+                await adapter.aclose()
             await client.aclose()
         assert estimate.units == search_cost_usd("turbo", 0) == Decimal("0.001"), (
             f"AC-PA-2: turbo estimate must equal the documented price, saw {estimate.units!r}"
@@ -693,12 +671,10 @@ def _keenable_client(status: int) -> httpx.AsyncClient:
 
 
 class TestKeenableErrors:
-    async def test_402_hard_exhaustion_recorded(
-        self, static_resolver: None, repo: SQLiteRepository
-    ) -> None:
+    async def test_402_hard_exhaustion_recorded(self, repo: SQLiteRepository) -> None:
         client = _keenable_client(402)
         try:
-            adapter = KeenableAdapter(client)
+            adapter = KeenableAdapter(client, api_key=TEST_API_KEY)
             with pytest.raises(ProviderOperationError) as exc_info:
                 await tracked_call(
                     repo,
@@ -716,12 +692,10 @@ class TestKeenableErrors:
             f"(saw {latest!r}); routing steers away only from recorded state"
         )
 
-    async def test_429_never_exhaustion(
-        self, static_resolver: None, repo: SQLiteRepository
-    ) -> None:
+    async def test_429_never_exhaustion(self, repo: SQLiteRepository) -> None:
         client = _keenable_client(429)
         try:
-            adapter = KeenableAdapter(client)
+            adapter = KeenableAdapter(client, api_key=TEST_API_KEY)
             with pytest.raises(ProviderOperationError) as exc_info:
                 await tracked_call(
                     repo,
@@ -736,9 +710,7 @@ class TestKeenableErrors:
             "AC-5: 429 must never persist as quota exhaustion"
         )
 
-    async def test_paid_usage_preserves_free_allowance(
-        self, static_resolver: None, repo: SQLiteRepository
-    ) -> None:
+    async def test_paid_usage_preserves_free_allowance(self, repo: SQLiteRepository) -> None:
         # T-2: a real paid call through _meta usage detail; the combined free
         # remaining becomes unknown (None) while both counters survive (D-2).
         def handler(request: httpx.Request) -> httpx.Response:
@@ -752,7 +724,7 @@ class TestKeenableErrors:
 
         client = httpx.AsyncClient(transport=httpx.MockTransport(handler), timeout=30.0)
         try:
-            adapter = KeenableAdapter(client)
+            adapter = KeenableAdapter(client, api_key=TEST_API_KEY)
             response = await tracked_call(
                 repo,
                 adapter,
@@ -1235,17 +1207,16 @@ class TestPollFailureSafety:
 
 
 class TestUnseededParallelLedger:
-    async def test_unseeded_spend_reports_unknown(
-        self, static_resolver: None, repo: SQLiteRepository
-    ) -> None:
+    async def test_unseeded_spend_reports_unknown(self, repo: SQLiteRepository) -> None:
         # T-6/AC-PA-3: without an enabled seed, spend is tracked but no
         # balance may be fabricated; remaining/limit stay unknown.
         def handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(200, json={})
 
         client = httpx.AsyncClient(transport=httpx.MockTransport(handler), timeout=30.0)
+        adapter: ParallelAdapter | None = None
         try:
-            adapter = ParallelAdapter(client)
+            adapter = ParallelAdapter(client, api_key=TEST_API_KEY)
             assert adapter.record_success_spend(Decimal("1.25")) is None, (
                 "AC-PA-3: unseeded spend must not materialize a snapshot"
             )
@@ -1253,7 +1224,8 @@ class TestUnseededParallelLedger:
                 "AC-PA-3: unseeded accounts report no quota snapshot"
             )
         finally:
-            await adapter.aclose()
+            if adapter is not None:
+                await adapter.aclose()
             await client.aclose()
         latest = await repo.latest_quota("parallel")
         assert latest is None or (latest.remaining is None and latest.limit is None), (
@@ -1283,9 +1255,7 @@ def _parallel_extract_handler(request: httpx.Request) -> httpx.Response:
 
 
 class TestParallelFetchUsagePersistence:
-    async def test_fetch_usage_event_persists_url_count(
-        self, static_resolver: None, repo: SQLiteRepository
-    ) -> None:
+    async def test_fetch_usage_event_persists_url_count(self, repo: SQLiteRepository) -> None:
         # R2 guard: the executed-fetch usage event carries url_count in
         # metadata, and the metadata filter must let it through — otherwise
         # persisted spend ledgers silently lose the batch dimension.
@@ -1295,8 +1265,9 @@ class TestParallelFetchUsagePersistence:
         client = httpx.AsyncClient(
             transport=httpx.MockTransport(_parallel_extract_handler), timeout=30.0
         )
+        adapter: ParallelAdapter | None = None
         try:
-            adapter = ParallelAdapter(client)
+            adapter = ParallelAdapter(client, api_key=TEST_API_KEY)
             response = await tracked(
                 repo,
                 adapter,
@@ -1304,7 +1275,8 @@ class TestParallelFetchUsagePersistence:
                 operation=UsageOperation.FETCH,
             )
         finally:
-            await adapter.aclose()
+            if adapter is not None:
+                await adapter.aclose()
             await client.aclose()
         assert response.usage is not None, "AC-PA-1 setup: fetch must report usage"
         assert response.usage.metadata.get("url_count") == 4, (
@@ -1353,16 +1325,14 @@ async def _keenable_hydrated(adapter: object, repo: SQLiteRepository) -> object:
 
 
 class TestKeenableRebuildPersistence:
-    async def test_hydration_restores_spend_across_rebuild(
-        self, static_resolver: None, repo: SQLiteRepository
-    ) -> None:
+    async def test_hydration_restores_spend_across_rebuild(self, repo: SQLiteRepository) -> None:
         from freesearch.services.monitoring import tracked_call as tracked
 
         client = httpx.AsyncClient(
             transport=httpx.MockTransport(_keenable_search_handler()), timeout=30.0
         )
         try:
-            first = KeenableAdapter(client)
+            first = KeenableAdapter(client, api_key=TEST_API_KEY)
             for _ in range(3):
                 await tracked(
                     repo,
@@ -1371,7 +1341,7 @@ class TestKeenableRebuildPersistence:
                     operation=UsageOperation.SEARCH,
                 )
             assert (await first.quota()).remaining == Decimal("99997")
-            rebuilt = KeenableAdapter(client)
+            rebuilt = KeenableAdapter(client, api_key=TEST_API_KEY)
             assert (await rebuilt.quota()).remaining == Decimal("100000"), (
                 "R3 setup: a rebuilt adapter starts amnesiac (full allowance)"
             )
@@ -1382,9 +1352,7 @@ class TestKeenableRebuildPersistence:
             "AC-5/R3: hydration must restore the persisted 3-credit spend across rebuild"
         )
 
-    async def test_402_exhaustion_survives_rebuild(
-        self, static_resolver: None, repo: SQLiteRepository
-    ) -> None:
+    async def test_402_exhaustion_survives_rebuild(self, repo: SQLiteRepository) -> None:
         from freesearch.infrastructure.resilience import ProviderOperationError as OpError
         from freesearch.services.monitoring import tracked_call as tracked
 
@@ -1393,7 +1361,7 @@ class TestKeenableRebuildPersistence:
             timeout=30.0,
         )
         try:
-            first = KeenableAdapter(client)
+            first = KeenableAdapter(client, api_key=TEST_API_KEY)
             with pytest.raises(OpError):
                 await tracked(
                     repo,
@@ -1402,7 +1370,7 @@ class TestKeenableRebuildPersistence:
                     operation=UsageOperation.SEARCH,
                 )
             assert (await first.quota()).remaining == Decimal("0")
-            rebuilt = KeenableAdapter(client)
+            rebuilt = KeenableAdapter(client, api_key=TEST_API_KEY)
             await _keenable_hydrated(rebuilt, repo)
         finally:
             await client.aclose()
@@ -1411,9 +1379,7 @@ class TestKeenableRebuildPersistence:
             "restart must not resurrect a depleted allowance into routing"
         )
 
-    async def test_allowance_rolls_over_at_month_boundary(
-        self, static_resolver: None, repo: SQLiteRepository
-    ) -> None:
+    async def test_allowance_rolls_over_at_month_boundary(self, repo: SQLiteRepository) -> None:
         # Last month's spend must not leak into the new month's allowance:
         # only current-month ledger activity counts after hydration.
         kind = _unit_kind()
@@ -1443,7 +1409,7 @@ class TestKeenableRebuildPersistence:
         )
         client = httpx.AsyncClient(timeout=30.0)
         try:
-            rebuilt = KeenableAdapter(client)
+            rebuilt = KeenableAdapter(client, api_key=TEST_API_KEY)
             await _keenable_hydrated(rebuilt, repo)
         finally:
             await client.aclose()
@@ -1522,7 +1488,7 @@ class TestMetadataTypePreservation:
 
 
 class TestQuotaPollBackoffAndEviction:
-    async def test_quota_poll_backs_off_on_429_then_succeeds(self, static_resolver: None) -> None:
+    async def test_quota_poll_backs_off_on_429_then_succeeds(self) -> None:
         # Failure backoff through the public ResilientRunner seams (injected
         # clock/sleeper, deterministic jitter): two 429s on the quota poll
         # sleep capped exponential backoff, then the poll succeeds.
@@ -1545,6 +1511,7 @@ class TestQuotaPollBackoffAndEviction:
 
         caller = httpx.AsyncClient(transport=httpx.MockTransport(handler), timeout=30.0)
         clock = [0.0]
+        adapter: YoucomAdapter | None = None
         try:
             runner = ResilientRunner(
                 caller,
@@ -1556,11 +1523,12 @@ class TestQuotaPollBackoffAndEviction:
                 sleeper=sleeper,
                 random_source=lambda: 1.0,
             )
-            adapter = YoucomAdapter(caller, runner=runner)
+            adapter = YoucomAdapter(caller, runner=runner, api_key=TEST_API_KEY)
             try:
                 snapshot = await adapter.quota()
             finally:
-                await adapter.aclose()
+                if adapter is not None:
+                    await adapter.aclose()
         finally:
             await caller.aclose()
         assert snapshot.remaining == Decimal("0.50"), (
@@ -1618,9 +1586,7 @@ class TestQuotaPollBackoffAndEviction:
 
 
 class TestParallelHydrationUnknownMode:
-    async def test_hydrate_skips_unknown_legacy_mode(
-        self, static_resolver: None, repo: SQLiteRepository
-    ) -> None:
+    async def test_hydrate_skips_unknown_legacy_mode(self, repo: SQLiteRepository) -> None:
         """Critic OBJECT-2: an unrecognized mode must not break hydration.
 
         A legacy/request row carrying a mode the price table never defined
@@ -1654,8 +1620,9 @@ class TestParallelHydrationUnknownMode:
             return httpx.Response(200, json={})
 
         client = httpx.AsyncClient(transport=httpx.MockTransport(handler), timeout=30.0)
+        adapter: ParallelAdapter | None = None
         try:
-            adapter = ParallelAdapter(client, free_seed=Decimal("5.00"))
+            adapter = ParallelAdapter(client, free_seed=Decimal("5.00"), api_key=TEST_API_KEY)
             try:
                 snapshot = await adapter.hydrate_quota(repo)
             except ValueError as exc:
@@ -1665,7 +1632,8 @@ class TestParallelHydrationUnknownMode:
                     f"current-month spend is lost with it: {exc}"
                 ) from exc
         finally:
-            await adapter.aclose()
+            if adapter is not None:
+                await adapter.aclose()
             await client.aclose()
         assert snapshot is not None, "AC-PA-3 setup: seeded hydration must produce a snapshot"
         # Only the well-formed turbo row prices: 5.00 - 0.001.
@@ -1728,9 +1696,7 @@ class TestBraveDerivedSpend:
         with pytest.raises((TypeError, ValueError)):
             spend(bad)  # type: ignore[arg-type]
 
-    async def test_snapshot_keeps_throttle_but_carries_cost_metadata(
-        self, static_resolver: None
-    ) -> None:
+    async def test_snapshot_keeps_throttle_but_carries_cost_metadata(self) -> None:
         from freesearch.adapters.brave import BraveAdapter
 
         headers = {"X-RateLimit-Remaining": "49, 0", "X-RateLimit-Limit": "50, 0"}
@@ -1738,7 +1704,7 @@ class TestBraveDerivedSpend:
             transport=httpx.MockTransport(_brave_search_handler(headers)), timeout=30.0
         )
         try:
-            adapter = BraveAdapter(client)
+            adapter = BraveAdapter(client, api_key=TEST_API_KEY)
             response = await adapter.search(SearchRequest(query="q", limit=2))
         finally:
             await client.aclose()
@@ -1759,9 +1725,7 @@ class TestBraveDerivedSpend:
             f"spend metadata must carry allowance 5.00, saw {metadata!r}"
         )
 
-    async def test_collect_stats_projects_176_requests_to_088(
-        self, static_resolver: None, repo: SQLiteRepository
-    ) -> None:
+    async def test_collect_stats_projects_176_requests_to_088(self, repo: SQLiteRepository) -> None:
         from freesearch.adapters.brave import BraveAdapter
 
         kind = _unit_kind()
@@ -1786,7 +1750,7 @@ class TestBraveDerivedSpend:
             transport=httpx.MockTransport(_brave_search_handler(headers)), timeout=30.0
         )
         try:
-            adapter = BraveAdapter(client)
+            adapter = BraveAdapter(client, api_key=TEST_API_KEY)
             await tracked_call(
                 repo,
                 adapter,
@@ -1821,7 +1785,7 @@ class TestBraveDerivedSpend:
             "AC-3: Brave REQUEST ledger stays exact (175 plus the tracked search)"
         )
 
-    async def test_per_second_headroom_in_usage_metadata(self, static_resolver: None) -> None:
+    async def test_per_second_headroom_in_usage_metadata(self) -> None:
         from freesearch.adapters.brave import BraveAdapter
 
         headers = {"X-RateLimit-Remaining": "49, 0"}
@@ -1829,7 +1793,7 @@ class TestBraveDerivedSpend:
             transport=httpx.MockTransport(_brave_search_handler(headers)), timeout=30.0
         )
         try:
-            adapter = BraveAdapter(client)
+            adapter = BraveAdapter(client, api_key=TEST_API_KEY)
             response = await adapter.search(SearchRequest(query="q", limit=2))
         finally:
             await client.aclose()
@@ -1838,9 +1802,7 @@ class TestBraveDerivedSpend:
             f"usage must carry per-second headroom 49, saw {response.usage.metadata!r}"
         )
 
-    async def test_other_dimensions_never_inflate_brave_spend(
-        self, static_resolver: None, repo: SQLiteRepository
-    ) -> None:
+    async def test_other_dimensions_never_inflate_brave_spend(self, repo: SQLiteRepository) -> None:
         kind = _unit_kind()
         await repo.record_usage(
             UsageEvent(
@@ -1870,7 +1832,7 @@ class TestBraveDerivedSpend:
         try:
             from freesearch.adapters.brave import BraveAdapter
 
-            adapter = BraveAdapter(client)
+            adapter = BraveAdapter(client, api_key=TEST_API_KEY)
             await tracked_call(
                 repo,
                 adapter,
@@ -1890,7 +1852,7 @@ class TestBraveDerivedSpend:
 class TestBraveExhaustionMapping:
     @staticmethod
     @pytest.mark.parametrize("code", ["CREDIT_EXHAUSTED", "QUOTA_LIMITED", "USAGE_LIMIT_EXCEEDED"])
-    async def test_body_code_maps_to_quota_exhausted(static_resolver: None, code: str) -> None:
+    async def test_body_code_maps_to_quota_exhausted(code: str) -> None:
         from freesearch.adapters.brave import BraveAdapter
 
         def handler(request: httpx.Request) -> httpx.Response:
@@ -1898,7 +1860,7 @@ class TestBraveExhaustionMapping:
 
         client = httpx.AsyncClient(transport=httpx.MockTransport(handler), timeout=30.0)
         try:
-            adapter = BraveAdapter(client)
+            adapter = BraveAdapter(client, api_key=TEST_API_KEY)
             with pytest.raises(ProviderOperationError) as exc_info:
                 await adapter.search(SearchRequest(query="q", limit=2))
         finally:
@@ -1909,7 +1871,7 @@ class TestBraveExhaustionMapping:
         assert exc_info.value.error.retryable is False, "exhaustion is non-retryable"
         assert exc_info.value.error.status_code == 402
 
-    async def test_429_with_body_code_never_becomes_exhaustion(self, static_resolver: None) -> None:
+    async def test_429_with_body_code_never_becomes_exhaustion(self) -> None:
         from freesearch.adapters.brave import BraveAdapter
 
         def handler(request: httpx.Request) -> httpx.Response:
@@ -1917,7 +1879,7 @@ class TestBraveExhaustionMapping:
 
         client = httpx.AsyncClient(transport=httpx.MockTransport(handler), timeout=30.0)
         try:
-            adapter = BraveAdapter(client)
+            adapter = BraveAdapter(client, api_key=TEST_API_KEY)
             with pytest.raises(ProviderOperationError) as exc_info:
                 await adapter.search(SearchRequest(query="q", limit=2))
         finally:
@@ -1929,7 +1891,7 @@ class TestBraveExhaustionMapping:
         assert exc_info.value.error.retryable is True
 
     async def test_quota_after_error_402_records_exhaustion_without_limit(
-        self, static_resolver: None, repo: SQLiteRepository
+        self, repo: SQLiteRepository
     ) -> None:
         from freesearch.adapters.brave import BraveAdapter
 
@@ -1938,7 +1900,7 @@ class TestBraveExhaustionMapping:
 
         client = httpx.AsyncClient(transport=httpx.MockTransport(handler), timeout=30.0)
         try:
-            adapter = BraveAdapter(client)
+            adapter = BraveAdapter(client, api_key=TEST_API_KEY)
             with pytest.raises(ProviderOperationError):
                 await tracked_call(
                     repo,
@@ -1956,9 +1918,7 @@ class TestBraveExhaustionMapping:
         )
         assert latest.remaining_percent is None, "AC-7a: percent stays None"
 
-    async def test_genuine_throttle_zero_still_excludes(
-        self, static_resolver: None, repo: SQLiteRepository
-    ) -> None:
+    async def test_genuine_throttle_zero_still_excludes(self, repo: SQLiteRepository) -> None:
         from freesearch.adapters.base import ProviderAdapter
         from freesearch.adapters.brave import BraveAdapter
         from freesearch.models.contracts import (
@@ -1978,7 +1938,7 @@ class TestBraveExhaustionMapping:
             transport=httpx.MockTransport(_brave_search_handler(headers)), timeout=30.0
         )
         try:
-            adapter = BraveAdapter(client)
+            adapter = BraveAdapter(client, api_key=TEST_API_KEY)
             await tracked_call(
                 repo,
                 adapter,
@@ -2033,9 +1993,7 @@ class TestBraveExhaustionMapping:
 
 
 class TestBraveMonthlyCounterLedger:
-    async def test_tracked_bare_search_persists_bounded_quota(
-        self, static_resolver: None, repo: SQLiteRepository
-    ) -> None:
+    async def test_tracked_bare_search_persists_bounded_quota(self, repo: SQLiteRepository) -> None:
         from freesearch.adapters.brave import BraveAdapter
 
         client = httpx.AsyncClient(
@@ -2043,7 +2001,7 @@ class TestBraveMonthlyCounterLedger:
             timeout=30.0,
         )
         try:
-            adapter = BraveAdapter(client)
+            adapter = BraveAdapter(client, api_key=TEST_API_KEY)
             await tracked_call(
                 repo,
                 adapter,
@@ -2059,23 +2017,21 @@ class TestBraveMonthlyCounterLedger:
         assert latest.source == QuotaSource.ESTIMATED
         assert latest.remaining_percent == Decimal("99.9")
 
-    async def test_hydrate_restores_counter_after_restart(
-        self, static_resolver: None, repo: SQLiteRepository
-    ) -> None:
+    async def test_hydrate_restores_counter_after_restart(self, repo: SQLiteRepository) -> None:
         from freesearch.adapters.brave import BraveAdapter
 
         client = httpx.AsyncClient(
             transport=httpx.MockTransport(_brave_search_handler({})), timeout=30.0
         )
         try:
-            first = BraveAdapter(client)
+            first = BraveAdapter(client, api_key=TEST_API_KEY)
             await tracked_call(
                 repo,
                 first,
                 lambda running: running.search(SearchRequest(query="q", limit=2)),
                 operation=UsageOperation.SEARCH,
             )
-            rebuilt = BraveAdapter(client)
+            rebuilt = BraveAdapter(client, api_key=TEST_API_KEY)
             snapshot = await rebuilt.hydrate_quota(repo)
         finally:
             await client.aclose()
@@ -2085,9 +2041,7 @@ class TestBraveMonthlyCounterLedger:
         )
         assert snapshot.limit == Decimal("1000")
 
-    async def test_header_limit_preferred_over_implied(
-        self, static_resolver: None, repo: SQLiteRepository
-    ) -> None:
+    async def test_header_limit_preferred_over_implied(self, repo: SQLiteRepository) -> None:
         from freesearch.adapters.brave import BraveAdapter
 
         headers = {
@@ -2099,7 +2053,7 @@ class TestBraveMonthlyCounterLedger:
             transport=httpx.MockTransport(_brave_search_handler(headers)), timeout=30.0
         )
         try:
-            adapter = BraveAdapter(client)
+            adapter = BraveAdapter(client, api_key=TEST_API_KEY)
             await tracked_call(
                 repo,
                 adapter,
@@ -2143,7 +2097,7 @@ class _FakeExaSDK:
 
 class TestExaMonthlyLedger:
     async def test_unbudgeted_spend_reports_unknown(
-        self, static_resolver: None, repo: SQLiteRepository, monkeypatch: pytest.MonkeyPatch
+        self, repo: SQLiteRepository, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         from exa_py.api import CostDollars, Result
         from exa_py.api import SearchResponse as ExaSDKResponse
@@ -2159,10 +2113,9 @@ class TestExaMonthlyLedger:
         monkeypatch.setattr(exa_module, "AsyncExa", lambda **kw: sdk)
 
         client = httpx.AsyncClient(timeout=30.0)
+        adapter: ExaAdapter | None = None
         try:
-            adapter = ExaAdapter(
-                client, api_key=SecretStr("quota-unit-secret"), monthly_budget=None
-            )
+            adapter = ExaAdapter(client, api_key=TEST_API_KEY, monthly_budget=None)
             response = await tracked_call(
                 repo,
                 adapter,
@@ -2178,7 +2131,8 @@ class TestExaMonthlyLedger:
             assert snapshot.remaining is None
             assert snapshot.limit is None
         finally:
-            await adapter.aclose()
+            if adapter is not None:
+                await adapter.aclose()
             await client.aclose()
 
         latest = await repo.latest_quota("exa")
@@ -2186,7 +2140,7 @@ class TestExaMonthlyLedger:
         assert latest.remaining is None and latest.limit is None
 
     async def test_budgeted_spend_tracks_remaining_and_derived_percent(
-        self, static_resolver: None, repo: SQLiteRepository, monkeypatch: pytest.MonkeyPatch
+        self, repo: SQLiteRepository, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         from exa_py.api import CostDollars, Result
         from exa_py.api import SearchResponse as ExaSDKResponse
@@ -2202,10 +2156,9 @@ class TestExaMonthlyLedger:
         monkeypatch.setattr(exa_module, "AsyncExa", lambda **kw: sdk)
 
         client = httpx.AsyncClient(timeout=30.0)
+        adapter: ExaAdapter | None = None
         try:
-            adapter = ExaAdapter(
-                client, api_key=SecretStr("quota-unit-secret"), monthly_budget=Decimal("10.00")
-            )
+            adapter = ExaAdapter(client, api_key=TEST_API_KEY, monthly_budget=Decimal("10.00"))
             await tracked_call(
                 repo,
                 adapter,
@@ -2226,7 +2179,8 @@ class TestExaMonthlyLedger:
                 operation=UsageOperation.SEARCH,
             )
         finally:
-            await adapter.aclose()
+            if adapter is not None:
+                await adapter.aclose()
             await client.aclose()
 
         latest = await repo.latest_quota("exa")
@@ -2246,7 +2200,7 @@ class TestExaMonthlyLedger:
         assert Decimal(exa_quota["remaining_percent"]) == Decimal("99.9")
 
     async def test_observed_zero_on_402_cleared_on_subsequent_success(
-        self, static_resolver: None, repo: SQLiteRepository, monkeypatch: pytest.MonkeyPatch
+        self, repo: SQLiteRepository, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         from exa_py.api import CostDollars, Result
         from exa_py.api import SearchResponse as ExaSDKResponse
@@ -2257,10 +2211,9 @@ class TestExaMonthlyLedger:
         monkeypatch.setattr(exa_module, "AsyncExa", lambda **kw: sdk)
 
         client = httpx.AsyncClient(timeout=30.0)
+        adapter: ExaAdapter | None = None
         try:
-            adapter = ExaAdapter(
-                client, api_key=SecretStr("quota-unit-secret"), monthly_budget=Decimal("10.00")
-            )
+            adapter = ExaAdapter(client, api_key=TEST_API_KEY, monthly_budget=Decimal("10.00"))
             with pytest.raises(ProviderOperationError) as exc_info:
                 await tracked_call(
                     repo,
@@ -2304,11 +2257,12 @@ class TestExaMonthlyLedger:
             assert latest_after.metadata.get("soft_zero") is not True
             assert contracts_module.is_soft_quota_zero("exa", latest_after) is False
         finally:
-            await adapter.aclose()
+            if adapter is not None:
+                await adapter.aclose()
             await client.aclose()
 
     async def test_429_records_observed_zero_and_stays_retryable(
-        self, static_resolver: None, repo: SQLiteRepository, monkeypatch: pytest.MonkeyPatch
+        self, repo: SQLiteRepository, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         sdk = _FakeExaSDK(
             search_error=ValueError("Request failed with status code 429: Too Many Requests")
@@ -2316,10 +2270,9 @@ class TestExaMonthlyLedger:
         monkeypatch.setattr(exa_module, "AsyncExa", lambda **kw: sdk)
 
         client = httpx.AsyncClient(timeout=30.0)
+        adapter: ExaAdapter | None = None
         try:
-            adapter = ExaAdapter(
-                client, api_key=SecretStr("quota-unit-secret"), monthly_budget=Decimal("10.00")
-            )
+            adapter = ExaAdapter(client, api_key=TEST_API_KEY, monthly_budget=Decimal("10.00"))
             with pytest.raises(ProviderOperationError) as exc_info:
                 await tracked_call(
                     repo,
@@ -2336,12 +2289,11 @@ class TestExaMonthlyLedger:
             assert latest.remaining == Decimal("0")
             assert latest.metadata.get("exhaustion_status") == 429
         finally:
-            await adapter.aclose()
+            if adapter is not None:
+                await adapter.aclose()
             await client.aclose()
 
-    async def test_hydrate_quota_restores_current_month_spend(
-        self, static_resolver: None, repo: SQLiteRepository
-    ) -> None:
+    async def test_hydrate_quota_restores_current_month_spend(self, repo: SQLiteRepository) -> None:
         now = datetime.now(UTC)
         kind = _unit_kind()
         # Two events in current month
@@ -2382,10 +2334,9 @@ class TestExaMonthlyLedger:
         )
 
         client = httpx.AsyncClient(timeout=30.0)
+        adapter: ExaAdapter | None = None
         try:
-            adapter = ExaAdapter(
-                client, api_key=SecretStr("quota-unit-secret"), monthly_budget=Decimal("10.00")
-            )
+            adapter = ExaAdapter(client, api_key=TEST_API_KEY, monthly_budget=Decimal("10.00"))
             snapshot = await adapter.hydrate_quota(repo)
             assert snapshot is not None
             assert snapshot.limit == Decimal("10.00")
@@ -2393,11 +2344,12 @@ class TestExaMonthlyLedger:
             assert snapshot.unit_kind == _opt(kind, "USD")
             assert snapshot.display_unit == "USD"
         finally:
-            await adapter.aclose()
+            if adapter is not None:
+                await adapter.aclose()
             await client.aclose()
 
     async def test_fallback_spend_with_manual_credits_round_trip(
-        self, static_resolver: None, repo: SQLiteRepository, monkeypatch: pytest.MonkeyPatch
+        self, repo: SQLiteRepository, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         from exa_py.api import Result
         from exa_py.api import SearchResponse as ExaSDKResponse
@@ -2415,10 +2367,11 @@ class TestExaMonthlyLedger:
         monkeypatch.setattr(exa_module, "AsyncExa", lambda **kw: sdk)
 
         client = httpx.AsyncClient(timeout=30.0)
+        adapter: ExaAdapter | None = None
         try:
             adapter = ExaAdapter(
                 client,
-                api_key=SecretStr("quota-unit-secret"),
+                api_key=TEST_API_KEY,
                 manual_starting_credits=Decimal("10.00"),
             )
             response = await tracked_call(
@@ -2431,7 +2384,8 @@ class TestExaMonthlyLedger:
             assert response.usage.units == Decimal("0.007")
             assert response.usage.metadata.get("provenance") == "exa_pricing_fallback"
         finally:
-            await adapter.aclose()
+            if adapter is not None:
+                await adapter.aclose()
             await client.aclose()
 
         latest = await repo.latest_quota("exa")
@@ -2442,7 +2396,7 @@ class TestExaMonthlyLedger:
         assert latest.metadata.get("limit_source") == "manual_starting_credits"
 
     async def test_429_zero_cleared_by_later_success_via_tracked_call(
-        self, static_resolver: None, repo: SQLiteRepository, monkeypatch: pytest.MonkeyPatch
+        self, repo: SQLiteRepository, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         from exa_py.api import CostDollars, Result
         from exa_py.api import SearchResponse as ExaSDKResponse
@@ -2453,10 +2407,9 @@ class TestExaMonthlyLedger:
         monkeypatch.setattr(exa_module, "AsyncExa", lambda **kw: sdk)
 
         client = httpx.AsyncClient(timeout=30.0)
+        adapter: ExaAdapter | None = None
         try:
-            adapter = ExaAdapter(
-                client, api_key=SecretStr("quota-unit-secret"), monthly_budget=Decimal("10.00")
-            )
+            adapter = ExaAdapter(client, api_key=TEST_API_KEY, monthly_budget=Decimal("10.00"))
             with pytest.raises(ProviderOperationError):
                 await tracked_call(
                     repo,
@@ -2488,5 +2441,6 @@ class TestExaMonthlyLedger:
             assert latest_after.remaining == Decimal("9.995")
             assert latest_after.metadata.get("soft_zero") is not True
         finally:
-            await adapter.aclose()
+            if adapter is not None:
+                await adapter.aclose()
             await client.aclose()

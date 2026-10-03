@@ -1,0 +1,315 @@
+"""Unit coverage for the app-scoped observability facade.
+
+Fast and isolated: a real ``OtelObservability`` over an in-memory SDK exporter
+for hierarchy/status assertions, plus direct redaction-hook assertions. No live
+network, no database, no process-global provider registration.
+"""
+
+import asyncio
+import re
+
+import pytest
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from opentelemetry.trace import StatusCode
+
+from freesearch.configuration.config import Settings
+from freesearch.infrastructure.observability import (
+    NO_OP_OBSERVABILITY,
+    NO_OP_SPAN,
+    NoOpObservability,
+    OtelObservability,
+    SpanKindName,
+    build_observability,
+    build_span_processors,
+    current_observability,
+    error_type_of,
+    is_sensitive_key,
+    trace_content_attributes,
+    use_observability,
+)
+from freesearch.infrastructure.resilience import ProviderOperationError
+from freesearch.models.contracts import ProviderError
+from freesearch.models.observability import TraceAttribute
+
+_TRACE_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+
+
+def _memory_runtime() -> tuple[OtelObservability, InMemorySpanExporter]:
+    provider = TracerProvider()
+    exporter = InMemorySpanExporter()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    return OtelObservability(provider.get_tracer("test"), provider), exporter
+
+
+def test_noop_span_handle_records_nothing() -> None:
+    assert NO_OP_SPAN.trace_id is None
+    # None of these may raise; they record nothing.
+    NO_OP_SPAN.set_attributes({"freesearch.request.query": "q"})
+    NO_OP_SPAN.add_event("freesearch.provider.request", {"query": "q"})
+    NO_OP_SPAN.record_exception(RuntimeError("boom"))
+    NO_OP_SPAN.mark_error(RuntimeError("boom"))
+
+
+def test_noop_runtime_is_inert() -> None:
+    runtime = NoOpObservability()
+
+    with runtime.span("freesearch.backend") as span:
+        assert span.trace_id is None
+        span.set_attributes({"k": "v"})
+        span.add_event("event")
+    runtime.annotate_root({"freesearch.request.query": "q"})
+
+    assert runtime.current_trace_id() is None
+    assert runtime.force_flush() is True
+    assert runtime.shutdown() is None
+
+
+def test_noop_runtime_propagates_exceptions_unchanged() -> None:
+    runtime = NoOpObservability()
+    marker = RuntimeError("propagate me")
+
+    with pytest.raises(RuntimeError) as raised, runtime.span("freesearch.backend"):
+        raise marker
+
+    assert raised.value is marker
+
+
+def test_default_runtime_outside_request_is_noop() -> None:
+    assert current_observability() is NO_OP_OBSERVABILITY
+    assert current_observability().current_trace_id() is None
+
+
+def test_nested_spans_share_one_stable_trace_id() -> None:
+    runtime, _exporter = _memory_runtime()
+
+    with use_observability(runtime):
+        with runtime.span("POST /search", kind=SpanKindName.SERVER) as root:
+            root_id = root.trace_id
+            assert root_id is not None
+            assert _TRACE_ID_RE.match(root_id) is not None
+            assert runtime.current_trace_id() == root_id
+            with runtime.span("freesearch.backend") as child:
+                assert child.trace_id == root_id
+                assert runtime.current_trace_id() == root_id
+        assert runtime.current_trace_id() is None
+
+
+def test_exception_is_recorded_exactly_once_across_nesting() -> None:
+    runtime, exporter = _memory_runtime()
+    marker = RuntimeError("inner failure")
+
+    with (
+        use_observability(runtime),
+        pytest.raises(RuntimeError),
+        runtime.span("POST /search", kind=SpanKindName.SERVER),
+        runtime.span("freesearch.provider"),
+    ):
+        raise marker
+
+    spans = {span.name: span for span in exporter.get_finished_spans()}
+    assert set(spans) == {"POST /search", "freesearch.provider"}
+    assert spans["freesearch.provider"].status.status_code is StatusCode.ERROR
+    assert spans["POST /search"].status.status_code is StatusCode.ERROR
+    exception_events = [
+        event
+        for span in spans.values()
+        for event in (span.events or ())
+        if event.name == "exception"
+    ]
+    assert len(exception_events) == 1
+    assert spans["freesearch.provider"].attributes.get("error.type") == "RuntimeError"
+    assert spans["POST /search"].attributes.get("error.type") == "RuntimeError"
+
+
+def test_record_exception_marks_error_with_low_cardinality_type() -> None:
+    runtime, exporter = _memory_runtime()
+    error = ProviderOperationError(
+        ProviderError(provider="keenable", code="http_error", message="HTTP 502")
+    )
+
+    with use_observability(runtime), runtime.span("freesearch.provider") as span:
+        span.record_exception(error)
+
+    (finished,) = exporter.get_finished_spans()
+    assert finished.status.status_code is StatusCode.ERROR
+    assert finished.attributes.get("error.type") == "http_error"
+    assert [event.name for event in (finished.events or ())] == ["exception"]
+
+
+def test_cancelled_error_is_not_marked_failed() -> None:
+    runtime, exporter = _memory_runtime()
+
+    async def _cancel_inside_span() -> None:
+        with use_observability(runtime), runtime.span("freesearch.provider"):
+            raise asyncio.CancelledError("gone")
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(_cancel_inside_span())
+
+    (finished,) = exporter.get_finished_spans()
+    assert finished.status.status_code is not StatusCode.ERROR
+    assert [event.name for event in (finished.events or ())] == []
+
+
+def test_trace_content_attributes_rejects_secrets_but_keeps_query_results() -> None:
+    payload = {
+        "freesearch.request.query": "distributed consensus",
+        "freesearch.response.result_count": 2,
+        "credentials": "hunter2",
+        "Authorization": "Bearer abc",
+        "Cookie": "session=1",
+        "X-API-Key": "keen_secret",
+        "raw_secret_value": "shh",
+        "apiKey": "key-123",
+        "authToken": "tok",
+        "request_headers": {"x": "y"},
+    }
+
+    attributes = trace_content_attributes(payload)
+
+    assert attributes["freesearch.request.query"] == "distributed consensus"
+    assert attributes["freesearch.response.result_count"] == 2
+    for rejected in (
+        "credentials",
+        "Authorization",
+        "Cookie",
+        "X-API-Key",
+        "raw_secret_value",
+        "apiKey",
+        "authToken",
+        "request_headers",
+    ):
+        assert rejected not in attributes
+
+
+def test_trace_content_attributes_filters_nested_mappings() -> None:
+    payload = {
+        "outer": {"query": "kept", "password": "dropped", "deep": {"cookie": "x"}},
+        "results": [{"title": "t", "url": "https://example.com"}],
+    }
+
+    attributes = trace_content_attributes(payload)
+
+    assert attributes["outer"] == {"query": "kept"}
+    assert attributes["results"] == [{"title": "t", "url": "https://example.com"}]
+
+
+@pytest.mark.parametrize(
+    ("key", "expected"),
+    [
+        ("credentials", True),
+        ("Authorization", True),
+        ("cookie", True),
+        ("X-API-Key", True),
+        ("x-api-key", True),
+        ("apiKey", True),
+        ("authToken", True),
+        ("secret", True),
+        ("raw_secret_value", True),
+        ("request_headers", True),
+        ("freesearch.request.query", False),
+        ("freesearch.response.result_count", False),
+        ("query", False),
+        ("result_count", False),
+    ],
+)
+def test_is_sensitive_key_fragments(key: str, expected: bool) -> None:
+    assert is_sensitive_key(key) is expected
+
+
+def test_set_attributes_and_events_apply_the_redaction_hook() -> None:
+    runtime, exporter = _memory_runtime()
+
+    with use_observability(runtime), runtime.span("freesearch.provider") as span:
+        span.set_attributes(
+            {
+                "freesearch.request.query": "kept query",
+                "X-API-Key": "keen_secret",
+                "Authorization": "Bearer abc",
+            }
+        )
+        span.add_event(
+            "freesearch.provider.request",
+            {"query": "kept", "secret": "dropped"},
+        )
+
+    (finished,) = exporter.get_finished_spans()
+    assert finished.attributes.get("freesearch.request.query") == "kept query"
+    assert "X-API-Key" not in dict(finished.attributes or {})
+    assert "Authorization" not in dict(finished.attributes or {})
+    (event,) = finished.events or ()
+    assert event.name == "freesearch.provider.request"
+    assert dict(event.attributes or {}) == {"query": "kept"}
+
+
+def test_annotate_root_targets_the_server_span() -> None:
+    runtime, exporter = _memory_runtime()
+
+    with (
+        use_observability(runtime),
+        runtime.span("POST /search", kind=SpanKindName.SERVER),
+        runtime.span("freesearch.backend"),
+    ):
+        runtime.annotate_root({"freesearch.request.query": "annotated"})
+
+    spans = {span.name: span for span in exporter.get_finished_spans()}
+    assert spans["POST /search"].attributes.get("freesearch.request.query") == "annotated"
+    assert "freesearch.request.query" not in dict(spans["freesearch.backend"].attributes or {})
+
+
+def test_error_type_of_prefers_provider_code() -> None:
+    provider_error = ProviderOperationError(
+        ProviderError(provider="keenable", code="http_error", message="HTTP 502")
+    )
+
+    assert error_type_of(provider_error) == "http_error"
+    assert error_type_of(RuntimeError("boom")) == "RuntimeError"
+    assert error_type_of(ValueError("bad")) == "ValueError"
+
+
+def test_build_span_processors_selects_database_or_none(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    database_settings = Settings(otel_processor="database")
+    none_settings = Settings(otel_processor="none")
+
+    assert len(build_span_processors(database_settings, tmp_path / "traces.db")) == 1
+    assert build_span_processors(none_settings, tmp_path / "traces.db") == []
+
+
+def test_build_observability_noop_cases(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    assert build_observability(Settings(otel_processor="database"), database=None) is (
+        NO_OP_OBSERVABILITY
+    )
+    assert build_observability(
+        Settings(otel_processor="none"), database=tmp_path / "traces.db"
+    ) is (NO_OP_OBSERVABILITY)
+
+
+def test_build_observability_database_runtime_has_no_trace_outside_spans(
+    tmp_path,  # type: ignore[no-untyped-def]
+) -> None:
+    runtime = build_observability(
+        Settings(otel_processor="database"), database=tmp_path / "traces.db"
+    )
+    assert runtime is not NO_OP_OBSERVABILITY
+
+    try:
+        with use_observability(runtime):
+            assert runtime.current_trace_id() is None
+            with runtime.span("POST /search", kind=SpanKindName.SERVER) as root:
+                assert root.trace_id is not None
+                assert _TRACE_ID_RE.match(root.trace_id) is not None
+            assert runtime.force_flush() is True
+    finally:
+        runtime.shutdown()
+
+
+def test_span_initial_attributes_always_carry_schema_version() -> None:
+    runtime, exporter = _memory_runtime()
+
+    with use_observability(runtime), runtime.span("freesearch.backend"):
+        pass
+
+    (finished,) = exporter.get_finished_spans()
+    assert finished.attributes.get(TraceAttribute.SCHEMA_VERSION) == 1

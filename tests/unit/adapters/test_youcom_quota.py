@@ -1,14 +1,14 @@
 """You.com USD-balance quota - deterministic, no network.
 
 Locks the quota contract: a GET on the exact balance URL over the borrowed
-transport with resolver-only auth (never caller credentials, never followed
-redirects, shared timeout) and exactly one shared-runner entry; an ESTIMATED
-USD snapshot with no limit/reset and a UTC timestamp whose remaining is the
-authoritative balance in USD dollars, with floored Web Search and contents
-call equivalents carried alongside in metadata (never a second spendable
-pool); safe suppressed ``invalid_response`` for malformed or secret-bearing
-payloads; and the shared runner's HTTP-status, Retry-After, and rate-limit
-cooldown behavior.
+transport with injected-key-only auth (never caller credentials, never
+followed redirects, shared timeout) and exactly one shared-runner entry; an
+ESTIMATED USD snapshot with no limit/reset and a UTC timestamp whose remaining
+is the authoritative balance in USD dollars, with floored Web Search and
+contents call equivalents carried alongside in metadata (never a second
+spendable pool); safe suppressed ``invalid_response`` for malformed or
+secret-bearing payloads; and the shared runner's HTTP-status, Retry-After, and
+rate-limit cooldown behavior.
 """
 
 from datetime import timedelta
@@ -16,11 +16,13 @@ from decimal import Decimal
 
 import httpx
 import pytest
+from pydantic import SecretStr
 
 from freesearch.adapters.youcom import YoucomAdapter
 from freesearch.infrastructure.resilience import ProviderOperationError
 from freesearch.models.contracts import QuotaSource, SearchRequest
 from tests.unit.adapters._youcom_test_support import (
+    _TEST_KEY,
     _WIRE_TIMEOUT,
     _assert_no_secret_leak,
     _assert_wire_auth_and_timeout,
@@ -31,7 +33,6 @@ from tests.unit.adapters._youcom_test_support import (
     _wire_caller,
     _wired,
     _WireRecorder,
-    fake_resolver,  # noqa: F401  (autouse fixture registered via import)
 )
 
 
@@ -39,7 +40,7 @@ async def test_capability_quota_enabled_and_price_matches_estimate() -> None:
     recorder = _WireRecorder(balance=50)
     caller = _wire_caller(recorder)
     runner = _CountingRunner(_default_runner(caller))
-    adapter = YoucomAdapter(caller, runner=runner)
+    adapter = YoucomAdapter(caller, runner=runner, api_key=SecretStr(_TEST_KEY))
     try:
         assert adapter.capabilities.quota is True
         estimate = await adapter.estimate_cost(SearchRequest(query="price"))
@@ -63,18 +64,18 @@ async def test_quota_get_uses_balance_url_resolver_auth_and_shared_timeout() -> 
     recorder = _WireRecorder(balance=50)
     caller = _wire_caller(recorder)
     runner = _CountingRunner(_default_runner(caller))
-    adapter = YoucomAdapter(caller, runner=runner)
+    adapter = YoucomAdapter(caller, runner=runner, api_key=SecretStr(_TEST_KEY))
     try:
         snapshot = await adapter.quota()
     finally:
         await adapter.aclose()
         await caller.aclose()
 
-    # One GET, resolver key only, shared timeout, redirects disabled, one entry.
+    # One GET, injected key only, shared timeout, redirects disabled, one entry.
     assert [(r.method, str(r.url)) for r in recorder.requests] == [
         ("GET", "https://api.you.com/v1/billing/account_balance")
     ]
-    _assert_wire_auth_and_timeout(recorder.requests, "sk-you-test-secret-1", _WIRE_TIMEOUT)
+    _assert_wire_auth_and_timeout(recorder.requests, _TEST_KEY, _WIRE_TIMEOUT)
     assert adapter._owned_http.follow_redirects is False
     assert runner.entries == ["you"]
     assert snapshot.remaining == Decimal("0.50")

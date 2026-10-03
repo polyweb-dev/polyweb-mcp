@@ -54,10 +54,19 @@ class _FakeClient:
 
 
 class _FakeAdapter:
-    """Stand-in for TavilyAdapter so environment hooks need no API key/network."""
+    """Stand-in for TavilyAdapter so environment hooks need no API key/network.
 
-    def __init__(self, client: object) -> None:
+    ``environment._adapter_for`` builds the default adapter through the explicit
+    constructor seam (``api_key=``) fed by the harness process env, so the double
+    mirrors the real ``TavilyAdapter(client, *, api_key=..., runner=...)``
+    keyword-only shape. The injected key is recorded and otherwise ignored: no
+    key material and no network are ever used.
+    """
+
+    def __init__(self, client: object, *, api_key: object = None, runner: object = None) -> None:
         self.client = client
+        self.api_key = api_key
+        self.runner = runner
         self.closed = False
 
     async def aclose(self) -> None:

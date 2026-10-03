@@ -4,6 +4,13 @@ import {
   fetchResponseFixture as canonicalFetchFixture,
   searchResponseFixture as canonicalSearchFixture,
 } from "../../src/test/backendFixtures"
+import {
+  ERROR_TRACE_ID,
+  SUCCESS_TRACE_ID,
+  errorTraceDetailFixture,
+  traceDetailFixture,
+  traceListFixture,
+} from "../../src/test/fixtures/activity"
 
 /**
  * Deterministic in-memory backend stub for state-neutral E2E.
@@ -115,6 +122,36 @@ export function failStubbedOAuthBegin(provider: string): void {
  */
 let dashboardQuotaOverride: unknown[] | null = null
 
+// ---------------------------------------------------------------------------
+// Trace read API stub (Activity).
+//
+// `GET /api/v1/traces` serves the summary-only list (honoring the `operation`
+// query filter, like the backend); `GET /api/v1/traces/{id}` serves the
+// disclosed detail for the success (search) and error (fetch) fixtures and
+// 404s unknown ids. Failure injection is per-scenario and cleared by
+// installBackendStub.
+// ---------------------------------------------------------------------------
+
+const stubbedTraceListRequests: string[] = []
+let stubbedTraceListFailure: string | null = null
+const stubbedTraceDetailFailures: Record<string, string> = {}
+
+/** Query strings (including the leading `?`, or `""`) of trace list requests. */
+export function traceListRequests(): string[] {
+  return [...stubbedTraceListRequests]
+}
+
+/** Fail the next trace list reads with a 500, or clear the failure. */
+export function failStubbedTraceList(message: string | null): void {
+  stubbedTraceListFailure = message
+}
+
+/** Fail one trace detail read with a 500, or clear the failure. */
+export function failStubbedTraceDetail(traceId: string, message: string | null): void {
+  if (message === null) delete stubbedTraceDetailFailures[traceId]
+  else stubbedTraceDetailFailures[traceId] = message
+}
+
 export function setDashboardQuotaOverride(latestQuota: unknown[]): void {
   dashboardQuotaOverride = [...latestQuota]
 }
@@ -211,6 +248,11 @@ export async function installBackendStub(page: Page): Promise<void> {
   // scenarios (e.g. Brave overlay into later quota rows).
   for (const key of Object.keys(stubbedManualQuotas)) delete stubbedManualQuotas[key]
   dashboardQuotaOverride = null
+  stubbedTraceListRequests.length = 0
+  stubbedTraceListFailure = null
+  for (const key of Object.keys(stubbedTraceDetailFailures)) {
+    delete stubbedTraceDetailFailures[key]
+  }
   let providers = initialProviders()
   let routing: StubRouting = {
     fallback_policy: "chained",
@@ -416,6 +458,49 @@ export async function installBackendStub(page: Page): Promise<void> {
       usage: { ...(base.usage as Record<string, unknown>), provider: pinned },
     })
   })
+
+  // Trace read API (Activity). The list is summary-only by contract — no
+  // query text or results — and honors the `operation` filter server-side.
+  // Pathname-exact matchers keep these from colliding with each other or
+  // with the Vite module graph.
+  await page.route(
+    (url) => url.pathname === "/api/v1/traces",
+    (route) => {
+      if (route.request().method() !== "GET") return route.fallback()
+      const requestUrl = new URL(route.request().url())
+      stubbedTraceListRequests.push(requestUrl.search)
+      if (stubbedTraceListFailure !== null) {
+        return json(route, { detail: stubbedTraceListFailure }, 500)
+      }
+      const operation = requestUrl.searchParams.get("operation")
+      const list = traceListFixture() as {
+        items: Record<string, unknown>[]
+        generated_at: string
+      }
+      const items =
+        operation === null
+          ? list.items
+          : list.items.filter((item) => item.operation === operation)
+      return json(route, { items, generated_at: list.generated_at })
+    }
+  )
+
+  // Disclosed detail: full input, tagged output, and stage timeline for the
+  // two fixture traces; unknown ids 404 like the backend.
+  await page.route(
+    (url) => url.pathname.startsWith("/api/v1/traces/"),
+    (route) => {
+      if (route.request().method() !== "GET") return route.fallback()
+      const traceId = decodeURIComponent(
+        new URL(route.request().url()).pathname.split("/").pop() ?? ""
+      )
+      const failure = stubbedTraceDetailFailures[traceId]
+      if (failure !== undefined) return json(route, { detail: failure }, 500)
+      if (traceId === SUCCESS_TRACE_ID) return json(route, traceDetailFixture())
+      if (traceId === ERROR_TRACE_ID) return json(route, errorTraceDetailFixture())
+      return json(route, { detail: `unknown trace '${traceId}'` }, 404)
+    }
+  )
 }
 
 /**

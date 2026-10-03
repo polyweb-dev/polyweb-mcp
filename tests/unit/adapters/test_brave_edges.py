@@ -4,7 +4,7 @@ Complements the locked acceptance suite in ``test_brave.py`` with rate-limit
 header hygiene, malformed payload rejection, sparse-result normalization, and
 the unsupported-fetch / fetch-estimate operation edges.  Runner/retry behavior
 lives in ``test_brave_resilience.py``; outgoing wire-request hygiene lives in
-``test_brave_wire.py``.
+``test_brave_wire.py``.  Keys are injected explicitly into the constructor.
 """
 
 from collections.abc import Callable
@@ -15,19 +15,9 @@ import httpx
 import pytest
 from pydantic import SecretStr
 
-import freesearch.adapters.brave as brave_module
 from freesearch.adapters.brave import BraveAdapter
 from freesearch.infrastructure.resilience import ProviderOperationError
-from freesearch.infrastructure.secrets import ProviderName
 from freesearch.models.contracts import FetchRequest, SearchRequest, SearchResponse, UsageOperation
-
-
-class _Resolver:
-    def __init__(self, key: str = "edge-secret") -> None:
-        self.key = SecretStr(key)
-
-    def get(self, provider: ProviderName) -> SecretStr:
-        return self.key
 
 
 def _payload(**overrides: object) -> dict[str, object]:
@@ -49,13 +39,13 @@ def _payload(**overrides: object) -> dict[str, object]:
 
 
 def _adapter(
-    handler: Callable[[httpx.Request], httpx.Response],
+    handler: Callable[[httpx.Request], httpx.Response], *, key: str = "edge-secret"
 ) -> tuple[BraveAdapter, httpx.AsyncClient]:
     client = httpx.AsyncClient(
         transport=httpx.MockTransport(handler),
         headers={"Authorization": "Bearer caller", "X-API-Key": "caller-key"},
     )
-    return BraveAdapter(client), client
+    return BraveAdapter(client, api_key=SecretStr(key)), client
 
 
 @pytest.mark.parametrize(
@@ -73,9 +63,8 @@ def _adapter(
     ],
 )
 async def test_rate_limit_header_normalization(
-    monkeypatch, header: str | None, expected: dict[str, int]
+    header: str | None, expected: dict[str, int]
 ) -> None:
-    monkeypatch.setattr(brave_module, "get_provider_secret_resolver", lambda: _Resolver())
     headers = {} if header is None else {"X-RateLimit-Remaining": header}
     adapter, client = _adapter(
         lambda request: httpx.Response(200, json=_payload(), headers=headers)
@@ -104,9 +93,8 @@ async def test_rate_limit_header_normalization(
     ],
 )
 async def test_malformed_results_and_page_age_map_to_invalid_response(
-    monkeypatch, payload: dict[str, object]
+    payload: dict[str, object],
 ) -> None:
-    monkeypatch.setattr(brave_module, "get_provider_secret_resolver", lambda: _Resolver())
     adapter, client = _adapter(lambda request: httpx.Response(200, json=payload))
     try:
         with pytest.raises(ProviderOperationError) as excinfo:
@@ -119,8 +107,7 @@ async def test_malformed_results_and_page_age_map_to_invalid_response(
     assert excinfo.value.__cause__ is None
 
 
-async def test_numeric_page_age_is_coerced_to_unix_datetime(monkeypatch) -> None:
-    monkeypatch.setattr(brave_module, "get_provider_secret_resolver", lambda: _Resolver())
+async def test_numeric_page_age_is_coerced_to_unix_datetime() -> None:
     payload = {"web": {"results": [{"url": "https://example.com/ts", "page_age": 123}]}}
     adapter, client = _adapter(lambda request: httpx.Response(200, json=payload))
     try:
@@ -131,8 +118,7 @@ async def test_numeric_page_age_is_coerced_to_unix_datetime(monkeypatch) -> None
     assert response.results[0].published_at == datetime(1970, 1, 1, 0, 2, 3, tzinfo=UTC)
 
 
-async def test_non_json_success_body_maps_to_invalid_response(monkeypatch) -> None:
-    monkeypatch.setattr(brave_module, "get_provider_secret_resolver", lambda: _Resolver())
+async def test_non_json_success_body_maps_to_invalid_response() -> None:
     adapter, client = _adapter(lambda request: httpx.Response(200, text="<html>not json</html>"))
     try:
         with pytest.raises(ProviderOperationError) as excinfo:
@@ -156,10 +142,7 @@ def _assert_sparse_defaults(response: SearchResponse) -> None:
     assert second.metadata == {}
 
 
-async def test_sparse_result_normalizes_with_defaults_and_string_metadata_only(
-    monkeypatch,
-) -> None:
-    monkeypatch.setattr(brave_module, "get_provider_secret_resolver", lambda: _Resolver())
+async def test_sparse_result_normalizes_with_defaults_and_string_metadata_only() -> None:
     payload = {
         "web": {
             "results": [
@@ -183,8 +166,7 @@ async def test_sparse_result_normalizes_with_defaults_and_string_metadata_only(
     _assert_sparse_defaults(response)
 
 
-async def test_fetch_raises_without_any_network_call(monkeypatch) -> None:
-    monkeypatch.setattr(brave_module, "get_provider_secret_resolver", lambda: _Resolver())
+async def test_fetch_raises_without_any_network_call() -> None:
     calls = 0
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -204,8 +186,7 @@ async def test_fetch_raises_without_any_network_call(monkeypatch) -> None:
     assert excinfo.value.error.retryable is False
 
 
-async def test_estimate_cost_for_fetch_is_zero_units(monkeypatch) -> None:
-    monkeypatch.setattr(brave_module, "get_provider_secret_resolver", lambda: _Resolver())
+async def test_estimate_cost_for_fetch_is_zero_units() -> None:
     adapter, client = _adapter(lambda request: httpx.Response(200, json=_payload()))
     try:
         estimate = await adapter.estimate_cost(FetchRequest(url="https://example.com"))

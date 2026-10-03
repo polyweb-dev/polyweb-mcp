@@ -239,21 +239,28 @@ async def test_balance_ttl_and_failure_backoff(
     client = _open(repository, secret_store)
     try:
         await connect_parallel(client, stub_server, repository)
+        # Pairing intentionally performs the FIRST balance fetch inside the
+        # ready transition, so every count below is relative to that read.
+        paired_calls = stub_server.balance_calls
+        assert paired_calls == 1, "pairing must perform exactly one eager balance read"
         first = await poll_balance(repository, stub_server, secret_store)
         assert first is not None
-        assert stub_server.balance_calls == 1
+        assert stub_server.balance_calls == paired_calls + 1, (
+            "an explicit poll must make exactly one more balance call"
+        )
         second = await poll_balance(repository, stub_server, secret_store)
         assert second is None, "TTL-cached poll returns no new snapshot"
-        assert stub_server.balance_calls == 1, "TTL ignored: re-polled inside window"
+        assert stub_server.balance_calls == paired_calls + 1, "TTL ignored: re-polled inside window"
         clear_oauth_poll_state(repository)
         stub_server.balance_status = 500
         failed = await poll_balance(repository, stub_server, secret_store)
         assert failed is None
-        calls_after_failure = stub_server.balance_calls
-        assert calls_after_failure == 2, "failing poll must still attempt once"
+        assert stub_server.balance_calls == paired_calls + 2, "failing poll must still attempt once"
         again = await poll_balance(repository, stub_server, secret_store)
         assert again is None
-        assert stub_server.balance_calls == 2, "failure backoff ignored: vendor re-hit"
+        assert stub_server.balance_calls == paired_calls + 2, (
+            "failure backoff ignored: vendor re-hit"
+        )
     finally:
         stub_server.balance_status = 200
         client.__exit__(None, None, None)

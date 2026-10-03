@@ -11,14 +11,15 @@ import json
 from datetime import timedelta
 
 import pytest
+from pydantic import SecretStr
 
 from freesearch.adapters.youcom import YoucomAdapter
 from freesearch.models.contracts import SearchRequest
 from tests.unit.adapters._youcom_test_support import (
+    _TEST_KEY,
     _default_runner,
     _wire_caller,
     _WireRecorder,
-    fake_resolver,  # noqa: F401  (autouse fixture registered via import)
 )
 
 
@@ -35,7 +36,9 @@ async def test_search_caps_count_at_one_hundred(limit: int, expected: int) -> No
     caller = _wire_caller(recorder)
     adapter: YoucomAdapter | None = None
     try:
-        adapter = YoucomAdapter(caller, runner=_default_runner(caller))
+        adapter = YoucomAdapter(
+            caller, runner=_default_runner(caller), api_key=SecretStr(_TEST_KEY)
+        )
         request = (
             SearchRequest(query="cap", limit=limit)
             if limit <= 100
@@ -90,7 +93,9 @@ async def test_search_flattens_web_and_news_sections() -> None:
     caller = _wire_caller(recorder)
     adapter: YoucomAdapter | None = None
     try:
-        adapter = YoucomAdapter(caller, runner=_default_runner(caller))
+        adapter = YoucomAdapter(
+            caller, runner=_default_runner(caller), api_key=SecretStr(_TEST_KEY)
+        )
         response = await adapter.search(SearchRequest(query="norm"))
     finally:
         if adapter is not None:
@@ -139,7 +144,9 @@ async def test_search_missing_or_typo_sections_yield_empty_response(results: obj
     caller = _wire_caller(recorder)
     adapter: YoucomAdapter | None = None
     try:
-        adapter = YoucomAdapter(caller, runner=_default_runner(caller))
+        adapter = YoucomAdapter(
+            caller, runner=_default_runner(caller), api_key=SecretStr(_TEST_KEY)
+        )
         response = await adapter.search(SearchRequest(query="empty"))
     finally:
         if adapter is not None:
@@ -159,7 +166,9 @@ async def test_search_missing_or_null_results_yield_empty_success(
     caller = _wire_caller(recorder)
     adapter: YoucomAdapter | None = None
     try:
-        adapter = YoucomAdapter(caller, runner=_default_runner(caller))
+        adapter = YoucomAdapter(
+            caller, runner=_default_runner(caller), api_key=SecretStr(_TEST_KEY)
+        )
         response = await adapter.search(SearchRequest(query="empty"))
     finally:
         if adapter is not None:
@@ -186,7 +195,9 @@ async def test_search_flattened_total_never_exceeds_requested_limit() -> None:
     caller = _wire_caller(recorder)
     adapter: YoucomAdapter | None = None
     try:
-        adapter = YoucomAdapter(caller, runner=_default_runner(caller))
+        adapter = YoucomAdapter(
+            caller, runner=_default_runner(caller), api_key=SecretStr(_TEST_KEY)
+        )
         response = await adapter.search(SearchRequest(query="cap", limit=10))
     finally:
         if adapter is not None:
@@ -229,7 +240,9 @@ async def test_search_parses_page_age_into_published_at() -> None:
     caller = _wire_caller(recorder)
     adapter: YoucomAdapter | None = None
     try:
-        adapter = YoucomAdapter(caller, runner=_default_runner(caller))
+        adapter = YoucomAdapter(
+            caller, runner=_default_runner(caller), api_key=SecretStr(_TEST_KEY)
+        )
         response = await adapter.search(SearchRequest(query="age"))
     finally:
         if adapter is not None:

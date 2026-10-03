@@ -1,0 +1,87 @@
+{
+  "_comment": "Deterministic error trace for OpenTelemetry persistence tests: fixed ids, failed provider span, low-cardinality error.type, one exception event, and no fabricated results.",
+  "trace_id": "0f1e2d3c4b5a69788796a5b4c3d2e1f0",
+  "operation": "fetch",
+  "provider": "keenable",
+  "outcome": "error",
+  "input_text": "https://docs.freesearch.dev/getting-started",
+  "result_count": null,
+  "error": { "type": "http_error", "message": "HTTP 502" },
+  "output": null,
+  "spans": [
+    {
+      "span_id": "2100000000000001",
+      "parent_span_id": null,
+      "name": "POST /fetch",
+      "kind": "server",
+      "stage": "Fetch request",
+      "started_at": "2026-09-29T09:20:00.000000+00:00",
+      "ended_at": "2026-09-29T09:20:00.512000+00:00",
+      "duration_ms": 512,
+      "status_code": "error",
+      "outcome": "error",
+      "error_type": "http_error",
+      "error": { "type": "http_error", "message": "HTTP 502" },
+      "events": []
+    },
+    {
+      "span_id": "2200000000000002",
+      "parent_span_id": "2100000000000001",
+      "name": "freesearch.backend",
+      "kind": "internal",
+      "stage": "Backend handling",
+      "started_at": "2026-09-29T09:20:00.004000+00:00",
+      "ended_at": "2026-09-29T09:20:00.504000+00:00",
+      "duration_ms": 500,
+      "status_code": "error",
+      "outcome": "error",
+      "error_type": "http_error",
+      "error": { "type": "http_error", "message": "HTTP 502" },
+      "events": []
+    },
+    {
+      "span_id": "2300000000000003",
+      "parent_span_id": "2200000000000002",
+      "name": "freesearch.provider",
+      "kind": "client",
+      "stage": "Provider request",
+      "started_at": "2026-09-29T09:20:00.006000+00:00",
+      "ended_at": "2026-09-29T09:20:00.500000+00:00",
+      "duration_ms": 494,
+      "status_code": "error",
+      "outcome": "error",
+      "error_type": "http_error",
+      "error": { "type": "http_error", "message": "HTTP 502" },
+      "events": [
+        {
+          "name": "freesearch.provider.request",
+          "timestamp": "2026-09-29T09:20:00.006000+00:00",
+          "attributes": { "url": "https://docs.freesearch.dev/getting-started" }
+        },
+        {
+          "name": "exception",
+          "timestamp": "2026-09-29T09:20:00.500000+00:00",
+          "attributes": {
+            "exception.type": "ProviderOperationError",
+            "exception.message": "HTTP 502"
+          }
+        }
+      ]
+    },
+    {
+      "span_id": "2400000000000004",
+      "parent_span_id": "2300000000000003",
+      "name": "freesearch.provider.http",
+      "kind": "client",
+      "stage": "Provider HTTP call",
+      "started_at": "2026-09-29T09:20:00.008000+00:00",
+      "ended_at": "2026-09-29T09:20:00.498000+00:00",
+      "duration_ms": 490,
+      "status_code": "error",
+      "outcome": "error",
+      "error_type": "http_error",
+      "error": { "type": "http_error", "message": "HTTP 502" },
+      "events": []
+    }
+  ]
+}

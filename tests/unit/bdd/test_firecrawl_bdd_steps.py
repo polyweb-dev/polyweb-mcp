@@ -9,8 +9,8 @@ Contract under test (BDD fix contract):
   AC-L1  ``before_scenario`` must tag-select ``FirecrawlAdapter`` (never the
          Tavily default) for scenarios tagged ``live firecrawl`` while
          ``after_scenario`` retains the per-scenario adapter/client lifecycle,
-         and ``before_all`` must resolve the Firecrawl key through the shared
-         provider secret resolver.
+         and ``before_all`` must resolve the Firecrawl key directly from the
+         harness process env.
 
          Tag semantics are locked to Behave's actual JSON dry-run output:
          Behave strips the ``@`` prefix and reports scenario tags as bare
@@ -28,11 +28,11 @@ Contract under test (BDD fix contract):
          mismatch, empty content, over-length content, missing key, wrong
          adapter).
 
-Red phase: ``test_before_scenario_selects_firecrawl_adapter_for_firecrawl_tag``
-and ``test_before_scenario_keeps_tavily_for_at_sign_prefixed_tag`` fail while
-``features/environment.py`` matches tags against the ``"@firecrawl"`` string
-instead of the bare ``"firecrawl"`` that Behave actually emits; they lock the
-seam the production hook fix must open.
+The two adapter-selection tests
+(``test_before_scenario_selects_firecrawl_adapter_for_firecrawl_tag`` and
+``test_before_scenario_keeps_tavily_for_at_sign_prefixed_tag``) lock the seam
+between the bare ``"firecrawl"`` tag Behave actually emits and the
+tag-selection helper in ``features/environment.py``.
 """
 
 import asyncio
@@ -42,10 +42,10 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from pydantic import HttpUrl, SecretStr
+from pydantic import HttpUrl
 
 from freesearch.infrastructure import http as freesearch_http
-from freesearch.infrastructure.secrets import ProviderName
+from freesearch.infrastructure.secrets import PROVIDER_ENV_VARS, ProviderName
 from freesearch.models.contracts import (
     FetchedDocument,
     FetchRequest,
@@ -80,8 +80,9 @@ class _FakeTavilyAdapter:
 
     name = "tavily"
 
-    def __init__(self, client: object) -> None:
+    def __init__(self, client: object, *, api_key: object = None, runner: object = None) -> None:
         self.client = client
+        self.api_key = api_key
         self.closed = False
 
     async def aclose(self) -> None:
@@ -93,8 +94,9 @@ class _FakeFirecrawlAdapter:
 
     name = "firecrawl"
 
-    def __init__(self, client: object) -> None:
+    def __init__(self, client: object, *, api_key: object = None, runner: object = None) -> None:
         self.client = client
+        self.api_key = api_key
         self.closed = False
 
     async def aclose(self) -> None:
@@ -127,6 +129,18 @@ def _forbid_direct_httpx(*args: object, **kwargs: object) -> None:
         "before_scenario must build the client via freesearch.http.create_async_client(), "
         "not httpx.AsyncClient directly"
     )
+
+
+def _clear_harness_provider_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Remove every harness provider key from the process env for this test."""
+    for env_var in PROVIDER_ENV_VARS.values():
+        monkeypatch.delenv(env_var, raising=False)
+
+
+def _set_harness_key(monkeypatch: pytest.MonkeyPatch, provider: ProviderName, value: str) -> str:
+    """Publish one fake harness key through the process env (the consumer seam)."""
+    monkeypatch.setenv(PROVIDER_ENV_VARS[provider], value)
+    return value
 
 
 def _firecrawl_scenario() -> SimpleNamespace:
@@ -175,14 +189,18 @@ def _fetch_response(
 def test_before_scenario_selects_firecrawl_adapter_for_firecrawl_tag(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Scenarios tagged ``firecrawl`` (bare Behave tag) must get a FirecrawlAdapter."""
+    """Scenarios tagged ``firecrawl`` (bare Behave tag) must get a FirecrawlAdapter
+    carrying the harness key on the explicit ``api_key`` constructor seam."""
     fake_client = _FakeClient()
     factory_calls: list[int] = []
+    firecrawl_key = "harness-firecrawl-key"
 
     def fake_factory() -> _FakeClient:
         factory_calls.append(1)
         return fake_client
 
+    _clear_harness_provider_keys(monkeypatch)
+    _set_harness_key(monkeypatch, ProviderName.FIRECRAWL, firecrawl_key)
     monkeypatch.setattr(freesearch_http, "create_async_client", fake_factory)
     monkeypatch.setattr(environment, "create_async_client", fake_factory, raising=False)
     monkeypatch.setattr(environment.httpx, "AsyncClient", _forbid_direct_httpx)
@@ -190,6 +208,7 @@ def test_before_scenario_selects_firecrawl_adapter_for_firecrawl_tag(
     monkeypatch.setattr(environment, "FirecrawlAdapter", _FakeFirecrawlAdapter, raising=False)
 
     context = SimpleNamespace()
+    environment.before_all(context)
     try:
         environment.before_scenario(context, _firecrawl_scenario())
     finally:
@@ -200,6 +219,8 @@ def test_before_scenario_selects_firecrawl_adapter_for_firecrawl_tag(
         "before_scenario must select FirecrawlAdapter for bare 'firecrawl' tag scenarios"
     )
     assert context.adapter.client is fake_client, "adapter must own the factory client"
+    assert context.adapter.api_key is not None, "the harness key must reach the seam"
+    assert context.adapter.api_key.get_secret_value() == firecrawl_key
 
 
 def test_before_scenario_keeps_tavily_for_at_sign_prefixed_tag(
@@ -245,30 +266,38 @@ def test_before_scenario_keeps_tavily_adapter_for_tavily_tag(
     )
 
 
-def test_before_all_resolves_firecrawl_key_via_shared_resolver(
+def test_before_all_resolves_firecrawl_key_from_harness_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """before_all must ask the shared resolver for the Firecrawl key."""
-    requested: list[ProviderName] = []
+    """before_all must resolve the Firecrawl flag from the harness env.
 
-    class _FakeResolver:
-        def get(self, provider: ProviderName) -> SecretStr | None:
-            requested.append(provider)
-            if provider is ProviderName.FIRECRAWL:
-                return SecretStr("test-key")
-            return None
-
-    monkeypatch.setattr(environment, "get_provider_secret_resolver", _FakeResolver)
+    The retired ``get_provider_secret_resolver`` seam is gone; the harness reads
+    ``FREESEARCH_FIRECRAWL_API_KEY`` directly and exposes the boolean flag the
+    Given step asserts on.
+    """
+    _clear_harness_provider_keys(monkeypatch)
+    _set_harness_key(monkeypatch, ProviderName.FIRECRAWL, "test-key")
 
     context = SimpleNamespace()
     environment.before_all(context)
 
-    assert ProviderName.FIRECRAWL in requested, (
-        "before_all must resolve the Firecrawl key through the shared resolver"
-    )
     assert getattr(context, "has_firecrawl_key", False) is True, (
         "before_all must expose context.has_firecrawl_key for the Given step"
     )
+    assert not hasattr(environment, "get_provider_secret_resolver")
+
+
+def test_before_all_clears_firecrawl_flag_when_env_key_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without the harness env key the flag must be False, so the Given step
+    fails loudly instead of the harness silently skipping."""
+    _clear_harness_provider_keys(monkeypatch)
+
+    context = SimpleNamespace()
+    environment.before_all(context)
+
+    assert getattr(context, "has_firecrawl_key", True) is False
 
 
 def test_after_scenario_closes_firecrawl_adapter_and_factory_client() -> None:

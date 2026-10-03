@@ -21,10 +21,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from pydantic import SecretStr
 
 from freesearch.infrastructure import http as freesearch_http
-from freesearch.infrastructure.secrets import ProviderName
+from freesearch.infrastructure.secrets import PROVIDER_ENV_VARS, ProviderName
 
 # ``features`` is an uninstalled namespace package at the repo root; make it
 # importable regardless of pytest's sys.path manipulation.
@@ -48,8 +47,9 @@ class _FakeClient:
 class _FakeTavilyAdapter:
     """Stand-in for TavilyAdapter so environment hooks need no API key/network."""
 
-    def __init__(self, client: object) -> None:
+    def __init__(self, client: object, *, api_key: object = None, runner: object = None) -> None:
         self.client = client
+        self.api_key = api_key
         self.closed = False
 
     async def aclose(self) -> None:
@@ -59,8 +59,9 @@ class _FakeTavilyAdapter:
 class _FakeBraveAdapter:
     """Stand-in for BraveAdapter so environment hooks need no API key/network."""
 
-    def __init__(self, client: object) -> None:
+    def __init__(self, client: object, *, api_key: object = None, runner: object = None) -> None:
         self.client = client
+        self.api_key = api_key
         self.closed = False
 
     async def aclose(self) -> None:
@@ -72,24 +73,21 @@ class _NonCallableAcloseAdapter:
 
     aclose = None
 
-    def __init__(self, client: object) -> None:
+    def __init__(self, client: object, *, api_key: object = None, runner: object = None) -> None:
         self.client = client
         self.close_attempted = False
 
 
-class _FakeResolver:
-    """Resolver seam returning per-provider keys for the ``before_all`` hook."""
+def _clear_harness_provider_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Remove every harness provider key from the process env for this test."""
+    for env_var in PROVIDER_ENV_VARS.values():
+        monkeypatch.delenv(env_var, raising=False)
 
-    def __init__(self, *, brave_key: bool, tavily_key: bool) -> None:
-        self._brave_key = brave_key
-        self._tavily_key = tavily_key
 
-    def get(self, provider: ProviderName) -> SecretStr | None:
-        if provider is ProviderName.BRAVE:
-            return SecretStr("brave-secret") if self._brave_key else None
-        if provider is ProviderName.TAVILY:
-            return SecretStr("tavily-secret") if self._tavily_key else None
-        return None
+def _set_harness_key(monkeypatch: pytest.MonkeyPatch, provider: ProviderName, value: str) -> str:
+    """Publish one fake harness key through the process env (the consumer seam)."""
+    monkeypatch.setenv(PROVIDER_ENV_VARS[provider], value)
+    return value
 
 
 def _forbid_direct_httpx(*args: object, **kwargs: object) -> None:
@@ -103,28 +101,37 @@ def _forbid_direct_httpx(*args: object, **kwargs: object) -> None:
 
 
 def test_before_all_resolves_brave_key_flag(monkeypatch: pytest.MonkeyPatch) -> None:
-    """before_all must resolve context.has_brave_key alongside has_tavily_key."""
-    resolver = _FakeResolver(brave_key=True, tavily_key=False)
-    monkeypatch.setattr(environment, "get_provider_secret_resolver", lambda: resolver)
+    """before_all must resolve context.has_brave_key from the harness env.
+
+    The retired ``get_provider_secret_resolver`` seam is gone: the harness reads
+    the process env directly through ``_harness_env_key``.
+    """
+    _clear_harness_provider_keys(monkeypatch)
+    _set_harness_key(monkeypatch, ProviderName.BRAVE, "brave-secret")
 
     context = SimpleNamespace()
     environment.before_all(context)
 
     assert getattr(context, "has_brave_key", None) is True
     assert getattr(context, "has_tavily_key", None) is False
+    assert not hasattr(environment, "get_provider_secret_resolver")
 
 
 def test_before_scenario_builds_brave_adapter_for_tagged_scenario(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A 'brave' tagged scenario must get a BraveAdapter via the shared factory."""
+    """A 'brave' tagged scenario must get a BraveAdapter via the shared factory,
+    carrying the harness key on the explicit ``api_key`` constructor seam."""
     fake_client = _FakeClient()
     factory_calls: list[int] = []
+    brave_key = "brave-secret"
 
     def fake_factory() -> _FakeClient:
         factory_calls.append(1)
         return fake_client
 
+    _clear_harness_provider_keys(monkeypatch)
+    _set_harness_key(monkeypatch, ProviderName.BRAVE, brave_key)
     monkeypatch.setattr(freesearch_http, "create_async_client", fake_factory)
     monkeypatch.setattr(environment, "create_async_client", fake_factory, raising=False)
     monkeypatch.setattr(environment.httpx, "AsyncClient", _forbid_direct_httpx)
@@ -133,6 +140,7 @@ def test_before_scenario_builds_brave_adapter_for_tagged_scenario(
 
     context = SimpleNamespace()
     scenario = SimpleNamespace(tags=["live", "brave"])
+    environment.before_all(context)
     try:
         environment.before_scenario(context, scenario)
         assert factory_calls == [1], "create_async_client() was not used"
@@ -140,6 +148,8 @@ def test_before_scenario_builds_brave_adapter_for_tagged_scenario(
             "brave tagged scenario must build a BraveAdapter"
         )
         assert context.adapter.client is fake_client, "adapter must own the factory client"
+        assert context.adapter.api_key is not None, "the harness key must reach the seam"
+        assert context.adapter.api_key.get_secret_value() == brave_key
     finally:
         environment.after_scenario(context, None)
 
@@ -147,12 +157,19 @@ def test_before_scenario_builds_brave_adapter_for_tagged_scenario(
 def test_before_scenario_keeps_tavily_adapter_for_untagged_scenario(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """An untagged scenario must keep the TavilyAdapter selection (regression)."""
+    """An untagged scenario must keep the TavilyAdapter selection (regression).
+
+    Tavily is the ``_adapter_for`` default; with its harness key present the
+    untagged scenario still constructs it (and receives that key explicitly).
+    """
     fake_client = _FakeClient()
+    tavily_key = "tavily-secret"
 
     def fake_factory() -> _FakeClient:
         return fake_client
 
+    _clear_harness_provider_keys(monkeypatch)
+    _set_harness_key(monkeypatch, ProviderName.TAVILY, tavily_key)
     monkeypatch.setattr(freesearch_http, "create_async_client", fake_factory)
     monkeypatch.setattr(environment, "create_async_client", fake_factory, raising=False)
     monkeypatch.setattr(environment.httpx, "AsyncClient", _forbid_direct_httpx)
@@ -161,10 +178,13 @@ def test_before_scenario_keeps_tavily_adapter_for_untagged_scenario(
 
     context = SimpleNamespace()
     scenario = SimpleNamespace(tags=[])
+    environment.before_all(context)
     try:
         environment.before_scenario(context, scenario)
         assert isinstance(context.adapter, _FakeTavilyAdapter)
         assert context.adapter.client is fake_client
+        assert context.adapter.api_key is not None, "the harness key must reach the seam"
+        assert context.adapter.api_key.get_secret_value() == tavily_key
     finally:
         environment.after_scenario(context, None)
 

@@ -6,23 +6,18 @@ from decimal import Decimal
 
 import httpx
 import pytest
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from opentelemetry.trace import SpanKind, StatusCode
 from pydantic import SecretStr
 
-import freesearch.adapters.keenable as keenable_module
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.adapters.keenable import KeenableAdapter
+from freesearch.infrastructure.observability import OtelObservability, use_observability
 from freesearch.infrastructure.resilience import ProviderOperationError
-from freesearch.infrastructure.secrets import ProviderName
 from freesearch.models.contracts import FetchRequest, SearchRequest, UnitKind, UsageOperation
-
-
-class _Resolver:
-    def __init__(self, key: str | None = None) -> None:
-        self._key = SecretStr(key) if key else None
-
-    def get(self, provider: ProviderName) -> SecretStr | None:
-        assert provider is ProviderName.KEENABLE
-        return self._key
+from freesearch.models.observability import TraceSpanName
 
 
 class _Runner:
@@ -68,9 +63,16 @@ class _Transport:
         )
 
 
-def _adapter(transport: _Transport, runner: _Runner | None = None) -> KeenableAdapter:
+def _adapter(
+    transport: _Transport,
+    runner: _Runner | None = None,
+    *,
+    api_key: SecretStr | None = None,
+) -> KeenableAdapter:
     return KeenableAdapter(
-        httpx.AsyncClient(transport=httpx.MockTransport(transport)), runner=runner
+        httpx.AsyncClient(transport=httpx.MockTransport(transport)),
+        runner=runner,
+        api_key=api_key,
     )
 
 
@@ -84,12 +86,9 @@ def test_adapter_implements_contract_and_has_free_costs() -> None:
 
 
 @pytest.mark.asyncio
-async def test_keyless_search_and_fetch_use_public_paths_and_title(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_keyless_search_and_fetch_use_public_paths_and_title() -> None:
     transport = _Transport()
     runner = _Runner()
-    monkeypatch.setattr(keenable_module, "get_provider_secret_resolver", lambda: _Resolver())
     adapter = _adapter(transport, runner)
 
     search = await adapter.search(SearchRequest(query="keenable", limit=2))
@@ -123,15 +122,12 @@ async def test_keyless_search_and_fetch_use_public_paths_and_title(
 
 
 @pytest.mark.asyncio
-async def test_keyed_requests_use_private_paths_and_only_api_key(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_keyed_requests_use_private_paths_and_only_api_key() -> None:
     transport = _Transport()
-    monkeypatch.setattr(
-        keenable_module, "get_provider_secret_resolver", lambda: _Resolver("keen_secret")
-    )
 
-    await _adapter(transport).search(SearchRequest(query="keenable"))
+    await _adapter(transport, api_key=SecretStr("keen_secret")).search(
+        SearchRequest(query="keenable")
+    )
 
     request = transport.requests[0]
     assert request.url.path == "/v1/search"
@@ -160,16 +156,14 @@ async def test_fetch_cost_estimate_uses_fetch_operation() -> None:
 
 
 @pytest.mark.asyncio
-async def test_invalid_response_and_vendor_errors_are_normalized_without_key(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_invalid_response_and_vendor_errors_are_normalized_without_key() -> None:
     def handler(_: httpx.Request) -> httpx.Response:
         return httpx.Response(401, json={"error": "bad key keen_secret"})
 
-    monkeypatch.setattr(
-        keenable_module, "get_provider_secret_resolver", lambda: _Resolver("keen_secret")
+    adapter = KeenableAdapter(
+        httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        api_key=SecretStr("keen_secret"),
     )
-    adapter = KeenableAdapter(httpx.AsyncClient(transport=httpx.MockTransport(handler)))
 
     with pytest.raises(ProviderOperationError) as raised:
         await adapter.search(SearchRequest(query="keenable"))
@@ -189,10 +183,9 @@ _RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
     [(10, 10), (50, 50), (51, 50), (100, 50)],
 )
 async def test_search_limit_is_capped_at_50_without_clamping_at_boundary(
-    monkeypatch: pytest.MonkeyPatch, limit: int, expected_max_results: int
+    limit: int, expected_max_results: int
 ) -> None:
     transport = _Transport()
-    monkeypatch.setattr(keenable_module, "get_provider_secret_resolver", lambda: _Resolver())
 
     await _adapter(transport).search(SearchRequest(query="keenable", limit=limit))
 
@@ -205,10 +198,9 @@ async def test_search_limit_is_capped_at_50_without_clamping_at_boundary(
     [(None, "abcdef", False), (6, "abcdef", False), (5, "abcde", True)],
 )
 async def test_fetch_truncates_only_when_content_exceeds_max_chars(
-    monkeypatch: pytest.MonkeyPatch, max_chars: int | None, expected_content: str, truncated: bool
+    max_chars: int | None, expected_content: str, truncated: bool
 ) -> None:
     transport = _Transport()
-    monkeypatch.setattr(keenable_module, "get_provider_secret_resolver", lambda: _Resolver())
 
     fetch = await _adapter(transport).fetch(
         FetchRequest(url="https://example.com/document", max_chars=max_chars)
@@ -229,13 +221,10 @@ async def test_fetch_truncates_only_when_content_exceeds_max_chars(
         {"results": [{"url": "not-a-url"}]},
     ],
 )
-async def test_malformed_search_payloads_raise_normalized_invalid_response(
-    monkeypatch: pytest.MonkeyPatch, payload: object
-) -> None:
+async def test_malformed_search_payloads_raise_normalized_invalid_response(payload: object) -> None:
     def handler(_: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json=payload)
 
-    monkeypatch.setattr(keenable_module, "get_provider_secret_resolver", lambda: _Resolver())
     adapter = KeenableAdapter(httpx.AsyncClient(transport=httpx.MockTransport(handler)))
 
     with pytest.raises(ProviderOperationError) as raised:
@@ -248,11 +237,10 @@ async def test_malformed_search_payloads_raise_normalized_invalid_response(
 
 
 @pytest.mark.asyncio
-async def test_non_json_success_body_is_normalized(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_non_json_success_body_is_normalized() -> None:
     def handler(_: httpx.Request) -> httpx.Response:
         return httpx.Response(200, content=b"<html>proxy error</html>")
 
-    monkeypatch.setattr(keenable_module, "get_provider_secret_resolver", lambda: _Resolver())
     adapter = KeenableAdapter(httpx.AsyncClient(transport=httpx.MockTransport(handler)))
 
     with pytest.raises(ProviderOperationError) as raised:
@@ -267,13 +255,10 @@ async def test_non_json_success_body_is_normalized(monkeypatch: pytest.MonkeyPat
     "payload",
     [{}, {"content": 123}, {"content": None}, {"content": ["a", "b"]}],
 )
-async def test_malformed_fetch_payloads_raise_normalized_invalid_response(
-    monkeypatch: pytest.MonkeyPatch, payload: object
-) -> None:
+async def test_malformed_fetch_payloads_raise_normalized_invalid_response(payload: object) -> None:
     def handler(_: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json=payload)
 
-    monkeypatch.setattr(keenable_module, "get_provider_secret_resolver", lambda: _Resolver())
     adapter = KeenableAdapter(httpx.AsyncClient(transport=httpx.MockTransport(handler)))
 
     with pytest.raises(ProviderOperationError) as raised:
@@ -285,13 +270,10 @@ async def test_malformed_fetch_payloads_raise_normalized_invalid_response(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("status", [400, 401, 403, 404, 429, 500, 502, 503, 504])
-async def test_http_error_retryable_flag_matches_status_policy(
-    monkeypatch: pytest.MonkeyPatch, status: int
-) -> None:
+async def test_http_error_retryable_flag_matches_status_policy(status: int) -> None:
     def handler(_: httpx.Request) -> httpx.Response:
         return httpx.Response(status, json={"error": "vendor detail"})
 
-    monkeypatch.setattr(keenable_module, "get_provider_secret_resolver", lambda: _Resolver())
     adapter = KeenableAdapter(
         httpx.AsyncClient(transport=httpx.MockTransport(handler)), runner=_Runner()
     )
@@ -317,15 +299,12 @@ async def test_http_error_retryable_flag_matches_status_policy(
         (None, None),
     ],
 )
-async def test_published_at_is_parsed_or_dropped(
-    monkeypatch: pytest.MonkeyPatch, raw: object, expected: datetime | None
-) -> None:
+async def test_published_at_is_parsed_or_dropped(raw: object, expected: datetime | None) -> None:
     def handler(_: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200, json={"results": [{"url": "https://example.com/r", "published_at": raw}]}
         )
 
-    monkeypatch.setattr(keenable_module, "get_provider_secret_resolver", lambda: _Resolver())
     adapter = KeenableAdapter(httpx.AsyncClient(transport=httpx.MockTransport(handler)))
 
     response = await adapter.search(SearchRequest(query="keenable"))
@@ -334,16 +313,13 @@ async def test_published_at_is_parsed_or_dropped(
 
 
 @pytest.mark.asyncio
-async def test_minimal_search_result_uses_defaults_and_drops_none_metadata(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_minimal_search_result_uses_defaults_and_drops_none_metadata() -> None:
     def handler(_: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
             json={"results": [{"url": "https://example.com/r", "description": None}]},
         )
 
-    monkeypatch.setattr(keenable_module, "get_provider_secret_resolver", lambda: _Resolver())
     adapter = KeenableAdapter(httpx.AsyncClient(transport=httpx.MockTransport(handler)))
 
     response = await adapter.search(SearchRequest(query="keenable"))
@@ -356,16 +332,13 @@ async def test_minimal_search_result_uses_defaults_and_drops_none_metadata(
 
 
 @pytest.mark.asyncio
-async def test_fetch_uses_request_url_and_tolerates_non_string_title(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_fetch_uses_request_url_and_tolerates_non_string_title() -> None:
     def handler(_: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
             json={"url": "https://unused.example/other", "title": 123, "content": "body"},
         )
 
-    monkeypatch.setattr(keenable_module, "get_provider_secret_resolver", lambda: _Resolver())
     adapter = KeenableAdapter(httpx.AsyncClient(transport=httpx.MockTransport(handler)))
 
     fetch = await adapter.fetch(FetchRequest(url="https://example.com/document"))
@@ -376,12 +349,9 @@ async def test_fetch_uses_request_url_and_tolerates_non_string_title(
 
 
 @pytest.mark.asyncio
-async def test_caller_client_default_api_key_does_not_leak_into_keyless_requests(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_caller_client_default_api_key_does_not_leak_into_keyless_requests() -> None:
     """A caller client default ``X-API-Key`` must not reach keyless /public calls."""
     transport = _Transport()
-    monkeypatch.setattr(keenable_module, "get_provider_secret_resolver", lambda: _Resolver())
     client = httpx.AsyncClient(
         transport=httpx.MockTransport(transport), headers={"X-API-Key": "unrelated-secret"}
     )
@@ -400,12 +370,9 @@ async def test_caller_client_default_api_key_does_not_leak_into_keyless_requests
 
 
 @pytest.mark.asyncio
-async def test_caller_client_basic_auth_does_not_leak_into_keyless_requests(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_caller_client_basic_auth_does_not_leak_into_keyless_requests() -> None:
     """A caller client ``auth=`` must not reach keyless /public calls."""
     transport = _Transport()
-    monkeypatch.setattr(keenable_module, "get_provider_secret_resolver", lambda: _Resolver())
     client = httpx.AsyncClient(
         transport=httpx.MockTransport(transport), auth=httpx.BasicAuth("user", "caller-secret")
     )
@@ -434,18 +401,13 @@ async def test_caller_client_basic_auth_does_not_leak_into_keyless_requests(
 
 
 @pytest.mark.asyncio
-async def test_keyed_requests_send_resolver_key_only_without_caller_basic_auth(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A caller client ``auth=`` must not reach keyed calls; resolver key only."""
+async def test_keyed_requests_send_injected_key_only_without_caller_basic_auth() -> None:
+    """A caller client ``auth=`` must not reach keyed calls; the injected key only."""
     transport = _Transport()
-    monkeypatch.setattr(
-        keenable_module, "get_provider_secret_resolver", lambda: _Resolver("keen_secret")
-    )
     client = httpx.AsyncClient(
         transport=httpx.MockTransport(transport), auth=httpx.BasicAuth("user", "caller-secret")
     )
-    adapter = KeenableAdapter(client, runner=_Runner())
+    adapter = KeenableAdapter(client, runner=_Runner(), api_key=SecretStr("keen_secret"))
 
     await adapter.search(SearchRequest(query="keenable", limit=2))
     await adapter.fetch(FetchRequest(url="https://example.com/document", max_chars=3))
@@ -461,17 +423,261 @@ async def test_keyed_requests_send_resolver_key_only_without_caller_basic_auth(
 
 
 @pytest.mark.asyncio
-async def test_keyed_fetch_uses_private_path_and_api_key_only(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_keyed_fetch_uses_private_path_and_api_key_only() -> None:
     transport = _Transport()
-    monkeypatch.setattr(
-        keenable_module, "get_provider_secret_resolver", lambda: _Resolver("keen_secret")
-    )
 
-    await _adapter(transport).fetch(FetchRequest(url="https://example.com/document"))
+    await _adapter(transport, api_key=SecretStr("keen_secret")).fetch(
+        FetchRequest(url="https://example.com/document")
+    )
 
     request = transport.requests[0]
     assert request.url.path == "/v1/fetch"
     assert request.headers["X-API-Key"] == "keen_secret"
     assert "X-Keenable-Title" not in request.headers
+
+
+# ---------------------------------------------------------------------------
+# OpenTelemetry child-span boundaries (feature/open-telemetry, Tester-owned).
+#
+# These tests use the current ``KeenableAdapter(client, api_key=...)``
+# constructor and the public observability facade only (an in-memory SDK
+# exporter observes finished spans). They do not touch the tests above.
+# ---------------------------------------------------------------------------
+
+
+def _memory_runtime() -> tuple[OtelObservability, InMemorySpanExporter]:
+    provider = TracerProvider()
+    exporter = InMemorySpanExporter()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    return OtelObservability(provider.get_tracer("keenable-trace-test"), provider), exporter
+
+
+def _traced_adapter(
+    handler: object, *, api_key: SecretStr | None = None
+) -> tuple[KeenableAdapter, OtelObservability, InMemorySpanExporter]:
+    runtime, exporter = _memory_runtime()
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))  # type: ignore[arg-type]
+    return KeenableAdapter(client, runner=_Runner(), api_key=api_key), runtime, exporter
+
+
+def _spans_by_name(exporter: InMemorySpanExporter) -> dict[str, object]:
+    return {span.name: span for span in exporter.get_finished_spans()}
+
+
+def _trace_hex(span: object) -> str:
+    return format(span.context.trace_id, "032x")  # type: ignore[union-attr]
+
+
+def _exception_event_count(exporter: InMemorySpanExporter) -> int:
+    return sum(
+        1
+        for span in exporter.get_finished_spans()
+        for event in (span.events or ())
+        if event.name == "exception"
+    )
+
+
+class TestKeenableTraceSpans:
+    """Exact request/parse child boundaries with no credential capture."""
+
+    @pytest.mark.asyncio
+    async def test_search_success_creates_http_then_parse_children(self) -> None:
+        def handler(_: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={
+                    "results": [
+                        {
+                            "title": "Consensus",
+                            "url": "https://example.com/consensus",
+                            "snippet": "Raft and Paxos.",
+                        }
+                    ]
+                },
+            )
+
+        adapter, runtime, exporter = _traced_adapter(handler)
+
+        with use_observability(runtime), runtime.span(TraceSpanName.PROVIDER):
+            response = await adapter.search(SearchRequest(query="consensus", limit=2))
+
+        assert [item.title for item in response.results] == ["Consensus"]
+        spans = _spans_by_name(exporter)
+        assert set(spans) == {
+            TraceSpanName.PROVIDER,
+            TraceSpanName.PROVIDER_HTTP,
+            TraceSpanName.PROVIDER_PARSE,
+        }
+        provider_span = spans[TraceSpanName.PROVIDER]
+        http_span = spans[TraceSpanName.PROVIDER_HTTP]
+        parse_span = spans[TraceSpanName.PROVIDER_PARSE]
+        assert http_span.kind is SpanKind.CLIENT
+        assert http_span.attributes["http.request.method"] == "POST"
+        assert http_span.attributes["server.address"] == "api.keenable.ai"
+        assert http_span.attributes["server.port"] == 443
+        assert http_span.attributes["http.response.status_code"] == 200
+        assert http_span.status.status_code is StatusCode.UNSET
+        assert parse_span.kind is SpanKind.INTERNAL
+        assert parse_span.attributes["freesearch.operation.name"] == "search"
+        assert parse_span.attributes["freesearch.response.result_count"] == 1
+        assert parse_span.status.status_code is StatusCode.UNSET
+        assert _exception_event_count(exporter) == 0
+        assert _trace_hex(http_span) == _trace_hex(parse_span) == _trace_hex(provider_span)
+        assert http_span.parent.span_id == provider_span.context.span_id
+        assert parse_span.parent.span_id == provider_span.context.span_id
+
+    @pytest.mark.asyncio
+    async def test_fetch_success_creates_http_then_parse_children(self) -> None:
+        def handler(_: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={
+                    "url": "https://example.com/document",
+                    "title": "Document",
+                    "content": "abcdef",
+                },
+            )
+
+        adapter, runtime, exporter = _traced_adapter(handler)
+
+        with use_observability(runtime), runtime.span(TraceSpanName.PROVIDER):
+            fetched = await adapter.fetch(FetchRequest(url="https://example.com/document"))
+
+        assert fetched.document.content == "abcdef"
+        spans = _spans_by_name(exporter)
+        assert set(spans) == {
+            TraceSpanName.PROVIDER,
+            TraceSpanName.PROVIDER_HTTP,
+            TraceSpanName.PROVIDER_PARSE,
+        }
+        http_span = spans[TraceSpanName.PROVIDER_HTTP]
+        parse_span = spans[TraceSpanName.PROVIDER_PARSE]
+        assert http_span.attributes["http.request.method"] == "GET"
+        assert http_span.attributes["server.address"] == "api.keenable.ai"
+        assert http_span.attributes["http.response.status_code"] == 200
+        assert http_span.status.status_code is StatusCode.UNSET
+        assert parse_span.attributes["freesearch.operation.name"] == "fetch"
+        assert parse_span.attributes["freesearch.response.content_length"] == 6
+        assert parse_span.status.status_code is StatusCode.UNSET
+        assert _exception_event_count(exporter) == 0
+
+    @pytest.mark.asyncio
+    async def test_malformed_search_payload_marks_parse_child(self) -> None:
+        def handler(_: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={"unexpected": []})
+
+        adapter, runtime, exporter = _traced_adapter(handler)
+
+        with (
+            use_observability(runtime),
+            pytest.raises(ProviderOperationError) as raised,
+            runtime.span(TraceSpanName.PROVIDER),
+        ):
+            await adapter.search(SearchRequest(query="consensus"))
+
+        assert raised.value.error.code == "invalid_response"
+        spans = _spans_by_name(exporter)
+        assert set(spans) == {
+            TraceSpanName.PROVIDER,
+            TraceSpanName.PROVIDER_HTTP,
+            TraceSpanName.PROVIDER_PARSE,
+        }
+        http_span = spans[TraceSpanName.PROVIDER_HTTP]
+        parse_span = spans[TraceSpanName.PROVIDER_PARSE]
+        assert http_span.status.status_code is StatusCode.UNSET
+        assert http_span.attributes["http.response.status_code"] == 200
+        assert parse_span.status.status_code is StatusCode.ERROR
+        assert parse_span.attributes["error.type"] == "invalid_response"
+        assert _exception_event_count(exporter) == 1
+        parse_events = [event.name for event in (parse_span.events or ())]
+        assert parse_events == ["exception"]
+
+    @pytest.mark.asyncio
+    async def test_search_http_error_marks_http_child_and_skips_parse(self) -> None:
+        def handler(_: httpx.Request) -> httpx.Response:
+            return httpx.Response(502, json={"error": "bad gateway"})
+
+        adapter, runtime, exporter = _traced_adapter(handler)
+
+        with (
+            use_observability(runtime),
+            pytest.raises(ProviderOperationError) as raised,
+            runtime.span(TraceSpanName.PROVIDER),
+        ):
+            await adapter.search(SearchRequest(query="consensus"))
+
+        assert raised.value.error.code == "http_error"
+        assert raised.value.error.status_code == 502
+        spans = _spans_by_name(exporter)
+        assert set(spans) == {TraceSpanName.PROVIDER, TraceSpanName.PROVIDER_HTTP}
+        http_span = spans[TraceSpanName.PROVIDER_HTTP]
+        assert http_span.status.status_code is StatusCode.ERROR
+        assert http_span.attributes["error.type"] == "http_error"
+        assert http_span.attributes["http.response.status_code"] == 502
+        assert _exception_event_count(exporter) == 1
+        assert [event.name for event in (http_span.events or ())] == ["exception"]
+
+    @pytest.mark.asyncio
+    async def test_fetch_http_error_marks_http_child_and_skips_parse(self) -> None:
+        def handler(_: httpx.Request) -> httpx.Response:
+            return httpx.Response(500, json={"error": "upstream failure"})
+
+        adapter, runtime, exporter = _traced_adapter(handler)
+
+        with (
+            use_observability(runtime),
+            pytest.raises(ProviderOperationError) as raised,
+            runtime.span(TraceSpanName.PROVIDER),
+        ):
+            await adapter.fetch(FetchRequest(url="https://example.com/document"))
+
+        assert raised.value.error.code == "http_error"
+        spans = _spans_by_name(exporter)
+        assert set(spans) == {TraceSpanName.PROVIDER, TraceSpanName.PROVIDER_HTTP}
+        http_span = spans[TraceSpanName.PROVIDER_HTTP]
+        assert http_span.attributes["http.request.method"] == "GET"
+        assert http_span.status.status_code is StatusCode.ERROR
+        assert http_span.attributes["error.type"] == "http_error"
+        assert _exception_event_count(exporter) == 1
+
+    @pytest.mark.asyncio
+    async def test_keyed_search_records_no_api_key_attribute_or_event(self) -> None:
+        seen: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(request)
+            return httpx.Response(
+                200,
+                json={
+                    "results": [
+                        {
+                            "title": "Consensus",
+                            "url": "https://example.com/consensus",
+                            "snippet": "Raft and Paxos.",
+                        }
+                    ]
+                },
+            )
+
+        secret = "keen_secret_for_trace_test"
+        adapter, runtime, exporter = _traced_adapter(handler, api_key=SecretStr(secret))
+
+        with use_observability(runtime), runtime.span(TraceSpanName.PROVIDER):
+            await adapter.search(SearchRequest(query="consensus"))
+
+        # Control: the key really was on the wire, so the absence below is not vacuous.
+        assert seen[0].headers["X-API-Key"] == secret
+        blob = "\n".join(
+            [
+                repr(dict(span.attributes or {}))
+                + "\n"
+                + repr(
+                    [(event.name, dict(event.attributes or {})) for event in (span.events or ())]
+                )
+                for span in exporter.get_finished_spans()
+            ]
+        )
+        assert secret not in blob
+        assert "X-API-Key" not in blob
+        assert "Authorization" not in blob
+        assert "Bearer" not in blob

@@ -1,0 +1,30 @@
+export { mapTraceDetail, mapTraceList } from "./model/mappers"
+export type {
+  TraceDetail,
+  TraceError,
+  TraceEvent,
+  TraceFetchOutput,
+  TraceOperation,
+  TraceOutcome,
+  TraceOutput,
+  TraceSearchOutput,
+  TraceSearchResult,
+  TraceSpanKind,
+  TraceStage,
+  TraceSummary,
+} from "./model/types"
+export type {
+  BackendTraceDetail,
+  BackendTraceError,
+  BackendTraceEvent,
+  BackendTraceFetchOutput,
+  BackendTraceList,
+  BackendTraceOperation,
+  BackendTraceOutcome,
+  BackendTraceOutput,
+  BackendTraceSearchOutput,
+  BackendTraceSearchResult,
+  BackendTraceSpan,
+  BackendTraceSpanKind,
+  BackendTraceSummary,
+} from "./api/wire"

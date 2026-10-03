@@ -4,9 +4,10 @@ No test code lives here (never collected): only the injected fakes and
 payload builders shared by ``test_youcom_*.py``. Fakes follow the conventions
 in ``tests/test_resilience.py``: plain injected objects, no sleeping, no HTTP.
 
-The autouse ``fake_resolver`` fixture is registered for every provider test
-module via ``conftest.py`` (not by direct import here), so adapter
-construction always resolves the injected key instead of an ambient one.
+The adapter takes its credential by explicit constructor injection
+(``YoucomAdapter(..., api_key=SecretStr(_TEST_KEY))``); tests build keyed
+adapters with the ``_TEST_KEY`` fake and never reach for an ambient one, since
+the retired ``get_provider_secret_resolver()`` seam no longer exists.
 ``_wired`` removes the per-test client construction/close boilerplate.
 """
 
@@ -15,15 +16,16 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 
 import httpx
-import pytest
 from pydantic import SecretStr
 
-import freesearch.adapters.youcom as youcom_module
 from freesearch.adapters.youcom import YoucomAdapter
 from freesearch.infrastructure.resilience import ProviderOperationError, ResilientRunner
-from freesearch.infrastructure.secrets import ProviderName
 
 _UNSET = object()
+
+# Fake credential injected into every keyed adapter; wire assertions in the
+# ``test_youcom_*.py`` modules compare ``X-API-Key`` against this value.
+_TEST_KEY = "sk-you-test-secret-1"
 
 
 class _FakeClient:
@@ -80,29 +82,6 @@ class _CountingRunner:
     async def run(self, provider: str, operation) -> object:
         self.entries.append(provider)
         return await self.inner.run(provider, operation)
-
-
-class _NoKeyResolver:
-    """Fake provider secret resolver that always resolves to no credential."""
-
-    def __init__(self) -> None:
-        self.requested: list[ProviderName] = []
-
-    def get(self, provider: ProviderName) -> None:
-        self.requested.append(provider)
-        return None
-
-
-class _KeyResolver:
-    """Fake provider secret resolver returning a fixed ``SecretStr``."""
-
-    def __init__(self, secret: str) -> None:
-        self._secret = SecretStr(secret)
-        self.requested: list[ProviderName] = []
-
-    def get(self, provider: ProviderName) -> SecretStr:
-        self.requested.append(provider)
-        return self._secret
 
 
 class _WireRecorder:
@@ -214,12 +193,15 @@ async def _wired(
     """Adapter over a ``MockTransport`` handler; owned clients always closed.
 
     Builds the caller client (or reuses the supplied one) and the adapter
-    with the deterministic default runner, guaranteeing both are closed on
-    exit; wire assertions stay on ``recorder.requests``.
+    with the deterministic default runner and the fake injected key,
+    guaranteeing both are closed on exit; wire assertions stay on
+    ``recorder.requests``.
     """
     if caller is None:
         caller = _wire_caller(recorder)
-    adapter = YoucomAdapter(caller, runner=_default_runner(caller, sleeper=sleeper))
+    adapter = YoucomAdapter(
+        caller, runner=_default_runner(caller, sleeper=sleeper), api_key=SecretStr(_TEST_KEY)
+    )
     try:
         yield adapter
     finally:
@@ -231,7 +213,7 @@ def _assert_wire_auth_and_timeout(
     requests: list[httpx.Request], secret: str, timeout: httpx.Timeout
 ) -> None:
     for request in requests:
-        # Only the resolver's You.com key is auth on the wire.
+        # Only the adapter's injected You.com key is auth on the wire.
         assert request.headers.get("X-API-Key") == secret
         assert request.headers.get("authorization") is None
         assert "caller-token-1" not in request.headers.values()
@@ -240,10 +222,3 @@ def _assert_wire_auth_and_timeout(
         # The borrowed transport reasserts the shared client's full phase
         # policy per request; the caller's phases never collapse.
         assert request.extensions["timeout"] == timeout.as_dict()
-
-
-@pytest.fixture(autouse=True)
-def fake_resolver(monkeypatch: pytest.MonkeyPatch) -> _KeyResolver:
-    resolver = _KeyResolver("sk-you-test-secret-1")
-    monkeypatch.setattr(youcom_module, "get_provider_secret_resolver", lambda: resolver)
-    return resolver

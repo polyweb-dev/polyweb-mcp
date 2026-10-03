@@ -229,7 +229,75 @@ pnpm dev
 ```
 
 - **Dashboard UI:** `http://localhost:5173`
-- The Vite development server automatically proxies API requests (`/search`, `/fetch`, `/dashboard`, `/stats`, `/api`) to the backend at `http://127.0.0.1:8001`.
+- The Vite development server automatically proxies API requests (`/search`, `/fetch`, `/dashboard`, `/stats`, `/api`) to the backend at `http://127.0.0.1:8001`. Set `VITE_BACKEND_URL` (shell environment or `freesearch-ui/.env`) to point the proxy at a different backend origin for a session, e.g. `VITE_BACKEND_URL=http://127.0.0.1:8003 pnpm dev -- --port 5175`.
+
+### OpenTelemetry traces (Search / Fetch)
+
+Every `POST /search` and `POST /fetch` — the only provider-querying routes — produces one
+OpenTelemetry trace with a stable `trace_id`:
+
+```text
+POST /search                SERVER root (selective ASGI middleware, X-Trace-Id header)
+├─ freesearch.backend       INTERNAL, request handling
+│  ├─ freesearch.route      INTERNAL, candidate planning
+│  ├─ freesearch.provider   CLIENT, one per attempted/fanout provider (request/response events)
+│  │  ├─ freesearch.provider.http   CLIENT, Keenable outbound request
+│  │  └─ freesearch.provider.parse  INTERNAL, Keenable JSON + normalization
+│  └─ freesearch.results    INTERNAL, result assembly (single projection or RRF fusion)
+└─ freesearch.response      INTERNAL, encoded response send
+```
+
+Monitoring reads (`/stats`, `/dashboard`), the trace read API, health/control routes, and
+static UI requests are never traced. Fanout is always one trace with concurrent provider
+children; a handled provider failure marks that child `error` and the root `partial`.
+
+- **Instrumentation facade:** `src/freesearch/infrastructure/observability.py` is the only
+  instrumentation module importing `opentelemetry.*`; the persistence exporter
+  (`persistence/otel_exporter.py`) is the second and last permitted OTel boundary (PLAN §2.1)
+  because it maps SDK span objects onto the trace table. Routes, services, and adapters never
+  import `opentelemetry.*` — they call `current_observability()`. The provider is app-scoped
+  (never `trace.set_tracer_provider`), so repeated `create_app()` compositions and per-test
+  databases stay isolated.
+- **Persistence:** finished spans are exported by
+  `src/freesearch/persistence/otel_exporter.py` into the SQLite `trace_spans` table
+  (Alembic revision `0003_open_telemetry_spans`). Root rows double as the Activity summary.
+  Exports are batched, so the middleware flushes once per traced request after the root span
+  ends — that is what makes the row visible without a refresh.
+- **Read API:** `GET /api/v1/traces` returns summary rows only (no query, no results);
+  `GET /api/v1/traces/{trace_id}` returns the full input, tagged output, and ordered stage
+  timeline. `404` for absent or malformed ids.
+- **Correlation:** every traced response carries `X-Trace-Id: <32-lowercase-hex>` (including
+  handled error responses) matching the detail API's `trace_id`.
+- **Activity UI:** the Activity page lists those traces and discloses query in, results out,
+  per-stage latency, and errors behind an explicit **View details** control.
+
+#### Configuration
+
+| Variable | Default | Meaning |
+| :--- | :--- | :--- |
+| `FREESEARCH_OTEL_PROCESSOR` | `database` | `database` persists spans locally; `none` disables tracing (no-op runtime, no `X-Trace-Id`). |
+| `FREESEARCH_OTEL_SERVICE_NAME` | `freesearch` | `service.name` resource attribute on every span. |
+
+#### Future exporter seam (OTLP / Langfuse / LangSmith)
+
+`build_span_processors(settings, database)` in
+`src/freesearch/infrastructure/observability.py` is the single registration point for span
+exporters. Adding an OTLP, Langfuse, or LangSmith exporter means appending a
+`SpanProcessor` there (optionally driven by the standard `OTEL_EXPORTER_OTLP_*` variables);
+no route, service, or adapter call site changes. Span attributes and events already use
+OpenTelemetry HTTP semantic conventions plus provider-neutral `freesearch.*` keys with a
+`freesearch.trace.schema_version` marker, so a vendor exporter can consume them unchanged.
+
+#### Local content and retention
+
+Trace content (query text, URLs, normalized result snippets/scores, fetched document text)
+is stored **as-is and locally** so the Activity page can show what was actually sent and
+received. It is not sent anywhere, and it persists with the SQLite database until the rows
+are deleted; there is deliberately no automatic purge yet (the partial root-start index
+keeps an age-based purge cheap to add). Credentials, API keys, `Authorization`/`Cookie`
+headers, arbitrary request headers, and configured secrets are never captured — the single
+redaction hook `trace_content_attributes(...)` drops any credential-, header-, cookie-, or
+token-shaped key (including nested ones) before a span attribute, event, or row is written.
 
 ### Start the Model Context Protocol (MCP) Server (Optional)
 

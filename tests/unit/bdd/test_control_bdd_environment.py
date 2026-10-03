@@ -25,7 +25,14 @@ class _FakeClient:
 
 
 class _ForbiddenTavilyAdapter:
-    def __init__(self, client: object) -> None:
+    """Construction raises: proves the offline control guard ran first.
+
+    It accepts the explicit ``api_key=``/``runner=`` seam that
+    ``environment._adapter_for`` now passes, so a guard regression surfaces as
+    this assertion instead of an unrelated ``TypeError`` from the double.
+    """
+
+    def __init__(self, client: object, *, api_key: object = None, runner: object = None) -> None:
         raise AssertionError("TavilyAdapter must not be constructed for control scenarios")
 
 
