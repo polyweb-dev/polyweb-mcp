@@ -182,6 +182,11 @@ describe("RF2: null limits render as — on ranks / simulator / settings", () =>
 
     renderUsage(dashboardFixture())
     await waitForUsage()
+    // "Usage totals" renders with zero rows, so await the data-dependent
+    // em-dash blank (PersistGate + dashboard both async by design).
+    await waitFor(() => {
+      expect(document.body.textContent ?? "").toMatch(/[\u2014]/)
+    })
     const body = document.body.textContent ?? ""
     expect(body).not.toContain("∞")
     expect(body).toMatch(/[\u2014]/)
@@ -305,6 +310,8 @@ describe("RF4: visible unavailable/confidence semantics in Settings modal + Usag
 
     renderUsage(dashboardFixture({ latest_quota: canonicalQuotasFixture() }))
     await waitForUsage()
+    // Await the data-dependent quota row, not the static "Usage totals" shell.
+    await screen.findByTestId("quota-remaining-percent-brave")
     expect(screen.getByTestId("quota-remaining-percent-brave")).toHaveTextContent("95% remaining")
     const usageBody = document.body.textContent ?? ""
     expect(usageBody).toMatch(/95% remaining.*monthly.*950\/1000 requests/i)

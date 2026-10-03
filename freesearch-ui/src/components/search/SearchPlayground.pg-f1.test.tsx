@@ -83,7 +83,6 @@ const playgroundOwnerFiles = [
   "../../features/playground/model/usePlaygroundController.ts",
   "../../features/playground/model/playgroundFetchAction.ts",
   "../../features/playground/model/playgroundExecuteAction.ts",
-  "../../features/playground/model/playgroundTypes.ts",
   "../../features/playground/model/useResultPreview.ts",
   "../../features/playground/ui/PlaygroundPage.tsx",
   "../../features/playground/ui/SearchSection.tsx",
@@ -130,6 +129,12 @@ const simulatorSource = simulatorOwnerFiles
   .join("\n")
 const simulatorShim = readFileSync(
   path.resolve(testDir, "../routing/RouteSimulator.tsx"),
+  "utf8"
+)
+// PLAN FR-1: content derivation lives in the persisted slice as selectors,
+// never as stored fields or inline controller expressions.
+const sliceSource = readFileSync(
+  path.resolve(testDir, "../../store/playgroundSlice.ts"),
   "utf8"
 )
 const commonDir = path.resolve(testDir, "../common")
@@ -339,11 +344,14 @@ describe("PG-F1 AC-PG-F1-2: submit docks Fetch and keeps it docked while loading
   })
 
   it("owns hasFetchContent as activeFetch||isFetching||fetchError gating fetch-layout", () => {
+    // Slice-owned derivation (PLAN §3.2): results, a pending run, or an error
+    // count as content; the booleans are selected, never stored.
+    expect(sliceSource).toContain("selectHasFetchContent")
+    expect(sliceSource).toContain("selectActiveFetch(state) !== null")
+    expect(sliceSource).toContain("selectIsFetching(state)")
+    expect(sliceSource).toContain("selectFetchError(state) !== null")
+    expect(sliceSource).not.toMatch(/hasFetchContent[?]?:\s*boolean/)
     expect(playgroundSource).toContain("hasFetchContent")
-    expect(playgroundSource).toMatch(
-      /hasFetchContent\s*=\s*activeFetch\s*!==\s*null\s*\|\|\s*isFetching\s*\|\|\s*fetchError\s*!==\s*null/
-    )
-    expect(playgroundSource).toContain("fetch-layout")
     expect(playgroundSource).toMatch(
       /hasFetchContent\s*\?\s*["']docked["']\s*:\s*["']hero["']|data-state\s*=\s*\{hasFetchContent/
     )
@@ -860,11 +868,16 @@ describe("PG-F1 AC-PG-F1-6 regressions: PG-S1..S5 + header + Simulator + logic u
     expect(simulatorSource).not.toContain("fetch-composer")
     expect(simulatorSource).not.toContain("search-composer")
 
-    // Fetching logic untouched: execution start-clear + trim + routing
-    // (canonical owner is the execution domain; the context wires runFetch).
-    expect(executionSource).toContain("setActiveFetch(null)")
-    expect(executionSource).toContain("setFetchError(null)")
-    expect(executionSource).toContain("setIsFetching(true)")
+    // Fetching logic ownership (PLAN §3.5): the execution runners publish the
+    // start/success/failure lifecycle through the slice (start still clears
+    // the stale document up front); request mapping is unchanged.
+    expect(executionSource).toContain("fetchStarted")
+    expect(executionSource).toContain("fetchSucceeded")
+    expect(executionSource).toContain("fetchFailed")
+    expect(executionSource).toContain("searchStarted")
+    expect(executionSource).toContain("searchSucceeded")
+    expect(executionSource).toContain("searchFailed")
+    expect(executionSource).toContain("useAppDispatch")
     expect(executionSource).toContain("url: request.url.trim()")
     expect(executionSource).toContain("max_chars: null")
     expect(executionSource).toMatch(

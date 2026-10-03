@@ -1,16 +1,33 @@
-import { useState } from "react"
+import { useEffect } from "react"
 import type { Dispatch, FormEvent, SetStateAction } from "react"
 import { useFreeSearch } from "@/context/useFreeSearch"
 import type { ProviderConfig } from "@/domains/providers"
-import type {
-  FetchResponse,
-  SearchResponse,
-  SearchResult,
-} from "@/domains/execution"
+import type { FetchResponse, SearchResponse, SearchResult } from "@/domains/execution"
+import { useAppDispatch, useAppSelector } from "@/store/hooks"
+import {
+  selectActiveFetch,
+  selectActiveSearch,
+  selectFetchError,
+  selectFetchUrl,
+  selectHasFetchContent,
+  selectHasSearchContent,
+  selectIsFetching,
+  selectIsSearching,
+  selectMode,
+  selectQuery,
+  selectResultCount,
+  selectSearchError,
+  selectSelectedProviderId,
+  setFetchUrl as setFetchUrlAction,
+  setMode as setModeAction,
+  setQuery as setQueryAction,
+  setResultCount as setResultCountAction,
+  setSelectedProviderId as setSelectedProviderIdAction,
+} from "@/store/playgroundSlice"
+import type { PlaygroundMode } from "@/store/playgroundSlice"
 import { useResultPreview } from "./useResultPreview"
 import { createExecuteHandler } from "./playgroundExecuteAction"
 import { createFetchResultHandler } from "./playgroundFetchAction"
-import type { PlaygroundMode } from "./playgroundTypes"
 
 export type { PlaygroundMode }
 
@@ -57,78 +74,110 @@ function isEligibleForOperation(
 }
 
 /**
- * Interaction coordination for the search/fetch playground. Owns composer
- * drafts, view mode, and execution handlers; rendering lives in ui/.
- * hasSearchContent/hasFetchContent pin the hero->docked layouts exactly as
- * the monolith did (results, pending, or error each count as content).
+ * `auto`/`all` always pass through; a pinned id that is no longer eligible for
+ * the active mode falls back to `auto` for display and for the next request.
+ */
+function resolveEffectiveProviderId(
+  selectedProviderId: string,
+  eligibleProviders: ProviderConfig[]
+): string {
+  if (selectedProviderId === "auto" || selectedProviderId === "all") return selectedProviderId
+  return eligibleProviders.some((provider) => provider.id === selectedProviderId)
+    ? selectedProviderId
+    : "auto"
+}
+
+/** Slice-backed controller fields, selected in one place to stay within budget. */
+function usePlaygroundSliceFields() {
+  return {
+    mode: useAppSelector(selectMode),
+    query: useAppSelector(selectQuery),
+    fetchUrl: useAppSelector(selectFetchUrl),
+    selectedProviderId: useAppSelector(selectSelectedProviderId),
+    resultCount: useAppSelector(selectResultCount),
+    activeSearch: useAppSelector(selectActiveSearch),
+    activeFetch: useAppSelector(selectActiveFetch),
+    isSearching: useAppSelector(selectIsSearching),
+    isFetching: useAppSelector(selectIsFetching),
+    searchError: useAppSelector(selectSearchError),
+    fetchError: useAppSelector(selectFetchError),
+    hasSearchContent: useAppSelector(selectHasSearchContent),
+    hasFetchContent: useAppSelector(selectHasFetchContent),
+  }
+}
+
+/**
+ * Interaction coordination for the search/fetch playground. Composer drafts,
+ * view mode, request options, latest results, and execution status are Redux
+ * state (persisted); only inspector/clipboard presentation state stays local.
+ * Rendering lives in ui/.
  */
 export function usePlaygroundController(): PlaygroundController {
-  const {
-    providers,
-    activeSearch,
-    activeFetch,
-    isSearching,
-    isFetching,
-    searchError,
-    fetchError,
-    runSearch,
-    runFetch,
-  } = useFreeSearch()
-  const [mode, setMode] = useState<PlaygroundMode>("search")
-  const [query, setQuery] = useState("")
-  const [fetchUrl, setFetchUrl] = useState("")
-  const [selectedProviderId, setSelectedProviderId] = useState<string>("auto")
-  const [resultCount, setResultCount] = useState(6)
+  const { providers, providersLoading, runSearch, runFetch } = useFreeSearch()
+  const dispatch = useAppDispatch()
+  const fields = usePlaygroundSliceFields()
   const preview = useResultPreview()
+  const { setSelectedResultForPreview } = preview
 
   const eligibleProviders = providers.filter((provider) =>
-    isEligibleForOperation(provider, mode)
+    isEligibleForOperation(provider, fields.mode)
   )
 
-  const isSelectedEligible =
-    selectedProviderId === "auto" ||
-    selectedProviderId === "all" ||
-    eligibleProviders.some((p) => p.id === selectedProviderId)
+  const effectiveSelectedProviderId = resolveEffectiveProviderId(
+    fields.selectedProviderId,
+    eligibleProviders
+  )
+  const isSelectionStale = effectiveSelectedProviderId !== fields.selectedProviderId
 
-  const effectiveSelectedProviderId = isSelectedEligible ? selectedProviderId : "auto"
+  // The catalog arrives asynchronously and a persisted provider can lose its key
+  // between sessions: rewrite the stored choice once the catalog has settled so
+  // a reload cannot resurrect an ineligible id. Display already falls back.
+  useEffect(() => {
+    if (providersLoading !== true && isSelectionStale) {
+      dispatch(setSelectedProviderIdAction("auto"))
+    }
+  }, [dispatch, isSelectionStale, providersLoading])
 
-  const hasSearchContent =
-    activeSearch !== null || isSearching || searchError !== null
-  const hasFetchContent = activeFetch !== null || isFetching || fetchError !== null
+  const setQuery = (value: string) => dispatch(setQueryAction(value))
+  const setFetchUrl = (value: string) => dispatch(setFetchUrlAction(value))
+  const setSelectedProviderId = (value: string) =>
+    dispatch(setSelectedProviderIdAction(value))
+  const setResultCount = (value: number) => dispatch(setResultCountAction(value))
 
   const handleExecute = createExecuteHandler({
-    mode,
-    query,
-    fetchUrl,
+    mode: fields.mode,
+    query: fields.query,
+    fetchUrl: fields.fetchUrl,
     selectedProviderId: effectiveSelectedProviderId,
-    resultCount,
+    resultCount: fields.resultCount,
     eligibleProviders,
     runSearch,
     runFetch,
-    showResult: preview.setSelectedResultForPreview,
+    showResult: setSelectedResultForPreview,
   })
 
   const switchMode = (next: PlaygroundMode) => {
-    if (next === "fetch" && effectiveSelectedProviderId === "all") {
-      setSelectedProviderId("auto")
-    } else if (
+    const selectionLostForNextMode =
       effectiveSelectedProviderId !== "auto" &&
       effectiveSelectedProviderId !== "all" &&
-      !providers.some((provider) =>
-        provider.id === effectiveSelectedProviderId && isEligibleForOperation(provider, next)
+      !providers.some(
+        (provider) =>
+          provider.id === effectiveSelectedProviderId && isEligibleForOperation(provider, next)
       )
-    ) {
+    if (next === "fetch" && effectiveSelectedProviderId === "all") {
+      setSelectedProviderId("auto")
+    } else if (selectionLostForNextMode) {
       setSelectedProviderId("auto")
     }
-    setMode(next)
-    preview.setSelectedResultForPreview(null)
+    dispatch(setModeAction(next))
+    setSelectedResultForPreview(null)
   }
 
   const handleFetchResult = createFetchResultHandler({
     selectedProviderId: effectiveSelectedProviderId,
     providers,
-    isSearching,
-    isFetching,
+    isSearching: fields.isSearching,
+    isFetching: fields.isFetching,
     runFetch,
     setSelectedProviderId,
     setFetchUrl,
@@ -137,20 +186,9 @@ export function usePlaygroundController(): PlaygroundController {
   })
 
   return {
-    mode,
-    query,
-    fetchUrl,
-    selectedProviderId: effectiveSelectedProviderId,
-    resultCount,
+    ...fields,
     eligibleProviders,
-    hasSearchContent,
-    hasFetchContent,
-    activeSearch,
-    activeFetch,
-    isSearching,
-    isFetching,
-    searchError,
-    fetchError,
+    selectedProviderId: effectiveSelectedProviderId,
     selectedResultForPreview: preview.selectedResultForPreview,
     showJsonInspector: preview.showJsonInspector,
     copied: preview.copied,
@@ -158,7 +196,7 @@ export function usePlaygroundController(): PlaygroundController {
     setFetchUrl,
     setSelectedProviderId,
     setResultCount,
-    setSelectedResultForPreview: preview.setSelectedResultForPreview,
+    setSelectedResultForPreview,
     setShowJsonInspector: preview.setShowJsonInspector,
     copyToClipboard: preview.copyToClipboard,
     handleExecute,

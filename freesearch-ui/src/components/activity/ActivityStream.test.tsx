@@ -44,11 +44,13 @@ describe("ActivityStream (live backend)", () => {
     vi.unstubAllGlobals()
   })
 
-  it("shows a loading state while the dashboard is in flight", () => {
+  it("shows a loading state while the dashboard is in flight", async () => {
     const gate = deferred<Response>()
     renderWithBackend(() => gate.promise as unknown as Response)
     // Note: the stub returns the pending promise; the component must render
-    // a loading indicator instead of invented rows.
+    // a loading indicator instead of invented rows. PersistGate opens first
+    // (async by design), while the dashboard stays pending behind the gate.
+    await screen.findByText(/loading/i)
     expect(screen.getByText(/loading/i)).toBeInTheDocument()
     gate.resolve(ok(dashboardFixture()))
   })

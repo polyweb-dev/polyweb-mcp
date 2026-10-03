@@ -79,7 +79,6 @@ const playgroundOwnerFiles = [
   "../../features/playground/model/usePlaygroundController.ts",
   "../../features/playground/model/playgroundFetchAction.ts",
   "../../features/playground/model/playgroundExecuteAction.ts",
-  "../../features/playground/model/playgroundTypes.ts",
   "../../features/playground/model/useResultPreview.ts",
   "../../features/playground/ui/PlaygroundPage.tsx",
   "../../features/playground/ui/SearchSection.tsx",
@@ -622,7 +621,9 @@ describe("PG-S4 AC-PG-S4-6: eligible-inherit else auto + markdown/4000ms contrac
     const { stub } = renderWithBackend()
     await readyForSearch()
 
-    // Firecrawl is search+fetch: eligible in both modes.
+    // Firecrawl is search+fetch: eligible in both modes. The catalog arrives
+    // asynchronously, so wait for its option before pinning it.
+    await screen.findByRole("option", { name: "Firecrawl" })
     const searchSelect = screen.getByRole("combobox") as HTMLSelectElement
     fireEvent.change(searchSelect, { target: { value: "firecrawl" } })
     expect(searchSelect.value).toBe("firecrawl")
@@ -648,7 +649,9 @@ describe("PG-S4 AC-PG-S4-6: eligible-inherit else auto + markdown/4000ms contrac
     const { stub } = renderWithBackend()
     await readyForSearch()
 
-    // Brave is search-only: fetch-ineligible.
+    // Brave is search-only: fetch-ineligible. The catalog arrives
+    // asynchronously, so wait for its option before pinning it.
+    await screen.findByRole("option", { name: "Brave Search" })
     const searchSelect = screen.getByRole("combobox") as HTMLSelectElement
     fireEvent.change(searchSelect, { target: { value: "brave" } })
     expect(searchSelect.value).toBe("brave")

@@ -66,7 +66,6 @@ const playgroundOwnerFiles = [
   "../../features/playground/model/usePlaygroundController.ts",
   "../../features/playground/model/playgroundFetchAction.ts",
   "../../features/playground/model/playgroundExecuteAction.ts",
-  "../../features/playground/model/playgroundTypes.ts",
   "../../features/playground/model/useResultPreview.ts",
   "../../features/playground/ui/PlaygroundPage.tsx",
   "../../features/playground/ui/SearchSection.tsx",

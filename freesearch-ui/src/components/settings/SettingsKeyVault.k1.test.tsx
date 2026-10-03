@@ -583,7 +583,10 @@ describe("K1-5: key vault behavior contract", () => {
   it("renders the loading skeleton with aria-busy and a disabled Delete key, then resolves to 7 cards", async () => {
     const user = userEvent.setup()
     renderSettings(true)
-    await user.click(screen.getByRole("tab", { name: /^Keys$/ }))
+    // Providers stay deferred by design, so await the gate-open marker (any
+    // tab) rather than provider data before asserting the skeleton.
+    const keysTab = await screen.findByRole("tab", { name: /^Keys$/ })
+    await user.click(keysTab)
     expect(screen.getByText("Loading provider keys...", { exact: true })).toBeInTheDocument()
     const busy = screen
       .getByText("Loading provider keys...", { exact: true })

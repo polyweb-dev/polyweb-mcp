@@ -175,8 +175,12 @@ describe("R-STRAT AC-R-STRAT-2: strategy cards and selection logic intact", () =
     await readyForStrategy()
 
     const strict = screen.getByRole("button", { name: /^Strict priority/ })
-    expect(within(strict).getByText("Primary")).toBeInTheDocument()
-    expect(within(strict).getByText("Brave Search")).toBeInTheDocument()
+    // The Primary badge and the arbitrated provider name both arrive with the
+    // asynchronous catalog — await the data together, not the static card.
+    await waitFor(() => {
+      expect(within(strict).getByText("Primary")).toBeInTheDocument()
+      expect(within(strict).getByText("Brave Search")).toBeInTheDocument()
+    })
     expect(strict.textContent).toMatch(/ms.*p95|p95/)
   })
 

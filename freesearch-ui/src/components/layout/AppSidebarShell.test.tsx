@@ -56,7 +56,7 @@ function LocationProbe() {
   return <div data-testid="test-location">{location.pathname}</div>
 }
 
-function renderApp(route = "/playground") {
+async function renderApp(route = "/playground") {
   installFetchStub((req) => {
     if (req.url === "/api/v1/providers" && req.method === "GET") {
       return ok(allProvidersFixture())
@@ -67,12 +67,14 @@ function renderApp(route = "/playground") {
     if (req.url.startsWith("/dashboard")) return ok(dashboardFixture())
     return err(404, { detail: "unhandled test route" })
   })
-  return render(
+  const result = render(
     <MemoryRouter initialEntries={[route]}>
       <App />
       <LocationProbe />
     </MemoryRouter>
   )
+  await screen.findByRole("navigation", { name: "Primary" })
+  return result
 }
 
 function testPath(): string {
@@ -98,7 +100,7 @@ afterEach(() => {
 
 describe("AC-SB-8a: App is a flex-row shell with aside + main", () => {
   it("renders the sidebar aside and the main landmark", async () => {
-    renderApp()
+    await renderApp()
     expect(document.querySelector("aside")).not.toBeNull()
     expect(screen.getByRole("main")).toBeInTheDocument()
     await waitFor(() => {
@@ -108,8 +110,8 @@ describe("AC-SB-8a: App is a flex-row shell with aside + main", () => {
     })
   })
 
-  it("shell lays out horizontally (flex-row), not the legacy flex-col stack", () => {
-    renderApp()
+  it("shell lays out horizontally (flex-row), not the legacy flex-col stack", async () => {
+    await renderApp()
     const aside = document.querySelector("aside")
     expect(aside).not.toBeNull()
     const shell = aside!.parentElement as HTMLElement
@@ -118,8 +120,8 @@ describe("AC-SB-8a: App is a flex-row shell with aside + main", () => {
     expect(shell.className).not.toMatch(/flex-col/)
   })
 
-  it("aside and main share the same horizontal shell", () => {
-    renderApp()
+  it("aside and main share the same horizontal shell", async () => {
+    await renderApp()
     const shell = (document.querySelector("aside") as HTMLElement)
       .parentElement as HTMLElement
     expect(shell.className).toMatch(/flex-row/)
@@ -128,8 +130,8 @@ describe("AC-SB-8a: App is a flex-row shell with aside + main", () => {
 })
 
 describe("AC-SB-8b: legacy header topbar is gone", () => {
-  it("renders no <header> element", () => {
-    renderApp()
+  it("renders no <header> element", async () => {
+    await renderApp()
     expect(document.querySelector("header")).toBeNull()
   })
 
@@ -140,8 +142,8 @@ describe("AC-SB-8b: legacy header topbar is gone", () => {
 })
 
 describe("AC-SB-8c (C4, P1-FINAL): five sidebar links swap intact views via the URL", () => {
-  it("sidebar exposes all six workspaces as links with exact route hrefs", () => {
-    renderApp()
+  it("sidebar exposes all six workspaces as links with exact route hrefs", async () => {
+    await renderApp()
     const nav = screen.getByRole("navigation", { name: "Primary" })
     for (const { link, path } of EXPECTED_VIEWS) {
       expect(
@@ -154,7 +156,7 @@ describe("AC-SB-8c (C4, P1-FINAL): five sidebar links swap intact views via the 
     "sidebar '$link' navigates to '$path' showing the '$heading' view",
     async ({ link, heading, path }) => {
       const user = userEvent.setup()
-      renderApp("/playground")
+      await renderApp("/playground")
       await user.click(
         within(screen.getByRole("navigation", { name: "Primary" })).getByRole(
           "link",
@@ -174,7 +176,7 @@ describe("AC-SB-8c (C4, P1-FINAL): five sidebar links swap intact views via the 
 
   it("full click-through visits every view with exactly one active marker", async () => {
     const user = userEvent.setup()
-    renderApp("/playground")
+    await renderApp("/playground")
     for (const { link, heading, path } of EXPECTED_VIEWS) {
       await user.click(
         within(screen.getByRole("navigation", { name: "Primary" })).getByRole(
@@ -196,8 +198,8 @@ describe("AC-SB-8c (C4, P1-FINAL): five sidebar links swap intact views via the 
 })
 
 describe("AC-SB-8d (C4): shell keeps the link+router contract", () => {
-  it("sidebar nav has links with hrefs and no button nav items", () => {
-    renderApp()
+  it("sidebar nav has links with hrefs and no button nav items", async () => {
+    await renderApp()
     const aside = document.querySelector("aside") as HTMLElement
     const nav = within(aside).getByRole("navigation", { name: "Primary" })
     expect(within(nav).getAllByRole("link")).toHaveLength(5)
@@ -209,7 +211,7 @@ describe("AC-SB-8d (C4): shell keeps the link+router contract", () => {
 
   it("switching views changes the URL through the route table", async () => {
     const user = userEvent.setup()
-    renderApp("/playground")
+    await renderApp("/playground")
     expect(testPath()).toBe("/playground")
     for (const { link, path } of EXPECTED_VIEWS) {
       await user.click(
@@ -232,7 +234,7 @@ describe("AC-SB-8d (C4): shell keeps the link+router contract", () => {
   })
 
   it("P1-FINAL: legacy /providers redirects to the merged Settings registry", async () => {
-    renderApp("/providers")
+    await renderApp("/providers")
     await waitFor(() => {
       expect(
         within(screen.getByRole("main")).getByRole("heading", {
@@ -266,7 +268,7 @@ describe("AC-SB-8d (C4): shell keeps the link+router contract", () => {
 describe("AC-SB-8e: PillTabs gold standard untouched", () => {
   it("Routing view still exposes Strategy/Simulator/Ranks/Resilience pill tabs", async () => {
     const user = userEvent.setup()
-    renderApp("/playground")
+    await renderApp("/playground")
     await user.click(
       within(screen.getByRole("navigation", { name: "Primary" })).getByRole(
         "link",
@@ -291,7 +293,7 @@ describe("AC-SB-8e: PillTabs gold standard untouched", () => {
 
   it("Settings view still exposes Providers/Keys/Failover pill tabs", async () => {
     const user = userEvent.setup()
-    renderApp("/playground")
+    await renderApp("/playground")
     await user.click(
       within(screen.getByRole("navigation", { name: "Primary" })).getByRole(
         "link",
@@ -331,7 +333,7 @@ describe("AC-SB-8f: App source wires Sidebar into the flex-row shell", () => {
 
   it("App exposes the sidebar collapse toggle", async () => {
     const user = userEvent.setup()
-    renderApp()
+    await renderApp()
     const toggle = screen.getByRole("button", {
       name: "Collapse sidebar",
       exact: true,

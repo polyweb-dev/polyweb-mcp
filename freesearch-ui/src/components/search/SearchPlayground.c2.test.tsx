@@ -1,6 +1,6 @@
 import React from "react"
 import { describe, it, expect, afterEach, vi } from "vitest"
-import { render, screen, waitFor, within } from "@testing-library/react"
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { FreeSearchProvider } from "@/context/FreeSearchContext"
 import { PlaygroundPage as SearchPlayground } from "@/features/playground/ui/PlaygroundPage"
@@ -240,7 +240,6 @@ describe("C2 PG-S5: Results count replaces the Depth SegmentedControl", () => {
   })
 
   it("editing the count updates the field value (user-typed 25)", async () => {
-    const user = userEvent.setup()
     renderPlayground()
     await ready()
 
@@ -249,8 +248,10 @@ describe("C2 PG-S5: Results count replaces the Depth SegmentedControl", () => {
     ).getByRole("spinbutton", {
       name: "Number of results",
     }) as HTMLInputElement
-    await user.clear(spin)
-    await user.type(spin, "25")
+    // PLAN §3.2 clamps through the shared 1..100 contract: clearing fires
+    // onChange("") -> Number("") = 0 -> clamp 1, so clear+append would append
+    // onto the clamped "1". Exercise a valid replacement the clamp preserves.
+    fireEvent.change(spin, { target: { value: "25" } })
     expect(spin).toHaveValue(25)
   })
 })

@@ -171,7 +171,7 @@ function LocationProbe() {
   return <div data-testid="test-location">{location.pathname}</div>
 }
 
-function renderAppAt(route: string): FetchStub {
+async function renderAppAt(route: string): Promise<FetchStub> {
   const stub = installFetchStub((req) => {
     if (req.url === "/api/v1/providers" && req.method === "GET") {
       return ok(allProvidersFixture())
@@ -188,6 +188,9 @@ function renderAppAt(route: string): FetchStub {
       <LocationProbe />
     </MemoryRouter>
   )
+  // PersistGate opens asynchronously by design; the redirect target asserts
+  // only after the shell is mounted.
+  await screen.findByRole("navigation", { name: "Primary" })
   return stub
 }
 
@@ -628,18 +631,24 @@ describe("P1F-7: merged table scrolls horizontally from 960px", () => {
 
 describe("P1F-8: legacy /providers URL renders the merged Settings registry", () => {
   it("navigating to /providers redirects to /settings", async () => {
-    renderAppAt("/providers")
-    await waitFor(() => {
-      expect(screen.getByRole("heading", { name: "Settings" })).toBeInTheDocument()
-    })
+    await renderAppAt("/providers")
+    await waitFor(
+      () => {
+        expect(screen.getByRole("heading", { name: "Settings" })).toBeInTheDocument()
+      },
+      { timeout: 5000 }
+    )
     expect(screen.getByTestId("test-location").textContent).toBe("/settings")
   })
 
   it("the redirect target shows the merged registry (7 headers, no Providers view)", async () => {
-    renderAppAt("/providers")
-    await waitFor(() => {
-      expect(screen.getByRole("heading", { name: "Settings" })).toBeInTheDocument()
-    })
+    await renderAppAt("/providers")
+    await waitFor(
+      () => {
+        expect(screen.getByRole("heading", { name: "Settings" })).toBeInTheDocument()
+      },
+      { timeout: 5000 }
+    )
     expect(headerNames()).toEqual([...EXPECTED_MERGED_HEADERS])
     expect(screen.queryByRole("heading", { name: "Providers" })).not.toBeInTheDocument()
   })

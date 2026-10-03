@@ -89,7 +89,6 @@ const playgroundOwnerFiles = [
   "../../features/playground/model/usePlaygroundController.ts",
   "../../features/playground/model/playgroundFetchAction.ts",
   "../../features/playground/model/playgroundExecuteAction.ts",
-  "../../features/playground/model/playgroundTypes.ts",
   "../../features/playground/model/useResultPreview.ts",
   "../../features/playground/ui/PlaygroundPage.tsx",
   "../../features/playground/ui/SearchSection.tsx",
@@ -320,6 +319,8 @@ describe("PG-S5 AC-PG-S5-2: /search limit + routing wiring", () => {
     const select = within(
       screen.getByTestId("search-composer-footer")
     ).getByRole("combobox") as HTMLSelectElement
+    // The catalog arrives asynchronously — await the pinned option first.
+    await screen.findByRole("option", { name: "Tavily" })
     fireEvent.change(select, { target: { value: "tavily" } })
     expect(select.value).toBe("tavily")
     expect(resultsSpinInFooter() as HTMLInputElement).toHaveValue(6)
@@ -439,6 +440,7 @@ describe("PG-S5 AC-PG-S5-2: /search limit + routing wiring", () => {
     const select = within(
       screen.getByTestId("search-composer-footer")
     ).getByRole("combobox") as HTMLSelectElement
+    await screen.findByRole("option", { name: "Tavily" })
     fireEvent.change(select, { target: { value: "tavily" } })
     await submitQueryViaClick("prefer guard pinned")
     await waitFor(() => {

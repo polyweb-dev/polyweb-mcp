@@ -151,7 +151,9 @@ describe("SearchPlayground (live backend)", () => {
       expect(screen.getByPlaceholderText(/Search across all providers/i)).toBeInTheDocument()
     })
 
-    // Brave is search-only: pick it in the search provider filter.
+    // Brave is search-only: pick it in the search provider filter. The
+    // catalog arrives asynchronously, so wait for its option first.
+    await screen.findByRole("option", { name: "Brave Search" })
     const searchSelect = screen.getByRole("combobox") as HTMLSelectElement
     fireEvent.change(searchSelect, { target: { value: "brave" } })
     expect(searchSelect.value).toBe("brave")
