@@ -19,6 +19,7 @@ describe("LatencyWaterfallValue", () => {
 
     expect(screen.getByText("250ms")).toBeInTheDocument()
     expect(screen.getByText("5 res")).toBeInTheDocument()
+    expect(screen.getByText("5 res").parentElement?.className).toContain("gap-x-2")
   })
 
   it("omits the result count when the caller records none", () => {

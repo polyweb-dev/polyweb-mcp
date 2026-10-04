@@ -95,16 +95,25 @@ describe("SearchResultInspector", () => {
     expect(link).toHaveAttribute("aria-label", url)
   })
 
-  it("shows Unavailable for a null score without a fabricated zero", () => {
-    render(
+  it("omits the score row when no score was recorded", () => {
+    const { rerender } = render(
       <SearchResultInspector
         result={inspectorResult({ score: { label: "Provider score", value: null, format: "decimal" } })}
       />
     )
 
-    expect(screen.getByText("Provider score")).toBeInTheDocument()
-    expect(screen.getByText("Unavailable")).toBeInTheDocument()
+    expect(screen.queryByText("Provider score")).not.toBeInTheDocument()
+    expect(screen.queryByText("Unavailable")).not.toBeInTheDocument()
     expect(screen.queryByText("0.00")).not.toBeInTheDocument()
+
+    rerender(
+      <SearchResultInspector
+        result={inspectorResult({ score: { label: "Score", value: 0, format: "percent" } })}
+      />
+    )
+
+    expect(screen.queryByText("Score")).not.toBeInTheDocument()
+    expect(screen.queryByText("0% match")).not.toBeInTheDocument()
   })
 
   it("never shows Source or Source not recorded text", () => {

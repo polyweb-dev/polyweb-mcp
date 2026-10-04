@@ -25,14 +25,14 @@ function providerSummary(result: SearchResultView): ReactNode {
       <ProviderBadge
         providerId={first.id}
         name={first.name}
-        className="text-[11px] text-[var(--muted)]"
+        className="text-[var(--muted)]"
         logoClassName="size-3.5"
       />
     )
   }
   return (
     <span className="inline-flex flex-wrap items-center gap-1.5 text-[var(--text-strong)]">
-      <span className="rounded bg-[var(--surface-muted)] px-1.5 py-0.5 text-[11px] font-medium text-[var(--signal)]">
+      <span className="rounded bg-[var(--surface-muted)] px-1.5 py-0.5 font-medium text-[var(--signal)]">
         {result.providers.length} engines
       </span>
       {result.providers.map((provider) => (
@@ -40,8 +40,8 @@ function providerSummary(result: SearchResultView): ReactNode {
           key={provider.id}
           providerId={provider.id}
           name={provider.name}
-          className="text-[11px] text-[var(--muted)]"
-          logoClassName="size-3"
+          className="text-[var(--muted)]"
+          logoClassName="size-3.5"
         />
       ))}
     </span>

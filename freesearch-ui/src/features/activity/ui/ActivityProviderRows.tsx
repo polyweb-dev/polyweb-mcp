@@ -126,7 +126,7 @@ function attemptRow(
         {resultLabel(attempt)}
       </TableCell>
       <TableCell className={`${CELL} text-right`}>
-        <Button variant="outline" size="sm" onClick={() => onInspect(attempt.spanId)}>
+        <Button variant="outline" size="default" onClick={() => onInspect(attempt.spanId)}>
           View details
         </Button>
       </TableCell>

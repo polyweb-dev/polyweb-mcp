@@ -73,7 +73,7 @@ describe("TraceDetailDialog", () => {
     expect(within(dialog).getByText("All providers")).toBeInTheDocument()
     expect(within(dialog).getAllByText("Total latency").length).toBeGreaterThan(0)
     expect(within(dialog).getAllByText("3381ms").length).toBeGreaterThan(0)
-    expect(within(dialog).getByText("success")).toBeInTheDocument()
+    expect(within(dialog).getByText("Success")).toBeInTheDocument()
     expect(within(dialog).getAllByText("6").length).toBeGreaterThan(0)
   })
 
@@ -104,8 +104,8 @@ describe("TraceDetailDialog", () => {
     expect(
       screen.getAllByText("Reuters Latest Finance News | Today Top Headlines")
     ).toHaveLength(1)
-    // The shared card shows the recorded value; the label lives in the inspector after selection.
-    expect(within(ranked).getByText("0.70")).toBeInTheDocument()
+    // The shared card shows the recorded value on the common percentage scale.
+    expect(within(ranked).getByText("70% match")).toBeInTheDocument()
     // R8: the shared card carries a two-line snippet, so the text is present in the row.
     expect(
       within(ranked).getByText(
@@ -115,7 +115,7 @@ describe("TraceDetailDialog", () => {
     await user.click(screen.getByRole("button", { name: /Reuters Latest Finance News/ }))
     const inspector = screen.getByRole("region", { name: "Result inspector" })
     expect(within(inspector).getByText("Fusion score")).toBeInTheDocument()
-    expect(within(inspector).getByText("0.70")).toBeInTheDocument()
+    expect(within(inspector).getByText("70% match")).toBeInTheDocument()
   })
 
   it("renders every recorded result with no show-all control", () => {
@@ -177,12 +177,12 @@ describe("TraceDetailDialog", () => {
     expect(
       screen.getByText(/Showing this provider's response/)
     ).toBeInTheDocument()
-    // The shared card shows the value; the inspector shows the label after selection.
-    expect(within(dialog).getByText("0.92")).toBeInTheDocument()
+    // The shared card shows the value on the common percentage scale.
+    expect(within(dialog).getByText("92% match")).toBeInTheDocument()
     await user.click(screen.getByRole("button", { name: /Reuters Latest Finance News/ }))
     const inspector = screen.getByRole("region", { name: "Result inspector" })
     expect(within(inspector).getByText("Provider score")).toBeInTheDocument()
-    expect(within(inspector).getByText("0.92")).toBeInTheDocument()
+    expect(within(inspector).getByText("92% match")).toBeInTheDocument()
   })
 
   it("labels a single-provider trace with provider order, not fusion", async () => {
@@ -193,12 +193,12 @@ describe("TraceDetailDialog", () => {
       screen.getByText(/Results keep the order returned by/)
     ).toBeInTheDocument()
     expect(screen.getAllByText("Keenable").length).toBeGreaterThanOrEqual(2)
-    // The shared card shows the value; the inspector shows the label after selection.
-    expect(screen.getByText("0.94")).toBeInTheDocument()
+    // The shared card shows the value on the common percentage scale.
+    expect(screen.getByText("94% match")).toBeInTheDocument()
     await user.click(screen.getByRole("button", { name: /Consensus algorithms explained/ }))
     const inspector = screen.getByRole("region", { name: "Result inspector" })
     expect(within(inspector).getByText("Provider score")).toBeInTheDocument()
-    expect(within(inspector).getByText("0.94")).toBeInTheDocument()
+    expect(within(inspector).getByText("94% match")).toBeInTheDocument()
     expect(screen.queryByText(/Fusion score/)).not.toBeInTheDocument()
     expect(screen.queryByText(/contributor not recorded/i)).not.toBeInTheDocument()
   })

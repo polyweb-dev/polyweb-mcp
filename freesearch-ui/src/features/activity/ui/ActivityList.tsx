@@ -127,7 +127,7 @@ function traceRow(options: TraceRowOptions): ReactNode {
       <TableCell className={`${CELL} text-right`}>
         <Button
           variant="outline"
-          size="sm"
+          size="default"
           onClick={(event) => {
             // The row is a click target too: stop the bubble so one interaction
             // selects the trace exactly once.

@@ -24,8 +24,8 @@ function emptyCopy(results: readonly TraceSearchResult[]): string {
 /**
  * Side inspector for one selected trace result: a thin adapter to the shared
  * inspector, so the recorded rank, attribution, score, and target host come
- * before the snippet exactly as they do in the Playground. The order
- * explanation keeps its place while nothing is selected.
+ * before the snippet exactly as they do in the Playground. While nothing is
+ * selected, the order explanation leads and the selection prompt follows it.
  */
 export function TraceResultInspector({
   result,
@@ -36,23 +36,19 @@ export function TraceResultInspector({
   results,
 }: TraceResultInspectorProps) {
   if (result === null || rank === null) {
+    if (results.length === 0) {
+      return <p className="text-[12px] text-[var(--muted)]">{emptyCopy(results)}</p>
+    }
     return (
-      <div className="min-w-0 space-y-3 text-[12px]">
-        <SearchResultInspector
-          result={null}
-          emptyState={<p className="text-[var(--muted)]">{emptyCopy(results)}</p>}
+      <div className="min-w-0 space-y-2 text-[12px]">
+        <h4 className="text-[12px] text-[var(--muted)]">Why this order</h4>
+        <p className="text-[var(--muted)]">{emptyCopy(results)}</p>
+        <TraceRankingExplanation
+          results={results}
+          mode={mode}
+          providerId={providerId}
+          providerLabel={providerLabel}
         />
-        {results.length > 0 && (
-          <div className="min-w-0 space-y-1">
-            <h4 className="text-[12px] text-[var(--muted)]">Why this order</h4>
-            <TraceRankingExplanation
-              results={results}
-              mode={mode}
-              providerId={providerId}
-              providerLabel={providerLabel}
-            />
-          </div>
-        )}
       </div>
     )
   }

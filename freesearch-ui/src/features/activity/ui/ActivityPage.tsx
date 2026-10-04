@@ -1,3 +1,4 @@
+import { RefreshCw } from "lucide-react"
 import { Button } from "@/shared/ui/button"
 import { SegmentedControl } from "@/shared/ui/SegmentedControl"
 import type { ActivityFilter } from "../model/useActivityController"
@@ -47,8 +48,15 @@ export function ActivityPage() {
             onChange={(label) => controller.setFilter(filterFromLabel(label))}
             ariaLabel="Activity operation filter"
           />
-          <Button variant="outline" size="sm" onClick={controller.refresh}>
-            Refresh
+          <Button
+            variant="default"
+            size="icon-lg"
+            className="h-auto w-[34px] self-stretch"
+            onClick={controller.refresh}
+            aria-label="Refresh"
+            title="Refresh"
+          >
+            <RefreshCw aria-hidden="true" className="size-4" />
           </Button>
         </div>
       </div>

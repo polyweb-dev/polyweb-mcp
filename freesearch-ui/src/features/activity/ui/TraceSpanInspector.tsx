@@ -3,7 +3,6 @@ import { traceTrajectoryLabel, type TraceEvent, type TraceStage } from "@/domain
 import { providerIdentity } from "@/domains/providers"
 import { JsonViewer } from "@/shared/ui/JsonViewer"
 import { ProviderBadge } from "@/shared/ui/ProviderBadge"
-import { TraceStatusPill } from "./TraceStatusPill"
 
 export interface TraceSpanInspectorProps {
   stage: TraceStage | null
@@ -41,7 +40,7 @@ function titleNode(stage: TraceStage): ReactNode {
   const identity = providerId === null || providerId === "" ? null : providerIdentity(providerId)
   if (identity !== null && identity.id !== "" && identity.id !== AGGREGATED_PROVIDER) {
     return (
-      <span className="flex min-w-0 flex-wrap items-center gap-1.5">
+      <span className="flex min-w-0 flex-wrap items-center gap-2">
         <ProviderBadge providerId={identity.id} name={identity.name} logoClassName="size-4" />
         {" "}
         <span>request</span>
@@ -51,21 +50,16 @@ function titleNode(stage: TraceStage): ReactNode {
   return <span className="[overflow-wrap:anywhere]">{traceTrajectoryLabel(stage)}</span>
 }
 
-function generalSection(stage: TraceStage): ReactNode {
-  return section(
-    "General",
-    <div className="min-w-0 space-y-2">
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-[11px] text-[var(--muted)]">Status</span>
-        <TraceStatusPill outcome={stage.outcome} />
-        <span className="text-[12px] text-[var(--text-strong)]">{stage.label}</span>
-      </div>
-      {stage.error !== null && (
-        <p className="text-[12px]" style={{ color: "var(--status-danger)" }}>
-          {stage.error.type}: {stage.error.message}
-        </p>
-      )}
-    </div>
+/**
+ * A span failure, shown only when the span recorded one. The outcome itself
+ * lives in the dialog summary above, so a successful span adds no block here.
+ */
+function spanError(stage: TraceStage): ReactNode {
+  if (stage.error === null) return null
+  return (
+    <p className="min-w-0 text-[12px]" style={{ color: "var(--status-danger)" }}>
+      {stage.error.type}: {stage.error.message}
+    </p>
   )
 }
 
@@ -157,7 +151,7 @@ export function TraceSpanInspector({ stage, traceId }: TraceSpanInspectorProps) 
         </h4>
       </div>
 
-      {generalSection(stage)}
+      {spanError(stage)}
       {timingSection(stage)}
       {payloadSection("Request", requestEvents, stage.spanId, "This span recorded no request payload.")}
       {payloadSection(

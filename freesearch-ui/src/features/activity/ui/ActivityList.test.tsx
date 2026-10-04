@@ -142,7 +142,7 @@ describe("ActivityList", () => {
     const keenableRow = screen.getByText("2025ms").closest("tr")!
     expect(within(keenableRow).getByText("Keenable")).toBeInTheDocument()
     expect(within(keenableRow).getByText("3")).toBeInTheDocument()
-    expect(within(keenableRow).getByText("success")).toBeInTheDocument()
+    expect(within(keenableRow).getByText("Success")).toBeInTheDocument()
     const tavilyRow = screen.getByText("3223ms").closest("tr")!
     expect(within(tavilyRow).getByText("Tavily")).toBeInTheDocument()
   })
@@ -426,7 +426,7 @@ describe("ActivityList seven-provider direct identity", () => {
 
     const parallelRow = screen.getByText("830ms").closest("tr")!
     expect(within(parallelRow).getByText("Parallel")).toBeInTheDocument()
-    expect(within(parallelRow).getByText("error")).toBeInTheDocument()
+    expect(within(parallelRow).getByText("Error")).toBeInTheDocument()
   })
 
   it("names the empty exa/youcom responses that still carry provider", () => {

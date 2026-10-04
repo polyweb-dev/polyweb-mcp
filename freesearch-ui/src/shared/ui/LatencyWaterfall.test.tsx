@@ -266,7 +266,7 @@ describe("LatencyWaterfall selectable rows", () => {
     expect(button.className).toContain("focus-visible:ring-[var(--signal)]/40")
   })
 
-  it("marks only the final ruler tick with the millisecond unit", () => {
+  it("marks the millisecond unit outside the axis, not on a tick", () => {
     render(
       <LatencyWaterfall
         rows={[selectableRow({ selected: false, onSelect: () => {} })]}
@@ -275,13 +275,15 @@ describe("LatencyWaterfall selectable rows", () => {
       />
     )
 
-    // Item 5: short bare numbers on every tick, the unit once on the final
-    // tick, with zero geometry change to the ruler box.
-    expect(screen.getByText("100 ms")).toBeInTheDocument()
+    // Item 5: short bare numbers on every tick, the unit once outside the
+    // track, with zero geometry change to the ruler box.
+    expect(screen.getByText("100")).toBeInTheDocument()
     expect(screen.getByText("0")).toBeInTheDocument()
     expect(screen.getByText("25")).toBeInTheDocument()
     expect(screen.getByText("50")).toBeInTheDocument()
     expect(screen.getByText("75")).toBeInTheDocument()
+    expect(screen.getByText("ms")).toBeInTheDocument()
+    expect(screen.queryByText("100 ms")).not.toBeInTheDocument()
     expect(screen.queryByText("0 ms")).not.toBeInTheDocument()
   })
 

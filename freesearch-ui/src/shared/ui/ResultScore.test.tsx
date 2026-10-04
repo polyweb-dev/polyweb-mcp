@@ -3,23 +3,24 @@ import { render, screen } from "@testing-library/react"
 import { ResultScore } from "./ResultScore"
 
 /**
- * ResultScore (PLAN §4 R1): one recorded score in its own unit — Playground
- * keeps its percentage match rate, a trace keeps its decimal score. A null
- * value is stated as unavailable; no zero is invented and no mode converts.
+ * ResultScore (PLAN §4 R1): one recorded score, always as a gold percentage
+ * match rate — Playground keeps its percentage match rate, a trace fusion or
+ * provider score is shown on the same scale. A null value is stated as
+ * unavailable; no zero is invented.
  */
 describe("ResultScore", () => {
-  it("renders a decimal score with exactly two decimals", () => {
+  it("renders a decimal score as a percentage match", () => {
     render(<ResultScore score={{ label: "Fusion score", value: 0.7, format: "decimal" }} />)
 
-    expect(screen.getByText("0.70")).toBeInTheDocument()
+    expect(screen.getByText("70% match")).toBeInTheDocument()
   })
 
-  it("rounds a decimal score to two decimals", () => {
+  it("rounds a decimal score to a whole-number percentage", () => {
     render(
       <ResultScore score={{ label: "Provider score", value: 0.686, format: "decimal" }} />
     )
 
-    expect(screen.getByText("0.69")).toBeInTheDocument()
+    expect(screen.getByText("69% match")).toBeInTheDocument()
   })
 
   it("renders a percent score with Playground percentage semantics", () => {
@@ -35,30 +36,36 @@ describe("ResultScore", () => {
     expect(screen.getByText("85% match")).toBeInTheDocument()
   })
 
-  it("shows Unavailable for a null decimal score", () => {
-    render(
+  it("renders nothing for a null score", () => {
+    const { container } = render(
       <ResultScore score={{ label: "Fusion score", value: null, format: "decimal" }} />
     )
 
-    expect(screen.getByText("Unavailable")).toBeInTheDocument()
+    expect(container).toBeEmptyDOMElement()
+    expect(screen.queryByText("Unavailable")).not.toBeInTheDocument()
   })
 
-  it("shows Unavailable for a null percent score", () => {
-    render(<ResultScore score={{ label: "Score", value: null, format: "percent" }} />)
+  it("renders nothing for a zero score", () => {
+    const { container } = render(
+      <ResultScore score={{ label: "Score", value: 0, format: "percent" }} />
+    )
 
-    expect(screen.getByText("Unavailable")).toBeInTheDocument()
+    expect(container).toBeEmptyDOMElement()
+    expect(screen.queryByText("0% match")).not.toBeInTheDocument()
+    expect(screen.queryByText("Unavailable")).not.toBeInTheDocument()
   })
 
-  it("does not convert a decimal score into a percentage", () => {
+  it("never shows a decimal score in decimal form", () => {
     render(<ResultScore score={{ label: "Fusion score", value: 0.7, format: "decimal" }} />)
-
-    expect(screen.queryByText("70% match")).not.toBeInTheDocument()
-  })
-
-  it("does not convert a percent score into a decimal", () => {
-    render(<ResultScore score={{ label: "Score", value: 0.7, format: "percent" }} />)
 
     expect(screen.queryByText("0.70")).not.toBeInTheDocument()
     expect(screen.getByText("70% match")).toBeInTheDocument()
+  })
+
+  it("paints every score in the common gold match color", () => {
+    render(<ResultScore score={{ label: "Score", value: 0.7, format: "percent" }} />)
+
+    expect(screen.queryByText("0.70")).not.toBeInTheDocument()
+    expect(screen.getByText("70% match").getAttribute("style")).toContain("var(--accent-gold)")
   })
 })

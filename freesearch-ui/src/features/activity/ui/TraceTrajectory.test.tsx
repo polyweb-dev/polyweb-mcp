@@ -74,6 +74,7 @@ describe("TraceTrajectory", () => {
     for (const row of rows) {
       expect(row.querySelector('span[style*="left"]')).not.toBeNull()
       expect(row.textContent).toMatch(/\d+ms/)
+      expect(row.textContent).not.toMatch(/\d+ res/)
     }
   })
 
@@ -129,7 +130,7 @@ describe("TraceTrajectory", () => {
     expect(screen.getByText("Outside provider calls")).toBeInTheDocument()
   })
 
-  it("carries the inset focus ring on trajectory rows and the ms unit on the final tick", () => {
+  it("carries the inset focus ring on trajectory rows and the ms unit outside the axis", () => {
     const detail = mapTraceDetail(aggregatedTraceDetailFixture())
     render(
       <TraceTrajectory
@@ -140,12 +141,15 @@ describe("TraceTrajectory", () => {
       />
     )
 
-    // Item 5: the inset ring survives the trajectory scroll container, and the
-    // ruler marks only its final tick with the millisecond unit.
+    // Item 5: the inset ring survives the trajectory scroll container, the
+    // ruler ticks stay bare numbers, and the millisecond unit sits outside
+    // the track so the final tick can never wrap or clip.
     const row = screen.getByRole("button", { name: /keenable request/i })
     expect(row.className).toContain("focus-visible:ring-inset")
     expect(row.className).toContain("focus-visible:ring-2")
-    expect(screen.getByText(`${detail.totalMs} ms`)).toBeInTheDocument()
+    expect(screen.getByText(String(detail.totalMs))).toBeInTheDocument()
+    expect(screen.getByText("ms")).toBeInTheDocument()
+    expect(screen.queryByText(`${detail.totalMs} ms`)).not.toBeInTheDocument()
   })
 
   it("marks the selected row and hands its span id to the side payload", async () => {

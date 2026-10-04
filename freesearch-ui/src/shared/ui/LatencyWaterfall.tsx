@@ -133,16 +133,15 @@ function labelIndent(depth: number | undefined): CSSProperties | undefined {
 
 function tickLabelClass(percent: number): string {
   return cn(
-    "tnum absolute bottom-1 text-[10px] leading-none text-[var(--muted)]",
+    "tnum absolute bottom-1 whitespace-nowrap text-[10px] leading-none text-[var(--muted)]",
     percent > 0 && percent < PERCENT_SCALE && "-translate-x-1/2",
     percent >= PERCENT_SCALE && "-translate-x-full"
   )
 }
 
-/** The axis carries its unit once, on the last tick, so the numbers stay short. */
+/** Ticks stay bare numbers; the millisecond unit lives outside the axis track. */
 function tickText(totalMs: number, percent: number): string {
-  const value = Math.round((totalMs * percent) / PERCENT_SCALE)
-  return percent === PERCENT_SCALE ? `${value} ms` : String(value)
+  return String(Math.round((totalMs * percent) / PERCENT_SCALE))
 }
 
 function renderRuler(totalMs: number, hasScale: boolean) {
@@ -176,6 +175,11 @@ function renderRulerRow(totalMs: number, hasScale: boolean, sticky: boolean) {
     >
       <span aria-hidden="true" className="hidden sm:block" />
       <div className={TRACK_CELL_CLASS}>{renderRuler(totalMs, hasScale)}</div>
+      {hasScale ? (
+        <span aria-hidden="true" className={cn(VALUE_CELL_CLASS, "text-[11px] text-[var(--muted)]")}>
+          ms
+        </span>
+      ) : null}
     </div>
   )
 }

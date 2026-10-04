@@ -1,4 +1,5 @@
 import type { ProviderConfig } from "@/domains/providers"
+import { ProviderBadge } from "@/shared/ui/ProviderBadge"
 
 export const PROVIDERS_POPOVER_ID = "provider-status-details"
 
@@ -27,7 +28,11 @@ export function ProviderStatusPopover({
       <div className="space-y-1.5 py-2">
         {providers.map((provider) => (
           <div key={provider.id} className="flex items-center justify-between gap-3">
-            <span className="truncate">{provider.name}</span>
+            <ProviderBadge
+              providerId={provider.id}
+              name={provider.name}
+              logoClassName="size-3.5"
+            />
             <span
               className={
                 eligibleProviders.some(({ id }) => id === provider.id)

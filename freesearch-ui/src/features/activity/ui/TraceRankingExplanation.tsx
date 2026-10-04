@@ -1,6 +1,5 @@
 import type { TraceSearchResult } from "@/domains/activity"
 import { providerIdentity } from "@/domains/providers"
-import { ProviderBadge } from "@/shared/ui/ProviderBadge"
 
 /** Which ranking this view explains: the fused output, or one provider's own. */
 export type RankingMode = "fusion" | "provider"
@@ -30,21 +29,15 @@ function providerCopy(scored: boolean): { before: string; after: string } {
 }
 
 /**
- * The provider identity inside a sentence. A known provider shows its badge;
- * an unrecorded one keeps the plain label, so the sentence still reads.
+ * The provider name inside a sentence: plain text at the surrounding size,
+ * never a badge, so the sentence reads as one line. An unrecorded provider
+ * keeps the plain label for the same reason.
  */
 function providerInline(providerId: string | null, providerLabel: string) {
   if (providerId === null || providerId === "") return <span>{providerLabel}</span>
   const identity = providerIdentity(providerId)
   if (identity.id === "" || identity.id === "aggregated") return <span>{identity.name}</span>
-  return (
-    <ProviderBadge
-      providerId={identity.id}
-      name={identity.name}
-      className="align-middle text-[12px] text-[var(--text-strong)]"
-      logoClassName="size-3.5"
-    />
-  )
+  return <span>{identity.name}</span>
 }
 
 /**

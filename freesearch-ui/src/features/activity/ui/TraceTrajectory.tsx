@@ -4,7 +4,6 @@ import {
   deriveTraceLatencySummary,
   selectUserTraceStages,
   type TraceLatencySummary,
-  type TraceProviderAttempt,
   type TraceStage,
 } from "@/domains/activity"
 import { providerIdentity } from "@/domains/providers"
@@ -127,7 +126,6 @@ function latencySummary(summary: TraceLatencySummary, hasAttempts: boolean): Rea
 
 function toRow(
   stage: TraceStage,
-  attempt: TraceProviderAttempt | undefined,
   selectedSpanId: string | null,
   onSelect: (spanId: string) => void
 ): LatencyWaterfallRow {
@@ -138,7 +136,7 @@ function toRow(
     value: (
       <LatencyWaterfallValue
         durationMs={stage.durationMs}
-        resultCount={attempt?.resultCount ?? null}
+        resultCount={null}
         outcome={stage.outcome === "success" ? undefined : stage.outcome}
       />
     ),
@@ -164,13 +162,7 @@ export function TraceTrajectory({
   const visible = useMemo(() => selectUserTraceStages(stages), [stages])
   const attempts = useMemo(() => deriveProviderAttempts(stages, null), [stages])
   const summary = useMemo(() => deriveTraceLatencySummary(attempts, totalMs), [attempts, totalMs])
-  const attemptBySpan = useMemo(
-    () => new Map(attempts.map((attempt) => [attempt.spanId, attempt])),
-    [attempts]
-  )
-  const rows = visible.map((stage) =>
-    toRow(stage, attemptBySpan.get(stage.spanId), selectedSpanId, onSelect)
-  )
+  const rows = visible.map((stage) => toRow(stage, selectedSpanId, onSelect))
 
   return (
     <div className="min-w-0 space-y-2">

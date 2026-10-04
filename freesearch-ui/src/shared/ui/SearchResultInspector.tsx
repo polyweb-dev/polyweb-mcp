@@ -2,6 +2,7 @@ import type { ReactNode } from "react"
 import { ExternalLink } from "lucide-react"
 import { ProviderBadge } from "./ProviderBadge"
 import { ResultScore } from "./ResultScore"
+import { hasRecordedScore } from "./searchResultView"
 import type { SearchResultView } from "./searchResultView"
 
 export interface SearchResultInspectorProps {
@@ -106,7 +107,9 @@ export function SearchResultInspector({
 
       <dl className="grid min-w-0 grid-cols-2 gap-x-3 gap-y-2">
         {metaRow(result.attributionLabel, attributionValue(result))}
-        {metaRow(result.score.label, <ResultScore score={result.score} />)}
+        {hasRecordedScore(result.score)
+          ? metaRow(result.score.label, <ResultScore score={result.score} />)
+          : null}
       </dl>
 
       <div className="min-w-0 space-y-1">

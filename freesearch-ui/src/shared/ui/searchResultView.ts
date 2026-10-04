@@ -13,6 +13,17 @@ export interface ResultScoreView {
   format: "decimal" | "percent"
 }
 
+/**
+ * Whether a score carries a recorded value worth showing. A null score was
+ * never recorded, and a zero score carries no ranking signal, so both stay
+ * hidden instead of rendering as "Unavailable" or "0% match".
+ */
+export function hasRecordedScore(
+  score: ResultScoreView
+): score is ResultScoreView & { value: number } {
+  return score.value !== null && score.value !== 0
+}
+
 /** One provider identity as the result surfaces show it. */
 export interface ResultProviderView {
   id: string

@@ -86,7 +86,10 @@ describe("SearchResultCard", () => {
     expect(screen.getByText("Tavily")).toBeInTheDocument()
     expect(screen.getByText("Exa")).toBeInTheDocument()
     expect(screen.getByText("2 engines")).toBeInTheDocument()
-    expect(screen.getByText("0.70")).toBeInTheDocument()
+    expect(screen.getByText("70% match")).toBeInTheDocument()
+    // The metadata row shares one font size; nothing in it drops a level.
+    const meta = screen.getByText("2 engines").closest("div")!
+    expect(meta.querySelectorAll('[class*="text-[11px]"]')).toHaveLength(0)
   })
 
   it("shows the published date when the view records one", () => {
