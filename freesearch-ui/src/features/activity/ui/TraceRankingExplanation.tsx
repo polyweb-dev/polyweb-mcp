@@ -1,4 +1,6 @@
 import type { TraceSearchResult } from "@/domains/activity"
+import { providerIdentity } from "@/domains/providers"
+import { ProviderBadge } from "@/shared/ui/ProviderBadge"
 
 /** Which ranking this view explains: the fused output, or one provider's own. */
 export type RankingMode = "fusion" | "provider"
@@ -10,12 +12,39 @@ const FUSION_UNSCORED =
 const RRF_ABSENT =
   "Raw reciprocal-rank inputs and per-provider ranks are not recorded, so exact RRF arithmetic is unavailable."
 
-/** One sentence per mode: the order is explained once, never per result. */
-function providerCopy(provider: string, scored: boolean): string {
+/** One sentence per mode, split around the provider identity it names. */
+function providerCopy(scored: boolean): { before: string; after: string } {
+  const before = "Results keep the order returned by "
   if (scored) {
-    return `Results keep the order returned by ${provider}. Recorded provider scores are shown as metadata; FreeSearch did not reorder this response.`
+    return {
+      before,
+      after:
+        ". Recorded provider scores are shown as metadata; FreeSearch did not reorder this response.",
+    }
   }
-  return `Results keep the order returned by ${provider}. This trace did not record provider scores, so returned order is the only ranking signal.`
+  return {
+    before,
+    after:
+      ". This trace did not record provider scores, so returned order is the only ranking signal.",
+  }
+}
+
+/**
+ * The provider identity inside a sentence. A known provider shows its badge;
+ * an unrecorded one keeps the plain label, so the sentence still reads.
+ */
+function providerInline(providerId: string | null, providerLabel: string) {
+  if (providerId === null || providerId === "") return <span>{providerLabel}</span>
+  const identity = providerIdentity(providerId)
+  if (identity.id === "" || identity.id === "aggregated") return <span>{identity.name}</span>
+  return (
+    <ProviderBadge
+      providerId={identity.id}
+      name={identity.name}
+      className="align-middle text-[12px] text-[var(--text-strong)]"
+      logoClassName="size-3.5"
+    />
+  )
 }
 
 /**
@@ -27,22 +56,33 @@ function providerCopy(provider: string, scored: boolean): string {
 export function TraceRankingExplanation({
   results,
   mode,
+  providerId,
   providerLabel,
 }: {
   results: readonly TraceSearchResult[]
   mode: RankingMode
+  providerId: string | null
   providerLabel: string
 }) {
   const scored = results.some((result) => result.score !== null)
-  const sentence =
-    mode === "fusion"
-      ? scored
-        ? FUSION_SCORED
-        : FUSION_UNSCORED
-      : providerCopy(providerLabel, scored)
+  const copy = providerCopy(scored)
   return (
     <div className="min-w-0 space-y-2 text-[12px]">
-      <p className="text-[var(--muted)]">{sentence}</p>
+      <p className="text-[var(--muted)]">
+        {mode === "fusion" ? (
+          scored ? (
+            FUSION_SCORED
+          ) : (
+            FUSION_UNSCORED
+          )
+        ) : (
+          <>
+            {copy.before}
+            {providerInline(providerId, providerLabel)}
+            {copy.after}
+          </>
+        )}
+      </p>
       {mode === "fusion" && scored && <p className="text-[var(--muted)]">{RRF_ABSENT}</p>}
     </div>
   )

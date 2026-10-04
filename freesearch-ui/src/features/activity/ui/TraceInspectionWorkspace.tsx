@@ -1,5 +1,6 @@
-import { useState } from "react"
+import { useState, type ReactNode } from "react"
 import {
+  selectUserTraceStages,
   traceTrajectoryLabel,
   type TraceDetail,
   type TraceOutput,
@@ -7,7 +8,9 @@ import {
   type TraceSearchOutput,
   type TraceStage,
 } from "@/domains/activity"
+import { providerIdentity } from "@/domains/providers"
 import { InspectorSplitPane } from "@/shared/ui/InspectorSplitPane"
+import { ProviderBadge } from "@/shared/ui/ProviderBadge"
 import { SegmentedControl } from "@/shared/ui/SegmentedControl"
 import type { RankingMode } from "./TraceRankingExplanation"
 import { TraceResultInspector } from "./TraceResultInspector"
@@ -31,6 +34,7 @@ interface Selection {
 }
 
 const NO_SELECTION: Selection = { view: "results", resultIndex: null, spanId: null }
+const AGGREGATED_PROVIDER = "aggregated"
 
 /** Identity of the inspected subject: a new trace or scope starts fresh. */
 function identityOf(trace: TraceDetail, attempt: TraceProviderAttempt | null): string {
@@ -41,14 +45,39 @@ function searchOutput(output: TraceOutput | null): TraceSearchOutput | null {
   return output !== null && output.kind === "search_results" ? output : null
 }
 
-function selectedStage(trace: TraceDetail, spanId: string | null): TraceStage | null {
+/**
+ * Provider the shown output belongs to: the scoped attempt, or the trace's own
+ * provider when the whole trace is a single-provider search. A fused whole
+ * trace has no single provider and keeps the null.
+ */
+function scopedProviderId(trace: TraceDetail, attempt: TraceProviderAttempt | null): string | null {
+  if (attempt !== null) return attempt.providerId
+  return trace.provider === AGGREGATED_PROVIDER ? null : trace.provider
+}
+
+function selectedStage(stages: readonly TraceStage[], spanId: string | null): TraceStage | null {
   if (spanId === null) return null
-  return trace.stages.find((stage) => stage.spanId === spanId) ?? null
+  return stages.find((stage) => stage.spanId === spanId) ?? null
+}
+
+/** The provider identity a line shows, or the recorded label when it is absent. */
+function providerNode(providerId: string | null, fallbackLabel: string): ReactNode {
+  if (providerId === null || providerId === "") return <span>{fallbackLabel}</span>
+  const identity = providerIdentity(providerId)
+  if (identity.id === "" || identity.id === AGGREGATED_PROVIDER) return <span>{fallbackLabel}</span>
+  return <ProviderBadge providerId={identity.id} name={identity.name} logoClassName="size-3.5" />
 }
 
 /** One quiet line naming what the workspace is currently showing. */
-function scopeText(output: TraceOutput | null, attempt: TraceProviderAttempt | null): string {
-  if (attempt !== null) return `${attempt.providerLabel} response`
+function scopeText(output: TraceOutput | null, attempt: TraceProviderAttempt | null): ReactNode {
+  if (attempt !== null) {
+    return (
+      <span className="inline-flex min-w-0 flex-wrap items-center gap-1.5">
+        {providerNode(attempt.providerId, attempt.providerLabel)}
+        {" response"}
+      </span>
+    )
+  }
   if (output === null) return "No recorded output"
   if (output.kind === "fetch_document") return "Fetched document"
   return `${output.results.length} results in fused order`
@@ -71,17 +100,19 @@ interface SelectionPaneOptions {
   attempt: TraceProviderAttempt | null
   mode: RankingMode
   providerLabel: string
+  providerId: string | null
   selection: Selection
   onSelectResult: (index: number) => void
   onSelectSpan: (spanId: string) => void
 }
 
 function resultsView(options: SelectionPaneOptions) {
-  const { output, attempt, mode, providerLabel, selection, onSelectResult } = options
+  const { output, attempt, mode, providerLabel, providerId, selection, onSelectResult } = options
   const results = searchOutput(output)
   const shared = {
     output,
     mode,
+    providerId,
     results: results?.results ?? [],
     selectedIndex: selection.resultIndex,
     onSelect: onSelectResult,
@@ -101,6 +132,7 @@ function resultsView(options: SelectionPaneOptions) {
           result={results.results[selection.resultIndex ?? -1] ?? null}
           rank={selection.resultIndex === null ? null : selection.resultIndex + 1}
           mode={mode}
+          providerId={providerId}
           providerLabel={providerLabel}
           results={results.results}
         />
@@ -111,20 +143,25 @@ function resultsView(options: SelectionPaneOptions) {
 
 function trajectoryView(options: SelectionPaneOptions) {
   const { trace, selection, onSelectSpan } = options
-  const stage = selectedStage(trace, selection.spanId)
+  // Only the visible user-level stages can be selected, so a hidden transport
+  // or function span never gets a detail panel.
+  const stages = selectUserTraceStages(trace.stages)
+  const stage = selectedStage(stages, selection.spanId)
   return (
     <InspectorSplitPane
       primaryLabel="Trace trajectory"
       detailLabel={stage === null ? "Span payload" : `${traceTrajectoryLabel(stage)} payload`}
       primary={
         <TraceTrajectory
-          stages={trace.stages}
+          stages={stages}
           totalMs={trace.totalMs}
           selectedSpanId={selection.spanId}
           onSelect={onSelectSpan}
         />
       }
-      detail={<TraceSpanInspector stage={stage} traceId={trace.traceId} />}
+      detail={
+        <TraceSpanInspector key={stage?.spanId ?? "none"} stage={stage} traceId={trace.traceId} />
+      }
     />
   )
 }
@@ -133,7 +170,7 @@ function trajectoryView(options: SelectionPaneOptions) {
  * The detail workspace: recorded results and the recorded trajectory in one
  * switchable shell, each with the payload of the current selection at its side.
  * Selection is ephemeral and belongs here — a new trace or provider scope
- * starts with nothing selected (PLAN §5.3–5.4).
+ * starts with nothing selected (PLAN §5).
  */
 export function TraceInspectionWorkspace({
   trace,
@@ -158,6 +195,7 @@ export function TraceInspectionWorkspace({
     attempt,
     mode,
     providerLabel,
+    providerId: scopedProviderId(trace, attempt),
     selection,
     onSelectResult: (resultIndex) =>
       setSelection((prev) => ({

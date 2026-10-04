@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
 import { render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
+import { selectUserTraceStages } from "@/domains/activity/model/tracePresentation"
 import { mapTraceDetail } from "@/domains/activity/model/mappers"
 import {
   aggregatedTraceDetailFixture,
@@ -16,8 +17,9 @@ import { TraceTrajectory } from "./TraceTrajectory"
  * the nested-disclosure timeline (`TraceTimeline.test.tsx` is deleted).
  */
 describe("TraceTrajectory", () => {
-  it("renders every span once in wire order with stable depth", () => {
+  it("renders user-level stages once in canonical order with stable depth", () => {
     const detail = mapTraceDetail(aggregatedTraceDetailFixture())
+    const visible = selectUserTraceStages(detail.stages)
     render(
       <TraceTrajectory
         stages={detail.stages}
@@ -29,8 +31,13 @@ describe("TraceTrajectory", () => {
 
     const list = screen.getByRole("list", { name: /trajectory/i })
     const rows = within(list).getAllByRole("button")
-    expect(rows).toHaveLength(detail.stages.length)
+    expect(visible).toHaveLength(11)
+    expect(rows).toHaveLength(visible.length)
     expect(rows[0]).toHaveTextContent(/search request/i)
+    expect(screen.queryByText(/provider http call/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/provider response parse/i)).not.toBeInTheDocument()
+    expect(within(list).getAllByTestId(/provider-logo-/)).toHaveLength(7)
+    expect(screen.queryByRole("button", { name: /^provider request$/i })).not.toBeInTheDocument()
   })
 
   it("indents children by depth without nested disclosure boxes", () => {
@@ -99,6 +106,46 @@ describe("TraceTrajectory", () => {
 
     const failed = screen.getByRole("button", { name: /provider request/i })
     expect(failed).toHaveTextContent(/error/i)
+  })
+
+  it("summarizes provider time as the interval union, not the duration sum", () => {
+    const detail = mapTraceDetail(aggregatedTraceDetailFixture())
+    render(
+      <TraceTrajectory
+        stages={detail.stages}
+        totalMs={detail.totalMs}
+        selectedSpanId={null}
+        onSelect={() => {}}
+      />
+    )
+
+    const active = screen.getByText("Provider active").closest("div")!
+    const activeMs = Number((active.textContent ?? "").replace(/[^0-9]/g, ""))
+    const durationSum = detail.stages
+      .filter((stage) => stage.name === "freesearch.provider")
+      .reduce((sum, stage) => sum + stage.durationMs, 0)
+    expect(activeMs).toBeGreaterThan(0)
+    expect(activeMs).toBeLessThan(durationSum)
+    expect(screen.getByText("Outside provider calls")).toBeInTheDocument()
+  })
+
+  it("carries the inset focus ring on trajectory rows and the ms unit on the final tick", () => {
+    const detail = mapTraceDetail(aggregatedTraceDetailFixture())
+    render(
+      <TraceTrajectory
+        stages={detail.stages}
+        totalMs={detail.totalMs}
+        selectedSpanId={null}
+        onSelect={() => {}}
+      />
+    )
+
+    // Item 5: the inset ring survives the trajectory scroll container, and the
+    // ruler marks only its final tick with the millisecond unit.
+    const row = screen.getByRole("button", { name: /keenable request/i })
+    expect(row.className).toContain("focus-visible:ring-inset")
+    expect(row.className).toContain("focus-visible:ring-2")
+    expect(screen.getByText(`${detail.totalMs} ms`)).toBeInTheDocument()
   })
 
   it("marks the selected row and hands its span id to the side payload", async () => {

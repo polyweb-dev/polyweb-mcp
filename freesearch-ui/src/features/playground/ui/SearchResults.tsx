@@ -1,8 +1,9 @@
 import type { ReactNode } from "react"
-import { ProviderLogo } from "@/components/common/ProviderLogo"
 import type { SearchResponse } from "@/domains/execution"
+import { providerIdentity } from "@/domains/providers"
 import { InspectorSplitPane } from "@/shared/ui/InspectorSplitPane"
 import { JsonViewer } from "@/shared/ui/JsonViewer"
+import { ProviderBadge } from "@/shared/ui/ProviderBadge"
 import type { PlaygroundController } from "../model/usePlaygroundController"
 import { ResultCard } from "./ResultCard"
 import { ResultInspector } from "./ResultInspector"
@@ -45,6 +46,7 @@ export function SearchResults({ controller, result: activeSearch }: SearchResult
     isFetching,
     handleFetchResult,
   } = controller
+  const resolvedIdentity = providerIdentity(activeSearch.selectedProviderId)
   return (
     <div className="space-y-6 pt-2">
       {/* Telemetry bar */}
@@ -64,10 +66,11 @@ export function SearchResults({ controller, result: activeSearch }: SearchResult
               {activeSearch.selectedProviderId === "aggregated" ? (
                 <span>All Providers ({activeSearch.participatingProviders?.length ?? "multiple"} fused)</span>
               ) : (
-                <>
-                  <ProviderLogo providerId={activeSearch.selectedProviderId} className="size-3.5" />
-                  {activeSearch.selectedProviderId}
-                </>
+                <ProviderBadge
+                  providerId={resolvedIdentity.id}
+                  name={resolvedIdentity.name}
+                  logoClassName="size-3.5"
+                />
               )}
             </span>
           </div>

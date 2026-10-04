@@ -94,7 +94,8 @@ describe("TraceDetailDialog", () => {
     ).toBeInTheDocument()
   })
 
-  it("lists fused results as compact selectable rows with rank, source, and fusion scores", () => {
+  it("lists fused results as compact selectable rows with rank, source, and fusion scores", async () => {
+    const user = userEvent.setup()
     renderDialog(aggregatedDetail())
 
     const ranked = screen.getByRole("list", { name: "Ranked results" })
@@ -103,13 +104,18 @@ describe("TraceDetailDialog", () => {
     expect(
       screen.getAllByText("Reuters Latest Finance News | Today Top Headlines")
     ).toHaveLength(1)
-    expect(within(ranked).getByText("Fusion score 0.70")).toBeInTheDocument()
-    // The full snippet stays out of the rows until selection.
+    // The shared card shows the recorded value; the label lives in the inspector after selection.
+    expect(within(ranked).getByText("0.70")).toBeInTheDocument()
+    // R8: the shared card carries a two-line snippet, so the text is present in the row.
     expect(
-      screen.queryByText(
+      within(ranked).getByText(
         "Exclusive news, data and analytics for financial market professionals."
       )
-    ).not.toBeInTheDocument()
+    ).toBeInTheDocument()
+    await user.click(screen.getByRole("button", { name: /Reuters Latest Finance News/ }))
+    const inspector = screen.getByRole("region", { name: "Result inspector" })
+    expect(within(inspector).getByText("Fusion score")).toBeInTheDocument()
+    expect(within(inspector).getByText("0.70")).toBeInTheDocument()
   })
 
   it("renders every recorded result with no show-all control", () => {
@@ -151,32 +157,64 @@ describe("TraceDetailDialog", () => {
     expect(screen.queryByText(/contributor not recorded/i)).not.toBeInTheDocument()
   })
 
-  it("scopes results, score, and summary to the inspected provider attempt", () => {
+  it("scopes results, score, and summary to the inspected provider attempt", async () => {
+    const user = userEvent.setup()
     renderDialog(aggregatedDetail(), { providerSpanId: "a100000000000003" })
 
-    expect(screen.getByText("Keenable response")).toBeInTheDocument()
+    // The provider identity renders as a logo badge followed by the name, so the
+    // scope line holds separate elements instead of one text node. The badge
+    // repeats in the scope line, the ranking sentence, and the result cards.
+    const dialog = screen.getByRole("dialog")
+    expect(within(dialog).getAllByText("Keenable").length).toBeGreaterThanOrEqual(2)
+    expect(within(dialog).getAllByText(/response/).length).toBeGreaterThanOrEqual(2)
     expect(screen.queryByText("Results returned")).not.toBeInTheDocument()
     expect(
-      screen.getByText(/Results keep the order returned by Keenable/)
+      screen.getByText(/Results keep the order returned by/)
     ).toBeInTheDocument()
-    expect(screen.getByText("Provider score 0.92")).toBeInTheDocument()
     expect(screen.queryByText(/Fusion score/)).not.toBeInTheDocument()
     expect(screen.getByText("Provider latency")).toBeInTheDocument()
     expect(screen.getByText("2025ms")).toBeInTheDocument()
     expect(
       screen.getByText(/Showing this provider's response/)
     ).toBeInTheDocument()
+    // The shared card shows the value; the inspector shows the label after selection.
+    expect(within(dialog).getByText("0.92")).toBeInTheDocument()
+    await user.click(screen.getByRole("button", { name: /Reuters Latest Finance News/ }))
+    const inspector = screen.getByRole("region", { name: "Result inspector" })
+    expect(within(inspector).getByText("Provider score")).toBeInTheDocument()
+    expect(within(inspector).getByText("0.92")).toBeInTheDocument()
   })
 
-  it("labels a single-provider trace with provider order, not fusion", () => {
+  it("labels a single-provider trace with provider order, not fusion", async () => {
+    const user = userEvent.setup()
     renderDialog(searchDetail())
 
     expect(
-      screen.getByText(/Results keep the order returned by Keenable/)
+      screen.getByText(/Results keep the order returned by/)
     ).toBeInTheDocument()
-    expect(screen.getByText("Provider score 0.94")).toBeInTheDocument()
+    expect(screen.getAllByText("Keenable").length).toBeGreaterThanOrEqual(2)
+    // The shared card shows the value; the inspector shows the label after selection.
+    expect(screen.getByText("0.94")).toBeInTheDocument()
+    await user.click(screen.getByRole("button", { name: /Consensus algorithms explained/ }))
+    const inspector = screen.getByRole("region", { name: "Result inspector" })
+    expect(within(inspector).getByText("Provider score")).toBeInTheDocument()
+    expect(within(inspector).getByText("0.94")).toBeInTheDocument()
     expect(screen.queryByText(/Fusion score/)).not.toBeInTheDocument()
     expect(screen.queryByText(/contributor not recorded/i)).not.toBeInTheDocument()
+  })
+
+  it("places inspector metadata before the snippet with no Source row", async () => {
+    const user = userEvent.setup()
+    renderDialog(aggregatedDetail())
+
+    await user.click(screen.getByRole("button", { name: /Reuters Latest Finance News/ }))
+    const inspector = screen.getByRole("region", { name: "Result inspector" })
+    const html = inspector.innerHTML
+    expect(html.indexOf("Fusion score")).toBeGreaterThan(-1)
+    expect(html.indexOf("Fusion score")).toBeLessThan(html.indexOf("Target URL"))
+    expect(html.indexOf("Target URL")).toBeLessThan(html.indexOf("Snippet summary"))
+    expect(within(inspector).queryByText(/Source/)).not.toBeInTheDocument()
+    expect(within(inspector).queryByText(/Source not recorded/)).not.toBeInTheDocument()
   })
 
   it("states the no-score fallback without inventing ranking arithmetic", () => {
@@ -207,7 +245,9 @@ describe("TraceDetailDialog", () => {
     expect(screen.queryByText("Latency")).not.toBeInTheDocument()
     await user.click(screen.getByRole("button", { name: "Trajectory" }))
     const trajectory = screen.getByRole("list", { name: "Trace trajectory" })
-    expect(within(trajectory).getByText("Keenable request")).toBeInTheDocument()
+    const row = within(trajectory).getByRole("button", { name: /Keenable request/i })
+    expect(within(row).getByText("Keenable")).toBeInTheDocument()
+    expect(within(row).getByText("request")).toBeInTheDocument()
     expect(within(trajectory).getByText("2025ms")).toBeInTheDocument()
   })
 
@@ -357,16 +397,24 @@ describe("TraceDetailDialog inspector workspace", () => {
     )
   })
 
-  it("keeps rows compact and shows the full snippet only in the side inspector", async () => {
+  it("keeps rows compact and shows the full snippet in the side inspector", async () => {
     const user = userEvent.setup()
     renderAggregated()
 
+    // R8: the shared card carries a two-line snippet in the row; selection fills the inspector.
+    const ranked = screen.getByRole("list", { name: "Ranked results" })
     expect(
-      screen.queryByText("Exclusive news, data and analytics for financial market professionals.")
+      within(ranked).getByText("Exclusive news, data and analytics for financial market professionals.")
+    ).toBeInTheDocument()
+    const inspector = screen.getByRole("region", { name: "Result inspector" })
+    expect(
+      within(inspector).queryByText("Exclusive news, data and analytics for financial market professionals.")
     ).not.toBeInTheDocument()
     await user.click(screen.getByRole("button", { name: /Reuters Latest Finance News/ }))
     expect(
-      screen.getByText("Exclusive news, data and analytics for financial market professionals.")
+      within(screen.getByRole("region", { name: "Result inspector" })).getByText(
+        "Exclusive news, data and analytics for financial market professionals."
+      )
     ).toBeInTheDocument()
   })
 

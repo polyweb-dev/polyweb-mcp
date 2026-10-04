@@ -1,6 +1,7 @@
 import { ExternalLink, FileText } from "lucide-react"
-import { ProviderLogo } from "@/components/common/ProviderLogo"
 import type { SearchResult } from "@/domains/execution"
+import { SearchResultCard } from "@/shared/ui/SearchResultCard"
+import { toPlaygroundResultView } from "../model/searchResultPresentation"
 
 export interface ResultCardProps {
   result: SearchResult
@@ -11,69 +12,35 @@ export interface ResultCardProps {
   onFetch: (result: SearchResult) => void
 }
 
-/** One search hit: select to inspect, fetch inline, or open externally. */
-export function ResultCard({ result: res, selected, isSearching, isFetching, onSelect, onFetch }: ResultCardProps) {
-  const cardClass = selected
-    ? "border-[var(--signal)] bg-[var(--signal-muted)]"
-    : "border-[var(--border-subtle)] bg-[var(--surface)] hover:bg-[var(--elevated)]"
+/**
+ * One search hit: a thin adapter to the shared card. The card owns the visual
+ * structure; the fetch and external-link actions stay Playground-owned and sit
+ * outside the selection button, so neither one selects the card.
+ */
+export function ResultCard({
+  result,
+  selected,
+  isSearching,
+  isFetching,
+  onSelect,
+  onFetch,
+}: ResultCardProps) {
   return (
-    <div
-      key={res.id}
-      onClick={() => onSelect(res)}
-      className={"p-3.5 rounded-lg border transition-all cursor-pointer " + cardClass}
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0 space-y-1">
-          <h4 className="text-[14px] font-medium text-[var(--text-strong)] hover:text-[var(--signal)] transition-colors">
-            {res.title}
-          </h4>
-
-          <p className="text-[12px] font-mono text-[var(--muted)] truncate">
-            {res.url}
-          </p>
-
-          <p className="text-[13px] text-[var(--text)] line-clamp-2 leading-relaxed mt-1">
-            {res.snippet}
-          </p>
-
-          <div className="flex items-center gap-3 text-[12px] text-[var(--muted)] pt-1">
-            {res.sources && res.sources.length > 1 ? (
-              <span className="inline-flex flex-wrap items-center gap-1.5 text-[var(--text-strong)]">
-                <span className="rounded bg-[var(--surface-muted)] px-1.5 py-0.5 text-[11px] font-medium text-[var(--signal)]">
-                  {res.sources.length} engines
-                </span>
-                {res.sources.map((s) => (
-                  <span key={s} className="inline-flex items-center gap-1 text-[11px] text-[var(--muted)]">
-                    <ProviderLogo providerId={s} className="size-3" />
-                    {s}
-                  </span>
-                ))}
-              </span>
-            ) : (
-              <span className="inline-flex items-center gap-1.5 text-[var(--text-strong)]">
-                <ProviderLogo providerId={res.providerId} name={res.providerName} className="size-3.5" />
-                {res.providerName}
-              </span>
-            )}
-            <span className="tnum">
-              {Math.round(res.relevanceScore * 100)}% match
-            </span>
-            {res.publishedDate && (
-              <span className="tnum">{res.publishedDate}</span>
-            )}
-          </div>
-        </div>
-
-        <div className="flex shrink-0 items-center gap-1">
+    <SearchResultCard
+      result={toPlaygroundResultView(result)}
+      selected={selected}
+      onSelect={() => onSelect(result)}
+      actions={
+        <>
           <button
             type="button"
-            data-testid={"fetch-result-" + res.id}
+            data-testid={"fetch-result-" + result.id}
             title="Fetch this page"
-            aria-label={"Fetch " + res.title}
+            aria-label={"Fetch " + result.title}
             disabled={isSearching || isFetching}
             onClick={(e) => {
               e.stopPropagation()
-              void onFetch(res)
+              void onFetch(result)
             }}
             className="p-1 text-[var(--muted)] transition-colors hover:text-[var(--text-strong)] disabled:cursor-not-allowed disabled:opacity-50"
           >
@@ -81,17 +48,16 @@ export function ResultCard({ result: res, selected, isSearching, isFetching, onS
           </button>
 
           <a
-            href={res.url}
+            href={result.url}
             target="_blank"
             rel="noreferrer"
-            onClick={(e) => e.stopPropagation()}
-            className="p-1 text-[var(--muted)] hover:text-[var(--text-strong)] transition-colors shrink-0"
+            className="shrink-0 p-1 text-[var(--muted)] transition-colors hover:text-[var(--text-strong)]"
             title="Open external link"
           >
             <ExternalLink className="size-3.5" />
           </a>
-        </div>
-      </div>
-    </div>
+        </>
+      }
+    />
   )
 }

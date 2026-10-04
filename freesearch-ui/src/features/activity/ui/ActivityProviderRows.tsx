@@ -1,6 +1,8 @@
 import type { ReactNode } from "react"
 import { deriveProviderAttempts, type TraceProviderAttempt } from "@/domains/activity"
+import { providerIdentity } from "@/domains/providers"
 import { Button } from "@/shared/ui/button"
+import { ProviderBadge } from "@/shared/ui/ProviderBadge"
 import { TableCell, TableRow } from "@/shared/ui/table"
 import type { TraceLoadState } from "../model/useActivityController"
 import { TraceStatusPill } from "./TraceStatusPill"
@@ -52,9 +54,19 @@ function resultLabel(attempt: TraceProviderAttempt): string {
   return attempt.resultCount === null ? "—" : String(attempt.resultCount)
 }
 
-function nameNote(attempt: TraceProviderAttempt): ReactNode {
-  if (attempt.providerId !== null) return null
-  return <span className="ml-1.5 text-[11px] text-[var(--muted)]">Name not recorded</span>
+/** The recorded attempt identity, with an explicit note when nothing named it. */
+function providerValue(attempt: TraceProviderAttempt): ReactNode {
+  if (attempt.providerId === null || attempt.providerId === "") {
+    return (
+      <>
+        {attempt.providerLabel}
+        <span className="ml-1.5 text-[11px] text-[var(--muted)]">Name not recorded</span>
+      </>
+    )
+  }
+  const identity = providerIdentity(attempt.providerId)
+  if (identity.id === "") return attempt.providerLabel
+  return <ProviderBadge providerId={identity.id} name={identity.name} logoClassName="size-3.5" />
 }
 
 function messageRow(
@@ -102,8 +114,7 @@ function attemptRow(
       </TableCell>
       <TableCell className={`${CELL} text-[var(--muted)]`}>response</TableCell>
       <TableCell className={`${CELL} text-[var(--text-strong)]`}>
-        {attempt.providerLabel}
-        {nameNote(attempt)}
+        {providerValue(attempt)}
       </TableCell>
       <TableCell className={`${CELL} text-center`}>
         <TraceStatusPill outcome={attempt.outcome} />
@@ -116,7 +127,7 @@ function attemptRow(
       </TableCell>
       <TableCell className={`${CELL} text-right`}>
         <Button variant="outline" size="sm" onClick={() => onInspect(attempt.spanId)}>
-          Inspect
+          View details
         </Button>
       </TableCell>
     </TableRow>

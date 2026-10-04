@@ -248,6 +248,43 @@ describe("LatencyWaterfall selectable rows", () => {
     expect(screen.getByText("Plain")).toBeInTheDocument()
   })
 
+  it("carries the inset focus-visible ring on selectable rows", () => {
+    render(
+      <LatencyWaterfall
+        rows={[selectableRow({ selected: false, onSelect: () => {} })]}
+        totalMs={100}
+        ariaLabel="Latency"
+      />
+    )
+
+    // Item 5: the ring is inset because the trajectory scroll container hides
+    // horizontal overflow; an outer ring would lose its left edge there.
+    const button = screen.getByRole("button", { name: /selectable/i })
+    expect(button.className).toContain("focus-visible:outline-none")
+    expect(button.className).toContain("focus-visible:ring-2")
+    expect(button.className).toContain("focus-visible:ring-inset")
+    expect(button.className).toContain("focus-visible:ring-[var(--signal)]/40")
+  })
+
+  it("marks only the final ruler tick with the millisecond unit", () => {
+    render(
+      <LatencyWaterfall
+        rows={[selectableRow({ selected: false, onSelect: () => {} })]}
+        totalMs={100}
+        ariaLabel="Latency"
+      />
+    )
+
+    // Item 5: short bare numbers on every tick, the unit once on the final
+    // tick, with zero geometry change to the ruler box.
+    expect(screen.getByText("100 ms")).toBeInTheDocument()
+    expect(screen.getByText("0")).toBeInTheDocument()
+    expect(screen.getByText("25")).toBeInTheDocument()
+    expect(screen.getByText("50")).toBeInTheDocument()
+    expect(screen.getByText("75")).toBeInTheDocument()
+    expect(screen.queryByText("0 ms")).not.toBeInTheDocument()
+  })
+
   it("keeps identical geometry clamps on selectable rows", () => {
     render(
       <LatencyWaterfall

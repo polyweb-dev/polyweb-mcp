@@ -1,6 +1,9 @@
 import type { CSSProperties, ReactNode } from "react"
 import { cn } from "cn"
 
+export { LatencyWaterfallValue } from "./LatencyWaterfallValue"
+export type { LatencyWaterfallValueProps } from "./LatencyWaterfallValue"
+
 export interface LatencyWaterfallSegment {
   offsetMs: number
   durationMs: number
@@ -24,6 +27,8 @@ export interface LatencyWaterfallProps {
   rows: readonly LatencyWaterfallRow[]
   totalMs: number
   ariaLabel: string
+  /** Keeps the time axis visible while the rows scroll under it. */
+  stickyRuler?: boolean
 }
 
 /** A segment whose geometry is already clamped inside the track. */
@@ -41,11 +46,15 @@ const TICK_PERCENTS = [0, 25, 50, 75, 100] as const
 
 /**
  * One grid template for the ruler and every row, so every track shares an
- * origin: below `sm` the label sits above a full-width track with its value on
- * the label line, and from `sm` up they are three aligned columns.
+ * origin and an endpoint: below `sm` the label sits above a full-width track
+ * with its value on the label line, and from `sm` up they are three aligned
+ * columns with a fixed-width value column.
  */
 const ROW_GRID_CLASS =
-  "grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 sm:grid-cols-[minmax(0,10rem)_minmax(0,1fr)_auto]"
+  "grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 sm:grid-cols-[minmax(0,10rem)_minmax(0,1fr)_7rem]"
+/** Every row and the ruler carry the same inset, so their tracks stay aligned. */
+const ROW_INSET_CLASS = "px-1 py-0.5"
+const ROW_HEIGHT_CLASS = "min-h-[32px]"
 const TRACK_CELL_CLASS =
   "col-span-2 col-start-1 row-start-2 sm:col-span-1 sm:col-start-2 sm:row-start-1"
 const LABEL_CELL_CLASS = "min-w-0 break-words text-[12px] text-[var(--text)]"
@@ -130,14 +139,28 @@ function tickLabelClass(percent: number): string {
   )
 }
 
+/** The axis carries its unit once, on the last tick, so the numbers stay short. */
+function tickText(totalMs: number, percent: number): string {
+  const value = Math.round((totalMs * percent) / PERCENT_SCALE)
+  return percent === PERCENT_SCALE ? `${value} ms` : String(value)
+}
+
 function renderRuler(totalMs: number, hasScale: boolean) {
   return (
     <div aria-hidden="true" className="relative h-5 min-w-0">
       <div className="absolute inset-x-0 bottom-0 h-px bg-[var(--border-subtle)]" />
       {hasScale &&
         TICK_PERCENTS.map((percent) => (
+          <span
+            key={`${percent}-guide`}
+            className="absolute bottom-0 top-0 w-px bg-[var(--border-subtle)]"
+            style={{ left: `${percent}%` }}
+          />
+        ))}
+      {hasScale &&
+        TICK_PERCENTS.map((percent) => (
           <span key={percent} className={tickLabelClass(percent)} style={{ left: `${percent}%` }}>
-            {Math.round((totalMs * percent) / PERCENT_SCALE)}
+            {tickText(totalMs, percent)}
           </span>
         ))}
     </div>
@@ -145,9 +168,12 @@ function renderRuler(totalMs: number, hasScale: boolean) {
 }
 
 /** The ruler occupies the same grid cell as a track, so both columns share one x origin. */
-function renderRulerRow(totalMs: number, hasScale: boolean) {
+function renderRulerRow(totalMs: number, hasScale: boolean, sticky: boolean) {
   return (
-    <div className={ROW_GRID_CLASS}>
+    <div
+      className={cn(ROW_GRID_CLASS, ROW_INSET_CLASS, sticky && "sticky top-0 z-10")}
+      style={sticky ? { background: "var(--elevated)" } : undefined}
+    >
       <span aria-hidden="true" className="hidden sm:block" />
       <div className={TRACK_CELL_CLASS}>{renderRuler(totalMs, hasScale)}</div>
     </div>
@@ -166,7 +192,7 @@ function renderRow(row: LatencyWaterfallRow, totalMs: number) {
   )
   if (row.onSelect === undefined) {
     return (
-      <li key={row.id} className={ROW_GRID_CLASS}>
+      <li key={row.id} className={cn(ROW_GRID_CLASS, ROW_INSET_CLASS, ROW_HEIGHT_CLASS)}>
         {cells}
       </li>
     )
@@ -180,7 +206,12 @@ function renderRow(row: LatencyWaterfallRow, totalMs: number) {
         onClick={row.onSelect}
         className={cn(
           ROW_GRID_CLASS,
-          "w-full rounded-sm px-1 py-0.5 text-left transition-colors motion-reduce:transition-none",
+          ROW_INSET_CLASS,
+          ROW_HEIGHT_CLASS,
+          // The ring is inset because the scroll container hides horizontal
+          // overflow: an outer ring would lose its left edge there.
+          "w-full rounded-sm text-left transition-colors motion-reduce:transition-none",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--signal)]/40",
           row.selected === true
             ? "bg-[var(--signal-muted)] shadow-[inset_2px_0_0_0_var(--signal)]"
             : "hover:bg-[var(--surface)]"
@@ -192,14 +223,19 @@ function renderRow(row: LatencyWaterfallRow, totalMs: number) {
   )
 }
 
-export function LatencyWaterfall({ rows, totalMs, ariaLabel }: LatencyWaterfallProps) {
+export function LatencyWaterfall({
+  rows,
+  totalMs,
+  ariaLabel,
+  stickyRuler = false,
+}: LatencyWaterfallProps) {
   const hasScale = Number.isFinite(totalMs) && totalMs > 0
 
   return (
     <div className="min-w-0">
       {/* the ruler is decorative; this states the scale for screen readers */}
       <p className="sr-only">Timeline scale 0 to {totalMs} milliseconds</p>
-      {renderRulerRow(totalMs, hasScale)}
+      {renderRulerRow(totalMs, hasScale, stickyRuler)}
       <ol role="list" aria-label={ariaLabel} className="m-0 list-none space-y-1 p-0">
         {rows.length === 0 ? (
           <li className="text-[12px] text-[var(--muted)]">No timing was recorded.</li>

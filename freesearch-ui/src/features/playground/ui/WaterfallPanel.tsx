@@ -1,5 +1,11 @@
 import type { ProviderWaterfallItem } from "@/domains/execution"
-import { LatencyWaterfall, type LatencyWaterfallRow } from "@/shared/ui/LatencyWaterfall"
+import { providerIdentity } from "@/domains/providers"
+import { ProviderBadge } from "@/shared/ui/ProviderBadge"
+import {
+  LatencyWaterfall,
+  LatencyWaterfallValue,
+  type LatencyWaterfallRow,
+} from "@/shared/ui/LatencyWaterfall"
 
 const OUTCOME_COLORS: Record<ProviderWaterfallItem["status"], string> = {
   success: "var(--signal)",
@@ -13,22 +19,28 @@ function axisTotal(waterfall: readonly ProviderWaterfallItem[]): number {
   return Math.max(1, ...waterfall.map((item) => item.latencyMs))
 }
 
-function outcomeLabel(item: ProviderWaterfallItem): string {
-  return item.status === "success" ? `${item.resultsCount} res` : item.status
-}
-
 function toRow(item: ProviderWaterfallItem): LatencyWaterfallRow {
+  const identity = providerIdentity(item.providerId)
+  const succeeded = item.status === "success"
   return {
     id: item.providerId,
-    label: <span className="font-medium text-[var(--text)]">{item.providerName}</span>,
+    label: (
+      <ProviderBadge
+        providerId={identity.id}
+        name={identity.name}
+        className="text-[12px] font-medium text-[var(--text)]"
+        logoClassName="size-3.5"
+      />
+    ),
     // Execution rows carry no span offsets: the fan-out starts each provider at
     // the request, so every lane begins at zero on the shared axis.
     segments: [{ offsetMs: 0, durationMs: item.latencyMs, color: OUTCOME_COLORS[item.status] }],
     value: (
-      <span className="tnum">
-        <span className="text-[var(--text-strong)]">{item.latencyMs}ms</span>
-        <span className="ml-2 text-[12px] text-[var(--muted)]">{outcomeLabel(item)}</span>
-      </span>
+      <LatencyWaterfallValue
+        durationMs={item.latencyMs}
+        resultCount={succeeded ? item.resultsCount : null}
+        outcome={succeeded ? undefined : item.status}
+      />
     ),
   }
 }

@@ -11,9 +11,13 @@ import {
 } from "@/shared/ui/table"
 import { Button } from "@/shared/ui/button"
 import type { TraceSummary } from "@/domains/activity"
+import { providerIdentity } from "@/domains/providers"
+import { ProviderBadge } from "@/shared/ui/ProviderBadge"
 import type { TraceLoadState } from "../model/useActivityController"
 import { ActivityProviderRows } from "./ActivityProviderRows"
 import { TraceStatusPill } from "./TraceStatusPill"
+
+const AGGREGATED_PROVIDER = "aggregated"
 
 const COLUMNS = [
   { label: "Time", align: "" },
@@ -68,6 +72,20 @@ function providerExpander(
   )
 }
 
+/**
+ * The list identity cell: a logo and catalog name for a specific provider, the
+ * plain label for the fanout group or for a trace that named no provider.
+ */
+function providerValue(summary: TraceSummary): ReactNode {
+  const providerId = summary.provider
+  if (providerId === null || providerId === "" || providerId === AGGREGATED_PROVIDER) {
+    return summary.providerLabel
+  }
+  const identity = providerIdentity(providerId)
+  if (identity.id === "") return summary.providerLabel
+  return <ProviderBadge providerId={identity.id} name={identity.name} logoClassName="size-3.5" />
+}
+
 interface TraceRowOptions {
   summary: TraceSummary
   time: string
@@ -90,11 +108,11 @@ function traceRow(options: TraceRowOptions): ReactNode {
       </TableCell>
       <TableCell className={`${CELL} font-medium text-[var(--text-strong)]`}>
         <span className="inline-flex items-center gap-1.5">
-          {summary.provider === "aggregated" &&
+          {summary.provider === AGGREGATED_PROVIDER &&
             providerExpander(time, expanded, panelId, () =>
               onToggleProviders(summary.traceId)
             )}
-          {summary.providerLabel}
+          {providerValue(summary)}
         </span>
       </TableCell>
       <TableCell className={`${CELL} text-center`}>

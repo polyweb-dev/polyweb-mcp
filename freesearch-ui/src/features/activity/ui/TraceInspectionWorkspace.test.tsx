@@ -60,7 +60,10 @@ describe("TraceInspectionWorkspace", () => {
     const { rerender } = renderWorkspace(first)
 
     await user.click(screen.getAllByRole("button", { name: /Reuters|Yahoo|CNBC|Financial|Bloomberg|MarketWatch/ })[0]!)
-    expect(screen.getByText("Exclusive news, data and analytics for financial market professionals.")).toBeInTheDocument()
+    const inspector = screen.getByRole("region", { name: "Result inspector" })
+    expect(
+      within(inspector).getByText("Exclusive news, data and analytics for financial market professionals.")
+    ).toBeInTheDocument()
 
     const second = mapTraceDetail(traceDetailFixture())
     rerender(
@@ -93,8 +96,9 @@ describe("TraceInspectionWorkspace", () => {
     renderWorkspace(detail)
 
     await user.click(screen.getByRole("button", { name: /Second copy/ }))
-    expect(screen.getByText("Snippet two")).toBeInTheDocument()
-    expect(screen.queryByText("Snippet one")).not.toBeInTheDocument()
+    const dupInspector = screen.getByRole("region", { name: "Result inspector" })
+    expect(within(dupInspector).getByText("Snippet two")).toBeInTheDocument()
+    expect(within(dupInspector).queryByText("Snippet one")).not.toBeInTheDocument()
   })
 
   it("replaces the side payload instead of appending it", async () => {
@@ -103,11 +107,14 @@ describe("TraceInspectionWorkspace", () => {
 
     const rows = screen.getAllByRole("button", { name: /Reuters|Yahoo|CNBC|Financial|Bloomberg|MarketWatch/ })
     await user.click(rows[0]!)
-    expect(screen.getByText("Exclusive news, data and analytics for financial market professionals.")).toBeInTheDocument()
-    await user.click(rows[1]!)
-    expect(screen.getByText("Market coverage six days ago.")).toBeInTheDocument()
+    const replaceInspector = screen.getByRole("region", { name: "Result inspector" })
     expect(
-      screen.queryByText("Exclusive news, data and analytics for financial market professionals.")
+      within(replaceInspector).getByText("Exclusive news, data and analytics for financial market professionals.")
+    ).toBeInTheDocument()
+    await user.click(rows[1]!)
+    expect(within(replaceInspector).getByText("Market coverage six days ago.")).toBeInTheDocument()
+    expect(
+      within(replaceInspector).queryByText("Exclusive news, data and analytics for financial market professionals.")
     ).not.toBeInTheDocument()
   })
 
@@ -117,7 +124,8 @@ describe("TraceInspectionWorkspace", () => {
 
     await user.click(screen.getByRole("button", { name: "Trajectory" }))
     await user.click(screen.getByRole("button", { name: /Keenable request/ }))
-    expect(screen.getByText(/keenable/i)).toBeInTheDocument()
+    const payloadRegion = screen.getByRole("region", { name: /payload/i })
+    expect(within(payloadRegion).getByText("Keenable")).toBeInTheDocument()
     expect(screen.getByLabelText(/freesearch.provider.response attributes/i)).toBeInTheDocument()
   })
 
@@ -143,7 +151,8 @@ describe("TraceInspectionWorkspace", () => {
       />
     )
 
-    expect(screen.getByText(/Keenable response|provider/i)).toBeInTheDocument()
+    expect(screen.getByText("Keenable")).toBeInTheDocument()
+    expect(screen.getByText(/response/)).toBeInTheDocument()
     expect(screen.queryByText(/fusion/i)).not.toBeInTheDocument()
   })
 

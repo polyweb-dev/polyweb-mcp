@@ -1,17 +1,61 @@
 import { expect } from "@playwright/test"
+import type { Page } from "@playwright/test"
 import { Given, When, Then } from "./fixtures"
 import {
+  FUSION_LONG_SNIPPET,
+  NULL_SOURCE_LONG_SNIPPET,
   SEVEN_PROVIDER_IDS,
+  SEVEN_PROVIDER_DURATIONS,
   SEVEN_PROVIDER_LONG_SNIPPET,
+  SEVEN_PROVIDER_OFFSETS,
   SEVEN_PROVIDER_QUERY,
   SEVEN_PROVIDER_TRACE_ID,
+  SEVEN_STAGE_GEOMETRY,
+  SEVEN_TOTAL_MS,
   failStubbedTraceDetail,
   failStubbedTraceList,
-  sevenProviderLabel,
   sevenProviderResult,
   traceDetailRequests,
   traceListRequests,
 } from "./backendStub"
+import type { SevenProviderId } from "./backendStub"
+
+/**
+ * Catalog display name per seven-provider stub id. The UI resolves every
+ * provider identity through providerIdentity, so `you`/`youcom` renders as
+ * `You.com` and `brave` renders as `Brave Search` — never the raw span id.
+ */
+const SEVEN_PROVIDER_DISPLAY: Record<SevenProviderId, string> = {
+  brave: "Brave Search",
+  keenable: "Keenable",
+  tavily: "Tavily",
+  exa: "Exa",
+  firecrawl: "Firecrawl",
+  youcom: "You.com",
+  parallel: "Parallel",
+}
+
+/**
+ * Region scopes inside the trace detail dialog. The shared card and the side
+ * inspector render the same snippet text, so payload assertions must name
+ * their region: the list keeps the two-line preview, the inspector owns the
+ * full text, and each trajectory pane owns its own payload.
+ */
+function resultInspectorRegion(page: Page) {
+  return page.getByRole("dialog").getByRole("region", { name: "Result inspector" })
+}
+
+function resultsListRegion(page: Page) {
+  return page.getByRole("dialog").getByRole("region", { name: /Results|response/ })
+}
+
+function trajectoryList(page: Page) {
+  return page.getByRole("dialog").getByRole("list", { name: "Trace trajectory" })
+}
+
+function spanInspectorRegion(page: Page) {
+  return page.getByRole("dialog").getByRole("region", { name: /payload/ })
+}
 
 Given("I am on the Activity view", async ({ page }) => {
   await page.getByRole("link", { name: "Activity", exact: true }).click()
@@ -241,11 +285,12 @@ Then('every {string} control should be a real button', async ({ page }, label: s
 
 When('I expand the all-providers trace', async ({ page }) => {
   await page.getByRole('button', { name: /Show provider responses for/ }).first().click()
-  // The nested panel resolves to Inspect rows on success, or — when a trace
-  // detail failure was injected — to the error panel with its retry.
+  // The nested panel resolves to provider rows (marked with the hierarchy
+  // arrow) on success, or — when a trace detail failure was injected — to
+  // the error panel with its retry.
   await expect
     .poll(async () => page.getByRole('table').innerText())
-    .toMatch(/Inspect|unavailable|Loading provider responses/)
+    .toMatch(/↳|unavailable|Loading provider responses/)
 })
 
 When('I collapse the all-providers trace', async ({ page }) => {
@@ -253,7 +298,7 @@ When('I collapse the all-providers trace', async ({ page }) => {
 })
 
 Then('no nested provider row should be visible', async ({ page }) => {
-  await expect(page.getByRole('button', { name: 'Inspect' })).toHaveCount(0)
+  await expect(page.getByRole('table')).not.toContainText('↳')
 })
 
 Then(
@@ -273,17 +318,26 @@ Then('the seven-provider trace should show no anonymous provider text', async ({
   expect(text).not.toContain('Name not recorded')
 })
 
-Then('each nested provider row should expose an {string} button', async ({ page }, label: string) => {
-  const buttons = page.getByRole('button', { name: label, exact: true })
-  await expect(buttons).toHaveCount(7)
-  for (const button of await buttons.all()) {
+Then('each nested provider row should expose a {string} button', async ({ page }, label: string) => {
+  const table = page.getByRole('table')
+  // Nested provider rows carry the hierarchy arrow; parent trace rows do not.
+  const nestedRows = table.getByRole('row').filter({ hasText: '↳' })
+  await expect(nestedRows).toHaveCount(7)
+  const nestedButtons = nestedRows.getByRole('button', { name: label, exact: true })
+  await expect(nestedButtons).toHaveCount(7)
+  for (const button of await nestedButtons.all()) {
     await expect(button).toBeVisible()
   }
+  // Pin the parent count separately: six stubbed traces lead the list, so the
+  // expanded page holds six parent actions plus seven nested actions.
+  const allButtons = page.getByRole('button', { name: label, exact: true })
+  await expect(allButtons).toHaveCount(13)
+  expect((await allButtons.count()) - (await nestedButtons.count())).toBe(6)
 })
 
 When('I inspect the {string} provider response', async ({ page }, provider: string) => {
   const row = page.getByRole('row').filter({ hasText: provider }).first()
-  await row.getByRole('button', { name: 'Inspect', exact: true }).click()
+  await row.getByRole('button', { name: 'View details', exact: true }).click()
   await expect(page.getByRole('dialog')).toBeVisible()
 })
 
@@ -465,6 +519,37 @@ Then(
   'the trace detail should explain {string} exactly once',
   async ({ page }, sentence: string) => {
     const dialog = page.getByRole('dialog')
+    // Provider sentences render the provider name as a badge (logo + name),
+    // so one text node never holds the full sentence. Pin the exact approved
+    // wording as region-scoped parts in order: before-text + badge + after-text.
+    const providerPrefix = 'Results keep the order returned by '
+    if (sentence.startsWith(providerPrefix)) {
+      const rest = sentence.slice(providerPrefix.length)
+      const dot = rest.indexOf('.')
+      if (dot < 0) throw new Error(`cannot split provider sentence '${sentence}'`)
+      const provider = rest.slice(0, dot)
+      const after = rest.slice(dot)
+      const before = 'Results keep the order returned by'
+      const explanation = dialog.locator('p', { hasText: before })
+      await expect(explanation).toHaveCount(1)
+      await expect(explanation).toContainText(before)
+      await expect(explanation.getByText(provider, { exact: true }).first()).toBeVisible()
+      await expect(
+        explanation.locator('img[data-testid^="provider-logo-"]').first()
+      ).toBeVisible()
+      await expect(explanation).toContainText(after)
+      const joined = await explanation.evaluate(
+        (node) => (node.textContent ?? '').replace(/\s+/g, ' ').trim()
+      )
+      const beforeIdx = joined.indexOf(before)
+      const providerIdx = joined.indexOf(provider, beforeIdx)
+      const afterHead = after.slice(0, 24)
+      const afterIdx = joined.indexOf(afterHead, providerIdx)
+      expect(beforeIdx).toBeGreaterThanOrEqual(0)
+      expect(providerIdx).toBeGreaterThan(beforeIdx)
+      expect(afterIdx).toBeGreaterThan(providerIdx)
+      return
+    }
     await expect(dialog).toContainText(sentence)
     const occurrences = (await dialog.innerText()).split(sentence).length - 1
     expect(occurrences).toBe(1)
@@ -498,21 +583,42 @@ Then('the trace detail should not show a duplicate ranked list', async ({ page }
 })
 
 // --- Select-to-side results -------------------------------------------------
+// The shared card and the side inspector render the same snippet text, so
+// every step below stays inside its own region: the list owns selection and
+// the two-line preview, the inspector owns the full payload.
 
-Then('the compact result rows should not contain the seeded long snippet', async ({ page }) => {
-  const text = await page.getByRole('dialog').innerText()
-  expect(text).not.toContain(SEVEN_PROVIDER_LONG_SNIPPET)
+Then('the compact result rows should clamp the seeded long snippet to two lines', async ({ page }) => {
+  const results = resultsListRegion(page)
+  const snippets = results.locator('p.line-clamp-2')
+  await expect(snippets.first()).toBeVisible()
+  for (const snippet of await snippets.all()) {
+    const clamp = await snippet.evaluate((node) => {
+      const style = getComputedStyle(node)
+      return style.getPropertyValue('line-clamp') || style.getPropertyValue('-webkit-line-clamp')
+    })
+    expect(clamp.trim()).toBe('2')
+  }
+  // The seeded long snippet is present in its card but visually clamped: its
+  // scroll height exceeds the two-line client height of that card.
+  const keenable = results.getByRole('button', { name: 'Keenable acceptance result' }).first()
+  const preview = keenable.locator('p.line-clamp-2')
+  await expect(preview).toContainText(SEVEN_PROVIDER_LONG_SNIPPET.slice(0, 48))
+  const box = await preview.evaluate((node) => ({
+    scrollHeight: node.scrollHeight,
+    clientHeight: node.clientHeight,
+  }))
+  expect(box.scrollHeight).toBeGreaterThan(box.clientHeight)
+  expect(box.clientHeight).toBeLessThanOrEqual(64)
 })
 
 When('I select the result {string}', async ({ page }, title: string) => {
-  const dialog = page.getByRole('dialog')
-  await dialog.getByRole('button', { name: title }).first().click()
+  await resultsListRegion(page).getByRole('button', { name: title }).first().click()
 })
 
 Then('the result {string} should be marked as selected', async ({ page }, title: string) => {
   // Selectable rows expose pressed state (same contract as the Trajectory
   // selectable waterfall rows in PLAN §5.4).
-  const button = page.getByRole('dialog').getByRole('button', { name: title }).first()
+  const button = resultsListRegion(page).getByRole('button', { name: title }).first()
   await expect(button).toHaveAttribute('aria-pressed', 'true')
 })
 
@@ -531,6 +637,7 @@ function sevenResultIdFromLabel(
     case 'firecrawl':
       return 'firecrawl'
     case 'youcom':
+    case 'you.com':
       return 'youcom'
     default:
       throw new Error(`unknown seven-provider result label '${label}'`)
@@ -540,11 +647,18 @@ function sevenResultIdFromLabel(
 Then(
   'the result inspector should show the full {string} payload',
   async ({ page }, label: string) => {
-    const dialog = page.getByRole('dialog')
+    const inspector = resultInspectorRegion(page)
     const result = sevenProviderResult(sevenResultIdFromLabel(label))
-    await expect(dialog).toContainText(result.snippet)
-    await expect(dialog).toContainText(result.url)
-    await expect(dialog).toContainText(result.score.toFixed(2))
+    await expect(inspector).toContainText(result.snippet)
+    // PLAN §4: the inspector shows only the URL host as visible link text,
+    // with the full URL in the link accessible name, href, and title.
+    const host = new URL(result.url).host
+    const link = inspector.getByRole('link', { name: result.url }).first()
+    await expect(link).toBeVisible()
+    await expect(link).toContainText(host)
+    await expect(link).toHaveAttribute('href', result.url)
+    await expect(link).toHaveAttribute('title', result.url)
+    await expect(inspector).toContainText(result.score.toFixed(2))
   }
 )
 
@@ -552,14 +666,22 @@ Then(
   'the result inspector should show the full {string} payload without growing the page',
   async ({ page }, label: string) => {
     const dialog = page.getByRole('dialog')
+    const inspector = resultInspectorRegion(page)
     const result = sevenProviderResult(sevenResultIdFromLabel(label))
-    await expect(dialog).toContainText(result.snippet)
-    await expect(dialog).toContainText(result.url)
-    await expect(dialog).toContainText(result.score.toFixed(2))
+    await expect(inspector).toContainText(result.snippet)
+    // PLAN §4: host as visible text, full URL in accessible name/href/title.
+    const host = new URL(result.url).host
+    const link = inspector.getByRole('link', { name: result.url }).first()
+    await expect(link).toBeVisible()
+    await expect(link).toContainText(host)
+    await expect(link).toHaveAttribute('href', result.url)
+    await expect(link).toHaveAttribute('title', result.url)
+    await expect(inspector).toContainText(result.score.toFixed(2))
     // Replacement, not accumulation: the previously inspected long payload
-    // is gone once another result is selected.
+    // is gone from the inspector once another result is selected. The card
+    // list keeps its own two-line preview, so this stays inspector-scoped.
     if (sevenResultIdFromLabel(label) !== 'keenable') {
-      expect(await dialog.innerText()).not.toContain(SEVEN_PROVIDER_LONG_SNIPPET)
+      expect(await inspector.innerText()).not.toContain(SEVEN_PROVIDER_LONG_SNIPPET)
     }
     const geometry = await dialog.evaluate((node) => ({ scrollHeight: node.scrollHeight }))
     expect(geometry.scrollHeight).toBeLessThan(2000)
@@ -581,7 +703,7 @@ Then(
   async ({ page }) => {
     const dialog = page.getByRole('dialog')
     for (const provider of SEVEN_PROVIDER_IDS) {
-      const row = dialog.getByRole('button', { name: `${sevenProviderLabel(provider)} request` })
+      const row = dialog.getByRole('button', { name: `${SEVEN_PROVIDER_DISPLAY[provider]} request` })
       await expect(row).toBeVisible()
       await expect(row).toContainText(/\d+\s*ms/)
       // Fused in-row timing: the shared-scale track renders at least one
@@ -613,7 +735,10 @@ Then(
 )
 
 When('I select the trajectory row {string}', async ({ page }, label: string) => {
-  await page.getByRole('dialog').getByRole('button', { name: label }).first().click()
+  // Label targeting equals span-id order per selectUserTraceStages: repeated
+  // provider rows keep offset order (wire order matches offset order in these
+  // fixtures), and every label is unique inside one trajectory.
+  await trajectoryList(page).getByRole('button', { name: label }).first().click()
 })
 
 Then(
@@ -648,13 +773,13 @@ Then('focus should stay inside the dialog', async ({ page }) => {
 })
 
 When('I focus the result {string} and press Enter', async ({ page }, title: string) => {
-  const button = page.getByRole('dialog').getByRole('button', { name: title }).first()
+  const button = resultsListRegion(page).getByRole('button', { name: title }).first()
   await button.focus()
   await page.keyboard.press('Enter')
 })
 
 When('I focus the trajectory row {string} and press Enter', async ({ page }, label: string) => {
-  const button = page.getByRole('dialog').getByRole('button', { name: label }).first()
+  const button = trajectoryList(page).getByRole('button', { name: label }).first()
   await button.focus()
   await page.keyboard.press('Enter')
 })
@@ -729,3 +854,436 @@ When('I clear the trace detail failure and retry the nested panel', async ({ pag
   failStubbedTraceDetail(SEVEN_PROVIDER_TRACE_ID, null)
   await page.getByRole('table').getByRole('button', { name: 'Retry', exact: true }).click()
 })
+
+// ---------------------------------------------------------------------------
+// Trace Detail UI enhancement (Tester Turn 1): user-level trajectory stages,
+// shared result presentation, and measured geometry contracts (PLAN §7).
+// ---------------------------------------------------------------------------
+
+Then('the trajectory should show a {string} row', async ({ page }, label: string) => {
+  await expect(trajectoryList(page).getByRole('button', { name: label }).first()).toBeVisible()
+})
+
+Then('the trajectory should not show a {string} row', async ({ page }, label: string) => {
+  await expect(trajectoryList(page).getByRole('button', { name: label })).toHaveCount(0)
+})
+
+Then(
+  'the trajectory ruler and every row track should align within {string} pixels',
+  async ({ page }, pixels: string) => {
+    const tolerance = Number(pixels)
+    const geometry = await page.getByRole('dialog').evaluate((dialog) => {
+      const region = dialog.querySelector('section[aria-label="Trace trajectory"]')
+      if (region === null) throw new Error('trajectory region is missing')
+      const ruler = region.querySelector('div[aria-hidden="true"].h-5')
+      if (ruler === null) throw new Error('trajectory ruler is missing')
+      const tracks = [
+        ...region.querySelectorAll('ol[aria-label="Trace trajectory"] div[aria-hidden="true"].h-2'),
+      ]
+      const rectOf = (element: Element): { left: number; right: number } => {
+        const rect = element.getBoundingClientRect()
+        return { left: rect.left, right: rect.right }
+      }
+      return { ruler: rectOf(ruler), tracks: tracks.map(rectOf) }
+    })
+    expect(geometry.tracks.length).toBeGreaterThan(0)
+    for (const track of geometry.tracks) {
+      expect(Math.abs(track.left - geometry.ruler.left)).toBeLessThanOrEqual(tolerance)
+      expect(Math.abs(track.right - geometry.ruler.right)).toBeLessThanOrEqual(tolerance)
+    }
+  }
+)
+
+Then(
+  'the trajectory bars should match recorded offsets and durations within {string} pixels',
+  async ({ page }, pixels: string) => {
+    const tolerance = Number(pixels)
+    const bars = await page.getByRole('dialog').evaluate((dialog) => {
+      const region = dialog.querySelector('section[aria-label="Trace trajectory"]')
+      if (region === null) throw new Error('trajectory region is missing')
+      const rows = [...region.querySelectorAll('ol[aria-label="Trace trajectory"] > li')]
+      return rows.map((row) => {
+        const track = row.querySelector('div[aria-hidden="true"].h-2')
+        if (track === null) throw new Error('trajectory track is missing')
+        const bar = track.querySelector('span[style]')
+        if (bar === null) throw new Error('trajectory bar is missing')
+        const style = (bar as HTMLElement).style
+        return {
+          leftPct: Number.parseFloat(style.left),
+          widthPct: Number.parseFloat(style.width),
+          trackWidth: track.getBoundingClientRect().width,
+        }
+      })
+    })
+    expect(bars).toHaveLength(SEVEN_STAGE_GEOMETRY.length)
+    bars.forEach((bar, index) => {
+      const expected = SEVEN_STAGE_GEOMETRY[index]
+      if (expected === undefined) throw new Error(`no recorded geometry for row ${index}`)
+      const expectedLeftPx = (expected.offsetMs / SEVEN_TOTAL_MS) * bar.trackWidth
+      const actualLeftPx = (bar.leftPct / 100) * bar.trackWidth
+      expect(Math.abs(actualLeftPx - expectedLeftPx)).toBeLessThanOrEqual(tolerance + 0.5)
+      const expectedWidthPct = (expected.durationMs / SEVEN_TOTAL_MS) * 100
+      const actualWidthPx = (bar.widthPct / 100) * bar.trackWidth
+      if (expectedWidthPct < 0.5) {
+        // Minimum-width marker: the bar stays a visible sliver with an
+        // accurate numeric value instead of a proportional width.
+        expect(actualWidthPx).toBeLessThanOrEqual((0.5 / 100) * bar.trackWidth + tolerance)
+        return
+      }
+      const expectedWidthPx = (expected.durationMs / SEVEN_TOTAL_MS) * bar.trackWidth
+      expect(Math.abs(actualWidthPx - expectedWidthPx)).toBeLessThanOrEqual(tolerance + 0.5)
+    })
+  }
+)
+
+Then('the trajectory ruler should mark the final tick in milliseconds', async ({ page }) => {
+  const texts = await page.getByRole('dialog').evaluate((dialog) => {
+    const region = dialog.querySelector('section[aria-label="Trace trajectory"]')
+    if (region === null) throw new Error('trajectory region is missing')
+    const ruler = region.querySelector('div[aria-hidden="true"].h-5')
+    if (ruler === null) throw new Error('trajectory ruler is missing')
+    const labels = [...ruler.querySelectorAll('span[class*="tnum"]')]
+    return labels.map((element) => (element as HTMLElement).innerText.trim())
+  })
+  // Item 5 axis fix: short bare numbers on every tick, the unit once on the
+  // final tick, with zero geometry change to the ruler box.
+  expect(texts.length).toBeGreaterThan(1)
+  for (const text of texts.slice(0, -1)) {
+    expect(text).toMatch(/^\d+$/)
+  }
+  expect(texts[texts.length - 1]).toMatch(/^\d+ ms$/)
+})
+
+Then(
+  'the trajectory row should show an inset focus ring at both edges after Tab',
+  async ({ page }) => {
+    const dialog = page.getByRole('dialog')
+    // Real keyboard: Tab until a trajectory row owns focus (at most 25 stops).
+    let focused = false
+    for (let stop = 0; stop < 25; stop++) {
+      const owned = await dialog.evaluate(() => {
+        const active = document.activeElement
+        const button =
+          active instanceof HTMLElement
+            ? active.closest('section[aria-label="Trace trajectory"] button')
+            : null
+        return button !== null
+      })
+      if (owned) {
+        focused = true
+        break
+      }
+      await page.keyboard.press('Tab')
+    }
+    expect(focused).toBe(true)
+    // Item 5 ring fix: the inset box-shadow ring must read at both row edges
+    // inside the trajectory scroll container, with no outline switch.
+    const ring = await dialog.evaluate(() => {
+      const active = document.activeElement as HTMLElement
+      const button = active.closest(
+        'section[aria-label="Trace trajectory"] button'
+      ) as HTMLElement
+      const scroller = button.closest('div[class*="overflow-y-auto"]') as HTMLElement
+      const row = button.getBoundingClientRect()
+      const box = scroller.getBoundingClientRect()
+      const style = getComputedStyle(button)
+      return {
+        focusVisible: active.matches(':focus-visible'),
+        shadow: style.boxShadow,
+        outline: style.outlineStyle,
+        leftInside: row.left >= box.left - 2,
+        rightInside: row.right <= box.right + 2,
+      }
+    })
+    expect(ring.focusVisible).toBe(true)
+    expect(ring.shadow).toContain('inset')
+    expect(ring.outline).toBe('none')
+    expect(ring.leftInside).toBe(true)
+    expect(ring.rightInside).toBe(true)
+  }
+)
+
+Then('the latency summary should count overlapping provider calls once', async ({ page }) => {
+  const region = page.getByRole('dialog').getByRole('region', { name: 'Trace trajectory' })
+  // Recompute the union from the recorded stub intervals (never the sum):
+  // concurrent fanout counts once, exactly like deriveTraceLatencySummary.
+  const intervals = SEVEN_PROVIDER_IDS.map((id) => ({
+    start: SEVEN_PROVIDER_OFFSETS[id],
+    end: SEVEN_PROVIDER_OFFSETS[id] + SEVEN_PROVIDER_DURATIONS[id],
+  })).sort((a, b) => a.start - b.start)
+  const merged: { start: number; end: number }[] = []
+  for (const interval of intervals) {
+    const last = merged[merged.length - 1]
+    if (last !== undefined && interval.start <= last.end) {
+      last.end = Math.max(last.end, interval.end)
+    } else {
+      merged.push({ ...interval })
+    }
+  }
+  const unionMs = merged.reduce((sum, interval) => sum + (interval.end - interval.start), 0)
+  const durationSum = intervals.reduce((sum, interval) => sum + (interval.end - interval.start), 0)
+  expect(durationSum).toBeGreaterThan(unionMs)
+  const outside = SEVEN_TOTAL_MS - unionMs
+  const gaps: { start: number; end: number }[] = []
+  let cursor = 0
+  for (const interval of merged) {
+    if (interval.start > cursor) gaps.push({ start: cursor, end: interval.start })
+    cursor = Math.max(cursor, interval.end)
+  }
+  if (SEVEN_TOTAL_MS > cursor) gaps.push({ start: cursor, end: SEVEN_TOTAL_MS })
+  const beforeMs = gaps[0] !== undefined && gaps[0].start === 0 ? gaps[0].end : 0
+  const last = gaps[gaps.length - 1]
+  const afterMs = last !== undefined && last.end >= SEVEN_TOTAL_MS ? last.end - last.start : 0
+  const betweenMs = Math.max(0, outside - beforeMs - afterMs)
+  const valueOf = async (label: string): Promise<string> => {
+    const dd = region
+      .getByText(label, { exact: true })
+      .locator('xpath=..')
+      .locator('dd')
+    return (await dd.innerText()).trim()
+  }
+  await expect(region.getByText('Before providers', { exact: true })).toBeVisible()
+  expect(await valueOf('Before providers')).toBe(`${beforeMs}ms`)
+  expect(await valueOf('Provider active')).toBe(`${unionMs}ms`)
+  expect(await valueOf('After providers')).toBe(`${afterMs}ms`)
+  expect(await valueOf('Outside provider calls')).toBe(`${outside}ms`)
+  await expect(region.getByText('Between providers', { exact: true })).toHaveCount(
+    betweenMs > 0 ? 1 : 0
+  )
+  await expect(region).toContainText('counts overlapping provider calls once')
+  // The duration sum must never appear as provider time: the union decides.
+  await expect(page.getByRole('dialog')).not.toContainText(`${durationSum}ms`)
+})
+
+Then('the result inspector should show {string}', async ({ page }, text: string) => {
+  await expect(resultInspectorRegion(page)).toContainText(text)
+})
+
+Then(
+  'the result inspector should show {string} before the snippet summary',
+  async ({ page }, marker: string) => {
+    const inspector = resultInspectorRegion(page)
+    await expect(inspector.getByText(marker, { exact: true }).first()).toBeVisible()
+    const order = await inspector.evaluate((node, expected: string) => {
+      const candidates = [...node.querySelectorAll('p, dt, dd, span, a')]
+      const found =
+        candidates.find((element) => (element.textContent ?? '').trim() === expected) ?? null
+      const snippet =
+        [...node.querySelectorAll('p')].find((element) => {
+          const overflowY = getComputedStyle(element).overflowY
+          return overflowY === 'auto' || overflowY === 'scroll'
+        }) ?? null
+      if (found === null) return { found: false, ordered: false }
+      if (snippet === null) return { found: true, ordered: false }
+      const position = snippet.compareDocumentPosition(found)
+      return { found: true, ordered: (position & Node.DOCUMENT_POSITION_PRECEDING) !== 0 }
+    }, marker)
+    expect(order.found).toBe(true)
+    expect(order.ordered).toBe(true)
+  }
+)
+
+Then(
+  'the result inspector metadata should stay visible without scrolling the snippet region',
+  async ({ page }) => {
+    const inspector = resultInspectorRegion(page)
+    const layout = await inspector.evaluate((node) => {
+      const text = (element: Element | null): string => (element?.textContent ?? '').trim()
+      const rank =
+        [...node.querySelectorAll('p')].find((element) =>
+          /^Result \d+ of \d+$/.test(text(element))
+        ) ?? null
+      const cellFor = (labels: readonly string[]): Element | null => {
+        const dt = [...node.querySelectorAll('dt')].find((element) =>
+          labels.includes(text(element))
+        )
+        return dt?.parentElement?.querySelector('dd') ?? null
+      }
+      const attribution = cellFor(['Provider', 'Contributing providers', 'Attributed'])
+      const score = cellFor(['Fusion score', 'Provider score', 'Score'])
+      const targetLabel =
+        [...node.querySelectorAll('span')].find((element) => text(element) === 'Target URL') ??
+        null
+      const target = targetLabel?.parentElement?.querySelector('a') ?? null
+      const snippet =
+        [...node.querySelectorAll('p')].find((element) => {
+          const overflowY = getComputedStyle(element).overflowY
+          return overflowY === 'auto' || overflowY === 'scroll'
+        }) ?? null
+      const metas = [rank, attribution, score, target]
+      const inViewport = (rect: DOMRect | null): boolean =>
+        rect !== null && rect.top >= -2 && rect.bottom <= window.innerHeight + 2
+      const allVisible = metas
+        .map((element) => (element === null ? null : element.getBoundingClientRect()))
+        .every(inViewport)
+      // Bounded scroll region (not the dialog): max-height plus auto/scroll overflow.
+      const snippetStyle = snippet === null ? null : getComputedStyle(snippet)
+      const bounded =
+        snippet !== null &&
+        snippetStyle !== null &&
+        (snippetStyle.overflowY === 'auto' || snippetStyle.overflowY === 'scroll') &&
+        snippetStyle.maxHeight !== 'none'
+      // Recorded metadata precedes the snippet in DOM order.
+      const orderOf = (element: Element | null): number => {
+        if (element === null || snippet === null) return Number.NaN
+        const position = snippet.compareDocumentPosition(element)
+        // DOCUMENT_POSITION_PRECEDING (2) means element comes before snippet.
+        return position & 2 ? 0 : 1
+      }
+      const ordered = metas.every((element) => orderOf(element) === 0)
+      const tops = metas.map((element) => element?.getBoundingClientRect().top ?? Number.NaN)
+      // Scroll the snippet region to its end: recorded metadata must not move.
+      if (snippet !== null) snippet.scrollTop = snippet.scrollHeight
+      const topsAfter = metas.map(
+        (element) => element?.getBoundingClientRect().top ?? Number.NaN
+      )
+      const unmoved = tops.every(
+        (top, index) => Math.abs(top - (topsAfter[index] ?? Number.NaN)) <= 2
+      )
+      return { allVisible, bounded, ordered, unmoved }
+    })
+    expect(layout.bounded).toBe(true)
+    expect(layout.ordered).toBe(true)
+    expect(layout.allVisible).toBe(true)
+    expect(layout.unmoved).toBe(true)
+  }
+)
+
+Then(
+  'the result inspector snippet should contain the full {string} text in its own scroll region',
+  async ({ page }, kind: string) => {
+    const expected =
+      kind === 'fusion long'
+        ? FUSION_LONG_SNIPPET
+        : kind === 'null-source'
+          ? NULL_SOURCE_LONG_SNIPPET
+          : null
+    if (expected === null) throw new Error(`unknown recorded snippet '${kind}'`)
+    const inspector = resultInspectorRegion(page)
+    const paragraphs = inspector.locator('p')
+    const count = await paragraphs.count()
+    let snippet: ReturnType<Page['locator']> | null = null
+    for (let index = 0; index < count; index += 1) {
+      const candidate = paragraphs.nth(index)
+      const overflowY = await candidate.evaluate((node) => getComputedStyle(node).overflowY)
+      if (overflowY === 'auto' || overflowY === 'scroll') {
+        snippet = candidate
+        break
+      }
+    }
+    if (snippet === null) throw new Error('inspector snippet scroll region is missing')
+    expect(await snippet.evaluate((node) => node.textContent ?? '')).toContain(expected)
+    const box = await snippet.evaluate((node) => {
+      const style = getComputedStyle(node)
+      return {
+        scrollHeight: node.scrollHeight,
+        clientHeight: node.clientHeight,
+        overflowY: style.overflowY,
+        maxHeight: style.maxHeight,
+      }
+    })
+    // Its own bounded scroll region (not the dialog): overflow plus max-height.
+    expect(box.overflowY === 'auto' || box.overflowY === 'scroll').toBe(true)
+    expect(box.maxHeight).not.toBe('none')
+    // Boundary value is the correct bound with honest 2px tolerance: content that
+    // fits exactly (188 vs 188) still lives in its scroll region.
+    expect(box.scrollHeight + 2).toBeGreaterThanOrEqual(box.clientHeight)
+  }
+)
+
+Then('the result inspector should show contributor {string}', async ({ page }, name: string) => {
+  await expect(
+    resultInspectorRegion(page).getByText(name, { exact: true }).first()
+  ).toBeVisible()
+})
+
+Then(
+  'the result inspector should not show contributor {string}',
+  async ({ page }, name: string) => {
+    await expect(
+      resultInspectorRegion(page).getByText(name, { exact: true })
+    ).toHaveCount(0)
+  }
+)
+
+Then(
+  'the result inspector badges should number {int} and each show a logo',
+  async ({ page }, count: number) => {
+    const logos = resultInspectorRegion(page).locator('img[data-testid^="provider-logo-"]')
+    await expect(logos).toHaveCount(count)
+    for (const logo of await logos.all()) {
+      await expect(logo).toBeVisible()
+    }
+  }
+)
+
+Then('the span inspector should show {string}', async ({ page }, text: string) => {
+  const region = spanInspectorRegion(page)
+  // Recorded URLs live inside collapsed JsonViewer groups (PLAN §4 keeps
+  // arrays collapsed). Expand them with real summary activations first.
+  if (text.startsWith('https://')) {
+    for (let round = 0; round < 8; round += 1) {
+      const collapsed = region.locator('details:not([open]) > summary')
+      const count = await collapsed.count()
+      if (count === 0) break
+      for (let index = 0; index < count; index += 1) {
+        try {
+          await collapsed.nth(index).click({ timeout: 2000 })
+        } catch {
+          break
+        }
+      }
+    }
+  }
+  await expect(region).toContainText(text)
+})
+
+Then('the span inspector should not show {string}', async ({ page }, text: string) => {
+  const region = spanInspectorRegion(page)
+  // Expand first so absence is meaningful (a collapsed group hides every URL).
+  if (text.startsWith('https://')) {
+    for (let round = 0; round < 8; round += 1) {
+      const collapsed = region.locator('details:not([open]) > summary')
+      const count = await collapsed.count()
+      if (count === 0) break
+      for (let index = 0; index < count; index += 1) {
+        try {
+          await collapsed.nth(index).click({ timeout: 2000 })
+        } catch {
+          break
+        }
+      }
+    }
+  }
+  await expect(region).not.toContainText(text)
+})
+
+Then('the trace detail should not contain {string}', async ({ page }, text: string) => {
+  await expect(page.getByRole('dialog')).not.toContainText(text)
+})
+
+Then(
+  'the nested provider rows should show provider logos followed by names',
+  async ({ page }) => {
+    const table = page.getByRole('table')
+    for (const provider of SEVEN_PROVIDER_IDS) {
+      const display = SEVEN_PROVIDER_DISPLAY[provider]
+      const row = table.getByRole('row').filter({ hasText: display }).first()
+      await expect(row.locator('img[data-testid^="provider-logo-"]')).toBeVisible()
+      await expect(row.getByText(display, { exact: true }).first()).toBeVisible()
+    }
+  }
+)
+
+Then(
+  'the trajectory provider rows should show provider logos followed by names',
+  async ({ page }) => {
+    const list = trajectoryList(page)
+    for (const provider of SEVEN_PROVIDER_IDS) {
+      const display = SEVEN_PROVIDER_DISPLAY[provider]
+      const row = list.getByRole('button', { name: `${display} request` })
+      await expect(row.locator('img[data-testid^="provider-logo-"]')).toBeVisible()
+      await expect(row.getByText(display, { exact: true }).first()).toBeVisible()
+    }
+  }
+)

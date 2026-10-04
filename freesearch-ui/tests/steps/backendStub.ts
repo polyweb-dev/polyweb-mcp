@@ -198,7 +198,8 @@ export const SEVEN_PROVIDER_LONG_SNIPPET =
   "an explicit selection in the side inspector."
 
 const SEVEN_STARTED_AT_MS = Date.parse("2026-09-29T09:05:00.000Z")
-const SEVEN_TOTAL_MS = 4520
+/** Trace window of the seven-provider fanout stub (also the trajectory axis). */
+export const SEVEN_TOTAL_MS = 4520
 
 function sevenTs(offsetMs: number): string {
   return new Date(SEVEN_STARTED_AT_MS + offsetMs).toISOString()
@@ -220,7 +221,7 @@ export const SEVEN_PROVIDER_DURATIONS: Record<SevenProviderId, number> = {
   parallel: 410,
 }
 
-const SEVEN_PROVIDER_OFFSETS: Record<SevenProviderId, number> = {
+export const SEVEN_PROVIDER_OFFSETS: Record<SevenProviderId, number> = {
   brave: 20,
   keenable: 30,
   tavily: 46,
@@ -238,6 +239,27 @@ const SEVEN_PROVIDER_SCORES: Record<Exclude<SevenProviderId, "parallel">, number
   firecrawl: 0.58,
   youcom: 0.49,
 }
+
+/**
+ * Recorded trajectory geometry of the seven-provider stub in visible-row
+ * order (total, backend, providers by offset, results assembly, response).
+ * Steps compare each rendered bar against offset/total and duration/total.
+ */
+export interface StubStageGeometry {
+  offsetMs: number
+  durationMs: number
+}
+
+export const SEVEN_STAGE_GEOMETRY: StubStageGeometry[] = [
+  { offsetMs: 0, durationMs: SEVEN_TOTAL_MS },
+  { offsetMs: 4, durationMs: 4508 },
+  ...SEVEN_PROVIDER_IDS.map((id) => ({
+    offsetMs: SEVEN_PROVIDER_OFFSETS[id],
+    durationMs: SEVEN_PROVIDER_DURATIONS[id],
+  })),
+  { offsetMs: 4400, durationMs: 8 },
+  { offsetMs: 4512, durationMs: 8 },
+]
 
 export interface SevenProviderResultPayload {
   title: string
@@ -394,6 +416,410 @@ export function sevenProviderTraceDetailFixture(
         provider: null,
         events: [],
       },
+    ],
+    ...overrides,
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Current-data fixtures (Activity Trace Detail UI, Tester Turn 1).
+//
+// Two appended list rows (after the four existing rows, so row 1 stays the
+// seven-provider trace and rows 3/4 stay the single/error traces):
+// - a single-provider Exa search whose one result records a null source and
+//   a null score with a long snippet (attribution must come from the span and
+//   the trace provider, never from "Source not recorded");
+// - an all-providers fusion search with a comma-separated contributor source
+//   and a long snippet, plus wire-only child spans (HTTP, parse) and one
+//   function-level span that the trajectory must hide from its rows.
+// ---------------------------------------------------------------------------
+
+/** Trace id of the single-provider null-source stub (32-char lowercase hex). */
+export const NULL_SOURCE_TRACE_ID = "c9d1e2f3a4b5061728394a5b6c7d8e91"
+
+/** Query recorded on the null-source trace (list rows must never show it). */
+export const NULL_SOURCE_QUERY = "null-source single-provider acceptance probe"
+
+/** Title of the one null-source result. */
+export const NULL_SOURCE_RESULT_TITLE = "Exa null-source acceptance result"
+
+/** URL of the one null-source result. */
+export const NULL_SOURCE_RESULT_URL = "https://e2e.freesearch.dev/null-source/exa"
+
+/**
+ * Seeded long snippet on the null-source result. The shared card clamps it to
+ * two lines; the side inspector shows it in full inside its own scroll region.
+ */
+export const NULL_SOURCE_LONG_SNIPPET =
+  "Exa returned this recorded result without a source label or a vendor score, and the " +
+  "trace still attributes it to Exa through the provider span and the trace provider. " +
+  "This seeded long snippet proves the inspector keeps its recorded metadata above a " +
+  "long summary: rank, provider badge, score, and target host stay visible while the " +
+  "full snippet waits in its own bounded scroll region below the metadata."
+
+const NULL_SOURCE_STARTED_AT_MS = Date.parse("2026-09-30T08:00:00.000Z")
+const NULL_SOURCE_TOTAL_MS = 2400
+
+function nullSourceTs(offsetMs: number): string {
+  return new Date(NULL_SOURCE_STARTED_AT_MS + offsetMs).toISOString()
+}
+
+function nullSourceSpan(
+  spanId: string,
+  parentSpanId: string | null,
+  name: string,
+  stage: string,
+  offsetMs: number,
+  durationMs: number,
+  extra: Record<string, unknown> = {}
+): Record<string, unknown> {
+  return {
+    span_id: spanId,
+    parent_span_id: parentSpanId,
+    name,
+    stage,
+    kind: "server",
+    started_at: nullSourceTs(offsetMs),
+    ended_at: nullSourceTs(offsetMs + durationMs),
+    duration_ms: durationMs,
+    outcome: "success",
+    error: null,
+    provider: null,
+    events: [],
+    ...extra,
+  }
+}
+
+/** `GET /api/v1/traces` summary row for the null-source single-provider trace. */
+export function nullSourceTraceSummaryFixture(
+  overrides: Record<string, unknown> = {}
+): Record<string, unknown> {
+  return {
+    trace_id: NULL_SOURCE_TRACE_ID,
+    operation: "search",
+    started_at: new Date(NULL_SOURCE_STARTED_AT_MS).toISOString(),
+    duration_ms: NULL_SOURCE_TOTAL_MS,
+    provider: "exa",
+    outcome: "success",
+    result_count: 1,
+    error: null,
+    ...overrides,
+  }
+}
+
+/** `GET /api/v1/traces/{null-source}` detail: one null result, hidden children. */
+export function nullSourceTraceDetailFixture(
+  overrides: Record<string, unknown> = {}
+): Record<string, unknown> {
+  const result = {
+    title: NULL_SOURCE_RESULT_TITLE,
+    url: NULL_SOURCE_RESULT_URL,
+    snippet: NULL_SOURCE_LONG_SNIPPET,
+    source: null,
+    score: null,
+  }
+  return {
+    ...nullSourceTraceSummaryFixture(),
+    input: NULL_SOURCE_QUERY,
+    output: {
+      kind: "search_results",
+      query: NULL_SOURCE_QUERY,
+      results: [result],
+    },
+    spans: [
+      nullSourceSpan("c900000000000000", null, "POST /search", "Search request", 0, 2400),
+      nullSourceSpan(
+        "c900000000000001",
+        "c900000000000000",
+        "freesearch.route",
+        "Route selection",
+        2,
+        120
+      ),
+      nullSourceSpan(
+        "c900000000000002",
+        "c900000000000000",
+        "freesearch.backend",
+        "Backend handling",
+        4,
+        2392
+      ),
+      {
+        ...nullSourceSpan(
+          "c900000000000003",
+          "c900000000000002",
+          "freesearch.provider",
+          "Provider request",
+          130,
+          2100,
+          { kind: "client", provider: "exa" }
+        ),
+        events: [
+          {
+            name: "freesearch.provider.request",
+            timestamp: nullSourceTs(130),
+            attributes: { query: NULL_SOURCE_QUERY, limit: 6 },
+          },
+          {
+            name: "freesearch.provider.response",
+            timestamp: nullSourceTs(2230),
+            attributes: { result_count: 1, results: [result] },
+          },
+        ],
+      },
+      // Wire-only children: decoded data keeps them, visible rows must not.
+      nullSourceSpan(
+        "c900000000000004",
+        "c900000000000003",
+        "freesearch.provider.http",
+        "Provider HTTP call",
+        132,
+        2090,
+        { kind: "client" }
+      ),
+      nullSourceSpan(
+        "c900000000000005",
+        "c900000000000003",
+        "freesearch.provider.parse",
+        "Provider response parse",
+        2222,
+        4,
+        { kind: "internal" }
+      ),
+      nullSourceSpan(
+        "c900000000000006",
+        "c900000000000002",
+        "freesearch.results",
+        "Results assembly",
+        2390,
+        4,
+        { kind: "internal" }
+      ),
+      nullSourceSpan(
+        "c900000000000007",
+        "c900000000000000",
+        "freesearch.response",
+        "Response to caller",
+        2394,
+        6,
+        { kind: "internal" }
+      ),
+    ],
+    ...overrides,
+  }
+}
+
+/** Trace id of the fusion long-snippet stub (32-char lowercase hex). */
+export const FUSION_LONG_TRACE_ID = "d1e2f3a4b5c61728394a5b6c7d8e90f1"
+
+/** Query recorded on the fusion long-snippet trace. */
+export const FUSION_LONG_QUERY = "fusion long-snippet acceptance probe"
+
+/** Title of the multi-contributor fusion result. */
+export const FUSION_LONG_RESULT_TITLE = "Fusion multi-engine acceptance result"
+
+/** Title of the single-contributor fusion result. */
+export const FUSION_SINGLE_RESULT_TITLE = "Fusion single-engine acceptance result"
+
+/**
+ * Seeded long snippet on the multi-contributor fusion result: top metadata
+ * first, full text in its own scroll region.
+ */
+export const FUSION_LONG_SNIPPET =
+  "Brave and Keenable both returned this recorded fusion result, and the fusion " +
+  "projection stored their contributor ids as one comma-separated source text. " +
+  "This seeded long snippet proves the fusion inspector keeps its recorded metadata " +
+  "above a long summary: rank, both contributor badges, fusion score, and target host " +
+  "stay visible while the full snippet waits in its own bounded scroll region below " +
+  "the metadata. Selecting another result replaces these badges instead of repeating " +
+  "every trace participant."
+
+const FUSION_LONG_STARTED_AT_MS = Date.parse("2026-09-30T08:10:00.000Z")
+const FUSION_LONG_TOTAL_MS = 3800
+
+function fusionLongTs(offsetMs: number): string {
+  return new Date(FUSION_LONG_STARTED_AT_MS + offsetMs).toISOString()
+}
+
+function fusionLongSpan(
+  spanId: string,
+  parentSpanId: string | null,
+  name: string,
+  stage: string,
+  offsetMs: number,
+  durationMs: number,
+  extra: Record<string, unknown> = {}
+): Record<string, unknown> {
+  return {
+    span_id: spanId,
+    parent_span_id: parentSpanId,
+    name,
+    stage,
+    kind: "internal",
+    started_at: fusionLongTs(offsetMs),
+    ended_at: fusionLongTs(offsetMs + durationMs),
+    duration_ms: durationMs,
+    outcome: "success",
+    error: null,
+    provider: null,
+    events: [],
+    ...extra,
+  }
+}
+
+function fusionLongProviderSpan(
+  spanId: string,
+  provider: string,
+  offsetMs: number,
+  durationMs: number,
+  result: Record<string, unknown>
+): Record<string, unknown> {
+  return {
+    ...fusionLongSpan(
+      spanId,
+      "d100000000000002",
+      "freesearch.provider",
+      "Provider request",
+      offsetMs,
+      durationMs,
+      { kind: "client", provider }
+    ),
+    events: [
+      {
+        name: "freesearch.provider.request",
+        timestamp: fusionLongTs(offsetMs),
+        attributes: { query: FUSION_LONG_QUERY, limit: 6 },
+      },
+      {
+        name: "freesearch.provider.response",
+        timestamp: fusionLongTs(offsetMs + durationMs),
+        attributes: { result_count: 1, results: [result] },
+      },
+    ],
+  }
+}
+
+/** `GET /api/v1/traces` summary row for the fusion long-snippet trace. */
+export function fusionLongTraceSummaryFixture(
+  overrides: Record<string, unknown> = {}
+): Record<string, unknown> {
+  return {
+    trace_id: FUSION_LONG_TRACE_ID,
+    operation: "search",
+    started_at: new Date(FUSION_LONG_STARTED_AT_MS).toISOString(),
+    duration_ms: FUSION_LONG_TOTAL_MS,
+    provider: "aggregated",
+    outcome: "success",
+    result_count: 2,
+    error: null,
+    ...overrides,
+  }
+}
+
+/** `GET /api/v1/traces/{fusion-long}` detail: fused output + hidden children. */
+export function fusionLongTraceDetailFixture(
+  overrides: Record<string, unknown> = {}
+): Record<string, unknown> {
+  const multi = {
+    title: FUSION_LONG_RESULT_TITLE,
+    url: "https://e2e.freesearch.dev/fusion/long",
+    snippet: FUSION_LONG_SNIPPET,
+    source: "brave, keenable, brave",
+    score: 0.87,
+  }
+  const single = {
+    title: FUSION_SINGLE_RESULT_TITLE,
+    url: "https://e2e.freesearch.dev/fusion/tavily",
+    snippet: "Tavily returned one recorded result for the fusion probe.",
+    source: "tavily",
+    score: 0.62,
+  }
+  return {
+    ...fusionLongTraceSummaryFixture(),
+    input: FUSION_LONG_QUERY,
+    output: {
+      kind: "search_results",
+      query: FUSION_LONG_QUERY,
+      results: [multi, single],
+    },
+    spans: [
+      fusionLongSpan("d100000000000000", null, "POST /search", "Search request", 0, 3800, {
+        kind: "server",
+      }),
+      fusionLongSpan(
+        "d100000000000001",
+        "d100000000000000",
+        "freesearch.route",
+        "Route selection",
+        2,
+        88
+      ),
+      fusionLongSpan(
+        "d100000000000002",
+        "d100000000000000",
+        "freesearch.backend",
+        "Backend handling",
+        4,
+        3788
+      ),
+      fusionLongProviderSpan("d100000000000003", "brave", 100, 900, {
+        title: "Brave fusion acceptance result",
+        url: "https://e2e.freesearch.dev/fusion/brave",
+        snippet: "Brave returned one recorded result for the fusion probe.",
+        source: "brave",
+        score: 0.81,
+      }),
+      // Wire-only transport child of the Brave attempt: never a visible row.
+      fusionLongSpan(
+        "d100000000000004",
+        "d100000000000003",
+        "freesearch.provider.http",
+        "Provider HTTP call",
+        102,
+        888,
+        { kind: "client" }
+      ),
+      fusionLongProviderSpan("d100000000000005", "keenable", 200, 1500, {
+        title: "Keenable fusion acceptance result",
+        url: "https://e2e.freesearch.dev/fusion/keenable",
+        snippet: "Keenable returned one recorded result for the fusion probe.",
+        source: "keenable",
+        score: 0.9,
+      }),
+      // Wire-only parse child of the Keenable attempt: never a visible row.
+      fusionLongSpan(
+        "d100000000000006",
+        "d100000000000005",
+        "freesearch.provider.parse",
+        "Provider response parse",
+        1690,
+        6
+      ),
+      fusionLongProviderSpan("d100000000000007", "tavily", 300, 700, {
+        title: "Tavily fusion acceptance result",
+        url: "https://e2e.freesearch.dev/fusion/tavily",
+        snippet: "Tavily returned one recorded result for the fusion probe.",
+        source: "tavily",
+        score: 0.74,
+      }),
+      // Function-level span: recorded data keeps it, visible rows must not.
+      fusionLongSpan("d100000000000008", "d100000000000002", "freesearch.rank", "Rank fusion", 3710, 4),
+      fusionLongSpan(
+        "d100000000000009",
+        "d100000000000002",
+        "freesearch.results",
+        "Results assembly",
+        3720,
+        8
+      ),
+      fusionLongSpan(
+        "d10000000000000a",
+        "d100000000000000",
+        "freesearch.response",
+        "Response to caller",
+        3792,
+        8
+      ),
     ],
     ...overrides,
   }
@@ -742,9 +1168,16 @@ export async function installBackendStub(page: Page): Promise<void> {
           : list.items.filter((item) => item.operation === operation)
       // The seven-provider acceptance trace leads the list (it is a search
       // fanout, so the fetch filter still excludes it, like the backend).
+      // The two current-data traces close the list (both are searches): the
+      // null-source single-provider trace, then the fusion long-snippet trace.
       const items =
         operation === null || operation === "search"
-          ? [sevenProviderTraceSummaryFixture(), ...base]
+          ? [
+              sevenProviderTraceSummaryFixture(),
+              ...base,
+              nullSourceTraceSummaryFixture(),
+              fusionLongTraceSummaryFixture(),
+            ]
           : base
       return json(route, { items, generated_at: list.generated_at })
     }
@@ -767,6 +1200,12 @@ export async function installBackendStub(page: Page): Promise<void> {
       if (traceId === AGGREGATED_TRACE_ID) return json(route, aggregatedTraceDetailFixture())
       if (traceId === SEVEN_PROVIDER_TRACE_ID) {
         return json(route, sevenProviderTraceDetailFixture())
+      }
+      if (traceId === NULL_SOURCE_TRACE_ID) {
+        return json(route, nullSourceTraceDetailFixture())
+      }
+      if (traceId === FUSION_LONG_TRACE_ID) {
+        return json(route, fusionLongTraceDetailFixture())
       }
       return json(route, { detail: `unknown trace '${traceId}'` }, 404)
     }

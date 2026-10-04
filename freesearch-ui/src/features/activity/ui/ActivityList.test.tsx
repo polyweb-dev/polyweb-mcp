@@ -119,7 +119,7 @@ describe("ActivityList", () => {
     expect(onToggleProviders).toHaveBeenCalledWith(AGGREGATED_TRACE_ID)
   })
 
-  it("renders nested provider rows with status, latency, count, and Inspect", () => {
+  it("renders nested provider rows with status, latency, count, and View details", () => {
     const detail = mapTraceDetail(aggregatedTraceDetailFixture())
     render(
       <ActivityList
@@ -132,7 +132,11 @@ describe("ActivityList", () => {
       />
     )
 
-    const inspectButtons = screen.getAllByRole("button", { name: "Inspect" })
+    // R6 unifies the action text: 3 parent rows plus 7 nested provider rows.
+    expect(screen.getAllByRole("button", { name: "View details" })).toHaveLength(10)
+    const inspectButtons = ["2025ms", "3223ms", "1450ms", "1780ms", "2050ms", "2310ms", "830ms"].map(
+      (latency) => within(screen.getByText(latency).closest("tr")!).getByRole("button", { name: "View details" })
+    )
     expect(inspectButtons).toHaveLength(7)
     // Scope by the attempt latency: the parent list has other Keenable rows.
     const keenableRow = screen.getByText("2025ms").closest("tr")!
@@ -143,7 +147,7 @@ describe("ActivityList", () => {
     expect(within(tavilyRow).getByText("Tavily")).toBeInTheDocument()
   })
 
-  it("passes the trace id and provider span id when Inspect is clicked", async () => {
+  it("passes the trace id and provider span id when View details is clicked", async () => {
     const user = userEvent.setup()
     const onInspect = vi.fn()
     const detail = mapTraceDetail(aggregatedTraceDetailFixture())
@@ -160,7 +164,7 @@ describe("ActivityList", () => {
     )
 
     const keenableRow = screen.getByText("2025ms").closest("tr")!
-    await user.click(within(keenableRow).getByRole("button", { name: "Inspect" }))
+    await user.click(within(keenableRow).getByRole("button", { name: "View details" }))
 
     expect(onInspect).toHaveBeenCalledTimes(1)
     expect(onInspect).toHaveBeenCalledWith(AGGREGATED_TRACE_ID, "a100000000000003")
@@ -397,16 +401,16 @@ describe("ActivityList seven-provider direct identity", () => {
   it("renders seven named provider rows from the direct span fields", () => {
     expandedSeven()
 
-    expect(screen.getAllByRole("button", { name: "Inspect" })).toHaveLength(7)
+    expect(screen.getAllByRole("button", { name: "View details" })).toHaveLength(10)
     // Scope each name by its attempt latency: the parent list has other
     // provider rows (e.g. the single-provider Keenable trace).
     const expected: Array<[string, string]> = [
-      ["Brave", "1450ms"],
+      ["Brave Search", "1450ms"],
       ["Keenable", "2025ms"],
       ["Tavily", "3223ms"],
       ["Exa", "1780ms"],
       ["Firecrawl", "2050ms"],
-      ["Youcom", "2310ms"],
+      ["You.com", "2310ms"],
       ["Parallel", "830ms"],
     ]
     for (const [name, latency] of expected) {
@@ -431,6 +435,24 @@ describe("ActivityList seven-provider direct identity", () => {
     const exaRow = screen.getByText("1780ms").closest("tr")!
     expect(within(exaRow).getByText("Exa")).toBeInTheDocument()
     const youcomRow = screen.getByText("2310ms").closest("tr")!
-    expect(within(youcomRow).getByText("Youcom")).toBeInTheDocument()
+    expect(within(youcomRow).getByText("You.com")).toBeInTheDocument()
+  })
+
+  it("shows a logo followed by the catalog name in every provider row", () => {
+    expandedSeven()
+
+    const braveRow = screen.getByText("1450ms").closest("tr")!
+    expect(within(braveRow).getByText("Brave Search")).toBeInTheDocument()
+    expect(within(braveRow).getByTestId("provider-logo-brave")).toBeInTheDocument()
+    const youcomRow = screen.getByText("2310ms").closest("tr")!
+    expect(within(youcomRow).getByText("You.com")).toBeInTheDocument()
+    expect(within(youcomRow).getByTestId("provider-logo-youcom")).toBeInTheDocument()
+  })
+
+  it("labels parent and provider actions with one View details text", () => {
+    expandedSeven()
+
+    expect(screen.getAllByRole("button", { name: "View details" })).toHaveLength(10)
+    expect(screen.queryByRole("button", { name: "Inspect" })).not.toBeInTheDocument()
   })
 })
