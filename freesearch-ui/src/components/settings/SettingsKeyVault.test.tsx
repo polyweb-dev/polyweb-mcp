@@ -102,6 +102,7 @@ const SEED_PROVIDER_NAMES = [
   "Firecrawl",
   "You.com",
   "Parallel",
+  "Tinyfish",
 ] as const
 
 const STANDARD_PLACEHOLDER = "Paste an API key to store"
@@ -368,8 +369,8 @@ describe("K1-3: 1440px viewport fills the Settings main column", () => {
     await waitForProviders()
     await openKeysTab()
     const grid = keyVaultGrid()
-    expect(grid.querySelectorAll('input[type="password"]')).toHaveLength(7)
-    expect(grid.children).toHaveLength(7)
+    expect(grid.querySelectorAll('input[type="password"]')).toHaveLength(8)
+    expect(grid.children).toHaveLength(8)
     for (const name of SEED_PROVIDER_NAMES) {
       expect(within(grid).getByText(name, { exact: true })).toBeInTheDocument()
     }
@@ -502,6 +503,27 @@ describe("K1-5: key vault behavior contract", () => {
     expect(puts[0].body).toEqual({ key: "yc_live_secret_key_6789" })
   })
 
+  it("stores Tinyfish credentials through its write-only vault endpoint", async () => {
+    const user = userEvent.setup()
+    const stub = renderSettings()
+    await waitForProviders()
+    await openKeysTab()
+    const card = findKeyCard("Tinyfish")
+    const input = screen.getByRole("textbox", { name: "Tinyfish API key" })
+    await user.type(input, "tinyfish-test-secret")
+    await user.click(within(card).getByRole("button", { name: /^Save$/ }))
+    await waitFor(() => {
+      expect(within(card).getByText("TIN_••••••••a1b2", { exact: true })).toBeInTheDocument()
+    })
+    expect(input).toHaveValue("")
+    expect(card).toHaveTextContent("Stored")
+    expect(document.body.textContent).not.toContain("tinyfish-test-secret")
+    const puts = stub.requestsTo("/api/v1/providers/tinyfish/secret")
+    expect(puts).toHaveLength(1)
+    expect(puts[0].method).toBe("PUT")
+    expect(puts[0].body).toEqual({ key: "tinyfish-test-secret" })
+  })
+
   it("shows Saving... on the Save button while the PUT is in flight", async () => {
     const user = userEvent.setup()
     renderSettings()
@@ -601,17 +623,17 @@ describe("K1-5: key vault behavior contract", () => {
     gateHolder.providers!.resolve(ok(allProvidersFixture()))
     await waitForProviders()
     expect(screen.queryByText("Loading provider keys...", { exact: true })).not.toBeInTheDocument()
-    expect(keyVaultGrid().querySelectorAll('input[type="password"]')).toHaveLength(7)
+    expect(keyVaultGrid().querySelectorAll('input[type="password"]')).toHaveLength(8)
   })
 
   it("shows exact status pills (6x Stored + 1x Keyless, no Missing) with masked fingerprints and no reveal actions", async () => {
     renderSettings()
     await waitForProviders()
     await openKeysTab()
-    expect(screen.getAllByText("Stored", { exact: true })).toHaveLength(6)
+    expect(screen.getAllByText("Stored", { exact: true })).toHaveLength(7)
     expect(screen.getByText("Keyless", { exact: true })).toBeInTheDocument()
     expect(screen.queryByText("Missing", { exact: true })).not.toBeInTheDocument()
-    expect(screen.getAllByText(/••••••••/)).toHaveLength(6)
+    expect(screen.getAllByText(/••••••••/)).toHaveLength(7)
     const body = document.body.textContent ?? ""
     for (const forbidden of ["Copy", "Burn", "Reveal", "shown once"]) {
       expect(body).not.toContain(forbidden)

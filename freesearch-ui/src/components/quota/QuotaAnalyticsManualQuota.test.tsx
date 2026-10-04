@@ -13,11 +13,11 @@ import {
 } from "@/test/backendFixtures"
 
 /**
- * Manual billing entry overlay: Brave always offers Set budget, Exa/Parallel
+ * Manual billing entry overlay: Brave always offers Set budget, Exa/Parallel/Tinyfish
  * offer it while no vendor budget is configured, and a saved window renders
  * as an ESTIMATED overlay line without rewriting the throttle headline.
  */
-function renderWithManualStub() {
+function renderWithManualStub(latestQuota = canonicalQuotasFixture()) {
   const stub = installFetchStub((req) => {
     if (req.url === "/api/v1/providers" && req.method === "GET") {
       return ok(allProvidersFixture())
@@ -33,7 +33,7 @@ function renderWithManualStub() {
       return ok({ provider: "brave", ...body, updated_at: "2026-09-06T12:00:00Z" })
     }
     if (req.url.startsWith("/dashboard")) {
-      return ok(dashboardFixture({ latest_quota: canonicalQuotasFixture() }))
+      return ok(dashboardFixture({ latest_quota: latestQuota }))
     }
     return err(404, { detail: "unhandled test route" })
   })
@@ -58,6 +58,36 @@ describe("QuotaAnalytics manual billing entry", () => {
     expect(screen.getByTestId("manual-quota-open-brave")).toHaveTextContent("Set budget")
     expect(screen.getByTestId("manual-quota-open-parallel")).toHaveTextContent("Set budget")
     expect(screen.queryByTestId("manual-quota-open-tavily")).toBeNull()
+  })
+
+  it("offers Tinyfish manual entry while its monthly budget is unconfigured", async () => {
+    const user = userEvent.setup()
+    const stub = renderWithManualStub()
+    const row = (await screen.findByText("Tinyfish quota", { exact: true })).closest("tr")!
+    expect(row).toHaveTextContent("Budget not configured")
+    expect(row).toHaveTextContent("Monthly")
+    expect(screen.getByTestId("manual-quota-open-tinyfish")).toHaveTextContent("Set budget")
+    await user.click(screen.getByTestId("manual-quota-open-tinyfish"))
+    const dialog = await screen.findByRole("dialog")
+    expect(dialog).toHaveTextContent("Set budget — Tinyfish")
+    expect(stub.requestsTo("/api/v1/providers/tinyfish/manual-quota").map((request) => request.method)).toContain("GET")
+  })
+
+  it("hides Tinyfish manual entry when a finite vendor quota exists", async () => {
+    renderWithManualStub([...canonicalQuotasFixture(), {
+      provider: "tinyfish",
+      source: "authoritative",
+      observed_at: "2026-09-06T12:00:00Z",
+      remaining: "750",
+      limit: "1000",
+      remaining_percent: "75",
+      unit_kind: "REQUEST",
+      reset_at: null,
+    }])
+    const row = (await screen.findByText("Tinyfish quota", { exact: true })).closest("tr")!
+    expect(row).toHaveTextContent("75% remaining")
+    expect(row).toHaveTextContent("750/1000 requests")
+    expect(screen.queryByTestId("manual-quota-open-tinyfish")).toBeNull()
   })
 
   it("saves a Brave window and shows an estimated overlay beside the observed headline", async () => {

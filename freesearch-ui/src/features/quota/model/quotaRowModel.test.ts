@@ -80,6 +80,15 @@ describe("manualBudgetMissing", () => {
     expect(manualBudgetMissing(quotaProvider("exa"), snapshot("exa"), 75)).toBe(false)
   })
 
+  it("offers Tinyfish Manual Entry only without a vendor snapshot or percentage", () => {
+    const provider = quotaProvider("tinyfish")
+    expect(manualBudgetMissing(provider, undefined, null)).toBe(true)
+    expect(manualBudgetMissing(provider, snapshot("tinyfish"), null)).toBe(true)
+    expect(manualBudgetMissing(provider, snapshot("tinyfish"), 75)).toBe(false)
+    expect(manualBudgetMissing(provider, snapshot("tinyfish", { remaining: "750", limit: "1000" }), null)).toBe(false)
+    expect(manualBudgetMissing(provider, snapshot("tinyfish", { remaining: "750" }), null)).toBe(false)
+  })
+
   it("never treats other providers as budget-missing", () => {
     expect(manualBudgetMissing(quotaProvider("brave"), undefined, null)).toBe(false)
     expect(manualBudgetMissing(quotaProvider("tavily"), snapshot("tavily"), null)).toBe(false)

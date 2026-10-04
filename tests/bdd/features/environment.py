@@ -75,6 +75,7 @@ def before_scenario(context: Any, scenario: Any) -> None:
         or _has_control_tag(scenario)
         or _has_fanout_tag(scenario)
         or (_has_quota_tag(scenario) and not _has_live_tag(scenario))
+        or (_has_tinyfish_tag(scenario) and not _has_live_tag(scenario))
     ):
         context.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(context.loop)
@@ -360,6 +361,15 @@ def _has_keenable_keyed_tag(scenario: Any) -> bool:
     if not tags:
         return False
     return any(str(getattr(tag, "name", tag)).lstrip("@") == "keenable-keyed" for tag in tags)
+
+
+def _has_tinyfish_tag(scenario: Any) -> bool:
+    """Identify offline Tinyfish scenarios, including feature-level tags."""
+    tags = getattr(scenario, "tags", None) or ()
+    feature_tags = getattr(getattr(scenario, "feature", None), "tags", None) or ()
+    return any(
+        str(getattr(tag, "name", tag)).lstrip("@") == "tinyfish" for tag in (*tags, *feature_tags)
+    )
 
 
 def _has_firecrawl_tag(scenario: Any) -> bool:

@@ -21,6 +21,7 @@ SENTINEL_PROVIDER_KEYS: dict[str, str] = {
     "you": "YOU-SENTINEL-key-8d14f6b3a952",
     "brave": "BRAVE-SENTINEL-key-40ce97d15ab8",
     "keenable": "KEENABLE-SENTINEL-key-b6f2d381c4e7",
+    "tinyfish": "TINYFISH-SENTINEL-key-8c42b91ea35f",
 }
 
 #: Passphrase sentinel for master-key tests (AC-1). Never an AES key itself.

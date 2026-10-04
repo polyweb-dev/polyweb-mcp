@@ -5,6 +5,7 @@ import firecrawlLogo from "@/assets/firecrawl.webp"
 import keenableLogo from "@/assets/keenable.webp"
 import parallelLogo from "@/assets/parallel.webp"
 import tavilyLogo from "@/assets/tavily.webp"
+import tinyfishLogo from "@/assets/tinyfish.webp"
 import youcomLogo from "@/assets/youcom.webp"
 import { cn } from "cn"
 
@@ -16,6 +17,7 @@ const LOGO_MAP: Record<string, string> = {
   keenable: keenableLogo,
   parallel: parallelLogo,
   tavily: tavilyLogo,
+  tinyfish: tinyfishLogo,
   youcom: youcomLogo,
   "you.com": youcomLogo,
 }

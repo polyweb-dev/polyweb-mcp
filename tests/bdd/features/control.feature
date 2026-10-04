@@ -7,7 +7,7 @@ Feature: Provider control plane and routing settings
   Scenario: Provider enumeration exposes canonical defaults
     Given an offline control API with stub adapters
     When I list the control-plane providers
-    Then the control-plane provider list should contain the seven canonical providers
+    Then the control-plane provider list should contain the eight canonical providers
     And every provider should have a closed circuit breaker and no latency p95
 
   Scenario: Provider enablement patch persists to a fresh read

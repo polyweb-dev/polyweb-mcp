@@ -27,8 +27,8 @@ import {
  * Fixture values mirror the live FastAPI wire contract (snake_case,
  * Decimal-as-string, ISO-8601 datetimes) and the canonical unit-test
  * fixtures in `src/test/backendFixtures.ts`:
- * - 7 canonical providers (brave, keenable, tavily, exa, firecrawl, you,
- *   parallel) with stable priorities 1..7, fixed p95 latencies, and
+ * - 8 canonical providers (brave, keenable, tavily, exa, firecrawl, you,
+ *   parallel, tinyfish) with stable priorities 1..8, fixed p95 latencies, and
  *   catalog-faithful secret presence (you/parallel start "missing" so the
  *   key-vault save flow starts from an empty vault).
  * - Routing starts chained/balanced/3 (master failover switch ON), so the
@@ -848,9 +848,10 @@ const SECRET_PRESENCE: Record<string, SecretPresence> = {
   firecrawl: "configured",
   you: "missing",
   parallel: "missing",
+  tinyfish: "configured",
 }
 
-const PROVIDER_ORDER = ["brave", "keenable", "tavily", "exa", "firecrawl", "you", "parallel"]
+const PROVIDER_ORDER = ["brave", "keenable", "tavily", "exa", "firecrawl", "you", "parallel", "tinyfish"]
 
 function initialProviders(): StubProvider[] {
   return PROVIDER_ORDER.map((id, index) => ({

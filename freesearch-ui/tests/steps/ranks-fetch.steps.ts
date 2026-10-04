@@ -8,7 +8,7 @@ import { Then } from "./fixtures"
  * table via the plain `includes("fetch")` path (not just the playground
  * fetch picker), while Brave stays fetch-incapable everywhere.
  *
- * Deterministic: the stub serves 7 enabled providers; visibility is checked
+ * Deterministic: the stub serves 8 enabled providers; visibility is checked
  * against the rendered ranks table after the Fetch operation is selected.
  * No sleeps, no network, auto-waiting assertions only.
  */

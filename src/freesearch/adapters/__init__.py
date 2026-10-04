@@ -7,6 +7,7 @@ from freesearch.adapters.firecrawl import FirecrawlAdapter
 from freesearch.adapters.keenable import KeenableAdapter
 from freesearch.adapters.parallel import ParallelAdapter
 from freesearch.adapters.tavily import TavilyAdapter
+from freesearch.adapters.tinyfish import TinyfishAdapter
 from freesearch.adapters.youcom import YoucomAdapter
 
 __all__ = [
@@ -17,5 +18,6 @@ __all__ = [
     "ParallelAdapter",
     "ProviderAdapter",
     "TavilyAdapter",
+    "TinyfishAdapter",
     "YoucomAdapter",
 ]

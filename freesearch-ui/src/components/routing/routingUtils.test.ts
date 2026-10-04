@@ -27,6 +27,7 @@ describe("getEligibleProviders", () => {
       "exa",
       "firecrawl",
       "youcom",
+      "tinyfish",
     ])
   })
 
@@ -37,14 +38,15 @@ describe("getEligibleProviders", () => {
       "exa",
       "firecrawl",
       "youcom",
+      "tinyfish",
     ])
   })
 
   it.each([
-    ["cost_optimized", ["keenable", "brave", "tavily", "exa", "firecrawl", "youcom"]],
-    ["latency_optimized", ["brave", "keenable", "tavily", "exa", "youcom", "firecrawl"]],
-    ["quality_first", ["exa", "brave", "keenable", "tavily", "firecrawl", "youcom"]],
-    ["round_robin", ["brave", "keenable", "tavily", "exa", "firecrawl", "youcom"]],
+    ["cost_optimized", ["keenable", "brave", "tavily", "exa", "firecrawl", "youcom", "tinyfish"]],
+    ["latency_optimized", ["brave", "keenable", "tinyfish", "tavily", "exa", "youcom", "firecrawl"]],
+    ["quality_first", ["exa", "brave", "keenable", "tavily", "firecrawl", "youcom", "tinyfish"]],
+    ["round_robin", ["brave", "keenable", "tavily", "exa", "firecrawl", "youcom", "tinyfish"]],
   ] as const)("sorts eligible providers for the %s preset", (preset, expected) => {
     expect(idsFor(seedProviders(), "search", preset)).toEqual(expected)
   })
@@ -61,6 +63,7 @@ describe("getEligibleProviders", () => {
       "exa",
       "firecrawl",
       "youcom",
+      "tinyfish",
     ])
   })
 

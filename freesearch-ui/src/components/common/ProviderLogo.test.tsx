@@ -17,6 +17,21 @@ describe("ProviderLogo", () => {
     expect(img).toBeInTheDocument()
   })
 
+  it("renders the correct webp logo for tinyfish by providerId", () => {
+    render(<ProviderLogo providerId="tinyfish" />)
+    const img = screen.getByTestId("provider-logo-tinyfish")
+    expect(img).toBeInTheDocument()
+    expect(img.tagName.toLowerCase()).toBe("img")
+    expect(img).toHaveAttribute("aria-hidden", "true")
+    expect(img.getAttribute("src")).toContain("tinyfish.webp")
+  })
+
+  it("renders the correct webp logo for tinyfish by name", () => {
+    render(<ProviderLogo name="Tinyfish" />)
+    const img = screen.getByTestId("provider-logo-tinyfish")
+    expect(img).toBeInTheDocument()
+  })
+
   it("renders a fallback avatar letter for unknown providers", () => {
     render(<ProviderLogo providerId="unknown_engine" name="Custom Engine" />)
     const fallback = screen.getByTestId("provider-logo-fallback")

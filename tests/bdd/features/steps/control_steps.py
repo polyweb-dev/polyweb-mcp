@@ -201,7 +201,7 @@ def step_when_list_control_providers(context: Any) -> None:
         context.providers_response = client.get("/api/v1/providers")
 
 
-@then("the control-plane provider list should contain the seven canonical providers")
+@then("the control-plane provider list should contain the eight canonical providers")
 def step_then_canonical_providers(context: Any) -> None:
     assert context.providers_response.status_code == 200
     body = context.providers_response.json()
@@ -213,8 +213,9 @@ def step_then_canonical_providers(context: Any) -> None:
         "you",
         "brave",
         "keenable",
+        "tinyfish",
     }
-    assert len(body) == 7
+    assert len(body) == 8
 
 
 @then("every provider should have a closed circuit breaker and no latency p95")

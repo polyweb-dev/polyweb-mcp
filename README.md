@@ -13,6 +13,7 @@ FreeSearch is a provider-neutral search, content extraction, and quota-orchestra
 - **Parallel** (Search & Fetch with OAuth balance tracking)
 - **You.com** (Search & Fetch)
 - **Keenable** (Search with rolling-hour keyless tier or API key)
+- **Tinyfish** (Search & Markdown Fetch)
 
 ---
 

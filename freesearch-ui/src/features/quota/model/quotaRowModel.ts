@@ -9,7 +9,7 @@ export interface QuotaRowEstimates {
 }
 
 /**
- * Whether Exa/Parallel lack a vendor budget (Brave callers always pass an
+ * Whether Exa/Parallel/Tinyfish lack a vendor budget (Brave callers always pass an
  * eligible row). A missing snapshot with no comparable percentage means the
  * row can only offer Manual Entry.
  */
@@ -20,7 +20,7 @@ export function manualBudgetMissing(
 ): boolean {
   const noSnapshot = isMissingQuotaSnapshot(latestQuota)
   return (
-    (provider.id === "exa" || provider.id === "parallel") &&
+    ["exa", "parallel", "tinyfish"].includes(provider.id) &&
     noSnapshot &&
     remainingPercent === null
   )

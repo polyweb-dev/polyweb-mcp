@@ -374,7 +374,7 @@ describe("AC-R1-3: bar content (unified wording)", () => {
     await renderAppAt("/playground")
     expect(screen.getByTestId("status-bar")).toBeInTheDocument()
     await waitFor(() => {
-      expect(barEl().textContent).toContain("7 of 7 providers")
+      expect(barEl().textContent).toContain("8 of 8 providers")
     })
   })
 
@@ -392,7 +392,7 @@ describe("AC-R1-3: bar content (unified wording)", () => {
     await renderAppAt("/routing")
     expect(screen.getByTestId("status-bar")).toBeInTheDocument()
     await waitFor(() => {
-      expect(barEl().textContent).toContain("7 of 7 providers")
+      expect(barEl().textContent).toContain("8 of 8 providers")
     })
     await waitFor(() => {
       expect(barEl().textContent).toContain("Failover active")
@@ -403,7 +403,7 @@ describe("AC-R1-3: bar content (unified wording)", () => {
     await renderAppAt("/playground")
     expect(screen.getByTestId("status-bar")).toBeInTheDocument()
     await waitFor(() => {
-      expect(barEl().textContent).toContain("7 of 7 providers")
+      expect(barEl().textContent).toContain("8 of 8 providers")
     })
     expect(screen.queryByText(/Fallback/)).toBeNull()
   })
@@ -447,7 +447,7 @@ describe("AC-R1-4: single source on both routes", () => {
       </MemoryRouter>
     )
     await waitFor(() => {
-      expect(screen.getByText("7 of 7 providers")).toBeInTheDocument()
+      expect(screen.getByText("8 of 8 providers")).toBeInTheDocument()
     })
     const playgroundText = screen.getByTestId("status-bar").textContent
     first.unmount()
@@ -458,7 +458,7 @@ describe("AC-R1-4: single source on both routes", () => {
       </MemoryRouter>
     )
     await waitFor(() => {
-      expect(screen.getByText("7 of 7 providers")).toBeInTheDocument()
+      expect(screen.getByText("8 of 8 providers")).toBeInTheDocument()
     })
     const routingText = screen.getByTestId("status-bar").textContent
     expect(routingText).toBe(playgroundText)
@@ -572,7 +572,7 @@ describe("AC-R1-6: popover opens with context-only detail rows", () => {
     ) as HTMLElement
     expect(popover.textContent).toContain("Brave Search")
     expect(popover.textContent).toContain("Keenable")
-    expect(popover.textContent).toContain("7 of 7 providers")
+    expect(popover.textContent).toContain("8 of 8 providers")
 
     const failoverTrigger = triggerEl(/failover/i)
     await user.click(failoverTrigger)
@@ -699,7 +699,7 @@ describe("AC-R1-8: page-level clusters removed, views intact", () => {
     await renderAppAt("/playground")
     expect(screen.getByTestId("status-bar")).toBeInTheDocument()
     await waitFor(() => {
-      expect(screen.getByText("7 of 7 providers")).toBeInTheDocument()
+      expect(screen.getByText("8 of 8 providers")).toBeInTheDocument()
     })
     expect(screen.getByRole("heading", { name: "Search Playground" })).toBeInTheDocument()
     expect(screen.getByPlaceholderText(/Search across all providers/i)).toBeInTheDocument()
@@ -711,7 +711,7 @@ describe("AC-R1-8: page-level clusters removed, views intact", () => {
     await renderAppAt("/routing")
     expect(screen.getByTestId("status-bar")).toBeInTheDocument()
     await waitFor(() => {
-      expect(screen.getByText("7 of 7 providers")).toBeInTheDocument()
+      expect(screen.getByText("8 of 8 providers")).toBeInTheDocument()
     })
     expect(screen.getByRole("heading", { name: "Routing" })).toBeInTheDocument()
     expect(screen.getAllByRole("tab")).toHaveLength(4)
@@ -771,7 +771,7 @@ describe("AC-R1-9: edge states (loading neutral, error muted, 0-of-N)", () => {
 
     await screen.findByTestId("status-bar")
     await waitFor(() => {
-      expect(screen.getByText("7 of 7 providers")).toBeInTheDocument()
+      expect(screen.getByText("8 of 8 providers")).toBeInTheDocument()
     })
     expect(screen.queryByText("Failover active", { exact: true })).toBeNull()
     expect(screen.queryByText("Failover inactive", { exact: true })).toBeNull()
@@ -788,7 +788,7 @@ describe("AC-R1-9: edge states (loading neutral, error muted, 0-of-N)", () => {
 
     await screen.findByTestId("status-bar")
     await waitFor(() => {
-      expect(barEl().textContent).toContain("0 of 7 providers")
+      expect(barEl().textContent).toContain("0 of 8 providers")
     })
     expect(screen.queryByText(/Fallback/)).toBeNull()
   })

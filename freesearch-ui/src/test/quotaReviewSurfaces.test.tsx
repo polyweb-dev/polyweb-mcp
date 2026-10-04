@@ -282,7 +282,7 @@ describe("RF4: visible unavailable/confidence semantics in Settings modal + Usag
     expect(headers).not.toContain("Quota")
     expect(headers).not.toContain("p95")
     const rows = Array.from(table.querySelectorAll("tbody tr"))
-    expect(rows.length).toBe(7)
+    expect(rows.length).toBe(8)
     for (const row of rows) {
       expect(row.children).toHaveLength(headers.length)
     }

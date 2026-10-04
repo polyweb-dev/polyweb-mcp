@@ -74,6 +74,15 @@ export const PROVIDER_CATALOG: StaticProviderMeta[] = [
     authHeaderName: "Authorization",
     capabilities: ["search", "extract", "fetch"],
   },
+  {
+    id: "tinyfish",
+    backendId: "tinyfish",
+    name: "Tinyfish",
+    description: "Web infrastructure for AI agents with structured search and clean markdown content extraction.",
+    baseUrl: "https://api.search.tinyfish.ai",
+    authHeaderName: "X-API-Key",
+    capabilities: ["search", "fetch"],
+  },
 ];
 
 export function catalogEntryForId(id: string): StaticProviderMeta | undefined {
