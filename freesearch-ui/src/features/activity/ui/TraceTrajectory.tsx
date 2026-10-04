@@ -150,8 +150,8 @@ function toRow(
  * The recorded trajectory at user level: total, route selection, backend
  * handling, one row per provider attempt, results assembly, and the response to
  * the caller, all on one shared time axis (PLAN §4). Transport and parse
- * children stay out of the rows; selecting a row hands its span id to the side
- * inspector, and nothing here expands or animates.
+ * children stay out of the rows; selecting a row hands its span id to the
+ * payload panel below the rows, and nothing here expands or animates.
  */
 export function TraceTrajectory({
   stages,
@@ -165,9 +165,13 @@ export function TraceTrajectory({
   const rows = visible.map((stage) => toRow(stage, selectedSpanId, onSelect))
 
   return (
-    <div className="min-w-0 space-y-2">
+    // Fills the trajectory pane it is given: the summary keeps its natural
+    // height and the rows take the rest, so the pane owns one scrollbar and the
+    // ruler stays visible on it. `h-full` falls back to content height when a
+    // parent has none, and the row floor keeps that fallback usable.
+    <div className="flex h-full min-h-0 min-w-0 flex-col gap-2">
       {latencySummary(summary, attempts.length > 0)}
-      <div className="min-w-0 max-h-[26rem] overflow-y-auto overflow-x-hidden pr-1">
+      <div className="min-h-[4rem] min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain pr-1">
         <LatencyWaterfall
           rows={rows}
           totalMs={totalMs}

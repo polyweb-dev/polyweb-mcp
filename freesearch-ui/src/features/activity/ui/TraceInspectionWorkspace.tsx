@@ -141,6 +141,13 @@ function resultsView(options: SelectionPaneOptions) {
   )
 }
 
+/**
+ * The trajectory as two full-width rows instead of two columns: the waterfall
+ * keeps the whole axis to itself, and the selected payload reads below it with
+ * the whole width for its JSON. The waterfall row is capped at half the pane so
+ * it can never crowd the payload out, the payload row takes what is left, and
+ * each row scrolls on its own — the geometry the browser network panel uses.
+ */
 function trajectoryView(options: SelectionPaneOptions) {
   const { trace, selection, onSelectSpan } = options
   // Only the visible user-level stages can be selected, so a hidden transport
@@ -148,29 +155,32 @@ function trajectoryView(options: SelectionPaneOptions) {
   const stages = selectUserTraceStages(trace.stages)
   const stage = selectedStage(stages, selection.spanId)
   return (
-    <InspectorSplitPane
-      primaryLabel="Trace trajectory"
-      detailLabel={stage === null ? "Span payload" : `${traceTrajectoryLabel(stage)} payload`}
-      primary={
+    <div className="grid min-h-0 min-w-0 flex-1 grid-rows-[minmax(9rem,50%)_minmax(11rem,1fr)] gap-4">
+      <section role="region" aria-label="Trace trajectory" className="min-h-0 min-w-0 overflow-hidden">
         <TraceTrajectory
           stages={stages}
           totalMs={trace.totalMs}
           selectedSpanId={selection.spanId}
           onSelect={onSelectSpan}
         />
-      }
-      detail={
+      </section>
+      <section
+        role="region"
+        aria-label={stage === null ? "Span payload" : `${traceTrajectoryLabel(stage)} payload`}
+        className="min-h-0 min-w-0 overflow-y-auto overscroll-contain rounded-md border border-[var(--border-subtle)] bg-[var(--surface)] p-3"
+      >
         <TraceSpanInspector key={stage?.spanId ?? "none"} stage={stage} traceId={trace.traceId} />
-      }
-    />
+      </section>
+    </div>
   )
 }
 
 /**
  * The detail workspace: recorded results and the recorded trajectory in one
- * switchable shell, each with the payload of the current selection at its side.
- * Selection is ephemeral and belongs here — a new trace or provider scope
- * starts with nothing selected (PLAN §5).
+ * switchable shell. Results keep the payload of the current selection at their
+ * side; the trajectory stacks it in a second full-width row below the
+ * waterfall. Selection is ephemeral and belongs here — a new trace or provider
+ * scope starts with nothing selected (PLAN §5).
  */
 export function TraceInspectionWorkspace({
   trace,
@@ -207,8 +217,20 @@ export function TraceInspectionWorkspace({
   }
 
   return (
-    <div className="min-w-0 space-y-3">
-      <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
+    // The stacked trajectory takes the height the dialog has left and shares it
+    // between the two rows. Every level of that chain needs `min-h-0`: without
+    // it the content-based minimum wins over the free space and the panes are
+    // laid out at full content height again. The rows carry their own minimums,
+    // so a short viewport scrolls the body instead of crushing a row. Results
+    // stay content-sized.
+    <div
+      className={
+        selection.view === "trajectory"
+          ? "flex min-h-0 min-w-0 flex-1 flex-col gap-3"
+          : "min-w-0 space-y-3"
+      }
+    >
+      <div className="flex min-w-0 shrink-0 flex-wrap items-center justify-between gap-3">
         <p className="min-w-0 text-[12px] text-[var(--muted)]">{scopeText(output, attempt)}</p>
         {viewSwitcher(selection.view, (view) => setSelection((prev) => ({ ...prev, view })))}
       </div>

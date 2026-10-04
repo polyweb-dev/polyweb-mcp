@@ -40,6 +40,30 @@ describe("TraceTrajectory", () => {
     expect(screen.queryByRole("button", { name: /^provider request$/i })).not.toBeInTheDocument()
   })
 
+  it("fills its pane with one scroll region instead of a fixed cap", () => {
+    const detail = mapTraceDetail(aggregatedTraceDetailFixture())
+    const { container } = render(
+      <TraceTrajectory
+        stages={detail.stages}
+        totalMs={detail.totalMs}
+        selectedSpanId={null}
+        onSelect={() => {}}
+      />
+    )
+
+    const root = container.firstElementChild as HTMLElement
+    expect(root.className).toMatch(/flex-col/)
+    expect(root.className).toMatch(/h-full/)
+
+    const scroller = root.lastElementChild as HTMLElement
+    expect(scroller.className).toMatch(/flex-1/)
+    expect(scroller.className).toMatch(/overflow-y-auto/)
+    expect(scroller.className).toMatch(/min-h-\[4rem\]/)
+    // The pane above owns the height now; a fixed cap would fight it.
+    expect(scroller.className).not.toMatch(/max-h-\[/)
+    expect(within(scroller).getByRole("list", { name: "Trace trajectory" })).toBeInTheDocument()
+  })
+
   it("indents children by depth without nested disclosure boxes", () => {
     const detail = mapTraceDetail(aggregatedTraceDetailFixture())
     render(

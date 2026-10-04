@@ -54,6 +54,53 @@ describe("TraceInspectionWorkspace", () => {
     )
   })
 
+  it("stacks the trajectory into full-width rows with the payload below the waterfall", async () => {
+    const user = userEvent.setup()
+    const { container } = renderWorkspace(aggregated())
+
+    await user.click(screen.getByRole("button", { name: "Trajectory" }))
+
+    const waterfall = screen.getByRole("region", { name: "Trace trajectory" })
+    const payload = screen.getByRole("region", { name: /payload/i })
+    // Order in the document is what stacks them; there is no second column.
+    const stack = waterfall.parentElement as HTMLElement
+    expect(container.contains(stack)).toBe(true)
+    expect(stack.className).toMatch(/grid/)
+    expect(stack.className).toMatch(/grid-rows-\[minmax\(9rem,50%\)_minmax\(11rem,1fr\)\]/)
+    expect(stack.className).not.toMatch(/grid-cols-/)
+    expect(stack.children[0]).toBe(waterfall)
+    expect(stack.children[1]).toBe(payload)
+  })
+
+  it("lets each stacked row scroll on its own", async () => {
+    const user = userEvent.setup()
+    renderWorkspace(aggregated())
+
+    await user.click(screen.getByRole("button", { name: "Trajectory" }))
+
+    const waterfall = screen.getByRole("region", { name: "Trace trajectory" })
+    const payload = screen.getByRole("region", { name: /payload/i })
+    expect(waterfall.className).toMatch(/min-h-0/)
+    expect(payload.className).toMatch(/min-h-0/)
+    expect(payload.className).toMatch(/overflow-y-auto/)
+    expect(screen.getByRole("list", { name: "Trace trajectory" })).toBeInTheDocument()
+  })
+
+  it("claims the leftover height for the trajectory and leaves results content-sized", async () => {
+    const user = userEvent.setup()
+    const { container } = renderWorkspace(aggregated())
+
+    const workspace = container.firstElementChild as HTMLElement
+    expect(workspace.className).toMatch(/space-y-3/)
+    expect(workspace.className).not.toMatch(/flex-1/)
+
+    await user.click(screen.getByRole("button", { name: "Trajectory" }))
+
+    expect(workspace.className).toMatch(/flex/)
+    expect(workspace.className).toMatch(/flex-1/)
+    expect(workspace.className).toMatch(/flex-col/)
+  })
+
   it("resets selection when the trace identity changes", async () => {
     const user = userEvent.setup()
     const first = aggregated()

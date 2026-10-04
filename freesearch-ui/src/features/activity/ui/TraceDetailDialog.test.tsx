@@ -397,6 +397,25 @@ describe("TraceDetailDialog inspector workspace", () => {
     )
   })
 
+  it("offers the leftover body height to the trajectory so both rows fit", async () => {
+    const user = userEvent.setup()
+    renderAggregated()
+
+    await user.click(screen.getByRole("button", { name: "Trajectory" }))
+
+    // The rail, the query, and the workspace are one column that is exactly the
+    // height of the scrolling body, so the stacked rows share what is left
+    // instead of stacking as one more block.
+    const waterfall = screen.getByRole("region", { name: "Trace trajectory" })
+    const workspace = waterfall.parentElement?.parentElement as HTMLElement
+    const column = workspace.parentElement as HTMLElement
+    expect(column.className).toMatch(/h-full/)
+    expect(column.className).toMatch(/flex-col/)
+    expect(workspace.className).toMatch(/min-h-0/)
+    expect(workspace.className).toMatch(/flex-1/)
+    expect(within(column).getByRole("region", { name: /payload/i })).toBeInTheDocument()
+  })
+
   it("keeps rows compact and shows the full snippet in the side inspector", async () => {
     const user = userEvent.setup()
     renderAggregated()

@@ -54,7 +54,11 @@ function readyView({ trace, attempt, providerSpanId }: ReadyViewOptions) {
   const mode: RankingMode =
     attempt !== null || trace.provider !== "aggregated" ? "provider" : "fusion"
   return (
-    <div className="min-w-0 space-y-5 text-[13px]">
+    // Exactly the height of the scrolling body, so the workspace below the rail
+    // and the query can be handed what is left and share it. The height must be
+    // definite: with `min-h-full` the leftover is indefinite and the workspace
+    // falls back to its content, which pushes the panes out of the dialog.
+    <div className="flex h-full min-w-0 flex-col gap-5 text-[13px]">
       <TraceDetailSummary trace={trace} attempt={attempt} />
       <TraceDetailError trace={trace} />
 
