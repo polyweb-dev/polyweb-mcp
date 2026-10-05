@@ -8,6 +8,7 @@ import {
   TableRow,
 } from "@/shared/ui/table"
 import type { ProviderConfig } from "@/domains/providers"
+import { FETCH_BIT, GLOBAL_BIT, SEARCH_BIT } from "@/domains/providers"
 import { stripProtocol } from "./providerDisplay"
 import { HealthStatus } from "./ProviderHealthStatus"
 import { PriorityIndicator } from "./ProviderPriorityControl"
@@ -19,7 +20,7 @@ interface ProviderRegistryRowProps {
   rank: number
   providerCount: number
   testing: boolean
-  globalPending: boolean
+  accessPending: boolean
   canMoveUp: boolean
   canMoveDown: boolean
   onMovePriority: (direction: "up" | "down") => void
@@ -34,7 +35,7 @@ export const ProviderRegistryRow: React.FC<ProviderRegistryRowProps> = ({
   rank,
   providerCount,
   testing,
-  globalPending,
+  accessPending,
   canMoveUp,
   canMoveDown,
   onMovePriority,
@@ -92,9 +93,10 @@ export const ProviderRegistryRow: React.FC<ProviderRegistryRowProps> = ({
         <OperationControl
           label="Search"
           providerName={provider.name}
-          supported={provider.capabilities.includes("search")}
+          supported={(provider.supportMask & SEARCH_BIT) !== 0}
           enabled={provider.searchEnabled}
           globallyDisabled={!provider.globalEnabled}
+          pending={accessPending}
           onToggle={onToggleSearch}
         />
       </TableCell>
@@ -102,9 +104,10 @@ export const ProviderRegistryRow: React.FC<ProviderRegistryRowProps> = ({
         <OperationControl
           label="Fetch"
           providerName={provider.name}
-          supported={provider.capabilities.includes("fetch")}
+          supported={(provider.supportMask & FETCH_BIT) !== 0}
           enabled={provider.fetchEnabled}
           globallyDisabled={!provider.globalEnabled}
+          pending={accessPending}
           onToggle={onToggleFetch}
         />
       </TableCell>
@@ -113,7 +116,7 @@ export const ProviderRegistryRow: React.FC<ProviderRegistryRowProps> = ({
         <Switch
           checked={provider.globalEnabled}
           onChange={onToggleGlobal}
-          disabled={globalPending}
+          disabled={accessPending || (provider.supportMask & GLOBAL_BIT) === 0}
           ariaLabel={`${provider.name} global routing`}
         />
       </TableCell>

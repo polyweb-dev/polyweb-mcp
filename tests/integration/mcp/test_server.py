@@ -6,6 +6,7 @@ closed to an empty list without keys, which the no-provider guard surfaces.
 """
 
 from datetime import UTC, datetime
+from pathlib import Path
 
 import httpx
 import pytest
@@ -25,6 +26,7 @@ from freesearch.models.contracts import (
     SearchResult,
     UsageOperation,
 )
+from freesearch.persistence.storage import SQLiteRepository
 
 
 class _StubAdapter(ProviderAdapter):
@@ -203,3 +205,112 @@ def test_main_cli_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
     # 2. Test streamable-http with stateless flag and custom port
     main(["--transport", "streamable-http", "--stateless", "--port", "8888"])
     assert invocations[-1] == ("streamable-http", True, "127.0.0.1", 8888)
+
+
+class _MaskStub(_StubAdapter):
+    def __init__(self, name: str, *, fetch: bool = True) -> None:
+        super().__init__(name, fetch=fetch)
+        self.search_calls = 0
+        self.fetch_calls = 0
+
+    async def search(self, request):  # type: ignore[no-untyped-def]
+        self.search_calls += 1
+        return await super().search(request)
+
+    async def fetch(self, request):  # type: ignore[no-untyped-def]
+        self.fetch_calls += 1
+        return await super().fetch(request)
+
+
+async def test_mcp_search_respects_global_mask_off(tmp_path: Path) -> None:
+    repository = await SQLiteRepository.open(tmp_path / "mcp-mask.db")
+    try:
+        await repository.set_runtime_setting(
+            "provider.exa", {"config": {"enable_mask": 0, "support_mask": 7, "priority": 100}}
+        )
+        adapter = _MaskStub("exa")
+        server = create_server([adapter], repository=repository)
+
+        with pytest.raises(ToolError, match="no eligible provider"):
+            await server.call_tool("search", {"request": {"query": "global off"}})
+
+        assert adapter.search_calls == 0
+    finally:
+        await repository.close()
+
+
+async def test_mcp_fetch_respects_fetch_bit_off(tmp_path: Path) -> None:
+    repository = await SQLiteRepository.open(tmp_path / "mcp-fetch.db")
+    try:
+        await repository.set_runtime_setting(
+            "provider.exa", {"config": {"enable_mask": 3, "support_mask": 7, "priority": 100}}
+        )
+        adapter = _MaskStub("exa")
+        server = create_server([adapter], repository=repository)
+
+        search = await server.call_tool("search", {"request": {"query": "search on"}})
+        assert search[1]["provider"] == "exa"
+
+        with pytest.raises(ToolError, match="no eligible provider"):
+            await server.call_tool("fetch", {"request": {"url": "https://example.com"}})
+
+        assert adapter.search_calls == 1
+        assert adapter.fetch_calls == 0
+    finally:
+        await repository.close()
+
+
+async def test_mcp_reads_fresh_masks_after_startup_without_restart(tmp_path: Path) -> None:
+    repository = await SQLiteRepository.open(tmp_path / "mcp-fresh.db")
+    try:
+        adapter = _MaskStub("exa")
+        server = create_server([adapter], repository=repository)
+
+        first = await server.call_tool("search", {"request": {"query": "before"}})
+        assert first[1]["provider"] == "exa"
+
+        await repository.set_runtime_setting(
+            "provider.exa", {"config": {"enable_mask": 0, "support_mask": 7, "priority": 100}}
+        )
+
+        with pytest.raises(ToolError, match="no eligible provider"):
+            await server.call_tool("search", {"request": {"query": "after"}})
+
+        assert adapter.search_calls == 1
+    finally:
+        await repository.close()
+
+
+async def test_mcp_preserves_injected_noncanonical_names(tmp_path: Path) -> None:
+    repository = await SQLiteRepository.open(tmp_path / "mcp-injected.db")
+    try:
+        adapter = _MaskStub("test_provider")
+        server = create_server([adapter], repository=repository)
+
+        response = await server.call_tool("search", {"request": {"query": "injected"}})
+
+        assert response[1]["provider"] == "test_provider"
+        assert adapter.search_calls == 1
+    finally:
+        await repository.close()
+
+
+async def test_mcp_fanout_excludes_masked_provider(tmp_path: Path) -> None:
+    repository = await SQLiteRepository.open(tmp_path / "mcp-fanout.db")
+    try:
+        await repository.set_runtime_setting(
+            "provider.exa", {"config": {"enable_mask": 0, "support_mask": 7, "priority": 100}}
+        )
+        off = _MaskStub("exa")
+        on = _MaskStub("brave", fetch=False)
+        server = create_server([off, on], repository=repository)
+
+        response = await server.call_tool(
+            "search", {"request": {"query": "fanout", "fanout": True}}
+        )
+
+        assert response[1]["participating_providers"] == ["brave"]
+        assert off.search_calls == 0
+        assert on.search_calls == 1
+    finally:
+        await repository.close()

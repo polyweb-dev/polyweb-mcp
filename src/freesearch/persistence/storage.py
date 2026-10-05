@@ -3,7 +3,7 @@
 import asyncio
 import json
 import math
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -737,6 +737,38 @@ class SQLiteRepository:
         async with self._session_factory() as session:
             await session.execute(statement)
             await session.commit()
+
+    async def update_runtime_setting(self, key: str, update: Callable[[Any], Any]) -> Any:
+        """Read, change, and store one runtime setting in a single write transaction.
+
+        ``update`` is a synchronous pure callback. The helper reserves the
+        SQLite write lock with ``BEGIN IMMEDIATE``, reads the current payload
+        inside that transaction, and commits the new payload once. A callback,
+        encoding, or database error rolls the transaction back and keeps the
+        stored payload. The new payload is the return value.
+        """
+
+        async with self._engine.connect() as connection:
+            await connection.exec_driver_sql("BEGIN IMMEDIATE")
+            try:
+                row = await connection.execute(
+                    select(RuntimeSettingRow.value_json).where(RuntimeSettingRow.key == key)
+                )
+                current_json = row.scalar_one_or_none()
+                current = json.loads(current_json) if current_json is not None else None
+                value = update(current)
+                payload = json.dumps(value, separators=(",", ":"), allow_nan=False)
+                statement = sqlite_insert(RuntimeSettingRow).values(key=key, value_json=payload)
+                statement = statement.on_conflict_do_update(
+                    index_elements=[RuntimeSettingRow.key],
+                    set_={"value_json": statement.excluded.value_json},
+                )
+                await connection.execute(statement)
+                await connection.commit()
+            except BaseException:
+                await connection.rollback()
+                raise
+        return value
 
     @staticmethod
     def _usage_from_row(row: UsageEventRow) -> UsageEvent:

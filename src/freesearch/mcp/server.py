@@ -159,7 +159,7 @@ async def _build_generation(
     from freesearch.routers.control import (
         _build_with_resolved_secret,
         _resolve_secret,
-        effective_config_for_name,
+        initialize_provider_configs,
     )
 
     client = create_async_client()
@@ -170,12 +170,13 @@ async def _build_generation(
         repository = state["repository"]
         if isinstance(repository, SQLiteRepository):
             state["secret_store"] = _encrypted_store(repository)
+            await initialize_provider_configs(repository)
         store = state["secret_store"]
         if isinstance(repository, SQLiteRepository) and store is not None:
+            # An administrator OFF choice does not skip construction: each
+            # request filters the candidates, so a later ON choice needs no
+            # server restart.
             for provider in ProviderName:
-                config = await effective_config_for_name(repository, provider)
-                if not config.enabled:
-                    continue
                 key, _source = await _resolve_secret(provider, store)
                 if key is None and provider is not ProviderName.KEENABLE:
                     continue
@@ -241,6 +242,27 @@ async def _route_state(
     return health, quotas
 
 
+async def _accessible_routes(
+    active: Sequence[ProviderAdapter],
+    repository: SQLiteRepository | None,
+    operation: UsageOperation,
+) -> list[ProviderAdapter]:
+    """Return the adapters whose current masks allow ``operation``.
+
+    The request reads the current masks before route selection, so an earlier
+    admin change applies to the next call without a restart.
+    """
+
+    from freesearch.routers.control import effective_config_for_name
+
+    accessible: list[ProviderAdapter] = []
+    for adapter in active:
+        config = await effective_config_for_name(repository, adapter.name, strict=True)
+        if config.allows(operation):
+            accessible.append(adapter)
+    return accessible
+
+
 async def _mcp_fanout_search(
     request: SearchRequest,
     active: Sequence[ProviderAdapter],
@@ -248,12 +270,13 @@ async def _mcp_fanout_search(
     secret_store: AsyncSecretStore | None = None,
 ) -> dict[str, Any]:
     """Execute concurrent fanout search across active adapters for MCP."""
-    await _apply_parallel_seed(active, repository)
-    health, quotas = await _route_state(repository, active, secret_store)
+    eligible = await _accessible_routes(active, repository, UsageOperation.SEARCH)
+    await _apply_parallel_seed(eligible, repository)
+    health, quotas = await _route_state(repository, eligible, secret_store)
     fanout_req = request.model_copy(
         update={"routing": request.routing.model_copy(update={"mode": RoutingMode.FANOUT})}
     )
-    candidates = select_route(fanout_req, active, health, quotas)
+    candidates = select_route(fanout_req, eligible, health, quotas)
     if not candidates:
         raise RuntimeError("no eligible provider is available for search")
 
@@ -396,9 +419,16 @@ def create_server(
                 "(PUT /api/v1/providers/{id}/secret)"
             )
         repository = state["repository"]
-        await _apply_parallel_seed(active, repository)
-        health, quotas = await _route_state(repository, active, state["secret_store"])
-        return select_route(request, active, health, quotas)[0].adapter
+        operation = (
+            UsageOperation.SEARCH if isinstance(request, SearchRequest) else UsageOperation.FETCH
+        )
+        eligible = await _accessible_routes(active, repository, operation)
+        await _apply_parallel_seed(eligible, repository)
+        health, quotas = await _route_state(repository, eligible, state["secret_store"])
+        candidates = select_route(request, eligible, health, quotas)
+        if not candidates:
+            raise RuntimeError(f"no eligible provider is available for {operation.value}")
+        return candidates[0].adapter
 
     @server.tool()
     async def search(request: SearchRequest) -> dict[str, Any]:

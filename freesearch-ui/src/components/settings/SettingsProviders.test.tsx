@@ -140,7 +140,23 @@ function renderSettings(): FetchStub {
     if (req.method === "PATCH" && req.url.startsWith("/api/v1/providers/")) {
       const backendId = req.url.split("/").at(-1) ?? "unknown"
       const wire = allProvidersFixture().find((p) => p.provider_id === backendId)
-      return ok({ ...(wire ?? allProvidersFixture()[0]), ...((req.body as object) ?? {}) })
+      const base = { ...(wire ?? allProvidersFixture()[0]) } as Record<string, unknown> & {
+        enable_mask: number
+        priority: number
+      }
+      const patch = ((req.body as Record<string, unknown>) ?? {}) as Record<string, unknown>
+      let enableMask = base.enable_mask
+      if (typeof patch.enable_mask === "number") enableMask = patch.enable_mask
+      else {
+        if (patch.enabled === true) enableMask |= 1
+        if (patch.enabled === false) enableMask &= ~1
+        if (patch.search_enabled === true) enableMask |= 2
+        if (patch.search_enabled === false) enableMask &= ~2
+        if (patch.fetch_enabled === true) enableMask |= 4
+        if (patch.fetch_enabled === false) enableMask &= ~4
+      }
+      const priority = typeof patch.priority === "number" ? patch.priority : base.priority
+      return ok({ ...base, enable_mask: enableMask, enabled: (enableMask & 1) !== 0, priority })
     }
     if (req.method === "POST" && req.url.endsWith("/test")) {
       if (testGate) return testGate
@@ -311,7 +327,7 @@ describe("P1F-2: registry controls preserved in the merged table", () => {
     }
   })
 
-  it("keeps Search/Fetch controls local-only with switch toggles", async () => {
+  it("persists Search/Fetch controls via durable PATCH with switch toggles", async () => {
     const user = userEvent.setup()
     const stub = renderSettings()
     await waitForProviders()
@@ -319,8 +335,16 @@ describe("P1F-2: registry controls preserved in the merged table", () => {
     const searchSwitch = within(searchCell).getByRole("switch", { name: "Brave Search search routing" })
     expect(searchSwitch).toHaveAttribute("aria-checked", "true")
     await user.click(searchSwitch)
-    expect(searchSwitch).toHaveAttribute("aria-checked", "false")
-    expect(stub.requests.filter((r) => r.method === "PATCH")).toHaveLength(0)
+    await waitFor(() => {
+      expect(
+        within(cellFor("Brave Search", "Search")).getByRole("switch", {
+          name: "Brave Search search routing",
+        }),
+      ).toHaveAttribute("aria-checked", "false")
+    })
+    const patches = stub.requestsTo("/api/v1/providers/brave")
+    expect(patches).toHaveLength(1)
+    expect(patches[0].body).toEqual({ search_enabled: false })
   })
 
   it("shows priorities P1..P7 with bounded up/down controls per row", async () => {
@@ -788,7 +812,23 @@ function renderSettings(): FetchStub {
       if (patchGate) return patchGate
       const backendId = req.url.split("/").at(-1) ?? "unknown"
       const wire = allProvidersFixture().find((p) => p.provider_id === backendId)
-      return ok({ ...(wire ?? allProvidersFixture()[0]), ...((req.body as object) ?? {}) })
+      const base = { ...(wire ?? allProvidersFixture()[0]) } as Record<string, unknown> & {
+        enable_mask: number
+        priority: number
+      }
+      const patch = ((req.body as Record<string, unknown>) ?? {}) as Record<string, unknown>
+      let enableMask = base.enable_mask
+      if (typeof patch.enable_mask === "number") enableMask = patch.enable_mask
+      else {
+        if (patch.enabled === true) enableMask |= 1
+        if (patch.enabled === false) enableMask &= ~1
+        if (patch.search_enabled === true) enableMask |= 2
+        if (patch.search_enabled === false) enableMask &= ~2
+        if (patch.fetch_enabled === true) enableMask |= 4
+        if (patch.fetch_enabled === false) enableMask &= ~4
+      }
+      const priority = typeof patch.priority === "number" ? patch.priority : base.priority
+      return ok({ ...base, enable_mask: enableMask, enabled: (enableMask & 1) !== 0, priority })
     }
     if (req.method === "POST" && req.url.endsWith("/test")) {
       if (testGate) return testGate
@@ -1138,7 +1178,7 @@ describe("S-P1-5: all SettingsProviders contracts preserved in the table", () =>
       expect(screen.getByRole("switch", { name: "Exa global routing" })).toBeDisabled()
     })
 
-    gate.resolve(ok({ ...allProvidersFixture()[3], enabled: false }))
+    gate.resolve(ok({ ...allProvidersFixture()[3], enable_mask: 6, enabled: false }))
     await waitFor(() => {
       expect(screen.getByRole("switch", { name: "Exa global routing" })).toHaveAttribute(
         "aria-checked",
@@ -1150,34 +1190,83 @@ describe("S-P1-5: all SettingsProviders contracts preserved in the table", () =>
     expect(patches[0].body).toEqual({ enabled: false })
   })
 
-  it("keeps Search switch local-only with exclusive aria-checked", async () => {
+  it("persists a Search toggle via PATCH and disables the row while pending", async () => {
     const user = userEvent.setup()
+    const gate = deferred<Response>()
     const stub = renderSettings()
     await waitForProviders()
+    patchGate = gate.promise
 
-    const searchCell = cellFor("Brave Search", "Search")
-    const searchSwitch = within(searchCell).getByRole("switch", {
-      name: "Brave Search search routing",
+    await user.click(
+      within(cellFor("Brave Search", "Search")).getByRole("switch", {
+        name: "Brave Search search routing",
+      }),
+    )
+    await waitFor(() => {
+      expect(
+        screen.getByRole("switch", { name: "Brave Search search routing" }),
+      ).toBeDisabled()
+      expect(
+        screen.getByRole("switch", { name: "Brave Search global routing" }),
+      ).toBeDisabled()
     })
-    expect(searchSwitch).toHaveAttribute("aria-checked", "true")
-    await user.click(searchSwitch)
-    expect(searchSwitch).toHaveAttribute("aria-checked", "false")
-    expect(stub.requests.filter((r) => r.method === "PATCH")).toHaveLength(0)
+
+    gate.resolve(ok({ ...allProvidersFixture()[0], enable_mask: 5, enabled: true }))
+    await waitFor(() => {
+      expect(
+        screen.getByRole("switch", { name: "Brave Search search routing" }),
+      ).toHaveAttribute("aria-checked", "false")
+    })
+    const searchPatches = stub.requestsTo("/api/v1/providers/brave")
+    expect(searchPatches).toHaveLength(1)
+    expect(searchPatches[0].body).toEqual({ search_enabled: false })
   })
 
-  it("keeps Fetch switch local-only with exclusive aria-checked", async () => {
+  it("persists a Fetch toggle via PATCH with one-bit bodies", async () => {
     const user = userEvent.setup()
     const stub = renderSettings()
     await waitForProviders()
 
-    const fetchCell = cellFor("Tavily", "Fetch")
-    const fetchSwitch = within(fetchCell).getByRole("switch", {
-      name: "Tavily fetch routing",
+    await user.click(
+      within(cellFor("Tavily", "Fetch")).getByRole("switch", {
+        name: "Tavily fetch routing",
+      }),
+    )
+    await waitFor(() => {
+      expect(
+        within(cellFor("Tavily", "Fetch")).getByRole("switch", {
+          name: "Tavily fetch routing",
+        }),
+      ).toHaveAttribute("aria-checked", "false")
     })
-    expect(fetchSwitch).toHaveAttribute("aria-checked", "true")
-    await user.click(fetchSwitch)
-    expect(fetchSwitch).toHaveAttribute("aria-checked", "false")
-    expect(stub.requests.filter((r) => r.method === "PATCH")).toHaveLength(0)
+    const fetchPatches = stub.requestsTo("/api/v1/providers/tavily")
+    expect(fetchPatches).toHaveLength(1)
+    expect(fetchPatches[0].body).toEqual({ fetch_enabled: false })
+  })
+
+  it("preserves previous state when a persisted toggle fails", async () => {
+    const user = userEvent.setup()
+    const gate = deferred<Response>()
+    const stub = renderSettings()
+    await waitForProviders()
+    patchGate = gate.promise
+
+    await user.click(screen.getByRole("switch", { name: "Exa global routing" }))
+    await waitFor(() => {
+      expect(screen.getByRole("switch", { name: "Exa global routing" })).toBeDisabled()
+    })
+
+    gate.resolve(err(500, { detail: "db down" }) as unknown as Response)
+    await waitFor(() => {
+      expect(screen.getByRole("switch", { name: "Exa global routing" })).not.toBeDisabled()
+    })
+    expect(screen.getByRole("switch", { name: "Exa global routing" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    )
+    const failedPatches = stub.requestsTo("/api/v1/providers/exa")
+    expect(failedPatches).toHaveLength(1)
+    expect(failedPatches[0].body).toEqual({ enabled: false })
   })
 
   it("exposes an icon test button per row that opens the modal; modal Test runs handleTest (Testing... + POST)", async () => {
@@ -1490,7 +1579,18 @@ function renderSettingsWith(providers: WireProviderStatus[]): FetchStub {
       const backendId = req.url.split("/").at(-1) ?? "unknown"
       const entry = server.find((row) => row.provider_id === backendId)
       if (!entry) return err(404, { detail: `unknown provider '${backendId}'` })
-      Object.assign(entry, (req.body as object) ?? {})
+      const patch = ((req.body as Record<string, unknown>) ?? {}) as Record<string, unknown>
+      if (typeof patch.enable_mask === "number") entry.enable_mask = patch.enable_mask
+      else {
+        if (patch.enabled === true) entry.enable_mask |= 1
+        if (patch.enabled === false) entry.enable_mask &= ~1
+        if (patch.search_enabled === true) entry.enable_mask |= 2
+        if (patch.search_enabled === false) entry.enable_mask &= ~2
+        if (patch.fetch_enabled === true) entry.enable_mask |= 4
+        if (patch.fetch_enabled === false) entry.enable_mask &= ~4
+      }
+      if (typeof patch.priority === "number") entry.priority = patch.priority
+      entry.enabled = (entry.enable_mask & 1) !== 0
       return ok(entry)
     }
     return err(404, { detail: "unhandled test route" })
@@ -2103,7 +2203,23 @@ function renderSettings(): FetchStub {
     if (req.method === "PATCH" && req.url.startsWith("/api/v1/providers/")) {
       const backendId = req.url.split("/").at(-1) ?? "unknown"
       const wire = allProvidersFixture().find((p) => p.provider_id === backendId)
-      return ok({ ...(wire ?? allProvidersFixture()[0]), ...((req.body as object) ?? {}) })
+      const base = { ...(wire ?? allProvidersFixture()[0]) } as Record<string, unknown> & {
+        enable_mask: number
+        priority: number
+      }
+      const patch = ((req.body as Record<string, unknown>) ?? {}) as Record<string, unknown>
+      let enableMask = base.enable_mask
+      if (typeof patch.enable_mask === "number") enableMask = patch.enable_mask
+      else {
+        if (patch.enabled === true) enableMask |= 1
+        if (patch.enabled === false) enableMask &= ~1
+        if (patch.search_enabled === true) enableMask |= 2
+        if (patch.search_enabled === false) enableMask &= ~2
+        if (patch.fetch_enabled === true) enableMask |= 4
+        if (patch.fetch_enabled === false) enableMask &= ~4
+      }
+      const priority = typeof patch.priority === "number" ? patch.priority : base.priority
+      return ok({ ...base, enable_mask: enableMask, enabled: (enableMask & 1) !== 0, priority })
     }
     if (req.method === "POST" && req.url.endsWith("/test")) {
       if (testGate) return testGate
@@ -2572,7 +2688,23 @@ function renderSettings(): FetchStub {
     if (req.method === "PATCH" && req.url.startsWith("/api/v1/providers/")) {
       const backendId = req.url.split("/").at(-1) ?? "unknown"
       const wire = allProvidersFixture().find((p) => p.provider_id === backendId)
-      return ok({ ...(wire ?? allProvidersFixture()[0]), ...((req.body as object) ?? {}) })
+      const base = { ...(wire ?? allProvidersFixture()[0]) } as Record<string, unknown> & {
+        enable_mask: number
+        priority: number
+      }
+      const patch = ((req.body as Record<string, unknown>) ?? {}) as Record<string, unknown>
+      let enableMask = base.enable_mask
+      if (typeof patch.enable_mask === "number") enableMask = patch.enable_mask
+      else {
+        if (patch.enabled === true) enableMask |= 1
+        if (patch.enabled === false) enableMask &= ~1
+        if (patch.search_enabled === true) enableMask |= 2
+        if (patch.search_enabled === false) enableMask &= ~2
+        if (patch.fetch_enabled === true) enableMask |= 4
+        if (patch.fetch_enabled === false) enableMask &= ~4
+      }
+      const priority = typeof patch.priority === "number" ? patch.priority : base.priority
+      return ok({ ...base, enable_mask: enableMask, enabled: (enableMask & 1) !== 0, priority })
     }
     if (req.method === "POST" && req.url.endsWith("/test")) {
       return ok({

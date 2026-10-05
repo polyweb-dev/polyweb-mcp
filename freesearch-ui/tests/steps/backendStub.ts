@@ -42,6 +42,8 @@ type SecretPresence = "configured" | "missing" | "keyless_public"
 interface StubProvider {
   provider_id: string
   enabled: boolean
+  enable_mask: number
+  support_mask: number
   priority: number
   health: "healthy"
   circuit_breaker: { state: "closed"; updated_at: string }
@@ -123,6 +125,30 @@ export function failStubbedOAuthBegin(provider: string): void {
  * SUT's post-transition dashboard refresh deterministically sees it.
  */
 let dashboardQuotaOverride: unknown[] | null = null
+
+// ---------------------------------------------------------------------------
+// Provider PATCH failure/delay injection (provider-access-flags suite).
+//
+// Per-scenario maps cleared by installBackendStub. Failure forces the next
+// PATCH for one backend provider id to 500; delay holds the PATCH response
+// open so request-active (pending) controls stay observable. Neither map
+// touches production sources.
+// ---------------------------------------------------------------------------
+
+const stubbedProviderPatchFailures: Record<string, string> = {}
+const stubbedProviderPatchDelays: Record<string, number> = {}
+
+/** Fail the next PATCH for one backend provider id, or clear the failure. */
+export function failStubbedProviderPatch(provider: string, message: string | null): void {
+  if (message === null) delete stubbedProviderPatchFailures[provider]
+  else stubbedProviderPatchFailures[provider] = message
+}
+
+/** Delay the next PATCH for one backend provider id by ms, or clear it. */
+export function delayStubbedProviderPatch(provider: string, ms: number | null): void {
+  if (ms === null) delete stubbedProviderPatchDelays[provider]
+  else stubbedProviderPatchDelays[provider] = ms
+}
 
 // ---------------------------------------------------------------------------
 // Trace read API stub (Activity).
@@ -853,18 +879,35 @@ const SECRET_PRESENCE: Record<string, SecretPresence> = {
 
 const PROVIDER_ORDER = ["brave", "keenable", "tavily", "exa", "firecrawl", "you", "parallel", "tinyfish"]
 
+const SUPPORT_MASKS: Record<string, number> = {
+  brave: 3,
+  keenable: 7,
+  tavily: 7,
+  exa: 7,
+  firecrawl: 7,
+  you: 7,
+  parallel: 7,
+  tinyfish: 7,
+}
+
 function initialProviders(): StubProvider[] {
-  return PROVIDER_ORDER.map((id, index) => ({
-    provider_id: id,
-    enabled: true,
-    priority: index + 1,
-    health: "healthy",
-    circuit_breaker: { state: "closed", updated_at: FIXED_AT },
-    latency_p95_ms: 110 + index * 10,
-    secret_presence: SECRET_PRESENCE[id] ?? "missing",
-    free_tier_estimates: { search: "0", fetch: "0", cost_estimate: "0" },
-    reset_schedule: null,
-  }))
+  return PROVIDER_ORDER.map((id, index) => {
+    const supportMask = SUPPORT_MASKS[id] ?? 7
+    const enableMask = 7
+    return {
+      provider_id: id,
+      enabled: (enableMask & supportMask & 1) !== 0,
+      enable_mask: enableMask,
+      support_mask: supportMask,
+      priority: index + 1,
+      health: "healthy",
+      circuit_breaker: { state: "closed", updated_at: FIXED_AT },
+      latency_p95_ms: 110 + index * 10,
+      secret_presence: SECRET_PRESENCE[id] ?? "missing",
+      free_tier_estimates: { search: "0", fetch: "0", cost_estimate: "0" },
+      reset_schedule: null,
+    }
+  })
 }
 
 function dashboardFixture(): Record<string, unknown> {
@@ -933,6 +976,12 @@ export async function installBackendStub(page: Page): Promise<void> {
   // scenarios (e.g. Brave overlay into later quota rows).
   for (const key of Object.keys(stubbedManualQuotas)) delete stubbedManualQuotas[key]
   dashboardQuotaOverride = null
+  for (const key of Object.keys(stubbedProviderPatchFailures)) {
+    delete stubbedProviderPatchFailures[key]
+  }
+  for (const key of Object.keys(stubbedProviderPatchDelays)) {
+    delete stubbedProviderPatchDelays[key]
+  }
   stubbedTraceListRequests.length = 0
   stubbedTraceListFailure = null
   stubbedTraceDetailRequests.length = 0
@@ -1059,17 +1108,69 @@ export async function installBackendStub(page: Page): Promise<void> {
     return json(route, { provider: backendId, state: "closed", updated_at: FIXED_AT })
   })
 
-  // Provider PATCH (global enable / priority moves): in-memory update only.
-  await page.route("**/api/v1/providers/*", (route) => {
+  // Provider PATCH (masks + priority): in-memory update only. Models both
+  // masks with canonical seeds (Brave 7/3, others 7/7) and one-bit partial
+  // updates. Never accepts support_mask from admin: the field is ignored.
+  await page.route("**/api/v1/providers/*", async (route) => {
     if (route.request().method() !== "PATCH") return route.fallback()
     const backendId = new URL(route.request().url()).pathname.split("/").pop() ?? ""
+    const failure = stubbedProviderPatchFailures[backendId]
+    if (failure !== undefined) return json(route, { detail: failure }, 500)
+    const delayMs = stubbedProviderPatchDelays[backendId]
+    if (typeof delayMs === "number" && delayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs))
+    }
     const patch = readJsonBody(route)
     const current = providers.find((row) => row.provider_id === backendId)
     if (!current) return json(route, { detail: "Unknown provider" }, 404)
-    const next = {
+    let enableMask = current.enable_mask
+    const hasEnableMask = patch.enable_mask !== undefined
+    const hasBooleanAccess =
+      patch.enabled !== undefined ||
+      patch.search_enabled !== undefined ||
+      patch.fetch_enabled !== undefined
+    if (hasEnableMask && hasBooleanAccess) {
+      return json(route, { detail: "enable_mask cannot combine with boolean access fields" }, 422)
+    }
+    if (hasEnableMask) {
+      if (
+        typeof patch.enable_mask !== "number" ||
+        !Number.isInteger(patch.enable_mask) ||
+        patch.enable_mask < 0 ||
+        patch.enable_mask > 7
+      ) {
+        return json(route, { detail: "enable_mask must be an integer 0..7" }, 422)
+      }
+      enableMask = patch.enable_mask as number
+    } else {
+      if (patch.enabled !== undefined) {
+        if (typeof patch.enabled !== "boolean") {
+          return json(route, { detail: "enabled must be a boolean" }, 422)
+        }
+        enableMask =
+          (patch.enabled as boolean) ? enableMask | 1 : enableMask & ~1
+      }
+      if (patch.search_enabled !== undefined) {
+        if (typeof patch.search_enabled !== "boolean") {
+          return json(route, { detail: "search_enabled must be a boolean" }, 422)
+        }
+        enableMask =
+          (patch.search_enabled as boolean) ? enableMask | 2 : enableMask & ~2
+      }
+      if (patch.fetch_enabled !== undefined) {
+        if (typeof patch.fetch_enabled !== "boolean") {
+          return json(route, { detail: "fetch_enabled must be a boolean" }, 422)
+        }
+        enableMask =
+          (patch.fetch_enabled as boolean) ? enableMask | 4 : enableMask & ~4
+      }
+    }
+    const next: StubProvider = {
       ...current,
-      enabled: typeof patch.enabled === "boolean" ? patch.enabled : current.enabled,
-      priority: typeof patch.priority === "number" ? patch.priority : current.priority,
+      enable_mask: enableMask,
+      support_mask: current.support_mask,
+      enabled: (enableMask & current.support_mask & 1) !== 0,
+      priority: typeof patch.priority === "number" ? (patch.priority as number) : current.priority,
     }
     providers = providers.map((row) => (row.provider_id === backendId ? next : row))
     return json(route, next)
