@@ -558,3 +558,14 @@ def test_downgrade_recreates_cache_metadata_table_and_index(tmp_path: Path) -> N
     assert "cache_metadata_expires_at" not in _indexes(database)
     _assert_trace_spans_schema(database)
     validate_database_schema(database)
+
+
+def test_upgrade_database_enables_wal_mode(tmp_path: Path) -> None:
+    """upgrade_database() must ensure WAL journal mode is set on disk."""
+    database = tmp_path / "wal-mode.db"
+    result = upgrade_database(database)
+    assert result.current_revision == migration_head()
+
+    with sqlite3.connect(database) as connection:
+        journal_mode = connection.execute("PRAGMA journal_mode").fetchone()[0]
+    assert journal_mode == "wal"

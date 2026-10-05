@@ -482,3 +482,36 @@ async def test_repository_constructs_with_engine_only(tmp_path: Path) -> None:
     )
     assert len(await repository.list_usage()) == 1
     await repository.close()
+
+
+async def test_repository_configures_wal_and_performance_pragmas(tmp_path: Path) -> None:
+    """Connections managed by the repository must have WAL and tuning PRAGMAs active."""
+    db_path = tmp_path / "pragmas.db"
+    async with (
+        await SQLiteRepository.open(db_path) as repository,
+        repository._engine.connect() as connection,
+    ):
+        journal_mode = (await connection.exec_driver_sql("PRAGMA journal_mode")).scalar()
+        synchronous = (await connection.exec_driver_sql("PRAGMA synchronous")).scalar()
+        busy_timeout = (await connection.exec_driver_sql("PRAGMA busy_timeout")).scalar()
+        cache_size = (await connection.exec_driver_sql("PRAGMA cache_size")).scalar()
+        temp_store = (await connection.exec_driver_sql("PRAGMA temp_store")).scalar()
+        mmap_size = (await connection.exec_driver_sql("PRAGMA mmap_size")).scalar()
+
+    assert journal_mode == "wal"
+    assert synchronous == 1  # NORMAL
+    assert busy_timeout == 30000
+    assert cache_size == -64000
+    assert temp_store == 2  # MEMORY
+    assert mmap_size == 268435456
+
+    engine = create_async_engine(
+        URL.create(drivername="sqlite+aiosqlite", database=str(tmp_path / "engine-only-pragmas.db"))
+    )
+    repo = SQLiteRepository(engine)
+    async with repo._engine.connect() as connection:
+        journal_mode = (await connection.exec_driver_sql("PRAGMA journal_mode")).scalar()
+        synchronous = (await connection.exec_driver_sql("PRAGMA synchronous")).scalar()
+    assert journal_mode == "wal"
+    assert synchronous == 1
+    await repo.close()

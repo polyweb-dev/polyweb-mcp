@@ -314,6 +314,7 @@ def write_trace_spans(database: Path, records: Sequence[TraceSpanRecord]) -> Non
     rows = [_row(record) for record in records]
     with closing(sqlite3.connect(database, timeout=_SQLITE_TIMEOUT_SECONDS)) as connection:
         connection.execute("PRAGMA busy_timeout = 30000")
+        connection.execute("PRAGMA synchronous = NORMAL")
         connection.executemany(_INSERT, rows)
         connection.commit()
 
