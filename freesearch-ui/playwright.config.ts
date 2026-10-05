@@ -9,7 +9,7 @@ import { defineBddConfig } from "playwright-bdd"
  * defaults without changing them (default 5173). Overrides reuse the running
  * dev server (reuseExistingServer) and never hardcode an alternate port.
  */
-const configuredPort = Number(process.env.PLAYWRIGHT_PORT ?? 5173)
+const configuredPort = Number(process.env.PLAYWRIGHT_PORT ?? process.env.VITE_PORT ?? 5174)
 const configuredBaseURL =
   process.env.PLAYWRIGHT_BASE_URL ?? `http://localhost:${configuredPort}`
 

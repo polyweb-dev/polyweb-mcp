@@ -23,10 +23,19 @@ function proxyFor(backendUrl: string) {
 
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => {
+  const rootDir = path.resolve(import.meta.dirname, "..")
   // Shell environment wins over .env files, so a session can point the UI at
-  // a different backend (e.g. 8003) without changing the committed default.
-  const env = { ...loadEnv(mode, process.cwd(), "VITE_"), ...process.env }
-  const backendUrl = env.VITE_BACKEND_URL || DEFAULT_BACKEND_URL
+  // a different backend or port without changing committed defaults.
+  const env = {
+    ...loadEnv(mode, rootDir, ["VITE_", "FREESEARCH_"]),
+    ...loadEnv(mode, process.cwd(), ["VITE_", "FREESEARCH_"]),
+    ...process.env,
+  }
+  const backendPort = env.FREESEARCH_API_PORT || "8001"
+  const backendUrl =
+    env.VITE_BACKEND_URL ||
+    (env.FREESEARCH_API_PORT ? `http://127.0.0.1:${backendPort}` : DEFAULT_BACKEND_URL)
+  const port = Number(env.VITE_PORT || 5174)
 
   return {
     plugins: [
@@ -40,9 +49,11 @@ export default defineConfig(({ mode }) => {
       },
     },
     server: {
+      port,
       proxy: proxyFor(backendUrl),
     },
     preview: {
+      port,
       proxy: proxyFor(backendUrl),
     },
   }
