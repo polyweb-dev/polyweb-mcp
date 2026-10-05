@@ -1,13 +1,13 @@
 # Main/orchestrator
-model = "gpt-6-astra"
-model_reasoning_effort = "light"
+model = "gpt-6.1-sol"
+model_reasoning_effort = "high"
 
 [agents]
 enabled = true
 
 # Workers spawned by Sol
-default_subagent_model = "muse-spark-1.3-contributor"
-default_subagent_reasoning_effort = "xhigh"
+default_subagent_model = "gpt-6-luna"
+default_subagent_reasoning_effort = "max"
 
 [mcp_servers.codegraph]
 command = "codegraph"

@@ -24,9 +24,9 @@ function divider(index: number): string {
 
 function cell(label: string, value: ReactNode, index: number): ReactNode {
   return (
-    <div key={label} className={cn("min-w-0 px-4 py-3", divider(index))}>
-      <dt className="block text-[12px] text-[var(--muted)]">{label}</dt>
-      <dd className="mt-0.5 block min-w-0 text-[13px] text-[var(--text-strong)] tnum">{value}</dd>
+    <div key={label} className={cn("min-w-0 px-2.5 py-1.5 sm:px-3", divider(index))}>
+      <dt className="text-[10px] leading-4 text-[var(--muted)]">{label}</dt>
+      <dd className="min-w-0 text-[12px] leading-4 text-[var(--text-strong)] tnum [overflow-wrap:anywhere]">{value}</dd>
     </div>
   )
 }
@@ -70,8 +70,8 @@ export function TraceDetailSummary({
 }) {
   const results = attempt === null ? trace.resultCount : attempt.resultCount
   return (
-    <div className="min-w-0 space-y-2">
-      <dl className="grid min-w-0 grid-cols-2 overflow-hidden rounded-md border border-[var(--border-subtle)] bg-[var(--elevated)] sm:grid-cols-4">
+    <div className="min-w-0 space-y-1">
+      <dl className="grid min-w-0 grid-cols-2 overflow-hidden rounded-md border border-[var(--border-subtle)] bg-[var(--elevated)] divide-x divide-y divide-[var(--border-subtle)] sm:grid-cols-4 sm:divide-y-0">
         {cell("Status", <TraceStatusPill outcome={attempt?.outcome ?? trace.outcome} />, 0)}
         {cell("Provider", providerCell(trace, attempt), 1)}
         {cell(

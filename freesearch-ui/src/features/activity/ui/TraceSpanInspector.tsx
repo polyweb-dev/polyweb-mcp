@@ -1,11 +1,18 @@
 import type { ReactNode } from "react"
-import { traceTrajectoryLabel, type TraceEvent, type TraceStage } from "@/domains/activity"
+import {
+  type TraceDetail,
+  type TraceEvent,
+  type TraceStage,
+} from "@/domains/activity"
 import { providerIdentity } from "@/domains/providers"
 import { JsonViewer } from "@/shared/ui/JsonViewer"
 import { ProviderBadge } from "@/shared/ui/ProviderBadge"
+import { traceSpanLabel, traceSpanPurpose } from "../model/traceSpanPresentation"
+import { TraceScopeDetails } from "./TraceScopeDetails"
 
 export interface TraceSpanInspectorProps {
   stage: TraceStage | null
+  trace: TraceDetail
   traceId: string
 }
 
@@ -47,7 +54,7 @@ function titleNode(stage: TraceStage): ReactNode {
       </span>
     )
   }
-  return <span className="[overflow-wrap:anywhere]">{traceTrajectoryLabel(stage)}</span>
+  return <span className="[overflow-wrap:anywhere]">{traceSpanLabel(stage)}</span>
 }
 
 /**
@@ -66,10 +73,15 @@ function spanError(stage: TraceStage): ReactNode {
 function timingSection(stage: TraceStage): ReactNode {
   return section(
     "Timing",
-    <dl className="grid min-w-0 grid-cols-3 gap-x-3 gap-y-2">
+    <dl className="flex min-w-0 flex-wrap items-start justify-between gap-x-6 gap-y-2">
       {metaRow("Duration", `${stage.durationMs}ms`)}
       {metaRow("Start offset", `${stage.offsetMs}ms`)}
-      {metaRow("End offset", `${stage.offsetMs + stage.durationMs}ms`)}
+      <div className="min-w-0 text-right">
+        <dt className="text-[11px] text-[var(--muted)]">End offset</dt>
+        <dd className="mono min-w-0 text-[11px] text-[var(--text-strong)] [overflow-wrap:anywhere]">
+          {stage.offsetMs + stage.durationMs}ms
+        </dd>
+      </div>
     </dl>
   )
 }
@@ -83,7 +95,11 @@ function eventBlock(event: TraceEvent, eventKey: string): ReactNode {
         {" · "}
         <span className="tnum">{new Date(event.timestamp).toISOString()}</span>
       </p>
-      <JsonViewer value={event.attributes} ariaLabel={`${event.name} attributes`} />
+      <JsonViewer
+        value={event.attributes}
+        ariaLabel={`${event.name} attributes`}
+        className="max-h-none overflow-visible"
+      />
     </div>
   )
 }
@@ -91,33 +107,38 @@ function eventBlock(event: TraceEvent, eventKey: string): ReactNode {
 function payloadSection(
   title: string,
   events: readonly TraceEvent[],
-  spanId: string,
-  emptyText: string
+  spanId: string
 ): ReactNode {
+  if (events.length === 0) return null
   return section(
     title,
-    events.length === 0 ? (
-      <p className="text-[12px] text-[var(--muted)]">{emptyText}</p>
-    ) : (
-      <div className="min-w-0 space-y-3">
-        {events.map((event) => eventBlock(event, spanId))}
-      </div>
-    )
+    <div className="min-w-0 space-y-3">
+      {events.map((event) => eventBlock(event, spanId))}
+    </div>
   )
 }
 
-function technicalSection(stage: TraceStage, traceId: string): ReactNode {
+function technicalSection(stage: TraceStage): ReactNode {
   return (
-    <details className="min-w-0 border-t border-[var(--border-subtle)] pt-3">
-      <summary className="cursor-pointer text-[12px] text-[var(--muted)]">
+    <details className="group min-w-0 border-t border-[var(--border-subtle)] pt-3">
+      <summary className="flex list-none cursor-pointer items-center gap-2 text-[12px] text-[var(--muted)]">
+        <span
+          aria-hidden="true"
+          className="inline-flex size-4 shrink-0 items-center justify-center text-[14px] transition-transform motion-reduce:transition-none group-open:rotate-90"
+        >
+          ›
+        </span>
         Technical identifiers
       </summary>
       <dl className="mt-2 grid min-w-0 grid-cols-2 gap-x-3 gap-y-2">
         {metaRow("Span name", stage.name)}
+        {metaRow("Stage label", stage.label)}
         {metaRow("Kind", stage.kind)}
-        {metaRow("Trace", traceId)}
+        {metaRow("Started at", stage.startedAt)}
+        {metaRow("Outcome", stage.outcome)}
         {metaRow("Span", stage.spanId)}
         {metaRow("Parent", stage.parentSpanId ?? "—")}
+        {metaRow("Provider ID", stage.providerId ?? "—")}
       </dl>
     </details>
   )
@@ -129,12 +150,15 @@ function technicalSection(stage: TraceStage, traceId: string): ReactNode {
  * identifiers stay inside one disclosure. Selecting another row replaces this
  * panel instead of appending another block.
  */
-export function TraceSpanInspector({ stage, traceId }: TraceSpanInspectorProps) {
+export function TraceSpanInspector({ stage, trace }: TraceSpanInspectorProps) {
   if (stage === null) {
     return (
-      <p className="text-[12px] text-[var(--muted)]">
-        Select a trajectory row to inspect its timing and payload.
-      </p>
+      <div className="min-w-0 space-y-3">
+        <p className="text-[12px] text-[var(--muted)]">
+          No span timing was recorded for this trace.
+        </p>
+        <TraceScopeDetails trace={trace} />
+      </div>
     )
   }
   const requestEvents = stage.events.filter((event) => event.name.endsWith(REQUEST_EVENT_SUFFIX))
@@ -143,6 +167,7 @@ export function TraceSpanInspector({ stage, traceId }: TraceSpanInspectorProps) 
     (event) =>
       !event.name.endsWith(REQUEST_EVENT_SUFFIX) && !event.name.endsWith(RESPONSE_EVENT_SUFFIX)
   )
+  const purpose = traceSpanPurpose(stage)
   return (
     <div className="min-w-0 space-y-3 text-[12px]">
       <div className="flex min-w-0 flex-wrap items-center gap-2">
@@ -152,16 +177,13 @@ export function TraceSpanInspector({ stage, traceId }: TraceSpanInspectorProps) 
       </div>
 
       {spanError(stage)}
+      {purpose !== null && <p className="text-[12px] text-[var(--muted)]">{purpose}</p>}
       {timingSection(stage)}
-      {payloadSection("Request", requestEvents, stage.spanId, "This span recorded no request payload.")}
-      {payloadSection(
-        "Response",
-        responseEvents,
-        stage.spanId,
-        "This span recorded no response payload."
-      )}
-      {otherEvents.length > 0 && payloadSection("Events", otherEvents, stage.spanId, "")}
-      {technicalSection(stage, traceId)}
+      {payloadSection("Request", requestEvents, stage.spanId)}
+      {payloadSection("Response", responseEvents, stage.spanId)}
+      {otherEvents.length > 0 && payloadSection("Events", otherEvents, stage.spanId)}
+      {technicalSection(stage)}
+      <TraceScopeDetails trace={trace} />
     </div>
   )
 }

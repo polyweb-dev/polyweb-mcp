@@ -11,12 +11,12 @@ import {
 import { TraceInspectionWorkspace } from "./TraceInspectionWorkspace"
 
 /**
- * The Results/Trajectory inspector workspace (PLAN §6.3 item 6). It owns the
+ * The Results/Trace workspace. It owns the
  * ephemeral view/result/span selection inside one shared split shell:
  * - keyed by traceId + providerSpanId (selection resets across traces);
  * - result identity is the scoped index, so duplicate URLs stay distinct;
  * - selecting another result/trajectory row replaces the side payload;
- * - trajectory selection surfaces the recorded provider name + events;
+ * - one trace inspector surfaces span timing, payloads, and trace-level details;
  * - provider-scoped output and fetch documents render in the same shell.
  */
 function aggregated(): TraceDetail {
@@ -38,67 +38,108 @@ function renderWorkspace(detail: TraceDetail, overrides = {}) {
 }
 
 describe("TraceInspectionWorkspace", () => {
-  it("switches between Results and Trajectory modes", async () => {
+  it("starts with the first result selected and opens one complete trace view", async () => {
     const user = userEvent.setup()
     renderWorkspace(aggregated())
 
-    const switcher = screen.getByRole("group", { name: /trace detail view/i })
+    const switcher = screen.getByRole("group", { name: "Trace detail views" })
     expect(within(switcher).getByRole("button", { name: "Results" })).toHaveAttribute(
       "aria-pressed",
       "true"
     )
-    await user.click(within(switcher).getByRole("button", { name: "Trajectory" }))
-    expect(within(switcher).getByRole("button", { name: "Trajectory" })).toHaveAttribute(
+    expect(within(screen.getByRole("list", { name: "Ranked results" })).getAllByRole("button")[0])
+      .toHaveAttribute("aria-pressed", "true")
+
+    await user.click(within(switcher).getByRole("button", { name: "Trace" }))
+    expect(within(switcher).getByRole("button", { name: "Trace" })).toHaveAttribute(
       "aria-pressed",
       "true"
     )
+    expect(screen.getByRole("region", { name: "Trace timeline" })).toBeInTheDocument()
+    expect(screen.getByRole("list", { name: "Trace trajectory" })).toBeInTheDocument()
+    expect(within(switcher).queryByRole("button", { name: "Request data" })).not.toBeInTheDocument()
+
+    const inspector = screen.getByRole("region", { name: /details/i })
+    expect(within(inspector).getByText("freesearch.provider.request")).toBeInTheDocument()
+    expect(within(inspector).getByLabelText("freesearch.provider.request attributes")).toHaveTextContent(
+      "What is the latest financial news?"
+    )
+    const responseAttributes = within(inspector).getByLabelText(
+      "freesearch.provider.response attributes"
+    )
+    expect(responseAttributes).toHaveTextContent('"result_count": 3')
+    await user.click(within(responseAttributes).getByText("3 items"))
+    await user.click(within(responseAttributes).getAllByText("5 keys")[0]!)
+    expect(responseAttributes).toHaveTextContent("Reuters Latest Finance News")
+    await user.click(within(inspector).getByText("Recorded output"))
+    expect(within(inspector).getByRole("group", { name: "Recorded output JSON" })).toBeInTheDocument()
   })
 
-  it("stacks the trajectory into full-width rows with the payload below the waterfall", async () => {
+  it("keeps the waterfall provider rows consistent and preserves their recorded payload", async () => {
     const user = userEvent.setup()
     const { container } = renderWorkspace(aggregated())
 
-    await user.click(screen.getByRole("button", { name: "Trajectory" }))
+    await user.click(screen.getByRole("button", { name: "Trace" }))
 
-    const waterfall = screen.getByRole("region", { name: "Trace trajectory" })
-    const payload = screen.getByRole("region", { name: /payload/i })
-    // Order in the document is what stacks them; there is no second column.
-    const stack = waterfall.parentElement as HTMLElement
-    expect(container.contains(stack)).toBe(true)
-    expect(stack.className).toMatch(/grid/)
-    expect(stack.className).toMatch(/grid-rows-\[minmax\(9rem,50%\)_minmax\(11rem,1fr\)\]/)
-    expect(stack.className).not.toMatch(/grid-cols-/)
-    expect(stack.children[0]).toBe(waterfall)
-    expect(stack.children[1]).toBe(payload)
+    const timeline = screen.getByRole("region", { name: "Trace timeline" })
+    const detail = screen.getByRole("region", { name: /details/i })
+    const split = timeline.parentElement as HTMLElement
+    expect(container.contains(split)).toBe(true)
+    expect(split.className).toMatch(/lg:grid-cols-/)
+    expect(detail).toBeInTheDocument()
+    expect(within(detail).getByText("freesearch.provider.request")).toBeInTheDocument()
+
+    const providerRow = within(screen.getByRole("list", { name: "Trace trajectory" })).getByRole(
+      "button",
+      { name: /Keenable request/ }
+    )
+    const trajectory = screen.getByRole("list", { name: "Trace trajectory" })
+    expect(within(trajectory).getAllByRole("button")).toHaveLength(11)
+    expect(within(trajectory).queryByRole("button", { name: /HTTP request|Response parsing/ })).not.toBeInTheDocument()
+    expect(within(trajectory).queryByText(/Provider steps|Other recorded steps|Recorded substeps/)).not.toBeInTheDocument()
+
+    await user.click(providerRow)
+    expect(within(detail).getByLabelText("freesearch.provider.response attributes")).toHaveTextContent(
+      '"result_count": 3'
+    )
+    await user.click(within(detail).getByText("Technical identifiers"))
+    expect(within(detail).getByText("Span").parentElement).toHaveTextContent("a100000000000003")
+    expect(within(detail).getByText("freesearch.provider")).toBeInTheDocument()
   })
 
-  it("lets each stacked row scroll on its own", async () => {
+  it("gives the timeline and span payload their own readable scroll regions", async () => {
     const user = userEvent.setup()
     renderWorkspace(aggregated())
 
-    await user.click(screen.getByRole("button", { name: "Trajectory" }))
+    await user.click(screen.getByRole("button", { name: "Trace" }))
 
-    const waterfall = screen.getByRole("region", { name: "Trace trajectory" })
-    const payload = screen.getByRole("region", { name: /payload/i })
-    expect(waterfall.className).toMatch(/min-h-0/)
-    expect(payload.className).toMatch(/min-h-0/)
-    expect(payload.className).toMatch(/overflow-y-auto/)
+    const timeline = screen.getByRole("region", { name: "Trace timeline" })
+    const details = screen.getByRole("region", { name: /details/i })
+    expect(timeline.firstElementChild?.className).toMatch(/min-h-0/)
+    expect(details.firstElementChild?.className).toMatch(/overflow-y-auto/)
+    expect(screen.queryByText("Select a trajectory row to inspect its timing and payload.")).not.toBeInTheDocument()
     expect(screen.getByRole("list", { name: "Trace trajectory" })).toBeInTheDocument()
   })
 
-  it("claims the leftover height for the trajectory and leaves results content-sized", async () => {
+  it("keeps trace details available when no span timing was recorded", async () => {
     const user = userEvent.setup()
-    const { container } = renderWorkspace(aggregated())
+    const detail = aggregated()
+    detail.stages = []
+    const { container } = renderWorkspace(detail)
 
     const workspace = container.firstElementChild as HTMLElement
-    expect(workspace.className).toMatch(/space-y-3/)
-    expect(workspace.className).not.toMatch(/flex-1/)
-
-    await user.click(screen.getByRole("button", { name: "Trajectory" }))
-
-    expect(workspace.className).toMatch(/flex/)
+    expect(workspace.className).toMatch(/h-full/)
     expect(workspace.className).toMatch(/flex-1/)
-    expect(workspace.className).toMatch(/flex-col/)
+
+    await user.click(screen.getByRole("button", { name: "Trace" }))
+
+    expect(screen.getByRole("region", { name: "Trace timeline" })).toBeInTheDocument()
+    const inspector = screen.getByRole("region", { name: /details/i })
+    expect(within(inspector).getByText("No span timing was recorded for this trace.")).toBeInTheDocument()
+    await user.click(within(inspector).getByText("Trace metadata"))
+    expect(within(inspector).getByText("Trace ID").parentElement).toHaveTextContent(detail.traceId)
+    await user.click(within(inspector).getByText("Recorded output"))
+    expect(within(inspector).getByRole("group", { name: "Recorded output JSON" })).toBeInTheDocument()
   })
 
   it("resets selection when the trace identity changes", async () => {
@@ -165,13 +206,14 @@ describe("TraceInspectionWorkspace", () => {
     ).not.toBeInTheDocument()
   })
 
-  it("selects a trajectory row and shows its provider payload at the side", async () => {
+  it("selects the first payload-bearing trace row and shows its provider payload", async () => {
     const user = userEvent.setup()
     renderWorkspace(aggregated())
 
-    await user.click(screen.getByRole("button", { name: "Trajectory" }))
-    await user.click(screen.getByRole("button", { name: /Keenable request/ }))
-    const payloadRegion = screen.getByRole("region", { name: /payload/i })
+    await user.click(screen.getByRole("button", { name: "Trace" }))
+    const providerRow = screen.getByRole("button", { name: /Keenable request/ })
+    expect(providerRow).toHaveAttribute("aria-pressed", "true")
+    const payloadRegion = screen.getByRole("region", { name: /details/i })
     expect(within(payloadRegion).getByText("Keenable")).toBeInTheDocument()
     expect(screen.getByLabelText(/freesearch.provider.response attributes/i)).toBeInTheDocument()
   })
@@ -203,14 +245,15 @@ describe("TraceInspectionWorkspace", () => {
     expect(screen.queryByText(/fusion/i)).not.toBeInTheDocument()
   })
 
-  it("falls back to the fetch document for fetch traces", () => {
+  it("shows the complete recorded fetch document in its full-height pane", () => {
+    const content = "Stored document body. ".repeat(40)
     const detail = mapTraceDetail(errorTraceDetailFixture({
       output: {
         kind: "fetch_document",
         url: "https://example.com/doc",
         title: "Doc",
-        content: "hello world",
-        content_length: 11,
+        content,
+        content_length: content.length,
         truncated: false,
       },
     }))
@@ -223,7 +266,9 @@ describe("TraceInspectionWorkspace", () => {
       />
     )
 
-    expect(screen.getByText("hello world")).toBeInTheDocument()
+    const article = screen.getByRole("article")
+    expect(article.querySelector("pre")?.textContent).toBe(content)
+    expect(within(article).queryByRole("button", { name: /show full content/i })).not.toBeInTheDocument()
     expect(vi.fn()).not.toHaveBeenCalled()
   })
 })

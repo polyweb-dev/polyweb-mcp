@@ -28,7 +28,7 @@ export function TraceSearchResults({
     return <p className="text-[13px] text-[var(--muted)]">No result was returned.</p>
   }
   return (
-    <ul aria-label="Ranked results" className="m-0 min-w-0 list-none space-y-2 p-0">
+    <ul aria-label="Ranked results" className="m-0 min-w-0 list-none border-t border-[var(--border-subtle)] p-0">
       {results.map((result, index) => (
         <TraceResultRow
           key={index}

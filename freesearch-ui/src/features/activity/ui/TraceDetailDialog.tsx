@@ -58,23 +58,29 @@ function readyView({ trace, attempt, providerSpanId }: ReadyViewOptions) {
     // and the query can be handed what is left and share it. The height must be
     // definite: with `min-h-full` the leftover is indefinite and the workspace
     // falls back to its content, which pushes the panes out of the dialog.
-    <div className="flex h-full min-w-0 flex-col gap-5 text-[13px]">
-      <TraceDetailSummary trace={trace} attempt={attempt} />
+    <div className="flex h-full min-h-0 min-w-0 flex-col gap-2.5 text-[13px]">
+      <div className="grid min-w-0 shrink-0 gap-2 sm:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)] sm:items-stretch">
+        <TraceDetailSection title={trace.operation === "fetch" ? "URL" : "Query"}>
+          <p
+            title={trace.input ?? "—"}
+            className="m-0 mono max-h-12 overflow-y-auto text-[12px] leading-[18px] text-[var(--text)] whitespace-pre-wrap [overflow-wrap:anywhere]"
+          >
+            {trace.input ?? "—"}
+          </p>
+        </TraceDetailSection>
+        <TraceDetailSummary trace={trace} attempt={attempt} />
+      </div>
       <TraceDetailError trace={trace} />
 
-      <TraceDetailSection title={trace.operation === "fetch" ? "URL fetched" : "Query sent"}>
-        <p className="mono rounded border border-[var(--border-subtle)] bg-[var(--elevated)] p-3 text-[var(--text)] whitespace-pre-wrap [overflow-wrap:anywhere]">
-          {trace.input ?? "—"}
-        </p>
-      </TraceDetailSection>
-
-      <TraceInspectionWorkspace
-        key={`${trace.traceId}:${providerSpanId ?? "all"}`}
-        trace={trace}
-        output={scopedOutput(trace, providerSpanId)}
-        attempt={attempt}
-        mode={mode}
-      />
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <TraceInspectionWorkspace
+          key={`${trace.traceId}:${providerSpanId ?? "all"}`}
+          trace={trace}
+          output={scopedOutput(trace, providerSpanId)}
+          attempt={attempt}
+          mode={mode}
+        />
+      </div>
     </div>
   )
 }
@@ -102,7 +108,7 @@ export function TraceDetailDialog({
       isOpen={isOpen}
       onClose={onClose}
       title="Trace detail"
-      subtitle="Stored locally in this FreeSearch database; the query and its results are shown only here."
+      subtitle="Stored in this FreeSearch database; query and results are shown only here."
       maxWidth="7xl"
       scrollBody
     >

@@ -30,12 +30,12 @@ describe("TraceTrajectory", () => {
     )
 
     const list = screen.getByRole("list", { name: /trajectory/i })
-    const rows = within(list).getAllByRole("button")
+    const rows = within(list).getAllByRole("button").filter((row) => row.hasAttribute("data-depth"))
     expect(visible).toHaveLength(11)
     expect(rows).toHaveLength(visible.length)
     expect(rows[0]).toHaveTextContent(/search request/i)
-    expect(screen.queryByText(/provider http call/i)).not.toBeInTheDocument()
-    expect(screen.queryByText(/provider response parse/i)).not.toBeInTheDocument()
+    expect(within(list).queryByText(/provider http call/i)).not.toBeInTheDocument()
+    expect(within(list).queryByText(/provider response parse/i)).not.toBeInTheDocument()
     expect(within(list).getAllByTestId(/provider-logo-/)).toHaveLength(7)
     expect(screen.queryByRole("button", { name: /^provider request$/i })).not.toBeInTheDocument()
   })
@@ -64,7 +64,7 @@ describe("TraceTrajectory", () => {
     expect(within(scroller).getByRole("list", { name: "Trace trajectory" })).toBeInTheDocument()
   })
 
-  it("indents children by depth without nested disclosure boxes", () => {
+  it("keeps only comparable user-level stages in the waterfall", () => {
     const detail = mapTraceDetail(aggregatedTraceDetailFixture())
     render(
       <TraceTrajectory
@@ -79,7 +79,8 @@ describe("TraceTrajectory", () => {
     const rows = within(list).getAllByRole("button")
     const depths = rows.map((row) => row.getAttribute("data-depth") ?? row.getAttribute("aria-level"))
     expect(depths[0]).not.toBe(depths[1])
-    expect(document.querySelector("details")).toBeNull()
+    expect(within(list).queryByRole("button", { name: /HTTP request|Response parsing/ })).not.toBeInTheDocument()
+    expect(within(list).queryByText(/Provider steps|Other recorded steps|Recorded substeps/)).not.toBeInTheDocument()
   })
 
   it("fuses one shared-scale offset/duration bar into every row", () => {
@@ -94,7 +95,7 @@ describe("TraceTrajectory", () => {
     )
 
     const list = screen.getByRole("list", { name: /trajectory/i })
-    const rows = within(list).getAllByRole("button")
+    const rows = within(list).getAllByRole("button").filter((row) => row.hasAttribute("data-depth"))
     for (const row of rows) {
       expect(row.querySelector('span[style*="left"]')).not.toBeNull()
       expect(row.textContent).toMatch(/\d+ms/)

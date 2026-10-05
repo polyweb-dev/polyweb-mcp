@@ -16,9 +16,8 @@ import {
 
 /**
  * Trace detail is the single disclosure point for sensitive content: a compact
- * telemetry strip, the query, bounded results, the honest ranking explanation,
- * the simplified provider-vs-FreeSearch latency, and the collapsed technical
- * trajectory. Outside this dialog the query and results never appear.
+ * context band, selected result details, timing, request data, and ranking
+ * explanation. Outside this dialog the query and results never appear.
  */
 function aggregatedDetail(): TraceDetail {
   return mapTraceDetail(aggregatedTraceDetailFixture())
@@ -77,18 +76,23 @@ describe("TraceDetailDialog", () => {
     expect(within(dialog).getAllByText("6").length).toBeGreaterThan(0)
   })
 
-  it("discloses the full query under Query sent", () => {
+  it("discloses the full query in the compact context band", () => {
     renderDialog(searchDetail())
 
-    expect(screen.getByText("Query sent")).toBeInTheDocument()
-    expect(screen.getByText("distributed consensus algorithms")).toBeInTheDocument()
+    const label = screen.getByRole("heading", { name: "Query" })
+    const query = screen.getByText("distributed consensus algorithms")
+    const field = label.closest("section")
+    expect(field).toHaveClass("items-center")
+    expect(label.parentElement).toHaveClass("items-baseline")
+    expect(label).toHaveClass("m-0", "leading-[18px]")
+    expect(query).toHaveClass("m-0", "leading-[18px]")
   })
 
-  it("labels the fetch input as the URL fetched", () => {
+  it("labels the fetch input as its URL", () => {
     const detail = mapTraceDetail(errorTraceDetailFixture())
     renderDialog(detail)
 
-    expect(screen.getByText("URL fetched")).toBeInTheDocument()
+    expect(screen.getByText("URL")).toBeInTheDocument()
     expect(
       screen.getByText("https://docs.freesearch.dev/getting-started")
     ).toBeInTheDocument()
@@ -100,20 +104,26 @@ describe("TraceDetailDialog", () => {
 
     const ranked = screen.getByRole("list", { name: "Ranked results" })
     expect(within(ranked).getAllByRole("button")).toHaveLength(6)
-    // Titles appear once, in the list only: the ranking explanation no longer repeats them.
+    // The title appears in the selected row and in its inspector.
     expect(
       screen.getAllByText("Reuters Latest Finance News | Today Top Headlines")
-    ).toHaveLength(1)
-    // The shared card shows the recorded value on the common percentage scale.
+    ).toHaveLength(2)
+    // The compact row keeps the recorded value on the common percentage scale.
     expect(within(ranked).getByText("70% match")).toBeInTheDocument()
-    // R8: the shared card carries a two-line snippet, so the text is present in the row.
+    // One-line preview is readable in the row; the selected inspector keeps the full snippet.
     expect(
       within(ranked).getByText(
         "Exclusive news, data and analytics for financial market professionals."
       )
     ).toBeInTheDocument()
-    await user.click(screen.getByRole("button", { name: /Reuters Latest Finance News/ }))
+    expect(within(ranked).getAllByRole("button")[0]).toHaveAttribute("aria-pressed", "true")
     const inspector = screen.getByRole("region", { name: "Result inspector" })
+    expect(
+      within(inspector).getByText(
+        "Exclusive news, data and analytics for financial market professionals."
+      )
+    ).toBeInTheDocument()
+    await user.click(screen.getByRole("button", { name: /Reuters Latest Finance News/ }))
     expect(within(inspector).getByText("Fusion score")).toBeInTheDocument()
     expect(within(inspector).getByText("70% match")).toBeInTheDocument()
   })
@@ -138,15 +148,14 @@ describe("TraceDetailDialog", () => {
     expect(screen.queryByRole("button", { name: /show all/i })).not.toBeInTheDocument()
   })
 
-  it("explains fusion order once in the side inspector with the honest RRF note", () => {
+  it("opens on the first result and keeps the honest ranking explanation available", async () => {
+    const user = userEvent.setup()
     renderDialog(aggregatedDetail())
 
-    expect(
-      screen.getByText(
-        "Select a result to inspect its full snippet, URL, and recorded score."
-      )
-    ).toBeInTheDocument()
-    expect(screen.getByText("Why this order")).toBeInTheDocument()
+    const inspector = screen.getByRole("region", { name: "Result inspector" })
+    expect(within(inspector).getByText("Result 1 of 6")).toBeInTheDocument()
+    expect(within(inspector).getByText("Reuters Latest Finance News | Today Top Headlines")).toBeInTheDocument()
+    await user.click(within(inspector).getByText("Why this order"))
     expect(
       screen.getByText(/Results are shown in FreeSearch's final fused order/)
     ).toBeInTheDocument()
@@ -168,6 +177,7 @@ describe("TraceDetailDialog", () => {
     expect(within(dialog).getAllByText("Keenable").length).toBeGreaterThanOrEqual(2)
     expect(within(dialog).getAllByText(/response/).length).toBeGreaterThanOrEqual(2)
     expect(screen.queryByText("Results returned")).not.toBeInTheDocument()
+    await user.click(screen.getByText("Why this order"))
     expect(
       screen.getByText(/Results keep the order returned by/)
     ).toBeInTheDocument()
@@ -177,10 +187,12 @@ describe("TraceDetailDialog", () => {
     expect(
       screen.getByText(/Showing this provider's response/)
     ).toBeInTheDocument()
-    // The shared card shows the value on the common percentage scale.
-    expect(within(dialog).getByText("92% match")).toBeInTheDocument()
+    // The row and selected inspector both retain the scoped provider score.
+    const ranked = within(dialog).getByRole("list", { name: "Ranked results" })
+    expect(within(ranked).getByText("92% match")).toBeInTheDocument()
+    const inspector = within(dialog).getByRole("region", { name: "Result inspector" })
+    expect(within(inspector).getByText("92% match")).toBeInTheDocument()
     await user.click(screen.getByRole("button", { name: /Reuters Latest Finance News/ }))
-    const inspector = screen.getByRole("region", { name: "Result inspector" })
     expect(within(inspector).getByText("Provider score")).toBeInTheDocument()
     expect(within(inspector).getByText("92% match")).toBeInTheDocument()
   })
@@ -193,10 +205,13 @@ describe("TraceDetailDialog", () => {
       screen.getByText(/Results keep the order returned by/)
     ).toBeInTheDocument()
     expect(screen.getAllByText("Keenable").length).toBeGreaterThanOrEqual(2)
-    // The shared card shows the value on the common percentage scale.
-    expect(screen.getByText("94% match")).toBeInTheDocument()
-    await user.click(screen.getByRole("button", { name: /Consensus algorithms explained/ }))
+    // The row and its default-selected inspector both retain the provider score.
+    const ranked = screen.getByRole("list", { name: "Ranked results" })
+    expect(within(ranked).getByText("94% match")).toBeInTheDocument()
     const inspector = screen.getByRole("region", { name: "Result inspector" })
+    expect(within(inspector).getByText("94% match")).toBeInTheDocument()
+    await user.click(screen.getByText("Why this order"))
+    await user.click(screen.getByRole("button", { name: /Consensus algorithms explained/ }))
     expect(within(inspector).getByText("Provider score")).toBeInTheDocument()
     expect(within(inspector).getByText("94% match")).toBeInTheDocument()
     expect(screen.queryByText(/Fusion score/)).not.toBeInTheDocument()
@@ -217,7 +232,8 @@ describe("TraceDetailDialog", () => {
     expect(within(inspector).queryByText(/Source not recorded/)).not.toBeInTheDocument()
   })
 
-  it("states the no-score fallback without inventing ranking arithmetic", () => {
+  it("states the no-score fallback without inventing ranking arithmetic", async () => {
+    const user = userEvent.setup()
     const detail = mapTraceDetail(
       traceDetailFixture({
         output: {
@@ -232,18 +248,21 @@ describe("TraceDetailDialog", () => {
     )
     renderDialog(detail)
 
+    const inspector = screen.getByRole("region", { name: "Result inspector" })
+    expect(within(inspector).getByText("Provider score").parentElement).toHaveTextContent("Not recorded")
+    await user.click(within(inspector).getByText("Why this order"))
     expect(
       screen.getByText(/This trace did not record provider scores, so returned order is the only ranking signal/)
     ).toBeInTheDocument()
     expect(screen.queryByText(/Only the final score is shown/)).not.toBeInTheDocument()
   })
 
-  it("fuses provider timing into trajectory rows instead of a separate latency panel", async () => {
+  it("shows provider timing in the unified Trace view instead of a separate latency panel", async () => {
     const user = userEvent.setup()
     renderDialog(aggregatedDetail())
 
     expect(screen.queryByText("Latency")).not.toBeInTheDocument()
-    await user.click(screen.getByRole("button", { name: "Trajectory" }))
+    await user.click(screen.getByRole("button", { name: "Trace" }))
     const trajectory = screen.getByRole("list", { name: "Trace trajectory" })
     const row = within(trajectory).getByRole("button", { name: /Keenable request/i })
     expect(within(row).getByText("Keenable")).toBeInTheDocument()
@@ -260,18 +279,15 @@ describe("TraceDetailDialog", () => {
     )
   })
 
-  it("selects a trajectory row and shows its payload in the side inspector", async () => {
+  it("opens Trace with the first payload-bearing span selected", async () => {
     const user = userEvent.setup()
     renderDialog(aggregatedDetail())
 
-    await user.click(screen.getByRole("button", { name: "Trajectory" }))
-    expect(
-      screen.getByText("Select a trajectory row to inspect its timing and payload.")
-    ).toBeInTheDocument()
-    await user.click(screen.getByRole("button", { name: /Keenable request/ }))
-    expect(
-      screen.queryByText("Select a trajectory row to inspect its timing and payload.")
-    ).not.toBeInTheDocument()
+    await user.click(screen.getByRole("button", { name: "Trace" }))
+    expect(screen.getByRole("button", { name: /Keenable request/ })).toHaveAttribute(
+      "aria-pressed",
+      "true"
+    )
     expect(screen.getByText("freesearch.provider.request")).toBeInTheDocument()
   })
 
@@ -281,7 +297,7 @@ describe("TraceDetailDialog", () => {
     const alert = screen.getByRole("alert")
     expect(alert).toHaveTextContent("http_error")
     expect(alert).toHaveTextContent("HTTP 502")
-    expect(screen.getByText("URL fetched")).toBeInTheDocument()
+    expect(screen.getByText("URL")).toBeInTheDocument()
     expect(screen.getByText(/no results were recorded/i)).toBeInTheDocument()
   })
 
@@ -338,8 +354,7 @@ describe("TraceDetailDialog", () => {
 
 /**
  * The rebuilt dialog (PLAN §6.3 item 5): 7xl modal, one aligned `<dl>` summary
- * rail, concise mode-specific order copy, a Results/Trajectory switch, and a
- * selected side payload.
+ * compact context band, two inspection views, and a default-selected result.
  */
 describe("TraceDetailDialog inspector workspace", () => {
   function renderAggregated(overrides = {}) {
@@ -368,9 +383,11 @@ describe("TraceDetailDialog inspector workspace", () => {
     expect(rail?.querySelectorAll(":scope > div")).toHaveLength(4)
   })
 
-  it("states fusion order once with the concise copy and no duplicate list", () => {
+  it("keeps the concise fusion explanation available without a duplicate list", async () => {
+    const user = userEvent.setup()
     renderAggregated()
 
+    await user.click(screen.getByText("Why this order"))
     expect(
       screen.getByText(/Results are shown in FreeSearch.s final fused order/)
     ).toBeInTheDocument()
@@ -381,55 +398,51 @@ describe("TraceDetailDialog inspector workspace", () => {
     expect(screen.queryByText(/contributor not recorded/i)).not.toBeInTheDocument()
   })
 
-  it("switches between Results and Trajectory modes", async () => {
+  it("switches between Results and one complete Trace view", async () => {
     const user = userEvent.setup()
     renderAggregated()
 
-    const switcher = screen.getByRole("group", { name: /trace detail view/i })
+    const switcher = screen.getByRole("group", { name: "Trace detail views" })
     expect(within(switcher).getByRole("button", { name: "Results" })).toHaveAttribute(
       "aria-pressed",
       "true"
     )
-    await user.click(within(switcher).getByRole("button", { name: "Trajectory" }))
-    expect(within(switcher).getByRole("button", { name: "Trajectory" })).toHaveAttribute(
+    await user.click(within(switcher).getByRole("button", { name: "Trace" }))
+    expect(within(switcher).getByRole("button", { name: "Trace" })).toHaveAttribute(
       "aria-pressed",
       "true"
     )
+    expect(screen.getByRole("region", { name: "Trace timeline" })).toBeInTheDocument()
+    expect(within(switcher).queryByRole("button", { name: "Request data" })).not.toBeInTheDocument()
+    const details = screen.getByRole("region", { name: /details/i })
+    expect(within(details).getByText("freesearch.provider.request")).toBeInTheDocument()
+    expect(
+      screen.getByText("Full trace · select a stage to inspect its timing and recorded data")
+    ).toBeInTheDocument()
   })
 
-  it("offers the leftover body height to the trajectory so both rows fit", async () => {
+  it("keeps the timeline beside selected span details and labels the whole-trace scope", async () => {
     const user = userEvent.setup()
     renderAggregated()
 
-    await user.click(screen.getByRole("button", { name: "Trajectory" }))
+    await user.click(screen.getByRole("button", { name: "Trace" }))
 
-    // The rail, the query, and the workspace are one column that is exactly the
-    // height of the scrolling body, so the stacked rows share what is left
-    // instead of stacking as one more block.
-    const waterfall = screen.getByRole("region", { name: "Trace trajectory" })
-    const workspace = waterfall.parentElement?.parentElement as HTMLElement
-    const column = workspace.parentElement as HTMLElement
-    expect(column.className).toMatch(/h-full/)
-    expect(column.className).toMatch(/flex-col/)
-    expect(workspace.className).toMatch(/min-h-0/)
-    expect(workspace.className).toMatch(/flex-1/)
-    expect(within(column).getByRole("region", { name: /payload/i })).toBeInTheDocument()
+    const timeline = screen.getByRole("region", { name: "Trace timeline" })
+    expect(timeline.parentElement?.className).toMatch(/lg:grid-cols-/)
+    expect(screen.getByRole("region", { name: /details/i })).toBeInTheDocument()
+    expect(
+      screen.getByText("Full trace · select a stage to inspect its timing and recorded data")
+    ).toBeInTheDocument()
   })
 
-  it("keeps rows compact and shows the full snippet in the side inspector", async () => {
-    const user = userEvent.setup()
+  it("selects the first result and shows its full snippet beside the compact list", () => {
     renderAggregated()
 
-    // R8: the shared card carries a two-line snippet in the row; selection fills the inspector.
     const ranked = screen.getByRole("list", { name: "Ranked results" })
     expect(
       within(ranked).getByText("Exclusive news, data and analytics for financial market professionals.")
     ).toBeInTheDocument()
-    const inspector = screen.getByRole("region", { name: "Result inspector" })
-    expect(
-      within(inspector).queryByText("Exclusive news, data and analytics for financial market professionals.")
-    ).not.toBeInTheDocument()
-    await user.click(screen.getByRole("button", { name: /Reuters Latest Finance News/ }))
+    expect(within(ranked).getAllByRole("button")[0]).toHaveAttribute("aria-pressed", "true")
     expect(
       within(screen.getByRole("region", { name: "Result inspector" })).getByText(
         "Exclusive news, data and analytics for financial market professionals."

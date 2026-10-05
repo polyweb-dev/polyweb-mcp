@@ -267,13 +267,17 @@ describe("LatencyWaterfall selectable rows", () => {
   })
 
   it("marks the millisecond unit outside the axis, not on a tick", () => {
-    render(
+    const { unmount } = render(
       <LatencyWaterfall
         rows={[selectableRow({ selected: false, onSelect: () => {} })]}
         totalMs={100}
         ariaLabel="Latency"
       />
     )
+
+    const defaultGrid = "sm:grid-cols-[minmax(0,10rem)_minmax(0,1fr)_7rem]"
+    expect(screen.getByText("ms").parentElement).toHaveClass(defaultGrid)
+    expect(screen.getByRole("button", { name: /selectable.*40ms/i })).toHaveClass(defaultGrid)
 
     // Item 5: short bare numbers on every tick, the unit once outside the
     // track, with zero geometry change to the ruler box.
@@ -285,6 +289,25 @@ describe("LatencyWaterfall selectable rows", () => {
     expect(screen.getByText("ms")).toBeInTheDocument()
     expect(screen.queryByText("100 ms")).not.toBeInTheDocument()
     expect(screen.queryByText("0 ms")).not.toBeInTheDocument()
+
+    unmount()
+    render(
+      <LatencyWaterfall
+        rows={[selectableRow({ selected: false, onSelect: () => {} })]}
+        totalMs={100}
+        ariaLabel="Compact latency"
+        compactRuler
+        expandedTrack
+      />
+    )
+    const expandedGrid = "sm:grid-cols-[minmax(0,10rem)_minmax(0,1fr)_5rem]"
+    expect(screen.getByText("ms").parentElement).toHaveClass(expandedGrid)
+    expect(screen.getByRole("button", { name: /selectable.*40ms/i })).toHaveClass(expandedGrid)
+    expect(screen.getByText("0")).toBeInTheDocument()
+    expect(screen.getByText("50")).toBeInTheDocument()
+    expect(screen.getByText("100")).toBeInTheDocument()
+    expect(screen.queryByText("25")).not.toBeInTheDocument()
+    expect(screen.queryByText("75")).not.toBeInTheDocument()
   })
 
   it("keeps identical geometry clamps on selectable rows", () => {

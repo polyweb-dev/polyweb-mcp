@@ -25,7 +25,7 @@ export interface TraceInspectionWorkspaceProps {
   mode: RankingMode
 }
 
-type TraceView = "results" | "trajectory"
+type TraceView = "results" | "trace"
 
 interface Selection {
   view: TraceView
@@ -33,7 +33,6 @@ interface Selection {
   spanId: string | null
 }
 
-const NO_SELECTION: Selection = { view: "results", resultIndex: null, spanId: null }
 const AGGREGATED_PROVIDER = "aggregated"
 
 /** Identity of the inspected subject: a new trace or scope starts fresh. */
@@ -45,11 +44,18 @@ function searchOutput(output: TraceOutput | null): TraceSearchOutput | null {
   return output !== null && output.kind === "search_results" ? output : null
 }
 
-/**
- * Provider the shown output belongs to: the scoped attempt, or the trace's own
- * provider when the whole trace is a single-provider search. A fused whole
- * trace has no single provider and keeps the null.
- */
+function initialSelection(trace: TraceDetail, output: TraceOutput | null): Selection {
+  const results = searchOutput(output)?.results ?? []
+  const stages = selectUserTraceStages(trace.stages)
+  const firstStage = stages.find((stage) => stage.events.length > 0) ?? stages[0]
+  return {
+    view: "results",
+    resultIndex: results.length > 0 ? 0 : null,
+    spanId: firstStage?.spanId ?? null,
+  }
+}
+
+/** Provider the shown output belongs to, if it has one. */
 function scopedProviderId(trace: TraceDetail, attempt: TraceProviderAttempt | null): string | null {
   if (attempt !== null) return attempt.providerId
   return trace.provider === AGGREGATED_PROVIDER ? null : trace.provider
@@ -60,7 +66,6 @@ function selectedStage(stages: readonly TraceStage[], spanId: string | null): Tr
   return stages.find((stage) => stage.spanId === spanId) ?? null
 }
 
-/** The provider identity a line shows, or the recorded label when it is absent. */
 function providerNode(providerId: string | null, fallbackLabel: string): ReactNode {
   if (providerId === null || providerId === "") return <span>{fallbackLabel}</span>
   const identity = providerIdentity(providerId)
@@ -68,8 +73,12 @@ function providerNode(providerId: string | null, fallbackLabel: string): ReactNo
   return <ProviderBadge providerId={identity.id} name={identity.name} logoClassName="size-3.5" />
 }
 
-/** One quiet line naming what the workspace is currently showing. */
-function scopeText(output: TraceOutput | null, attempt: TraceProviderAttempt | null): ReactNode {
+function scopeText(
+  view: TraceView,
+  output: TraceOutput | null,
+  attempt: TraceProviderAttempt | null
+): ReactNode {
+  if (view === "trace") return "Full trace · select a stage to inspect its timing and recorded data"
   if (attempt !== null) {
     return (
       <span className="inline-flex min-w-0 flex-wrap items-center gap-1.5">
@@ -84,12 +93,14 @@ function scopeText(output: TraceOutput | null, attempt: TraceProviderAttempt | n
 }
 
 function viewSwitcher(view: TraceView, onChange: (view: TraceView) => void) {
+  const current = view === "trace" ? "Trace" : "Results"
   return (
     <SegmentedControl
-      options={["Results", "Trajectory"]}
-      value={view === "results" ? "Results" : "Trajectory"}
-      onChange={(label) => onChange(label === "Trajectory" ? "trajectory" : "results")}
-      ariaLabel="Trace detail view"
+      options={["Results", "Trace"]}
+      value={current}
+      onChange={(label) => onChange(label === "Trace" ? "trace" : "results")}
+      ariaLabel="Trace detail views"
+      minColumnWidth="auto"
     />
   )
 }
@@ -106,8 +117,7 @@ interface SelectionPaneOptions {
   onSelectSpan: (spanId: string) => void
 }
 
-function resultsView(options: SelectionPaneOptions) {
-  const { output, attempt, mode, providerLabel, providerId, selection, onSelectResult } = options
+function resultsView({ output, mode, providerLabel, providerId, selection, onSelectResult }: SelectionPaneOptions) {
   const results = searchOutput(output)
   const shared = {
     output,
@@ -118,123 +128,113 @@ function resultsView(options: SelectionPaneOptions) {
     onSelect: onSelectResult,
   }
   if (results === null) {
-    // A fetch document (or an absent output) is one payload, not a list with an
-    // inspector: it reads better across the full width.
-    return <TraceResults {...shared} />
+    return (
+      <section aria-label="Results" className="h-full min-h-0 min-w-0 overflow-y-auto overscroll-contain [scrollbar-gutter:stable]">
+        <div className="min-w-0 px-3 py-3">
+          <TraceResults {...shared} />
+        </div>
+      </section>
+    )
   }
   return (
     <InspectorSplitPane
-      primaryLabel={attempt === null ? "Results" : `${providerLabel} response`}
+      primaryLabel="Ranked results"
       detailLabel="Result inspector"
-      primary={<TraceResults {...shared} />}
+      className="grid h-full min-h-0 min-w-0 grid-rows-[minmax(0,1fr)_minmax(0,1fr)] items-stretch gap-0 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] lg:grid-rows-1"
+      primary={
+        <div className="h-full min-h-0 min-w-0 overflow-y-auto overscroll-contain [scrollbar-gutter:stable]">
+          <div className="min-w-0 pr-3 py-2">
+            <TraceResults {...shared} />
+          </div>
+        </div>
+      }
       detail={
-        <TraceResultInspector
-          result={results.results[selection.resultIndex ?? -1] ?? null}
-          rank={selection.resultIndex === null ? null : selection.resultIndex + 1}
-          mode={mode}
-          providerId={providerId}
-          providerLabel={providerLabel}
-          results={results.results}
-        />
+        <div className="h-full min-h-0 min-w-0 overflow-y-auto overscroll-contain border-t border-[var(--border-subtle)] lg:border-l lg:border-t-0 [scrollbar-gutter:stable]">
+          <div className="min-w-0 px-3 py-3 lg:pl-5">
+            <TraceResultInspector
+              result={results.results[selection.resultIndex ?? -1] ?? null}
+              rank={selection.resultIndex === null ? null : selection.resultIndex + 1}
+              mode={mode}
+              providerId={providerId}
+              providerLabel={providerLabel}
+              results={results.results}
+            />
+          </div>
+        </div>
       }
     />
   )
 }
 
-/**
- * The trajectory as two full-width rows instead of two columns: the waterfall
- * keeps the whole axis to itself, and the selected payload reads below it with
- * the whole width for its JSON. The waterfall row is capped at half the pane so
- * it can never crowd the payload out, the payload row takes what is left, and
- * each row scrolls on its own — the geometry the browser network panel uses.
- */
-function trajectoryView(options: SelectionPaneOptions) {
-  const { trace, selection, onSelectSpan } = options
-  // Only the visible user-level stages can be selected, so a hidden transport
-  // or function span never gets a detail panel.
-  const stages = selectUserTraceStages(trace.stages)
-  const stage = selectedStage(stages, selection.spanId)
+function traceView({ trace, selection, onSelectSpan }: SelectionPaneOptions) {
+  const stage = selectedStage(trace.stages, selection.spanId)
   return (
-    <div className="grid min-h-0 min-w-0 flex-1 grid-rows-[minmax(9rem,50%)_minmax(11rem,1fr)] gap-4">
-      <section role="region" aria-label="Trace trajectory" className="min-h-0 min-w-0 overflow-hidden">
-        <TraceTrajectory
-          stages={stages}
-          totalMs={trace.totalMs}
-          selectedSpanId={selection.spanId}
-          onSelect={onSelectSpan}
-        />
-      </section>
-      <section
-        role="region"
-        aria-label={stage === null ? "Span payload" : `${traceTrajectoryLabel(stage)} payload`}
-        className="min-h-0 min-w-0 overflow-y-auto overscroll-contain rounded-md border border-[var(--border-subtle)] bg-[var(--surface)] p-3"
-      >
-        <TraceSpanInspector key={stage?.spanId ?? "none"} stage={stage} traceId={trace.traceId} />
-      </section>
-    </div>
+    <InspectorSplitPane
+      primaryLabel="Trace timeline"
+      detailLabel={stage === null ? "Span details" : `${traceTrajectoryLabel(stage)} details`}
+      className="grid h-full min-h-0 min-w-0 grid-rows-[minmax(0,1fr)_minmax(0,1fr)] items-stretch gap-0 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] lg:grid-rows-1 lg:gap-3"
+      primary={
+        <section className="h-full min-h-0 min-w-0 overflow-hidden border-b border-[var(--border-subtle)] pb-2 lg:border-b-0 lg:border-r lg:pb-0 lg:pr-3">
+          <TraceTrajectory
+            stages={trace.stages}
+            totalMs={trace.totalMs}
+            selectedSpanId={selection.spanId}
+            onSelect={onSelectSpan}
+          />
+        </section>
+      }
+      detail={
+        <section className="h-full min-h-0 min-w-0 overflow-y-auto overscroll-contain [scrollbar-gutter:stable]">
+          <div className="min-w-0 px-3 py-3">
+            <TraceSpanInspector
+              key={stage?.spanId ?? "none"}
+              stage={stage}
+              trace={trace}
+              traceId={trace.traceId}
+            />
+          </div>
+        </section>
+      }
+    />
   )
 }
 
-/**
- * The detail workspace: recorded results and the recorded trajectory in one
- * switchable shell. Results keep the payload of the current selection at their
- * side; the trajectory stacks it in a second full-width row below the
- * waterfall. Selection is ephemeral and belongs here — a new trace or provider
- * scope starts with nothing selected (PLAN §5).
- */
-export function TraceInspectionWorkspace({
-  trace,
-  output,
-  attempt,
-  mode,
-}: TraceInspectionWorkspaceProps) {
+/** Results beside one unified trace timeline and selected-span inspector. */
+export function TraceInspectionWorkspace({ trace, output, attempt, mode }: TraceInspectionWorkspaceProps) {
   const [identity, setIdentity] = useState(() => identityOf(trace, attempt))
-  const [selection, setSelection] = useState<Selection>(NO_SELECTION)
+  const [selection, setSelection] = useState(() => initialSelection(trace, output))
   const current = identityOf(trace, attempt)
   if (identity !== current) {
-    // Adjusting state during render for a changed subject: the previous
-    // selection described another trace or provider, so it must not carry over.
     setIdentity(current)
-    setSelection(NO_SELECTION)
+    setSelection(initialSelection(trace, output))
   }
 
   const providerLabel = attempt?.providerLabel ?? trace.providerLabel
+  const providerId = scopedProviderId(trace, attempt)
   const options: SelectionPaneOptions = {
     trace,
     output,
     attempt,
     mode,
     providerLabel,
-    providerId: scopedProviderId(trace, attempt),
+    providerId,
     selection,
-    onSelectResult: (resultIndex) =>
-      setSelection((prev) => ({
-        ...prev,
-        resultIndex: prev.resultIndex === resultIndex ? null : resultIndex,
-      })),
-    onSelectSpan: (spanId) =>
-      setSelection((prev) => ({ ...prev, spanId: prev.spanId === spanId ? null : spanId })),
+    onSelectResult: (resultIndex) => setSelection((previous) => ({ ...previous, resultIndex })),
+    onSelectSpan: (spanId) => setSelection((previous) => ({ ...previous, spanId })),
   }
 
   return (
-    // The stacked trajectory takes the height the dialog has left and shares it
-    // between the two rows. Every level of that chain needs `min-h-0`: without
-    // it the content-based minimum wins over the free space and the panes are
-    // laid out at full content height again. The rows carry their own minimums,
-    // so a short viewport scrolls the body instead of crushing a row. Results
-    // stay content-sized.
-    <div
-      className={
-        selection.view === "trajectory"
-          ? "flex min-h-0 min-w-0 flex-1 flex-col gap-3"
-          : "min-w-0 space-y-3"
-      }
-    >
-      <div className="flex min-w-0 shrink-0 flex-wrap items-center justify-between gap-3">
-        <p className="min-w-0 text-[12px] text-[var(--muted)]">{scopeText(output, attempt)}</p>
-        {viewSwitcher(selection.view, (view) => setSelection((prev) => ({ ...prev, view })))}
+    <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col gap-2">
+      <div className="flex min-w-0 shrink-0 flex-wrap items-center justify-between gap-2 border-b border-[var(--border-subtle)] pb-2">
+        <p className="min-w-0 text-[11px] text-[var(--muted)]">
+          {scopeText(selection.view, output, attempt)}
+        </p>
+        {viewSwitcher(selection.view, (view) => setSelection((previous) => ({ ...previous, view })))}
       </div>
-      {selection.view === "results" ? resultsView(options) : trajectoryView(options)}
+      <div className="min-h-0 min-w-0 flex-1">
+        {selection.view === "results" && resultsView(options)}
+        {selection.view === "trace" && traceView(options)}
+      </div>
     </div>
   )
 }
