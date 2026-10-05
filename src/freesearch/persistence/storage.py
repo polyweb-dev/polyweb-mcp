@@ -10,7 +10,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, Self, cast, overload
 
-from sqlalchemy import URL, Index, Integer, Text, insert, select
+from sqlalchemy import URL, Index, Integer, Text, event, insert, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Row
 from sqlalchemy.ext.asyncio import (
@@ -420,6 +420,29 @@ def _sum_usage_rows(rows: Sequence[Row[Any]]) -> list[UsageTotal | LegacyUsageTo
     return cast(list[UsageTotal | LegacyUsageTotal], [*known_totals, *legacy_totals])
 
 
+_CONFIGURED_ENGINES_TAG = "_freesearch_sqlite_configured"
+
+
+def configure_sqlite_engine(engine: AsyncEngine) -> None:
+    """Attach connection hooks to configure SQLite WAL and performance PRAGMAs."""
+
+    sync_engine = engine.sync_engine
+    if getattr(sync_engine, _CONFIGURED_ENGINES_TAG, False):
+        return
+    setattr(sync_engine, _CONFIGURED_ENGINES_TAG, True)
+
+    @event.listens_for(sync_engine, "connect")
+    def _set_sqlite_pragmas(dbapi_connection: Any, connection_record: Any) -> None:
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA journal_mode = WAL;")
+        cursor.execute("PRAGMA synchronous = NORMAL;")
+        cursor.execute("PRAGMA busy_timeout = 30000;")
+        cursor.execute("PRAGMA cache_size = -64000;")
+        cursor.execute("PRAGMA mmap_size = 268435456;")
+        cursor.execute("PRAGMA temp_store = MEMORY;")
+        cursor.close()
+
+
 class SQLiteRepository:
     """Persist shared operational models without provider-specific dependencies."""
 
@@ -437,6 +460,8 @@ class SQLiteRepository:
         session_factory: async_sessionmaker[AsyncSession] | None = None,
     ) -> None:
         """Wrap an engine; the session factory defaults to one bound to it."""
+
+        configure_sqlite_engine(engine)
         self._engine = engine
         self._session_factory = session_factory or async_sessionmaker(
             engine, expire_on_commit=False

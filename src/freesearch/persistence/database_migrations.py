@@ -7,7 +7,7 @@ import threading
 import time
 import uuid
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -299,6 +299,15 @@ def _backup(database: Path) -> Path:
     return backup
 
 
+def _apply_wal_mode(database: Path) -> None:
+    """Ensure WAL mode and performance settings are applied to the SQLite file."""
+    if database.is_file():
+        with closing(sqlite3.connect(database, timeout=_SQLITE_TIMEOUT_SECONDS)) as connection:
+            connection.execute("PRAGMA journal_mode = WAL")
+            connection.execute("PRAGMA synchronous = NORMAL")
+            connection.execute("PRAGMA busy_timeout = 30000")
+
+
 def upgrade_database(database: str | Path) -> MigrationResult:
     """Adopt or upgrade one SQLite database, preserving data and making a backup."""
 
@@ -308,6 +317,7 @@ def upgrade_database(database: str | Path) -> MigrationResult:
         previous_revision, tables = _inspect(path)
         head = migration_head()
         if previous_revision == head:
+            _apply_wal_mode(path)
             validate_database_schema(path)
             return MigrationResult(path, previous_revision, head, None, False)
         if previous_revision is None:
@@ -322,6 +332,7 @@ def upgrade_database(database: str | Path) -> MigrationResult:
 
         try:
             command.upgrade(_config(path), head)
+            _apply_wal_mode(path)
             validate_database_schema(path)
         except BaseException as error:
             raise DatabaseMigrationError(f"failed to migrate {path}: {error}") from error
