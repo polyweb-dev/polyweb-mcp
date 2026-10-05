@@ -31,6 +31,18 @@ from freesearch.models.contracts import (
     UsageOperation,
     UsageStatus,
 )
+from freesearch.models.observability import (
+    TraceDetail,
+    TraceEventDetail,
+    TraceOperation,
+    TraceOutcome,
+    TraceSpanDetail,
+    TraceSpanKind,
+    TraceSummary,
+    display_stage,
+    parse_trace_output,
+    trace_error,
+)
 from freesearch.persistence.database_migrations import (
     absolute_database_path,
     upgrade_database,
@@ -189,6 +201,40 @@ class ProviderHealthRow(Base):
     message: Mapped[str | None] = mapped_column(Text)
 
 
+class TraceSpanRow(Base):
+    """Row model for persisted OpenTelemetry spans (one row per span).
+
+    Root rows (``parent_span_id IS NULL``) double as the Activity summary, so
+    the list query can read only the explicit summary columns and never touch
+    the raw ``attributes_json``/``events_json``/``output_json`` payloads. Rows
+    are written by :class:`freesearch.persistence.otel_exporter.SQLiteSpanExporter`.
+    """
+
+    __tablename__ = "trace_spans"
+    __table_args__ = (Index("trace_spans_trace_started_at", "trace_id", "started_at"),)
+
+    span_id: Mapped[str] = mapped_column(Text, primary_key=True, nullable=True)
+    trace_id: Mapped[str] = mapped_column(Text)
+    parent_span_id: Mapped[str | None] = mapped_column(Text)
+    name: Mapped[str] = mapped_column(Text)
+    kind: Mapped[str] = mapped_column(Text)
+    started_at: Mapped[str] = mapped_column(Text)
+    ended_at: Mapped[str] = mapped_column(Text)
+    duration_ms: Mapped[int] = mapped_column(Integer)
+    status_code: Mapped[str] = mapped_column(Text)
+    status_message: Mapped[str | None] = mapped_column(Text)
+    outcome: Mapped[str] = mapped_column(Text)
+    error_type: Mapped[str | None] = mapped_column(Text)
+    operation: Mapped[str | None] = mapped_column(Text)
+    provider: Mapped[str | None] = mapped_column(Text)
+    input_text: Mapped[str | None] = mapped_column(Text)
+    output_json: Mapped[str | None] = mapped_column(Text)
+    result_count: Mapped[int | None] = mapped_column(Integer)
+    attributes_json: Mapped[str] = mapped_column(Text)
+    events_json: Mapped[str] = mapped_column(Text)
+    resource_json: Mapped[str] = mapped_column(Text)
+
+
 @dataclass(frozen=True)
 class UsageTotal:
     """Usage units aggregated for one provider, operation, and unit kind."""
@@ -233,6 +279,100 @@ def _decode_metadata(value: object) -> object:
             return parsed if parsed.is_finite() else value
         return {key: _decode_metadata(item) for key, item in value.items()}
     return value
+
+
+_SUMMARY_COLUMNS = (
+    TraceSpanRow.trace_id,
+    TraceSpanRow.operation,
+    TraceSpanRow.started_at,
+    TraceSpanRow.duration_ms,
+    TraceSpanRow.provider,
+    TraceSpanRow.outcome,
+    TraceSpanRow.result_count,
+    TraceSpanRow.status_message,
+    TraceSpanRow.error_type,
+)
+
+MIN_TRACE_LIMIT = 1
+MAX_TRACE_LIMIT = 100
+
+
+def _trace_operation(raw: str | None) -> TraceOperation | None:
+    """Parse a stored operation, tolerating rows written by another reader."""
+
+    try:
+        return TraceOperation(raw) if raw else None
+    except ValueError:
+        return None
+
+
+def _trace_outcome(raw: str) -> TraceOutcome:
+    """Parse a stored outcome; an unknown value is surfaced as a failure."""
+
+    try:
+        return TraceOutcome(raw)
+    except ValueError:
+        return TraceOutcome.ERROR
+
+
+def _trace_summary(row: Any) -> TraceSummary:
+    """Project a root row's summary columns into the list/detail summary.
+
+    Accepts either the column projection returned by ``list_trace_summaries``
+    or a whole :class:`TraceSpanRow`, so the list read can stay column-only.
+    """
+
+    return TraceSummary(
+        trace_id=str(row.trace_id),
+        operation=_trace_operation(row.operation),
+        started_at=datetime.fromisoformat(str(row.started_at)),
+        duration_ms=int(row.duration_ms),
+        provider=row.provider,
+        outcome=_trace_outcome(str(row.outcome)),
+        result_count=row.result_count,
+        error=trace_error(row.status_message, row.error_type),
+    )
+
+
+def _trace_span_detail(row: TraceSpanRow) -> TraceSpanDetail:
+    """Project one stored span row into the Activity timeline entry."""
+
+    try:
+        kind = TraceSpanKind(row.kind)
+    except ValueError:
+        kind = TraceSpanKind.INTERNAL
+    return TraceSpanDetail(
+        span_id=row.span_id,
+        parent_span_id=row.parent_span_id,
+        name=row.name,
+        stage=display_stage(row.name),
+        provider=row.provider,
+        kind=kind,
+        started_at=datetime.fromisoformat(row.started_at),
+        ended_at=datetime.fromisoformat(row.ended_at),
+        duration_ms=row.duration_ms,
+        outcome=_trace_outcome(row.outcome),
+        error=trace_error(row.status_message, row.error_type),
+        events=_trace_events(row.events_json),
+    )
+
+
+def _trace_events(events_json: str) -> list[TraceEventDetail]:
+    """Decode stored span events, ignoring rows a newer schema wrote."""
+
+    try:
+        raw = json.loads(events_json)
+    except ValueError:
+        return []
+    if not isinstance(raw, list):
+        return []
+    events: list[TraceEventDetail] = []
+    for item in raw:
+        try:
+            events.append(TraceEventDetail.model_validate(item))
+        except ValueError:
+            continue
+    return events
 
 
 def _known_total_sort_key(total: UsageTotal) -> tuple[str, str, str]:
@@ -331,6 +471,69 @@ class SQLiteRepository:
         """Dispose the engine, releasing pooled connections; safe to call repeatedly."""
 
         await self._engine.dispose()
+
+    @property
+    def database_path(self) -> Path:
+        """Return the file this repository is bound to (trace-exporter seam)."""
+
+        database = self._engine.url.database
+        if database is None:
+            raise ValueError("SQLiteRepository requires a file-backed database")
+        return Path(database)
+
+    async def list_trace_summaries(
+        self,
+        *,
+        limit: int = 50,
+        operation: TraceOperation | None = None,
+        outcome: TraceOutcome | None = None,
+    ) -> list[TraceSummary]:
+        """Return root traces newest first, reading summary columns only.
+
+        The projection deliberately excludes ``input_text``, ``output_json``,
+        and the raw attributes/events so the Activity list stays fast and never
+        carries request content.
+        """
+
+        statement = (
+            select(*_SUMMARY_COLUMNS)
+            .where(TraceSpanRow.parent_span_id.is_(None))
+            .order_by(TraceSpanRow.started_at.desc(), TraceSpanRow.span_id.desc())
+            .limit(min(max(limit, MIN_TRACE_LIMIT), MAX_TRACE_LIMIT))
+        )
+        if operation is not None:
+            statement = statement.where(TraceSpanRow.operation == operation.value)
+        if outcome is not None:
+            statement = statement.where(TraceSpanRow.outcome == outcome.value)
+        async with self._session_factory() as session:
+            rows = (await session.execute(statement)).all()
+        return [_trace_summary(row) for row in rows]
+
+    async def get_trace(self, trace_id: str) -> TraceDetail | None:
+        """Return one trace's summary, full content, and ordered spans.
+
+        Spans are ordered by ``(started_at, span_id)`` so the timeline is
+        stable even when fanout children ran concurrently. ``None`` means no
+        root span is stored for ``trace_id``.
+        """
+
+        statement = (
+            select(TraceSpanRow)
+            .where(TraceSpanRow.trace_id == trace_id)
+            .order_by(TraceSpanRow.started_at, TraceSpanRow.span_id)
+        )
+        async with self._session_factory() as session:
+            rows = (await session.scalars(statement)).all()
+        root = next((row for row in rows if row.parent_span_id is None), None)
+        if root is None:
+            return None
+        summary = _trace_summary(root)
+        return TraceDetail(
+            **summary.model_dump(),
+            input=root.input_text,
+            output=parse_trace_output(root.output_json),
+            spans=[_trace_span_detail(row) for row in rows],
+        )
 
     async def record_usage(self, event: UsageEvent) -> None:
         """Append a provider usage event."""

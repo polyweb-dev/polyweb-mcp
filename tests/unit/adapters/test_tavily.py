@@ -18,14 +18,17 @@ rather than key fallback, unknown remaining for a null key limit,
 malformed/status normalization with redaction and suppression,
 single-runner-entry semantics, and ``Retry-After``-driven 429 cooldown
 through the shared runner's raw response path), and adapter construction
-safety (caller HTTP client never mutated, missing resolver credential
-safe). One
-end-to-end test drives the real installed ``AsyncTavilyClient`` over the
+safety (caller HTTP client never mutated, missing API-key credential safe).
+One end-to-end test drives the real installed ``AsyncTavilyClient`` over the
 adapter's borrowed transport on a shared ``httpx.MockTransport`` to verify
-the wire contract (Tavily URL, resolver Authorization, no caller auth
+the wire contract (Tavily URL, injected-key Authorization, no caller auth
 header leak, timeout extension, phase policy preservation, and close
 semantics). Fakes follow the conventions in ``tests/test_resilience.py``:
 plain injected objects, no sleeping, no HTTP.
+
+The key seam is explicit constructor injection (``api_key=SecretStr(...)``);
+the retired global ``get_provider_secret_resolver`` seam is no longer
+referenced.
 """
 
 import asyncio
@@ -52,7 +55,6 @@ import freesearch.adapters.tavily as tavily_module
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.adapters.tavily import TavilyAdapter
 from freesearch.infrastructure.resilience import ProviderOperationError, ResilientRunner
-from freesearch.infrastructure.secrets import ProviderName
 from freesearch.models.contracts import FetchRequest, QuotaSource, SearchRequest, UsageOperation
 
 
@@ -130,34 +132,11 @@ class _RecordingRunner:
         return await operation()
 
 
-class _NoKeyResolver:
-    """Fake provider secret resolver that always resolves to no credential."""
-
-    def __init__(self) -> None:
-        self.requested: list[ProviderName] = []
-
-    def get(self, provider: ProviderName) -> None:
-        self.requested.append(provider)
-        return None
-
-
-class _KeyResolver:
-    """Fake provider secret resolver returning a fixed ``SecretStr``."""
-
-    def __init__(self, secret: str) -> None:
-        self._secret = SecretStr(secret)
-        self.requested: list[ProviderName] = []
-
-    def get(self, provider: ProviderName) -> SecretStr:
-        self.requested.append(provider)
-        return self._secret
-
-
 def make_adapter(*, sdk: _FakeSDK | None = None, runner=None) -> TavilyAdapter:
     """Build an adapter with no network: fake client, runner, and SDK seams.
 
-    A ``_FakeSDK`` is injected by default so the real resolver-backed
-    ``_build_sdk`` (and its owned HTTPX client) is never reached.
+    A ``_FakeSDK`` is injected by default so the real ``_build_sdk`` (and its
+    owned HTTPX client) is never reached.
     """
     return TavilyAdapter(_FakeClient(), runner=runner, sdk_client=sdk or _FakeSDK())
 
@@ -239,19 +218,23 @@ def test_init_wraps_caller_client_in_shared_runner_with_seams() -> None:
 
 
 async def test_init_missing_resolver_credential_fails_closed(monkeypatch) -> None:
+    """A missing key fails closed at construction (explicit ``api_key=None``).
+
+    Substitution note: this test previously asserted the retired global
+    ``get_provider_secret_resolver`` seam was asked for exactly the Tavily
+    credential (``resolver.requested == [ProviderName.TAVILY]``). The surviving
+    guarantee is asserted instead: fail-closed non-retryable
+    ``configuration_error`` with the caller client left untouched.
+    """
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
     monkeypatch.delenv("TAVILY_PROJECT", raising=False)
     monkeypatch.delenv("TAVILY_ORG_ID", raising=False)
-    resolver = _NoKeyResolver()
-    monkeypatch.setattr(tavily_module, "get_provider_secret_resolver", lambda: resolver)
 
     client = httpx.AsyncClient()
     try:
         with pytest.raises(ProviderOperationError) as excinfo:
-            TavilyAdapter(client)
+            TavilyAdapter(client, api_key=None)
 
-        # The resolver must be asked for exactly the Tavily credential.
-        assert resolver.requested == [ProviderName.TAVILY]
         assert excinfo.value.error.code == "configuration_error"
         assert excinfo.value.error.retryable is False
         assert "no Tavily API key configured" in excinfo.value.error.message
@@ -262,18 +245,23 @@ async def test_init_missing_resolver_credential_fails_closed(monkeypatch) -> Non
 
 
 async def test_init_missing_credential_never_falls_back_to_ambient_key(monkeypatch) -> None:
+    """No ambient ``TAVILY_API_KEY`` fallback.
+
+    Substitution note: the retired resolver's ``requested`` bookkeeping is gone;
+    the surviving guarantee is fail-closed construction that leaks neither the
+    ambient key into the error nor into the caller's client.
+    """
     monkeypatch.setenv("TAVILY_API_KEY", "ambient-sk-leak")
-    resolver = _NoKeyResolver()
-    monkeypatch.setattr(tavily_module, "get_provider_secret_resolver", lambda: resolver)
 
     client = httpx.AsyncClient()
     try:
         with pytest.raises(ProviderOperationError) as excinfo:
-            TavilyAdapter(client)
-        assert resolver.requested == [ProviderName.TAVILY]
+            TavilyAdapter(client, api_key=None)
         assert excinfo.value.error.code == "configuration_error"
         assert "ambient-sk-leak" not in str(excinfo.value)
         assert "ambient-sk-leak" not in str(client.headers)
+        # The ambient key is never adopted into the caller's client.
+        assert "Authorization" not in client.headers
     finally:
         await client.aclose()
 
@@ -282,8 +270,6 @@ async def test_init_scopes_credential_to_adapter_owned_client(monkeypatch) -> No
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
     monkeypatch.delenv("TAVILY_PROJECT", raising=False)
     monkeypatch.delenv("TAVILY_ORG_ID", raising=False)
-    resolver = _KeyResolver("sk-super-secret-abc")
-    monkeypatch.setattr(tavily_module, "get_provider_secret_resolver", lambda: resolver)
 
     # Spy the official SDK constructor to capture the exact client it is
     # built on; the real instance is still constructed.
@@ -299,15 +285,13 @@ async def test_init_scopes_credential_to_adapter_owned_client(monkeypatch) -> No
     client = httpx.AsyncClient()
     adapter: TavilyAdapter | None = None
     try:
-        adapter = TavilyAdapter(client)
+        adapter = TavilyAdapter(client, api_key=SecretStr("sk-super-secret-abc"))
     finally:
         await client.aclose()
         if adapter is not None:
             await adapter.aclose()
 
     assert adapter is not None
-    # The resolver must be asked for exactly the Tavily credential.
-    assert resolver.requested == [ProviderName.TAVILY]
     assert adapter._owned_http is not None
     assert adapter._owned_http is not client
     assert adapter._owned_http.headers["Authorization"] == "Bearer sk-super-secret-abc"
@@ -325,21 +309,18 @@ async def test_init_does_not_mutate_caller_http_client(monkeypatch) -> None:
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
     monkeypatch.delenv("TAVILY_PROJECT", raising=False)
     monkeypatch.delenv("TAVILY_ORG_ID", raising=False)
-    resolver = _KeyResolver("sk-super-secret-abc")
-    monkeypatch.setattr(tavily_module, "get_provider_secret_resolver", lambda: resolver)
 
     client = httpx.AsyncClient()
     headers_before = dict(client.headers)
     base_url_before = str(client.base_url)
     adapter: TavilyAdapter | None = None
     try:
-        adapter = TavilyAdapter(client)
+        adapter = TavilyAdapter(client, api_key=SecretStr("sk-super-secret-abc"))
     finally:
         await client.aclose()
         if adapter is not None:
             await adapter.aclose()
 
-    assert resolver.requested == [ProviderName.TAVILY]
     assert dict(client.headers) == headers_before
     assert str(client.base_url) == base_url_before
 
@@ -348,8 +329,6 @@ async def test_caller_auth_headers_never_leak_into_scoped_sdk_client(monkeypatch
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
     monkeypatch.delenv("TAVILY_PROJECT", raising=False)
     monkeypatch.delenv("TAVILY_ORG_ID", raising=False)
-    resolver = _KeyResolver("sk-tavily-cred-99")
-    monkeypatch.setattr(tavily_module, "get_provider_secret_resolver", lambda: resolver)
 
     client = httpx.AsyncClient(
         headers={
@@ -359,17 +338,16 @@ async def test_caller_auth_headers_never_leak_into_scoped_sdk_client(monkeypatch
     )
     adapter: TavilyAdapter | None = None
     try:
-        adapter = TavilyAdapter(client)
+        adapter = TavilyAdapter(client, api_key=SecretStr("sk-tavily-cred-99"))
     finally:
         await client.aclose()
         if adapter is not None:
             await adapter.aclose()
 
     assert adapter is not None
-    assert resolver.requested == [ProviderName.TAVILY]
     assert adapter._owned_http is not None
     owned = adapter._owned_http.headers
-    # The resolver's Tavily credential is the only auth header on the scoped
+    # The injected Tavily credential is the only auth header on the scoped
     # SDK client; caller auth headers never leak into it.
     assert owned.get("Authorization") == "Bearer sk-tavily-cred-99"
     assert "caller-token-1" not in owned.values()
@@ -381,15 +359,12 @@ async def test_aclose_closes_owned_client_and_leaves_shared_client_open(monkeypa
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
     monkeypatch.delenv("TAVILY_PROJECT", raising=False)
     monkeypatch.delenv("TAVILY_ORG_ID", raising=False)
-    resolver = _KeyResolver("sk-super-secret-abc")
-    monkeypatch.setattr(tavily_module, "get_provider_secret_resolver", lambda: resolver)
 
     client = httpx.AsyncClient()
     try:
-        adapter = TavilyAdapter(client)
+        adapter = TavilyAdapter(client, api_key=SecretStr("sk-super-secret-abc"))
         await adapter.aclose()
 
-        assert resolver.requested == [ProviderName.TAVILY]
         assert adapter._owned_http is not None
         assert adapter._owned_http.is_closed is True
         assert client.is_closed is False
@@ -407,17 +382,15 @@ async def test_real_sdk_routes_borrowed_transport_end_to_end(monkeypatch) -> Non
     adapter-owned client whose transport borrows the shared caller client's
     pools, and points the caller at a shared ``httpx.MockTransport``. No
     network and no real key: the wire recorder asserts the Tavily URL, the
-    resolver's Authorization header, that caller auth headers never leak
-    onto the wire, that the actual per-request timeout extension carries the
-    caller's read phase (never the SDK's 60s default) while the caller's
+    injected credential's Authorization header, that caller auth headers never
+    leak onto the wire, that the actual per-request timeout extension carries
+    the caller's read phase (never the SDK's 60s default) while the caller's
     full phase policy object stays intact, and that adapter close leaves the
     shared client open.
     """
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
     monkeypatch.delenv("TAVILY_PROJECT", raising=False)
     monkeypatch.delenv("TAVILY_ORG_ID", raising=False)
-    resolver = _KeyResolver("sk-e2e-secret-77")
-    monkeypatch.setattr(tavily_module, "get_provider_secret_resolver", lambda: resolver)
 
     recorder = _WireRecorder()
     caller = httpx.AsyncClient(
@@ -427,7 +400,7 @@ async def test_real_sdk_routes_borrowed_transport_end_to_end(monkeypatch) -> Non
     )
     adapter: TavilyAdapter | None = None
     try:
-        adapter = TavilyAdapter(caller)
+        adapter = TavilyAdapter(caller, api_key=SecretStr("sk-e2e-secret-77"))
         search_response = await adapter.search(SearchRequest(query="e2e"))
         await adapter.fetch(FetchRequest(url="https://example.com/doc"))
         # Adapter close closes only the SDK-owned client, never the shared one.
@@ -440,7 +413,6 @@ async def test_real_sdk_routes_borrowed_transport_end_to_end(monkeypatch) -> Non
             await adapter.aclose()
         await caller.aclose()
 
-    assert resolver.requested == [ProviderName.TAVILY]
     assert search_response.query == "e2e"
     assert adapter is not None
     assert adapter._owned_http is not None
@@ -451,7 +423,7 @@ async def test_real_sdk_routes_borrowed_transport_end_to_end(monkeypatch) -> Non
         "https://api.tavily.com/extract",
     ]
     for request in recorder.requests:
-        # The resolver credential is the only auth on the wire.
+        # The injected credential is the only auth on the wire.
         assert request.headers["authorization"] == "Bearer sk-e2e-secret-77"
         assert "caller-token-1" not in request.headers.values()
         assert "caller-xkey-2" not in request.headers.values()
@@ -1220,7 +1192,7 @@ class _CountingRunner:
 
 class _FakeOwnedHTTP:
     """Recording stand-in for the adapter-owned scoped client that carries
-    the resolver credential, used by ``_quota_request``.
+    the injected credential, used by ``_quota_request``.
     """
 
     def __init__(self, response: httpx.Response) -> None:
@@ -1257,10 +1229,10 @@ def test_capabilities_quota_enabled() -> None:
 async def test_quota_real_path_crosses_shared_runner_and_scoped_transport(monkeypatch) -> None:
     """Stage-3 quota over the real construction path.
 
-    Resolver, real installed SDK, adapter-owned scoped client, borrowed
-    transport, and the shared runner: the GET
+    Injected credential, real installed SDK, adapter-owned scoped client,
+    borrowed transport, and the shared runner: the GET
     ``https://api.tavily.com/usage`` must cross the shared resilience runner
-    exactly once, carry only the resolver's credential on the wire (never the
+    exactly once, carry only the injected credential on the wire (never the
     caller's ``Authorization``/``X-API-Key``), and map the account plan
     figures into an authoritative snapshot; closing the adapter must leave
     the caller's shared client open.
@@ -1268,8 +1240,6 @@ async def test_quota_real_path_crosses_shared_runner_and_scoped_transport(monkey
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
     monkeypatch.delenv("TAVILY_PROJECT", raising=False)
     monkeypatch.delenv("TAVILY_ORG_ID", raising=False)
-    resolver = _KeyResolver("sk-quota-e2e-55")
-    monkeypatch.setattr(tavily_module, "get_provider_secret_resolver", lambda: resolver)
 
     recorder = _UsageWireRecorder()
     caller = httpx.AsyncClient(
@@ -1279,7 +1249,7 @@ async def test_quota_real_path_crosses_shared_runner_and_scoped_transport(monkey
     runner = _CountingRunner(ResilientRunner(caller))
     adapter: TavilyAdapter | None = None
     try:
-        adapter = TavilyAdapter(caller, runner=runner)
+        adapter = TavilyAdapter(caller, runner=runner, api_key=SecretStr("sk-quota-e2e-55"))
         snapshot = await adapter.quota()
         await adapter.aclose()
         assert adapter._owned_http is not None
@@ -1290,11 +1260,10 @@ async def test_quota_real_path_crosses_shared_runner_and_scoped_transport(monkey
             await adapter.aclose()
         await caller.aclose()
 
-    assert resolver.requested == [ProviderName.TAVILY]
     assert runner.entries == ["tavily"]  # one runner entry per public call
     assert [str(request.url) for request in recorder.requests] == ["https://api.tavily.com/usage"]
     request = recorder.requests[0]
-    # The resolver credential is the only auth on the wire.
+    # The injected credential is the only auth on the wire.
     assert request.headers["authorization"] == "Bearer sk-quota-e2e-55"
     assert "caller-token-1" not in request.headers.values()
     assert "caller-xkey-2" not in request.headers.values()
@@ -1498,8 +1467,6 @@ async def test_quota_malformed_json_body_is_redacted_invalid_response(monkeypatc
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
     monkeypatch.delenv("TAVILY_PROJECT", raising=False)
     monkeypatch.delenv("TAVILY_ORG_ID", raising=False)
-    resolver = _KeyResolver("sk-quota-bad-json-66")
-    monkeypatch.setattr(tavily_module, "get_provider_secret_resolver", lambda: resolver)
 
     recorder = _UsageWireRecorder(
         responses=[httpx.Response(200, content=b'{"api_key": "super-secret", broken')]
@@ -1507,7 +1474,7 @@ async def test_quota_malformed_json_body_is_redacted_invalid_response(monkeypatc
     caller = httpx.AsyncClient(transport=httpx.MockTransport(recorder))
     adapter: TavilyAdapter | None = None
     try:
-        adapter = TavilyAdapter(caller)
+        adapter = TavilyAdapter(caller, api_key=SecretStr("sk-quota-bad-json-66"))
         with pytest.raises(ProviderOperationError) as excinfo:
             await adapter.quota()
     finally:
@@ -1595,16 +1562,15 @@ async def test_quota_mock_429_retry_after_reaches_runner_raw_path() -> None:
 
 
 async def test_quota_real_path_429_retry_after_records_cooldown(monkeypatch) -> None:
-    """The real construction path (resolver, scoped client, borrowed
-    transport, shared runner) must also let a ``Retry-After`` 429 reach the
-    runner's raw path: the runner sleeps the ``Retry-After`` delay (not the
-    backoff), records the cooldown, and retries to a successful snapshot.
+    """The real construction path (injected credential, scoped client,
+    borrowed transport, shared runner) must also let a ``Retry-After`` 429
+    reach the runner's raw path: the runner sleeps the ``Retry-After`` delay
+    (not the backoff), records the cooldown, and retries to a successful
+    snapshot.
     """
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
     monkeypatch.delenv("TAVILY_PROJECT", raising=False)
     monkeypatch.delenv("TAVILY_ORG_ID", raising=False)
-    resolver = _KeyResolver("sk-quota-429-77")
-    monkeypatch.setattr(tavily_module, "get_provider_secret_resolver", lambda: resolver)
 
     recorder = _UsageWireRecorder(
         responses=[
@@ -1627,7 +1593,7 @@ async def test_quota_real_path_429_retry_after_records_cooldown(monkeypatch) -> 
     )
     adapter: TavilyAdapter | None = None
     try:
-        adapter = TavilyAdapter(caller, runner=runner)
+        adapter = TavilyAdapter(caller, runner=runner, api_key=SecretStr("sk-quota-429-77"))
         snapshot = await adapter.quota()
     finally:
         if adapter is not None:

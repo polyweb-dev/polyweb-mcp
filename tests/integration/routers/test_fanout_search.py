@@ -5,6 +5,7 @@ provider keys or HTTP calls are needed. A real SQLite repository proves
 telemetry is recorded for every participating provider.
 """
 
+import re
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -360,3 +361,103 @@ async def test_fanout_search_returns_waterfall_and_records_activity_telemetry(
     assert len(aggregated_events) == 1
     assert aggregated_events[0].status.value == "success"
     assert aggregated_events[0].operation.value == "search"
+
+
+# ---------------------------------------------------------------------------
+# OpenTelemetry tracing (feature/open-telemetry, Tester-owned).
+# ---------------------------------------------------------------------------
+
+
+def _trace_id_of(response: object) -> str:
+    header = response.headers["x-trace-id"]  # type: ignore[union-attr]
+    assert re.fullmatch(r"[0-9a-f]{32}", header) is not None
+    return header
+
+
+async def test_fanout_trace_has_sibling_providers_and_partial_outcome(
+    repository: SQLiteRepository,
+) -> None:
+    failing = FakeSearchAdapter("flaky_provider", fail=True)
+    working = FakeSearchAdapter(
+        "reliable_provider",
+        [
+            SearchResult(
+                title="Reliable Hit",
+                url=AnyHttpUrl("https://example.com/reliable"),
+                snippet="Reliable content",
+            )
+        ],
+    )
+    app = create_app([failing, working], repository=repository)
+
+    with TestClient(app) as client:
+        response = client.post("/search", json={"query": "partial query", "fanout": True})
+        assert response.status_code == 200
+        trace_id = _trace_id_of(response)
+        detail = client.get(f"/api/v1/traces/{trace_id}").json()
+
+    assert detail["outcome"] == "partial"
+    assert detail["input"] == "partial query"
+    assert detail["output"]["kind"] == "search_results"
+    assert len(detail["output"]["results"]) == 1
+    spans = detail["spans"]
+    roots = [span for span in spans if span["parent_span_id"] is None]
+    assert len(roots) == 1
+    assert roots[0]["name"] == "POST /search"
+    providers = [span for span in spans if span["name"] == "freesearch.provider"]
+    assert len(providers) == 2
+    results = [span for span in spans if span["name"] == "freesearch.results"]
+    assert len(results) == 1
+    failed = next(span for span in providers if span["error"] is not None)
+    assert failed["outcome"] == "error"
+    assert failed["error"]["type"] == "RuntimeError"
+    succeeded = next(span for span in providers if span["error"] is None)
+    assert succeeded["outcome"] == "success"
+
+
+async def test_fanout_success_trace_has_one_root_and_two_provider_children(
+    repository: SQLiteRepository,
+) -> None:
+    p1 = FakeSearchAdapter(
+        "p1",
+        [SearchResult(title="P1", url=AnyHttpUrl("https://example.com/1"), snippet="1")],
+    )
+    p2 = FakeSearchAdapter(
+        "p2",
+        [SearchResult(title="P2", url=AnyHttpUrl("https://example.com/2"), snippet="2")],
+    )
+    app = create_app([p1, p2], repository=repository)
+
+    with TestClient(app) as client:
+        response = client.post("/search", json={"query": "fanout query", "fanout": True})
+        assert response.status_code == 200
+        assert response.json()["provider"] == "aggregated"
+        trace_id = _trace_id_of(response)
+        detail = client.get(f"/api/v1/traces/{trace_id}").json()
+
+    assert detail["outcome"] == "success"
+    assert detail["result_count"] == 2
+    providers = [span for span in detail["spans"] if span["name"] == "freesearch.provider"]
+    assert len(providers) == 2
+    assert all(span["outcome"] == "success" for span in providers)
+
+
+async def test_fanout_all_fail_writes_error_trace_without_results(
+    repository: SQLiteRepository,
+) -> None:
+    first = FakeSearchAdapter("flaky-a", fail=True)
+    second = FakeSearchAdapter("flaky-b", fail=True)
+    app = create_app([first, second], repository=repository)
+
+    with TestClient(app) as client:
+        response = client.post("/search", json={"query": "doomed query", "fanout": True})
+        assert response.status_code == 500
+        trace_id = _trace_id_of(response)
+        detail = client.get(f"/api/v1/traces/{trace_id}").json()
+
+    assert detail["outcome"] == "error"
+    assert detail["output"] is None
+    assert detail["result_count"] is None
+    providers = [span for span in detail["spans"] if span["name"] == "freesearch.provider"]
+    assert len(providers) == 2
+    assert all(span["outcome"] == "error" for span in providers)

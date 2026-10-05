@@ -62,10 +62,18 @@ class _FakeClient:
 
 
 class _FakeAdapter:
-    """Stand-in for TavilyAdapter: has an ``aclose`` (Tavily-like lifecycle)."""
+    """Stand-in for TavilyAdapter: has an ``aclose`` (Tavily-like lifecycle).
 
-    def __init__(self, client: object) -> None:
+    ``_adapter_for`` builds the default adapter through the explicit constructor
+    seam (``api_key=``) that the real ``TavilyAdapter`` now takes, so the double
+    must accept the same keyword-only shape and ignore the key like the adapter
+    ignores a ``None`` harness key.
+    """
+
+    def __init__(self, client: object, *, api_key: object = None, runner: object = None) -> None:
         self.client = client
+        self.api_key = api_key
+        self.runner = runner
         self.name = "tavily"
         self.closed = False
 
@@ -74,10 +82,16 @@ class _FakeAdapter:
 
 
 class _FakeKeenableAdapter:
-    """Stand-in for KeenableAdapter: caller-owned client, NO ``aclose`` method."""
+    """Stand-in for KeenableAdapter: caller-owned client, NO ``aclose`` method.
 
-    def __init__(self, client: object) -> None:
+    ``_adapter_for`` passes the explicit ``api_key=`` seam here too, so the
+    double mirrors the real constructor's keyword-only signature.
+    """
+
+    def __init__(self, client: object, *, api_key: object = None, runner: object = None) -> None:
         self.client = client
+        self.api_key = api_key
+        self.runner = runner
         self.name = "keenable"
 
 
@@ -171,7 +185,10 @@ def test_live_scenario_runs_and_selects_keenable_adapter_when_gate_enabled(
     fake_client, factory_calls = _setup_fakes(monkeypatch)
     keenable_adapter = _FakeKeenableAdapter(fake_client)
     monkeypatch.setattr(
-        environment, "KeenableAdapter", lambda client: keenable_adapter, raising=False
+        environment,
+        "KeenableAdapter",
+        lambda client, *, api_key=None, runner=None: keenable_adapter,
+        raising=False,
     )
 
     context = SimpleNamespace()

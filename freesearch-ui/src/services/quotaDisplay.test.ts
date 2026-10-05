@@ -51,6 +51,18 @@ describe("quotaDisplay", () => {
     expect(display.periodLabel).toBe("Monthly")
   })
 
+  it("shows Tinyfish monthly budget gaps without fabricating quota, then displays finite capacity", () => {
+    const missing = quotaDisplay({ ...input, providerId: "tinyfish", remaining: null, limit: null })
+    expect(missing.headline).toBe("Budget not configured")
+    expect(missing.periodLabel).toBe("Monthly")
+    expect(missing.remainingPercent).toBeNull()
+    expect(missing.nativeValue).toBe("—/— requests")
+
+    const observed = quotaDisplay({ ...input, providerId: "tinyfish", remaining: "750", limit: "1000" })
+    expect(observed.headline).toBe("75% remaining")
+    expect(observed.nativeValue).toBe("750/1000 requests")
+  })
+
   it("treats You.com remaining USD as an account balance, not a quota percentage", () => {
     const display = quotaDisplay({
       ...input,

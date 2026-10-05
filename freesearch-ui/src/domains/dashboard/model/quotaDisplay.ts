@@ -49,7 +49,7 @@ function periodLabel(input: QuotaDisplayInput): string {
   if (normalizedWindow === "monthly" || normalizedWindow === "month") return "Monthly"
   if (isBalancePeriod(input)) return "Account balance"
   if (input.providerId === "keenable" && input.keyless) return "Hourly"
-  if (["brave", "exa", "firecrawl", "keenable", "parallel", "tavily"].includes(input.providerId ?? "")) {
+  if (["brave", "exa", "firecrawl", "keenable", "parallel", "tavily", "tinyfish"].includes(input.providerId ?? "")) {
     return "Monthly"
   }
   return "Quota"
@@ -66,7 +66,7 @@ function quotaHeadline(input: QuotaDisplayInput, percent: number | null, remaini
   if (percent !== null) return `${percent}% remaining`
   if (isBalanceHeadline(input, remaining)) return "Balance available"
   if (input.providerId === "parallel" && input.isOAuthPaired) return "Balance pending"
-  if (input.providerId === "exa" || input.providerId === "parallel") return "Budget not configured"
+  if (["exa", "parallel", "tinyfish"].includes(input.providerId ?? "")) return "Budget not configured"
   if (input.providerId === "brave") return "Limit unavailable"
   if (input.providerId === "keenable") return input.keyless ? "Hourly quota pending" : "Quota pending"
   return "Quota unavailable"

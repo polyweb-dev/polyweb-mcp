@@ -21,7 +21,7 @@ Feature: Encrypted-DB secrets storage
 
   Scenario: AC-3 All provider keys and OAuth tokens rest as ciphertext only
     Given an offline encrypted control API in passphrase mode
-    When I write all seven sentinel provider secrets through the control API
+    When I write all eight sentinel provider secrets through the control API
     And I complete an OAuth pairing through the stubbed vendor
     Then every secret row should decrypt to its sentinel under the correct key
     And a database-wide scan should find zero sentinel substrings

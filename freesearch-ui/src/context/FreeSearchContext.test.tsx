@@ -143,7 +143,7 @@ describe("FreeSearchContext (live backend)", () => {
     expect(urls).toContain("GET /api/v1/routing/config")
     expect(urls).toContain("GET /dashboard?limit=50")
 
-    expect(result.current.providers).toHaveLength(7)
+    expect(result.current.providers).toHaveLength(8)
     expect(result.current.providers.map((p) => p.id)).toContain("youcom")
     expect(result.current.providers.map((p) => p.id)).not.toContain("you")
     expect(result.current.providersLoading).toBe(false)
@@ -173,7 +173,12 @@ describe("FreeSearchContext (live backend)", () => {
     })
     const utils = renderHook(() => useFreeSearch(), { wrapper })
 
-    expect(utils.result.current.providersLoading).toBe(true)
+    // PersistGate opens first (async by design); the providers fetch starts
+    // only after the inner providers mount, then stays pending behind the
+    // deferred response.
+    await waitFor(() => {
+      expect(utils.result.current?.providersLoading).toBe(true)
+    })
 
     await act(async () => {
       gate.resolve(ok(allProvidersFixture()))
@@ -181,7 +186,7 @@ describe("FreeSearchContext (live backend)", () => {
     await waitFor(() => {
       expect(utils.result.current.providersLoading).toBe(false)
     })
-    expect(utils.result.current.providers).toHaveLength(7)
+    expect(utils.result.current.providers).toHaveLength(8)
     expect(stub.requestsTo("/api/v1/providers")).toHaveLength(1)
   })
 
@@ -220,7 +225,7 @@ describe("FreeSearchContext (live backend)", () => {
     })
     expect(utils.result.current.usageEvents).toEqual([])
     expect(utils.result.current.usageError).toContain("telemetry unavailable")
-    expect(utils.result.current.providers).toHaveLength(7)
+    expect(utils.result.current.providers).toHaveLength(8)
   })
 
   it("deletes removeProvider and cacheStats from the context API", async () => {
@@ -1119,5 +1124,167 @@ describe("FreeSearchContext (live backend)", () => {
     expect(events[0].displayUnit).toBeNull()
     expect(events[0].operation).toBe("fetch")
     gate.resolve(ok(server.dashboard))
+  })
+})
+
+/**
+ * PLAN §4.1.5: the search/fetch runners publish their lifecycle state through
+ * Redux. These tests pin the loading -> succeeded/failed transitions and the
+ * explicit clear — the pre-existing API mapping/fallback matrix above stays
+ * the regression coverage for request shapes.
+ */
+describe("FreeSearchContext Redux-backed runner lifecycle", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  function hangRoute(server: FakeBackend, url: string, gate: { promise: Promise<Response> }) {
+    return installFetchStub((req) => {
+      if (req.url === url && req.method === "POST") return gate.promise
+      if (req.url === "/api/v1/providers" && req.method === "GET") {
+        return ok(server.providers)
+      }
+      if (req.url === "/api/v1/routing/config" && req.method === "GET") {
+        return ok(server.routing)
+      }
+      if (req.url.startsWith("/dashboard") && req.method === "GET") {
+        return ok(server.dashboard)
+      }
+      if (req.url === "/search" && req.method === "POST") return ok(server.searchResponse)
+      if (req.url === "/fetch" && req.method === "POST") return ok(server.fetchResponse)
+      return err(404, { detail: "unhandled" })
+    })
+  }
+
+  function failRoute(server: FakeBackend, url: string, detail: string) {
+    return installFetchStub((req) => {
+      if (req.url === url && req.method === "POST") return err(503, { detail })
+      if (req.url === "/api/v1/providers" && req.method === "GET") {
+        return ok(server.providers)
+      }
+      if (req.url === "/api/v1/routing/config" && req.method === "GET") {
+        return ok(server.routing)
+      }
+      if (req.url.startsWith("/dashboard") && req.method === "GET") {
+        return ok(server.dashboard)
+      }
+      if (req.url === "/search" && req.method === "POST") return ok(server.searchResponse)
+      if (req.url === "/fetch" && req.method === "POST") return ok(server.fetchResponse)
+      return err(404, { detail: "unhandled" })
+    })
+  }
+
+  it("publishes search loading, then success, through Redux", async () => {
+    const server = createServer()
+    const { result } = await mountLoaded(server)
+    const gate = deferred<Response>()
+    hangRoute(server, "/search", gate)
+
+    let pending!: Promise<unknown>
+    act(() => {
+      pending = result.current.runSearch({ query: "deferred", maxResults: 6, timeoutMs: 5000 })
+    })
+    expect(result.current.isSearching).toBe(true)
+    expect(result.current.activeSearch).toBeNull()
+    expect(result.current.searchError).toBeNull()
+
+    await act(async () => {
+      gate.resolve(ok(server.searchResponse))
+      await pending
+    })
+    expect(result.current.isSearching).toBe(false)
+    expect(result.current.activeSearch?.results[0].title).toBe("Live backend result one")
+    expect(result.current.searchError).toBeNull()
+  })
+
+  it("publishes search failure through Redux and settles loading", async () => {
+    const server = createServer()
+    const { result } = await mountLoaded(server)
+    failRoute(server, "/search", "search exploded")
+
+    let response!: unknown
+    await act(async () => {
+      response = await result.current.runSearch({
+        query: "doomed",
+        maxResults: 6,
+        timeoutMs: 5000,
+      })
+    })
+    expect(response).toBeNull()
+    expect(result.current.isSearching).toBe(false)
+    expect(result.current.activeSearch).toBeNull()
+    expect(result.current.searchError).toContain("search exploded")
+  })
+
+  it("publishes fetch loading, then success, through Redux", async () => {
+    const server = createServer()
+    const { result } = await mountLoaded(server)
+    const gate = deferred<Response>()
+    hangRoute(server, "/fetch", gate)
+
+    let pending!: Promise<unknown>
+    act(() => {
+      pending = result.current.runFetch({
+        url: "https://example.com/doc",
+        format: "markdown",
+        timeoutMs: 4000,
+      })
+    })
+    expect(result.current.isFetching).toBe(true)
+    expect(result.current.activeFetch).toBeNull()
+    expect(result.current.fetchError).toBeNull()
+
+    await act(async () => {
+      gate.resolve(ok(server.fetchResponse))
+      await pending
+    })
+    expect(result.current.isFetching).toBe(false)
+    expect(result.current.activeFetch?.document.title).toBe("Live document title")
+    expect(result.current.fetchError).toBeNull()
+  })
+
+  it("publishes fetch failure through Redux and settles loading", async () => {
+    const server = createServer()
+    const { result } = await mountLoaded(server)
+    failRoute(server, "/fetch", "fetch exploded")
+
+    let response!: unknown
+    await act(async () => {
+      response = await result.current.runFetch({
+        url: "https://example.com/doc",
+        format: "markdown",
+        timeoutMs: 4000,
+      })
+    })
+    expect(response).toBeNull()
+    expect(result.current.isFetching).toBe(false)
+    expect(result.current.activeFetch).toBeNull()
+    expect(result.current.fetchError).toContain("fetch exploded")
+  })
+
+  it("clearActiveResults clears both Redux results and errors", async () => {
+    const server = createServer()
+    const { result } = await mountLoaded(server)
+
+    await act(async () => {
+      await result.current.runSearch({ query: "q", maxResults: 6, timeoutMs: 5000 })
+      await result.current.runFetch({
+        url: "https://example.com/doc",
+        format: "markdown",
+        timeoutMs: 4000,
+      })
+    })
+    expect(result.current.activeSearch).not.toBeNull()
+    expect(result.current.activeFetch).not.toBeNull()
+
+    act(() => {
+      result.current.clearActiveResults()
+    })
+    expect(result.current.activeSearch).toBeNull()
+    expect(result.current.activeFetch).toBeNull()
+    expect(result.current.searchError).toBeNull()
+    expect(result.current.fetchError).toBeNull()
+    expect(result.current.isSearching).toBe(false)
+    expect(result.current.isFetching).toBe(false)
   })
 })

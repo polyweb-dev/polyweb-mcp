@@ -8,9 +8,9 @@ Maps the acceptance criteria to tests:
 
 - AC-1 (scoped auth + shared runner): search/fetch POST only
   ``https://api.parallel.ai/v1/search`` / ``/v1/extract`` through the shared
-  runner; the resolver's key travels as a per-request ``x-api-key`` header;
-  the caller client is never mutated and caller ``Authorization`` /
-  ``X-API-Key`` never reach the wire.
+  runner; the constructor-injected ``api_key`` travels as a per-request
+  ``x-api-key`` header; the caller client is never mutated and caller
+  ``Authorization`` / ``X-API-Key`` never reach the wire.
 - AC-2 (normalization): documented Parallel payloads (fixture JSON under
   ``tests/fixtures/parallel/``) normalize to ``SearchResponse`` with query /
   provider / results (url, title, excerpts joined with a blank line, optional
@@ -30,9 +30,9 @@ Maps the acceptance criteria to tests:
   a shared ``httpx.MockTransport``; fakes follow the conventions in
   ``tests/test_resilience.py`` (plain injected objects, no sleeping, no HTTP).
 
-The resolver seam mirrors ``tests/providers/test_tavily.py``: the adapter is
-expected to import ``get_provider_secret_resolver`` from
-``freesearch.provider_config`` so tests can monkeypatch it.
+The key seam is explicit constructor injection (``api_key=SecretStr(...)``),
+mirroring ``tests/unit/adapters/test_tavily.py``: the adapter must never consult
+a global resolver or ambient environment fallback.
 """
 
 import asyncio
@@ -45,11 +45,9 @@ import httpx
 import pytest
 from pydantic import SecretStr
 
-import freesearch.adapters.parallel as parallel_module
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.adapters.parallel import ParallelAdapter
 from freesearch.infrastructure.resilience import ProviderOperationError, ResilientRunner
-from freesearch.infrastructure.secrets import ProviderName
 from freesearch.models.contracts import FetchRequest, SearchRequest, UsageOperation
 
 _FIXTURES = Path(__file__).resolve().parents[2] / "fixtures" / "parallel"
@@ -58,29 +56,6 @@ _FIXTURES = Path(__file__).resolve().parents[2] / "fixtures" / "parallel"
 def _load_fixture(name: str) -> dict[str, object]:
     with (_FIXTURES / name).open(encoding="utf-8") as handle:
         return json.load(handle)
-
-
-class _NoKeyResolver:
-    """Fake provider secret resolver that always resolves to no credential."""
-
-    def __init__(self) -> None:
-        self.requested: list[ProviderName] = []
-
-    def get(self, provider: ProviderName) -> None:
-        self.requested.append(provider)
-        return None
-
-
-class _KeyResolver:
-    """Fake provider secret resolver returning a fixed ``SecretStr``."""
-
-    def __init__(self, secret: str) -> None:
-        self._secret = SecretStr(secret)
-        self.requested: list[ProviderName] = []
-
-    def get(self, provider: ProviderName) -> SecretStr:
-        self.requested.append(provider)
-        return self._secret
 
 
 class _RecordingRunner:
@@ -154,12 +129,10 @@ def make_adapter(
     client: httpx.AsyncClient,
     *,
     runner=None,
-    monkeypatch,
     key: str = "sk-parallel-test-1",
 ) -> ParallelAdapter:
-    """Build an adapter whose resolver returns ``key`` (no network, no env)."""
-    monkeypatch.setattr(parallel_module, "get_provider_secret_resolver", lambda: _KeyResolver(key))
-    return ParallelAdapter(client, runner=runner)
+    """Build an adapter with an explicitly injected key (no network, no env)."""
+    return ParallelAdapter(client, runner=runner, api_key=SecretStr(key))
 
 
 def _assert_no_secret_leak(error: ProviderOperationError, secret: str) -> None:
@@ -173,10 +146,10 @@ def _assert_no_secret_leak(error: ProviderOperationError, secret: str) -> None:
 # --- construction ---------------------------------------------------------
 
 
-async def test_adapter_implements_provider_adapter_interface(monkeypatch) -> None:
+async def test_adapter_implements_provider_adapter_interface() -> None:
     caller = make_client()
     try:
-        adapter = make_adapter(caller, monkeypatch=monkeypatch)
+        adapter = make_adapter(caller)
 
         assert isinstance(adapter, ProviderAdapter)
         assert adapter.name == "parallel"
@@ -188,16 +161,21 @@ async def test_adapter_implements_provider_adapter_interface(monkeypatch) -> Non
         await caller.aclose()
 
 
-async def test_init_missing_resolver_credential_fails_closed(monkeypatch) -> None:
-    resolver = _NoKeyResolver()
-    monkeypatch.setattr(parallel_module, "get_provider_secret_resolver", lambda: resolver)
+async def test_init_missing_resolver_credential_fails_closed() -> None:
+    """A missing key fails closed at construction (explicit ``api_key=None``).
+
+    Substitution note: this test previously asserted that the retired global
+    ``get_provider_secret_resolver`` seam was asked for exactly the Parallel
+    credential (``resolver.requested == [ProviderName.PARALLEL]``). That seam
+    no longer exists, so the surviving behavioral guarantees are asserted
+    instead: fail-closed non-retryable ``configuration_error`` naming the
+    provider and the missing API key, with the caller client left untouched.
+    """
     caller = make_client()
     try:
         with pytest.raises(ProviderOperationError) as excinfo:
-            ParallelAdapter(caller)
+            ParallelAdapter(caller, api_key=None)
 
-        # The resolver must be asked for exactly the Parallel credential.
-        assert resolver.requested == [ProviderName.PARALLEL]
         assert excinfo.value.error.code == "configuration_error"
         assert excinfo.value.error.retryable is False
         message = excinfo.value.error.message.lower()
@@ -210,17 +188,24 @@ async def test_init_missing_resolver_credential_fails_closed(monkeypatch) -> Non
 
 
 async def test_init_missing_credential_never_falls_back_to_ambient_key(monkeypatch) -> None:
+    """No ambient ``FREESEARCH_PARALLEL_API_KEY`` fallback.
+
+    Substitution note: the retired resolver's ``requested`` bookkeeping is gone;
+    the surviving guarantee is fail-closed construction that leaks neither the
+    ambient key into the error nor into the caller's client.
+    """
     monkeypatch.setenv("FREESEARCH_PARALLEL_API_KEY", "ambient-pk-leak")
-    resolver = _NoKeyResolver()
-    monkeypatch.setattr(parallel_module, "get_provider_secret_resolver", lambda: resolver)
     caller = make_client()
     try:
         with pytest.raises(ProviderOperationError) as excinfo:
-            ParallelAdapter(caller)
-        assert resolver.requested == [ProviderName.PARALLEL]
+            ParallelAdapter(caller, api_key=None)
         assert excinfo.value.error.code == "configuration_error"
+        assert excinfo.value.error.retryable is False
         assert "ambient-pk-leak" not in str(excinfo.value)
         assert "ambient-pk-leak" not in str(caller.headers)
+        # The ambient key is never adopted into the caller's client.
+        assert "x-api-key" not in {key.lower() for key in caller.headers}
+        assert "Authorization" not in caller.headers
     finally:
         await caller.aclose()
 
@@ -228,16 +213,12 @@ async def test_init_missing_credential_never_falls_back_to_ambient_key(monkeypat
 # --- wire contract (AC-1) --------------------------------------------------
 
 
-async def test_search_posts_to_v1_search_through_shared_runner_with_scoped_key(
-    monkeypatch,
-) -> None:
+async def test_search_posts_to_v1_search_through_shared_runner_with_scoped_key() -> None:
     wire = _Wire()
     caller = make_authed_client(wire)
     runner = _RecordingRunner()
     try:
-        adapter = make_adapter(
-            caller, runner=runner, monkeypatch=monkeypatch, key="sk-parallel-secret-99"
-        )
+        adapter = make_adapter(caller, runner=runner, key="sk-parallel-secret-99")
         response = await adapter.search(SearchRequest(query="python async"))
     finally:
         await caller.aclose()
@@ -246,7 +227,7 @@ async def test_search_posts_to_v1_search_through_shared_runner_with_scoped_key(
     assert [str(request.url) for request in wire.requests] == ["https://api.parallel.ai/v1/search"]
     request = wire.requests[0]
     assert request.method == "POST"
-    # The resolver credential is the only auth on the wire.
+    # The injected api_key is the only auth on the wire.
     assert request.headers["x-api-key"] == "sk-parallel-secret-99"
     assert "authorization" not in request.headers
     assert "caller-token-1" not in request.headers.values()
@@ -255,16 +236,12 @@ async def test_search_posts_to_v1_search_through_shared_runner_with_scoped_key(
     assert response.query == "python async"
 
 
-async def test_fetch_posts_to_v1_extract_through_shared_runner_with_scoped_key(
-    monkeypatch,
-) -> None:
+async def test_fetch_posts_to_v1_extract_through_shared_runner_with_scoped_key() -> None:
     wire = _Wire()
     caller = make_authed_client(wire)
     runner = _RecordingRunner()
     try:
-        adapter = make_adapter(
-            caller, runner=runner, monkeypatch=monkeypatch, key="sk-parallel-secret-99"
-        )
+        adapter = make_adapter(caller, runner=runner, key="sk-parallel-secret-99")
         await adapter.fetch(FetchRequest(url="https://www.example.com/guide"))
     finally:
         await caller.aclose()
@@ -280,13 +257,13 @@ async def test_fetch_posts_to_v1_extract_through_shared_runner_with_scoped_key(
     assert json.loads(request.content)["urls"] == ["https://www.example.com/guide"]
 
 
-async def test_operations_never_mutate_caller_http_client(monkeypatch) -> None:
+async def test_operations_never_mutate_caller_http_client() -> None:
     wire = _Wire()
     caller = make_authed_client(wire)
     headers_before = dict(caller.headers)
     base_url_before = str(caller.base_url)
     try:
-        adapter = make_adapter(caller, monkeypatch=monkeypatch, key="sk-parallel-secret-99")
+        adapter = make_adapter(caller, key="sk-parallel-secret-99")
         await adapter.search(SearchRequest(query="mutate"))
         await adapter.fetch(FetchRequest(url="https://www.example.com/guide"))
     finally:
@@ -295,7 +272,7 @@ async def test_operations_never_mutate_caller_http_client(monkeypatch) -> None:
     assert dict(caller.headers) == headers_before
     assert str(caller.base_url) == base_url_before
     for request in wire.requests:
-        # The resolver key is scoped per request; caller auth never leaks.
+        # The injected api_key is scoped per request; caller auth never leaks.
         assert request.headers["x-api-key"] == "sk-parallel-secret-99"
         assert "authorization" not in request.headers
         assert "caller-token-1" not in request.headers.values()
@@ -305,13 +282,11 @@ async def test_operations_never_mutate_caller_http_client(monkeypatch) -> None:
 # --- search normalization (AC-2) -------------------------------------------
 
 
-async def test_search_normalizes_results_with_joined_excerpts_and_publish_date(
-    monkeypatch,
-) -> None:
+async def test_search_normalizes_results_with_joined_excerpts_and_publish_date() -> None:
     wire = _Wire()
     caller = make_client(wire)
     try:
-        adapter = make_adapter(caller, monkeypatch=monkeypatch)
+        adapter = make_adapter(caller)
         response = await adapter.search(SearchRequest(query="normalize"))
     finally:
         await caller.aclose()
@@ -353,13 +328,13 @@ async def test_search_normalizes_results_with_joined_excerpts_and_publish_date(
     ],
 )
 async def test_search_usage_sums_sku_counts_and_maps_search_id(
-    usage: object, expected: Decimal, monkeypatch
+    usage: object, expected: Decimal
 ) -> None:
     payload = _load_fixture("search.json") | {"usage": usage}
     wire = _Wire([httpx.Response(200, json=payload)])
     caller = make_client(wire)
     try:
-        adapter = make_adapter(caller, monkeypatch=monkeypatch)
+        adapter = make_adapter(caller)
         response = await adapter.search(SearchRequest(query="usage"))
     finally:
         await caller.aclose()
@@ -370,12 +345,12 @@ async def test_search_usage_sums_sku_counts_and_maps_search_id(
     assert response.usage.request_id == "search_fcb2b4f3c75e418687bccaa1a8381331"
 
 
-async def test_search_drops_absent_usage(monkeypatch) -> None:
+async def test_search_drops_absent_usage() -> None:
     payload = _load_fixture("search.json") | {"usage": None}
     wire = _Wire([httpx.Response(200, json=payload)])
     caller = make_client(wire)
     try:
-        adapter = make_adapter(caller, monkeypatch=monkeypatch)
+        adapter = make_adapter(caller)
         response = await adapter.search(SearchRequest(query="usage"))
     finally:
         await caller.aclose()
@@ -387,12 +362,12 @@ async def test_search_drops_absent_usage(monkeypatch) -> None:
     "usage",
     ["not-a-list", [{"name": "sku_search"}], [{"name": "sku_search", "count": "one"}]],
 )
-async def test_search_malformed_usage_raises_invalid_response(usage: object, monkeypatch) -> None:
+async def test_search_malformed_usage_raises_invalid_response(usage: object) -> None:
     payload = _load_fixture("search.json") | {"usage": usage}
     wire = _Wire([httpx.Response(200, json=payload)])
     caller = make_client(wire)
     try:
-        adapter = make_adapter(caller, monkeypatch=monkeypatch)
+        adapter = make_adapter(caller)
         with pytest.raises(ProviderOperationError) as excinfo:
             await adapter.search(SearchRequest(query="usage"))
     finally:
@@ -403,9 +378,7 @@ async def test_search_malformed_usage_raises_invalid_response(usage: object, mon
     assert excinfo.value.error.retryable is False
 
 
-async def test_search_malformed_response_raises_redacted_nonretryable_error(
-    monkeypatch,
-) -> None:
+async def test_search_malformed_response_raises_redacted_nonretryable_error() -> None:
     payload = {
         "search_id": "search_x",
         "results": [{"url": "https://www.example.com/guide", "api_key": "super-secret"}],
@@ -413,7 +386,7 @@ async def test_search_malformed_response_raises_redacted_nonretryable_error(
     wire = _Wire([httpx.Response(200, json=payload)])
     caller = make_client(wire)
     try:
-        adapter = make_adapter(caller, monkeypatch=monkeypatch)
+        adapter = make_adapter(caller)
         with pytest.raises(ProviderOperationError) as excinfo:
             await adapter.search(SearchRequest(query="bad"))
     finally:
@@ -428,14 +401,14 @@ async def test_search_malformed_response_raises_redacted_nonretryable_error(
     _assert_no_secret_leak(error, "super-secret")
 
 
-async def test_search_result_missing_url_raises_invalid_response(monkeypatch) -> None:
+async def test_search_result_missing_url_raises_invalid_response() -> None:
     payload = _load_fixture("search.json") | {
         "results": [{"title": "missing url", "excerpts": ["x"]}]
     }
     wire = _Wire([httpx.Response(200, json=payload)])
     caller = make_client(wire)
     try:
-        adapter = make_adapter(caller, monkeypatch=monkeypatch)
+        adapter = make_adapter(caller)
         with pytest.raises(ProviderOperationError) as excinfo:
             await adapter.search(SearchRequest(query="bad"))
     finally:
@@ -448,11 +421,11 @@ async def test_search_result_missing_url_raises_invalid_response(monkeypatch) ->
 # --- fetch normalization (AC-2) --------------------------------------------
 
 
-async def test_fetch_normalizes_full_content_and_usage(monkeypatch) -> None:
+async def test_fetch_normalizes_full_content_and_usage() -> None:
     wire = _Wire()
     caller = make_client(wire)
     try:
-        adapter = make_adapter(caller, monkeypatch=monkeypatch)
+        adapter = make_adapter(caller)
         response = await adapter.fetch(FetchRequest(url="https://www.example.com/guide"))
     finally:
         await caller.aclose()
@@ -475,7 +448,7 @@ async def test_fetch_normalizes_full_content_and_usage(monkeypatch) -> None:
     ],
 )
 async def test_fetch_truncates_content_at_max_chars_deterministically(
-    content: str, max_chars: int, expected: str, metadata: dict[str, object], monkeypatch
+    content: str, max_chars: int, expected: str, metadata: dict[str, object]
 ) -> None:
     payload = _load_fixture("extract.json") | {
         "results": [
@@ -489,7 +462,7 @@ async def test_fetch_truncates_content_at_max_chars_deterministically(
     wire = _Wire([httpx.Response(200, json=payload)])
     caller = make_client(wire)
     try:
-        adapter = make_adapter(caller, monkeypatch=monkeypatch)
+        adapter = make_adapter(caller)
         response = await adapter.fetch(
             FetchRequest(url="https://www.example.com/guide", max_chars=max_chars)
         )
@@ -500,14 +473,14 @@ async def test_fetch_truncates_content_at_max_chars_deterministically(
     assert response.document.metadata == metadata
 
 
-async def test_fetch_missing_matching_result_raises_fetch_failed(monkeypatch) -> None:
+async def test_fetch_missing_matching_result_raises_fetch_failed() -> None:
     payload = _load_fixture("extract.json") | {
         "results": [{"url": "https://other.example/x", "excerpts": [], "full_content": "no"}]
     }
     wire = _Wire([httpx.Response(200, json=payload)])
     caller = make_client(wire)
     try:
-        adapter = make_adapter(caller, monkeypatch=monkeypatch)
+        adapter = make_adapter(caller)
         with pytest.raises(ProviderOperationError) as excinfo:
             await adapter.fetch(FetchRequest(url="https://www.example.com/guide"))
     finally:
@@ -520,7 +493,7 @@ async def test_fetch_missing_matching_result_raises_fetch_failed(monkeypatch) ->
 
 @pytest.mark.parametrize("full_content", [None, 123])
 async def test_fetch_null_or_non_string_full_content_raises_invalid_response(
-    full_content: object, monkeypatch
+    full_content: object,
 ) -> None:
     payload = _load_fixture("extract.json") | {
         "results": [
@@ -534,7 +507,7 @@ async def test_fetch_null_or_non_string_full_content_raises_invalid_response(
     wire = _Wire([httpx.Response(200, json=payload)])
     caller = make_client(wire)
     try:
-        adapter = make_adapter(caller, monkeypatch=monkeypatch)
+        adapter = make_adapter(caller)
         with pytest.raises(ProviderOperationError) as excinfo:
             await adapter.fetch(FetchRequest(url="https://www.example.com/guide"))
     finally:
@@ -547,14 +520,12 @@ async def test_fetch_null_or_non_string_full_content_raises_invalid_response(
 # --- shared runner and error normalization (AC-3) ---------------------------
 
 
-async def test_two_concurrent_rate_limited_calls_each_enter_shared_runner(
-    monkeypatch,
-) -> None:
+async def test_two_concurrent_rate_limited_calls_each_enter_shared_runner() -> None:
     wire = _Wire([httpx.Response(429)] * 2)
     caller = make_client(wire)
     runner = _CountingRunner(ResilientRunner(caller, max_attempts=1))
     try:
-        adapter = make_adapter(caller, runner=runner, monkeypatch=monkeypatch)
+        adapter = make_adapter(caller, runner=runner)
         request = SearchRequest(query="concurrent")
         outcomes = await asyncio.gather(
             adapter.search(request), adapter.search(request), return_exceptions=True
@@ -572,14 +543,12 @@ async def test_two_concurrent_rate_limited_calls_each_enter_shared_runner(
 
 
 @pytest.mark.parametrize("status", [429, 500, 502, 503, 504])
-async def test_retryable_http_statuses_surface_as_retryable_errors(
-    status: int, monkeypatch
-) -> None:
+async def test_retryable_http_statuses_surface_as_retryable_errors(status: int) -> None:
     wire = _Wire([httpx.Response(status)])
     caller = make_client(wire)
     runner = ResilientRunner(caller, max_attempts=1)
     try:
-        adapter = make_adapter(caller, runner=runner, monkeypatch=monkeypatch)
+        adapter = make_adapter(caller, runner=runner)
         with pytest.raises(ProviderOperationError) as excinfo:
             await adapter.search(SearchRequest(query="retry"))
     finally:
@@ -602,12 +571,12 @@ async def test_retryable_http_statuses_surface_as_retryable_errors(
     ],
 )
 async def test_client_error_statuses_map_to_typed_nonretryable_errors(
-    status: int, code: str, monkeypatch
+    status: int, code: str
 ) -> None:
     wire = _Wire([httpx.Response(status)])
     caller = make_client(wire)
     try:
-        adapter = make_adapter(caller, monkeypatch=monkeypatch)
+        adapter = make_adapter(caller)
         with pytest.raises(ProviderOperationError) as excinfo:
             await adapter.search(SearchRequest(query="bad"))
     finally:
@@ -620,10 +589,10 @@ async def test_client_error_statuses_map_to_typed_nonretryable_errors(
     assert error.status_code == status
 
 
-async def test_normalized_error_redacts_secrets(monkeypatch) -> None:
+async def test_normalized_error_redacts_secrets() -> None:
     caller = make_client()
     try:
-        adapter = make_adapter(caller, monkeypatch=monkeypatch)
+        adapter = make_adapter(caller)
 
         error = adapter._error("bad_request", "query rejected: api_key=sk-leak-123")
 
@@ -638,11 +607,11 @@ async def test_normalized_error_redacts_secrets(monkeypatch) -> None:
 # --- cost estimation and quota (AC-4) --------------------------------------
 
 
-async def test_estimate_cost_search_is_network_free(monkeypatch) -> None:
+async def test_estimate_cost_search_is_network_free() -> None:
     caller = make_client()  # any wire request raises AssertionError
     runner = _RecordingRunner()
     try:
-        adapter = make_adapter(caller, runner=runner, monkeypatch=monkeypatch)
+        adapter = make_adapter(caller, runner=runner)
 
         estimate = await adapter.estimate_cost(SearchRequest(query="cost"))
 
@@ -654,11 +623,11 @@ async def test_estimate_cost_search_is_network_free(monkeypatch) -> None:
         await caller.aclose()
 
 
-async def test_estimate_cost_fetch_is_network_free(monkeypatch) -> None:
+async def test_estimate_cost_fetch_is_network_free() -> None:
     caller = make_client()  # any wire request raises AssertionError
     runner = _RecordingRunner()
     try:
-        adapter = make_adapter(caller, runner=runner, monkeypatch=monkeypatch)
+        adapter = make_adapter(caller, runner=runner)
 
         estimate = await adapter.estimate_cost(FetchRequest(url="https://www.example.com/guide"))
 
@@ -670,10 +639,10 @@ async def test_estimate_cost_fetch_is_network_free(monkeypatch) -> None:
         await caller.aclose()
 
 
-async def test_quota_is_unsupported(monkeypatch) -> None:
+async def test_quota_is_unsupported() -> None:
     caller = make_client()
     try:
-        adapter = make_adapter(caller, monkeypatch=monkeypatch)
+        adapter = make_adapter(caller)
 
         assert adapter.capabilities.quota is False
         assert await adapter.quota() is None
@@ -711,13 +680,13 @@ def _fetch_payload_with_content(content: str) -> dict[str, object]:
     ],
 )
 async def test_fetch_truncation_boundary_equality_and_empty_content(
-    content: str, max_chars: int | None, expected: str, metadata: dict[str, object], monkeypatch
+    content: str, max_chars: int | None, expected: str, metadata: dict[str, object]
 ) -> None:
     payload = _fetch_payload_with_content(content)
     wire = _Wire([httpx.Response(200, json=payload)])
     caller = make_client(wire)
     try:
-        adapter = make_adapter(caller, monkeypatch=monkeypatch)
+        adapter = make_adapter(caller)
         response = await adapter.fetch(
             FetchRequest(url="https://www.example.com/guide", max_chars=max_chars)
         )
@@ -728,12 +697,12 @@ async def test_fetch_truncation_boundary_equality_and_empty_content(
     assert response.document.metadata == metadata
 
 
-async def test_fetch_float_usage_count_sums_exactly(monkeypatch) -> None:
+async def test_fetch_float_usage_count_sums_exactly() -> None:
     payload = _load_fixture("extract.json") | {"usage": [{"name": "sku_extract", "count": 1.5}]}
     wire = _Wire([httpx.Response(200, json=payload)])
     caller = make_client(wire)
     try:
-        adapter = make_adapter(caller, monkeypatch=monkeypatch)
+        adapter = make_adapter(caller)
         response = await adapter.fetch(FetchRequest(url="https://www.example.com/guide"))
     finally:
         await caller.aclose()
@@ -752,14 +721,12 @@ async def test_fetch_float_usage_count_sums_exactly(monkeypatch) -> None:
         [{"name": "sku_search", "count": False}],
     ],
 )
-async def test_search_usage_bool_or_nonmapping_shapes_raise_invalid_response(
-    usage: object, monkeypatch
-) -> None:
+async def test_search_usage_bool_or_nonmapping_shapes_raise_invalid_response(usage: object) -> None:
     payload = _load_fixture("search.json") | {"usage": usage}
     wire = _Wire([httpx.Response(200, json=payload)])
     caller = make_client(wire)
     try:
-        adapter = make_adapter(caller, monkeypatch=monkeypatch)
+        adapter = make_adapter(caller)
         with pytest.raises(ProviderOperationError) as excinfo:
             await adapter.search(SearchRequest(query="usage"))
     finally:
@@ -781,13 +748,11 @@ async def test_search_usage_bool_or_nonmapping_shapes_raise_invalid_response(
         '{"search_id": "x", "results": [], "usage": [{"name": "s", "count": Infinity}]}',
     ],
 )
-async def test_search_nonfinite_usage_counts_raise_invalid_response(
-    raw_body: str, monkeypatch
-) -> None:
+async def test_search_nonfinite_usage_counts_raise_invalid_response(raw_body: str) -> None:
     wire = _Wire([httpx.Response(200, text=raw_body)])
     caller = make_client(wire)
     try:
-        adapter = make_adapter(caller, monkeypatch=monkeypatch)
+        adapter = make_adapter(caller)
         with pytest.raises(ProviderOperationError) as excinfo:
             await adapter.search(SearchRequest(query="usage"))
     finally:
@@ -806,13 +771,11 @@ async def test_search_nonfinite_usage_counts_raise_invalid_response(
         httpx.Response(200, json=[1, 2, 3]),  # a JSON array is not a payload object
     ],
 )
-async def test_search_malformed_json_body_raises_invalid_response(
-    response: httpx.Response, monkeypatch
-) -> None:
+async def test_search_malformed_json_body_raises_invalid_response(response: httpx.Response) -> None:
     wire = _Wire([response])
     caller = make_client(wire)
     try:
-        adapter = make_adapter(caller, monkeypatch=monkeypatch)
+        adapter = make_adapter(caller)
         with pytest.raises(ProviderOperationError) as excinfo:
             await adapter.search(SearchRequest(query="bad"))
     finally:
@@ -825,11 +788,11 @@ async def test_search_malformed_json_body_raises_invalid_response(
     assert error.__cause__ is None  # a raw JSON/parse failure never escapes
 
 
-async def test_fetch_malformed_json_body_raises_invalid_response(monkeypatch) -> None:
+async def test_fetch_malformed_json_body_raises_invalid_response() -> None:
     wire = _Wire([httpx.Response(200, text="not json at all")])
     caller = make_client(wire)
     try:
-        adapter = make_adapter(caller, monkeypatch=monkeypatch)
+        adapter = make_adapter(caller)
         with pytest.raises(ProviderOperationError) as excinfo:
             await adapter.fetch(FetchRequest(url="https://www.example.com/guide"))
     finally:
@@ -842,15 +805,13 @@ async def test_fetch_malformed_json_body_raises_invalid_response(monkeypatch) ->
 
 
 @pytest.mark.parametrize("status", [400, 401, 500])
-async def test_http_error_body_secret_never_leaks_and_cause_is_suppressed(
-    status: int, monkeypatch
-) -> None:
+async def test_http_error_body_secret_never_leaks_and_cause_is_suppressed(status: int) -> None:
     secret = "sk-body-secret-7"
     wire = _Wire([httpx.Response(status, json={"error": {"message": f"denied api_key={secret}"}})])
     caller = make_client(wire)
     runner = ResilientRunner(caller, max_attempts=1)
     try:
-        adapter = make_adapter(caller, runner=runner, monkeypatch=monkeypatch)
+        adapter = make_adapter(caller, runner=runner)
         with pytest.raises(ProviderOperationError) as excinfo:
             await adapter.search(SearchRequest(query="bad"))
     finally:
@@ -865,7 +826,7 @@ async def test_http_error_body_secret_never_leaks_and_cause_is_suppressed(
     _assert_no_secret_leak(error, secret)
 
 
-async def test_retryable_status_retries_through_runner_then_succeeds(monkeypatch) -> None:
+async def test_retryable_status_retries_through_runner_then_succeeds() -> None:
     wire = _Wire(
         [
             httpx.Response(503),
@@ -875,7 +836,7 @@ async def test_retryable_status_retries_through_runner_then_succeeds(monkeypatch
     caller = make_client(wire)
     runner = ResilientRunner(caller, max_attempts=2, base_delay=0.0, random_source=lambda: 0.0)
     try:
-        adapter = make_adapter(caller, runner=runner, monkeypatch=monkeypatch)
+        adapter = make_adapter(caller, runner=runner)
         response = await adapter.search(SearchRequest(query="retry"))
     finally:
         await caller.aclose()
@@ -895,7 +856,7 @@ async def test_retryable_status_retries_through_runner_then_succeeds(monkeypatch
         "https://www.example.com/guide/",  # trailing slash differs
     ],
 )
-async def test_fetch_url_match_is_exact_and_case_sensitive(result_url: str, monkeypatch) -> None:
+async def test_fetch_url_match_is_exact_and_case_sensitive(result_url: str) -> None:
     payload = _load_fixture("extract.json") | {
         "results": [
             {
@@ -908,7 +869,7 @@ async def test_fetch_url_match_is_exact_and_case_sensitive(result_url: str, monk
     wire = _Wire([httpx.Response(200, json=payload)])
     caller = make_client(wire)
     try:
-        adapter = make_adapter(caller, monkeypatch=monkeypatch)
+        adapter = make_adapter(caller)
         with pytest.raises(ProviderOperationError) as excinfo:
             await adapter.fetch(FetchRequest(url="https://www.example.com/guide"))
     finally:
@@ -921,11 +882,11 @@ async def test_fetch_url_match_is_exact_and_case_sensitive(result_url: str, monk
     assert error.__cause__ is None
 
 
-async def test_search_sends_advanced_settings_and_never_emits_language(monkeypatch) -> None:
+async def test_search_sends_advanced_settings_and_never_emits_language() -> None:
     wire = _Wire()
     caller = make_client(wire)
     try:
-        adapter = make_adapter(caller, monkeypatch=monkeypatch)
+        adapter = make_adapter(caller)
         await adapter.search(
             SearchRequest(
                 query="geo",
@@ -950,11 +911,11 @@ async def test_search_sends_advanced_settings_and_never_emits_language(monkeypat
     assert "language" not in body["advanced_settings"]
 
 
-async def test_search_default_limit_maps_to_max_results_ten(monkeypatch) -> None:
+async def test_search_default_limit_maps_to_max_results_ten() -> None:
     wire = _Wire()
     caller = make_client(wire)
     try:
-        adapter = make_adapter(caller, monkeypatch=monkeypatch)
+        adapter = make_adapter(caller)
         await adapter.search(SearchRequest(query="defaults"))
     finally:
         await caller.aclose()
@@ -963,11 +924,11 @@ async def test_search_default_limit_maps_to_max_results_ten(monkeypatch) -> None
     assert body["advanced_settings"] == {"max_results": 10}
 
 
-async def test_aclose_closes_only_adapter_owned_client(monkeypatch) -> None:
+async def test_aclose_closes_only_adapter_owned_client() -> None:
     wire = _Wire()
     caller = make_client(wire)
     try:
-        adapter = make_adapter(caller, monkeypatch=monkeypatch)
+        adapter = make_adapter(caller)
 
         assert adapter._http.is_closed is False
         assert caller.is_closed is False
@@ -999,13 +960,13 @@ async def test_aclose_closes_only_adapter_owned_client(monkeypatch) -> None:
 # against the current adapter.
 
 
-async def test_fetch_posts_advanced_settings_requesting_full_content(monkeypatch) -> None:
+async def test_fetch_posts_advanced_settings_requesting_full_content() -> None:
     """The extract body must explicitly request full content (documented
     ``advanced_settings.full_content``), because the vendor default is False."""
     wire = _Wire()
     caller = make_client(wire)
     try:
-        adapter = make_adapter(caller, monkeypatch=monkeypatch)
+        adapter = make_adapter(caller)
         await adapter.fetch(FetchRequest(url="https://www.example.com/guide"))
     finally:
         await caller.aclose()
@@ -1025,12 +986,12 @@ async def test_fetch_posts_advanced_settings_requesting_full_content(monkeypatch
     ],
 )
 async def test_search_limit_above_documented_cap_is_clamped_to_twenty(
-    limit: int, expected: int, monkeypatch
+    limit: int, expected: int
 ) -> None:
     wire = _Wire()
     caller = make_client(wire)
     try:
-        adapter = make_adapter(caller, monkeypatch=monkeypatch)
+        adapter = make_adapter(caller)
         await adapter.search(SearchRequest(query="cap", limit=limit))
     finally:
         await caller.aclose()
@@ -1045,11 +1006,11 @@ def _search_without(key: str) -> dict[str, object]:
     return payload
 
 
-async def test_search_missing_results_key_raises_invalid_response(monkeypatch) -> None:
+async def test_search_missing_results_key_raises_invalid_response() -> None:
     wire = _Wire([httpx.Response(200, json=_search_without("results"))])
     caller = make_client(wire)
     try:
-        adapter = make_adapter(caller, monkeypatch=monkeypatch)
+        adapter = make_adapter(caller)
         with pytest.raises(ProviderOperationError) as excinfo:
             await adapter.search(SearchRequest(query="shape"))
     finally:
@@ -1062,11 +1023,11 @@ async def test_search_missing_results_key_raises_invalid_response(monkeypatch) -
     assert excinfo.value.__cause__ is None
 
 
-async def test_search_missing_search_id_raises_invalid_response(monkeypatch) -> None:
+async def test_search_missing_search_id_raises_invalid_response() -> None:
     wire = _Wire([httpx.Response(200, json=_search_without("search_id"))])
     caller = make_client(wire)
     try:
-        adapter = make_adapter(caller, monkeypatch=monkeypatch)
+        adapter = make_adapter(caller)
         with pytest.raises(ProviderOperationError) as excinfo:
             await adapter.search(SearchRequest(query="shape"))
     finally:
@@ -1078,14 +1039,14 @@ async def test_search_missing_search_id_raises_invalid_response(monkeypatch) -> 
     assert excinfo.value.__cause__ is None
 
 
-async def test_search_non_string_search_id_raises_invalid_response(monkeypatch) -> None:
+async def test_search_non_string_search_id_raises_invalid_response() -> None:
     # Usage is absent so the adapter itself must reject the id shape; a
     # non-string id must never silently reach the usage request_id.
     payload = _load_fixture("search.json") | {"search_id": 123, "usage": None}
     wire = _Wire([httpx.Response(200, json=payload)])
     caller = make_client(wire)
     try:
-        adapter = make_adapter(caller, monkeypatch=monkeypatch)
+        adapter = make_adapter(caller)
         with pytest.raises(ProviderOperationError) as excinfo:
             await adapter.search(SearchRequest(query="shape"))
     finally:
@@ -1098,14 +1059,12 @@ async def test_search_non_string_search_id_raises_invalid_response(monkeypatch) 
 
 
 @pytest.mark.parametrize("results", ["not-a-list", {"a": 1}])
-async def test_search_non_list_results_raises_invalid_response(
-    results: object, monkeypatch
-) -> None:
+async def test_search_non_list_results_raises_invalid_response(results: object) -> None:
     payload = _load_fixture("search.json") | {"results": results}
     wire = _Wire([httpx.Response(200, json=payload)])
     caller = make_client(wire)
     try:
-        adapter = make_adapter(caller, monkeypatch=monkeypatch)
+        adapter = make_adapter(caller)
         with pytest.raises(ProviderOperationError) as excinfo:
             await adapter.search(SearchRequest(query="shape"))
     finally:
@@ -1117,13 +1076,13 @@ async def test_search_non_list_results_raises_invalid_response(
     assert excinfo.value.__cause__ is None
 
 
-async def test_search_empty_results_list_remains_valid_structure(monkeypatch) -> None:
+async def test_search_empty_results_list_remains_valid_structure() -> None:
     """An explicitly empty ``results`` array is a valid no-match search."""
     payload = _load_fixture("search.json") | {"results": [], "usage": None}
     wire = _Wire([httpx.Response(200, json=payload)])
     caller = make_client(wire)
     try:
-        adapter = make_adapter(caller, monkeypatch=monkeypatch)
+        adapter = make_adapter(caller)
         response = await adapter.search(SearchRequest(query="empty"))
     finally:
         await caller.aclose()
@@ -1138,13 +1097,13 @@ def _extract_without(key: str) -> dict[str, object]:
     return payload
 
 
-async def test_fetch_missing_results_key_raises_invalid_response(monkeypatch) -> None:
+async def test_fetch_missing_results_key_raises_invalid_response() -> None:
     # A missing ``results`` array is a structural defect, distinct from a
     # present-but-empty list (which is a valid "no successful extraction").
     wire = _Wire([httpx.Response(200, json=_extract_without("results"))])
     caller = make_client(wire)
     try:
-        adapter = make_adapter(caller, monkeypatch=monkeypatch)
+        adapter = make_adapter(caller)
         with pytest.raises(ProviderOperationError) as excinfo:
             await adapter.fetch(FetchRequest(url="https://www.example.com/guide"))
     finally:
@@ -1157,11 +1116,11 @@ async def test_fetch_missing_results_key_raises_invalid_response(monkeypatch) ->
     assert excinfo.value.__cause__ is None
 
 
-async def test_fetch_missing_extract_id_raises_invalid_response(monkeypatch) -> None:
+async def test_fetch_missing_extract_id_raises_invalid_response() -> None:
     wire = _Wire([httpx.Response(200, json=_extract_without("extract_id"))])
     caller = make_client(wire)
     try:
-        adapter = make_adapter(caller, monkeypatch=monkeypatch)
+        adapter = make_adapter(caller)
         with pytest.raises(ProviderOperationError) as excinfo:
             await adapter.fetch(FetchRequest(url="https://www.example.com/guide"))
     finally:
@@ -1173,13 +1132,13 @@ async def test_fetch_missing_extract_id_raises_invalid_response(monkeypatch) -> 
     assert excinfo.value.__cause__ is None
 
 
-async def test_fetch_non_string_extract_id_raises_invalid_response(monkeypatch) -> None:
+async def test_fetch_non_string_extract_id_raises_invalid_response() -> None:
     # Usage is absent so the adapter itself must reject the id shape.
     payload = _load_fixture("extract.json") | {"extract_id": 456, "usage": None}
     wire = _Wire([httpx.Response(200, json=payload)])
     caller = make_client(wire)
     try:
-        adapter = make_adapter(caller, monkeypatch=monkeypatch)
+        adapter = make_adapter(caller)
         with pytest.raises(ProviderOperationError) as excinfo:
             await adapter.fetch(FetchRequest(url="https://www.example.com/guide"))
     finally:
@@ -1192,12 +1151,12 @@ async def test_fetch_non_string_extract_id_raises_invalid_response(monkeypatch) 
 
 
 @pytest.mark.parametrize("results", ["not-a-list", {"a": 1}])
-async def test_fetch_non_list_results_raises_invalid_response(results: object, monkeypatch) -> None:
+async def test_fetch_non_list_results_raises_invalid_response(results: object) -> None:
     payload = _load_fixture("extract.json") | {"results": results}
     wire = _Wire([httpx.Response(200, json=payload)])
     caller = make_client(wire)
     try:
-        adapter = make_adapter(caller, monkeypatch=monkeypatch)
+        adapter = make_adapter(caller)
         with pytest.raises(ProviderOperationError) as excinfo:
             await adapter.fetch(FetchRequest(url="https://www.example.com/guide"))
     finally:
@@ -1209,13 +1168,13 @@ async def test_fetch_non_list_results_raises_invalid_response(results: object, m
     assert excinfo.value.__cause__ is None
 
 
-async def test_fetch_empty_results_list_raises_fetch_failed(monkeypatch) -> None:
+async def test_fetch_empty_results_list_raises_fetch_failed() -> None:
     """A present-but-empty ``results`` array is valid structure: no extraction."""
     payload = _load_fixture("extract.json") | {"results": [], "usage": None}
     wire = _Wire([httpx.Response(200, json=payload)])
     caller = make_client(wire)
     try:
-        adapter = make_adapter(caller, monkeypatch=monkeypatch)
+        adapter = make_adapter(caller)
         with pytest.raises(ProviderOperationError) as excinfo:
             await adapter.fetch(FetchRequest(url="https://www.example.com/guide"))
     finally:
@@ -1228,12 +1187,12 @@ async def test_fetch_empty_results_list_raises_fetch_failed(monkeypatch) -> None
 
 
 @pytest.mark.parametrize("status", [302, 304])
-async def test_final_3xx_status_maps_to_nonretryable_http_error(status: int, monkeypatch) -> None:
+async def test_final_3xx_status_maps_to_nonretryable_http_error(status: int) -> None:
     wire = _Wire([httpx.Response(status)])
     caller = make_client(wire)
     runner = ResilientRunner(caller, max_attempts=1)
     try:
-        adapter = make_adapter(caller, runner=runner, monkeypatch=monkeypatch)
+        adapter = make_adapter(caller, runner=runner)
         with pytest.raises(ProviderOperationError) as excinfo:
             await adapter.search(SearchRequest(query="redirect"))
     finally:

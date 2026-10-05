@@ -13,17 +13,18 @@ from datetime import timedelta
 
 import httpx
 import pytest
+from pydantic import SecretStr
 
 from freesearch.adapters.youcom import YoucomAdapter, _parse_published_at
 from freesearch.infrastructure.resilience import ProviderOperationError
 from freesearch.models.contracts import SearchRequest
 from tests.unit.adapters._youcom_test_support import (
+    _TEST_KEY,
     _assert_no_secret_leak,
     _default_runner,
     _wire_caller,
     _wired,
     _WireRecorder,
-    fake_resolver,  # noqa: F401  (autouse fixture registered via import)
 )
 
 
@@ -33,7 +34,9 @@ async def test_search_malformed_results_is_invalid_response(results: object) -> 
     caller = _wire_caller(recorder)
     adapter: YoucomAdapter | None = None
     try:
-        adapter = YoucomAdapter(caller, runner=_default_runner(caller))
+        adapter = YoucomAdapter(
+            caller, runner=_default_runner(caller), api_key=SecretStr(_TEST_KEY)
+        )
         with pytest.raises(ProviderOperationError) as excinfo:
             await adapter.search(SearchRequest(query="bad"))
     finally:
@@ -68,7 +71,9 @@ async def test_search_top_level_list_or_scalar_body_is_invalid_response(
     caller = _wire_caller(recorder)
     adapter: YoucomAdapter | None = None
     try:
-        adapter = YoucomAdapter(caller, runner=_default_runner(caller))
+        adapter = YoucomAdapter(
+            caller, runner=_default_runner(caller), api_key=SecretStr(_TEST_KEY)
+        )
         with pytest.raises(ProviderOperationError) as excinfo:
             await adapter.search(SearchRequest(query="bad"))
     finally:
@@ -141,7 +146,9 @@ async def test_search_normalizes_thumbnail_and_favicon_url_metadata() -> None:
     caller = _wire_caller(recorder)
     adapter: YoucomAdapter | None = None
     try:
-        adapter = YoucomAdapter(caller, runner=_default_runner(caller))
+        adapter = YoucomAdapter(
+            caller, runner=_default_runner(caller), api_key=SecretStr(_TEST_KEY)
+        )
         response = await adapter.search(SearchRequest(query="meta"))
     finally:
         if adapter is not None:
@@ -161,7 +168,9 @@ async def test_search_result_item_missing_url_is_invalid_response() -> None:
     caller = _wire_caller(recorder)
     adapter: YoucomAdapter | None = None
     try:
-        adapter = YoucomAdapter(caller, runner=_default_runner(caller))
+        adapter = YoucomAdapter(
+            caller, runner=_default_runner(caller), api_key=SecretStr(_TEST_KEY)
+        )
         with pytest.raises(ProviderOperationError) as excinfo:
             await adapter.search(SearchRequest(query="bad"))
     finally:
@@ -178,7 +187,9 @@ async def test_search_non_json_body_is_invalid_response() -> None:
     caller = _wire_caller(recorder)
     adapter: YoucomAdapter | None = None
     try:
-        adapter = YoucomAdapter(caller, runner=_default_runner(caller))
+        adapter = YoucomAdapter(
+            caller, runner=_default_runner(caller), api_key=SecretStr(_TEST_KEY)
+        )
         with pytest.raises(ProviderOperationError) as excinfo:
             await adapter.search(SearchRequest(query="bad"))
     finally:
@@ -200,7 +211,9 @@ async def test_search_malformed_payload_suppresses_cause_and_redacts() -> None:
     caller = _wire_caller(recorder)
     adapter: YoucomAdapter | None = None
     try:
-        adapter = YoucomAdapter(caller, runner=_default_runner(caller))
+        adapter = YoucomAdapter(
+            caller, runner=_default_runner(caller), api_key=SecretStr(_TEST_KEY)
+        )
         with pytest.raises(ProviderOperationError) as excinfo:
             await adapter.search(SearchRequest(query="bad"))
     finally:

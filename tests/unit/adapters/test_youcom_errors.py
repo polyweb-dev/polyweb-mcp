@@ -17,7 +17,6 @@ from tests.unit.adapters._youcom_test_support import (
     _search_payload,
     _wired,
     _WireRecorder,
-    fake_resolver,  # noqa: F401  (autouse fixture registered via import)
 )
 
 

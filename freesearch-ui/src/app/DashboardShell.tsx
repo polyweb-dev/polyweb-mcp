@@ -5,7 +5,7 @@ import { StatusBar } from "@/app/layout/StatusBar"
 import { PlaygroundPage } from "@/features/playground/ui/PlaygroundPage"
 import { RoutingEngine } from "@/components/routing/RoutingEngine"
 import { QuotaAnalytics } from "@/components/quota/QuotaAnalytics"
-import { ActivityStream } from "@/components/activity/ActivityStream"
+import { ActivityPage } from "@/features/activity/ui/ActivityPage"
 import { SettingsView } from "@/components/settings/SettingsView"
 import { ToastContainer } from "@/components/common/ToastContainer"
 import { workspaceRoutes, type TabId } from "./routes"
@@ -14,7 +14,7 @@ const routeElements: Record<TabId, ReactNode> = {
   playground: <PlaygroundPage />,
   routing: <RoutingEngine />,
   quotas: <QuotaAnalytics />,
-  activity: <ActivityStream />,
+  activity: <ActivityPage />,
   settings: <SettingsView />,
 }
 

@@ -6,9 +6,11 @@ provider network or credentials are involved.
 """
 
 import asyncio
+import gc
 import inspect
 import json
-import tempfile
+import time
+import uuid
 from collections.abc import AsyncIterator, Sequence
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -43,6 +45,7 @@ from freesearch.models.contracts import (
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
 from freesearch.services import monitoring
+from freesearch.services.parallel_oauth import clear_oauth_poll_state
 
 
 class _StubAdapter(ProviderAdapter):
@@ -195,21 +198,48 @@ class _LeakyRepository:
         return self._health if provider == self._health.provider else None
 
 
+_MONITORING_DB_ROOT = Path(".runtime-tmp/monitoring-pytest-dbs")
+
+
+def _unlink_with_retries(path: Path, *, attempts: int = 20) -> None:
+    """Remove a test database after Windows releases delayed SQLite handles.
+
+    Mirrors the BDD harness helper: retry only PermissionError with a bounded
+    pause, propagate every other error immediately, and re-raise once the
+    bound is exhausted instead of silently leaking the file.
+    """
+
+    for attempt in range(attempts):
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            gc.collect()
+            time.sleep(0.05)
+        else:
+            return
+
+
 @pytest_asyncio.fixture
 async def repository() -> AsyncIterator[SQLiteRepository]:
-    with tempfile.NamedTemporaryFile(
-        prefix="freesearch-monitoring-",
-        suffix=".db",
-        dir=Path.cwd(),
-        delete=False,
-    ) as temporary_file:
-        db_path = Path(temporary_file.name)
+    # An isolated per-test database file: a shared cwd temp name collides with
+    # concurrent runs and pytest tmp_path is unavailable in this sandbox.
+    _MONITORING_DB_ROOT.mkdir(parents=True, exist_ok=True)
+    db_path = _MONITORING_DB_ROOT / f"monitoring-{uuid.uuid4().hex}.db"
     db = await SQLiteRepository.open(db_path)
     try:
         yield db
     finally:
         await db.close()
-        db_path.unlink(missing_ok=True)
+        # Public eviction helpers only: cached quota/OAuth poll state is keyed
+        # by id(repository), and a recycled id must never inherit a stale entry.
+        monitoring.clear_quota_poll_cache(db)
+        clear_oauth_poll_state(db)
+        _unlink_with_retries(db_path)
+        _unlink_with_retries(Path(f"{db_path}.migration.lock"))
 
 
 def _event(

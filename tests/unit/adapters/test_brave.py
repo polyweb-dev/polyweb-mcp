@@ -1,4 +1,9 @@
-"""Acceptance coverage for the Brave Search adapter; all HTTP is mocked."""
+"""Acceptance coverage for the Brave Search adapter; all HTTP is mocked.
+
+Every adapter is built with an explicitly injected fake key: the retired
+``get_provider_secret_resolver`` seam no longer exists, so the wire token is
+proven to come from the constructor argument alone.
+"""
 
 import asyncio
 from datetime import UTC, datetime
@@ -8,21 +13,10 @@ import httpx
 import pytest
 from pydantic import SecretStr
 
-import freesearch.adapters.brave as brave_module
 from freesearch.adapters.brave import BraveAdapter
 from freesearch.infrastructure.resilience import ProviderOperationError
 from freesearch.infrastructure.secrets import PROVIDER_ENV_VARS, ProviderName
 from freesearch.models.contracts import QuotaSource, SearchRequest, SearchResponse, UsageOperation
-
-
-class _Resolver:
-    def __init__(self, key: str | None = "brave-secret") -> None:
-        self.key = SecretStr(key) if key is not None else None
-        self.requested: list[ProviderName] = []
-
-    def get(self, provider: ProviderName) -> SecretStr | None:
-        self.requested.append(provider)
-        return self.key
 
 
 class _Runner:
@@ -52,18 +46,17 @@ def _payload(**overrides: object) -> dict[str, object]:
     return payload
 
 
-def _adapter(handler, *, runner: _Runner | None = None) -> tuple[BraveAdapter, httpx.AsyncClient]:
+def _adapter(
+    handler, *, runner: _Runner | None = None, key: str = "brave-secret"
+) -> tuple[BraveAdapter, httpx.AsyncClient]:
     client = httpx.AsyncClient(
         transport=httpx.MockTransport(handler),
         headers={"Authorization": "Bearer caller", "X-API-Key": "caller-key"},
     )
-    return BraveAdapter(client, runner=runner), client
+    return BraveAdapter(client, runner=runner, api_key=SecretStr(key)), client
 
 
-def _assert_wire_request(
-    request: httpx.Request, resolver: _Resolver, client: httpx.AsyncClient
-) -> None:
-    assert resolver.requested == [ProviderName.BRAVE]
+def _assert_wire_request(request: httpx.Request, client: httpx.AsyncClient) -> None:
     assert str(request.url).startswith("https://api.search.brave.com/res/v1/web/search?")
     assert request.url.params["q"] == "Brave Search"
     assert request.url.params["count"] == "20"
@@ -85,9 +78,7 @@ def _assert_normalized_response(response: SearchResponse) -> None:
     assert response.usage.metadata == {"rate_limit_remaining": 1999}
 
 
-async def test_search_maps_wire_request_and_normalized_response(monkeypatch) -> None:
-    resolver = _Resolver()
-    monkeypatch.setattr(brave_module, "get_provider_secret_resolver", lambda: resolver)
+async def test_search_maps_wire_request_and_normalized_response() -> None:
     requests: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -108,23 +99,26 @@ async def test_search_maps_wire_request_and_normalized_response(monkeypatch) -> 
     finally:
         await client.aclose()
 
-    _assert_wire_request(requests[0], resolver, client)
+    _assert_wire_request(requests[0], client)
     _assert_normalized_response(response)
 
 
 async def test_missing_key_fails_closed_and_uses_planned_secret_name(monkeypatch) -> None:
-    resolver = _Resolver(None)
-    monkeypatch.setattr(brave_module, "get_provider_secret_resolver", lambda: resolver)
+    # An ambient environment credential must never satisfy construction: only an
+    # explicitly injected key can, so this stays fail-closed.
+    monkeypatch.setenv("FREESEARCH_BRAVE_SEARCH_API_KEY", "ambient-env-key")
     client = httpx.AsyncClient()
     try:
         with pytest.raises(ProviderOperationError) as excinfo:
             BraveAdapter(client)
+        with pytest.raises(ProviderOperationError) as explicit_none:
+            BraveAdapter(client, api_key=None)
     finally:
         await client.aclose()
 
-    assert resolver.requested == [ProviderName.BRAVE]
     assert excinfo.value.error.code == "configuration_error"
     assert excinfo.value.error.retryable is False
+    assert explicit_none.value.error.code == "configuration_error"
     assert PROVIDER_ENV_VARS[ProviderName.BRAVE] == "FREESEARCH_BRAVE_SEARCH_API_KEY"
 
 
@@ -133,13 +127,11 @@ async def test_missing_key_fails_closed_and_uses_planned_secret_name(monkeypatch
     [(400, False), (429, True), (500, True), (502, True), (503, True), (504, True)],
 )
 async def test_search_normalizes_status_errors_without_key_leaks(
-    monkeypatch, status: int, retryable: bool
+    status: int, retryable: bool
 ) -> None:
-    monkeypatch.setattr(
-        brave_module, "get_provider_secret_resolver", lambda: _Resolver("top-secret")
-    )
     adapter, client = _adapter(
-        lambda request: httpx.Response(status, json={"message": "top-secret"})
+        lambda request: httpx.Response(status, json={"message": "top-secret"}),
+        key="top-secret",
     )
     try:
         with pytest.raises(ProviderOperationError) as excinfo:
@@ -155,8 +147,7 @@ async def test_search_normalizes_status_errors_without_key_leaks(
 
 
 @pytest.mark.parametrize("payload", [{}, {"web": {}}, {"web": {"results": [{}]}}])
-async def test_search_rejects_malformed_payloads(monkeypatch, payload: dict[str, object]) -> None:
-    monkeypatch.setattr(brave_module, "get_provider_secret_resolver", lambda: _Resolver())
+async def test_search_rejects_malformed_payloads(payload: dict[str, object]) -> None:
     adapter, client = _adapter(lambda request: httpx.Response(200, json=payload))
     try:
         with pytest.raises(ProviderOperationError) as excinfo:
@@ -169,8 +160,7 @@ async def test_search_rejects_malformed_payloads(monkeypatch, payload: dict[str,
     assert excinfo.value.__cause__ is None
 
 
-async def test_every_concurrent_search_enters_shared_runner(monkeypatch) -> None:
-    monkeypatch.setattr(brave_module, "get_provider_secret_resolver", lambda: _Resolver())
+async def test_every_concurrent_search_enters_shared_runner() -> None:
     runner = _Runner()
     adapter, client = _adapter(
         lambda request: httpx.Response(429, json={"error": "rate"}), runner=runner
@@ -187,8 +177,7 @@ async def test_every_concurrent_search_enters_shared_runner(monkeypatch) -> None
     assert runner.entries == ["brave", "brave", "brave"]
 
 
-async def test_capabilities_fetch_rejection_and_search_cost(monkeypatch) -> None:
-    monkeypatch.setattr(brave_module, "get_provider_secret_resolver", lambda: _Resolver())
+async def test_capabilities_fetch_rejection_and_search_cost() -> None:
     adapter, client = _adapter(lambda request: httpx.Response(200, json=_payload()))
     try:
         assert adapter.capabilities.search is True
@@ -213,8 +202,7 @@ class TestBraveMonthlyCounter:
 
         return handle
 
-    async def test_bare_headers_yield_implied_estimated_snapshot(self, monkeypatch) -> None:
-        monkeypatch.setattr(brave_module, "get_provider_secret_resolver", lambda: _Resolver())
+    async def test_bare_headers_yield_implied_estimated_snapshot(self) -> None:
         adapter, client = _adapter(self._handler({"X-RateLimit-Remaining": "49"}))
         try:
             response = await adapter.search(SearchRequest(query="q", limit=2))
@@ -230,8 +218,7 @@ class TestBraveMonthlyCounter:
         assert snapshot.metadata.get("limit_implied") is True
         assert snapshot.remaining_percent == Decimal("99.9")
 
-    async def test_counter_ticks_down_per_search(self, monkeypatch) -> None:
-        monkeypatch.setattr(brave_module, "get_provider_secret_resolver", lambda: _Resolver())
+    async def test_counter_ticks_down_per_search(self) -> None:
         adapter, client = _adapter(self._handler({}))
         try:
             first = await adapter.search(SearchRequest(query="q", limit=2))
@@ -244,8 +231,7 @@ class TestBraveMonthlyCounter:
             f"second search must leave 998, saw {second.quota_snapshot.remaining!r}"
         )
 
-    async def test_header_pair_reanchors_counter(self, monkeypatch) -> None:
-        monkeypatch.setattr(brave_module, "get_provider_secret_resolver", lambda: _Resolver())
+    async def test_header_pair_reanchors_counter(self) -> None:
         adapter, client = _adapter(self._handler({}))
         try:
             await adapter.search(SearchRequest(query="q", limit=2))
@@ -263,8 +249,7 @@ class TestBraveMonthlyCounter:
         assert snapshot.source == QuotaSource.OBSERVED
         assert adapter._monthly_used == Decimal("100")
 
-    async def test_month_rollover_resets_counter(self, monkeypatch) -> None:
-        monkeypatch.setattr(brave_module, "get_provider_secret_resolver", lambda: _Resolver())
+    async def test_month_rollover_resets_counter(self) -> None:
         adapter, client = _adapter(self._handler({}))
         try:
             await adapter.search(SearchRequest(query="q", limit=2))

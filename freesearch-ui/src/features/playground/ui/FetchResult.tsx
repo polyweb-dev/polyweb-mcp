@@ -1,5 +1,6 @@
-import { ProviderLogo } from "@/components/common/ProviderLogo"
 import type { FetchResponse } from "@/domains/execution"
+import { providerIdentity } from "@/domains/providers"
+import { ProviderBadge } from "@/shared/ui/ProviderBadge"
 
 export interface FetchResultProps {
   result: FetchResponse
@@ -9,6 +10,9 @@ export interface FetchResultProps {
 
 /** Fetch result: metadata column plus the parsed markdown document. */
 export function FetchResult({ result: activeFetch, copied, onCopy }: FetchResultProps) {
+  // The wire name holds the raw provider value ("you"). The catalog name is the
+  // display name, and `providerIdentity` resolves the alias plus the logo key.
+  const provider = providerIdentity(activeFetch.document.providerId)
   return (
     <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start pt-2">
       {/* Left Column: Metadata & Outline */}
@@ -32,10 +36,12 @@ export function FetchResult({ result: activeFetch, copied, onCopy }: FetchResult
 
           <div className="flex items-center justify-between py-1.5 border-b border-[var(--border-subtle)]">
             <span>Provider</span>
-            <span className="inline-flex items-center gap-1.5 text-[var(--text)]">
-              <ProviderLogo providerId={activeFetch.document.providerId} name={activeFetch.document.providerName} className="size-3.5" />
-              {activeFetch.document.providerName}
-            </span>
+            <ProviderBadge
+              providerId={provider.id}
+              name={provider.name}
+              className="text-[var(--text)]"
+              logoClassName="size-3.5"
+            />
           </div>
 
           <div className="flex items-center justify-between py-1.5 border-b border-[var(--border-subtle)]">

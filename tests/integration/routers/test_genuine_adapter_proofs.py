@@ -35,6 +35,7 @@ from freesearch.adapters.firecrawl import FirecrawlAdapter
 from freesearch.adapters.keenable import KeenableAdapter
 from freesearch.adapters.parallel import ParallelAdapter
 from freesearch.adapters.tavily import TavilyAdapter
+from freesearch.adapters.tinyfish import TinyfishAdapter
 from freesearch.adapters.youcom import YoucomAdapter
 from freesearch.configuration.config import get_settings
 from freesearch.infrastructure.secrets import PROVIDER_ENV_VARS, ProviderName
@@ -53,6 +54,7 @@ _GENUINE_ADAPTERS = {
     ProviderName.KEENABLE: KeenableAdapter,
     ProviderName.PARALLEL: ParallelAdapter,
     ProviderName.TAVILY: TavilyAdapter,
+    ProviderName.TINYFISH: TinyfishAdapter,
     ProviderName.YOU: YoucomAdapter,
 }
 
@@ -64,6 +66,7 @@ _HOST_FRAG = {
     ProviderName.KEENABLE: "keenable",
     ProviderName.PARALLEL: "api.parallel.ai",
     ProviderName.TAVILY: "tavily",
+    ProviderName.TINYFISH: "tinyfish",
     ProviderName.YOU: "ydc-index",
 }
 
@@ -75,6 +78,7 @@ _AUTH_HEADER = {
     ProviderName.KEENABLE: "x-api-key",
     ProviderName.PARALLEL: "x-api-key",
     ProviderName.TAVILY: "authorization",
+    ProviderName.TINYFISH: "x-api-key",
     ProviderName.YOU: "x-api-key",
 }
 
@@ -180,6 +184,17 @@ class _VendorWire:
                         }
                     ],
                     "costDollars": {"total": 0.01},
+                }
+            )
+        if host == "api.search.tinyfish.ai" and path in ("", "/"):
+            return _json(
+                {
+                    "query": "wire proof",
+                    "results": [
+                        _result("https://example.com/tinyfish", snippet="tinyfish snippet")
+                    ],
+                    "total_results": 1,
+                    "page": 0,
                 }
             )
         return httpx.Response(404, json={"error": "proof-stub-no-route", "path": path})

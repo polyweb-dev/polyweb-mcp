@@ -121,6 +121,94 @@ def _indexes(database: Path) -> set[str]:
         }
 
 
+# Exact ``trace_spans`` contract per PLAN §3.1 (revision 0003).
+_TRACE_SPAN_COLUMNS = frozenset(
+    {
+        "span_id",
+        "trace_id",
+        "parent_span_id",
+        "name",
+        "kind",
+        "started_at",
+        "ended_at",
+        "duration_ms",
+        "status_code",
+        "status_message",
+        "outcome",
+        "error_type",
+        "operation",
+        "provider",
+        "input_text",
+        "output_json",
+        "result_count",
+        "attributes_json",
+        "events_json",
+        "resource_json",
+    }
+)
+_TRACE_SPAN_NOTNULL = frozenset(
+    {
+        "trace_id",
+        "name",
+        "kind",
+        "started_at",
+        "ended_at",
+        "duration_ms",
+        "status_code",
+        "outcome",
+        "attributes_json",
+        "events_json",
+        "resource_json",
+    }
+)
+_TRACE_SPAN_NULLABLE = _TRACE_SPAN_COLUMNS - _TRACE_SPAN_NOTNULL - {"span_id"}
+_TRACE_INDEXES = frozenset({"trace_spans_trace_started_at", "trace_spans_root_started_at"})
+
+
+def _table_info(database: Path, table: str) -> dict[str, tuple[bool, bool]]:
+    """Return ``column -> (notnull, is_primary_key)`` for one table."""
+
+    with sqlite3.connect(database) as connection:
+        return {
+            str(row[1]): (bool(row[3]), bool(row[5]))
+            for row in connection.execute(f'PRAGMA table_info("{table}")')
+        }
+
+
+def _index_columns(database: Path, index: str) -> list[str]:
+    with sqlite3.connect(database) as connection:
+        return [str(row[2]) for row in connection.execute(f'PRAGMA index_info("{index}")')]
+
+
+def _index_sql(database: Path, index: str) -> str:
+    with sqlite3.connect(database) as connection:
+        row = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?",
+            (index,),
+        ).fetchone()
+    assert row is not None
+    return str(row[0])
+
+
+def _assert_trace_spans_schema(database: Path) -> None:
+    """Assert the exact ``trace_spans`` table/column/index contract."""
+
+    assert _columns(database, "trace_spans") == set(_TRACE_SPAN_COLUMNS)
+    info = _table_info(database, "trace_spans")
+    assert info["span_id"] == (False, True)
+    for column in _TRACE_SPAN_NOTNULL:
+        assert info[column][0] is True, column
+    for column in _TRACE_SPAN_NULLABLE:
+        assert info[column][0] is False, column
+    assert _indexes(database) >= _TRACE_INDEXES
+    assert _index_columns(database, "trace_spans_trace_started_at") == [
+        "trace_id",
+        "started_at",
+    ]
+    assert _index_columns(database, "trace_spans_root_started_at") == ["started_at"]
+    assert "parent_span_id IS NULL" in _index_sql(database, "trace_spans_root_started_at")
+
+
 def _seed_at_0002(database: Path) -> None:
     migration_module.command.upgrade(_config_for(database), _PREVIOUS_HEAD)
     with sqlite3.connect(database) as connection:
@@ -376,7 +464,17 @@ def test_fresh_database_at_head_has_no_cache_metadata(tmp_path: Path) -> None:
         "usage_events_provider_observed_at",
         "quota_snapshots_provider_source_observed_at",
         "provider_health_provider_checked_at",
+        "trace_spans_trace_started_at",
+        "trace_spans_root_started_at",
     }
+    assert _tables(database) == {
+        "usage_events",
+        "runtime_settings",
+        "quota_snapshots",
+        "provider_health",
+        "trace_spans",
+    }
+    _assert_trace_spans_schema(database)
     validate_database_schema(database)
 
 
@@ -411,7 +509,14 @@ def test_upgrade_from_0002_drops_seeded_cache_rows_preserving_unrelated_data(
     assert _all_rows(database, "usage_events", "id")[0][3] == "12.50"
     assert _all_rows(database, "quota_snapshots", "id")[0][3] == "75.25"
     assert _all_rows(database, "quota_snapshots", "id")[0][4] == "100.00"
-    assert _indexes(database) == indexes_before - {"cache_metadata_expires_at"}
+    assert _indexes(database) == (indexes_before - {"cache_metadata_expires_at"}) | set(
+        _TRACE_INDEXES
+    )
+    _assert_trace_spans_schema(database)
+    # The 0002 database had no trace store: upgrade creates it empty.
+    with sqlite3.connect(database) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM trace_spans").fetchone() == (0,)
+    assert "trace_spans" not in _tables(result.backup)
     # The pre-migration backup retains the dropped cache rows for recovery.
     assert "cache_metadata" in _tables(result.backup)
     assert len(_all_rows(result.backup, "cache_metadata", "cache_key")) == 2
@@ -424,7 +529,9 @@ def test_downgrade_recreates_cache_metadata_table_and_index(tmp_path: Path) -> N
     database = tmp_path / "downgrade-cache.db"
     upgrade_database(database)
 
-    migration_module.command.downgrade(_config_for(database), "-1")
+    # Two steps back from the 0003 head: past the trace store (bf9f40b58cef)
+    # to the last revision that still owns the cache table (0002).
+    migration_module.command.downgrade(_config_for(database), "-2")
 
     assert _revision(database) == [_PREVIOUS_HEAD]
     assert "cache_metadata" in _tables(database)
@@ -439,6 +546,9 @@ def test_downgrade_recreates_cache_metadata_table_and_index(tmp_path: Path) -> N
         "size_bytes",
     }
     assert "cache_metadata_expires_at" in _indexes(database)
+    # Downgrade drops only the trace store added by revision 0003.
+    assert "trace_spans" not in _tables(database)
+    assert not (_TRACE_INDEXES & _indexes(database))
 
     result = upgrade_database(database)
 
@@ -446,4 +556,5 @@ def test_downgrade_recreates_cache_metadata_table_and_index(tmp_path: Path) -> N
     assert result.current_revision == migration_head()
     assert "cache_metadata" not in _tables(database)
     assert "cache_metadata_expires_at" not in _indexes(database)
+    _assert_trace_spans_schema(database)
     validate_database_schema(database)

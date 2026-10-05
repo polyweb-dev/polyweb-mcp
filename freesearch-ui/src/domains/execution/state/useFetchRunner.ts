@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback } from "react";
 import { apiService } from "@/services/api/freesearchApi";
 import { errorMessage } from "@/shared/api/http";
 import type { ToastNotification } from "@/shared/notifications/context";
@@ -7,6 +7,17 @@ import type { UsageEvent } from "@/domains/dashboard";
 import { mapFetchResponse } from "@/services/api/mappers";
 import { createTimeoutSignal, makeFetchEvent } from "@/domains/execution";
 import { toBackendId } from "@/domains/providers";
+import { useAppDispatch, useAppSelector } from "@/store/hooks";
+import {
+  clearFetch as clearFetchAction,
+  fetchFailed,
+  fetchFinished,
+  fetchStarted,
+  fetchSucceeded,
+  selectActiveFetch,
+  selectFetchError,
+  selectIsFetching,
+} from "@/store/playgroundSlice";
 
 export type ShowToast = (message: string, type?: ToastNotification["type"]) => void;
 
@@ -17,21 +28,26 @@ interface FetchRunnerDeps {
   prependUsageEvent: (event: UsageEvent) => void;
 }
 
+/**
+ * Fetch API orchestration: request mapping, timeout, toasts, usage events, and
+ * dashboard refresh stay here; the fetched document and its status live in the
+ * playground slice so they survive navigation and reload.
+ */
 export function useFetchRunner({
   showToast,
   fallbackEnabled,
   refreshDashboard,
   prependUsageEvent,
 }: FetchRunnerDeps) {
-  const [activeFetch, setActiveFetch] = useState<FetchResponse | null>(null);
-  const [isFetching, setIsFetching] = useState(false);
-  const [fetchError, setFetchError] = useState<string | null>(null);
+  const dispatch = useAppDispatch();
+  const activeFetch = useAppSelector(selectActiveFetch);
+  const isFetching = useAppSelector(selectIsFetching);
+  const fetchError = useAppSelector(selectFetchError);
 
   const runFetch = useCallback(
     async (request: FetchRequest): Promise<FetchResponse | null> => {
-      setIsFetching(true);
-      setFetchError(null);
-      setActiveFetch(null);
+      // Starting a fetch also drops the previous document (fetchStarted).
+      dispatch(fetchStarted());
       const startedAt = performance.now();
       const providerIds = request.providerId ? [toBackendId(request.providerId)] : [];
       const body = {
@@ -49,26 +65,25 @@ export function useFetchRunner({
         const response = mapFetchResponse(wire, {
           wallClockMs: Math.round(performance.now() - startedAt),
         });
-        setActiveFetch(response);
+        dispatch(fetchSucceeded(response));
         prependUsageEvent(makeFetchEvent(response));
         void refreshDashboard();
         return response;
       } catch (error) {
         const message = errorMessage(error, "Document fetch failed");
-        setFetchError(message);
+        dispatch(fetchFailed(message));
         showToast(message, "error");
         return null;
       } finally {
-        setIsFetching(false);
+        dispatch(fetchFinished());
       }
     },
-    [fallbackEnabled, refreshDashboard, showToast, prependUsageEvent],
+    [dispatch, fallbackEnabled, refreshDashboard, showToast, prependUsageEvent],
   );
 
   const clearFetch = useCallback(() => {
-    setActiveFetch(null);
-    setFetchError(null);
-  }, []);
+    dispatch(clearFetchAction());
+  }, [dispatch]);
 
   return { activeFetch, isFetching, fetchError, runFetch, clearFetch };
 }

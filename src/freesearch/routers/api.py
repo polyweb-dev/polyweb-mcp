@@ -19,6 +19,7 @@ from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 import httpx
 from fastapi import FastAPI, HTTPException
@@ -32,6 +33,15 @@ from freesearch.infrastructure.encrypted_store import (
     migrate_legacy_secrets_to_encrypted_db,
 )
 from freesearch.infrastructure.http import create_async_client
+from freesearch.infrastructure.observability import (
+    NO_OP_OBSERVABILITY,
+    ObservabilityRuntime,
+    SpanKindName,
+    build_observability,
+    current_observability,
+    error_type_of,
+)
+from freesearch.infrastructure.observability_asgi import ProviderTraceMiddleware
 from freesearch.infrastructure.secrets import AsyncSecretStore, ProviderName
 from freesearch.mcp.server import _apply_parallel_seed
 from freesearch.models.contracts import (
@@ -49,6 +59,18 @@ from freesearch.models.contracts import (
     UsageOperation,
     UsageStatus,
 )
+from freesearch.models.observability import (
+    TRACE_EVENT_PROVIDER_REQUEST,
+    TRACE_EVENT_PROVIDER_RESPONSE,
+    TraceAttribute,
+    TraceFetchOutput,
+    TraceOperation,
+    TraceRootSpan,
+    TraceSearchOutput,
+    TraceSearchResult,
+    TraceSpanName,
+)
+from freesearch.persistence.database_migrations import upgrade_database
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.control import (
     _build_with_resolved_secret,
@@ -57,6 +79,7 @@ from freesearch.routers.control import (
     register_control_routes,
     routing_policy,
 )
+from freesearch.routers.observability import register_observability_routes
 from freesearch.services.aggregation import reciprocal_rank_fusion
 from freesearch.services.monitoring import (
     MAX_RECENT_LIMIT,
@@ -70,6 +93,14 @@ from freesearch.services.monitoring import (
     tracked_call,
 )
 from freesearch.services.routing import RoutingError, select_route
+
+# Route templates that receive a root server span. Extending provider-querying
+# coverage means adding one entry here (plus its operation shape) — the
+# middleware, exporter, storage, and UI need no change.
+_TRACED_ROUTES: dict[tuple[str, str], str] = {
+    ("POST", "/search"): TraceRootSpan.SEARCH.value,
+    ("POST", "/fetch"): TraceRootSpan.FETCH.value,
+}
 
 
 async def _build_app_adapters(
@@ -164,8 +195,25 @@ def create_app(
             # applies any persisted Parallel monthly budget without requiring
             # a search/fetch request to happen first.
             await _apply_parallel_seed(routes, repo)
+            trace_database = _trace_database(repo, database)
+            if trace_database is not None and not isinstance(repo, SQLiteRepository):
+                # An injected-adapters composition can still point at a trace
+                # database; adopt it (upgrade + validate) before the exporter
+                # starts writing. A failure here is not fatal: the exporter
+                # reports a failed batch instead of failing user requests.
+                with suppress(Exception):
+                    await asyncio.to_thread(upgrade_database, trace_database)
+            app.state.observability = build_observability(
+                get_settings(),
+                database=trace_database,
+            )
             yield
         finally:
+            # Traces are force-flushed and shut down before the repository and
+            # adapters close, so the last batch cannot race a closing database.
+            runtime: ObservabilityRuntime = app.state.observability
+            app.state.observability = NO_OP_OBSERVABILITY
+            await asyncio.to_thread(runtime.shutdown)
             if owns_repository and repo is not None:
                 clear_quota_poll_cache(repo, routes)
                 app.state.repository = None
@@ -181,38 +229,51 @@ def create_app(
     app.state.secret_store = secret_store
     app.state._uses_default_secret_store = secret_store is None
     app.state._control_lock = asyncio.Lock()
+    # Tracing starts disabled and is enabled by the lifespan once the trace
+    # database is known, so tests that never enter the lifespan stay no-op.
+    app.state.observability = NO_OP_OBSERVABILITY
+    app.add_middleware(
+        ProviderTraceMiddleware,
+        runtime_getter=lambda: app.state.observability,
+        traced_routes=_TRACED_ROUTES,
+    )
     register_control_routes(app)
+    register_observability_routes(app)
 
     @app.post("/search", response_model=SearchResponse)
     async def search(request: SearchRequest) -> SearchResponse:
         """Search the web through the best available provider or all providers concurrently."""
-        if request.fanout or request.routing.mode is RoutingMode.FANOUT:
-            return await _dispatch_fanout_search(
+        observability = current_observability()
+        with observability.span(TraceSpanName.BACKEND, attributes=_request_attributes(request)):
+            if request.fanout or request.routing.mode is RoutingMode.FANOUT:
+                return await _dispatch_fanout_search(
+                    request,
+                    routes=app.state._routes,
+                    repository=app.state.repository,
+                    secret_store=app.state.secret_store,
+                )
+            return await _dispatch(
                 request,
+                UsageOperation.SEARCH,
+                lambda target, req: target.search(req),
                 routes=app.state._routes,
                 repository=app.state.repository,
                 secret_store=app.state.secret_store,
             )
-        return await _dispatch(
-            request,
-            UsageOperation.SEARCH,
-            lambda target, req: target.search(req),
-            routes=app.state._routes,
-            repository=app.state.repository,
-            secret_store=app.state.secret_store,
-        )
 
     @app.post("/fetch", response_model=FetchResponse)
     async def fetch(request: FetchRequest) -> FetchResponse:
         """Fetch a URL's content through the best available provider."""
-        return await _dispatch(
-            request,
-            UsageOperation.FETCH,
-            lambda target, req: target.fetch(req),
-            routes=app.state._routes,
-            repository=app.state.repository,
-            secret_store=app.state.secret_store,
-        )
+        observability = current_observability()
+        with observability.span(TraceSpanName.BACKEND, attributes=_request_attributes(request)):
+            return await _dispatch(
+                request,
+                UsageOperation.FETCH,
+                lambda target, req: target.fetch(req),
+                routes=app.state._routes,
+                repository=app.state.repository,
+                secret_store=app.state.secret_store,
+            )
 
     @app.get("/stats", response_model=StatsResponse)
     async def stats(limit: int = 20) -> StatsResponse:
@@ -274,6 +335,179 @@ def _pin_free_first(ordered: list[ProviderAdapter], preset: CostPreset) -> list[
     pinned = [adapter for adapter in ordered if adapter.name == "keenable"]
     rest = [adapter for adapter in ordered if adapter.name != "keenable"]
     return pinned + rest
+
+
+def _trace_database(repo: SQLiteRepository | None, database: str | Path | None) -> Path | None:
+    """Return the database that owns this app's traces, else ``None``.
+
+    An open repository is authoritative (the real server, and any injected
+    per-test database). Otherwise an explicitly supplied ``database`` is used;
+    with neither, tracing stays a no-op — an injected-adapters composition must
+    not silently write into a developer's default database.
+    """
+
+    if isinstance(repo, SQLiteRepository):
+        return repo.database_path
+    if database is None:
+        return None
+    return resolve_database_path(database)
+
+
+def _operation_name(request: SearchRequest | FetchRequest) -> TraceOperation:
+    """Return the trace operation for a provider-querying request."""
+
+    return TraceOperation.SEARCH if isinstance(request, SearchRequest) else TraceOperation.FETCH
+
+
+def _request_attributes(request: SearchRequest | FetchRequest) -> dict[str, Any]:
+    """Provider-neutral request shape for backend/route span attributes."""
+
+    attributes: dict[str, Any] = {
+        TraceAttribute.OPERATION: _operation_name(request).value,
+        TraceAttribute.ROUTING_MODE: request.routing.mode.value,
+    }
+    attributes[TraceAttribute.REQUEST_LIMIT] = (
+        request.limit if isinstance(request, SearchRequest) else request.max_chars
+    )
+    return attributes
+
+
+def _provider_request_event(request: SearchRequest | FetchRequest) -> dict[str, Any]:
+    """Outbound provider input event: content yes, credentials/headers never."""
+
+    if isinstance(request, SearchRequest):
+        return {
+            "query": request.query,
+            "limit": request.limit,
+            "mode": request.mode,
+            "language": request.language,
+            "country_code": request.country_code,
+            "domains": list(request.domains),
+        }
+    return {
+        "url": str(request.url),
+        "max_chars": request.max_chars,
+        "pdf_pages": request.pdf_pages,
+        "json_extract": request.json_extract,
+        "enhanced": request.enhanced,
+    }
+
+
+def _search_results_payload(response: SearchResponse) -> list[TraceSearchResult]:
+    """Normalized results out, in the one shape the trace read API serves."""
+
+    return [
+        TraceSearchResult(
+            title=result.title,
+            url=str(result.url),
+            snippet=result.snippet,
+            source=result.source,
+            score=result.score,
+        )
+        for result in response.results
+    ]
+
+
+def _provider_response_event(response: SearchResponse | FetchResponse) -> dict[str, Any]:
+    """Normalized provider response event (bounded; the root holds full output)."""
+
+    if isinstance(response, SearchResponse):
+        return {
+            "result_count": len(response.results),
+            "results": [item.model_dump() for item in _search_results_payload(response)],
+        }
+    document = response.document
+    return {
+        "result_count": 1,
+        "url": str(document.url),
+        "title": document.title,
+        "content_length": len(document.content),
+    }
+
+
+def _result_count(response: SearchResponse | FetchResponse) -> int:
+    """Return how many results the caller received."""
+
+    return len(response.results) if isinstance(response, SearchResponse) else 1
+
+
+def _annotate_root_error(observability: ObservabilityRuntime, error: BaseException) -> None:
+    """Mark the root span as failed with a low-cardinality type and message.
+
+    FastAPI turns an unhandled handler failure into a response inside the app,
+    so the root span would otherwise look successful; annotating the error keeps
+    the Activity row honest (and the failing child keeps the exception event).
+    """
+
+    observability.annotate_root(
+        {
+            TraceAttribute.ERROR_TYPE: error_type_of(error),
+            TraceAttribute.ERROR_MESSAGE: str(error),
+        }
+    )
+
+
+def _annotate_root(
+    observability: ObservabilityRuntime,
+    request: SearchRequest | FetchRequest,
+    response: SearchResponse | FetchResponse,
+) -> None:
+    """Project the request/response onto the root span (the exporter's summary).
+
+    Root attributes are the single source of the Activity summary row: the
+    operation, provider, input text, result count, partial flag, and the tagged
+    output payload the trace read API serves back.
+    """
+
+    if isinstance(request, SearchRequest) and isinstance(response, SearchResponse):
+        _annotate_search_root(observability, request, response)
+    elif isinstance(request, FetchRequest) and isinstance(response, FetchResponse):
+        _annotate_fetch_root(observability, request, response)
+
+
+def _annotate_search_root(
+    observability: ObservabilityRuntime, request: SearchRequest, response: SearchResponse
+) -> None:
+    """Annotate the root span of a search request."""
+
+    output = TraceSearchOutput(query=response.query, results=_search_results_payload(response))
+    observability.annotate_root(
+        {
+            TraceAttribute.OPERATION: TraceOperation.SEARCH.value,
+            TraceAttribute.PROVIDER: response.provider,
+            TraceAttribute.REQUEST_QUERY: request.query,
+            TraceAttribute.REQUEST_LIMIT: request.limit,
+            TraceAttribute.RESPONSE_RESULT_COUNT: len(response.results),
+            TraceAttribute.RESPONSE_PARTIAL: any(item.error for item in response.waterfall),
+            TraceAttribute.RESPONSE_OUTPUT_JSON: output.model_dump_json(),
+        }
+    )
+
+
+def _annotate_fetch_root(
+    observability: ObservabilityRuntime, request: FetchRequest, response: FetchResponse
+) -> None:
+    """Annotate the root span of a fetch request."""
+
+    document = response.document
+    output = TraceFetchOutput(
+        url=str(document.url),
+        title=document.title,
+        content=document.content,
+        content_length=len(document.content),
+        truncated=bool(document.metadata.get("truncated")),
+    )
+    observability.annotate_root(
+        {
+            TraceAttribute.OPERATION: TraceOperation.FETCH.value,
+            TraceAttribute.PROVIDER: response.provider,
+            TraceAttribute.REQUEST_URL: str(request.url),
+            TraceAttribute.REQUEST_LIMIT: request.max_chars,
+            TraceAttribute.RESPONSE_RESULT_COUNT: 1,
+            TraceAttribute.RESPONSE_PARTIAL: False,
+            TraceAttribute.RESPONSE_OUTPUT_JSON: output.model_dump_json(),
+        }
+    )
 
 
 async def _routing_state(
@@ -362,15 +596,50 @@ async def _dispatch[
     preset, and fallback policy; adapter failures propagate unchanged so the
     REST 500 / MCP ToolError contracts are preserved (no cross-adapter retry
     on failure, pinned by the offline BDD failure scenario).
+
+    Trace shape: ``freesearch.route`` (planning), ``freesearch.provider``
+    (one client span per attempted provider, with request/response events), and
+    ``freesearch.results`` (response projection). With a single candidate there
+    is nothing to fuse, so the results stage is the projection and root summary
+    annotation itself.
     """
 
-    attempts = await _plan_route(request, routes, repository, secret_store)
-    return await tracked_call(
-        repository,
-        attempts[0],
-        lambda target: invoke(target, request),
-        operation=operation,
-    )
+    observability = current_observability()
+    with observability.span(TraceSpanName.ROUTE, attributes=_request_attributes(request)):
+        attempts = await _plan_route(request, routes, repository, secret_store)
+    provider = attempts[0]
+    with observability.span(
+        TraceSpanName.PROVIDER,
+        kind=SpanKindName.CLIENT,
+        attributes={
+            TraceAttribute.OPERATION: _operation_name(request).value,
+            TraceAttribute.PROVIDER: provider.name,
+            TraceAttribute.ROUTING_CANDIDATE_COUNT: len(attempts),
+        },
+    ) as provider_span:
+        provider_span.add_event(
+            TRACE_EVENT_PROVIDER_REQUEST, attributes=_provider_request_event(request)
+        )
+        try:
+            response = await tracked_call(
+                repository,
+                provider,
+                lambda target: invoke(target, request),
+                operation=operation,
+            )
+        except Exception as error:
+            _annotate_root_error(observability, error)
+            raise
+        provider_span.add_event(
+            TRACE_EVENT_PROVIDER_RESPONSE, attributes=_provider_response_event(response)
+        )
+    with observability.span(
+        TraceSpanName.RESULTS,
+        attributes={TraceAttribute.OPERATION: _operation_name(request).value},
+    ) as results_span:
+        results_span.set_attributes({TraceAttribute.RESPONSE_RESULT_COUNT: _result_count(response)})
+        _annotate_root(observability, request, response)
+    return response
 
 
 async def _dispatch_fanout_search(
@@ -380,7 +649,14 @@ async def _dispatch_fanout_search(
     repository: SQLiteRepository | None,
     secret_store: AsyncSecretStore,
 ) -> SearchResponse:
-    """Execute search across all eligible configured providers concurrently and fuse results."""
+    """Execute search across all eligible configured providers concurrently and fuse results.
+
+    Trace shape: one root with a ``freesearch.route`` planning span, one
+    concurrent ``freesearch.provider`` client span per candidate, and a single
+    ``freesearch.results`` span around the RRF assembly — never one trace per
+    provider. A handled provider failure marks that child ERROR and the root
+    ``partial`` (the caller still received a response).
+    """
     if not routes:
         raise HTTPException(
             status_code=503,
@@ -389,19 +665,23 @@ async def _dispatch_fanout_search(
                 "(PUT /api/v1/providers/{id}/secret)"
             ),
         )
-    policy = await routing_policy(repository)
-    ordered = await _order_routes(routes, repository, policy.cost_optimization_preset)
-    health_snapshots, quota_snapshots = await _routing_state(repository, ordered, secret_store)
-    fanout_request = request.model_copy(
-        update={"routing": request.routing.model_copy(update={"mode": RoutingMode.FANOUT})}
-    )
-    try:
-        candidates = select_route(fanout_request, ordered, health_snapshots, quota_snapshots)
-    except RoutingError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    observability = current_observability()
+    with observability.span(TraceSpanName.ROUTE, attributes=_request_attributes(request)):
+        policy = await routing_policy(repository)
+        ordered = await _order_routes(routes, repository, policy.cost_optimization_preset)
+        health_snapshots, quota_snapshots = await _routing_state(repository, ordered, secret_store)
+        fanout_request = request.model_copy(
+            update={"routing": request.routing.model_copy(update={"mode": RoutingMode.FANOUT})}
+        )
+        try:
+            candidates = select_route(fanout_request, ordered, health_snapshots, quota_snapshots)
+        except RoutingError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
 
-    if not candidates:
-        raise HTTPException(status_code=503, detail="no eligible provider is available for search")
+        if not candidates:
+            raise HTTPException(
+                status_code=503, detail="no eligible provider is available for search"
+            )
 
     overall_start = time.perf_counter()
 
@@ -409,22 +689,39 @@ async def _dispatch_fanout_search(
         candidate_adapter: ProviderAdapter,
     ) -> tuple[str, SearchResponse | None, int, str, int, str | None]:
         call_start = time.perf_counter()
-        try:
-            res = await tracked_call(
-                repository,
-                candidate_adapter,
-                lambda target: target.search(request),
-                operation=UsageOperation.SEARCH,
+        with observability.span(
+            TraceSpanName.PROVIDER,
+            kind=SpanKindName.CLIENT,
+            attributes={
+                TraceAttribute.OPERATION: TraceOperation.SEARCH.value,
+                TraceAttribute.PROVIDER: candidate_adapter.name,
+                TraceAttribute.ROUTING_MODE: RoutingMode.FANOUT.value,
+                TraceAttribute.ROUTING_CANDIDATE_COUNT: len(candidates),
+            },
+        ) as provider_span:
+            provider_span.add_event(
+                TRACE_EVENT_PROVIDER_REQUEST, attributes=_provider_request_event(request)
+            )
+            try:
+                res = await tracked_call(
+                    repository,
+                    candidate_adapter,
+                    lambda target: target.search(request),
+                    operation=UsageOperation.SEARCH,
+                )
+            except Exception as exc:
+                provider_span.record_exception(exc)
+                elapsed = int((time.perf_counter() - call_start) * 1000)
+                status = "failed"
+                status_code = getattr(getattr(exc, "error", None), "status_code", None)
+                if status_code == 429:
+                    status = "rate_limited"
+                return (candidate_adapter.name, None, elapsed, status, 0, str(exc))
+            provider_span.add_event(
+                TRACE_EVENT_PROVIDER_RESPONSE, attributes=_provider_response_event(res)
             )
             elapsed = int((time.perf_counter() - call_start) * 1000)
             return (candidate_adapter.name, res, elapsed, "success", len(res.results), None)
-        except Exception as exc:
-            elapsed = int((time.perf_counter() - call_start) * 1000)
-            status = "failed"
-            status_code = getattr(getattr(exc, "error", None), "status_code", None)
-            if status_code == 429:
-                status = "rate_limited"
-            return (candidate_adapter.name, None, elapsed, status, 0, str(exc))
 
     tasks = [_call(c.adapter) for c in candidates]
     outcomes = await asyncio.gather(*tasks)
@@ -451,43 +748,55 @@ async def _dispatch_fanout_search(
 
     if not successful_results:
         first_err = errors[0] if errors else "all providers failed"
-        raise HTTPException(
+        failure = HTTPException(
             status_code=500,
             detail=f"all search providers failed: {first_err}",
         )
+        _annotate_root_error(observability, failure)
+        raise failure
 
-    fused_results = reciprocal_rank_fusion(
-        successful_results,
-        limit=request.limit,
-    )
-    participating = [name for name, _ in successful_results]
-    total_elapsed_ms = int((time.perf_counter() - overall_start) * 1000)
+    with observability.span(
+        TraceSpanName.RESULTS,
+        attributes={
+            TraceAttribute.OPERATION: TraceOperation.SEARCH.value,
+            TraceAttribute.ROUTING_CANDIDATE_COUNT: len(candidates),
+        },
+    ) as results_span:
+        fused_results = reciprocal_rank_fusion(
+            successful_results,
+            limit=request.limit,
+        )
+        participating = [name for name, _ in successful_results]
+        total_elapsed_ms = int((time.perf_counter() - overall_start) * 1000)
 
-    if repository is not None:
-        with suppress(Exception):
-            await repository.record_usage(
-                UsageEvent(
-                    provider="aggregated",
-                    operation=UsageOperation.SEARCH,
-                    units=Decimal("0"),
-                    observed_at=datetime.now(UTC),
-                    latency_ms=total_elapsed_ms,
-                    status=UsageStatus.SUCCESS,
-                    metadata={
-                        "participating_providers": participating,
-                        "fused_count": len(fused_results),
-                    },
+        if repository is not None:
+            with suppress(Exception):
+                await repository.record_usage(
+                    UsageEvent(
+                        provider="aggregated",
+                        operation=UsageOperation.SEARCH,
+                        units=Decimal("0"),
+                        observed_at=datetime.now(UTC),
+                        latency_ms=total_elapsed_ms,
+                        status=UsageStatus.SUCCESS,
+                        metadata={
+                            "participating_providers": participating,
+                            "fused_count": len(fused_results),
+                        },
+                    )
                 )
-            )
 
-    return SearchResponse(
-        query=request.query,
-        results=fused_results,
-        provider="aggregated" if len(successful_results) > 1 else successful_results[0][0],
-        total_results=len(fused_results),
-        participating_providers=participating,
-        waterfall=waterfall,
-    )
+        response = SearchResponse(
+            query=request.query,
+            results=fused_results,
+            provider="aggregated" if len(successful_results) > 1 else successful_results[0][0],
+            total_results=len(fused_results),
+            participating_providers=participating,
+            waterfall=waterfall,
+        )
+        results_span.set_attributes({TraceAttribute.RESPONSE_RESULT_COUNT: len(fused_results)})
+        _annotate_root(observability, request, response)
+    return response
 
 
 def _clamped_limit(limit: int) -> int:

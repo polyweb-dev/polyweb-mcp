@@ -1,6 +1,8 @@
 export { toBackendId, toUiId } from "./api/idMapping";
-export { PROVIDER_CATALOG, catalogNameOf } from "./model/catalog";
+export { PROVIDER_CATALOG, catalogNameOf, catalogEntryForId } from "./model/catalog";
 export type { StaticProviderMeta } from "./model/catalog";
+export { providerIdentity } from "./model/providerIdentity";
+export type { ProviderIdentity } from "./model/providerIdentity";
 export type {
   Capability,
   ProviderHealthStatus,

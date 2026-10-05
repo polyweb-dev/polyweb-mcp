@@ -421,12 +421,39 @@ def step_when_bounded_poll_outline(context: Any, credit: int, pending: int, invo
 
 @then('the Parallel balance outcome should be "{outcome}"')
 def step_then_balance_outcome(context: Any, outcome: str) -> None:
-    if outcome == "missing":
-        assert context.quota_snapshot is None
+    snapshot = context.quota_snapshot
+    if outcome == "neutralized UNKNOWN":
+        # An invoiced org exposes no prepaid balance, so the vendor body yields
+        # no AUTHORITATIVE snapshot and the previously authoritative display is
+        # neutralized to an ESTIMATED-unknown tombstone: the documented
+        # invoice switch path, not a missing row.
+        assert snapshot is not None, "an invoiced poll must tombstone, not vanish"
+        assert snapshot.provider == "parallel"
+        assert snapshot.source == "estimated", (
+            "invoice switch must drop the authoritative claim: " + repr(snapshot)
+        )
+        assert snapshot.unit_kind == "USD"
+        assert snapshot.display_unit == "USD"
+        assert snapshot.remaining is None, "neutralized remaining must be unknown: " + (
+            repr(snapshot)
+        )
+        assert snapshot.limit is None, "neutralized limit must be unknown: " + repr(snapshot)
+        with _client(context) as client:
+            dashboard = client.get("/dashboard")
+        assert dashboard.status_code == 200
+        entries = [
+            item for item in dashboard.json()["latest_quota"] if item["provider"] == "parallel"
+        ]
+        assert len(entries) == 1
+        assert entries[0]["source"] != "authoritative", repr(entries)
+        assert entries[0]["remaining"] is None, "dashboard must not quote stale funds"
         return
     assert outcome.startswith("USD ")
-    assert context.quota_snapshot is not None
-    assert context.quota_snapshot.remaining == Decimal(outcome.removeprefix("USD "))
+    assert snapshot is not None
+    assert snapshot.provider == "parallel"
+    assert snapshot.source == "authoritative", repr(snapshot)
+    assert snapshot.limit is None, "balance is remaining-only"
+    assert snapshot.remaining == Decimal(outcome.removeprefix("USD "))
 
 
 @when("the bounded quota poll runs with a rejected bearer")

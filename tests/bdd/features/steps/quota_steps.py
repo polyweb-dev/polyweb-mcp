@@ -25,11 +25,7 @@ import httpx
 from behave import given, then, when  # type: ignore[import-untyped]
 from pydantic import SecretStr, ValidationError
 
-import freesearch.adapters.brave as brave_module
 import freesearch.adapters.firecrawl as firecrawl_module
-import freesearch.adapters.keenable as keenable_module
-import freesearch.adapters.parallel as parallel_module
-import freesearch.adapters.youcom as youcom_module
 from freesearch.adapters._youcom_support import _estimated_quota
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.adapters.brave import BraveAdapter
@@ -39,7 +35,6 @@ from freesearch.adapters.keenable import KeenableAdapter
 from freesearch.adapters.parallel import ParallelAdapter, extract_cost_usd, search_cost_usd
 from freesearch.adapters.youcom import YoucomAdapter
 from freesearch.infrastructure.resilience import ProviderOperationError
-from freesearch.infrastructure.secrets import ProviderName
 from freesearch.models import contracts as contracts_module
 from freesearch.models.contracts import (
     CostEstimate,
@@ -65,21 +60,15 @@ from freesearch.services.routing import select_route
 
 FIXED_AT = datetime(2026, 3, 10, 12, 0, 0, tzinfo=UTC)
 
+# Fixed fake key: keyed adapters receive it through explicit constructor
+# injection (``api_key=``). There is no global secret-resolver seam any more;
+# scenarios about keyless/absent credentials pass no key instead.
+TEST_API_KEY = SecretStr("quota-test-secret")
+
 
 # --------------------------------------------------------------------------
 # Shared scaffolding
 # --------------------------------------------------------------------------
-
-
-class _StaticKeyResolver:
-    """Test-only secret resolver returning one fixed key for every provider."""
-
-    def __init__(self, key: str = "quota-test-secret") -> None:
-        self._key = SecretStr(key)
-
-    def get(self, provider: ProviderName) -> SecretStr | None:
-        del provider
-        return self._key
 
 
 class _ExaStubSDKClient:
@@ -184,12 +173,6 @@ class _StubAdapter(ProviderAdapter):
     async def quota(self) -> QuotaSnapshot | None:
         self._quota_calls.append(self._name)
         return self._quota_snapshot
-
-
-def _patch_resolver(context: Any, module: Any) -> None:
-    """Point ``module`` at the static test key (idempotent across scenarios)."""
-
-    module.get_provider_secret_resolver = lambda: _StaticKeyResolver()
 
 
 def _run(context: Any, coro: Awaitable[Any]) -> Any:
@@ -465,7 +448,6 @@ def _brave_payload() -> dict[str, Any]:
     'a Brave adapter with stubbed headers "{remaining}" remaining, "{limit}" limit, "{reset}" reset'
 )
 def step_given_brave_stubbed_headers(context: Any, remaining: str, limit: str, reset: str) -> None:
-    _patch_resolver(context, brave_module)
     headers = {
         "X-RateLimit-Remaining": remaining,
         "X-RateLimit-Limit": limit,
@@ -477,7 +459,7 @@ def step_given_brave_stubbed_headers(context: Any, remaining: str, limit: str, r
         return httpx.Response(200, json=_brave_payload(), headers=headers)
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler), timeout=30.0)
-    context.adapter = BraveAdapter(client)
+    context.adapter = BraveAdapter(client, api_key=TEST_API_KEY)
     context.http_client = client
 
 
@@ -903,8 +885,6 @@ def step_then_youcom_calls(context: Any, balance_usd: str, search: int, fetch: i
 
 @when("I record a You.com response with missing usage")
 def step_when_youcom_missing_usage(context: Any) -> None:
-    _patch_resolver(context, youcom_module)
-
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
@@ -912,7 +892,7 @@ def step_when_youcom_missing_usage(context: Any) -> None:
         )
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler), timeout=30.0)
-    adapter = YoucomAdapter(client)
+    adapter = YoucomAdapter(client, api_key=TEST_API_KEY)
     context.http_client = client
     context.you_adapter = adapter
     response = _run(context, adapter.search(SearchRequest(query="gap probe", limit=3)))
@@ -974,7 +954,6 @@ def _keenable_handler(request: httpx.Request) -> httpx.Response:
 
 @when("I apply {count:d} paid-false Keenable calls against the {allowance:d} monthly allowance")
 def step_when_keenable_paid_false(context: Any, count: int, allowance: int) -> None:
-    _patch_resolver(context, keenable_module)
     context.keenable_paid_meta = None
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -990,7 +969,7 @@ def step_when_keenable_paid_false(context: Any, count: int, allowance: int) -> N
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler), timeout=30.0)
     context.http_client = client
-    context.keenable_adapter = KeenableAdapter(client)
+    context.keenable_adapter = KeenableAdapter(client, api_key=TEST_API_KEY)
     for _ in range(count):
         _run(
             context,
@@ -1072,13 +1051,11 @@ def step_then_keenable_paid_true(context: Any) -> None:
 @then("a keyless Keenable call should record one REQUEST unit and an hourly snapshot")
 def step_then_keenable_keyless(context: Any) -> None:
     _require_unit_kind_model()
-    keenable_module.get_provider_secret_resolver = lambda: _NullKeyResolver()
-    try:
-        client = httpx.AsyncClient(transport=httpx.MockTransport(_keenable_handler), timeout=30.0)
-        adapter = KeenableAdapter(client)
-        response = _run(context, adapter.search(SearchRequest(query="keyless", limit=2)))
-    finally:
-        _patch_resolver(context, keenable_module)
+    # Keyless public mode: no key is injected at all, so the adapter must take
+    # the shared public pool path instead of the keyed allowance path.
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_keenable_handler), timeout=30.0)
+    adapter = KeenableAdapter(client, api_key=None)
+    response = _run(context, adapter.search(SearchRequest(query="keyless", limit=2)))
     assert response.usage is not None and response.usage.units == Decimal("1"), (
         f"AC-5: keyless usage must consume one hourly request unit, saw {response.usage!r}"
     )
@@ -1099,21 +1076,15 @@ def step_then_keenable_keyless(context: Any) -> None:
     )
 
 
-class _NullKeyResolver:
-    """Resolver reporting no stored key, selecting Keenable keyless mode."""
-
-    def get(self, provider: ProviderName) -> SecretStr | None:
-        del provider
-        return None
-
-
 @when("I estimate cost for a Keenable search")
 def step_when_keenable_estimate(context: Any) -> None:
-    _patch_resolver(context, keenable_module)
     client = httpx.AsyncClient(transport=httpx.MockTransport(_keenable_handler), timeout=30.0)
     context.http_client = client
     context.keenable_estimate = _run(
-        context, KeenableAdapter(client).estimate_cost(SearchRequest(query="price", limit=3))
+        context,
+        KeenableAdapter(client, api_key=TEST_API_KEY).estimate_cost(
+            SearchRequest(query="price", limit=3)
+        ),
     )
 
 
@@ -1131,12 +1102,11 @@ def step_then_keenable_estimate(context: Any, amount: str) -> None:
 
 @when('I estimate Parallel search in "{mode}" mode with {bundles:d} extra bundles')
 def step_when_parallel_search_estimate(context: Any, mode: str, bundles: int) -> None:
-    _patch_resolver(context, parallel_module)
     client = httpx.AsyncClient(
         transport=httpx.MockTransport(_parallel_search_handler), timeout=30.0
     )
     context.http_client = client
-    context.parallel_adapter = ParallelAdapter(client)
+    context.parallel_adapter = ParallelAdapter(client, api_key=TEST_API_KEY)
     context.parallel_mode = mode
     context.parallel_bundles = bundles
     # T-5: drive estimate_cost with the mode-aware request contract (P1-6) and
@@ -1194,12 +1164,11 @@ def step_then_parallel_search_estimate(context: Any, amount: str) -> None:
 
 @when("I estimate Parallel search with omitted mode and {bundles:d} extra bundles")
 def step_when_parallel_omitted_mode(context: Any, bundles: int) -> None:
-    _patch_resolver(context, parallel_module)
     client = httpx.AsyncClient(
         transport=httpx.MockTransport(_parallel_search_handler), timeout=30.0
     )
     context.http_client = client
-    context.parallel_adapter = ParallelAdapter(client)
+    context.parallel_adapter = ParallelAdapter(client, api_key=TEST_API_KEY)
     context.parallel_mode = "omitted"
     context.parallel_bundles = bundles
     # Omitted mode defaults to advanced per the OpenAPI default.
@@ -1221,12 +1190,11 @@ def step_when_parallel_extract_estimate(context: Any, urls: int) -> None:
     # T-3: pass url_count through the FetchRequest contract. Batches above one
     # URL are projection-only until batch fetch exists; the executable path is
     # always the single URL (see the single-URL step below).
-    _patch_resolver(context, parallel_module)
     client = httpx.AsyncClient(
         transport=httpx.MockTransport(_parallel_search_handler), timeout=30.0
     )
     context.http_client = client
-    context.parallel_adapter = ParallelAdapter(client)
+    context.parallel_adapter = ParallelAdapter(client, api_key=TEST_API_KEY)
     estimate = _run(
         context,
         context.parallel_adapter.estimate_cost(
@@ -1817,10 +1785,9 @@ def step_then_firecrawl_field_unknown(context: Any, field: str) -> None:
 
 @when("I estimate Firecrawl search with limit {limit:d}")
 def step_when_firecrawl_search_estimate(context: Any, limit: int) -> None:
-    _patch_resolver(context, firecrawl_module)
     client = httpx.AsyncClient(timeout=30.0)
     context.http_client = client
-    adapter = FirecrawlAdapter(client, sdk_client=object())
+    adapter = FirecrawlAdapter(client, sdk_client=object(), api_key=TEST_API_KEY)
     context.firecrawl_adapter = adapter
     context.firecrawl_estimate = _run(
         context, adapter.estimate_cost(SearchRequest(query="credit probe", limit=limit))
@@ -1858,10 +1825,9 @@ def step_when_firecrawl_fetch_estimate(
     # extraction, +4 enhanced, +1 zero-data-retention, base 1.
     adapter = _opt(context, "firecrawl_adapter", None)
     if adapter is None:  # pragma: no cover - outline always sets the adapter first
-        _patch_resolver(context, firecrawl_module)
         client = httpx.AsyncClient(timeout=30.0)
         context.http_client = client
-        adapter = FirecrawlAdapter(client, sdk_client=object())
+        adapter = FirecrawlAdapter(client, sdk_client=object(), api_key=TEST_API_KEY)
         context.firecrawl_adapter = adapter
     flags = {
         "pdf_pages": pdf,
@@ -1906,7 +1872,6 @@ def step_then_firecrawl_fetch_estimate(context: Any, credits: int) -> None:
 
 @when("I record a Parallel search response with SKU counts {first:d} and {second:d}")
 def step_when_parallel_sku_response(context: Any, first: int, second: int) -> None:
-    _patch_resolver(context, parallel_module)
     calls: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -1925,7 +1890,7 @@ def step_when_parallel_sku_response(context: Any, first: int, second: int) -> No
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler), timeout=30.0)
     context.http_client = client
-    adapter = ParallelAdapter(client)
+    adapter = ParallelAdapter(client, api_key=TEST_API_KEY)
     context.parallel_sku_response = _run(
         context, adapter.search(SearchRequest(query="sku probe", limit=3))
     )
@@ -1971,11 +1936,10 @@ def step_then_parallel_spend_decimal(context: Any) -> None:
 
 
 def _parallel_adapter_for(context: Any) -> ParallelAdapter:
-    _patch_resolver(context, parallel_module)
     client = httpx.AsyncClient(
         transport=httpx.MockTransport(_parallel_search_handler), timeout=30.0
     )
-    return ParallelAdapter(client)
+    return ParallelAdapter(client, api_key=TEST_API_KEY)
 
 
 @when("I enable the Parallel USD {seed} monthly seed and record USD {spend} of successful spend")
@@ -2058,12 +2022,11 @@ def step_then_parallel_seed_remaining(context: Any, remaining: str, limit: str) 
 def step_when_parallel_unseeded_spend(context: Any) -> None:
     # No free_seed: the account has no verified eligibility, so spend is
     # tracked but no balance may be fabricated.
-    _patch_resolver(context, parallel_module)
     client = httpx.AsyncClient(
         transport=httpx.MockTransport(_parallel_search_handler), timeout=30.0
     )
     context.http_client = client
-    adapter = ParallelAdapter(client)
+    adapter = ParallelAdapter(client, api_key=TEST_API_KEY)
     context.parallel_unseeded = adapter
     context.parallel_unseeded_recorded = adapter.record_success_spend(Decimal("1.25"))
 
@@ -2087,14 +2050,13 @@ def step_then_parallel_unseeded_unknown(context: Any) -> None:
 
 @when("a Parallel 402 soft signal arrives")
 def step_when_parallel_402(context: Any) -> None:
-    _patch_resolver(context, parallel_module)
 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(402, json={"error": "insufficient_balance"})
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler), timeout=30.0)
     context.http_client = client
-    adapter = ParallelAdapter(client)
+    adapter = ParallelAdapter(client, api_key=TEST_API_KEY)
     try:
         _run(context, adapter.search(SearchRequest(query="soft probe", limit=3)))
     except ProviderOperationError as exc:
@@ -2181,7 +2143,6 @@ def step_then_parallel_soft_cleared(context: Any) -> None:
 
 @when("a Parallel 429 transient signal arrives")
 def step_when_parallel_429(context: Any) -> None:
-    _patch_resolver(context, parallel_module)
 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(429, json={"error": "rate_limited"})
@@ -2189,7 +2150,12 @@ def step_when_parallel_429(context: Any) -> None:
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler), timeout=30.0)
     context.http_client = client
     try:
-        _run(context, ParallelAdapter(client).search(SearchRequest(query="transient", limit=2)))
+        _run(
+            context,
+            ParallelAdapter(client, api_key=TEST_API_KEY).search(
+                SearchRequest(query="transient", limit=2)
+            ),
+        )
     except ProviderOperationError as exc:
         context.parallel_429_error = exc
     assert _opt(context, "parallel_429_error", None) is not None, (
@@ -2213,12 +2179,11 @@ def step_then_parallel_429_transient(context: Any) -> None:
 
 @when("I inspect Parallel quota capabilities")
 def step_when_parallel_capabilities(context: Any) -> None:
-    _patch_resolver(context, parallel_module)
     client = httpx.AsyncClient(
         transport=httpx.MockTransport(_parallel_search_handler), timeout=30.0
     )
     context.http_client = client
-    context.parallel_capabilities = ParallelAdapter(client).capabilities
+    context.parallel_capabilities = ParallelAdapter(client, api_key=TEST_API_KEY).capabilities
 
 
 @then("Parallel capabilities quota should stay false")
@@ -2234,11 +2199,10 @@ def step_then_no_oauth_poll(context: Any) -> None:
     # The balance endpoint requires an OAuth device-grant Bearer token; the
     # API-key adapter must never attempt it. Behavioral proof: quota() stays
     # unimplemented (None) and no balance URL is ever requested.
-    _patch_resolver(context, parallel_module)
     client = httpx.AsyncClient(
         transport=httpx.MockTransport(_parallel_search_handler), timeout=30.0
     )
-    adapter = ParallelAdapter(client)
+    adapter = ParallelAdapter(client, api_key=TEST_API_KEY)
     assert _run(context, adapter.quota()) is None, (
         "AC-PA-4: Parallel quota() must stay None (no API-key balance poll possible)"
     )
@@ -2321,9 +2285,7 @@ def step_then_exa_budget_remaining(context: Any, remaining: str, limit: str) -> 
 @when("an Exa 402 exhaustion signal arrives")
 def step_when_exa_402(context: Any) -> None:
     client = httpx.AsyncClient(timeout=30.0)
-    adapter = ExaAdapter(
-        client, api_key=SecretStr("quota-test-secret"), monthly_budget=context.exa_budget
-    )
+    adapter = ExaAdapter(client, api_key=TEST_API_KEY, monthly_budget=context.exa_budget)
     snapshot = adapter.quota_after_error(402)
     assert snapshot is not None
     assert snapshot.source is QuotaSource.OBSERVED
@@ -2394,7 +2356,7 @@ def step_then_exa_429_observed(context: Any) -> None:
 @when("I inspect Exa quota capabilities")
 def step_when_exa_capabilities(context: Any) -> None:
     client = httpx.AsyncClient(timeout=30.0)
-    adapter = ExaAdapter(client, api_key=SecretStr("quota-test-secret"))
+    adapter = ExaAdapter(client, api_key=TEST_API_KEY)
     context.exa_client = client
     context.exa_capabilities = adapter.capabilities
     context.exa_caps_snapshot = _run(context, adapter.quota())
@@ -2413,7 +2375,7 @@ def step_then_exa_caps(context: Any) -> None:
 @when("I record Exa spend without enabling the monthly budget")
 def step_when_exa_unbudgeted_spend(context: Any) -> None:
     client = httpx.AsyncClient(timeout=30.0)
-    adapter = ExaAdapter(client, api_key=SecretStr("quota-test-secret"), monthly_budget=None)
+    adapter = ExaAdapter(client, api_key=TEST_API_KEY, monthly_budget=None)
     context.exa_unbudgeted = adapter
 
     class _DummyResponse:
@@ -2450,7 +2412,7 @@ def step_when_exa_fallback_search(context: Any, count: int) -> None:
         _exa_bdd_search_response([_exa_bdd_result(index) for index in range(count)], None)
     )
     client = httpx.AsyncClient(timeout=30.0)
-    adapter = ExaAdapter(client, api_key=SecretStr("quota-test-secret"), sdk_client=stub)
+    adapter = ExaAdapter(client, api_key=TEST_API_KEY, sdk_client=stub)
     context.exa_client = client
     context.exa_adapter = adapter
     context.exa_sdk = stub
@@ -2505,7 +2467,7 @@ def step_when_exa_manual_credits(context: Any, credits: str, spend: str) -> None
     client = httpx.AsyncClient(timeout=30.0)
     adapter = ExaAdapter(
         client,
-        api_key=SecretStr("quota-test-secret"),
+        api_key=TEST_API_KEY,
         sdk_client=stub,
         manual_starting_credits=Decimal(credits),
     )

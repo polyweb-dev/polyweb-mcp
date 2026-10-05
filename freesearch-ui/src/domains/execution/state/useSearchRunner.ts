@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback } from "react";
 import { apiService } from "@/services/api/freesearchApi";
 import { errorMessage } from "@/shared/api/http";
 import type { ToastNotification } from "@/shared/notifications/context";
@@ -12,6 +12,17 @@ import type { ProviderConfig } from "@/domains/providers/model/types";
 import type { RoutingPreset } from "@/domains/routing/model/types";
 import { getEligibleProviders } from "@/domains/routing/model/routingPolicy";
 import { pickFallbackSearchProvider } from "@/domains/execution/model/searchFallback";
+import { useAppDispatch, useAppSelector } from "@/store/hooks";
+import {
+  clearSearch as clearSearchAction,
+  searchFailed,
+  searchFinished,
+  searchStarted,
+  searchSucceeded,
+  selectActiveSearch,
+  selectIsSearching,
+  selectSearchError,
+} from "@/store/playgroundSlice";
 
 export type ShowToast = (message: string, type?: ToastNotification["type"]) => void;
 
@@ -25,6 +36,11 @@ interface SearchRunnerDeps {
   routingPreset: RoutingPreset;
 }
 
+/**
+ * Search API orchestration: request mapping, timeout budget, fallback walk,
+ * toasts, usage events, and dashboard refresh stay here. Execution state itself
+ * lives in the playground slice so it survives navigation and reload.
+ */
 export function useSearchRunner({
   showToast,
   fallbackEnabled,
@@ -34,14 +50,14 @@ export function useSearchRunner({
   providers,
   routingPreset,
 }: SearchRunnerDeps) {
-  const [activeSearch, setActiveSearch] = useState<SearchResponse | null>(null);
-  const [isSearching, setIsSearching] = useState(false);
-  const [searchError, setSearchError] = useState<string | null>(null);
+  const dispatch = useAppDispatch();
+  const activeSearch = useAppSelector(selectActiveSearch);
+  const isSearching = useAppSelector(selectIsSearching);
+  const searchError = useAppSelector(selectSearchError);
 
   const runSearch = useCallback(
     async (request: SearchRequest): Promise<SearchResponse | null> => {
-      setIsSearching(true);
-      setSearchError(null);
+      dispatch(searchStarted());
       const startedAt = performance.now();
       const requestedProviderIds = request.providerIds ?? [];
 
@@ -70,7 +86,7 @@ export function useSearchRunner({
       };
 
       const succeed = (response: SearchResponse) => {
-        setActiveSearch(response);
+        dispatch(searchSucceeded(response));
         prependUsageEvent(makeSearchEvent(response));
         void refreshDashboard();
         return response;
@@ -78,7 +94,7 @@ export function useSearchRunner({
 
       const fail = (error: unknown) => {
         const message = errorMessage(error, "Search failed");
-        setSearchError(message);
+        dispatch(searchFailed(message));
         showToast(message, "error");
         return null;
       };
@@ -107,16 +123,15 @@ export function useSearchRunner({
           return fail(fallbackError);
         }
       } finally {
-        setIsSearching(false);
+        dispatch(searchFinished());
       }
     },
-    [fallbackEnabled, refreshDashboard, showToast, catalogNameOf, prependUsageEvent, providers, routingPreset],
+    [dispatch, fallbackEnabled, refreshDashboard, showToast, catalogNameOf, prependUsageEvent, providers, routingPreset],
   );
 
   const clearSearch = useCallback(() => {
-    setActiveSearch(null);
-    setSearchError(null);
-  }, []);
+    dispatch(clearSearchAction());
+  }, [dispatch]);
 
   return { activeSearch, isSearching, searchError, runSearch, clearSearch };
 }

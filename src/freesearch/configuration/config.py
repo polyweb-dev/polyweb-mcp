@@ -36,6 +36,14 @@ class Settings(BaseSettings):
     encryption_key: SecretStr | None = Field(default=None, repr=False)
     encryption_key_file: Path = DEFAULT_KEY_FILE
 
+    # Trace persistence seam. ``database`` keeps spans in the local SQLite
+    # ``trace_spans`` table; ``none`` disables tracing entirely (a no-op
+    # runtime). Future exporters (OTLP, Langfuse, LangSmith) plug into
+    # ``freesearch.infrastructure.observability.build_span_processors``
+    # without touching any route, service, or adapter call site.
+    otel_processor: Literal["database", "none"] = "database"
+    otel_service_name: str = "freesearch"
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

@@ -66,7 +66,11 @@ describe("formatCountdown", () => {
 describe("OAuthPairingModal", () => {
   it("shows the code, approval link, and countdown while pending", async () => {
     renderModal()
-    expect(await screen.findByTestId("oauth-device-user-code")).toHaveTextContent("ABCD-1234")
+    // Standalone modal (no provider gate); the first paint waits on the
+    // beginFlow promise, so allow headroom under full-suite parallel load.
+    expect(
+      await screen.findByTestId("oauth-device-user-code", {}, { timeout: 5000 })
+    ).toHaveTextContent("ABCD-1234")
     expect(screen.getByTestId("oauth-device-open-verification")).toHaveAttribute(
       "href",
       "https://platform.parallel.ai/activate?code=ABCD-1234"

@@ -2,8 +2,9 @@
 
 Exercises retry-path behavior against the real :class:`ResilientRunner` and
 transport-error normalization/secret redaction with an injected failing runner.
-Response/operation edges live in ``test_brave_edges.py``; wire-request hygiene
-lives in ``test_brave_wire.py``.
+Keys are injected explicitly into the constructor (no resolver seam), then
+proven absent from every surfaced error.  Response/operation edges live in
+``test_brave_edges.py``; wire-request hygiene lives in ``test_brave_wire.py``.
 """
 
 from collections.abc import Callable
@@ -13,23 +14,13 @@ import httpx
 import pytest
 from pydantic import SecretStr
 
-import freesearch.adapters.brave as brave_module
 from freesearch.adapters.brave import BraveAdapter
 from freesearch.infrastructure.resilience import (
     CircuitOpenError,
     ProviderOperationError,
     ResilientRunner,
 )
-from freesearch.infrastructure.secrets import ProviderName
 from freesearch.models.contracts import SearchRequest
-
-
-class _Resolver:
-    def __init__(self, key: str = "edge-secret") -> None:
-        self.key = SecretStr(key)
-
-    def get(self, provider: ProviderName) -> SecretStr:
-        return self.key
 
 
 class _RaisingRunner:
@@ -60,6 +51,13 @@ def _payload(**overrides: object) -> dict[str, object]:
     return payload
 
 
+def _adapter(
+    client: httpx.AsyncClient, *, runner: Any = None, key: str = "edge-secret"
+) -> BraveAdapter:
+    """Build a Brave adapter with an explicitly injected fake key."""
+    return BraveAdapter(client, runner=runner, api_key=SecretStr(key))
+
+
 def _zero_delay_runner(client: httpx.AsyncClient, sleeps: list[float]) -> ResilientRunner:
     async def sleeper(delay: float) -> None:
         sleeps.append(delay)
@@ -76,8 +74,7 @@ def _zero_delay_runner(client: httpx.AsyncClient, sleeps: list[float]) -> Resili
     )
 
 
-async def test_real_runner_retries_429_then_succeeds_with_zero_delay(monkeypatch) -> None:
-    monkeypatch.setattr(brave_module, "get_provider_secret_resolver", lambda: _Resolver())
+async def test_real_runner_retries_429_then_succeeds_with_zero_delay() -> None:
     attempts = 0
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -89,7 +86,7 @@ async def test_real_runner_retries_429_then_succeeds_with_zero_delay(monkeypatch
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     sleeps: list[float] = []
-    adapter = BraveAdapter(client, runner=_zero_delay_runner(client, sleeps))
+    adapter = _adapter(client, runner=_zero_delay_runner(client, sleeps))
     try:
         response = await adapter.search(SearchRequest(query="retry me"))
     finally:
@@ -103,9 +100,8 @@ async def test_real_runner_retries_429_then_succeeds_with_zero_delay(monkeypatch
     assert response.usage.metadata == {"rate_limit_remaining": 1999}
 
 
-async def test_real_runner_retries_transport_error_and_redacts_key(monkeypatch) -> None:
+async def test_real_runner_retries_transport_error_and_redacts_key() -> None:
     secret = "top-secret"
-    monkeypatch.setattr(brave_module, "get_provider_secret_resolver", lambda: _Resolver(secret))
     attempts = 0
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -115,7 +111,7 @@ async def test_real_runner_retries_transport_error_and_redacts_key(monkeypatch) 
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     sleeps: list[float] = []
-    adapter = BraveAdapter(client, runner=_zero_delay_runner(client, sleeps))
+    adapter = _adapter(client, runner=_zero_delay_runner(client, sleeps), key=secret)
     try:
         with pytest.raises(ProviderOperationError) as excinfo:
             await adapter.search(SearchRequest(query="query"))
@@ -131,9 +127,8 @@ async def test_real_runner_retries_transport_error_and_redacts_key(monkeypatch) 
     assert secret not in str(excinfo.value)
 
 
-async def test_injected_runner_transport_error_normalized_without_key_leak(monkeypatch) -> None:
+async def test_injected_runner_transport_error_normalized_without_key_leak() -> None:
     secret = "top-secret"
-    monkeypatch.setattr(brave_module, "get_provider_secret_resolver", lambda: _Resolver(secret))
     calls = 0
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -142,8 +137,10 @@ async def test_injected_runner_transport_error_normalized_without_key_leak(monke
         return httpx.Response(200, json=_payload())
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    adapter = BraveAdapter(
-        client, runner=_RaisingRunner(httpx.ConnectError(f"raw failure exposing {secret}"))
+    adapter = _adapter(
+        client,
+        runner=_RaisingRunner(httpx.ConnectError(f"raw failure exposing {secret}")),
+        key=secret,
     )
     try:
         with pytest.raises(ProviderOperationError) as excinfo:
@@ -160,10 +157,9 @@ async def test_injected_runner_transport_error_normalized_without_key_leak(monke
     assert excinfo.value.__cause__ is None
 
 
-async def test_injected_runner_circuit_open_passes_through_unchanged(monkeypatch) -> None:
-    monkeypatch.setattr(brave_module, "get_provider_secret_resolver", lambda: _Resolver())
+async def test_injected_runner_circuit_open_passes_through_unchanged() -> None:
     client = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200)))
-    adapter = BraveAdapter(client, runner=_RaisingRunner(CircuitOpenError("brave")))
+    adapter = _adapter(client, runner=_RaisingRunner(CircuitOpenError("brave")))
     try:
         with pytest.raises(CircuitOpenError) as excinfo:
             await adapter.search(SearchRequest(query="query"))

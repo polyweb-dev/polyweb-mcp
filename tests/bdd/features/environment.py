@@ -49,21 +49,33 @@ def before_all(context: Any) -> None:
 def before_scenario(context: Any, scenario: Any) -> None:
     """Set up async event loop, HTTP client, and provider adapter per scenario.
 
-    Offline quota/monitoring/control scenarios win over provider tags: they
-    return before any live gate or live adapter construction, so the offline
-    path never constructs live adapters. Live provider quota scenarios
-    (``@live @quota``) are exempted below so they fall through to live
-    adapter construction and exercise the real vendor quota endpoints.
-    A ``@live @keenable`` scenario runs
-    only when ``FREESEARCH_RUN_LIVE=1``; otherwise it is skipped before any
-    resource setup, keeping offline BDD runs network-safe (Keenable is
-    keyless, so no key check can gate it).
+    The ordering below is a contract, cheapest and safest first:
+
+    1. Offline quota/monitoring/control/fanout scenarios win over provider tags:
+       they return before any live gate or live adapter construction, so the
+       offline path never constructs live adapters. Live provider quota
+       scenarios (``@live @quota``) are exempted so they fall through to live
+       adapter construction and exercise the real vendor quota endpoints.
+    2. A ``@live @keenable`` scenario runs only when ``FREESEARCH_RUN_LIVE=1``;
+       otherwise it is skipped before any resource setup, keeping offline BDD
+       runs network-safe (Keenable is keyless, so no key check can gate it).
+    3. Every live provider missing-key gate runs BEFORE the event loop and HTTP
+       client are created, so a skipped live scenario allocates nothing: no
+       event loop, no HTTP client, no adapter. Tavily (the ``_adapter_for``
+       default) and Firecrawl are gated here too, so an offline run with no
+       harness keys skips them instead of failing closed at construction.
+    4. Only then are the loop, the client, and the tag-selected adapter built.
+
+    The gates read only the boolean ``context.has_*_key`` flags that
+    ``before_all`` resolved from the harness env; key material never enters a
+    skip reason.
     """
     if (
         _has_monitoring_tag(scenario)
         or _has_control_tag(scenario)
         or _has_fanout_tag(scenario)
         or (_has_quota_tag(scenario) and not _has_live_tag(scenario))
+        or (_has_tinyfish_tag(scenario) and not _has_live_tag(scenario))
     ):
         context.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(context.loop)
@@ -84,60 +96,25 @@ def before_scenario(context: Any, scenario: Any) -> None:
     if _is_exa_scenario(scenario) and not context.has_exa_key:
         scenario.skip("FREESEARCH_EXA_API_KEY is not configured")
         return
+    missing_key_reason = _missing_live_key_reason(context, scenario)
+    if missing_key_reason is not None:
+        scenario.skip(reason=missing_key_reason)
+        return
     context.loop = asyncio.new_event_loop()
     asyncio.set_event_loop(context.loop)
     context.http_client = create_async_client()
     context.adapter = None
     context.youcom_adapter = None
-    # Monitoring, control, and quota scenarios supply their own offline adapters and
-    # repositories in their steps; never fall through to default provider
-    # construction or a live network call.
-    # You.com live scenarios skip before any adapter is constructed: TavilyAdapter
-    # fails closed without a Tavily key, which would abort a You.com scenario
-    # (e.g. when both provider keys are absent) instead of skipping it.
-    if scenario is not None and any(tag == "youcom" for tag in scenario.tags):
-        if not context.has_youcom_key:
-            scenario.skip(
-                reason=(
-                    "FREESEARCH_YOU_API_KEY is not set "
-                    "(harness live-gate reads the process env only). "
-                    "You.com live BDD scenarios are skipped without a harness env key."
-                )
-            )
-            return
+    # Offline scenarios supply their own adapters and repositories in their steps
+    # (the early return above keeps them away from default provider construction
+    # and any live network call), and You.com scenarios were gated above.
+    if _has_youcom_tag(scenario):
         from freesearch.adapters.youcom import YoucomAdapter
 
         context.youcom_adapter = YoucomAdapter(
             context.http_client, api_key=_explicit_api_key(ProviderName.YOU)
         )
     else:
-        if _has_brave_tag(scenario) and not getattr(context, "has_brave_key", True):
-            scenario.skip(
-                reason=(
-                    "FREESEARCH_BRAVE_SEARCH_API_KEY is not set "
-                    "(harness live-gate reads the process env only). "
-                    "Brave live BDD scenarios are skipped without a harness env key."
-                )
-            )
-            return
-        if _has_parallel_tag(scenario) and not getattr(context, "has_parallel_key", True):
-            scenario.skip(
-                reason=(
-                    "FREESEARCH_PARALLEL_API_KEY is not set "
-                    "(harness live-gate reads the process env only). "
-                    "Parallel live BDD scenarios are skipped without a harness env key."
-                )
-            )
-            return
-        if _has_keenable_keyed_tag(scenario) and not getattr(context, "has_keenable_key", True):
-            scenario.skip(
-                reason=(
-                    "FREESEARCH_KEENABLE_API_KEY is not set "
-                    "(harness live-gate reads the process env only). "
-                    "Keenable keyed live BDD scenarios are skipped without a harness env key."
-                )
-            )
-            return
         context.adapter = _adapter_for(context.http_client, scenario)
     context.search_response = None
     context.fetch_response = None
@@ -171,9 +148,79 @@ def _adapter_for(client: Any, scenario: Any) -> Any:
     return TavilyAdapter(client, api_key=_explicit_api_key(ProviderName.TAVILY))
 
 
+def _absent_key_reason(context: Any, flag: str, provider: ProviderName, label: str) -> str | None:
+    """Return the missing-key skip reason for ``flag``, or None when the key is set.
+
+    The reason names the env var (never any key material) so an operator can see
+    directly which harness key is missing.
+    """
+    if getattr(context, flag, True):
+        return None
+    return (
+        f"{PROVIDER_ENV_VARS[provider]} is not set "
+        "(harness live-gate reads the process env only). "
+        f"{label} live BDD scenarios are skipped without a harness env key."
+    )
+
+
+def _missing_live_key_reason(context: Any, scenario: Any) -> str | None:
+    """Return the skip reason when the scenario's harness provider key is absent.
+
+    Ordered like ``_adapter_for``'s selection so the reason always names the env
+    var the adapter about to be constructed would consume. Exa is handled by the
+    caller (it is identified by feature name, not by a tag). A ``context`` flag
+    that was never set counts as "not gated": duck-typed scenario doubles that
+    never ran ``before_all`` keep their previous construction behaviour, while a
+    real Behave run always resolves the flags in ``before_all``.
+    """
+    if _has_youcom_tag(scenario):
+        return _absent_key_reason(context, "has_youcom_key", ProviderName.YOU, "You.com")
+    if _has_parallel_tag(scenario):
+        return _absent_key_reason(context, "has_parallel_key", ProviderName.PARALLEL, "Parallel")
+    if _has_firecrawl_tag(scenario):
+        return _absent_key_reason(context, "has_firecrawl_key", ProviderName.FIRECRAWL, "Firecrawl")
+    if _has_keenable_keyed_tag(scenario):
+        return _absent_key_reason(
+            context, "has_keenable_key", ProviderName.KEENABLE, "Keenable keyed"
+        )
+    if _has_brave_tag(scenario):
+        return _absent_key_reason(context, "has_brave_key", ProviderName.BRAVE, "Brave")
+    if _is_tavily_scenario(scenario):
+        return _absent_key_reason(context, "has_tavily_key", ProviderName.TAVILY, "Tavily")
+    return None
+
+
 def _is_exa_scenario(scenario: Any) -> bool:
     """Identify scenarios declared by the Exa live feature."""
     return getattr(getattr(scenario, "feature", None), "name", "").startswith("Exa")
+
+
+def _is_tavily_scenario(scenario: Any) -> bool:
+    """Return True exactly when a live scenario falls through to Tavily.
+
+    Tavily live scenarios (features/tavily.feature ``@live @search``/``@fetch``/
+    ``@quota``) carry no provider tag, so a tag check alone cannot gate them.
+    Instead, for a ``@live`` scenario this predicate is the exact complement of
+    every other provider selection in ``_adapter_for`` - parallel, firecrawl,
+    keenable, keenable-keyed, brave - plus the Exa feature check and the
+    separately gated ``@youcom`` path.
+
+    The ``@live`` requirement is what keeps the gate live-only: an ordinary
+    untagged scenario (any offline BDD step that carries no provider tag) must
+    still get its default adapter constructed rather than being skipped for a
+    missing harness key.
+    """
+    if not _has_live_tag(scenario):
+        return False
+    return not (
+        _has_parallel_tag(scenario)
+        or _has_firecrawl_tag(scenario)
+        or _has_keenable_tag(scenario)
+        or _has_keenable_keyed_tag(scenario)
+        or _has_brave_tag(scenario)
+        or _is_exa_scenario(scenario)
+        or _has_youcom_tag(scenario)
+    )
 
 
 def after_scenario(context: Any, scenario: Any) -> None:
@@ -284,6 +331,14 @@ def _tags_include_fanout(tags: Iterable[Any]) -> bool:
     return any(str(getattr(tag, "name", tag)).lstrip("@") == "fanout" for tag in tags)
 
 
+def _has_youcom_tag(scenario: Any) -> bool:
+    """Return True when the scenario carries the 'youcom' tag (str or Tag forms)."""
+    tags = getattr(scenario, "tags", None)
+    if not tags:
+        return False
+    return any(str(getattr(tag, "name", tag)).lstrip("@") == "youcom" for tag in tags)
+
+
 def _has_brave_tag(scenario: Any) -> bool:
     """Return True when the scenario carries the 'brave' tag (str or Tag forms)."""
     tags = getattr(scenario, "tags", None)
@@ -306,6 +361,15 @@ def _has_keenable_keyed_tag(scenario: Any) -> bool:
     if not tags:
         return False
     return any(str(getattr(tag, "name", tag)).lstrip("@") == "keenable-keyed" for tag in tags)
+
+
+def _has_tinyfish_tag(scenario: Any) -> bool:
+    """Identify offline Tinyfish scenarios, including feature-level tags."""
+    tags = getattr(scenario, "tags", None) or ()
+    feature_tags = getattr(getattr(scenario, "feature", None), "tags", None) or ()
+    return any(
+        str(getattr(tag, "name", tag)).lstrip("@") == "tinyfish" for tag in (*tags, *feature_tags)
+    )
 
 
 def _has_firecrawl_tag(scenario: Any) -> bool:

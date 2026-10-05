@@ -8,18 +8,19 @@ rate-limited calls sharing the runner's cooldown while both surface
 import asyncio
 
 import httpx
+from pydantic import SecretStr
 
 from freesearch.adapters.youcom import YoucomAdapter
 from freesearch.infrastructure.resilience import ProviderOperationError, ResilientRunner
 from freesearch.models.contracts import FetchRequest, SearchRequest
 from tests.unit.adapters._youcom_test_support import (
+    _TEST_KEY,
     _CountingRunner,
     _default_runner,
     _FakeClock,
     _FakeSleeper,
     _wire_caller,
     _WireRecorder,
-    fake_resolver,  # noqa: F401  (autouse fixture registered via import)
 )
 
 
@@ -29,7 +30,7 @@ async def test_search_and_fetch_each_route_through_shared_runner_once() -> None:
     runner = _CountingRunner(_default_runner(caller))
     adapter: YoucomAdapter | None = None
     try:
-        adapter = YoucomAdapter(caller, runner=runner)
+        adapter = YoucomAdapter(caller, runner=runner, api_key=SecretStr(_TEST_KEY))
         await adapter.search(SearchRequest(query="routed"))
         await adapter.fetch(FetchRequest(url="https://example.com/doc"))
     finally:
@@ -63,7 +64,7 @@ async def test_two_concurrent_rate_limited_calls_share_the_shared_runner() -> No
     )
     adapter: YoucomAdapter | None = None
     try:
-        adapter = YoucomAdapter(caller, runner=runner)
+        adapter = YoucomAdapter(caller, runner=runner, api_key=SecretStr(_TEST_KEY))
         request = SearchRequest(query="concurrent")
         outcomes = await asyncio.gather(
             adapter.search(request), adapter.search(request), return_exceptions=True

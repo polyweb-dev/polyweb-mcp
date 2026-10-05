@@ -122,13 +122,21 @@ async def test_balance_401_unpairs_and_backs_off(
     client = _open(repository, secret_store)
     try:
         await connect_parallel(client, stub_server, repository)
+        # Pairing intentionally performs the FIRST balance fetch inside the
+        # ready transition, so the counts below stay relative to that read.
+        paired_calls = stub_server.balance_calls
+        assert paired_calls == 1, "pairing must perform exactly one eager balance read"
         stub_server.balance_status = 401
         snapshot = await poll_balance(repository, stub_server, secret_store)
         assert snapshot is None, "rejected bearer must yield no snapshot"
-        assert stub_server.balance_calls == 1
+        assert stub_server.balance_calls == paired_calls + 1, (
+            "rejected bearer must be attempted exactly once"
+        )
         again = await poll_balance(repository, stub_server, secret_store)
         assert again is None
-        assert stub_server.balance_calls == 1, "backoff ignored: re-polled a dead bearer"
+        assert stub_server.balance_calls == paired_calls + 1, (
+            "backoff ignored: re-polled a dead bearer"
+        )
         status = client.get(STATUS_PATH)
         assert status.status_code == 200
         assert status.json()["status"] == "unpaired", status.text[:300]

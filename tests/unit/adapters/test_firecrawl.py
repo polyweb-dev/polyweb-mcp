@@ -16,10 +16,10 @@ Contract under test:
         through the shared runner and returns a FetchResponse containing
         markdown (truncated exactly to ``FetchRequest.max_chars``), the
         target URL, a timezone-aware timestamp, and truncation metadata.
-  AC-3  constructing a non-injected adapter with no resolver credential
-        fails closed as ``ProviderOperationError`` ``configuration_error``,
-        never falls back to ambient credentials, and never leaks the
-        credential into exposed messages or the shared client.
+  AC-3  constructing a non-injected adapter with no explicit ``api_key``
+        credential fails closed as ``ProviderOperationError``
+        ``configuration_error``, never falls back to ambient credentials, and
+        never leaks the credential into exposed messages or the shared client.
   AC-4  SDK failures and structurally malformed responses are normalized to
         a redaction-safe ``ProviderOperationError`` (no secret, no raw
         payload, suppressed cause) with HTTP status 429/500/502/503/504
@@ -56,7 +56,6 @@ import freesearch.adapters.firecrawl as firecrawl_module  # import seam
 from freesearch.adapters import FirecrawlAdapter
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.infrastructure.resilience import ProviderOperationError
-from freesearch.infrastructure.secrets import ProviderName
 from freesearch.models.contracts import FetchRequest, SearchRequest, UsageOperation
 
 
@@ -105,34 +104,11 @@ class _RecordingRunner:
         return await operation()
 
 
-class _NoKeyResolver:
-    """Fake provider secret resolver that always resolves to no credential."""
-
-    def __init__(self) -> None:
-        self.requested: list[ProviderName] = []
-
-    def get(self, provider: ProviderName) -> None:
-        self.requested.append(provider)
-        return None
-
-
-class _KeyResolver:
-    """Fake provider secret resolver returning a fixed ``SecretStr``."""
-
-    def __init__(self, secret: str) -> None:
-        self._secret = SecretStr(secret)
-        self.requested: list[ProviderName] = []
-
-    def get(self, provider: ProviderName) -> SecretStr:
-        self.requested.append(provider)
-        return self._secret
-
-
 def make_adapter(*, sdk: _FakeSDK | None = None, runner=None) -> FirecrawlAdapter:
     """Build an adapter with no network: fake client, runner, and SDK seams.
 
-    A ``_FakeSDK`` is injected by default so the real resolver-backed
-    construction path is never reached.
+    A ``_FakeSDK`` is injected by default so the real SDK construction path
+    (the credential-gated explicit ``api_key`` seam) is never reached.
     """
     return FirecrawlAdapter(_FakeClient(), runner=runner, sdk_client=sdk or _FakeSDK())
 
@@ -299,15 +275,16 @@ async def test_fetch_within_max_chars_is_not_truncated() -> None:
 
 async def test_construction_missing_resolver_credential_fails_closed(monkeypatch) -> None:
     monkeypatch.delenv("FREESEARCH_FIRECRAWL_API_KEY", raising=False)
-    resolver = _NoKeyResolver()
-    monkeypatch.setattr(firecrawl_module, "get_provider_secret_resolver", lambda: resolver)
 
     client = httpx.AsyncClient()
     try:
         with pytest.raises(ProviderOperationError) as excinfo:
             FirecrawlAdapter(client)
 
-        assert resolver.requested == [ProviderName.FIRECRAWL]
+        # The retired resolver seam proved the adapter consulted the process
+        # resolver before failing; with explicit injection the absent
+        # credential is the constructor default, so fail-closed is proven by
+        # the construction itself.
         assert excinfo.value.error.code == "configuration_error"
         assert excinfo.value.error.retryable is False
         # The failing path must leave the shared client untouched.
@@ -318,15 +295,12 @@ async def test_construction_missing_resolver_credential_fails_closed(monkeypatch
 
 async def test_construction_never_falls_back_to_ambient_key(monkeypatch) -> None:
     monkeypatch.setenv("FREESEARCH_FIRECRAWL_API_KEY", "ambient-sk-leak")
-    resolver = _NoKeyResolver()
-    monkeypatch.setattr(firecrawl_module, "get_provider_secret_resolver", lambda: resolver)
 
     client = httpx.AsyncClient()
     try:
         with pytest.raises(ProviderOperationError) as excinfo:
             FirecrawlAdapter(client)
 
-        assert resolver.requested == [ProviderName.FIRECRAWL]
         assert excinfo.value.error.code == "configuration_error"
         assert "ambient-sk-leak" not in str(excinfo.value)
         assert "ambient-sk-leak" not in str(client.headers)
@@ -491,9 +465,9 @@ async def test_aclose_is_safe_with_injected_sdk() -> None:
 
 # --- adapter-owned SDK lifecycle ----------------------------------------------
 #
-# The adapter-created SDK (resolver path) mirrors the installed firecrawl-py
-# 4.38.0 surface: ``AsyncFirecrawl`` does NOT own a top-level transport. The
-# closeable ``AsyncHttpClient`` transport lives nested at
+# The adapter-created SDK (explicit ``api_key`` path) mirrors the installed
+# firecrawl-py 4.38.0 surface: ``AsyncFirecrawl`` does NOT own a top-level
+# transport. The closeable ``AsyncHttpClient`` transport lives nested at
 # ``AsyncFirecrawl.v2.async_http_client`` (the ``v2`` proxy is created lazily
 # and cached), so ``aclose()`` must close that nested transport — without
 # closing the caller-owned shared ``httpx.AsyncClient``. Injected fake SDKs
@@ -532,8 +506,6 @@ class _TransportOwningSDK:
 async def test_aclose_closes_adapter_owned_sdk_transport_but_not_shared_client(
     monkeypatch,
 ) -> None:
-    resolver = _KeyResolver("sk-live-456")
-    monkeypatch.setattr(firecrawl_module, "get_provider_secret_resolver", lambda: resolver)
     built: list[_TransportOwningSDK] = []
 
     def fake_sdk(**kwargs: object) -> _TransportOwningSDK:
@@ -545,10 +517,9 @@ async def test_aclose_closes_adapter_owned_sdk_transport_but_not_shared_client(
 
     shared = httpx.AsyncClient()
     try:
-        adapter = FirecrawlAdapter(shared)
+        adapter = FirecrawlAdapter(shared, api_key=SecretStr("sk-live-456"))
 
-        # Resolver-only credentials still drive the constructor path.
-        assert resolver.requested == [ProviderName.FIRECRAWL]
+        # Explicitly injected credentials still drive the constructor path.
         assert built and built[0].kwargs == {"api_key": "sk-live-456"}
         assert adapter._sdk is built[0]
         # The fake mirrors the installed SDK: the closeable transport exists
@@ -901,7 +872,7 @@ async def test_sdk_transport_error_propagates_unwrapped_for_runner() -> None:
         await adapter.search(SearchRequest(query="down"))
 
 
-# --- constructor resolver happy-path builds the SDK with the resolved key ------
+# --- constructor explicit-key happy-path builds the SDK with the injected key --
 
 
 class _RecordingSDK:
@@ -914,8 +885,6 @@ class _RecordingSDK:
 async def test_construction_with_resolver_key_builds_sdk_with_resolved_secret(
     monkeypatch,
 ) -> None:
-    resolver = _KeyResolver("sk-live-123")
-    monkeypatch.setattr(firecrawl_module, "get_provider_secret_resolver", lambda: resolver)
     built: list[_RecordingSDK] = []
 
     def fake_sdk(**kwargs: object) -> _RecordingSDK:
@@ -925,9 +894,8 @@ async def test_construction_with_resolver_key_builds_sdk_with_resolved_secret(
 
     monkeypatch.setattr(firecrawl_module, "AsyncFirecrawl", fake_sdk)
 
-    adapter = FirecrawlAdapter(_FakeClient())
+    adapter = FirecrawlAdapter(_FakeClient(), api_key=SecretStr("sk-live-123"))
 
-    assert resolver.requested == [ProviderName.FIRECRAWL]
     assert built and built[0].kwargs == {"api_key": "sk-live-123"}
     assert adapter._sdk is built[0]
 

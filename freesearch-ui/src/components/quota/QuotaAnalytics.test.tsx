@@ -86,9 +86,11 @@ describe("QuotaAnalytics (live backend)", () => {
       expect(screen.getByText("Tavily", { exact: true })).toBeInTheDocument()
     })
 
-    // RF2: null limits stay blank/— on every surface. 8 is retired.
-    const body = document.body.textContent ?? ""
+    // RF2: null limits stay blank/—; the configured provider count is legitimate.
+    expect(screen.getByText("8 configured")).toBeInTheDocument()
+    const body = (document.body.textContent ?? "").replace("8 configured", "")
     expect(body).not.toContain("8")
+    expect(body).not.toContain("∞")
     expect(screen.getAllByText(/—/).length).toBeGreaterThan(0)
   })
 

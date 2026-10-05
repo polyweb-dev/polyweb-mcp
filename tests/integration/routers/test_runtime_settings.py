@@ -29,6 +29,7 @@ CANONICAL_ALPHA_ORDER = [
     "keenable",
     "parallel",
     "tavily",
+    "tinyfish",
     "you",
 ]
 

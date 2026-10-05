@@ -352,7 +352,7 @@ def step_when_write_sentinel(context: Any, provider: str) -> None:
     context.last_provider = provider
 
 
-@when("I write all seven sentinel provider secrets through the control API")
+@when("I write all eight sentinel provider secrets through the control API")
 def step_when_write_all_sentinels(context: Any) -> None:
     with _client(context) as client:
         for provider in ProviderName:

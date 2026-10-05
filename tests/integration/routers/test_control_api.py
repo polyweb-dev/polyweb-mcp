@@ -206,8 +206,9 @@ async def test_get_providers_enumerates_canonical_status_contract(
         "you",
         "brave",
         "keenable",
+        "tinyfish",
     }
-    assert len(body) == 7
+    assert len(body) == 8
     for item in body:
         assert set(item) == {
             "provider_id",
