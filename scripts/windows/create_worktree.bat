@@ -77,15 +77,15 @@ echo -------------------------------------------------------
 REM 1. Create Git Worktree (checks local, then remote, else creates new from main)
 git show-ref --verify --quiet refs/heads/%TARGET_BRANCH%
 if not errorlevel 1 (
-    echo [1/5] Checking out existing local branch '%TARGET_BRANCH%' in worktree '%TARGET_PATH%'...
+    echo [1/6] Checking out existing local branch '%TARGET_BRANCH%' in worktree '%TARGET_PATH%'...
     git worktree add "%TARGET_PATH%" "%TARGET_BRANCH%"
 ) else (
     git show-ref --verify --quiet refs/remotes/origin/%TARGET_BRANCH%
     if not errorlevel 1 (
-        echo [1/5] Checking out remote branch 'origin/%TARGET_BRANCH%' in worktree '%TARGET_PATH%'...
+        echo [1/6] Checking out remote branch 'origin/%TARGET_BRANCH%' in worktree '%TARGET_PATH%'...
         git worktree add --track -b "%TARGET_BRANCH%" "%TARGET_PATH%" "origin/%TARGET_BRANCH%"
     ) else (
-        echo [1/5] Branch not found locally or remotely. Creating new branch '%TARGET_BRANCH%' from main...
+        echo [1/6] Branch not found locally or remotely. Creating new branch '%TARGET_BRANCH%' from main...
         git worktree add -b "%TARGET_BRANCH%" "%TARGET_PATH%" main
     )
 )
@@ -95,21 +95,26 @@ if errorlevel 1 (
     exit /b 1
 )
 
-REM 2. Copy .env file if present in main repo
+REM 2. Copy .env and database file if present in main repo
 if exist ".env" (
-    echo [2/5] Copying root .env file to '%TARGET_PATH%\.env'...
+    echo [2/6] Copying root .env file to '%TARGET_PATH%\.env'...
     copy /Y ".env" "%TARGET_PATH%\.env" >nul
 ) else (
-    echo [2/5] Warning: No .env file found in root repository. Skipping copy.
+    echo [2/6] Warning: No .env file found in root repository. Skipping copy.
 )
 
-REM 3. Backend Setup (uv sync)
+if exist "freesearch.db" (
+    echo [2/6] Copying freesearch.db to '%TARGET_PATH%\freesearch.db'...
+    copy /Y "freesearch.db" "%TARGET_PATH%\freesearch.db" >nul
+)
+
+REM 3. Backend Setup (uv sync + database migration)
 if /i "%TARGET_MODE%"=="ui" (
-    echo [3/5] [SKIP] Mode is 'ui' - skipping backend 'uv sync'.
+    echo [3/6] [SKIP] Mode is 'ui' - skipping backend 'uv sync'.
 ) else if /i "%TARGET_MODE%"=="docker" (
-    echo [3/5] [SKIP] Mode is 'docker' - skipping backend 'uv sync'.
+    echo [3/6] [SKIP] Mode is 'docker' - skipping backend 'uv sync'.
 ) else (
-    echo [3/5] Initializing backend virtualenv with 'uv sync' in '%TARGET_PATH%'...
+    echo [3/6] Initializing backend virtualenv with 'uv sync' in '%TARGET_PATH%'...
     pushd "%TARGET_PATH%"
     call uv sync
     if errorlevel 1 (
@@ -117,23 +122,28 @@ if /i "%TARGET_MODE%"=="ui" (
         popd
         exit /b 1
     )
+    echo [3/6] Ensuring database schema is current with 'uv run freesearch-db upgrade'...
+    call uv run freesearch-db upgrade
+    if errorlevel 1 (
+        echo [WARNING] Database upgrade reported an issue in '%TARGET_PATH%'.
+    )
     popd
 )
 
 REM 4. UI Setup (pnpm install + bddgen)
 if /i "%TARGET_MODE%"=="backend" (
-    echo [4/5] [SKIP] Mode is 'backend' - skipping UI dependency setup.
+    echo [4/6] [SKIP] Mode is 'backend' - skipping UI dependency setup.
 ) else if /i "%TARGET_MODE%"=="docker" (
-    echo [4/5] [SKIP] Mode is 'docker' - skipping UI dependencies.
+    echo [4/6] [SKIP] Mode is 'docker' - skipping UI dependencies.
     if exist "%TARGET_PATH%\freesearch-ui" (
         if exist "%~dp0..\..\freesearch-ui\.env.local" (
-            echo [4/5] Copying UI .env.local to '%TARGET_PATH%\freesearch-ui\.env.local'...
+            echo [4/6] Copying UI .env.local to '%TARGET_PATH%\freesearch-ui\.env.local'...
             copy /Y "%~dp0..\..\freesearch-ui\.env.local" "%TARGET_PATH%\freesearch-ui\.env.local" >nul
         )
     )
 ) else (
     if exist "%TARGET_PATH%\freesearch-ui\package.json" (
-        echo [4/5] Setting up UI dependencies in '%TARGET_PATH%\freesearch-ui'...
+        echo [4/6] Setting up UI dependencies in '%TARGET_PATH%\freesearch-ui'...
         pushd "%TARGET_PATH%\freesearch-ui"
         if exist "%~dp0..\..\freesearch-ui\.env.local" (
             copy /Y "%~dp0..\..\freesearch-ui\.env.local" ".env.local" >nul
@@ -144,23 +154,23 @@ if /i "%TARGET_MODE%"=="backend" (
             popd
             exit /b 1
         )
-        echo [4/5] Generating Playwright BDD specs with 'pnpm bddgen'...
+        echo [4/6] Generating Playwright BDD specs with 'pnpm bddgen'...
         call pnpm bddgen
         popd
     ) else (
-        echo [4/5] [INFO] No freesearch-ui directory found on this branch. Skipping UI setup.
+        echo [4/6] [INFO] No freesearch-ui directory found on this branch. Skipping UI setup.
     )
 )
 
 REM 5. CodeGraph Initialization
 where codegraph >nul 2>&1
 if not errorlevel 1 (
-    echo [5/5] Initializing CodeGraph index in '%TARGET_PATH%' with 'codegraph init -y'...
+    echo [5/6] Initializing CodeGraph index in '%TARGET_PATH%' with 'codegraph init -y'...
     pushd "%TARGET_PATH%"
     call codegraph init -y
     popd
 ) else (
-    echo [5/5] [SKIP] 'codegraph' CLI not found. Skipping CodeGraph initialization.
+    echo [5/6] [SKIP] 'codegraph' CLI not found. Skipping CodeGraph initialization.
 )
 
 echo.
