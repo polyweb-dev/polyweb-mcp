@@ -27,6 +27,7 @@ from fastapi import FastAPI, HTTPException
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.adapters.registry import adapter_factory, build_adapters, close_adapters
 from freesearch.configuration.config import get_settings
+from freesearch.configuration.provider_config import ProviderConfigError
 from freesearch.infrastructure.cryptography import SecretCodec, load_or_create_master_key
 from freesearch.infrastructure.encrypted_store import (
     EncryptedDbSecretStore,
@@ -76,6 +77,7 @@ from freesearch.routers.control import (
     _build_with_resolved_secret,
     _resolve_secret,
     effective_config_for_name,
+    initialize_provider_configs,
     register_control_routes,
     routing_policy,
 )
@@ -109,12 +111,14 @@ async def _build_app_adapters(
     client: httpx.AsyncClient | None,
     store: AsyncSecretStore,
 ) -> None:
-    """Build enabled adapters from app-scoped encrypted vault secrets."""
+    """Build credential-ready adapters from app-scoped encrypted vault secrets.
 
+    An administrator OFF choice does not skip construction: each request
+    filters the candidate list, so a later ON choice needs no restart.
+    """
+
+    await initialize_provider_configs(repository)
     for provider in ProviderName:
-        config = await effective_config_for_name(repository, provider)
-        if not config.enabled:
-            continue
         key, _source = await _resolve_secret(provider, store)
         if key is None and provider is not ProviderName.KEENABLE:
             continue
@@ -190,6 +194,10 @@ def create_app(
                     )
                 else:
                     routes.extend(build_adapters(app.state._client))
+            elif isinstance(repo, SQLiteRepository):
+                # Injected adapters with an owned database still need the
+                # canonical provider records before the first request.
+                await initialize_provider_configs(repo)
             # Restore locally derived quota state before the first dashboard
             # read.  This hydrates Keenable's rolling-hour keyless counter and
             # applies any persisted Parallel monthly budget without requiring
@@ -308,22 +316,26 @@ async def _order_routes(
     routes: Sequence[ProviderAdapter],
     repository: SQLiteRepository | None,
     preset: CostPreset,
+    operation: UsageOperation,
 ) -> list[ProviderAdapter]:
-    """Filter disabled adapters and sort by persisted priority.
+    """Filter inaccessible adapters and sort by persisted priority.
 
-    The sort is stable: adapters with equal persisted priority keep their
-    startup order (``build_adapters`` already emits the configured
-    ``(priority, name)`` order, and injected routes keep the caller's order),
-    so the pinned single-candidate routing contracts are preserved.
+    A candidate stays only when ``config.allows(operation)`` holds, so the
+    admin mask, the system support mask, and the global gate all apply before
+    any provider call. The sort is stable: adapters with equal persisted
+    priority keep their startup order (``build_adapters`` already emits the
+    configured ``(priority, name)`` order, and injected routes keep the
+    caller's order), so the pinned single-candidate routing contracts are
+    preserved.
     """
 
     await _apply_parallel_seed(routes, repository)
-    enabled: list[tuple[int, ProviderAdapter]] = []
+    eligible: list[tuple[int, ProviderAdapter]] = []
     for adapter in routes:
-        config = await effective_config_for_name(repository, adapter.name)
-        if config.enabled:
-            enabled.append((config.priority, adapter))
-    ordered = [adapter for _, adapter in sorted(enabled, key=lambda item: item[0])]
+        config = await effective_config_for_name(repository, adapter.name, strict=True)
+        if config.allows(operation):
+            eligible.append((config.priority, adapter))
+    ordered = [adapter for _, adapter in sorted(eligible, key=lambda item: item[0])]
     return _pin_free_first(ordered, preset)
 
 
@@ -536,6 +548,12 @@ async def _routing_state(
     return health, quotas
 
 
+def _usage_operation(request: SearchRequest | FetchRequest) -> UsageOperation:
+    """Return the usage operation of a provider-querying request."""
+
+    return UsageOperation.SEARCH if isinstance(request, SearchRequest) else UsageOperation.FETCH
+
+
 async def _plan_route(
     request: SearchRequest | FetchRequest,
     routes: Sequence[ProviderAdapter],
@@ -544,10 +562,10 @@ async def _plan_route(
 ) -> tuple[ProviderAdapter, ...]:
     """Return the ordered adapters to attempt for ``request``.
 
-    The in-memory routes are filtered by the persisted enablement, sorted by
-    persisted priority, pinned for the cost preset, truncated by the fallback
-    policy, and finally ranked by ``select_route``. A single candidate path
-    stays identical to the pre-control routing contract.
+    The in-memory routes are filtered by effective access, sorted by persisted
+    priority, pinned for the cost preset, truncated by the fallback policy,
+    and finally ranked by ``select_route``. A single candidate path stays
+    identical to the pre-control routing contract.
     """
 
     if not routes:
@@ -558,8 +576,14 @@ async def _plan_route(
                 "(PUT /api/v1/providers/{id}/secret)"
             ),
         )
+    operation = _usage_operation(request)
     policy = await routing_policy(repository)
-    ordered = await _order_routes(routes, repository, policy.cost_optimization_preset)
+    try:
+        ordered = await _order_routes(
+            routes, repository, policy.cost_optimization_preset, operation
+        )
+    except ProviderConfigError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
     if policy.fallback_policy is FallbackPolicy.FIRST_ONLY:
         ordered = ordered[:1]
     health_snapshots, quota_snapshots = await _routing_state(repository, ordered, secret_store)
@@ -567,6 +591,11 @@ async def _plan_route(
         candidates = select_route(request, ordered, health_snapshots, quota_snapshots)
     except RoutingError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    if not candidates:
+        raise HTTPException(
+            status_code=503,
+            detail=f"no eligible provider is available for {operation.value}",
+        )
     # A per-request allow_fallback=false already truncates inside select_route;
     # the global first_only policy truncates above.
     chained = request.routing.allow_fallback and policy.fallback_policy is FallbackPolicy.CHAINED
@@ -668,7 +697,12 @@ async def _dispatch_fanout_search(
     observability = current_observability()
     with observability.span(TraceSpanName.ROUTE, attributes=_request_attributes(request)):
         policy = await routing_policy(repository)
-        ordered = await _order_routes(routes, repository, policy.cost_optimization_preset)
+        try:
+            ordered = await _order_routes(
+                routes, repository, policy.cost_optimization_preset, UsageOperation.SEARCH
+            )
+        except ProviderConfigError as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
         health_snapshots, quota_snapshots = await _routing_state(repository, ordered, secret_store)
         fanout_request = request.model_copy(
             update={"routing": request.routing.model_copy(update={"mode": RoutingMode.FANOUT})}

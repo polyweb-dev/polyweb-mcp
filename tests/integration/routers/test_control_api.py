@@ -213,6 +213,8 @@ async def test_get_providers_enumerates_canonical_status_contract(
         assert set(item) == {
             "provider_id",
             "enabled",
+            "enable_mask",
+            "support_mask",
             "priority",
             "health",
             "circuit_breaker",
@@ -222,6 +224,15 @@ async def test_get_providers_enumerates_canonical_status_contract(
             "reset_schedule",
         }
         assert isinstance(item["enabled"], bool)
+        assert isinstance(item["enable_mask"], int)
+        assert isinstance(item["support_mask"], int)
+        assert 0 <= item["enable_mask"] <= 7
+        assert 0 <= item["support_mask"] <= 7
+        assert item["enable_mask"] == 7
+        expected_support = 3 if item["provider_id"] == "brave" else 7
+        assert item["support_mask"] == expected_support
+        assert item["enabled"] is bool(item["enable_mask"] & item["support_mask"] & 1)
+        assert item["enabled"] is True
         assert isinstance(item["priority"], int)
         assert item["priority"] >= 1
         assert item["health"] is None
@@ -265,6 +276,22 @@ async def test_unknown_provider_item_routes_return_404(
         {"priority": 0},
         {"free_tier_estimates": {"search": 0.5}},
         {"unknown_field": True},
+        {"enable_mask": True},
+        {"enable_mask": 1.5},
+        {"enable_mask": "7"},
+        {"enable_mask": -1},
+        {"enable_mask": 8},
+        {"enable_mask": None},
+        {"support_mask": 7},
+        {"support_mask": 3},
+        {"search_enabled": "yes"},
+        {"fetch_enabled": 1},
+        {"enable_mask": 7, "enabled": True},
+        {"enable_mask": 7, "search_enabled": True},
+        {"enable_mask": 7, "fetch_enabled": False},
+        {"enabled": None},
+        {"search_enabled": None},
+        {"fetch_enabled": None},
     ],
 )
 @pytest.mark.asyncio
@@ -279,6 +306,25 @@ async def test_provider_patch_rejects_non_strict_or_unknown_fields(
 
     assert response.status_code == 422
     assert response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_provider_patch_rejects_read_only_support_mask(
+    repository: SQLiteRepository,
+) -> None:
+    """Support is system-owned: admin PATCH never accepts it, even with a matching value."""
+    app = create_app([ControlAdapter("exa")], repository=repository)
+
+    with TestClient(app) as client:
+        before = client.get("/api/v1/providers/exa")
+        rejected = client.patch("/api/v1/providers/exa", json={"support_mask": 7})
+        after = client.get("/api/v1/providers/exa")
+
+    assert before.status_code == 200
+    assert rejected.status_code == 422
+    assert after.status_code == 200
+    assert after.json()["support_mask"] == before.json()["support_mask"]
+    assert after.json()["enable_mask"] == before.json()["enable_mask"]
 
 
 @pytest.mark.asyncio
@@ -301,16 +347,121 @@ async def test_provider_patch_merges_estimates_and_returns_updated_status(
     updated = response.json()
     assert updated["provider_id"] == "exa"
     assert updated["enabled"] is False
+    assert updated["enable_mask"] == 6
+    assert updated["support_mask"] == 7
     assert updated["priority"] == 7
     assert _json_decimal(updated["free_tier_estimates"]["search"]) == Decimal("2")
     assert "fetch" in updated["free_tier_estimates"]
     assert "cost_estimate" in updated["free_tier_estimates"]
     assert after.json()["enabled"] is False
+    assert after.json()["enable_mask"] == 6
+    assert after.json()["support_mask"] == 7
     assert after.json()["priority"] == 7
     assert _json_decimal(after.json()["free_tier_estimates"]["fetch"]) == _json_decimal(
         before.json()["free_tier_estimates"]["fetch"]
     )
     assert set(updated) == set(before.json())
+
+
+@pytest.mark.asyncio
+async def test_provider_patch_global_toggle_preserves_tool_bits(
+    repository: SQLiteRepository,
+) -> None:
+    """Global OFF clears only Bit 0; tool bits survive for a later global ON."""
+    app = create_app([ControlAdapter("exa")], repository=repository)
+
+    with TestClient(app) as client:
+        off = client.patch("/api/v1/providers/exa", json={"enabled": False})
+        on = client.patch("/api/v1/providers/exa", json={"enabled": True})
+
+    assert off.status_code == 200
+    assert off.json()["enable_mask"] == 6
+    assert off.json()["enabled"] is False
+    assert on.status_code == 200
+    assert on.json()["enable_mask"] == 7
+    assert on.json()["enabled"] is True
+
+
+@pytest.mark.asyncio
+async def test_provider_patch_search_toggle_changes_only_search_bit(
+    repository: SQLiteRepository,
+) -> None:
+    """A search PATCH changes Bit 1 and preserves global, fetch, and priority."""
+    app = create_app([ControlAdapter("exa")], repository=repository)
+
+    with TestClient(app) as client:
+        before = client.get("/api/v1/providers/exa")
+        off = client.patch("/api/v1/providers/exa", json={"search_enabled": False})
+        after_off = client.get("/api/v1/providers/exa")
+        on = client.patch("/api/v1/providers/exa", json={"search_enabled": True})
+
+    assert before.json()["enable_mask"] == 7
+    assert off.status_code == 200
+    assert off.json()["enable_mask"] == 5
+    assert off.json()["enabled"] is True
+    assert off.json()["support_mask"] == 7
+    assert after_off.json()["enable_mask"] == 5
+    assert on.status_code == 200
+    assert on.json()["enable_mask"] == 7
+
+
+@pytest.mark.asyncio
+async def test_provider_patch_fetch_toggle_changes_only_fetch_bit(
+    repository: SQLiteRepository,
+) -> None:
+    """A fetch PATCH changes Bit 2 and preserves the other enable bits."""
+    app = create_app([ControlAdapter("exa")], repository=repository)
+
+    with TestClient(app) as client:
+        off = client.patch("/api/v1/providers/exa", json={"fetch_enabled": False})
+        on = client.patch("/api/v1/providers/exa", json={"fetch_enabled": True})
+
+    assert off.status_code == 200
+    assert off.json()["enable_mask"] == 3
+    assert off.json()["enabled"] is True
+    assert on.status_code == 200
+    assert on.json()["enable_mask"] == 7
+
+
+@pytest.mark.asyncio
+async def test_provider_patch_enable_mask_replaces_all_bits(
+    repository: SQLiteRepository,
+) -> None:
+    """A complete enable_mask replaces every enable bit in one write."""
+    app = create_app([ControlAdapter("exa")], repository=repository)
+
+    with TestClient(app) as client:
+        replaced = client.patch("/api/v1/providers/exa", json={"enable_mask": 3})
+        reread = client.get("/api/v1/providers/exa")
+
+    assert replaced.status_code == 200
+    assert replaced.json()["enable_mask"] == 3
+    assert replaced.json()["support_mask"] == 7
+    assert replaced.json()["enabled"] is True
+    assert reread.json()["enable_mask"] == 3
+
+
+@pytest.mark.asyncio
+async def test_provider_patch_empty_body_is_allowed(
+    repository: SQLiteRepository,
+) -> None:
+    """An empty PATCH preserves every field under the current endpoint contract."""
+    app = create_app([ControlAdapter("exa")], repository=repository)
+
+    with TestClient(app) as client:
+        before = client.get("/api/v1/providers/exa")
+        response = client.patch("/api/v1/providers/exa", json={})
+
+    assert response.status_code == 200
+    updated = response.json()
+    previous = before.json()
+    assert updated["provider_id"] == previous["provider_id"]
+    assert updated["enabled"] == previous["enabled"]
+    assert updated["enable_mask"] == previous["enable_mask"]
+    assert updated["support_mask"] == previous["support_mask"]
+    assert updated["priority"] == previous["priority"]
+    assert updated["free_tier_estimates"] == previous["free_tier_estimates"]
+    assert updated["reset_schedule"] == previous["reset_schedule"]
 
 
 @pytest.mark.asyncio
@@ -323,6 +474,8 @@ async def test_provider_patch_persists_across_repository_reopen(tmp_path: Path) 
         with TestClient(app) as client:
             response = client.patch("/api/v1/providers/exa", json={"enabled": False, "priority": 9})
         assert response.status_code == 200
+        assert response.json()["enable_mask"] == 6
+        assert response.json()["support_mask"] == 7
     finally:
         await first.close()
 
@@ -333,7 +486,36 @@ async def test_provider_patch_persists_across_repository_reopen(tmp_path: Path) 
             reopened = client.get("/api/v1/providers/exa")
         assert reopened.status_code == 200
         assert reopened.json()["enabled"] is False
+        assert reopened.json()["enable_mask"] == 6
+        assert reopened.json()["support_mask"] == 7
         assert reopened.json()["priority"] == 9
+    finally:
+        await second.close()
+
+
+@pytest.mark.asyncio
+async def test_provider_patch_mask_persists_across_repository_reopen(tmp_path: Path) -> None:
+    """A one-bit PATCH survives a repository reopen with its sibling bits intact."""
+    database = tmp_path / "provider-mask-state.db"
+    first = await SQLiteRepository.open(database)
+    try:
+        app = create_app([ControlAdapter("exa")], repository=first)
+        with TestClient(app) as client:
+            response = client.patch("/api/v1/providers/exa", json={"search_enabled": False})
+        assert response.status_code == 200
+        assert response.json()["enable_mask"] == 5
+    finally:
+        await first.close()
+
+    second = await SQLiteRepository.open(database)
+    try:
+        app = create_app([], repository=second)
+        with TestClient(app) as client:
+            reopened = client.get("/api/v1/providers/exa")
+        assert reopened.status_code == 200
+        assert reopened.json()["enable_mask"] == 5
+        assert reopened.json()["support_mask"] == 7
+        assert reopened.json()["enabled"] is True
     finally:
         await second.close()
 
@@ -799,6 +981,58 @@ async def test_search_filters_a_constructed_provider_persisted_disabled(
 
 
 @pytest.mark.asyncio
+async def test_search_filters_provider_with_global_mask_off(
+    repository: SQLiteRepository,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A global-OFF mask excludes the provider from search without a restart."""
+    monkeypatch.chdir(tmp_path)
+    await repository.set_runtime_setting(
+        "provider.exa", {"config": {"enable_mask": 6, "support_mask": 7, "priority": 100}}
+    )
+    disabled = ControlAdapter("exa")
+    enabled = ControlAdapter("brave")
+    app = create_app([disabled, enabled], repository=repository)
+
+    with TestClient(app) as client:
+        response = client.post("/search", json={"query": "skip mask-off"})
+
+    assert response.status_code == 200
+    assert response.json()["provider"] == "brave"
+    assert disabled.search_calls == 0
+    assert enabled.search_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_search_filters_provider_with_search_bit_off_keeps_fetch_eligible(
+    repository: SQLiteRepository,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A search-OFF mask blocks search but a direct status read still shows global ON."""
+    monkeypatch.chdir(tmp_path)
+    await repository.set_runtime_setting(
+        "provider.exa", {"config": {"enable_mask": 5, "support_mask": 7, "priority": 100}}
+    )
+    search_off = ControlAdapter("exa")
+    fallback = ControlAdapter("brave")
+    app = create_app([search_off, fallback], repository=repository)
+
+    with TestClient(app) as client:
+        status = client.get("/api/v1/providers/exa")
+        response = client.post("/search", json={"query": "search bit off"})
+
+    assert status.status_code == 200
+    assert status.json()["enable_mask"] == 5
+    assert status.json()["enabled"] is True
+    assert response.status_code == 200
+    assert response.json()["provider"] == "brave"
+    assert search_off.search_calls == 0
+    assert fallback.search_calls == 1
+
+
+@pytest.mark.asyncio
 async def test_rest_and_mcp_success_record_latency_and_success_status(
     repository: SQLiteRepository,
 ) -> None:
@@ -879,6 +1113,8 @@ async def test_provider_status_response_model_rejects_extra_fields() -> None:
         ProviderStatusResponse(
             provider_id="exa",
             enabled=True,
+            enable_mask=7,
+            support_mask=7,
             priority=100,
             health=None,
             circuit_breaker={"state": "closed", "updated_at": "2026-01-01T00:00:00Z"},
@@ -886,8 +1122,54 @@ async def test_provider_status_response_model_rejects_extra_fields() -> None:
             secret_presence="missing",
             free_tier_estimates={},
             reset_schedule=None,
-            extra_field=True,
+            extra_field=True,  # type: ignore[call-arg]
         )
+
+
+@pytest.mark.asyncio
+async def test_provider_status_response_model_requires_both_masks() -> None:
+    """Both raw masks are required; the decoded global field alone is not enough."""
+    base = {
+        "provider_id": "exa",
+        "enabled": True,
+        "priority": 100,
+        "health": None,
+        "circuit_breaker": {"state": "closed", "updated_at": "2026-01-01T00:00:00Z"},
+        "latency_p95_ms": None,
+        "secret_presence": "missing",
+        "free_tier_estimates": {},
+        "reset_schedule": None,
+    }
+    with pytest.raises(ValidationError):
+        ProviderStatusResponse(**base)  # type: ignore[arg-type]
+    with pytest.raises(ValidationError):
+        ProviderStatusResponse(**{**base, "enable_mask": 7})  # type: ignore[arg-type]
+    with pytest.raises(ValidationError):
+        ProviderStatusResponse(**{**base, "support_mask": 7})  # type: ignore[arg-type]
+    valid = ProviderStatusResponse(**{**base, "enable_mask": 7, "support_mask": 7})
+    assert valid.enable_mask == 7
+    assert valid.support_mask == 7
+
+
+@pytest.mark.asyncio
+async def test_provider_status_response_model_rejects_non_strict_masks() -> None:
+    """Mask fields are strict integers in range 0-7."""
+    base = {
+        "provider_id": "exa",
+        "enabled": True,
+        "priority": 100,
+        "health": None,
+        "circuit_breaker": {"state": "closed", "updated_at": "2026-01-01T00:00:00Z"},
+        "latency_p95_ms": None,
+        "secret_presence": "missing",
+        "free_tier_estimates": {},
+        "reset_schedule": None,
+    }
+    for bad in (True, 1.5, "7", -1, 8, None):
+        with pytest.raises(ValidationError):
+            ProviderStatusResponse(**{**base, "enable_mask": bad, "support_mask": 7})
+        with pytest.raises(ValidationError):
+            ProviderStatusResponse(**{**base, "enable_mask": 7, "support_mask": bad})
 
 
 @pytest.mark.asyncio
@@ -898,6 +1180,12 @@ async def test_provider_config_update_shape_remains_strict_and_partial() -> None
     assert update.priority == 4
     with pytest.raises(ValidationError):
         ProviderConfigUpdate(enabled=True, unexpected=True)  # type: ignore[call-arg]
+    with pytest.raises(ValidationError):
+        ProviderConfigUpdate(support_mask=7)  # type: ignore[call-arg]
+    with pytest.raises(ValidationError):
+        ProviderConfigUpdate(enable_mask=7, search_enabled=True)
+    with pytest.raises(ValidationError):
+        ProviderConfigUpdate(enabled=None)  # type: ignore[arg-type]
 
 
 # --- Vault-only migration contracts (AC-1..AC-5) ------------------------------

@@ -21,6 +21,7 @@ describe("WaterfallPanel", () => {
 
     expect(screen.getByText("Execution waterfall")).toBeInTheDocument()
     expect(screen.queryByText("Trace unavailable from backend")).not.toBeInTheDocument()
+    expect(screen.queryByText(/trace (is )?unavailable|waterfall unavailable/i)).not.toBeInTheDocument()
     expect(screen.queryByText("Live execution trace")).not.toBeInTheDocument()
     expect(screen.getByText("Tavily")).toBeInTheDocument()
     expect(screen.getByText("250ms")).toBeInTheDocument()

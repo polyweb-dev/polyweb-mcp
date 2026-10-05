@@ -69,12 +69,13 @@ async def close_adapters(
 
 
 def build_adapters(client: httpx.AsyncClient | None = None) -> list[ProviderAdapter]:
-    """Return enabled adapters with a resolvable key, in configured priority order.
+    """Return credentialed adapters in configured priority order.
 
     Each adapter resolves its own credential through the shared resolver at
-    construction; providers without a key (or disabled by configuration) are
-    skipped so the server runs with whatever keys are present. Keenable operates
-    in keyless public mode when unconfigured.
+    construction; providers without a key are skipped so the server runs with
+    whatever keys are present. Keenable operates in keyless public mode when
+    unconfigured. An administrator OFF choice does not skip construction: each
+    request filters the candidates.
     """
 
     http_client = client or create_async_client()
@@ -83,7 +84,7 @@ def build_adapters(client: httpx.AsyncClient | None = None) -> list[ProviderAdap
         get_provider_configs().items(), key=lambda item: (item[1].priority, item[0].value)
     ):
         adapter_cls = _ADAPTERS.get(name)
-        if adapter_cls is None or not record.enabled:
+        if adapter_cls is None:
             continue
         try:
             if name is ProviderName.PARALLEL:

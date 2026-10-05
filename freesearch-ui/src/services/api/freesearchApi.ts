@@ -28,7 +28,13 @@ import { ApiError, parseDetail, toApiError } from "@/shared/api/http"
 const API_BASE = (import.meta.env.VITE_API_URL as string | undefined) ?? ""
 
 type RoutingConfigPatch = Partial<BackendRoutingConfig>
-type ProviderPatch = { enabled?: boolean; priority?: number }
+type ProviderPatch = {
+  enable_mask?: number
+  enabled?: boolean
+  search_enabled?: boolean
+  fetch_enabled?: boolean
+  priority?: number
+}
 
 /** Optional Activity list filters; omitted values ask for the backend default. */
 export type TraceListFilters = {
@@ -92,7 +98,10 @@ export class FreeSearchApiService {
 
   patchProvider(backendId: string, patch: ProviderPatch): Promise<BackendProviderStatus> {
     const body: ProviderPatch = {}
+    if (patch.enable_mask !== undefined) body.enable_mask = patch.enable_mask
     if (patch.enabled !== undefined) body.enabled = patch.enabled
+    if (patch.search_enabled !== undefined) body.search_enabled = patch.search_enabled
+    if (patch.fetch_enabled !== undefined) body.fetch_enabled = patch.fetch_enabled
     if (patch.priority !== undefined) body.priority = patch.priority
     return this.request<BackendProviderStatus>(`/api/v1/providers/${backendId}`, {
       method: "PATCH",

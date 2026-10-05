@@ -1,3 +1,4 @@
+import { isProviderOperationEnabled } from "@/domains/providers";
 import type { ProviderConfig } from "@/domains/providers/model/types";
 import type { RoutingPreset } from "./types";
 
@@ -10,12 +11,10 @@ export function getEligibleProviders(
   preset: RoutingPreset,
 ): ProviderConfig[] {
   const eligible = providers.filter((provider) => {
-    if (!provider.globalEnabled || provider.circuitBreaker === "open") return false;
+    if (provider.circuitBreaker === "open") return false;
     const hasCredential = provider.hasKey || provider.capabilities.includes("keyless_tier");
     if (!hasCredential) return false;
-    return op === "search"
-      ? provider.searchEnabled && provider.capabilities.includes("search")
-      : provider.fetchEnabled && provider.capabilities.includes("fetch");
+    return isProviderOperationEnabled(provider, op);
   });
   return [...eligible].sort(compareForPreset(preset));
 }

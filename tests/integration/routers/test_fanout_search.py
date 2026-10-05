@@ -461,3 +461,57 @@ async def test_fanout_all_fail_writes_error_trace_without_results(
     providers = [span for span in detail["spans"] if span["name"] == "freesearch.provider"]
     assert len(providers) == 2
     assert all(span["outcome"] == "error" for span in providers)
+
+
+async def test_fanout_excludes_search_off_provider_without_call(
+    repository: SQLiteRepository,
+) -> None:
+    off = FakeSearchAdapter(
+        "exa",
+        [SearchResult(title="Exa", url=AnyHttpUrl("https://example.com/exa"), snippet="e")],
+    )
+    on = FakeSearchAdapter(
+        "brave",
+        [SearchResult(title="Brave", url=AnyHttpUrl("https://example.com/brave"), snippet="b")],
+    )
+    await repository.set_runtime_setting(
+        "provider.exa", {"config": {"enable_mask": 5, "support_mask": 7, "priority": 100}}
+    )
+    app = create_app([off, on], repository=repository)
+
+    with TestClient(app) as client:
+        response = client.post("/search", json={"query": "fanout scope", "fanout": True})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["participating_providers"] == ["brave"]
+    assert off.search_calls == 0
+    assert on.search_calls == 1
+
+
+async def test_fanout_with_no_eligible_candidate_returns_503(
+    repository: SQLiteRepository,
+) -> None:
+    first = FakeSearchAdapter(
+        "exa",
+        [SearchResult(title="Exa", url=AnyHttpUrl("https://example.com/exa"), snippet="e")],
+    )
+    second = FakeSearchAdapter(
+        "brave",
+        [SearchResult(title="Brave", url=AnyHttpUrl("https://example.com/brave"), snippet="b")],
+    )
+    await repository.set_runtime_setting(
+        "provider.exa", {"config": {"enable_mask": 0, "support_mask": 7, "priority": 100}}
+    )
+    await repository.set_runtime_setting(
+        "provider.brave", {"config": {"enable_mask": 0, "support_mask": 3, "priority": 100}}
+    )
+    app = create_app([first, second], repository=repository)
+
+    with TestClient(app) as client:
+        response = client.post("/search", json={"query": "no candidate", "fanout": True})
+
+    assert response.status_code == 503
+    assert "no eligible provider" in response.json()["detail"]
+    assert first.search_calls == 0
+    assert second.search_calls == 0

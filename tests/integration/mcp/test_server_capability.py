@@ -250,3 +250,53 @@ async def test_fetch_without_any_adapter_raises_no_provider() -> None:
 
     with pytest.raises(ToolError, match="no provider is configured"):
         await server.call_tool("fetch", {"request": {"url": "https://example.com"}})
+
+
+# --- (f) access masks and capability remain independent gates ---
+
+
+async def test_capability_gate_blocks_without_call_even_when_masks_allow() -> None:
+    search_only = _CapabilityStub("searchonly", search=True, fetch=False)
+    server = create_server([search_only])
+
+    with pytest.raises(ToolError):
+        await server.call_tool("fetch", {"request": {"url": "https://example.com"}})
+
+    assert search_only.calls == []
+
+
+async def test_mask_gate_blocks_without_call_even_when_capability_allows(
+    tmp_path,  # type: ignore[no-untyped-def]
+) -> None:
+    from freesearch.persistence.storage import SQLiteRepository
+
+    repository = await SQLiteRepository.open(tmp_path / "capability-mask.db")
+    try:
+        await repository.set_runtime_setting(
+            "provider.exa", {"config": {"enable_mask": 0, "support_mask": 7, "priority": 100}}
+        )
+        stub = _CapabilityStub("exa", search=True, fetch=True)
+        server = create_server([stub], repository=repository)
+
+        with pytest.raises(ToolError, match="no eligible provider"):
+            await server.call_tool("search", {"request": {"query": "mask off"}})
+
+        assert stub.calls == []
+    finally:
+        await repository.close()
+
+
+async def test_unsupported_brave_fetch_never_calls_adapter(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    from freesearch.persistence.storage import SQLiteRepository
+
+    repository = await SQLiteRepository.open(tmp_path / "brave-fetch.db")
+    try:
+        stub = _CapabilityStub("brave", search=True, fetch=False)
+        server = create_server([stub], repository=repository)
+
+        with pytest.raises(ToolError):
+            await server.call_tool("fetch", {"request": {"url": "https://example.com"}})
+
+        assert stub.calls == []
+    finally:
+        await repository.close()
