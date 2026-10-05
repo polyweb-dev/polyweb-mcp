@@ -53,9 +53,9 @@ export function WaterfallPanel({ waterfall }: { waterfall: ProviderWaterfallItem
     <div className="min-w-0 space-y-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--elevated)] p-4">
       <div className="flex flex-wrap items-center justify-between gap-2 text-[13px]">
         <span className="font-medium text-[var(--text-strong)]">Execution waterfall</span>
-        <span className="text-[12px] text-[var(--muted)]">
-          {hasDetailedTrace ? "Live execution trace" : "Trace unavailable from backend"}
-        </span>
+        {hasDetailedTrace && (
+          <span className="text-[12px] text-[var(--muted)]">Live execution trace</span>
+        )}
       </div>
 
       <LatencyWaterfall

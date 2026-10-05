@@ -32,7 +32,7 @@ function providerSummary(result: SearchResultView): ReactNode {
   }
   return (
     <span className="inline-flex flex-wrap items-center gap-1.5 text-[var(--text-strong)]">
-      <span className="rounded bg-[var(--surface-muted)] px-1.5 py-0.5 font-medium text-[var(--signal)]">
+      <span className="py-0.5 font-medium text-[var(--signal)]">
         {result.providers.length} engines
       </span>
       {result.providers.map((provider) => (

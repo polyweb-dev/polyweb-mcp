@@ -130,7 +130,7 @@ function resultsView({ output, mode, providerLabel, providerId, selection, onSel
   if (results === null) {
     return (
       <section aria-label="Results" className="h-full min-h-0 min-w-0 overflow-y-auto overscroll-contain [scrollbar-gutter:stable]">
-        <div className="min-w-0 px-3 py-3">
+        <div className="min-w-0 py-3">
           <TraceResults {...shared} />
         </div>
       </section>

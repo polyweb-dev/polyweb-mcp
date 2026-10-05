@@ -5,7 +5,7 @@ import { WaterfallPanel } from "./WaterfallPanel"
 import type { ProviderWaterfallItem } from "@/domains/execution"
 
 describe("WaterfallPanel", () => {
-  it("renders 'Trace unavailable from backend' for single-provider responses", () => {
+  it("keeps single-provider timings without an unavailable-trace message", () => {
     const singleWaterfall: ProviderWaterfallItem[] = [
       {
         providerId: "tavily",
@@ -20,7 +20,7 @@ describe("WaterfallPanel", () => {
     render(<WaterfallPanel waterfall={singleWaterfall} />)
 
     expect(screen.getByText("Execution waterfall")).toBeInTheDocument()
-    expect(screen.getByText("Trace unavailable from backend")).toBeInTheDocument()
+    expect(screen.queryByText("Trace unavailable from backend")).not.toBeInTheDocument()
     expect(screen.queryByText("Live execution trace")).not.toBeInTheDocument()
     expect(screen.getByText("Tavily")).toBeInTheDocument()
     expect(screen.getByText("250ms")).toBeInTheDocument()
@@ -142,7 +142,7 @@ describe("WaterfallPanel non-selectable contract", () => {
     render(<WaterfallPanel waterfall={[]} />)
 
     expect(screen.getByText("Execution waterfall")).toBeInTheDocument()
-    expect(screen.getByText("Trace unavailable from backend")).toBeInTheDocument()
+    expect(screen.queryByText("Trace unavailable from backend")).not.toBeInTheDocument()
     expect(screen.getByText("No timing was recorded.")).toBeInTheDocument()
   })
 })
