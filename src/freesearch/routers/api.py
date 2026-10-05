@@ -23,6 +23,7 @@ from typing import Any
 
 import httpx
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import JSONResponse
 
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.adapters.registry import adapter_factory, build_adapters, close_adapters
@@ -70,6 +71,10 @@ from freesearch.models.observability import (
     TraceSearchResult,
     TraceSpanName,
 )
+from freesearch.models.provider_limits import (
+    LimitDeniedError,
+    LimitStoreUnavailable,
+)
 from freesearch.persistence.database_migrations import upgrade_database
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.control import (
@@ -79,8 +84,10 @@ from freesearch.routers.control import (
     register_control_routes,
     routing_policy,
 )
+from freesearch.routers.limits import limit_denial_response, register_limit_routes
 from freesearch.routers.observability import register_observability_routes
 from freesearch.services.aggregation import reciprocal_rank_fusion
+from freesearch.services.limits_sync import LimitSyncService
 from freesearch.services.monitoring import (
     MAX_RECENT_LIMIT,
     DashboardResponse,
@@ -92,6 +99,7 @@ from freesearch.services.monitoring import (
     resolve_database_path,
     tracked_call,
 )
+from freesearch.services.provider_limits import ProviderLimitsService
 from freesearch.services.routing import RoutingError, select_route
 
 # Route templates that receive a root server span. Extending provider-querying
@@ -101,6 +109,29 @@ _TRACED_ROUTES: dict[tuple[str, str], str] = {
     ("POST", "/search"): TraceRootSpan.SEARCH.value,
     ("POST", "/fetch"): TraceRootSpan.FETCH.value,
 }
+
+
+def _install_default_secret_store(app: FastAPI, repo: SQLiteRepository | None) -> None:
+    """Install the encrypted runtime-settings store for an owned repository.
+
+    An injected secret store stays untouched, so offline compositions keep their
+    seam.
+    """
+
+    if not isinstance(repo, SQLiteRepository) or not app.state._uses_default_secret_store:
+        return
+    settings = get_settings()
+    passphrase = (
+        settings.encryption_key.get_secret_value() if settings.encryption_key is not None else None
+    )
+    app.state.secret_store = EncryptedDbSecretStore(
+        repo,
+        SecretCodec(
+            load_or_create_master_key(
+                key_file=settings.encryption_key_file, passphrase_env=passphrase
+            )
+        ),
+    )
 
 
 async def _build_app_adapters(
@@ -152,25 +183,12 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         repo: SQLiteRepository | None = app.state.repository
+        stop_limits = asyncio.Event()
         try:
             if owns_repository:
                 repo = await SQLiteRepository.open(resolve_database_path(database))
                 app.state.repository = repo
-            if isinstance(repo, SQLiteRepository) and app.state._uses_default_secret_store:
-                settings = get_settings()
-                passphrase = (
-                    settings.encryption_key.get_secret_value()
-                    if settings.encryption_key is not None
-                    else None
-                )
-                app.state.secret_store = EncryptedDbSecretStore(
-                    repo,
-                    SecretCodec(
-                        load_or_create_master_key(
-                            key_file=settings.encryption_key_file, passphrase_env=passphrase
-                        )
-                    ),
-                )
+            _install_default_secret_store(app, repo)
             if (
                 owns_repository
                 and repo is not None
@@ -195,6 +213,7 @@ def create_app(
             # applies any persisted Parallel monthly budget without requiring
             # a search/fetch request to happen first.
             await _apply_parallel_seed(routes, repo)
+            await _start_limits(app, repo, routes, stop_limits)
             trace_database = _trace_database(repo, database)
             if trace_database is not None and not isinstance(repo, SQLiteRepository):
                 # An injected-adapters composition can still point at a trace
@@ -214,6 +233,9 @@ def create_app(
             runtime: ObservabilityRuntime = app.state.observability
             app.state.observability = NO_OP_OBSERVABILITY
             await asyncio.to_thread(runtime.shutdown)
+            # The schedule task stops and is awaited before the repository and
+            # adapters close, so no poll can race a closing database.
+            await _stop_limits(app, stop_limits)
             if owns_repository and repo is not None:
                 clear_quota_poll_cache(repo, routes)
                 app.state.repository = None
@@ -229,6 +251,9 @@ def create_app(
     app.state.secret_store = secret_store
     app.state._uses_default_secret_store = secret_store is None
     app.state._control_lock = asyncio.Lock()
+    app.state.limits = None
+    app.state.limits_sync = None
+    app.state._limits_task = None
     # Tracing starts disabled and is enabled by the lifespan once the trace
     # database is known, so tests that never enter the lifespan stay no-op.
     app.state.observability = NO_OP_OBSERVABILITY
@@ -238,7 +263,20 @@ def create_app(
         traced_routes=_TRACED_ROUTES,
     )
     register_control_routes(app)
+    register_limit_routes(app)
     register_observability_routes(app)
+
+    @app.exception_handler(LimitDeniedError)
+    async def _limit_denied(_: Any, exc: LimitDeniedError) -> JSONResponse:
+        """Transport one local admission denial as 402 or 429 with Retry-After."""
+
+        return limit_denial_response(exc)
+
+    @app.exception_handler(LimitStoreUnavailable)
+    async def _limit_store(_: Any, exc: LimitStoreUnavailable) -> JSONResponse:
+        """Return a safe 503 before a metered vendor call when the store fails."""
+
+        return JSONResponse(status_code=503, content={"detail": str(exc)})
 
     @app.post("/search", response_model=SearchResponse)
     async def search(request: SearchRequest) -> SearchResponse:
@@ -251,6 +289,7 @@ def create_app(
                     routes=app.state._routes,
                     repository=app.state.repository,
                     secret_store=app.state.secret_store,
+                    limits=app.state.limits,
                 )
             return await _dispatch(
                 request,
@@ -259,6 +298,7 @@ def create_app(
                 routes=app.state._routes,
                 repository=app.state.repository,
                 secret_store=app.state.secret_store,
+                limits=app.state.limits,
             )
 
     @app.post("/fetch", response_model=FetchResponse)
@@ -266,6 +306,7 @@ def create_app(
         """Fetch a URL's content through the best available provider."""
         observability = current_observability()
         with observability.span(TraceSpanName.BACKEND, attributes=_request_attributes(request)):
+            _require_single_url(request)
             return await _dispatch(
                 request,
                 UsageOperation.FETCH,
@@ -273,6 +314,7 @@ def create_app(
                 routes=app.state._routes,
                 repository=app.state.repository,
                 secret_store=app.state.secret_store,
+                limits=app.state.limits,
             )
 
     @app.get("/stats", response_model=StatsResponse)
@@ -282,6 +324,7 @@ def create_app(
             app.state.repository,
             adapter_names=[adapter.name for adapter in routes],
             recent_limit=_clamped_limit(limit),
+            limits=app.state.limits,
         )
 
     @app.get("/dashboard", response_model=DashboardResponse)
@@ -291,6 +334,7 @@ def create_app(
             app.state.repository,
             adapter_names=[adapter.name for adapter in routes],
             recent_limit=_clamped_limit(limit),
+            limits=app.state.limits,
         )
         return DashboardResponse(
             notice=snapshot.notice,
@@ -298,10 +342,69 @@ def create_app(
             recent_usage=snapshot.recent_usage,
             latest_quota=snapshot.latest_quota,
             latest_health=snapshot.latest_health,
+            crd_usage_totals=snapshot.crd_usage_totals,
+            provider_limits=await _provider_limits(app.state.limits),
             generated_at=datetime.now(UTC),
         )
 
     return app
+
+
+async def _start_limits(
+    app: FastAPI,
+    repo: SQLiteRepository | None,
+    routes: Sequence[ProviderAdapter],
+    stop: asyncio.Event,
+) -> None:
+    """Seed the catalog and start one schedule task for this runtime generation.
+
+    A composition without a repository (injected adapters) has no limit store,
+    so the schedule task does not start.
+    """
+
+    if not isinstance(repo, SQLiteRepository):
+        return
+    limits = ProviderLimitsService(repo.limits)
+    await limits.initialize()
+    app.state.limits = limits
+    app.state.limits_sync = LimitSyncService(repo.limits, limits, lambda: routes)
+    app.state._limits_task = asyncio.create_task(app.state.limits_sync.run(stop))
+
+
+async def _stop_limits(app: FastAPI, stop: asyncio.Event) -> None:
+    """Stop and await the schedule task before the repository and adapters close."""
+
+    stop.set()
+    task = getattr(app.state, "_limits_task", None)
+    if task is not None:
+        task.cancel()
+        with suppress(Exception, asyncio.CancelledError):
+            await task
+    app.state._limits_task = None
+    app.state.limits = None
+    app.state.limits_sync = None
+
+
+async def _provider_limits(
+    limits: ProviderLimitsService | None,
+) -> list[Any]:
+    """Read every provider card payload best effort; a failure yields none."""
+
+    if limits is None:
+        return []
+    with suppress(Exception):
+        return await limits.dashboard_views()
+    return []
+
+
+def _require_single_url(request: FetchRequest) -> None:
+    """Reject an executable batch fetch before admission and vendor I/O."""
+
+    if request.url_count != 1:
+        raise HTTPException(
+            status_code=422,
+            detail="this release executes exactly one URL per fetch request",
+        )
 
 
 async def _order_routes(
@@ -589,6 +692,7 @@ async def _dispatch[
     routes: Sequence[ProviderAdapter],
     repository: SQLiteRepository | None,
     secret_store: AsyncSecretStore,
+    limits: ProviderLimitsService | None = None,
 ) -> ResponseT:
     """Run the routed adapter call for the best policy-ordered candidate.
 
@@ -596,6 +700,10 @@ async def _dispatch[
     preset, and fallback policy; adapter failures propagate unchanged so the
     REST 500 / MCP ToolError contracts are preserved (no cross-adapter retry
     on failure, pinned by the offline BDD failure scenario).
+
+    The request shape reaches the common execution seam as an additive keyword,
+    so the local funds and rate gate can price the request after the unchanged
+    route selection.
 
     Trace shape: ``freesearch.route`` (planning), ``freesearch.provider``
     (one client span per attempted provider, with request/response events), and
@@ -626,6 +734,8 @@ async def _dispatch[
                 provider,
                 lambda target: invoke(target, request),
                 operation=operation,
+                request=request,
+                limits=limits,
             )
         except Exception as error:
             _annotate_root_error(observability, error)
@@ -648,6 +758,7 @@ async def _dispatch_fanout_search(
     routes: Sequence[ProviderAdapter],
     repository: SQLiteRepository | None,
     secret_store: AsyncSecretStore,
+    limits: ProviderLimitsService | None = None,
 ) -> SearchResponse:
     """Execute search across all eligible configured providers concurrently and fuse results.
 
@@ -708,6 +819,8 @@ async def _dispatch_fanout_search(
                     candidate_adapter,
                     lambda target: target.search(request),
                     operation=UsageOperation.SEARCH,
+                    request=request,
+                    limits=limits,
                 )
             except Exception as exc:
                 provider_span.record_exception(exc)

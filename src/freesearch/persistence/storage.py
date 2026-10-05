@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Self, cast, overload
+from typing import TYPE_CHECKING, Any, Self, cast, overload
 
 from sqlalchemy import URL, Index, Integer, Text, event, insert, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -47,6 +47,9 @@ from freesearch.persistence.database_migrations import (
     absolute_database_path,
     upgrade_database,
 )
+
+if TYPE_CHECKING:
+    from freesearch.persistence.limit_repository import LimitRepository
 
 _DECIMAL_METADATA_TAG = "__freesearch_decimal__"
 
@@ -466,6 +469,21 @@ class SQLiteRepository:
         self._session_factory = session_factory or async_sessionmaker(
             engine, expire_on_commit=False
         )
+        self._limits: LimitRepository | None = None
+
+    @property
+    def limits(self) -> "LimitRepository":
+        """Return the provider-limit repository bound to this session factory.
+
+        The import stays local so the limit row definitions can keep importing
+        ``Base`` from this module without an upward dependency cycle.
+        """
+
+        from freesearch.persistence.limit_repository import LimitRepository
+
+        if self._limits is None:
+            self._limits = LimitRepository(self._session_factory)
+        return self._limits
 
     @classmethod
     async def open(cls, database: str | Path) -> Self:

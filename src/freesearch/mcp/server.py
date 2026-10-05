@@ -47,6 +47,7 @@ from freesearch.models.contracts import (
 )
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.services.aggregation import reciprocal_rank_fusion
+from freesearch.services.limits_sync import LimitSyncService
 from freesearch.services.monitoring import (
     clear_quota_poll_cache,
     effective_quota,
@@ -54,6 +55,7 @@ from freesearch.services.monitoring import (
     resolve_database_path,
     tracked_call,
 )
+from freesearch.services.provider_limits import ProviderLimitsService
 from freesearch.services.routing import select_route
 
 # Canonical definitions live in :mod:`freesearch.adapters.registry`; the names
@@ -71,6 +73,47 @@ class _ServerState(TypedDict):
     client: httpx.AsyncClient | None
     routes: list[ProviderAdapter] | None
     secret_store: AsyncSecretStore | None
+    limits: "ProviderLimitsService | None"
+    limits_sync: "LimitSyncService | None"
+    limits_task: "asyncio.Task[None] | None"
+    limits_stop: asyncio.Event | None
+
+
+async def _start_limits_generation(state: _ServerState, routes: Sequence[ProviderAdapter]) -> None:
+    """Seed the limit catalog and start ONE schedule task for this generation.
+
+    A server without a repository has no limit store, so no task starts. The
+    task is per generation, never per MCP session.
+    """
+
+    repository = state["repository"]
+    if not isinstance(repository, SQLiteRepository):
+        return
+    limits = ProviderLimitsService(repository.limits)
+    await limits.initialize()
+    stop = asyncio.Event()
+    sync = LimitSyncService(repository.limits, limits, lambda: state["routes"] or [])
+    state["limits"] = limits
+    state["limits_sync"] = sync
+    state["limits_stop"] = stop
+    state["limits_task"] = asyncio.create_task(sync.run(stop))
+
+
+async def _stop_limits_generation(state: _ServerState) -> None:
+    """Stop and await the schedule task before the repository and adapters close."""
+
+    stop = state["limits_stop"]
+    if stop is not None:
+        stop.set()
+    task = state["limits_task"]
+    if task is not None:
+        task.cancel()
+        with suppress(Exception, asyncio.CancelledError):
+            await task
+    state["limits"] = None
+    state["limits_sync"] = None
+    state["limits_task"] = None
+    state["limits_stop"] = None
 
 
 def _quota_state_changed(current: QuotaSnapshot | None, projected: QuotaSnapshot) -> bool:
@@ -190,9 +233,12 @@ async def _build_generation(
         else:
             owned_routes = build_adapters(client)
         await _apply_parallel_seed(owned_routes, repository)
+        await _start_limits_generation(state, owned_routes)
     except BaseException:
-        # A failed enter never increments: close the freshly built client and
-        # adapters so a failed open cannot leak a partial generation.
+        # A failed enter never increments: stop any schedule task, then close the
+        # freshly built client and adapters so a failed open cannot leak a
+        # partial generation.
+        await _stop_limits_generation(state)
         await close_adapters(owned_routes, client)
         raise
     state["client"] = client
@@ -205,6 +251,7 @@ async def _detach_generation(state: _ServerState, *, owns_repository: bool) -> N
     client = state["client"]
     owned_routes = state["routes"]
     owned_repo = state["repository"] if owns_repository else None
+    await _stop_limits_generation(state)
     state["client"] = None
     state["routes"] = None
     state["secret_store"] = None
@@ -246,6 +293,7 @@ async def _mcp_fanout_search(
     active: Sequence[ProviderAdapter],
     repository: SQLiteRepository | None,
     secret_store: AsyncSecretStore | None = None,
+    limits: "ProviderLimitsService | None" = None,
 ) -> dict[str, Any]:
     """Execute concurrent fanout search across active adapters for MCP."""
     await _apply_parallel_seed(active, repository)
@@ -267,6 +315,8 @@ async def _mcp_fanout_search(
                 candidate_adapter,
                 lambda target: target.search(request),
                 operation=UsageOperation.SEARCH,
+                request=request,
+                limits=limits,
             )
             elapsed = int((time.perf_counter() - call_start) * 1000)
             return (candidate_adapter.name, res, elapsed, "success", len(res.results), None)
@@ -347,6 +397,10 @@ def create_server(
         "secret_store": _encrypted_store(repository)
         if isinstance(repository, SQLiteRepository)
         else None,
+        "limits": None,
+        "limits_sync": None,
+        "limits_task": None,
+        "limits_stop": None,
     }
     # Streamable-HTTP MCP runs one lifespan per concurrent session, so the
     # owned resources are refcounted (serialized by a lock): the first enter
@@ -408,7 +462,11 @@ def create_server(
             raise RuntimeError("no provider is configured: set a FREESEARCH_*_API_KEY")
         if request.fanout or request.routing.mode is RoutingMode.FANOUT:
             return await _mcp_fanout_search(
-                request, active, state["repository"], state["secret_store"]
+                request,
+                active,
+                state["repository"],
+                state["secret_store"],
+                limits=state["limits"],
             )
 
         adapter = await _route(request)
@@ -417,22 +475,34 @@ def create_server(
             adapter,
             lambda target: target.search(request),
             operation=UsageOperation.SEARCH,
+            request=request,
+            limits=state["limits"],
         )
         return response.model_dump(mode="json")
 
     @server.tool()
     async def fetch(request: FetchRequest) -> dict[str, Any]:
-        """Fetch a URL's content through the best available provider."""
+        """Fetch one URL's content through the best available provider."""
+        _require_single_url(request)
         adapter = await _route(request)
         response = await tracked_call(
             state["repository"],
             adapter,
             lambda target: target.fetch(request),
             operation=UsageOperation.FETCH,
+            request=request,
+            limits=state["limits"],
         )
         return response.model_dump(mode="json")
 
     return server
+
+
+def _require_single_url(request: FetchRequest) -> None:
+    """Reject an executable batch fetch before admission and vendor I/O."""
+
+    if request.url_count != 1:
+        raise ValueError("this release executes exactly one URL per fetch request")
 
 
 def main(argv: Sequence[str] | None = None) -> None:

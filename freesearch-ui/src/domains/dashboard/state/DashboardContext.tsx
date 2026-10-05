@@ -2,12 +2,13 @@ import React, { useCallback, useState } from "react";
 import { apiService } from "@/services/api/freesearchApi";
 import { errorMessage } from "@/shared/api/http";
 import type { ToastNotification } from "@/shared/notifications/context";
-import type { DashboardQuota, UsageEvent, UsageTotal } from "@/domains/dashboard";
+import type { CRDUsageTotal, DashboardQuota, ProviderLimits, UsageEvent, UsageTotal } from "@/domains/dashboard";
 import {
   mapDashboardQuotas,
   mapDashboardTotals,
   mapDashboardUsage,
 } from "@/services/api/mappers";
+import { decodeCRDUsageTotals, decodeProviderLimits } from "../api/limitsWire";
 
 export type ShowToast = (message: string, type?: ToastNotification["type"]) => void;
 
@@ -23,6 +24,8 @@ export const DashboardProvider: React.FC<{
   const [usageError, setUsageError] = useState<string | null>(null);
   const [usageTotals, setUsageTotals] = useState<UsageTotal[]>([]);
   const [dashboardQuotas, setDashboardQuotas] = useState<DashboardQuota[]>([]);
+  const [providerLimits, setProviderLimits] = useState<ProviderLimits[]>([]);
+  const [crdUsageTotals, setCrdUsageTotals] = useState<CRDUsageTotal[]>([]);
   const [dashboardNotice, setDashboardNotice] = useState<string | null>(null);
   const quotaAvailable = dashboardQuotas.length > 0;
 
@@ -34,12 +37,16 @@ export const DashboardProvider: React.FC<{
       setUsageEvents(mapDashboardUsage(dashboard, catalogNameOf));
       setUsageTotals(mapDashboardTotals(dashboard));
       setDashboardQuotas(mapDashboardQuotas(dashboard));
+      setProviderLimits(decodeProviderLimits(dashboard.provider_limits));
+      setCrdUsageTotals(decodeCRDUsageTotals(dashboard.crd_usage_totals));
       setDashboardNotice(dashboard.notice);
     } catch (error) {
       const message = errorMessage(error, "Unable to load usage telemetry");
       setUsageEvents([]);
       setUsageTotals([]);
       setDashboardQuotas([]);
+      setProviderLimits([]);
+      setCrdUsageTotals([]);
       setUsageError(message);
       showToast(message, "error");
     } finally {
@@ -54,6 +61,8 @@ export const DashboardProvider: React.FC<{
       usageError,
       usageTotals,
       dashboardQuotas,
+      providerLimits,
+      crdUsageTotals,
       quotaAvailable,
       dashboardNotice,
       refreshDashboard,
@@ -66,6 +75,8 @@ export const DashboardProvider: React.FC<{
       usageError,
       usageTotals,
       dashboardQuotas,
+      providerLimits,
+      crdUsageTotals,
       quotaAvailable,
       dashboardNotice,
       refreshDashboard,

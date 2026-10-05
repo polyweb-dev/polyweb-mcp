@@ -3,6 +3,7 @@ import { Clock, Database, Gauge } from "lucide-react"
 import { useFreeSearch } from "@/context/useFreeSearch"
 import { isManualQuotaEligible } from "../model/quotaEligibility"
 import { KpiCard } from "./KpiCard"
+import { ProviderLimitsCards } from "./ProviderLimitsCards"
 import { QuotaTable } from "./QuotaTable"
 import type { OAuthSlotArgs } from "./QuotaRow"
 import { UsageTotals } from "./UsageTotals"
@@ -17,7 +18,7 @@ export interface QuotaPageProps {
   renderOAuthActions?: (args: OAuthSlotArgs) => ReactNode
 }
 
-/** Usage page: recorded aggregates plus the per-provider quota grid. */
+/** Usage page: credit-unit cards, recorded aggregates, and the legacy grid. */
 export function QuotaPage({
   manualQuotaEligible = isManualQuotaEligible,
   renderOAuthActions,
@@ -26,6 +27,8 @@ export function QuotaPage({
   const {
     providers,
     usageTotals,
+    providerLimits,
+    crdUsageTotals,
     dashboardQuotas,
     quotaAvailable,
     dashboardNotice,
@@ -38,7 +41,7 @@ export function QuotaPage({
       <div className="flex flex-col gap-2 pb-2 border-b border-[var(--border-subtle)]">
         <h2 className="text-[var(--text-strong)]">Usage</h2>
         <p className="text-[13px] text-[var(--muted)]">
-          Recorded provider usage and quota signals reported by the backend.
+          Credit-unit capacity and recorded provider usage reported by the backend.
         </p>
         {dashboardNotice && <p className="text-[12px] text-[var(--muted)]">{dashboardNotice}</p>}
       </div>
@@ -78,14 +81,29 @@ export function QuotaPage({
         </KpiCard>
       </div>
 
-      <UsageTotals usageTotals={usageTotals} providers={providers} />
+      <ProviderLimitsCards providers={providers} providerLimits={providerLimits} />
 
-      <QuotaTable
+      <UsageTotals
+        usageTotals={usageTotals}
+        crdUsageTotals={crdUsageTotals}
         providers={providers}
-        dashboardQuotas={dashboardQuotas}
-        manualQuotaEligible={manualQuotaEligible}
-        {...(renderOAuthActions !== undefined ? { renderOAuthActions } : {})}
       />
+
+      <details className="overflow-hidden rounded-lg border border-[var(--border-subtle)]">
+        <summary className="cursor-pointer border-b border-[var(--border-subtle)] bg-[var(--elevated)] px-4 py-2.5 text-[13px] font-semibold text-[var(--text-strong)]">
+          Legacy native quota view
+        </summary>
+        <p className="px-4 py-2.5 text-[12px] text-[var(--muted)]">
+          Vendor native balances, manual native budgets, and manual usage entries. Credit units are
+          the primary view above; this grid stays available for native reconciliation.
+        </p>
+        <QuotaTable
+          providers={providers}
+          dashboardQuotas={dashboardQuotas}
+          manualQuotaEligible={manualQuotaEligible}
+          {...(renderOAuthActions !== undefined ? { renderOAuthActions } : {})}
+        />
+      </details>
 
     </div>
   )

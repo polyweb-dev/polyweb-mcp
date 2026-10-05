@@ -452,6 +452,27 @@ def test_upgrade_database_rejects_unrelated_or_incompatible_schema(tmp_path: Pat
     assert database_status(incompatible).current_revision is None
 
 
+_LIMIT_TABLES = frozenset(
+    {
+        "provider_limits",
+        "provider_native_pools",
+        "provider_crd_grants",
+        "provider_limit_events",
+        "provider_limit_admissions",
+        "provider_rate_observations",
+        "provider_rate_attempts",
+    }
+)
+_LIMIT_INDEXES = frozenset(
+    {
+        "provider_limit_events_provider_auth_observed",
+        "provider_limit_admissions_created_at",
+        "provider_rate_attempts_bucket_attempted",
+        "provider_rate_attempts_expires_at",
+    }
+)
+
+
 def test_fresh_database_at_head_has_no_cache_metadata(tmp_path: Path) -> None:
     database = tmp_path / "fresh-no-cache.db"
 
@@ -466,14 +487,14 @@ def test_fresh_database_at_head_has_no_cache_metadata(tmp_path: Path) -> None:
         "provider_health_provider_checked_at",
         "trace_spans_trace_started_at",
         "trace_spans_root_started_at",
-    }
+    } | set(_LIMIT_INDEXES)
     assert _tables(database) == {
         "usage_events",
         "runtime_settings",
         "quota_snapshots",
         "provider_health",
         "trace_spans",
-    }
+    } | set(_LIMIT_TABLES)
     _assert_trace_spans_schema(database)
     validate_database_schema(database)
 
@@ -511,7 +532,7 @@ def test_upgrade_from_0002_drops_seeded_cache_rows_preserving_unrelated_data(
     assert _all_rows(database, "quota_snapshots", "id")[0][4] == "100.00"
     assert _indexes(database) == (indexes_before - {"cache_metadata_expires_at"}) | set(
         _TRACE_INDEXES
-    )
+    ) | set(_LIMIT_INDEXES)
     _assert_trace_spans_schema(database)
     # The 0002 database had no trace store: upgrade creates it empty.
     with sqlite3.connect(database) as connection:
@@ -529,9 +550,10 @@ def test_downgrade_recreates_cache_metadata_table_and_index(tmp_path: Path) -> N
     database = tmp_path / "downgrade-cache.db"
     upgrade_database(database)
 
-    # Two steps back from the 0003 head: past the trace store (bf9f40b58cef)
-    # to the last revision that still owns the cache table (0002).
-    migration_module.command.downgrade(_config_for(database), "-2")
+    # Explicit target: from the 0004 head back to the last revision that
+    # still owns the cache table (0002). Head-relative "-2" is ambiguous
+    # once the limit revision exists, so name the revision directly.
+    migration_module.command.downgrade(_config_for(database), _PREVIOUS_HEAD)
 
     assert _revision(database) == [_PREVIOUS_HEAD]
     assert "cache_metadata" in _tables(database)
@@ -546,9 +568,12 @@ def test_downgrade_recreates_cache_metadata_table_and_index(tmp_path: Path) -> N
         "size_bytes",
     }
     assert "cache_metadata_expires_at" in _indexes(database)
-    # Downgrade drops only the trace store added by revision 0003.
+    # Downgrade drops the trace store added by revision 0003 and the seven
+    # limit tables added by revision 0004.
     assert "trace_spans" not in _tables(database)
     assert not (_TRACE_INDEXES & _indexes(database))
+    assert not (_LIMIT_TABLES & _tables(database))
+    assert not (_LIMIT_INDEXES & _indexes(database))
 
     result = upgrade_database(database)
 
@@ -556,6 +581,8 @@ def test_downgrade_recreates_cache_metadata_table_and_index(tmp_path: Path) -> N
     assert result.current_revision == migration_head()
     assert "cache_metadata" not in _tables(database)
     assert "cache_metadata_expires_at" not in _indexes(database)
+    assert _tables(database) >= _LIMIT_TABLES
+    assert _indexes(database) >= _LIMIT_INDEXES
     _assert_trace_spans_schema(database)
     validate_database_schema(database)
 
