@@ -69,15 +69,15 @@ _CONTENT_ATTRIBUTES = frozenset(
 
 _INSERT = """
 INSERT OR REPLACE INTO trace_spans (
-    span_id, trace_id, parent_span_id, name, kind, started_at, ended_at,
+    span_id, trace_id, parent_span_id, user_id, name, kind, started_at, ended_at,
     duration_ms, status_code, status_message, outcome, error_type, operation,
     provider, input_text, output_json, result_count, attributes_json,
     events_json, resource_json
 ) VALUES (
-    :span_id, :trace_id, :parent_span_id, :name, :kind, :started_at, :ended_at,
-    :duration_ms, :status_code, :status_message, :outcome, :error_type,
-    :operation, :provider, :input_text, :output_json, :result_count,
-    :attributes_json, :events_json, :resource_json
+    :span_id, :trace_id, :parent_span_id, :user_id, :name, :kind, :started_at,
+    :ended_at, :duration_ms, :status_code, :status_message, :outcome,
+    :error_type, :operation, :provider, :input_text, :output_json,
+    :result_count, :attributes_json, :events_json, :resource_json
 )
 """
 
@@ -198,7 +198,9 @@ def _summary_attributes(attributes: dict[str, Any], *, is_root: bool) -> dict[st
     operation = attributes.get(TraceAttribute.OPERATION)
     output = attributes.get(TraceAttribute.RESPONSE_OUTPUT_JSON)
     result_count = attributes.get(TraceAttribute.RESPONSE_RESULT_COUNT)
+    user_id = attributes.get(TraceAttribute.USER_ID)
     return {
+        "user_id": str(user_id) if user_id else None,
         "operation": str(operation) if operation else None,
         "input_text": str(input_text) if input_text is not None else None,
         "output_json": output if isinstance(output, str) else None,
@@ -242,6 +244,7 @@ def span_record(span: ReadableSpan) -> TraceSpanRecord:
         status_message=_status_message(span, attributes),
         outcome=_outcome(status, attributes, is_root=is_root, http_status=_http_status(attributes)),
         error_type=_error_type(span),
+        user_id=summary.get("user_id"),
         operation=_operation(summary.get("operation")),
         provider=_provider(attributes),
         input_text=summary.get("input_text"),

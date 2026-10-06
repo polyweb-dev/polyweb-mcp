@@ -18,6 +18,7 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExporter, Sp
 from opentelemetry.trace import SpanKind, Status, StatusCode
 
 from freesearch.models.observability import (
+    TraceAttribute,
     TraceOperation,
     TraceOutcome,
     TraceSearchOutput,
@@ -88,6 +89,9 @@ def _row_count(database: Path) -> int:
 async def test_exported_root_and_children_round_trip(
     repository: SQLiteRepository, tmp_path: Path
 ) -> None:
+    from uuid import UUID
+
+    owner = UUID("33333333-3333-4333-8333-333333333333")
     database = repository.database_path
     _provider, tracer = _exporting_tracer(database)
     # Capture finished spans in-memory so the test can assert the
@@ -105,6 +109,7 @@ async def test_exported_root_and_children_round_trip(
             "freesearch.request.query": "distributed consensus",
             "freesearch.response.result_count": 2,
             "freesearch.response.output_json": _SEARCH_OUTPUT.model_dump_json(),
+            TraceAttribute.USER_ID: str(owner),
         },
     ):
         with tracer.start_as_current_span("freesearch.backend", kind=SpanKind.INTERNAL):
@@ -139,16 +144,18 @@ async def test_exported_root_and_children_round_trip(
     assert child_row[0] == "brave"
     assert root_row[0] == "keenable"
 
-    summaries = await repository.list_trace_summaries()
+    summaries = await repository.list_trace_summaries(user_id=owner)
     assert len(summaries) == 1
     summary = summaries[0]
+    assert summary.user_id == str(owner)
     assert summary.operation is TraceOperation.SEARCH
     assert summary.provider == "keenable"
     assert summary.outcome is TraceOutcome.SUCCESS
     assert summary.result_count == 2
 
-    detail = await repository.get_trace(summary.trace_id)
+    detail = await repository.get_trace(summary.trace_id, user_id=owner)
     assert detail is not None
+    assert detail.user_id == str(owner)
     assert detail.input == "distributed consensus"
     assert isinstance(detail.output, TraceSearchOutput)
     assert [item.title for item in detail.output.results] == [
@@ -212,6 +219,9 @@ async def test_root_content_columns_stored_once_not_in_attributes_json(
 
 
 async def test_span_upsert_is_idempotent(repository: SQLiteRepository) -> None:
+    from uuid import UUID
+
+    owner = UUID("44444444-4444-4444-8444-444444444444")
     started = datetime(2026, 9, 29, 9, 15, tzinfo=UTC)
     ended = datetime(2026, 9, 29, 9, 15, 0, 248000, tzinfo=UTC)
     records = [
@@ -227,6 +237,7 @@ async def test_span_upsert_is_idempotent(repository: SQLiteRepository) -> None:
             provider="keenable",
             input_text="consensus",
             result_count=1,
+            user_id=str(owner),
         ),
         TraceSpanRecord(
             span_id="bb00000000000002",
@@ -245,12 +256,48 @@ async def test_span_upsert_is_idempotent(repository: SQLiteRepository) -> None:
     write_trace_spans(repository.database_path, records)
 
     assert _row_count(repository.database_path) == 2
-    detail = await repository.get_trace("e" * 32)
+    detail = await repository.get_trace("e" * 32, user_id=owner)
     assert detail is not None
+    assert detail.user_id == str(owner)
     assert [span.span_id for span in detail.spans] == [
         "aa00000000000001",
         "bb00000000000002",
     ]
+
+
+async def test_null_owner_rows_stay_intact_but_invisible(
+    repository: SQLiteRepository,
+) -> None:
+    from uuid import UUID
+
+    owner = UUID("55555555-5555-4555-8555-555555555555")
+    started = datetime(2026, 9, 29, 9, 15, tzinfo=UTC)
+    write_trace_spans(
+        repository.database_path,
+        [
+            TraceSpanRecord(
+                span_id="cc00000000000003",
+                trace_id="d" * 32,
+                name="POST /search",
+                kind=TraceSpanKind.SERVER,
+                started_at=started,
+                ended_at=started,
+                duration_ms=5,
+                operation=TraceOperation.SEARCH,
+                provider="keenable",
+            )
+        ],
+    )
+
+    assert _row_count(repository.database_path) == 1
+    assert await repository.list_trace_summaries(user_id=owner) == []
+    assert await repository.get_trace("d" * 32, user_id=owner) is None
+    with sqlite3.connect(repository.database_path) as connection:
+        row = connection.execute(
+            "SELECT trace_id, user_id FROM trace_spans WHERE parent_span_id IS NULL"
+        ).fetchone()
+    assert row[0] == "d" * 32
+    assert row[1] is None
 
 
 async def test_write_trace_spans_with_no_records_is_a_noop(

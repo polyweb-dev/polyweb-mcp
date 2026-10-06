@@ -3,14 +3,16 @@
 import asyncio
 import json
 import math
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Self, cast, overload
+from uuid import UUID
 
-from sqlalchemy import URL, Index, Integer, Text, event, insert, select
+from sqlalchemy import CHAR, URL, Index, Integer, Text, event, insert, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Row
 from sqlalchemy.ext.asyncio import (
@@ -216,6 +218,9 @@ class TraceSpanRow(Base):
     span_id: Mapped[str] = mapped_column(Text, primary_key=True, nullable=True)
     trace_id: Mapped[str] = mapped_column(Text)
     parent_span_id: Mapped[str | None] = mapped_column(Text)
+    # Canonical account UUID of the trace root. Child rows and historical rows
+    # keep ``None``; the root row is the only ownership authority.
+    user_id: Mapped[str | None] = mapped_column(CHAR(36))
     name: Mapped[str] = mapped_column(Text)
     kind: Mapped[str] = mapped_column(Text)
     started_at: Mapped[str] = mapped_column(Text)
@@ -283,6 +288,7 @@ def _decode_metadata(value: object) -> object:
 
 _SUMMARY_COLUMNS = (
     TraceSpanRow.trace_id,
+    TraceSpanRow.user_id,
     TraceSpanRow.operation,
     TraceSpanRow.started_at,
     TraceSpanRow.duration_ms,
@@ -324,6 +330,7 @@ def _trace_summary(row: Any) -> TraceSummary:
 
     return TraceSummary(
         trace_id=str(row.trace_id),
+        user_id=row.user_id,
         operation=_trace_operation(row.operation),
         started_at=datetime.fromisoformat(str(row.started_at)),
         duration_ms=int(row.duration_ms),
@@ -440,6 +447,9 @@ def configure_sqlite_engine(engine: AsyncEngine) -> None:
         cursor.execute("PRAGMA cache_size = -64000;")
         cursor.execute("PRAGMA mmap_size = 268435456;")
         cursor.execute("PRAGMA temp_store = MEMORY;")
+        # Account session families depend on foreign-key cascades, and SQLite
+        # keeps foreign-key checks off by default on every new connection.
+        cursor.execute("PRAGMA foreign_keys = ON;")
         cursor.close()
 
 
@@ -506,15 +516,34 @@ class SQLiteRepository:
             raise ValueError("SQLiteRepository requires a file-backed database")
         return Path(database)
 
+    @asynccontextmanager
+    async def session(self) -> AsyncIterator[AsyncSession]:
+        """Yield one short-lived session on this repository's own engine.
+
+        Account persistence reuses the operational engine instead of opening a
+        second database. The caller owns its commit boundary; the session is
+        always closed, and a failed block rolls back.
+        """
+
+        async with self._session_factory() as session:
+            try:
+                yield session
+            except BaseException:
+                await session.rollback()
+                raise
+
     async def list_trace_summaries(
         self,
         *,
+        user_id: UUID,
         limit: int = 50,
         operation: TraceOperation | None = None,
         outcome: TraceOutcome | None = None,
     ) -> list[TraceSummary]:
-        """Return root traces newest first, reading summary columns only.
+        """Return the account's own root traces newest first, summary columns only.
 
+        The owner predicate is applied before the order and the limit, so a
+        foreign or historical row can never displace an owned row in the window.
         The projection deliberately excludes ``input_text``, ``output_json``,
         and the raw attributes/events so the Activity list stays fast and never
         carries request content.
@@ -523,6 +552,7 @@ class SQLiteRepository:
         statement = (
             select(*_SUMMARY_COLUMNS)
             .where(TraceSpanRow.parent_span_id.is_(None))
+            .where(TraceSpanRow.user_id == str(user_id))
             .order_by(TraceSpanRow.started_at.desc(), TraceSpanRow.span_id.desc())
             .limit(min(max(limit, MIN_TRACE_LIMIT), MAX_TRACE_LIMIT))
         )
@@ -534,24 +564,31 @@ class SQLiteRepository:
             rows = (await session.execute(statement)).all()
         return [_trace_summary(row) for row in rows]
 
-    async def get_trace(self, trace_id: str) -> TraceDetail | None:
-        """Return one trace's summary, full content, and ordered spans.
+    async def get_trace(self, trace_id: str, *, user_id: UUID) -> TraceDetail | None:
+        """Return one owned trace's summary, full content, and ordered spans.
 
-        Spans are ordered by ``(started_at, span_id)`` so the timeline is
-        stable even when fanout children ran concurrently. ``None`` means no
-        root span is stored for ``trace_id``.
+        The root is found in SQL with both the trace id and the account UUID, so
+        an absent, foreign-owned, and historical unowned trace all give the same
+        ``None``. Child spans are read only after that owned-root check succeeds.
+        Spans are ordered by ``(started_at, span_id)`` so the timeline is stable
+        even when fanout children ran concurrently.
         """
 
-        statement = (
+        root_statement = select(TraceSpanRow).where(
+            TraceSpanRow.trace_id == trace_id,
+            TraceSpanRow.parent_span_id.is_(None),
+            TraceSpanRow.user_id == str(user_id),
+        )
+        span_statement = (
             select(TraceSpanRow)
             .where(TraceSpanRow.trace_id == trace_id)
             .order_by(TraceSpanRow.started_at, TraceSpanRow.span_id)
         )
         async with self._session_factory() as session:
-            rows = (await session.scalars(statement)).all()
-        root = next((row for row in rows if row.parent_span_id is None), None)
-        if root is None:
-            return None
+            root = (await session.scalars(root_statement)).first()
+            if root is None:
+                return None
+            rows = (await session.scalars(span_statement)).all()
         summary = _trace_summary(root)
         return TraceDetail(
             **summary.model_dump(),

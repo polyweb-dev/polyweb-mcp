@@ -9,6 +9,7 @@ import json
 from collections.abc import AsyncIterator
 from datetime import datetime
 from pathlib import Path
+from uuid import UUID
 
 import pytest_asyncio
 from fastapi.testclient import TestClient
@@ -21,9 +22,17 @@ from freesearch.models.observability import (
     TraceStatusCode,
 )
 from freesearch.models.observability import TraceOutcome as _Outcome
+from freesearch.models.users import UserRole
 from freesearch.persistence.otel_exporter import write_trace_spans
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
+from tests.fixtures.auth import (
+    account_id_from_pair,
+    raw_auth_headers,
+    register_and_login,
+    register_promote_login,
+    temp_email,
+)
 
 _FIXTURES = Path(__file__).resolve().parents[2] / "fixtures" / "observability"
 _SUCCESS_ID = "e1c2d3a4b5c6d7e8f9012345678abcde"
@@ -37,7 +46,7 @@ async def repository(tmp_path: Path) -> AsyncIterator[SQLiteRepository]:
     await repo.close()
 
 
-def _seed(repository: SQLiteRepository, *names: str) -> None:
+def _seed(repository: SQLiteRepository, owner: UUID, *names: str) -> None:
     for name in names:
         document = json.loads((_FIXTURES / name).read_text(encoding="utf-8"))
         records = []
@@ -68,6 +77,7 @@ def _seed(repository: SQLiteRepository, *names: str) -> None:
                     input_text=document.get("input_text") if is_root else None,
                     output_json=(json.dumps(output) if is_root and output is not None else None),
                     result_count=document.get("result_count") if is_root else None,
+                    user_id=str(owner) if is_root else None,
                     events=[
                         TraceEventDetail(
                             name=event["name"],
@@ -85,21 +95,32 @@ def _client(repository: SQLiteRepository) -> TestClient:
     return TestClient(create_app([], repository=repository))
 
 
-def _trace_ids(client: TestClient) -> list[str]:
-    return [item["trace_id"] for item in client.get("/api/v1/traces").json()["items"]]
+def _trace_ids(client: TestClient, headers: dict[str, str]) -> list[str]:
+    return [
+        item["trace_id"] for item in client.get("/api/v1/traces", headers=headers).json()["items"]
+    ]
 
 
 async def test_list_returns_newest_first_summary_only(
     repository: SQLiteRepository,
+    auth_secret: str,
 ) -> None:
-    _seed(repository, "search_success.json", "provider_error.json")
-
+    # Use one Agent account for trace reads. Seed rows carry its UUID.
     with _client(repository) as client:
-        response = client.get("/api/v1/traces")
+        anonymous = client.get("/api/v1/traces")
+        assert anonymous.status_code == 401
+
+        pair = register_and_login(client, temp_email("obs-list"))
+        headers = raw_auth_headers(pair["access_token"])
+        owner = account_id_from_pair(pair)
+        _seed(repository, owner, "search_success.json", "provider_error.json")
+        response = client.get("/api/v1/traces", headers=headers)
 
     assert response.status_code == 200
     payload = response.json()
     assert [item["trace_id"] for item in payload["items"]] == [_ERROR_ID, _SUCCESS_ID]
+    for item in payload["items"]:
+        assert item["user_id"] == str(owner)
     first, second = payload["items"]
     assert (first["operation"], first["outcome"], first["result_count"]) == (
         "fetch",
@@ -116,6 +137,7 @@ async def test_list_returns_newest_first_summary_only(
     for item in payload["items"]:
         assert set(item) == {
             "trace_id",
+            "user_id",
             "operation",
             "started_at",
             "duration_ms",
@@ -129,14 +151,21 @@ async def test_list_returns_newest_first_summary_only(
 
 async def test_list_filters_by_operation_and_outcome(
     repository: SQLiteRepository,
+    auth_secret: str,
 ) -> None:
-    _seed(repository, "search_success.json", "provider_error.json")
-
+    # Use one Agent account for trace reads. Seed rows carry its UUID.
     with _client(repository) as client:
-        fetched = client.get("/api/v1/traces", params={"operation": "fetch"})
-        errored = client.get("/api/v1/traces", params={"outcome": "error"})
-        mismatch = client.get("/api/v1/traces", params={"operation": "search", "outcome": "error"})
-        invalid = client.get("/api/v1/traces", params={"operation": "bogus"})
+        pair = register_and_login(client, temp_email("obs-filter"))
+        headers = raw_auth_headers(pair["access_token"])
+        _seed(repository, account_id_from_pair(pair), "search_success.json", "provider_error.json")
+        fetched = client.get("/api/v1/traces", params={"operation": "fetch"}, headers=headers)
+        errored = client.get("/api/v1/traces", params={"outcome": "error"}, headers=headers)
+        mismatch = client.get(
+            "/api/v1/traces",
+            params={"operation": "search", "outcome": "error"},
+            headers=headers,
+        )
+        invalid = client.get("/api/v1/traces", params={"operation": "bogus"}, headers=headers)
 
     assert [item["trace_id"] for item in fetched.json()["items"]] == [_ERROR_ID]
     assert [item["trace_id"] for item in errored.json()["items"]] == [_ERROR_ID]
@@ -144,18 +173,39 @@ async def test_list_filters_by_operation_and_outcome(
     assert invalid.status_code == 422
 
 
-async def test_list_limit_clamps_to_1_and_100(repository: SQLiteRepository) -> None:
-    _seed(repository, "search_success.json", "provider_error.json")
-
+async def test_list_limit_clamps_to_1_and_100(
+    repository: SQLiteRepository,
+    auth_secret: str,
+) -> None:
+    # Use one Agent account for trace reads. Seed rows carry its UUID.
     with _client(repository) as client:
-        assert len(client.get("/api/v1/traces", params={"limit": 0}).json()["items"]) == 1
-        assert len(client.get("/api/v1/traces").json()["items"]) == 2
-        assert len(client.get("/api/v1/traces", params={"limit": 5000}).json()["items"]) == 2
+        pair = register_and_login(client, temp_email("obs-limit"))
+        headers = raw_auth_headers(pair["access_token"])
+        _seed(repository, account_id_from_pair(pair), "search_success.json", "provider_error.json")
+        assert (
+            len(client.get("/api/v1/traces", params={"limit": 0}, headers=headers).json()["items"])
+            == 1
+        )
+        assert len(client.get("/api/v1/traces", headers=headers).json()["items"]) == 2
+        assert (
+            len(
+                client.get("/api/v1/traces", params={"limit": 5000}, headers=headers).json()[
+                    "items"
+                ]
+            )
+            == 2
+        )
 
 
-async def test_list_is_empty_without_traces(repository: SQLiteRepository) -> None:
+async def test_list_is_empty_without_traces(
+    repository: SQLiteRepository,
+    auth_secret: str,
+) -> None:
+    # Use one Agent account for the read. No seed rows exist.
     with _client(repository) as client:
-        response = client.get("/api/v1/traces")
+        pair = register_and_login(client, temp_email("obs-empty"))
+        headers = raw_auth_headers(pair["access_token"])
+        response = client.get("/api/v1/traces", headers=headers)
 
     assert response.status_code == 200
     assert response.json()["items"] == []
@@ -163,15 +213,20 @@ async def test_list_is_empty_without_traces(repository: SQLiteRepository) -> Non
 
 async def test_detail_returns_full_input_output_and_spans(
     repository: SQLiteRepository,
+    auth_secret: str,
 ) -> None:
-    _seed(repository, "search_success.json")
-
+    # Use one Agent account for the read. Seed rows carry its UUID.
     with _client(repository) as client:
-        response = client.get(f"/api/v1/traces/{_SUCCESS_ID}")
+        pair = register_and_login(client, temp_email("obs-detail"))
+        headers = raw_auth_headers(pair["access_token"])
+        owner = account_id_from_pair(pair)
+        _seed(repository, owner, "search_success.json")
+        response = client.get(f"/api/v1/traces/{_SUCCESS_ID}", headers=headers)
 
     assert response.status_code == 200
     detail = response.json()
     assert detail["trace_id"] == _SUCCESS_ID
+    assert detail["user_id"] == str(owner)
     assert detail["operation"] == "search"
     assert detail["input"] == "distributed consensus algorithms"
     assert detail["output"]["kind"] == "search_results"
@@ -220,11 +275,14 @@ async def test_detail_returns_full_input_output_and_spans(
 
 async def test_detail_error_trace_has_error_without_output(
     repository: SQLiteRepository,
+    auth_secret: str,
 ) -> None:
-    _seed(repository, "provider_error.json")
-
+    # Use one Agent account for the read. Seed rows carry its UUID.
     with _client(repository) as client:
-        response = client.get(f"/api/v1/traces/{_ERROR_ID}")
+        pair = register_and_login(client, temp_email("obs-err"))
+        headers = raw_auth_headers(pair["access_token"])
+        _seed(repository, account_id_from_pair(pair), "provider_error.json")
+        response = client.get(f"/api/v1/traces/{_ERROR_ID}", headers=headers)
 
     assert response.status_code == 200
     detail = response.json()
@@ -237,13 +295,17 @@ async def test_detail_error_trace_has_error_without_output(
 
 async def test_detail_404_for_absent_and_malformed_ids(
     repository: SQLiteRepository,
+    auth_secret: str,
 ) -> None:
-    _seed(repository, "search_success.json")
-
+    # Use one Agent account. Auth runs first, then the 404 logic.
     with _client(repository) as client:
-        absent = client.get(f"/api/v1/traces/{'0' * 32}")
-        malformed = client.get("/api/v1/traces/not-a-trace")
-        short = client.get("/api/v1/traces/abc123")
+        assert client.get(f"/api/v1/traces/{'0' * 32}").status_code == 401
+        pair = register_and_login(client, temp_email("obs-404"))
+        headers = raw_auth_headers(pair["access_token"])
+        _seed(repository, account_id_from_pair(pair), "search_success.json")
+        absent = client.get(f"/api/v1/traces/{'0' * 32}", headers=headers)
+        malformed = client.get("/api/v1/traces/not-a-trace", headers=headers)
+        short = client.get("/api/v1/traces/abc123", headers=headers)
 
     assert absent.status_code == 404
     assert malformed.status_code == 404
@@ -252,17 +314,33 @@ async def test_detail_404_for_absent_and_malformed_ids(
 
 async def test_trace_reads_and_monitoring_add_no_traces(
     repository: SQLiteRepository,
+    auth_secret: str,
 ) -> None:
-    _seed(repository, "search_success.json", "provider_error.json")
-
+    # Use one Agent account for traces and one Developer account for stats.
+    # Seed rows carry the Agent UUID. The Developer reads stats only.
     with _client(repository) as client:
-        before = _trace_ids(client)
-        assert client.get("/api/v1/traces").status_code == 200
-        assert client.get(f"/api/v1/traces/{_SUCCESS_ID}").status_code == 200
-        assert client.get("/api/v1/traces", params={"limit": 1}).status_code == 200
-        assert client.get("/stats").status_code == 200
-        assert client.get("/dashboard").status_code == 200
-        after = _trace_ids(client)
+        agent = register_and_login(client, temp_email("obs-agent"))
+        agent_headers = raw_auth_headers(agent["access_token"])
+        _seed(
+            repository,
+            account_id_from_pair(agent),
+            "search_success.json",
+            "provider_error.json",
+        )
+        dev_pair = await register_promote_login(
+            client, repository, temp_email("obs-dev"), UserRole.DEVELOPER
+        )
+        dev_headers = raw_auth_headers(dev_pair["access_token"])
+        before = _trace_ids(client, agent_headers)
+        assert client.get("/api/v1/traces", headers=agent_headers).status_code == 200
+        assert client.get(f"/api/v1/traces/{_SUCCESS_ID}", headers=agent_headers).status_code == 200
+        assert (
+            client.get("/api/v1/traces", params={"limit": 1}, headers=agent_headers).status_code
+            == 200
+        )
+        assert client.get("/stats", headers=dev_headers).status_code == 200
+        assert client.get("/dashboard", headers=dev_headers).status_code == 200
+        after = _trace_ids(client, agent_headers)
 
     assert before == [_ERROR_ID, _SUCCESS_ID]
     assert after == before

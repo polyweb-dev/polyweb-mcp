@@ -1,20 +1,20 @@
 """Command-line migration operations for the FreeSearch SQLite database."""
 
 import argparse
-import os
 from pathlib import Path
 
 from freesearch.persistence.database_migrations import database_status, upgrade_database
-
-_DEFAULT_DATABASE = "freesearch.db"
-_DATABASE_ENVIRONMENT_VARIABLE = "FREESEARCH_DB"
+from freesearch.services.monitoring import DB_ENV_VAR, DEFAULT_DB_FILENAME, resolve_database_path
 
 
 def _selected_database(explicit: Path | None) -> Path:
-    configured = os.environ.get(_DATABASE_ENVIRONMENT_VARIABLE)
-    if configured:
-        return Path(configured)
-    return explicit if explicit is not None else Path(_DEFAULT_DATABASE)
+    """Resolve the target database through the shared precedence rule.
+
+    Precedence: the process ``FREESEARCH_DB`` variable, an explicit ``--database``
+    argument, the local environment file, then the filename default.
+    """
+
+    return resolve_database_path(explicit)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -26,7 +26,8 @@ def _parser() -> argparse.ArgumentParser:
         "--database",
         type=Path,
         help=(
-            f"database path; FREESEARCH_DB takes precedence when set (default: {_DEFAULT_DATABASE})"
+            f"database path; {DB_ENV_VAR} takes precedence when set "
+            f"(default: {DEFAULT_DB_FILENAME})"
         ),
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
