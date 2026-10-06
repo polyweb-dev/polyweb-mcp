@@ -87,7 +87,7 @@ def _usd_record(
         rate=RateBlock(windows=rate_windows or [], published=bool(rate_windows)),
         budget=BudgetBlock(
             model=BudgetModel.USD,
-            native_cost_per_crd=Decimal(native_cost),
+            standard_native_cost=Decimal(native_cost),
             usd_per_call=Decimal(native_cost),
             priced=priced,
         ),
@@ -837,7 +837,7 @@ def step_unpriced(context: Any) -> None:
         rate=None,
         budget=BudgetBlock(
             model=BudgetModel.USD,
-            native_cost_per_crd=Decimal("0.005"),
+            standard_native_cost=Decimal("0.005"),
             usd_per_call=Decimal("0.005"),
             priced=False,
         ),
@@ -1012,7 +1012,8 @@ def step_exhausted(context: Any) -> None:
         scope=RateScope.KEY, unit=RateUnit.REQUESTS,
     )
     record = _usd_record(native_cost="0.005", rate_windows=[window])
-    context.service = _service(context, [record])
+    record_b = _usd_record(provider=SYNTH_B, native_cost="0.005")
+    context.service = _service(context, [record, record_b])
     context.record = record
     _run(context, context.service.initialize())
     _run(
@@ -1021,11 +1022,28 @@ def step_exhausted(context: Any) -> None:
             NativeUsageSnapshot(
                 pool_id=record.native_pool_id or "", provider=SYNTH,
                 auth_mode=AuthMode.KEYED, native_unit=UnitKind.USD,
-                observed_at=FIXED_AT, remaining=Decimal("5.000"),
+                observed_at=FIXED_AT, remaining=Decimal("3.000"),
                 allowance=Decimal("5.000"), credential_generation=0,
             )
         ),
     )
+    _run(
+        context,
+        _limits_repo(context).apply_snapshot(
+            NativeUsageSnapshot(
+                pool_id=record_b.native_pool_id or "", provider=SYNTH_B,
+                auth_mode=AuthMode.KEYED, native_unit=UnitKind.USD,
+                observed_at=FIXED_AT, remaining=Decimal("1.000"),
+                allowance=Decimal("5.000"), credential_generation=0,
+            )
+        ),
+    )
+    _run(context, context.service.admit(_ctx(attempt="b38-r1")))
+    try:
+        _run(context, context.service.admit(_ctx(attempt="b38-r2")))
+        raise AssertionError("hour window must deny before the refill")
+    except LimitDeniedError as exc:
+        assert exc.status_code == 429
 
 
 @when("the synthetic hour passes and a budget refill arrives")
@@ -1044,17 +1062,22 @@ def step_refill(context: Any) -> None:
         ),
     )
     context.refilled = _run(context, repo.get_pool(context.record.native_pool_id or ""))
+    context.other = _run(
+        context, repo.get_pool(f"{SYNTH_B}:keyed:USD")
+    )
+    context.renewed = _run(
+        context,
+        context.service.admit(_ctx(attempt="b38-r3", at=FIXED_AT + timedelta(hours=2))),
+    )
 
 
 @then("the synthetic rate refills without moving funds and the pool refills")
 def step_refill_ok(context: Any) -> None:
     assert context.refilled is not None
     assert context.refilled.remaining == Decimal("5.000")
-    bars = _run(
-        context,
-        context.service.rate_limits.progress(SYNTH, FIXED_AT + timedelta(hours=2)),
-    )
-    assert isinstance(bars, list)
+    assert context.renewed.attempt_id == "b38-r3"
+    assert context.other is not None
+    assert context.other.remaining == Decimal("1.000")
 
 
 # --- B39 --------------------------------------------------------------------
@@ -1086,10 +1109,10 @@ def step_shared_views(context: Any) -> None:
 def step_shared_once(context: Any) -> None:
     assert len(context.views) == 2
     assert context.funds_once == Decimal("5000")
-    assert context.views[0].remaining_crd == context.views[1].remaining_crd or True
-    total = context.funds_once
-    assert total == Decimal("5000")
-    assert sum(1 for _ in context.views) == 2
+    assert context.views[0].remaining_crd == Decimal("5000")
+    assert context.views[1].remaining_crd == Decimal("5000")
+    assert context.views[0].shared_pool_id == context.views[1].shared_pool_id
+    assert context.views[0].shared_pool_id == f"{SYNTH}:keyed:USD"
 
 
 # --- B40 --------------------------------------------------------------------
@@ -1166,3 +1189,570 @@ def step_both_reasons(context: Any) -> None:
     except LimitDeniedError as exc:
         assert exc.status_code == 402
         assert context.vendor_calls == 0
+
+
+# --- S1 Brave ---------------------------------------------------------------
+
+
+def _brave_search_payload() -> dict[str, object]:
+    return {
+        "web": {
+            "results": [
+                {
+                    "title": "Example",
+                    "url": "https://example.com/article",
+                    "description": "A result snippet.",
+                    "page_age": "2024-01-02T03:04:05Z",
+                    "language": "en",
+                }
+            ]
+        }
+    }
+
+
+def _brave_adapter(
+    handler: Any, calls: list[Any] | None = None
+) -> tuple[Any, Any]:
+    import httpx
+    from pydantic import SecretStr
+
+    from freesearch.adapters.brave import BraveAdapter
+
+    def counting(request: httpx.Request) -> httpx.Response:
+        if calls is not None:
+            calls.append(request)
+        return handler(request)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(counting), timeout=30.0)
+    return BraveAdapter(client, api_key=SecretStr("brave-test-secret")), client
+
+
+def _brave_records() -> list[ProviderLimitRecord]:
+    from freesearch.configuration.provider_limits import provider_limit_defaults
+
+    return [record for record in provider_limit_defaults() if record.provider == "brave"]
+
+
+def _brave_pool_id() -> str:
+    from freesearch.models.provider_limits import native_pool_id
+
+    return native_pool_id("brave", AuthMode.KEYED, UnitKind.USD)
+
+
+def _brave_service(context: Any) -> ProviderLimitsService:
+    return _service(context, _brave_records())
+
+
+@given("the Brave catalog records")
+def step_brave_catalog(context: Any) -> None:
+    _open_repo(context)
+    context.brave_records = _brave_records()
+    context.service = _service(context, context.brave_records)
+    context.vendor_calls = []
+
+
+@then("Brave holds one keyed search record and one keyed fetch placeholder")
+def step_brave_two_records(context: Any) -> None:
+    assert len(context.brave_records) == 2
+    search = next(r for r in context.brave_records if r.operation is LimitOperation.SEARCH)
+    fetch = next(r for r in context.brave_records if r.operation is LimitOperation.FETCH)
+    assert search.auth_mode is AuthMode.KEYED and search.supported
+    assert search.transport_available and search.budget is not None
+    assert search.budget.model is BudgetModel.USD
+    assert fetch.auth_mode is AuthMode.KEYED
+    assert fetch.supported is False and fetch.transport_available is False
+    assert fetch.rate is None and fetch.budget is None
+
+
+@then("Brave holds no keyless record")
+def step_brave_no_keyless(context: Any) -> None:
+    assert all(r.auth_mode is not AuthMode.KEYLESS for r in context.brave_records)
+
+
+@when("I project the Brave priced balance")
+def step_brave_project(context: Any) -> None:
+    search = next(r for r in context.brave_records if r.operation is LimitOperation.SEARCH)
+    pool = _pool(_brave_pool_id(), provider="brave", remaining="5.000", allowance="5.000")
+    context.brave_crd = cu.native_to_crd(pool, search.conversion_profile)
+    context.brave_cost = cu.request_cost_crd(search)
+
+
+@then("USD 5 gives 5000 CRDs and one standard search costs 5 CRDs")
+def step_brave_five(context: Any) -> None:
+    assert context.brave_crd == Decimal("5000")
+    assert context.brave_cost == Decimal("5")
+
+
+@given("a Brave adapter with monthly headers of 900 left of 1000")
+def step_brave_headers(context: Any) -> None:
+    _open_repo(context)
+    context.service = _service(context, _brave_records())
+    _run(context, context.service.initialize())
+    context.vendor_calls = []
+
+    def handler(request: Any) -> Any:
+        import httpx
+
+        return httpx.Response(
+            200,
+            json=_brave_search_payload(),
+            headers={"X-RateLimit-Remaining": "49, 900", "X-RateLimit-Limit": "50, 1000"},
+        )
+
+    adapter, client = _brave_adapter(handler, context.vendor_calls)
+    context.brave_adapter = adapter
+    context.brave_client = client
+    from freesearch.models.contracts import SearchRequest
+
+    context.brave_response = _run(context, adapter.search(SearchRequest(query="q", limit=2)))
+
+
+@when("I read the Brave usage snapshot")
+def step_brave_snapshot(context: Any) -> None:
+    from freesearch.models.provider_limits import UsageSyncRequest
+
+    context.snapshot = _run(
+        context,
+        context.brave_adapter.usage_snapshot(
+            UsageSyncRequest(
+                provider="brave", auth_mode=AuthMode.KEYED, observed_at=FIXED_AT
+            )
+        ),
+    )
+    assert context.snapshot is not None
+    _run(context, _limits_repo(context).apply_snapshot(context.snapshot))
+    context.brave_pool = _run(context, _limits_repo(context).get_pool(_brave_pool_id()))
+
+
+@then("the Brave pool holds allowance 5.000 USD with remaining 4.500 USD")
+def step_brave_pool(context: Any) -> None:
+    assert context.snapshot.allowance == Decimal("5.000")
+    assert context.snapshot.remaining == Decimal("4.500")
+    assert context.snapshot.source == "vendor_headers"
+    assert context.brave_pool is not None
+    assert context.brave_pool.remaining == Decimal("4.500")
+
+
+@then("the Brave observation carries no hour bar and no day bar")
+def step_brave_no_bars(context: Any) -> None:
+    assert context.snapshot.rate_observations, "burst headroom must be observed"
+    assert all(
+        obs.window is RateWindowName.SECOND for obs in context.snapshot.rate_observations
+    )
+    bars = _run(context, context.service.rate_limits.progress("brave", FIXED_AT))
+    assert bars == []
+
+
+@given("a Brave adapter with no vendor headers")
+def step_brave_no_headers(context: Any) -> None:
+    _open_repo(context)
+    context.service = _service(context, _brave_records())
+    _run(context, context.service.initialize())
+
+    def handler(request: Any) -> Any:
+        import httpx
+
+        return httpx.Response(200, json=_brave_search_payload())
+
+    adapter, client = _brave_adapter(handler)
+    context.brave_adapter = adapter
+    context.brave_client = client
+
+
+@when("I anchor Brave manual funds of USD 5")
+def step_brave_anchor(context: Any) -> None:
+    class _Anchor:
+        remaining = Decimal("5")
+        allowance = Decimal("5")
+        billing_end = None
+        updated_at = FIXED_AT
+
+    _run(context, context.service.apply_manual_anchor("brave", _Anchor()))
+    context.brave_pool = _run(context, _limits_repo(context).get_pool(_brave_pool_id()))
+
+
+@then("the Brave manual pool projects 5000 estimated CRDs")
+def step_brave_manual(context: Any) -> None:
+    search = next(r for r in _brave_records() if r.operation is LimitOperation.SEARCH)
+    assert context.brave_pool is not None
+    assert context.brave_pool.confidence is Confidence.ESTIMATED
+    assert cu.native_to_crd(context.brave_pool, search.conversion_profile) == Decimal("5000")
+
+
+@given("a Brave app with seeded catalog and monthly headers of 900 left of 1000")
+def step_brave_app(context: Any) -> None:
+    from freesearch.models.contracts import SearchRequest
+    from freesearch.models.provider_limits import UsageSyncRequest
+    from freesearch.routers.api import create_app
+
+    _open_repo(context)
+    context.vendor_calls = []
+
+    def handler(request: Any) -> Any:
+        import httpx
+
+        return httpx.Response(
+            200,
+            json=_brave_search_payload(),
+            headers={"X-RateLimit-Remaining": "49, 900", "X-RateLimit-Limit": "50, 1000"},
+        )
+
+    adapter, client = _brave_adapter(handler, context.vendor_calls)
+    context.brave_adapter = adapter
+    context.brave_client = client
+    context.brave_app = create_app([adapter], repository=context.repository)
+    _run(context, context.brave_adapter.search(SearchRequest(query="q", limit=2)))
+    snapshot = _run(
+        context,
+        context.brave_adapter.usage_snapshot(
+            UsageSyncRequest(
+                provider="brave", auth_mode=AuthMode.KEYED, observed_at=FIXED_AT
+            )
+        ),
+    )
+    assert snapshot is not None
+    _run(context, _limits_repo(context).apply_snapshot(snapshot))
+
+
+@when("I read the Brave provider view")
+def step_brave_view(context: Any) -> None:
+    service = ProviderLimitsService(_limits_repo(context), records=_brave_records())
+    context.brave_view = _run(context, service.provider_view("brave"))
+
+
+@then("the Brave search view is finite with cost 5 and the fetch view is unavailable")
+def step_brave_views(context: Any) -> None:
+    auth = context.brave_view.auth(AuthMode.KEYED)
+    assert auth is not None
+    search_view = next(v for v in auth.crd_views if v.operation is LimitOperation.SEARCH)
+    fetch_view = next(v for v in auth.crd_views if v.operation is LimitOperation.FETCH)
+    assert search_view.state is CRDState.FINITE
+    assert search_view.request_cost_crd == Decimal("5")
+    assert search_view.remaining_crd == Decimal("4500")
+    assert fetch_view.state is CRDState.UNAVAILABLE
+    assert len(context.brave_view.auths) == 1
+
+
+@then("a Brave fetch grant fails with 422")
+def step_brave_fetch_grant_422(context: Any) -> None:
+    from fastapi.testclient import TestClient
+
+    with TestClient(context.brave_app) as client:
+        response = client.put(
+            "/api/v1/providers/brave/crd-grants/keyed",
+            json={
+                "version": 0,
+                "period_start": "2026-03-01",
+                "period_end": "2026-04-01",
+                "search_crd": "10",
+                "fetch_crd": "4",
+            },
+        )
+    assert response.status_code == 422
+
+
+@given("a Brave pool with zero USD funds")
+def step_brave_zero_pool(context: Any) -> None:
+    _open_repo(context)
+    records = _brave_records()
+    context.service = _service(context, records)
+    _run(context, context.service.initialize())
+    _run(
+        context,
+        _limits_repo(context).apply_snapshot(
+            NativeUsageSnapshot(
+                pool_id=_brave_pool_id(), provider="brave",
+                auth_mode=AuthMode.KEYED, native_unit=UnitKind.USD,
+                observed_at=FIXED_AT, remaining=Decimal("0"),
+                allowance=Decimal("5.000"), credential_generation=0,
+            )
+        ),
+    )
+    context.vendor_calls = []
+
+
+@given("a Brave pool with known USD funds")
+def step_brave_known_pool(context: Any) -> None:
+    _open_repo(context)
+    records = _brave_records()
+    context.service = _service(context, records)
+    _run(context, context.service.initialize())
+    _run(
+        context,
+        _limits_repo(context).apply_snapshot(
+            NativeUsageSnapshot(
+                pool_id=_brave_pool_id(), provider="brave",
+                auth_mode=AuthMode.KEYED, native_unit=UnitKind.USD,
+                observed_at=FIXED_AT, remaining=Decimal("4.500"),
+                allowance=Decimal("5.000"), credential_generation=0,
+            )
+        ),
+    )
+    context.vendor_calls = []
+
+
+@when("I request one Brave search")
+def step_brave_request(context: Any) -> None:
+    try:
+        context.brave_admission = _run(
+            context,
+            context.service.admit(_ctx(provider="brave", attempt="brave-1")),
+        )
+        context.brave_denial = None
+    except LimitDeniedError as exc:
+        context.brave_admission = None
+        context.brave_denial = exc
+
+
+@then("the Brave gate denies with local 402 and zero vendor calls")
+def step_brave_402(context: Any) -> None:
+    assert context.brave_admission is None
+    assert context.brave_denial is not None
+    assert context.brave_denial.status_code == 402
+    assert context.brave_denial.error.code == "crd_exhausted"
+    assert context.brave_denial.error.retryable is False
+    assert context.vendor_calls == []
+
+
+@then("the Brave gate admits the call")
+def step_brave_admit(context: Any) -> None:
+    assert context.brave_denial is None
+    assert context.brave_admission is not None
+    assert context.brave_admission.attempt_id == "brave-1"
+
+
+@given("a Brave adapter with mock error answers")
+def step_brave_errors(context: Any) -> None:
+    _open_repo(context)
+    context.vendor_calls = []
+
+
+@when("Brave answers 429 with QUOTA_LIMITED")
+def step_brave_quota_limited(context: Any) -> None:
+    calls: list[Any] = []
+    context.vendor_calls = calls
+
+    def handler(request: Any) -> Any:
+        import httpx
+
+        return httpx.Response(429, json={"code": "QUOTA_LIMITED"})
+
+    adapter, client = _brave_adapter(handler, calls)
+    context.brave_client = client
+    from freesearch.models.contracts import SearchRequest
+
+    try:
+        _run(context, adapter.search(SearchRequest(query="q", limit=2)))
+        context.brave_error = None
+    except Exception as exc:
+        context.brave_error = exc
+
+
+@then("the Brave error is quota_exhausted with one attempt and no retry")
+def step_brave_budget_error(context: Any) -> None:
+    assert context.brave_error is not None
+    assert context.brave_error.error.code == "quota_exhausted"
+    assert context.brave_error.error.retryable is False
+    assert context.brave_error.error.status_code == 429
+    assert len(context.vendor_calls) == 1
+
+
+@when("Brave answers 429 with RATE_LIMITED")
+def step_brave_rate_limited(context: Any) -> None:
+    calls: list[Any] = []
+    context.vendor_calls = calls
+
+    def handler(request: Any) -> Any:
+        import httpx
+
+        return httpx.Response(429, json={"code": "RATE_LIMITED"})
+
+    adapter, client = _brave_adapter(handler, calls)
+    context.brave_client = client
+    from freesearch.models.contracts import SearchRequest
+
+    try:
+        _run(context, adapter.search(SearchRequest(query="q", limit=2)))
+        context.brave_error = None
+    except Exception as exc:
+        context.brave_error = exc
+
+
+@then("the Brave error is retryable with three attempts")
+def step_brave_rate_error(context: Any) -> None:
+    assert context.brave_error is not None
+    assert context.brave_error.error.code == "http_error"
+    assert context.brave_error.error.retryable is True
+    assert len(context.vendor_calls) == 3
+
+
+@when("I read the Brave provider detail")
+def step_brave_detail(context: Any) -> None:
+    service = ProviderLimitsService(_limits_repo(context), records=_brave_records())
+    view = _run(context, service.provider_view("brave"))
+    auth = view.auth(AuthMode.KEYED)
+    assert auth is not None
+    context.brave_detail = auth.detail
+    context.brave_record = next(
+        r for r in _brave_records() if r.operation is LimitOperation.SEARCH
+    )
+
+
+@then("the Brave detail shows native USD plan reset rates source and link")
+def step_brave_detail_fields(context: Any) -> None:
+    detail = context.brave_detail
+    assert detail is not None
+    assert detail.native_balance == Decimal("4.500")
+    assert detail.usd_per_call == Decimal("0.005")
+    assert detail.plan_name == "Monthly search credit"
+    assert detail.usage_url == "https://api-dashboard.search.brave.com/"
+    assert detail.source == "vendor_headers"
+    assert context.brave_record.budget is not None
+    assert context.brave_record.budget.allowance_period == "month"
+    assert any(
+        w.window is RateWindowName.SECOND and w.limit == Decimal("50")
+        for w in detail.rate_windows
+    )
+
+
+@when("I save a Brave search grant for one period")
+def step_brave_grant(context: Any) -> None:
+    context.brave_saved = _run(
+        context,
+        context.service.save_grant(
+            "brave",
+            GrantPayload(
+                version=0,
+                period_start=date(2026, 3, 1),
+                period_end=date(2026, 4, 1),
+                search_crd=Decimal("10"),
+                fetch_crd=Decimal("0"),
+            ),
+            AuthMode.KEYED,
+        ),
+    )
+    context.brave_history = _run(
+        context,
+        context.service.history(
+            LimitHistoryQuery(provider="brave", auth_mode=AuthMode.KEYED, limit=10)
+        ),
+    )
+
+
+@then("the Brave grant period persists with audit old new source")
+def step_brave_grant_audit(context: Any) -> None:
+    auth = context.brave_saved.auth(AuthMode.KEYED)
+    assert auth is not None
+    assert auth.grants.search_granted_crd == Decimal("10")
+    reasons = [e.reason for e in context.brave_history.events]
+    assert "grant" in reasons
+    grant_event = next(e for e in context.brave_history.events if e.reason == "grant")
+    assert grant_event.source in ("local", "operator")
+
+
+@given("Brave route fixtures with different CRD values")
+def step_brave_route_fixtures(context: Any) -> None:
+    from freesearch.services.routing import select_route
+    from tests.integration.services.test_monitoring import _StubAdapter
+
+    context.select_route = select_route
+    context.route_adapters = [_StubAdapter("brave-b"), _StubAdapter("brave-a")]
+
+
+@when("I select Brave routes twice")
+def step_brave_routes_twice(context: Any) -> None:
+    from freesearch.models.contracts import SearchRequest
+
+    req = SearchRequest(query="brave routing probe")
+    context.first_order = [
+        c.adapter.name for c in context.select_route(req, context.route_adapters, {}, {})
+    ]
+    context.second_order = [
+        c.adapter.name for c in context.select_route(req, context.route_adapters, {}, {})
+    ]
+
+
+@then("the Brave route order and fallback stay identical")
+def step_brave_routes_same(context: Any) -> None:
+    assert context.first_order == context.second_order
+
+
+@when("I project the Brave fetch view")
+def step_brave_fetch_view(context: Any) -> None:
+    fetch = next(r for r in context.brave_records if r.operation is LimitOperation.FETCH)
+    context.brave_fetch_view = cu.crd_view(fetch, None)
+
+
+@then("the Brave fetch state is unavailable and never unknown Free or zero")
+def step_brave_fetch_unavailable(context: Any) -> None:
+    assert context.brave_fetch_view.state is CRDState.UNAVAILABLE
+    assert context.brave_fetch_view.remaining_crd is None
+
+
+@when("two Brave searches succeed")
+def step_brave_two_successes(context: Any) -> None:
+    from freesearch.models.contracts import SearchResponse
+
+    for attempt in ("brave-t1", "brave-t2"):
+        admission = _run(
+            context, context.service.admit(_ctx(provider="brave", attempt=attempt))
+        )
+        _run(
+            context,
+            context.service.record_success(
+                admission, SearchResponse(query="q", results=[], provider="brave")
+            ),
+        )
+
+
+@then("the Brave totals hold one row with exact normalized CRDs and two attempts")
+def step_brave_totals(context: Any) -> None:
+    totals = _run(context, _limits_repo(context).crd_usage_totals("brave"))
+    assert len(totals) == 1
+    assert totals[0].normalized_crd == Decimal("10")
+    assert totals[0].attempt_count == 2
+
+
+@given("a Brave pool with zero USD funds and an exhausted burst window")
+def step_brave_both_denied(context: Any) -> None:
+    _open_repo(context)
+    records = _brave_records()
+    context.service = _service(context, records)
+    _run(context, context.service.initialize())
+    _run(
+        context,
+        _limits_repo(context).apply_snapshot(
+            NativeUsageSnapshot(
+                pool_id=_brave_pool_id(), provider="brave",
+                auth_mode=AuthMode.KEYED, native_unit=UnitKind.USD,
+                observed_at=FIXED_AT, remaining=Decimal("5.000"),
+                allowance=Decimal("5.000"), credential_generation=0,
+            )
+        ),
+    )
+    for index in range(50):
+        _run(context, context.service.admit(_ctx(provider="brave", attempt=f"burst-{index}")))
+    _run(
+        context,
+        _limits_repo(context).apply_snapshot(
+            NativeUsageSnapshot(
+                pool_id=_brave_pool_id(), provider="brave",
+                auth_mode=AuthMode.KEYED, native_unit=UnitKind.USD,
+                observed_at=FIXED_AT + timedelta(seconds=1), remaining=Decimal("0"),
+                allowance=Decimal("5.000"), credential_generation=0,
+            )
+        ),
+    )
+    context.vendor_calls = []
+
+
+@then("the Brave denial keeps both reasons with 402 precedence and zero vendor calls")
+def step_brave_both_reasons(context: Any) -> None:
+    try:
+        _run(context, context.service.admit(_ctx(provider="brave", attempt="brave-both")))
+        raise AssertionError("admission must deny")
+    except LimitDeniedError as exc:
+        assert exc.status_code == 402
+        assert exc.refusal == "funds"
+        assert exc.error.details.get("rate_denied") is True
+        assert context.vendor_calls == []

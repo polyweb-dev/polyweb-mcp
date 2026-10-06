@@ -77,7 +77,8 @@ def register_limit_routes(app: FastAPI) -> None:
 
         service = _service(request)
         mode = _auth_mode(auth_mode)
-
+        if provider_id == "brave" and payload.fetch_crd > 0:
+            raise HTTPException(status_code=422, detail="brave has no fetch rail")
         if payload.period_end <= payload.period_start:
             raise HTTPException(status_code=422, detail="period_end must be after period_start")
         return await _guard(provider_id, lambda: service.save_grant(provider_id, payload, mode))
@@ -165,7 +166,8 @@ def _record_update(
     _validate_usage_url(payload.get("usage_url"))
     if "version" not in payload:
         raise HTTPException(status_code=422, detail="version is required")
-
+    if provider_id == "brave" and selected is LimitOperation.FETCH and body.get("supported"):
+        raise HTTPException(status_code=422, detail="brave has no fetch rail")
     try:
         return LimitRecordUpdate.model_validate(payload)
     except ValueError as error:

@@ -5,9 +5,8 @@ manual reuse, unknown rails, and absent-record compatibility. No vendor I/O.
 """
 
 import asyncio
-import gc
-import time
 import uuid
+from contextlib import suppress
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -43,21 +42,6 @@ FIXED_AT = datetime(2026, 3, 10, 12, 0, 0, tzinfo=UTC)
 _DB_ROOT = Path(".runtime-tmp/limit-service-pytest-dbs")
 
 
-def _unlink_with_retries(path: Path, *, attempts: int = 20) -> None:
-    for attempt in range(attempts):
-        try:
-            path.unlink()
-        except FileNotFoundError:
-            return
-        except PermissionError:
-            if attempt == attempts - 1:
-                raise
-            gc.collect()
-            time.sleep(0.05)
-        else:
-            return
-
-
 @pytest_asyncio.fixture
 async def repository():
     _DB_ROOT.mkdir(parents=True, exist_ok=True)
@@ -68,7 +52,8 @@ async def repository():
     finally:
         await repo.close()
         for extra in (db_path, Path(f"{db_path}.migration.lock")):
-            _unlink_with_retries(extra)
+            with suppress(FileNotFoundError):
+                extra.unlink()
 
 
 def _record(provider="synth", operation=LimitOperation.SEARCH, cost="0.005",
@@ -78,7 +63,7 @@ def _record(provider="synth", operation=LimitOperation.SEARCH, cost="0.005",
         supported=True, transport_available=True,
         rate=RateBlock(windows=windows or [], published=bool(windows)),
         budget=BudgetBlock(
-            model=BudgetModel.USD, native_cost_per_crd=Decimal(cost),
+            model=BudgetModel.USD, standard_native_cost=Decimal(cost),
             usd_per_call=Decimal(cost), priced=priced,
         ),
         native_unit=UnitKind.USD, native_pool_id=f"{provider}:keyed:USD",
@@ -173,7 +158,7 @@ async def test_concurrent_rate_never_overspends(repository) -> None:
 async def test_unknown_balance_stays_eligible_until_grant_zero(repository) -> None:
     record = _record()
     record.budget = BudgetBlock(
-        model=BudgetModel.USD, native_cost_per_crd=Decimal("0.005"),
+        model=BudgetModel.USD, standard_native_cost=Decimal("0.005"),
         usd_per_call=Decimal("0.005"), priced=False,
     )
     svc = _service(repository, [record])
@@ -235,3 +220,23 @@ async def test_credential_change_rejects_stale(repository) -> None:
             credential_generation=0,
         )
     ) is False
+
+
+async def test_manual_anchor_delete_clears_to_unknown(repository) -> None:
+    """D3 pin: service delete of an anchor restores unknown, not the old values."""
+    svc = await _seed(repository, _record(), "5.000")
+
+    class _Anchor:
+        remaining = Decimal("10")
+        allowance = Decimal("5")
+        billing_end = None
+        updated_at = FIXED_AT
+
+    await svc.apply_manual_anchor("synth", _Anchor())
+    anchored = await repository.limits.get_pool("synth:keyed:USD")
+    assert anchored is not None and anchored.remaining == Decimal("10")
+    await svc.apply_manual_anchor("synth", None)
+    cleared = await repository.limits.get_pool("synth:keyed:USD")
+    assert cleared is not None
+    assert cleared.remaining is None
+    assert cleared.allowance is None

@@ -32,6 +32,7 @@ from freesearch.models.contracts import (
     FetchResponse,
     HealthStatus,
     ProviderCapabilities,
+    ProviderError,
     ProviderHealth,
     QuotaSnapshot,
     QuotaSource,
@@ -42,10 +43,23 @@ from freesearch.models.contracts import (
     UsageEvent,
     UsageOperation,
 )
+from freesearch.models.provider_limits import (
+    AuthMode,
+    BudgetBlock,
+    BudgetModel,
+    CRDPriceProfile,
+    CRDUsageTotal,
+    LimitCallContext,
+    LimitOperation,
+    NativeUsageSnapshot,
+    ProviderLimitRecord,
+    RateBlock,
+)
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
 from freesearch.services import monitoring
 from freesearch.services.parallel_oauth import clear_oauth_poll_state
+from freesearch.services.provider_limits import ProviderLimitsService
 
 
 class _StubAdapter(ProviderAdapter):
@@ -642,6 +656,84 @@ async def test_collect_stats_shape_ordering_grouping_and_quota_provenance(
     assert {health.provider for health in stats.latest_health} == {"alpha", "beta"}
 
 
+async def test_crd_usage_totals_sum_exact_success_volume_only(
+    repository: SQLiteRepository,
+) -> None:
+    """T2: populated totals sum exact success debits; a released failure is absent."""
+    t0 = datetime(2026, 1, 1, tzinfo=UTC)
+    record = ProviderLimitRecord(
+        provider="totals-provider",
+        operation=LimitOperation.SEARCH,
+        auth_mode=AuthMode.KEYED,
+        supported=True,
+        transport_available=True,
+        rate=RateBlock(windows=[], published=False),
+        budget=BudgetBlock(
+            model=BudgetModel.USD, standard_native_cost=Decimal("0.005")
+        ),
+        native_unit=UnitKind.USD,
+        native_pool_id="totals-provider:keyed:USD",
+        conversion_profile=CRDPriceProfile(),
+    )
+    limits = ProviderLimitsService(
+        repository.limits, records=[record], tier_defaults={}
+    )
+    await limits.initialize()
+    await repository.limits.apply_snapshot(
+        NativeUsageSnapshot(
+            pool_id="totals-provider:keyed:USD",
+            provider="totals-provider",
+            auth_mode=AuthMode.KEYED,
+            native_unit=UnitKind.USD,
+            observed_at=t0,
+            remaining=Decimal("5.000"),
+            allowance=Decimal("5.000"),
+            credential_generation=0,
+        )
+    )
+    for attempt in ("totals-1", "totals-2"):
+        admission = await limits.admit(
+            LimitCallContext(
+                provider="totals-provider",
+                operation=LimitOperation.SEARCH,
+                auth_mode=AuthMode.KEYED,
+                attempt_id=attempt,
+                requested_at=t0,
+            )
+        )
+        await limits.record_success(
+            admission,
+            SearchResponse(query="totals", results=[], provider="totals-provider"),
+        )
+    released = await limits.admit(
+        LimitCallContext(
+            provider="totals-provider",
+            operation=LimitOperation.SEARCH,
+            auth_mode=AuthMode.KEYED,
+            attempt_id="totals-3",
+            requested_at=t0,
+        )
+    )
+    await limits.record_failure(
+        released,
+        ProviderError(
+            provider="totals-provider", code="timeout", message="synthetic timeout"
+        ),
+    )
+
+    stats = await monitoring.collect_stats(repository, adapter_names=(), limits=limits)
+
+    assert stats.crd_usage_totals == [
+        CRDUsageTotal(
+            provider="totals-provider",
+            operation=LimitOperation.SEARCH,
+            normalized_crd=Decimal("10"),
+            attempt_count=2,
+            volume_count=2,
+        )
+    ]
+
+
 async def test_stats_projection_strips_health_message_usage_metadata_and_request_id() -> None:
     observed_at = datetime(2026, 1, 1, tzinfo=UTC)
     event = UsageEvent(
@@ -934,7 +1026,9 @@ async def test_dashboard_endpoint_matches_stats_and_preserves_quota_provenance(
     } == stats_body
     assert dashboard_body["crd_usage_totals"] == stats_body["crd_usage_totals"] == []
     assert isinstance(dashboard_body["provider_limits"], list)
-    assert len(dashboard_body["provider_limits"]) == 8
+    catalog_records = await repository.limits.list_records()
+    expected_cards = len({record.provider for record in catalog_records})
+    assert len(dashboard_body["provider_limits"]) == expected_cards
     for entry in dashboard_body["provider_limits"]:
         assert set(entry) >= {"provider", "active_auth_mode", "auths"}
     assert {(entry["provider"], entry["source"]) for entry in dashboard_body["latest_quota"]} == {
@@ -1057,7 +1151,9 @@ async def test_dashboard_endpoint_omits_sensitive_projection_fields_and_values(
     assert stats_body["crd_usage_totals"] == []
     assert dashboard_body["crd_usage_totals"] == []
     assert isinstance(dashboard_body["provider_limits"], list)
-    assert len(dashboard_body["provider_limits"]) == 8
+    catalog_records = await repository.limits.list_records()
+    expected_cards = len({record.provider for record in catalog_records})
+    assert len(dashboard_body["provider_limits"]) == expected_cards
     for body in (stats_body, dashboard_body):
         assert len(body["usage_totals"]) == 1
         assert set(body["usage_totals"][0]) == {

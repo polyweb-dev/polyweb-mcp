@@ -4,33 +4,19 @@ Covers limits GET, record PATCH validation, grant PUT, history GET, sync POST
 status mapping (404/422/409/503), safe-link rules, and batch url_count 422.
 """
 
-import gc
-import time
 import uuid
+from contextlib import suppress
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest_asyncio
 from fastapi.testclient import TestClient
 
+from freesearch.models.provider_limits import SyncClaim
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
 
 _DB_ROOT = Path(".runtime-tmp/limit-api-pytest-dbs")
-
-
-def _unlink_with_retries(path: Path, *, attempts: int = 20) -> None:
-    for attempt in range(attempts):
-        try:
-            path.unlink()
-        except FileNotFoundError:
-            return
-        except PermissionError:
-            if attempt == attempts - 1:
-                raise
-            gc.collect()
-            time.sleep(0.05)
-        else:
-            return
 
 
 @pytest_asyncio.fixture
@@ -43,7 +29,8 @@ async def repository():
     finally:
         await repo.close()
         for extra in (db_path, Path(f"{db_path}.migration.lock")):
-            _unlink_with_retries(extra)
+            with suppress(FileNotFoundError):
+                extra.unlink()
 
 
 def _client(repository, adapters=None):
@@ -115,3 +102,34 @@ async def test_no_repository_write_is_503() -> None:
     with TestClient(app) as client:
         response = client.get("/api/v1/providers/keenable/limits")
         assert response.status_code in (200, 503)
+
+
+async def test_stale_version_is_409(repository) -> None:
+    with TestClient(_client(repository)) as client:
+        response = client.patch(
+            "/api/v1/providers/brave/limits/keyed/search",
+            json={"version": 999, "plan_name": "Stale write"},
+        )
+    assert response.status_code == 409
+
+
+async def test_held_lease_sync_returns_skipped_200(repository) -> None:
+    from tests.integration.services.test_monitoring import _StubAdapter
+
+    app = _client(repository, adapters=[_StubAdapter("brave")])
+    with TestClient(app) as client:
+        assert (
+            client.get("/api/v1/providers/brave/limits").status_code == 200
+        )
+        assert await repository.limits.claim_sync(
+            SyncClaim(
+                provider="brave",
+                owner="tester-lease",
+                now=datetime.now(UTC),
+                lease_seconds=60,
+            )
+        ) is True
+        response = client.post("/api/v1/providers/brave/limits/sync")
+    assert response.status_code == 200
+    assert response.json()["status"] == "skipped"
+    assert response.json()["reason"] == "lease_held"

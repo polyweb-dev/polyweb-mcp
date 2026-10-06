@@ -253,15 +253,57 @@ def _keyless_documented_tier(
     ]
 
 
-def provider_limit_defaults() -> tuple[ProviderLimitRecord, ...]:
-    """Return the documented catalog.
+def _brave_records() -> list[ProviderLimitRecord]:
+    search_rate = _rate(
+        _request_window("brave", AuthMode.KEYED, "search", "50", scope=RateScope.ORG)
+    )
+    budget = _budget(
+        BudgetModel.USD,
+        free_allowance="5",
+        allowance_unit="USD",
+        allowance_period="month",
+        cost_per_1k="5",
+        native_cost=str(BRAVE_USD_PER_REQUEST),
+        usd_per_call=str(BRAVE_USD_PER_REQUEST),
+        on_exhausted=ExhaustAction.BILL,
+    )
+    return [
+        _record(
+            "brave",
+            LimitOperation.SEARCH,
+            AuthMode.KEYED,
+            rate=search_rate,
+            budget=budget,
+            pool_unit=UnitKind.USD,
+            profile=_profile(str(BRAVE_USD_PER_REQUEST), source="usd_native"),
+            plan_name="Monthly search credit",
+            usage_url="https://api-dashboard.search.brave.com/",
+        ),
+        # Brave has no generic fetch; the placeholder record keeps the card's
+        # required "n/a" main-number state.
+        _record(
+            "brave",
+            LimitOperation.FETCH,
+            AuthMode.KEYED,
+            supported=False,
+            transport_available=False,
+            rate=None,
+            budget=None,
+        ),
+    ]
 
-    C0 ships the shared core only. The provider builders and their tier
-    declarations arrive with slices C1 to C8, so the catalog holds zero records
-    and no provider is gated yet.
+
+def provider_limit_defaults() -> tuple[ProviderLimitRecord, ...]:
+    """Return the documented catalog in stable catalog order.
+
+    Slice C1 holds the two keyed Brave records. The other provider builders
+    arrive with slices C2 to C8.
     """
 
-    return ()
+    records: list[ProviderLimitRecord] = []
+    for builder in (_brave_records,):
+        records.extend(builder())
+    return tuple(records)
 
 
 def documented_keyless_operations(provider: str) -> list[LimitOperation]:
@@ -277,7 +319,37 @@ def documented_keyless_operations(provider: str) -> list[LimitOperation]:
 def provider_tier_defaults() -> dict[str, list[TierBalance]]:
     """Return declared free and paid subpools keyed by ``provider:auth_mode``.
 
-    C0 ships no tier declarations; the provider slices add them.
+    Slice C1 holds the Brave keyed group. The other provider groups arrive with
+    slices C2 to C8. The declarations describe documented entitlement, reset
+    rules, and funding mode. A vendor observation supplies the numbers; without
+    one, a declared allowance still lets the UI show a denominator it can trust.
     """
 
-    return {}
+    usd = UnitKind.USD
+    return {
+        "brave:keyed": [
+            _tier(
+                "brave:keyed:free",
+                "free",
+                usd,
+                allowance="5",
+                # Brave reports its own reset instant in the monthly pair
+                # element, and its free credit window is a rolling 30-day
+                # period, so the header drives the reset and no calendar day
+                # is claimed.
+                reset_rule=ResetRule.VENDOR_PERIOD,
+                source="vendor_headers",
+                confidence=Confidence.OBSERVED,
+                label="USD 5 monthly search credit (no rollover)",
+            ),
+            _tier(
+                "brave:keyed:postpaid",
+                "paid",
+                usd,
+                reset_rule=ResetRule.NEVER,
+                funding_mode=FundingMode.POSTPAID,
+                confidence=Confidence.UNKNOWN,
+                label="Prepaid funds or confirmed metered card",
+            ),
+        ],
+    }

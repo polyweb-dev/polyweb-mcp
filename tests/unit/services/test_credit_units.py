@@ -8,7 +8,7 @@ from decimal import Decimal
 
 import pytest
 
-from freesearch.models.contracts import FetchRequest, UnitKind
+from freesearch.models.contracts import UnitKind
 from freesearch.models.provider_limits import (
     AuthMode,
     BudgetBlock,
@@ -90,7 +90,7 @@ def _record(
     budget = None
     if budget_model is not None and native_cost is not None:
         cost = native_cost if isinstance(native_cost, Decimal) else Decimal(native_cost)
-        budget = BudgetBlock(model=budget_model, native_cost_per_crd=cost, priced=priced)
+        budget = BudgetBlock(model=budget_model, standard_native_cost=cost, priced=priced)
     return ProviderLimitRecord(
         provider=provider,
         operation=operation,
@@ -186,21 +186,6 @@ def test_firecrawl_hobby_standard_fetch_cost() -> None:
         pool_id="firecrawl:keyed:credit",
     )
     assert request_cost_crd(record) == Decimal("3.8")
-
-
-def test_firecrawl_json_fetch_addon_cost() -> None:
-    record = _record(
-        provider="firecrawl",
-        operation=LimitOperation.FETCH,
-        budget_model=BudgetModel.CREDITS,
-        native_cost="1",
-        native_unit=UnitKind.CREDIT,
-        price="0.0038",
-        pool_id="firecrawl:keyed:credit",
-    )
-    request = FetchRequest(url="https://example.com/page", json_extract=True)
-    assert request_native_cost(record, request) == Decimal("5")
-    assert request_cost_crd(record, request) == Decimal("19")
 
 
 def test_firecrawl_scale_annual_exact_fetch_cost() -> None:

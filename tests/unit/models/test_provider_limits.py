@@ -77,9 +77,9 @@ def test_json_float_half_stays_exact() -> None:
 
 
 def test_exact_decimal_serializes_as_string() -> None:
-    block = BudgetBlock(native_cost_per_crd=Decimal("0.005"))
+    block = BudgetBlock(standard_native_cost=Decimal("0.005"))
     payload = block.model_dump(mode="json")
-    assert payload["native_cost_per_crd"] == "0.005"
+    assert payload["standard_native_cost"] == "0.005"
 
 
 # BudgetBlock -----------------------------------------------------------------
@@ -88,11 +88,11 @@ def test_exact_decimal_serializes_as_string() -> None:
 def test_budget_block_defaults_and_priced_flag() -> None:
     # No zero-divisor validator exists; the priced flag carries the state.
     block = BudgetBlock()
-    assert block.native_cost_per_crd == Decimal("1")
+    assert block.standard_native_cost == Decimal("1")
     assert block.priced is True
-    unpriced = BudgetBlock(native_cost_per_crd=Decimal("0.005"), priced=False)
+    unpriced = BudgetBlock(standard_native_cost=Decimal("0.005"), priced=False)
     assert unpriced.priced is False
-    assert unpriced.native_cost_per_crd == Decimal("0.005")
+    assert unpriced.standard_native_cost == Decimal("0.005")
 
 
 # Enums -----------------------------------------------------------------------

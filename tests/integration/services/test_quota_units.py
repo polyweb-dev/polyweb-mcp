@@ -1871,10 +1871,13 @@ class TestBraveExhaustionMapping:
         assert exc_info.value.error.retryable is False, "exhaustion is non-retryable"
         assert exc_info.value.error.status_code == 402
 
-    async def test_429_with_body_code_never_becomes_exhaustion(self) -> None:
+    async def test_429_quota_limited_never_retries_as_exhaustion(self) -> None:
         from freesearch.adapters.brave import BraveAdapter
 
+        calls: list[object] = []
+
         def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request)
             return httpx.Response(429, json={"code": "QUOTA_LIMITED"})
 
         client = httpx.AsyncClient(transport=httpx.MockTransport(handler), timeout=30.0)
@@ -1884,11 +1887,33 @@ class TestBraveExhaustionMapping:
                 await adapter.search(SearchRequest(query="q", limit=2))
         finally:
             await client.aclose()
-        assert exc_info.value.error.code == "http_error", (
-            "AC-6: 429 stays transient even with an exhaustion body code, saw "
+        assert exc_info.value.error.code == "quota_exhausted", (
+            "PLAN rev6 line 561: 429 QUOTA_LIMITED is budget exhaustion, saw "
             f"{exc_info.value.error.code!r}"
         )
+        assert exc_info.value.error.retryable is False
+        assert exc_info.value.error.status_code == 429
+        assert len(calls) == 1, f"budget 429 must not retry, saw {len(calls)} attempts"
+
+    async def test_429_rate_limited_retries_as_rate_pressure(self) -> None:
+        from freesearch.adapters.brave import BraveAdapter
+
+        calls: list[object] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request)
+            return httpx.Response(429, json={"code": "RATE_LIMITED"})
+
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler), timeout=30.0)
+        try:
+            adapter = BraveAdapter(client, api_key=TEST_API_KEY)
+            with pytest.raises(ProviderOperationError) as exc_info:
+                await adapter.search(SearchRequest(query="q", limit=2))
+        finally:
+            await client.aclose()
+        assert exc_info.value.error.code == "http_error"
         assert exc_info.value.error.retryable is True
+        assert len(calls) == 3, f"rate 429 must retry, saw {len(calls)} attempts"
 
     async def test_quota_after_error_402_records_exhaustion_without_limit(
         self, repo: SQLiteRepository

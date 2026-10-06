@@ -4,9 +4,8 @@ Synthetic records only. Uses a real SQLite repository through the shared
 rate service. No vendor I/O.
 """
 
-import gc
-import time
 import uuid
+from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -35,21 +34,6 @@ FIXED_AT = datetime(2026, 3, 10, 12, 0, 0, tzinfo=UTC)
 _DB_ROOT = Path(".runtime-tmp/rate-limit-pytest-dbs")
 
 
-def _unlink_with_retries(path: Path, *, attempts: int = 20) -> None:
-    for attempt in range(attempts):
-        try:
-            path.unlink()
-        except FileNotFoundError:
-            return
-        except PermissionError:
-            if attempt == attempts - 1:
-                raise
-            gc.collect()
-            time.sleep(0.05)
-        else:
-            return
-
-
 @pytest_asyncio.fixture
 async def repository():
     _DB_ROOT.mkdir(parents=True, exist_ok=True)
@@ -60,7 +44,8 @@ async def repository():
     finally:
         await repo.close()
         for extra in (db_path, Path(f"{db_path}.migration.lock")):
-            _unlink_with_retries(extra)
+            with suppress(FileNotFoundError):
+                extra.unlink()
 
 
 def _record():

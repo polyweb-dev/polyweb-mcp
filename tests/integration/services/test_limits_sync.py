@@ -4,9 +4,8 @@ Synthetic adapters only. Covers single-tick seams, injected clocks, the
 60-second minimum cadence, stale generations, and hour/day-only progress.
 """
 
-import gc
-import time
 import uuid
+from contextlib import suppress
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -36,21 +35,6 @@ FIXED_AT = datetime(2026, 3, 10, 12, 0, 0, tzinfo=UTC)
 _DB_ROOT = Path(".runtime-tmp/limit-sync-pytest-dbs")
 
 
-def _unlink_with_retries(path: Path, *, attempts: int = 20) -> None:
-    for attempt in range(attempts):
-        try:
-            path.unlink()
-        except FileNotFoundError:
-            return
-        except PermissionError:
-            if attempt == attempts - 1:
-                raise
-            gc.collect()
-            time.sleep(0.05)
-        else:
-            return
-
-
 @pytest_asyncio.fixture
 async def repository():
     _DB_ROOT.mkdir(parents=True, exist_ok=True)
@@ -61,7 +45,8 @@ async def repository():
     finally:
         await repo.close()
         for extra in (db_path, Path(f"{db_path}.migration.lock")):
-            _unlink_with_retries(extra)
+            with suppress(FileNotFoundError):
+                extra.unlink()
 
 
 def _record(provider="synth"):
@@ -69,7 +54,7 @@ def _record(provider="synth"):
         provider=provider, operation=LimitOperation.SEARCH,
         auth_mode=AuthMode.KEYED, supported=True, transport_available=True,
         rate=RateBlock(windows=[], published=False),
-        budget=BudgetBlock(model=BudgetModel.USD, native_cost_per_crd=Decimal("0.005")),
+        budget=BudgetBlock(model=BudgetModel.USD, standard_native_cost=Decimal("0.005")),
         native_unit=UnitKind.USD, native_pool_id=f"{provider}:keyed:USD",
         conversion_profile=CRDPriceProfile(),
     )

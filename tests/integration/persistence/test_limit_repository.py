@@ -4,9 +4,8 @@ Synthetic providers only. Covers leases, reservations, audit, idempotence,
 manual anchors, and stale-generation rejection. No vendor I/O.
 """
 
-import gc
-import time
 import uuid
+from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -38,21 +37,6 @@ FIXED_AT = datetime(2026, 3, 10, 12, 0, 0, tzinfo=UTC)
 _DB_ROOT = Path(".runtime-tmp/limit-repo-pytest-dbs")
 
 
-def _unlink_with_retries(path: Path, *, attempts: int = 20) -> None:
-    for attempt in range(attempts):
-        try:
-            path.unlink()
-        except FileNotFoundError:
-            return
-        except PermissionError:
-            if attempt == attempts - 1:
-                raise
-            gc.collect()
-            time.sleep(0.05)
-        else:
-            return
-
-
 @pytest_asyncio.fixture
 async def limits_repo(tmp_path: Path):
     _DB_ROOT.mkdir(parents=True, exist_ok=True)
@@ -63,7 +47,8 @@ async def limits_repo(tmp_path: Path):
     finally:
         await repo.close()
         for extra in (db_path, Path(f"{db_path}.migration.lock")):
-            _unlink_with_retries(extra)
+            with suppress(FileNotFoundError):
+                extra.unlink()
 
 
 def _record(provider: str = "synth") -> ProviderLimitRecord:
@@ -74,7 +59,7 @@ def _record(provider: str = "synth") -> ProviderLimitRecord:
         supported=True,
         transport_available=True,
         rate=RateBlock(windows=[], published=False),
-        budget=BudgetBlock(model=BudgetModel.USD, native_cost_per_crd=Decimal("0.005")),
+        budget=BudgetBlock(model=BudgetModel.USD, standard_native_cost=Decimal("0.005")),
         native_unit=UnitKind.USD,
         native_pool_id=f"{provider}:keyed:USD",
         conversion_profile=CRDPriceProfile(),
@@ -237,3 +222,101 @@ async def test_manual_anchor_never_invents_balance(limits_repo) -> None:
     assert pool is not None and pool.remaining == Decimal("5.000")
     assert pool.source == "manual_anchor"
     assert pool.confidence is Confidence.ESTIMATED
+
+
+async def test_finalize_exact_payment_is_not_an_overspend(limits_repo) -> None:
+    """D2 pin: debit 10 from a balance of 10 stores 0 with no overspend."""
+    await limits_repo.ensure_pool(_pool())
+    await limits_repo.apply_snapshot(
+        NativeUsageSnapshot(
+            pool_id="synth:keyed:USD", provider="synth", auth_mode=AuthMode.KEYED,
+            native_unit=UnitKind.USD, observed_at=FIXED_AT,
+            remaining=Decimal("10"), allowance=Decimal("10"),
+            credential_generation=0,
+        )
+    )
+    await limits_repo.reserve(
+        LimitAdmission(
+            attempt_id="exact-1", provider="synth", operation=LimitOperation.SEARCH,
+            auth_mode=AuthMode.KEYED, pool_id="synth:keyed:USD",
+            reserved_crd=Decimal("10000"), created_at=FIXED_AT,
+            expires_at=FIXED_AT + timedelta(minutes=5),
+        )
+    )
+    assert await limits_repo.finalize(
+        LimitDebit(
+            attempt_id="exact-1", provider="synth", operation=LimitOperation.SEARCH,
+            auth_mode=AuthMode.KEYED, pool_id="synth:keyed:USD",
+            outcome="success", native_units=Decimal("10"),
+            crd_debit=Decimal("10000"), reason="local_success",
+        )
+    ) is True
+    pool = await limits_repo.get_pool("synth:keyed:USD")
+    assert pool is not None and pool.remaining == Decimal("0")
+    page = await limits_repo.list_history(
+        LimitHistoryQuery(provider="synth", limit=10)
+    )
+    event = next(e for e in page.events if e.local_attempt_id == "exact-1")
+    assert event.detail["clamped"] is False
+    assert event.detail["overspend"] is None
+
+
+async def test_finalize_real_overspend_stays_visible(limits_repo) -> None:
+    """D2 pin: debit 12 from a balance of 10 stores 0 with overspend 2."""
+    await limits_repo.ensure_pool(_pool())
+    await limits_repo.apply_snapshot(
+        NativeUsageSnapshot(
+            pool_id="synth:keyed:USD", provider="synth", auth_mode=AuthMode.KEYED,
+            native_unit=UnitKind.USD, observed_at=FIXED_AT,
+            remaining=Decimal("10"), allowance=Decimal("10"),
+            credential_generation=0,
+        )
+    )
+    await limits_repo.reserve(
+        LimitAdmission(
+            attempt_id="over-1", provider="synth", operation=LimitOperation.SEARCH,
+            auth_mode=AuthMode.KEYED, pool_id="synth:keyed:USD",
+            reserved_crd=Decimal("12000"), created_at=FIXED_AT,
+            expires_at=FIXED_AT + timedelta(minutes=5),
+        )
+    )
+    assert await limits_repo.finalize(
+        LimitDebit(
+            attempt_id="over-1", provider="synth", operation=LimitOperation.SEARCH,
+            auth_mode=AuthMode.KEYED, pool_id="synth:keyed:USD",
+            outcome="success", native_units=Decimal("12"),
+            crd_debit=Decimal("12000"), reason="local_success",
+        )
+    ) is True
+    pool = await limits_repo.get_pool("synth:keyed:USD")
+    assert pool is not None and pool.remaining == Decimal("0")
+    page = await limits_repo.list_history(
+        LimitHistoryQuery(provider="synth", limit=10)
+    )
+    event = next(e for e in page.events if e.local_attempt_id == "over-1")
+    assert event.detail["clamped"] is True
+    assert event.detail["overspend"] == "2"
+
+
+async def test_manual_anchor_delete_restores_unknown(limits_repo) -> None:
+    """D3 pin: delete of an anchor with 10 and 5 restores unknown, not zero."""
+    await limits_repo.ensure_pool(_pool())
+    await limits_repo.record_manual_anchor(
+        _pool(), remaining=Decimal("10"), allowance=Decimal("5"),
+        reset_at=None, observed_at=FIXED_AT,
+    )
+    assert await limits_repo.clear_pool_values(
+        "synth:keyed:USD", observed_at=FIXED_AT + timedelta(seconds=1)
+    ) is True
+    pool = await limits_repo.get_pool("synth:keyed:USD")
+    assert pool is not None
+    assert pool.remaining is None
+    assert pool.allowance is None
+    assert pool.manual_anchor is False
+    page = await limits_repo.list_history(
+        LimitHistoryQuery(provider="synth", limit=10)
+    )
+    event = next(e for e in page.events if e.reason == "reconcile")
+    assert event.detail["cleared"] is True
+    assert event.old_native == Decimal("10")
+    assert event.new_native is None
