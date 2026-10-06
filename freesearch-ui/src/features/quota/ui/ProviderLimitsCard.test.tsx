@@ -164,7 +164,7 @@ function renderBraveCard(): void {
 }
 
 describe("ProviderLimitsCard Brave", () => {
-  it("shows one credit bar with 90 percent, CRD and USD, and no fetch headline (UI7-01, UI7-02, UI7-04)", () => {
+  it("shows one credit bar with 90 percent, CRD only, and no fetch headline (UI7-01, UI7-02, UI7-04, final-polish 3c)", () => {
     renderBraveCard()
     const bar = screen.getByRole("progressbar", { name: "Brave credit units remaining" })
     expect(bar.getAttribute("aria-valuenow")).toBe("90")
@@ -172,12 +172,29 @@ describe("ProviderLimitsCard Brave", () => {
     expect(bar.getAttribute("aria-valuemax")).toBe("100")
     expect(screen.getByText("90%")).not.toBeNull()
     expect(screen.getByText("4500 CRD")).not.toBeNull()
-    expect(screen.getByText("4.500")).not.toBeNull()
+    // Final-polish Item 3c: card shows CRD only. USD value sits in hover title and aria-label.
+    expect(screen.queryByText("4.500")).toBeNull()
+    expect(screen.queryByText("USD left")).toBeNull()
+    expect(screen.queryByText("USD use (priced)")).toBeNull()
+    const crdValue = screen.getByText("4500 CRD")
+    expect(crdValue.getAttribute("title")).toBe("$4.5 left")
+    expect(crdValue.getAttribute("aria-label")).toBe("$4.5 left")
     // Polish Item 6: no auth_mode chip, no "keyed rail" text on the card.
     expect(screen.queryByText("keyed rail")).toBeNull()
     expect(screen.queryByText("n/a")).toBeNull()
     expect(screen.queryByText("Fetch credit units left")).toBeNull()
     expect(screen.queryByText(/keyless/i)).toBeNull()
+    vi.unstubAllGlobals()
+  })
+
+  it("exposes USD value in hover title and aria-label only with CRD bar text intact (final-polish 3c, 3e)", () => {
+    renderBraveCard()
+    const crdValue = screen.getByText("4500 CRD")
+    expect(crdValue.getAttribute("title")).toBe("$4.5 left")
+    expect(crdValue.getAttribute("aria-label")).toBe("$4.5 left")
+    expect(screen.queryByText("USD left")).toBeNull()
+    const bar = screen.getByRole("progressbar", { name: "Brave credit units remaining" })
+    expect(bar.getAttribute("aria-valuetext")).toBe("90% remaining, 4500 CRD left")
     vi.unstubAllGlobals()
   })
 

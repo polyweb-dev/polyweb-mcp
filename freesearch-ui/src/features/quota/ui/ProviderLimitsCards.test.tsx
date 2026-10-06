@@ -118,7 +118,7 @@ function braveEntry() {
 }
 
 describe("ProviderLimitsCards", () => {
-  it("renders the reported Brave card with its own totals only (UI7-02)", () => {
+  it("renders the reported Brave card with its own totals only (UI7-02, final-polish 3c)", () => {
     render(
       <ProviderLimitsCards
         providers={[{ id: "brave", name: "Brave" }, { id: "parallel", name: "Parallel" }] as never}
@@ -131,10 +131,13 @@ describe("ProviderLimitsCards", () => {
       />,
     )
     expect(screen.getByText("1 reported")).not.toBeNull()
-    // Polish Item 3: card shows funds left only; priced use stays a model fact.
+    // Final-polish Item 3c: card shows CRD left only; USD value sits in hover ARIA text.
     expect(screen.getByText("CRD left")).not.toBeNull()
-    expect(screen.getByText("USD left")).not.toBeNull()
+    expect(screen.queryByText("USD left")).toBe(null)
     expect(screen.getByText("4500 CRD")).not.toBeNull()
+    const crdValue = screen.getByText("4500 CRD")
+    expect(crdValue.getAttribute("title")).toBe("$4.5 left")
+    expect(crdValue.getAttribute("aria-label")).toBe("$4.5 left")
     expect(screen.queryByText("USD use (priced)")).toBe(null)
     expect(screen.queryByText("Parallel")).toBe(null)
   })

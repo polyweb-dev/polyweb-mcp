@@ -172,6 +172,14 @@ Then("the Brave card should show {string} for {string}", async ({ page }, value:
   await expect(card).toContainText(value)
 })
 
+Then("the Brave CRD value should carry {string} hover text", async ({ page }, text: string) => {
+  const card = page.locator("article", { hasText: "Brave" }).first()
+  const value = card.getByText(/\d.*CRD/)
+  await expect(value.first()).toBeVisible()
+  await expect(value.first()).toHaveAttribute("title", text)
+  await expect(value.first()).toHaveAttribute("aria-label", text)
+})
+
 Then("the Brave card should show one credit bar", async ({ page }) => {
   const card = page.locator("article", { hasText: "Brave" }).first()
   await expect(card.getByRole("progressbar", { name: barName("Brave") })).toHaveCount(1)

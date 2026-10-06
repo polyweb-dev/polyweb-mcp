@@ -171,7 +171,7 @@ export function CRDGrantForm(props: CRDGrantFormProps): ReactNode {
         cap sets a local ceiling above the vendor balance.
       </p>
       {stored !== null && <p className="tnum text-[12px] text-[var(--muted)]">{stored}</p>}
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+      <div className="grid grid-cols-1 gap-3">
         {fields.map((field) => {
           const id = fieldId(providerName, field.name)
           const message = errors[field.name]

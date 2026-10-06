@@ -119,4 +119,14 @@ describe("CRDGrantForm", () => {
     expect(await screen.findByText("Required.")).not.toBeNull()
     expect(screen.getByLabelText("Search credit units (CRD)").getAttribute("aria-invalid")).toBe("true")
   })
+
+  it("uses one column with three full-width rows in amount-period order (final-polish 2)", () => {
+    renderForm(false)
+    const grid = document.querySelector("div.grid")
+    expect(grid).not.toBeNull()
+    expect(grid?.className ?? "").toContain("grid-cols-1")
+    expect(grid?.className ?? "").not.toContain("sm:grid-cols-2")
+    const labels = Array.from(document.querySelectorAll("label")).map((entry) => entry.textContent)
+    expect(labels).toEqual(["Search credit units (CRD)", "Period start", "Period end"])
+  })
 })

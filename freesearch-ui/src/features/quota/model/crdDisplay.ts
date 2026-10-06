@@ -87,6 +87,13 @@ export function formatCRDAmount(amount: string): string {
   return `${exact ? "" : "≈"}${numberText} CRD`
 }
 
+/** Dollar form of one exact USD amount for display: "4.500" becomes "$4.5", and "5.000" becomes "$5". */
+export function dollarText(amount: string): string {
+  const text = amount.trim()
+  const trimmed = text.includes(".") ? text.replace(/0+$/, "").replace(/\.$/, "") : text
+  return "$" + (trimmed === "" ? "0" : trimmed)
+}
+
 /** Visible text of one credit-unit view, including its non-finite states. */
 export function formatCRD(view: CRDView): string {
   if (view.state === "unmetered") return UNMETERED_TEXT

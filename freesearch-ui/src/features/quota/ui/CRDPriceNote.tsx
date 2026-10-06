@@ -14,11 +14,20 @@ const PRICE_TEXT =
 const EMPTY_TEXT = "No provider price is reported in the current catalog."
 const MUTED = "text-[var(--muted)] text-[12px]"
 const COLUMNS = ["Provider", "Operation", "USD per call", "CRD per call"]
-/** One tone per operation: a search row and a fetch row differ by border and text. */
+/** The header row closes the table box on the top, the left, and the right side. */
+const HEAD_ROW = "border-t border-l border-r border-[var(--border-subtle)]"
+/**
+ * One tone per operation: a search row and a fetch row differ by border and
+ * text. The important marker holds the colored left border on every data row,
+ * because the shared table body closes its last row with `border-0`.
+ */
 const ROW_TONE: Record<string, string> = {
-  search: "border-l-2 border-l-[var(--accent-cyan)]",
-  fetch: "border-l-2 border-l-[var(--accent-seafoam)]",
+  search: "border-l-2! border-l-[var(--accent-cyan)]",
+  fetch: "border-l-2! border-l-[var(--accent-seafoam)]",
 }
+/** Every data row closes the box on its right side and its bottom side. */
+const ROW_EDGE =
+  "border-r! border-r-[var(--border-subtle)] border-b! border-b-[var(--border-subtle)]"
 const TEXT_TONE: Record<string, string> = {
   search: "text-[var(--accent-cyan)]",
   fetch: "text-[var(--accent-seafoam)]",
@@ -34,7 +43,10 @@ function profileText(versions: string[]): string {
 function priceRow(row: PriceNoteRow): ReactNode {
   const usd = row.usdPerCall + " USD" + (row.estimated ? " (estimated)" : "")
   return (
-    <TableRow key={row.provider + "-" + row.operation} className={ROW_TONE[row.operation]}>
+    <TableRow
+      key={row.provider + "-" + row.operation}
+      className={ROW_TONE[row.operation] + " " + ROW_EDGE}
+    >
       <TableCell>
         <span className="flex items-center gap-2">
           <ProviderLogo providerId={row.provider} name={row.providerName} />
@@ -74,7 +86,7 @@ export function CRDPriceNote(props: CRDPriceNoteProps): ReactNode {
       {rows.length > 0 && (
         <Table>
           <TableHeader>
-            <TableRow>
+            <TableRow className={HEAD_ROW}>
               {COLUMNS.map((column) => (
                 <TableHead key={column} scope="col">
                   {column}

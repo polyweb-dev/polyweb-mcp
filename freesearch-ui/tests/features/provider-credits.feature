@@ -1,6 +1,6 @@
 @stub @ui7
 Feature: Provider credit units display honestly
-  One credit bar with percent on the right. CRD left and USD left below the bar.
+  One credit bar with percent on the right. CRD left below the bar with USD value in hover text.
   Unknown fields stay hidden. Fetch controls show only where fetch has support.
 
   Background:
@@ -13,7 +13,7 @@ Feature: Provider credit units display honestly
     When I navigate directly to "/usage"
     Then the Brave credit bar should show "90" percent
     And the Brave card should show "4500 CRD" for "CRD left"
-    And the Brave card should show "4.500" for "USD left"
+    And the Brave CRD value should carry "$4.5 left" hover text
     And the Brave card should show one credit bar
     And the usage view should not show "∞"
 
@@ -65,15 +65,15 @@ Feature: Provider credit units display honestly
     And I reload the page
     Then the Brave credit bar should show "89.9" percent
     And the Brave card should show "4495 CRD" for "CRD left"
-    And the Brave card should show "4.495" for "USD left"
+    And the Brave CRD value should carry "$4.495 left" hover text
 
   @stub @ui7 @totals
   Scenario: U7-B07 Repeated fractional debits keep exact USD use
     Given the stubbed provider limits show "Brave finite credits after debit"
     And the stubbed credit totals show "Brave fractional use"
     When I navigate directly to "/usage"
-    # Polish Item 3: priced-use row removed from card; 0.011 stays a unit oracle in crdCardModel tests.
-    Then the Brave card should show "4.495" for "USD left"
+    # Final-polish Item 3c: card shows CRD only with USD in hover text; 0.011 stays a unit oracle in crdCardModel tests.
+    Then the Brave CRD value should carry "$4.495 left" hover text
 
   @stub @ui7 @shared
   Scenario: U7-B08 Shared funds pool two operations with local-only grants

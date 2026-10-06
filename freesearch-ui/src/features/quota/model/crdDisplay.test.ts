@@ -6,6 +6,7 @@ import type {
   TierBalance,
 } from "@/domains/dashboard"
 import {
+  dollarText,
   formatCRDAmount,
   formatCRD,
   providerCRDModel,
@@ -374,5 +375,31 @@ describe("resetRuleText", () => {
 
   it("keeps an unparsable reset date verbatim", () => {
     expect(resetRuleText("never", "not-a-date")).toBe("Never resets (not-a-date)")
+  })
+})
+
+describe("dollarText", () => {
+  it("trims trailing zeros: 4.500 becomes $4.5 (final-polish 3a, 3d)", () => {
+    expect(dollarText("4.500")).toBe("$4.5")
+  })
+
+  it("trims allowance zeros: 5.000 becomes $5 (final-polish 3d)", () => {
+    expect(dollarText("5.000")).toBe("$5")
+  })
+
+  it("keeps exact cents: 4.495 stays $4.495 (final-polish 3c)", () => {
+    expect(dollarText("4.495")).toBe("$4.495")
+  })
+
+  it("keeps call price precision: 0.005 stays $0.005", () => {
+    expect(dollarText("0.005")).toBe("$0.005")
+  })
+
+  it("handles whole dollars without a dot", () => {
+    expect(dollarText("10")).toBe("$10")
+  })
+
+  it("trims surrounding whitespace before the dollar form", () => {
+    expect(dollarText("  4.500  ")).toBe("$4.5")
   })
 })
