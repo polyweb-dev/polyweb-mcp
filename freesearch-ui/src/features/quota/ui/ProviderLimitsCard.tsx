@@ -1,18 +1,20 @@
 import { useMemo, useState } from "react"
 import type { ReactNode } from "react"
-import { Button } from "@/shared/ui/button"
 import { ProviderLogo } from "@/shared/ui/ProviderLogo"
 import type { CRDUsageTotal, ProviderAuthLimits, ProviderLimits } from "@/domains/dashboard"
 import type { BackendManualQuota } from "@/domains/dashboard/api/manualQuotaWire"
 import type { UnitKind } from "@/shared/api/units"
 import { activeAuth, creditCardModel, operationAvailable } from "../model/crdCardModel"
 import type { ManualAmountMode } from "../model/manualQuotaMath"
+import { CONTROL_SPLIT_NOTE } from "../model/quotaLabels"
 import type { ManualQuotaDefaults } from "../model/useQuotaForm"
 import { useManualQuota, type ManualQuotaOverlay } from "../model/useManualQuota"
 import { useProviderLimits, type ProviderLimitsController } from "../model/useProviderLimits"
 import { CRDGrantForm } from "./CRDGrantForm"
+import { Footnote } from "./Footnote"
 import { LimitHistoryModal } from "./LimitHistoryModal"
 import { ManualQuotaModal } from "./ManualQuotaModal"
+import { ProviderCardActions, type CardModal } from "./ProviderCardActions"
 import { ProviderCreditSummary } from "./ProviderCreditSummary"
 import { ProviderLimitsDetail } from "./ProviderLimitsDetail"
 import { ProviderRateBars } from "./ProviderRateBars"
@@ -28,8 +30,6 @@ export interface ProviderLimitsCardProps {
   manualEligible: boolean
 }
 
-type CardModal = "manual" | "grant" | "history" | null
-
 interface ManualUnit {
   unitKind: UnitKind | null
   displayUnit: string | null
@@ -38,7 +38,6 @@ interface ManualUnit {
 
 const CARD = "space-y-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] p-4"
 const LABEL = "text-[12px] text-[var(--muted)]"
-const CHIP = "rounded-full border border-[var(--border-subtle)] bg-[var(--elevated)] px-2 py-0.5 text-[11px] text-[var(--muted)]"
 
 function slug(providerId: string): string {
   return providerId.toLowerCase().replace(/[^a-z0-9]+/g, "-")
@@ -74,56 +73,6 @@ function manualDefaultsOf(manual: BackendManualQuota | null): ManualQuotaDefault
     allowance: manual.allowance,
     used: manual.current_usage,
   }
-}
-
-interface CardActionInput {
-  providerId: string
-  providerName: string
-  manualEligible: boolean
-  syncing: boolean
-  expanded: boolean
-  panelId: string
-  onSync: () => void
-  onOpenModal: (modal: CardModal) => void
-  onToggleExpanded: () => void
-}
-
-/** The card actions: sync, the two dialogs, the history dialog, and detail. */
-function cardActions(input: CardActionInput): ReactNode {
-  const { providerId, providerName, manualEligible, syncing, expanded, panelId } = input
-  const action = "px-3"
-  return (
-    <div className="flex flex-wrap items-center gap-2">
-      <Button type="button" variant="outline" size="lg" className={action}
-        disabled={syncing} aria-label={"Sync limits for " + providerName} onClick={input.onSync}>
-        {syncing ? "Syncing…" : "Sync"}
-      </Button>
-      {manualEligible && (
-        <Button type="button" variant="outline" size="lg" className={action}
-          data-testid={"manual-quota-open-" + providerId}
-          aria-label={"Manual entry for " + providerName}
-          onClick={() => input.onOpenModal("manual")}>
-          Manual entry
-        </Button>
-      )}
-      <Button type="button" variant="outline" size="lg" className={action}
-        data-testid={"crd-grant-open-" + providerId}
-        aria-label={"Grant credit units for " + providerName}
-        onClick={() => input.onOpenModal("grant")}>
-        Grant
-      </Button>
-      <Button type="button" variant="outline" size="lg" className={action}
-        data-testid={"limit-history-open-" + providerId}
-        aria-label={"Balance history for " + providerName}
-        onClick={() => input.onOpenModal("history")}>
-        History
-      </Button>
-      <Button type="button" variant="outline" size="lg" className={action}
-        aria-expanded={expanded} aria-controls={panelId} onClick={input.onToggleExpanded}>
-        {expanded ? "Hide detail" : "Show detail"}
-      </Button>
-    </div>
-  )
 }
 
 interface CardModalInput {
@@ -250,27 +199,28 @@ export function ProviderLimitsCard({
           <h4 id={titleId} className="truncate text-[13px] font-semibold text-[var(--text-strong)]">
             {providerName}
           </h4>
-          <span className={CHIP}>{auth.auth_mode} rail</span>
         </div>
-        {cardActions({
-          providerId,
-          providerName,
-          manualEligible,
-          syncing: controller.syncing,
-          expanded,
-          panelId,
-          onSync: () => void controller.syncNow(),
-          onOpenModal: setModal,
-          onToggleExpanded: () => setExpanded((previous) => !previous),
-        })}
+        <ProviderCardActions
+          providerId={providerId}
+          providerName={providerName}
+          manualEligible={manualEligible}
+          syncing={controller.syncing}
+          expanded={expanded}
+          panelId={panelId}
+          onSync={() => void controller.syncNow()}
+          onOpenModal={setModal}
+          onToggleExpanded={() => setExpanded((previous) => !previous)}
+        />
       </div>
+
+      <Footnote>{CONTROL_SPLIT_NOTE}</Footnote>
 
       {controller.syncNote !== null && (
         <p role="status" className={LABEL}>{controller.syncNote}</p>
       )}
 
       <ProviderCreditSummary providerName={providerName} model={model} />
-      {model.provenanceNote !== null && <p className={LABEL}>{model.provenanceNote}</p>}
+      {model.provenanceNote !== null && <Footnote>{model.provenanceNote}</Footnote>}
 
       {expanded && (
         <div id={panelId} className="space-y-4 border-t border-[var(--border-subtle)] pt-3">

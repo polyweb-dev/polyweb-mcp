@@ -1,6 +1,7 @@
 import type { ReactNode } from "react"
 import { formatCRDAmount } from "../model/crdDisplay"
 import type { CreditCardModel } from "../model/crdCardModel"
+import { Footnote } from "./Footnote"
 
 export interface ProviderCreditSummaryProps {
   providerName: string
@@ -9,6 +10,7 @@ export interface ProviderCreditSummaryProps {
 
 const LABEL = "text-[12px] text-[var(--muted)]"
 const VALUE = "tnum text-[15px] text-[var(--text-strong)]"
+const ROW = "flex w-full items-center justify-between gap-3"
 
 /** One decimal digit at most, and no trailing ".0". */
 function percentLabel(percent: number): string {
@@ -17,6 +19,10 @@ function percentLabel(percent: number): string {
 
 /**
  * One credit bar with the percent at its right, then the CRD and USD funds.
+ *
+ * The two fund rows span the full width, with the label at the leading edge and
+ * the exact amount at the trailing edge. Only the funds left appear here; the
+ * priced use stays a model fact without a row.
  *
  * The bar appears only with a known positive allowance. A known balance
  * without a denominator keeps its amounts and shows no percentage, an unmetered
@@ -55,26 +61,20 @@ export function ProviderCreditSummary({
           </span>
         </div>
       )}
-      <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-        <div>
-          <div className={LABEL}>CRD left</div>
-          <div className={VALUE}>{formatCRDAmount(model.remainingCRD)}</div>
+      <div className="space-y-1">
+        <div className={ROW}>
+          <span className={LABEL}>CRD left</span>
+          <span className={VALUE}>{formatCRDAmount(model.remainingCRD)}</span>
         </div>
         {model.remainingUSD !== null && (
-          <div>
-            <div className={LABEL}>USD left</div>
-            <div className={VALUE}>{model.remainingUSD}</div>
-          </div>
-        )}
-        {model.pricedUseUSD !== null && (
-          <div>
-            <div className={LABEL}>USD use (priced)</div>
-            <div className={VALUE}>{model.pricedUseUSD}</div>
+          <div className={ROW}>
+            <span className={LABEL}>USD left</span>
+            <span className={VALUE}>{model.remainingUSD}</span>
           </div>
         )}
       </div>
       {model.allowanceCRD === null && (
-        <p className={LABEL}>No allowance is reported, so this card shows no percentage.</p>
+        <Footnote>No allowance is reported, so this card shows no percentage.</Footnote>
       )}
     </div>
   )

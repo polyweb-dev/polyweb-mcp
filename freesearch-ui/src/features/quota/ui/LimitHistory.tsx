@@ -10,6 +10,8 @@ import {
 } from "@/shared/ui/table"
 import type { LimitAuditEvent } from "@/domains/dashboard"
 import { formatCRDAmount } from "../model/crdDisplay"
+import { operationLabel, reasonLabel, sourceLabel } from "../model/quotaLabels"
+import { newestFirst, timeText } from "../model/timeText"
 
 export interface LimitHistoryProps {
   providerName: string
@@ -50,26 +52,25 @@ function balanceText(event: LimitAuditEvent, side: "old" | "new"): string {
   return native === null ? "" : native + " " + nativeUnitText(event)
 }
 
-function timeText(iso: string): string {
-  const date = new Date(iso)
-  return Number.isNaN(date.getTime()) ? iso : date.toLocaleString()
-}
-
 function headingId(providerName: string): string {
   return "limit-history-" + providerName.toLowerCase().replace(/[^a-z0-9]+/g, "-")
 }
 
 /** Known operation and reason of one event, joined as one supplementary line. */
 function detailText(event: LimitAuditEvent): string {
-  return [event.operation, event.reason].filter((part): part is string => Boolean(part)).join(" · ")
+  return [operationLabel(event.operation), reasonLabel(event.reason)]
+    .filter((part) => part !== "")
+    .join(" · ")
 }
 
 /**
  * Paged audit trail of one provider rail.
  *
- * Each row shows the observed time, the old and new credit-unit balance, the
- * source, and the actor. Amounts stay exact until this display rule rounds
- * them, so the ledger itself is never rewritten.
+ * The newest observed row stays at the top and every later page holds older
+ * rows, so no reader scrolls to find the newest change. Each row shows the
+ * observed local time, the old and new credit-unit balance, the source, and the
+ * actor. Amounts stay exact until this display rule rounds them, so the ledger
+ * itself is never rewritten.
  */
 export function LimitHistory({
   providerName,
@@ -80,6 +81,7 @@ export function LimitHistory({
   onLoadMore,
 }: LimitHistoryProps): ReactNode {
   const id = headingId(providerName)
+  const rows = newestFirst(events)
   return (
     <section aria-labelledby={id} className="space-y-2">
       <h5 id={id} className="text-[12px] font-semibold text-[var(--text-strong)]">
@@ -114,7 +116,7 @@ export function LimitHistory({
             </TableRow>
           </TableHeader>
           <TableBody>
-            {events.map((event) => {
+            {rows.map((event) => {
               const detail = detailText(event)
               return (
                 <TableRow key={event.event_id}>
@@ -128,7 +130,7 @@ export function LimitHistory({
                   </TableCell>
                   <TableCell className="tnum">{balanceText(event, "old")}</TableCell>
                   <TableCell className="tnum">{balanceText(event, "new")}</TableCell>
-                  <TableCell>{event.source}</TableCell>
+                  <TableCell>{sourceLabel(event.source)}</TableCell>
                   <TableCell>{actorText(event)}</TableCell>
                 </TableRow>
               )

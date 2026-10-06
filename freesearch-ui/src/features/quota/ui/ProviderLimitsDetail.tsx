@@ -9,6 +9,8 @@ import type {
 } from "@/domains/dashboard"
 import { formatCRDAmount, resetRuleText } from "../model/crdDisplay"
 import { operationAvailable } from "../model/crdCardModel"
+import { poolName, SPEND_CAP } from "../model/quotaLabels"
+import { dateText, timestampOrNull } from "../model/timeText"
 
 export interface ProviderLimitsDetailProps {
   providerName: string
@@ -73,26 +75,27 @@ function detailRows(detail: ProviderLimitDetail | null, plan: string | null): De
   push(rows, "USD per call", known(detail.usd_per_call))
   push(rows, "Vendor-reported USD spend", known(detail.actual_spend_usd))
   push(rows, "Reset", resetText(detail))
-  push(rows, "Last sync", known(detail.last_sync_at))
+  push(rows, "Last sync", timestampOrNull(detail.last_sync_at))
   return rows
 }
 
 function grantText(granted: string, consumed: string): string {
-  return formatCRDAmount(granted) + " granted, " + formatCRDAmount(consumed) + " used"
+  return formatCRDAmount(granted) + " set, " + formatCRDAmount(consumed) + " used"
 }
 
-/** Grant facts of the supported operations only. */
+/** Spend cap facts of the supported operations only. */
 function grantRows(grants: CRDGrantsSummary | null, auth: ProviderAuthLimits): DetailRow[] {
   const rows: DetailRow[] = []
   if (grants === null) return rows
   const start = known(grants.period_start)
   const end = known(grants.period_end)
-  push(rows, "Grant period", start === null || end === null ? null : start + " to " + end)
+  const period = start === null || end === null ? null : dateText(start) + " to " + dateText(end)
+  push(rows, SPEND_CAP + " period", period)
   if (operationAvailable(auth, "search")) {
-    push(rows, "Search grant", grantText(grants.search_granted_crd, grants.search_consumed_crd))
+    push(rows, "Search " + SPEND_CAP.toLowerCase(), grantText(grants.search_granted_crd, grants.search_consumed_crd))
   }
   if (operationAvailable(auth, "fetch")) {
-    push(rows, "Fetch grant", grantText(grants.fetch_granted_crd, grants.fetch_consumed_crd))
+    push(rows, "Fetch " + SPEND_CAP.toLowerCase(), grantText(grants.fetch_granted_crd, grants.fetch_consumed_crd))
   }
   return rows
 }
@@ -121,7 +124,7 @@ function viewRows(auth: ProviderAuthLimits): DetailRow[] {
   return rows
 }
 
-/** Known aggregate funds of one native pool, shown once. */
+/** Known aggregate funds of one native pool, shown once under its human name. */
 function poolRows(pool: NativePool | null): DetailRow[] {
   if (pool === null) return []
   const remaining = nativeText(pool.remaining, pool.native_unit)
@@ -130,8 +133,8 @@ function poolRows(pool: NativePool | null): DetailRow[] {
   const parts: string[] = []
   if (remaining !== null) parts.push(remaining + " left")
   if (allowance !== null) parts.push("of " + allowance)
-  const id = known(pool.pool_id)
-  const value = id === null ? parts.join(" ") : id + ": " + parts.join(" ")
+  const name = poolName(pool.pool_id)
+  const value = name === "" ? parts.join(" ") : name + ": " + parts.join(" ")
   return [{ label: "Aggregate pool", value }]
 }
 

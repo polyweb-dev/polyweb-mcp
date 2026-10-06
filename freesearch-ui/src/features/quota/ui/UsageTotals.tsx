@@ -4,6 +4,7 @@ import type { ProviderConfig } from "@/domains/providers"
 import type { CRDUsageTotal } from "@/domains/dashboard"
 import { formatCRDAmount } from "../model/crdDisplay"
 import { formatUsageP95 } from "../model/quotaDetails"
+import { Footnote } from "./Footnote"
 
 export interface UsageTotalsProps {
   crdUsageTotals: CRDUsageTotal[]
@@ -40,12 +41,7 @@ export function UsageTotals({ crdUsageTotals, providers }: UsageTotalsProps) {
   const nameOf = (providerId: string) => catalogNameOf(providerId) ?? providerId
   return (
     <section aria-labelledby="usage-totals-heading" className="space-y-4">
-      <div className="border-b border-[var(--border-subtle)] pb-2">
-        <h3 id="usage-totals-heading" className={TITLE}>Usage totals</h3>
-        <p className="mt-1 text-[12px] text-[var(--muted)]">
-          Credit-unit cost uses one common scale: one CRD is USD 0.001 of priced native use. Volume counts searches and fetched URLs separately.
-        </p>
-      </div>
+      <h3 id="usage-totals-heading" className={TITLE}>Usage totals</h3>
 
       <div className={CARD}>
         <div className={HEAD_BAR}><h4 className={TITLE}>Credit-unit use</h4></div>
@@ -98,6 +94,10 @@ export function UsageTotals({ crdUsageTotals, providers }: UsageTotalsProps) {
           </div>
         )}
       </div>
+
+      <Footnote className="border-t border-[var(--border-subtle)]/60 pt-2">
+        Credit-unit cost uses one common scale: one CRD is USD 0.001 of priced native use. Volume counts searches and fetched URLs separately.
+      </Footnote>
     </section>
   )
 }

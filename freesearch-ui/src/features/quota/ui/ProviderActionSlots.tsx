@@ -2,6 +2,7 @@ import type { ReactNode } from "react"
 import type { DashboardQuota, ProviderLimits } from "@/domains/dashboard"
 import type { ProviderConfig } from "@/domains/providers"
 import { isManualQuotaEligible } from "../model/quotaEligibility"
+import { Footnote } from "./Footnote"
 import { ProviderActionSlot } from "./ProviderActionSlot"
 import type { OAuthSlotArgs } from "./QuotaRow"
 
@@ -37,15 +38,9 @@ export function ProviderActionSlots({
 }: ProviderActionSlotsProps): ReactNode {
   return (
     <section aria-labelledby="provider-actions-heading" className="space-y-3">
-      <div>
-        <h3 id="provider-actions-heading" className="text-[13px] font-semibold text-[var(--text-strong)]">
-          Provider actions
-        </h3>
-        <p className="mt-1 text-[12px] text-[var(--muted)]">
-          Account pairing, manual entries, and saved manual estimates. Funds and credit units appear
-          on the cards above.
-        </p>
-      </div>
+      <h3 id="provider-actions-heading" className="text-[13px] font-semibold text-[var(--text-strong)]">
+        Provider actions
+      </h3>
       {providers.map((provider) => (
         <ProviderActionSlot
           key={provider.id}
@@ -56,6 +51,10 @@ export function ProviderActionSlots({
           {...(renderOAuthActions !== undefined ? { renderOAuthActions } : {})}
         />
       ))}
+      <Footnote className="border-t border-[var(--border-subtle)]/60 pt-2">
+        Account pairing, balance entries, and saved estimates. Funds and credit units appear on the
+        cards above.
+      </Footnote>
     </section>
   )
 }

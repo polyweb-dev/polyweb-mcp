@@ -22,12 +22,13 @@ import type {
 import type { ProviderConfig } from "@/domains/providers"
 import { formatCRDAmount, percentRemaining, sumAmounts } from "./crdDisplay"
 import { multiplyDecimal, parseDecimal } from "./manualQuotaMath"
+import { sourceLabel, BALANCE_ENTRY } from "./quotaLabels"
 
 const OPERATIONS: readonly CRDOperation[] = ["search", "fetch"]
 const USD_UNIT = "USD"
 const FREE_UNIT = "FREE"
 const UNKNOWN_TEXT = "unknown"
-const MANUAL_ANCHOR_TEXT = "Estimated · Manual entry"
+const MANUAL_ANCHOR_TEXT = "Estimated · " + BALANCE_ENTRY
 const USD_SCALE = 12
 /** Confidence order: the weakest applicable member governs a combined note. */
 const CONFIDENCE_RANK: Record<string, number> = {
@@ -279,7 +280,10 @@ function provenanceNote(auth: ProviderAuthLimits): string | null {
   if (auth.aggregate_pool?.manual_anchor === true) {
     return stale ? MANUAL_ANCHOR_TEXT + " · stale" : MANUAL_ANCHOR_TEXT
   }
-  const parts = knownText([auth.aggregate_pool?.source, auth.detail?.source])
+  const parts = knownText([
+    sourceLabel(auth.aggregate_pool?.source),
+    sourceLabel(auth.detail?.source),
+  ])
   const confidence = weakestConfidence([auth.aggregate_pool?.confidence, auth.detail?.confidence])
   if (confidence !== null) parts.push(confidence)
   if (stale) parts.push("stale")

@@ -1,6 +1,7 @@
 import type { ReactNode } from "react"
 import type { CRDConfidence, RateBarView, RateProgressView } from "@/domains/dashboard"
 import { rateBarModel } from "../model/crdDisplay"
+import { timeText } from "../model/timeText"
 import { ConfidenceLabel } from "./ConfidenceLabel"
 
 export interface ProviderRateBarsProps {
@@ -85,7 +86,7 @@ export function ProviderRateBars({
             <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-[var(--muted)]">
               {confidenceCell(bar.confidence)}
               {bar.kind === "free_daily_allowance" && <span>Free daily allowance</span>}
-              {bar.resetAt !== null && <span>Resets {bar.resetAt}</span>}
+              {bar.resetAt !== null && <span>Resets {timeText(bar.resetAt)}</span>}
             </div>
           </div>
         )

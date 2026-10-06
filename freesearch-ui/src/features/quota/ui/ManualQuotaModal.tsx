@@ -1,16 +1,17 @@
 import type { ReactNode } from "react"
 import { Modal } from "@/shared/ui/Modal"
+import { SPEND_CAP, SPEND_CAP_NOTE } from "../model/quotaLabels"
 import { ManualEntryModal, type ManualEntryVariant } from "./ManualEntryModal"
 
 export type { ManualQuotaDefaults } from "../model/useQuotaForm"
 export type { ManualEntryVariant }
 
 /**
- * One shared modal shell for the credit-unit grant form. The grant form stays
- * outside this component, so the operator form keeps its own state and its own
+ * One shared modal shell for the spend cap form. The form stays outside this
+ * component, so the operator form keeps its own state and its own
  * server-version behavior.
  */
-export interface GrantShellVariant {
+export interface SpendCapShellVariant {
   mode: "grant"
   open: boolean
   providerId: string
@@ -19,14 +20,15 @@ export interface GrantShellVariant {
   children: ReactNode
 }
 
-export type ManualQuotaModalProps = ManualEntryVariant | GrantShellVariant
+export type ManualQuotaModalProps = ManualEntryVariant | SpendCapShellVariant
 
 /**
- * Reusable manual-entry and grant modal.
+ * Reusable balance-entry and spend-cap modal.
  *
  * `mode: "manual"` (the default) shows the native anchor form of
  * `ManualEntryModal`; `mode: "grant"` shows the same modal shell around the
- * credit-unit grant form. Each mode keeps one modal composition only.
+ * spend cap form. Each mode keeps one modal composition only, and each mode
+ * states its own meaning as the one visible dialog description.
  */
 export function ManualQuotaModal(props: ManualQuotaModalProps): ReactNode {
   if (props.mode === "grant") {
@@ -35,8 +37,8 @@ export function ManualQuotaModal(props: ManualQuotaModalProps): ReactNode {
         isOpen={props.open}
         onClose={props.onClose}
         maxWidth="md"
-        title={"Grant credit units — " + props.providerName}
-        subtitle="Operator credit-unit grant. The grant adds a local ceiling above the vendor balance."
+        title={SPEND_CAP + " — " + props.providerName}
+        subtitle={SPEND_CAP_NOTE}
       >
         {props.children}
       </Modal>

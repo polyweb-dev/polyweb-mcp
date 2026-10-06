@@ -50,8 +50,8 @@ describe("ProviderTierBars", () => {
     expect(screen.getByText("Resets on the vendor period")).not.toBeNull()
   })
 
-  it("shows the unknown split note when the vendor split is unknown", () => {
-    render(
+  it("renders no row when the vendor split is unknown (UI7-01)", () => {
+    const { container } = render(
       <ProviderTierBars
         providerName="Synth A"
         freeTiers={[]}
@@ -59,7 +59,8 @@ describe("ProviderTierBars", () => {
         tierSplitKnown={false}
       />,
     )
-    expect(screen.getAllByText("Tier split unavailable")).toHaveLength(2)
+    expect(container.textContent).toBe("")
+    expect(screen.queryByText("Tier split unavailable")).toBe(null)
   })
 
   it("formats a fractional CRD amount to one decimal", () => {
@@ -76,8 +77,8 @@ describe("ProviderTierBars", () => {
     expect(screen.getByText("≈0.6 CRD of 1 CRD")).not.toBeNull()
   })
 
-  it("renders unknown capacity as text with no zero bar", () => {
-    render(
+  it("renders no row for unknown capacity and never an invented zero (UI7-01)", () => {
+    const { container } = render(
       <ProviderTierBars
         providerName="Synth A"
         freeTiers={[
@@ -91,11 +92,12 @@ describe("ProviderTierBars", () => {
         tierSplitKnown
       />,
     )
-    expect(screen.getByText("Unknown")).not.toBeNull()
+    expect(container.textContent).toBe("")
+    expect(screen.queryByText("Unknown")).toBe(null)
     expect(screen.queryByRole("progressbar")).toBe(null)
   })
 
-  it("labels each progressbar with provider plus tier", () => {
+  it("renders known tier amounts as detail rows with no funds progressbar (UI7-01, UI7-02)", () => {
     render(
       <ProviderTierBars
         providerName="Synth A"
@@ -112,14 +114,8 @@ describe("ProviderTierBars", () => {
         tierSplitKnown
       />,
     )
-    const freeBar = screen.getByRole("progressbar", {
-      name: "Synth A free tier credit units remaining",
-    })
-    const paidBar = screen.getByRole("progressbar", {
-      name: "Synth A paid tier credit units remaining",
-    })
-    expect(freeBar.getAttribute("aria-valuenow")).toBe("50")
-    expect(paidBar.getAttribute("aria-valuenow")).toBe("50")
+    expect(screen.getAllByText("5 CRD of 10 CRD")).toHaveLength(2)
+    expect(screen.queryByRole("progressbar")).toBe(null)
   })
 
   it("omits aria-valuenow by rendering no bar when the percent is unknown", () => {

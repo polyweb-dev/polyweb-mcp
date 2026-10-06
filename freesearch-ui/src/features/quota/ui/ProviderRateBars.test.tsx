@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest"
 import { render, screen } from "@testing-library/react"
 import type { RateProgressView } from "@/domains/dashboard"
+import { timeText } from "../model/timeText"
 import { ProviderRateBars } from "./ProviderRateBars"
 
 /**
- * S0 generic rate bars: hour and day only, synthetic providers only, unknown
- * limits stay text-only and never render as a zero bar.
+ * UI7 rate bars: hour and day only, fetch rows gated by fetchAvailable,
+ * unknown limits stay text-only and never render as a zero bar.
+ * Replaces the pre-UI7 fetch expectations per UI7-04.
  */
 
 function makeProgress(overrides: Partial<RateProgressView> = {}): RateProgressView {
@@ -39,6 +41,7 @@ describe("ProviderRateBars", () => {
     render(
       <ProviderRateBars
         providerName="Synth A"
+        fetchAvailable
         progress={[
           makeProgress({ bucket_id: "bucket-hour", window: "1h" }),
           makeProgress({
@@ -61,6 +64,7 @@ describe("ProviderRateBars", () => {
     render(
       <ProviderRateBars
         providerName="Synth A"
+        fetchAvailable
         progress={[
           makeProgress({
             bucket_id: "bucket-hour",
@@ -84,10 +88,30 @@ describe("ProviderRateBars", () => {
     expect(screen.getByText("7 of 20 URLs")).not.toBeNull()
   })
 
+  it("hides fetch rate rows without fetch support (UI7-04)", () => {
+    const { container } = render(
+      <ProviderRateBars
+        providerName="Synth A"
+        fetchAvailable={false}
+        progress={[
+          makeProgress({
+            bucket_id: "bucket-day",
+            operation: "fetch",
+            window: "1d",
+            unit: "urls",
+          }),
+        ]}
+      />,
+    )
+    expect(container.textContent).toBe("")
+    expect(screen.queryByText("Fetch daily rate")).toBe(null)
+  })
+
   it("shows source confidence text on each bar", () => {
     render(
       <ProviderRateBars
         providerName="Synth A"
+        fetchAvailable
         progress={[makeProgress({ confidence: "authoritative" })]}
       />,
     )
@@ -98,6 +122,7 @@ describe("ProviderRateBars", () => {
     render(
       <ProviderRateBars
         providerName="Synth A"
+        fetchAvailable
         progress={[makeProgress({ confidence: "unknown" })]}
       />,
     )
@@ -108,6 +133,7 @@ describe("ProviderRateBars", () => {
     render(
       <ProviderRateBars
         providerName="Synth A"
+        fetchAvailable
         progress={[
           makeProgress({ window: "1d", kind: "free_daily_allowance" }),
         ]}
@@ -116,22 +142,26 @@ describe("ProviderRateBars", () => {
     expect(screen.getByText("Free daily allowance")).not.toBeNull()
   })
 
-  it("shows the reset text verbatim", () => {
+  it("shows the reset time in reader-locale text (polish Item 2)", () => {
     render(
       <ProviderRateBars
         providerName="Synth A"
+        fetchAvailable
         progress={[
           makeProgress({ reset_at: "2026-03-01T00:00:00Z" }),
         ]}
       />,
     )
-    expect(screen.getByText("Resets 2026-03-01T00:00:00Z")).not.toBeNull()
+    const expected = "Resets " + timeText("2026-03-01T00:00:00Z")
+    expect(screen.getByText(expected)).not.toBeNull()
+    expect(screen.queryByText("Resets 2026-03-01T00:00:00Z")).toBeNull()
   })
 
   it("exposes an accessible progressbar with provider operation window and unit", () => {
     render(
       <ProviderRateBars
         providerName="Synth A"
+        fetchAvailable
         progress={[makeProgress({ remaining: "5", limit: "10" })]}
       />,
     )
@@ -139,12 +169,15 @@ describe("ProviderRateBars", () => {
       name: "Synth A search hourly requests remaining",
     })
     expect(bar.getAttribute("aria-valuenow")).toBe("50")
+    expect(bar.getAttribute("aria-valuemin")).toBe("0")
+    expect(bar.getAttribute("aria-valuemax")).toBe("100")
   })
 
   it("renders an unknown limit as text only with no bar", () => {
     render(
       <ProviderRateBars
         providerName="Synth A"
+        fetchAvailable
         progress={[makeProgress({ remaining: "7", limit: null })]}
       />,
     )
@@ -154,7 +187,7 @@ describe("ProviderRateBars", () => {
 
   it("renders nothing without hour or day progress", () => {
     const { container } = render(
-      <ProviderRateBars providerName="Synth A" progress={[]} />,
+      <ProviderRateBars providerName="Synth A" fetchAvailable progress={[]} />,
     )
     expect(container.textContent).toBe("")
   })

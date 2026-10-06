@@ -5,6 +5,7 @@ import type { ProviderConfig } from "@/domains/providers"
 import { isManualQuotaEligible } from "../model/quotaEligibility"
 import { resolveQuota } from "../model/quotaDetails"
 import { manualBudgetMissing, resolveQuotaRow } from "../model/quotaRowModel"
+import { BALANCE_ENTRY, BALANCE_ENTRY_NOTE } from "../model/quotaLabels"
 import { useManualQuota } from "../model/useManualQuota"
 import type { ManualQuotaDefaults } from "../model/useQuotaForm"
 import { ManualBudgetButton } from "./ManualBudgetButton"
@@ -97,7 +98,8 @@ export function ProviderActionSlot({
           <ManualBudgetButton
             providerId={provider.id}
             providerName={provider.name}
-            label="Manual entry"
+            label={BALANCE_ENTRY}
+            note={BALANCE_ENTRY_NOTE}
             onOpen={() => setManualOpen(true)}
           />
         )}

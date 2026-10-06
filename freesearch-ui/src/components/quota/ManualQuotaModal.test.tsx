@@ -157,7 +157,7 @@ describe("ManualQuotaModal", () => {
       "body.allowance: must be positive"
     )
     expect(onClose).not.toHaveBeenCalled()
-    expect(screen.getByTestId("manual-quota-save")).toHaveTextContent("Save budget")
+    expect(screen.getByTestId("manual-quota-save")).toHaveTextContent("Save balance entry")
   })
 
   it("offers Clear entry when editing and deletes without saving", async () => {

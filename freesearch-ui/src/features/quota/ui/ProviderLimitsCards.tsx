@@ -1,6 +1,7 @@
 import type { ReactNode } from "react"
 import type { CRDUsageTotal, ProviderLimits } from "@/domains/dashboard"
 import type { ProviderConfig } from "@/domains/providers"
+import { Footnote } from "./Footnote"
 import { ProviderLimitsCard } from "./ProviderLimitsCard"
 
 export interface ProviderLimitsCardsProps {
@@ -44,19 +45,13 @@ export function ProviderLimitsCards({
 
   return (
     <section aria-labelledby="crd-cards-heading" className="space-y-3">
-      <div>
-        <div className="flex items-center gap-2.5">
-          <h3 id="crd-cards-heading" className="text-[13px] font-semibold text-[var(--text-strong)]">
-            Provider credit units
-          </h3>
-          <span className="rounded-full border border-[var(--border-subtle)] bg-[var(--surface)] px-2 py-0.5 text-[11px] text-[var(--muted)] tnum">
-            {entries.length} reported
-          </span>
-        </div>
-        <p className="mt-1 text-[12px] text-[var(--muted)]">
-          Vendor funds in one common scale: one CRD is USD 0.001 of priced native use. Amounts show
-          at most one decimal digit; the exact value governs admission, debit, and audit.
-        </p>
+      <div className="flex items-center gap-2.5">
+        <h3 id="crd-cards-heading" className="text-[13px] font-semibold text-[var(--text-strong)]">
+          Provider credit units
+        </h3>
+        <span className="rounded-full border border-[var(--border-subtle)] bg-[var(--surface)] px-2 py-0.5 text-[11px] text-[var(--muted)] tnum">
+          {entries.length} reported
+        </span>
       </div>
       {entries.length === 0 ? (
         <p className="rounded-lg border border-[var(--border-subtle)] p-8 text-center text-[13px] text-[var(--muted)]">
@@ -77,6 +72,10 @@ export function ProviderLimitsCards({
           ))}
         </div>
       )}
+      <Footnote className="border-t border-[var(--border-subtle)]/60 pt-2">
+        Vendor funds in one common scale: one CRD is USD 0.001 of priced native use. Amounts show
+        at most one decimal digit; the exact value governs admission, debit, and audit.
+      </Footnote>
     </section>
   )
 }

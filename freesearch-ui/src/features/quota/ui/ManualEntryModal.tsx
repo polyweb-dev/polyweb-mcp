@@ -4,6 +4,7 @@ import { unitLabel } from "@/services/api/mappers"
 import type { BackendManualQuotaPayload } from "@/domains/dashboard/api/manualQuotaWire"
 import type { UnitKind } from "@/shared/api/units"
 import { formatPercent1dp, type ManualAmountMode } from "../model/manualQuotaMath"
+import { BALANCE_ENTRY, BALANCE_ENTRY_NOTE } from "../model/quotaLabels"
 import { useQuotaForm, type ManualQuotaDefaults } from "../model/useQuotaForm"
 import { ManualQuotaFields } from "./ManualQuotaFields"
 import { ManualQuotaActions } from "./ManualQuotaActions"
@@ -36,10 +37,9 @@ function placeholdersFor(
 }
 
 /**
- * Reusable manual billing entry (Brave first; Exa/Parallel reuse it with USD
- * units). Mount it only while open (or key it per session): field state
- * initialises from `defaults` at mount. The vendor throttle headline is never
- * rewritten here.
+ * Reusable balance entry (Brave first; Exa/Parallel reuse it with USD units).
+ * Mount it only while open (or key it per session): field state initialises from
+ * `defaults` at mount. The vendor throttle headline is never rewritten here.
  */
 export function ManualEntryModal(props: ManualEntryVariant): ReactNode {
   const {
@@ -74,8 +74,8 @@ export function ManualEntryModal(props: ManualEntryVariant): ReactNode {
       isOpen={open}
       onClose={onClose}
       maxWidth="sm"
-      title={(isEditing ? "Update usage" : "Set budget") + " — " + providerName}
-      subtitle="Manual billing window. Estimated locally; not a vendor balance."
+      title={(isEditing ? "Update " + BALANCE_ENTRY.toLowerCase() : BALANCE_ENTRY) + " — " + providerName}
+      subtitle={BALANCE_ENTRY_NOTE}
     >
       <form onSubmit={(event) => void form.handleSubmit(event)} noValidate>
         <ManualQuotaFields

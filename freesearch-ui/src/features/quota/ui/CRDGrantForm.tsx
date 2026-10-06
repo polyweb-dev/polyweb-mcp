@@ -3,6 +3,7 @@ import type { FormEvent, ReactNode } from "react"
 import { Button } from "@/shared/ui/button"
 import type { CRDGrantPayload, CRDGrantsSummary } from "@/domains/dashboard"
 import { formatCRDAmount } from "../model/crdDisplay"
+import { SPEND_CAP } from "../model/quotaLabels"
 
 export interface CRDGrantFormProps {
   providerName: string
@@ -89,9 +90,9 @@ function validateDraft(
 /** Stored facts of the reported operations only; an absent rail stays absent. */
 function storedText(grants: CRDGrantsSummary, fetchAvailable: boolean): string {
   const search =
-    "Stored: search " +
+    "Stored spend cap: search " +
     formatCRDAmount(grants.search_granted_crd) +
-    " granted, " +
+    " set, " +
     formatCRDAmount(grants.search_consumed_crd) +
     " used, " +
     formatCRDAmount(grants.search_reserved_crd) +
@@ -101,7 +102,7 @@ function storedText(grants: CRDGrantsSummary, fetchAvailable: boolean): string {
     search +
     " Fetch " +
     formatCRDAmount(grants.fetch_granted_crd) +
-    " granted, " +
+    " set, " +
     formatCRDAmount(grants.fetch_consumed_crd) +
     " used."
   )
@@ -113,10 +114,10 @@ function fieldId(providerName: string, name: keyof GrantDraft): string {
 }
 
 /**
- * Operator grant form: one credit-unit amount per supported operation and one
- * period. The fetch field exists only for a fetch rail, and the stored fetch
- * grant is then preserved in the request. A save that fails keeps the draft,
- * and the modal closes only after a successful save.
+ * Operator spend cap form: one credit-unit amount per supported operation and
+ * one period. The fetch field exists only for a fetch rail, and the stored fetch
+ * cap is then preserved in the request. A save that fails keeps the draft, and
+ * the modal closes only after a successful save.
  */
 export function CRDGrantForm(props: CRDGrantFormProps): ReactNode {
   const { providerName, authMode, grants, fetchAvailable, saving, saveError, staleVersion } = props
@@ -166,8 +167,8 @@ export function CRDGrantForm(props: CRDGrantFormProps): ReactNode {
   return (
     <form onSubmit={(event) => void handleSubmit(event)} noValidate className="space-y-3">
       <p className="text-[12px] text-[var(--muted)]">
-        Grant credit units for the {authMode} rail. One CRD is USD 0.001 of priced native use. The
-        grant adds a local ceiling above the vendor balance.
+        {SPEND_CAP} for the {authMode} rail. One CRD is USD 0.001 of priced native use. The spend
+        cap sets a local ceiling above the vendor balance.
       </p>
       {stored !== null && <p className="tnum text-[12px] text-[var(--muted)]">{stored}</p>}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -204,7 +205,7 @@ export function CRDGrantForm(props: CRDGrantFormProps): ReactNode {
       )}
       <div className="flex flex-wrap items-center gap-2">
         <Button type="submit" size="lg" className="px-3" disabled={saving}>
-          {saving ? "Saving…" : "Save grant"}
+          {saving ? "Saving…" : "Save " + SPEND_CAP.toLowerCase()}
         </Button>
         {staleVersion && (
           <Button type="button" variant="outline" size="lg" className="px-3" onClick={onReload}>
