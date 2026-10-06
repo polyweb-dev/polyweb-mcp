@@ -1,23 +1,36 @@
 import type { ReactNode } from "react"
-import type { ProviderLimits } from "@/domains/dashboard"
+import type { CRDUsageTotal, ProviderLimits } from "@/domains/dashboard"
 import type { ProviderConfig } from "@/domains/providers"
 import { ProviderLimitsCard } from "./ProviderLimitsCard"
 
 export interface ProviderLimitsCardsProps {
   providers: ProviderConfig[]
   providerLimits: ProviderLimits[]
+  /** Every reported credit-unit use row of the dashboard. */
+  crdUsageTotals: CRDUsageTotal[]
+  refreshDashboard: () => Promise<void>
+  /** Providers that may hold a manual native anchor. */
+  manualEligible: ReadonlySet<string>
+}
+
+/** Credit-unit use rows of one provider; a card receives its own rows only. */
+function usageFor(totals: CRDUsageTotal[], providerId: string): CRDUsageTotal[] {
+  return totals.filter((total) => total.provider === providerId)
 }
 
 /**
  * Credit-unit card list for the configured providers.
  *
  * A provider appears only when the payload reports a limit entry for it, so a
- * rail the backend does not support never gains an invented row. The card list
+ * rail the backend does not support never gains an invented card. The card list
  * keeps both auth modes in the payload; each card shows its active rail.
  */
 export function ProviderLimitsCards({
   providers,
   providerLimits,
+  crdUsageTotals,
+  refreshDashboard,
+  manualEligible,
 }: ProviderLimitsCardsProps): ReactNode {
   const entries = providers
     .map((provider) => ({
@@ -41,9 +54,8 @@ export function ProviderLimitsCards({
           </span>
         </div>
         <p className="mt-1 text-[12px] text-[var(--muted)]">
-          Search and fetch capacity in credit units, with separate free and paid tier bars and the
-          hourly and daily rate capacity. Amounts show at most one decimal digit; the exact value
-          governs admission, debit, and audit.
+          Vendor funds in one common scale: one CRD is USD 0.001 of priced native use. Amounts show
+          at most one decimal digit; the exact value governs admission, debit, and audit.
         </p>
       </div>
       {entries.length === 0 ? (
@@ -58,6 +70,9 @@ export function ProviderLimitsCards({
               providerId={entry.provider.id}
               providerName={entry.provider.name}
               limits={entry.limits}
+              crdUsageTotals={usageFor(crdUsageTotals, entry.provider.id)}
+              refreshDashboard={refreshDashboard}
+              manualEligible={manualEligible.has(entry.provider.id)}
             />
           ))}
         </div>

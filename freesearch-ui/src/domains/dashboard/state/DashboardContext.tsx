@@ -28,12 +28,18 @@ export const DashboardProvider: React.FC<{
   const [crdUsageTotals, setCrdUsageTotals] = useState<CRDUsageTotal[]>([]);
   const [dashboardNotice, setDashboardNotice] = useState<string | null>(null);
   const quotaAvailable = dashboardQuotas.length > 0;
+  // Only the newest dashboard request may write state, so a slow older
+  // response can never restore old funds or old priced use.
+  const requestGeneration = React.useRef(0);
 
   const refreshDashboard = useCallback(async () => {
+    requestGeneration.current += 1;
+    const generation = requestGeneration.current;
     setUsageLoading(true);
     setUsageError(null);
     try {
       const dashboard = await apiService.getDashboard();
+      if (generation !== requestGeneration.current) return;
       setUsageEvents(mapDashboardUsage(dashboard, catalogNameOf));
       setUsageTotals(mapDashboardTotals(dashboard));
       setDashboardQuotas(mapDashboardQuotas(dashboard));
@@ -41,6 +47,7 @@ export const DashboardProvider: React.FC<{
       setCrdUsageTotals(decodeCRDUsageTotals(dashboard.crd_usage_totals));
       setDashboardNotice(dashboard.notice);
     } catch (error) {
+      if (generation !== requestGeneration.current) return;
       const message = errorMessage(error, "Unable to load usage telemetry");
       setUsageEvents([]);
       setUsageTotals([]);
@@ -50,7 +57,7 @@ export const DashboardProvider: React.FC<{
       setUsageError(message);
       showToast(message, "error");
     } finally {
-      setUsageLoading(false);
+      if (generation === requestGeneration.current) setUsageLoading(false);
     }
   }, [showToast, catalogNameOf]);
 

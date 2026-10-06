@@ -12,7 +12,8 @@ export interface CRDGrantFormProps {
   saving: boolean
   saveError: string | null
   staleVersion: boolean
-  onSave: (payload: CRDGrantPayload) => Promise<void>
+  onSave: (payload: CRDGrantPayload) => Promise<boolean>
+  onClose: () => void
   onReload: () => void
 }
 
@@ -31,8 +32,9 @@ interface GrantField {
 }
 
 type GrantErrors = Partial<Record<keyof GrantDraft, string>>
+type GrantTouched = Partial<Record<keyof GrantDraft, boolean>>
 
-/** Operator input allows at most one fractional digit. */
+/** New operator input allows at most one fractional digit. */
 const ONE_DIGIT = /^\d+(\.\d)?$/
 const CALENDAR_DATE = /^\d{4}-\d{2}-\d{2}$/
 
@@ -53,20 +55,26 @@ function toDraft(grants: CRDGrantsSummary | null): GrantDraft {
   }
 }
 
-function amountError(value: string): string | undefined {
+/** The one-digit rule applies to new input only, never to a stored server amount. */
+function amountError(value: string, changed: boolean): string | undefined {
   if (value.trim() === "") return "Required."
+  if (!changed) return undefined
   if (!ONE_DIGIT.test(value.trim())) {
     return "Use at most one decimal digit (for example 3.8)."
   }
   return undefined
 }
 
-function validateDraft(draft: GrantDraft, fetchAvailable: boolean): GrantErrors {
+function validateDraft(
+  draft: GrantDraft,
+  fetchAvailable: boolean,
+  touched: GrantTouched,
+): GrantErrors {
   const errors: GrantErrors = {}
-  const search = amountError(draft.search)
+  const search = amountError(draft.search, touched.search === true)
   if (search) errors.search = search
   if (fetchAvailable) {
-    const fetch = amountError(draft.fetch)
+    const fetch = amountError(draft.fetch, touched.fetch === true)
     if (fetch) errors.fetch = fetch
   }
   if (!CALENDAR_DATE.test(draft.start)) errors.start = "Use a calendar date."
@@ -78,36 +86,58 @@ function validateDraft(draft: GrantDraft, fetchAvailable: boolean): GrantErrors 
   return errors
 }
 
+/** Stored facts of the reported operations only; an absent rail stays absent. */
+function storedText(grants: CRDGrantsSummary, fetchAvailable: boolean): string {
+  const search =
+    "Stored: search " +
+    formatCRDAmount(grants.search_granted_crd) +
+    " granted, " +
+    formatCRDAmount(grants.search_consumed_crd) +
+    " used, " +
+    formatCRDAmount(grants.search_reserved_crd) +
+    " reserved."
+  if (!fetchAvailable) return search
+  return (
+    search +
+    " Fetch " +
+    formatCRDAmount(grants.fetch_granted_crd) +
+    " granted, " +
+    formatCRDAmount(grants.fetch_consumed_crd) +
+    " used."
+  )
+}
+
 function fieldId(providerName: string, name: keyof GrantDraft): string {
   const slug = providerName.toLowerCase().replace(/[^a-z0-9]+/g, "-")
   return "crd-grant-" + name + "-" + slug
 }
 
 /**
- * Operator grant form: two credit-unit amounts and one period.
- *
- * The fetch field is disabled when the provider has no fetch rail, and the
- * stored fetch grant is then preserved instead of zeroed. A stale-version
- * reply from the server shows next to the form with a reload action.
+ * Operator grant form: one credit-unit amount per supported operation and one
+ * period. The fetch field exists only for a fetch rail, and the stored fetch
+ * grant is then preserved in the request. A save that fails keeps the draft,
+ * and the modal closes only after a successful save.
  */
 export function CRDGrantForm(props: CRDGrantFormProps): ReactNode {
   const { providerName, authMode, grants, fetchAvailable, saving, saveError, staleVersion } = props
-  const { onSave, onReload } = props
+  const { onSave, onClose, onReload } = props
   const [draft, setDraft] = useState<GrantDraft>(() => toDraft(grants))
   const [errors, setErrors] = useState<GrantErrors>({})
+  const [touched, setTouched] = useState<GrantTouched>({})
 
   function setField(name: keyof GrantDraft, value: string): void {
     setDraft((previous) => ({ ...previous, [name]: value }))
+    setTouched((previous) => ({ ...previous, [name]: true }))
     setErrors((previous) => (previous[name] ? { ...previous, [name]: undefined } : previous))
   }
 
   async function handleSubmit(event: FormEvent): Promise<void> {
     event.preventDefault()
     if (saving) return
-    const found = validateDraft(draft, fetchAvailable)
+    const found = validateDraft(draft, fetchAvailable, touched)
     setErrors(found)
     if (Object.keys(found).length > 0) return
-    await onSave({
+    const saved = await onSave({
       auth_mode: authMode,
       version: grants?.version ?? 0,
       period_start: draft.start,
@@ -115,6 +145,7 @@ export function CRDGrantForm(props: CRDGrantFormProps): ReactNode {
       search_crd: draft.search.trim(),
       fetch_crd: fetchAvailable ? draft.fetch.trim() : (grants?.fetch_granted_crd ?? "0"),
     })
+    if (saved) onClose()
   }
 
   const fields: GrantField[] = [
@@ -130,11 +161,7 @@ export function CRDGrantForm(props: CRDGrantFormProps): ReactNode {
       disabled: saving,
     })
   }
-  const stored = grants === null ? null : "Stored: search " + formatCRDAmount(grants.search_granted_crd)
-    + " granted, " + formatCRDAmount(grants.search_consumed_crd) + " used, "
-    + formatCRDAmount(grants.search_reserved_crd) + " reserved. Fetch "
-    + formatCRDAmount(grants.fetch_granted_crd) + " granted, "
-    + formatCRDAmount(grants.fetch_consumed_crd) + " used."
+  const stored = grants === null ? null : storedText(grants, fetchAvailable)
 
   return (
     <form onSubmit={(event) => void handleSubmit(event)} noValidate className="space-y-3">
@@ -143,12 +170,6 @@ export function CRDGrantForm(props: CRDGrantFormProps): ReactNode {
         grant adds a local ceiling above the vendor balance.
       </p>
       {stored !== null && <p className="tnum text-[12px] text-[var(--muted)]">{stored}</p>}
-      {!fetchAvailable && (
-        <p className="text-[12px] text-[var(--muted)]">
-          Fetch credit units are n/a for this provider, so the form grants search units only and
-          keeps the stored fetch grant.
-        </p>
-      )}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         {fields.map((field) => {
           const id = fieldId(providerName, field.name)

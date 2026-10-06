@@ -1,10 +1,11 @@
+import { useMemo } from "react"
 import type { ReactNode } from "react"
-import { Clock, Database, Gauge } from "lucide-react"
 import { useFreeSearch } from "@/context/useFreeSearch"
 import { isManualQuotaEligible } from "../model/quotaEligibility"
-import { KpiCard } from "./KpiCard"
+import { manualEligibleProviders } from "../model/quotaRowModel"
+import { CRDPriceNote } from "./CRDPriceNote"
+import { ProviderActionSlots } from "./ProviderActionSlots"
 import { ProviderLimitsCards } from "./ProviderLimitsCards"
-import { QuotaTable } from "./QuotaTable"
 import type { OAuthSlotArgs } from "./QuotaRow"
 import { UsageTotals } from "./UsageTotals"
 
@@ -18,23 +19,30 @@ export interface QuotaPageProps {
   renderOAuthActions?: (args: OAuthSlotArgs) => ReactNode
 }
 
-/** Usage page: credit-unit cards, recorded aggregates, and the legacy grid. */
+/**
+ * Usage page: the credit-unit cards, the recorded aggregates, the provider
+ * actions, and one price note. The legacy native grid and its cache widgets
+ * left this page; the reusable dialog and row parts stay in the feature.
+ */
 export function QuotaPage({
   manualQuotaEligible = isManualQuotaEligible,
   renderOAuthActions,
-}: QuotaPageProps) {
-
+}: QuotaPageProps): ReactNode {
   const {
     providers,
-    usageTotals,
     providerLimits,
     crdUsageTotals,
     dashboardQuotas,
-    quotaAvailable,
     dashboardNotice,
     usageLoading,
     usageError,
+    refreshDashboard,
   } = useFreeSearch()
+
+  const manualEligible = useMemo(
+    () => manualEligibleProviders(providers, dashboardQuotas, manualQuotaEligible),
+    [providers, dashboardQuotas, manualQuotaEligible]
+  )
 
   return (
     <div className="space-y-8">
@@ -59,52 +67,26 @@ export function QuotaPage({
       {usageLoading && (
         <p className="text-[13px] text-[var(--muted)]" role="status">Loading usage telemetry...</p>
       )}
-      {!usageLoading && (
-        // GAP: 7 — the dashboard can have no authoritative quota records.
-        // GAP: 8 — cache telemetry is not part of the backend dashboard contract.
-        <p className="p-3 rounded border border-[var(--border-subtle)] bg-[var(--elevated)] text-[13px] text-[var(--muted)]">
-          {quotaAvailable
-            ? "Quota data available; cache telemetry unavailable."
-            : "Quota unavailable from the backend; cache telemetry unavailable."}
-        </p>
-      )}
 
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <KpiCard icon={<Gauge className="size-4 text-[var(--signal)] shrink-0" />} label="Recorded aggregates">
-          <span className="tnum">{usageTotals.length}</span> provider operations
-        </KpiCard>
-        <KpiCard icon={<Clock className="size-4 text-[var(--status-warning)] shrink-0" />} label="Quota signal">
-          {quotaAvailable ? "Available" : "No quota source"}
-        </KpiCard>
-        <KpiCard icon={<Database className="size-4 text-[var(--muted)] shrink-0" />} label="Cache telemetry">
-          No cache signal
-        </KpiCard>
-      </div>
-
-      <ProviderLimitsCards providers={providers} providerLimits={providerLimits} />
-
-      <UsageTotals
-        usageTotals={usageTotals}
-        crdUsageTotals={crdUsageTotals}
+      <ProviderLimitsCards
         providers={providers}
+        providerLimits={providerLimits}
+        crdUsageTotals={crdUsageTotals}
+        refreshDashboard={refreshDashboard}
+        manualEligible={manualEligible}
       />
 
-      <details className="overflow-hidden rounded-lg border border-[var(--border-subtle)]">
-        <summary className="cursor-pointer border-b border-[var(--border-subtle)] bg-[var(--elevated)] px-4 py-2.5 text-[13px] font-semibold text-[var(--text-strong)]">
-          Legacy native quota view
-        </summary>
-        <p className="px-4 py-2.5 text-[12px] text-[var(--muted)]">
-          Vendor native balances, manual native budgets, and manual usage entries. Credit units are
-          the primary view above; this grid stays available for native reconciliation.
-        </p>
-        <QuotaTable
-          providers={providers}
-          dashboardQuotas={dashboardQuotas}
-          manualQuotaEligible={manualQuotaEligible}
-          {...(renderOAuthActions !== undefined ? { renderOAuthActions } : {})}
-        />
-      </details>
+      <UsageTotals crdUsageTotals={crdUsageTotals} providers={providers} />
 
+      <ProviderActionSlots
+        providers={providers}
+        dashboardQuotas={dashboardQuotas}
+        providerLimits={providerLimits}
+        manualQuotaEligible={manualQuotaEligible}
+        {...(renderOAuthActions !== undefined ? { renderOAuthActions } : {})}
+      />
+
+      <CRDPriceNote providers={providers} providerLimits={providerLimits} />
     </div>
   )
 }

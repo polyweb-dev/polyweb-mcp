@@ -1,35 +1,41 @@
 /**
  * Provider limit controller for one provider rail.
  *
- * The hook owns loading, grant saves, sync, and paged history. Each load is
- * driven by its own effect, so a cancelled effect never writes state after a
- * newer load or after unmount.
+ * The dashboard snapshot is the single card data source, so this hook keeps no
+ * private limit copy. It owns grant saves, vendor sync, reload, and the audit
+ * page. Every mutation awaits the dashboard query before it reports success,
+ * and the audit page loads only while its modal stays open.
  */
 
 import { useCallback, useEffect, useState } from "react"
 import { apiService } from "@/services/api/freesearchApi"
 import { toBackendId } from "@/services/api/mappers"
 import { ApiError, errorMessage } from "@/shared/api/http"
-import { decodeLimitHistory, decodeProviderLimits } from "@/domains/dashboard"
+import { decodeLimitHistory } from "@/domains/dashboard"
 import type {
   CRDGrantPayload,
   LimitAuditEvent,
   ProviderLimits,
   ProviderLimitsSyncResult,
 } from "@/domains/dashboard"
+import { activeAuth } from "./crdCardModel"
 
 const STALE_VERSION_TEXT =
   "The server holds a newer version of this record. Reload the limits and try again."
 
+export interface ProviderLimitsInput {
+  providerId: string
+  limits: ProviderLimits
+  refreshDashboard: () => Promise<void>
+  historyOpen: boolean
+}
+
 export interface ProviderLimitsController {
-  limits: ProviderLimits | null
-  loading: boolean
-  error: string | null
   reload: () => Promise<void>
   saving: boolean
   saveError: string | null
   staleVersion: boolean
-  saveGrant: (payload: CRDGrantPayload) => Promise<void>
+  saveGrant: (payload: CRDGrantPayload) => Promise<boolean>
   syncing: boolean
   syncNote: string | null
   syncNow: () => Promise<void>
@@ -59,6 +65,14 @@ interface HistoryState {
   loadMoreHistory: () => Promise<void>
 }
 
+interface HistoryInput {
+  backendId: string
+  authMode: string
+  reloadKey: number
+  snapshotKey: string
+  open: boolean
+}
+
 type SyncBody = Partial<ProviderLimitsSyncResult>
 
 /** Read the sync reply defensively; a partial body still yields a safe note. */
@@ -72,72 +86,111 @@ function syncText(value: unknown): string {
   return "Sync " + status
 }
 
-/** First page of the audit trail, refreshed when the rail or limits change. */
-function useLimitHistory(
-  backendId: string,
-  authMode: string,
-  reloadKey: number,
-): HistoryState {
-  const [events, setEvents] = useState<LimitAuditEvent[]>([])
-  const [cursor, setCursor] = useState<string | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+interface HistoryPage {
+  /** The rail and snapshot this page belongs to; a stale page never shows. */
+  key: string
+  events: LimitAuditEvent[]
+  cursor: string | null
+  loading: boolean
+  loadingMore: boolean
+  error: string | null
+}
+
+const EMPTY_PAGE: HistoryPage = {
+  key: "",
+  events: [],
+  cursor: null,
+  loading: false,
+  loadingMore: false,
+  error: null,
+}
+
+/**
+ * First page and further pages of the audit trail.
+ *
+ * The page carries the rail and snapshot key it belongs to, so a closed modal,
+ * a changed rail, or a newer snapshot hides an older answer during render. The
+ * first page therefore loads only while its modal stays open.
+ */
+function useLimitHistory(input: HistoryInput): HistoryState {
+  const { backendId, authMode, reloadKey, snapshotKey, open } = input
+  const [page, setPage] = useState<HistoryPage>(EMPTY_PAGE)
+  const active = open && authMode !== ""
+  const key = active ? authMode + "|" + snapshotKey + "|" + reloadKey : ""
+  const current = page.key === key ? page : { ...EMPTY_PAGE, key, loading: active }
 
   useEffect(() => {
-    if (authMode === "") return
+    if (key === "") return
     let cancelled = false
     apiService
       .getLimitHistory({ backendId, authMode })
       .then((body) => {
         if (cancelled) return
-        const page = decodeLimitHistory(body)
-        setEvents(page.events)
-        setCursor(page.next_cursor)
-        setError(null)
-        setLoading(false)
+        const next = decodeLimitHistory(body)
+        setPage({
+          key,
+          events: next.events,
+          cursor: next.next_cursor,
+          loading: false,
+          loadingMore: false,
+          error: null,
+        })
       })
       .catch((failure: unknown) => {
         if (cancelled) return
-        setError(errorMessage(failure, "Unable to load limit history"))
-        setLoading(false)
+        setPage({
+          ...EMPTY_PAGE,
+          key,
+          error: errorMessage(failure, "Unable to load limit history"),
+        })
       })
     return () => {
       cancelled = true
     }
-  }, [authMode, backendId, reloadKey])
+  }, [authMode, backendId, key])
 
   const loadMoreHistory = useCallback(async (): Promise<void> => {
-    if (cursor === null) return
-    setLoading(true)
+    const cursor = current.cursor
+    if (cursor === null || current.loading || current.loadingMore) return
+    setPage((previous) => (previous.key === key ? { ...previous, loadingMore: true } : previous))
     try {
-      const page = decodeLimitHistory(
+      const next = decodeLimitHistory(
         await apiService.getLimitHistory({ backendId, authMode, cursor })
       )
-      setEvents((previous) => [...previous, ...page.events])
-      setCursor(page.next_cursor)
-      setError(null)
+      setPage((previous) =>
+        previous.key === key
+          ? {
+              ...previous,
+              events: [...previous.events, ...next.events],
+              cursor: next.next_cursor,
+              loadingMore: false,
+              error: null,
+            }
+          : previous
+      )
     } catch (failure) {
-      setError(errorMessage(failure, "Unable to load limit history"))
-    } finally {
-      setLoading(false)
+      setPage((previous) =>
+        previous.key === key
+          ? { ...previous, loadingMore: false, error: errorMessage(failure, "Unable to load limit history") }
+          : previous
+      )
     }
-  }, [authMode, backendId, cursor])
+  }, [authMode, backendId, current.cursor, current.loading, current.loadingMore, key])
 
   return {
-    history: events,
-    historyLoading: loading,
-    historyError: error,
-    hasMoreHistory: cursor !== null,
+    history: current.events,
+    historyLoading: current.loading || current.loadingMore,
+    historyError: current.error,
+    hasMoreHistory: current.cursor !== null,
     loadMoreHistory,
   }
 }
 
-export function useProviderLimits(providerId: string): ProviderLimitsController {
+export function useProviderLimits(input: ProviderLimitsInput): ProviderLimitsController {
+  const { providerId, limits, refreshDashboard, historyOpen } = input
   const backendId = toBackendId(providerId)
-  const [limits, setLimits] = useState<ProviderLimits | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const [authMode, setAuthMode] = useState("")
+  const authMode = activeAuth(limits)?.auth_mode ?? ""
+  const snapshotKey = limits.generated_at + "-" + limits.version
   const [reloadKey, setReloadKey] = useState(0)
   const [save, setSave] = useState<SaveState>({
     saving: false,
@@ -146,42 +199,20 @@ export function useProviderLimits(providerId: string): ProviderLimitsController 
   })
   const [sync, setSync] = useState<SyncState>({ syncing: false, syncNote: null })
 
-  useEffect(() => {
-    let cancelled = false
-    apiService
-      .getProviderLimits(backendId)
-      .then((body) => {
-        if (cancelled) return
-        const next = decodeProviderLimits(body)[0] ?? null
-        setLimits(next)
-        setAuthMode(next === null ? "keyed" : next.active_auth_mode)
-        setError(null)
-        setLoading(false)
-      })
-      .catch((failure: unknown) => {
-        if (cancelled) return
-        setError(errorMessage(failure, "Unable to load provider limits"))
-        setLoading(false)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [backendId, reloadKey])
-
   const reload = useCallback(async (): Promise<void> => {
-    setLoading(true)
+    await refreshDashboard()
     setReloadKey((previous) => previous + 1)
-  }, [])
+  }, [refreshDashboard])
 
   const saveGrant = useCallback(
-    async (payload: CRDGrantPayload): Promise<void> => {
+    async (payload: CRDGrantPayload): Promise<boolean> => {
       setSave({ saving: true, saveError: null, staleVersion: false })
       try {
-        const updated = decodeProviderLimits(await apiService.putCRDGrants(backendId, payload))
-        setLimits(updated[0] ?? null)
-        setAuthMode(payload.auth_mode ?? authMode)
+        await apiService.putCRDGrants(backendId, payload)
+        await refreshDashboard()
         setSave({ saving: false, saveError: null, staleVersion: false })
         setReloadKey((previous) => previous + 1)
+        return true
       } catch (failure) {
         const stale = failure instanceof ApiError && failure.status === 409
         setSave({
@@ -191,28 +222,27 @@ export function useProviderLimits(providerId: string): ProviderLimitsController 
             ? STALE_VERSION_TEXT
             : errorMessage(failure, "Unable to save the credit-unit grant"),
         })
+        return false
       }
     },
-    [authMode, backendId]
+    [backendId, refreshDashboard]
   )
 
   const syncNow = useCallback(async (): Promise<void> => {
     setSync({ syncing: true, syncNote: null })
     try {
       const note = syncText(await apiService.syncProviderLimits(backendId))
+      await refreshDashboard()
       setSync({ syncing: false, syncNote: note })
       setReloadKey((previous) => previous + 1)
     } catch (failure) {
       setSync({ syncing: false, syncNote: errorMessage(failure, "Unable to sync provider limits") })
     }
-  }, [backendId])
+  }, [backendId, refreshDashboard])
 
-  const history = useLimitHistory(backendId, authMode, reloadKey)
+  const history = useLimitHistory({ backendId, authMode, reloadKey, snapshotKey, open: historyOpen })
 
   return {
-    limits,
-    loading,
-    error,
     reload,
     saving: save.saving,
     saveError: save.saveError,

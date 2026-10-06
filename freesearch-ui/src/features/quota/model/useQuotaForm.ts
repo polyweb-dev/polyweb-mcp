@@ -4,7 +4,9 @@ import { ApiError } from "@/shared/api/http"
 import type { BackendManualQuotaPayload } from "@/domains/dashboard/api/manualQuotaWire"
 import {
   remainingPercent1dp,
+  subtractDecimal,
   validateManualQuotaFields,
+  type ManualAmountMode,
   type ManualQuotaFieldErrors,
   type ManualQuotaFields,
 } from "./manualQuotaMath"
@@ -34,13 +36,26 @@ export interface QuotaFormCallbacks {
   onClose: () => void
 }
 
-function toFields(defaults: ManualQuotaDefaults | null | undefined): ManualQuotaFields {
+function toFields(
+  defaults: ManualQuotaDefaults | null | undefined,
+  amountMode: ManualAmountMode
+): ManualQuotaFields {
+  const allowance = defaults?.allowance ?? ""
+  const used = defaults?.used ?? ""
+  // A saved current usage becomes the displayed remaining balance.
+  const shown = amountMode === "balance" ? (subtractDecimal(allowance, used) ?? used) : used
   return {
     billingStart: defaults?.billingStart ?? "",
     billingEnd: defaults?.billingEnd ?? "",
-    allowance: defaults?.allowance ?? "",
-    used: defaults?.used ?? "",
+    allowance,
+    used: shown,
   }
+}
+
+/** The current usage the native-anchor endpoint receives. */
+function usageOf(fields: ManualQuotaFields, amountMode: ManualAmountMode): string {
+  if (amountMode !== "balance") return fields.used.trim()
+  return subtractDecimal(fields.allowance, fields.used) ?? fields.used.trim()
 }
 
 function saveErrorMessage(error: unknown): string {
@@ -49,19 +64,24 @@ function saveErrorMessage(error: unknown): string {
   return "Unable to save Manual Entry"
 }
 
-/** Field state, validation, preview, and save/delete for the manual form. */
+/**
+ * Field state, validation, preview, and save/delete for the manual form.
+ * In balance mode the amount field holds the remaining balance, so the hook
+ * translates it to the current usage the endpoint expects.
+ */
 export function useQuotaForm(
   initial: ManualQuotaDefaults | null | undefined,
-  callbacks: QuotaFormCallbacks
+  callbacks: QuotaFormCallbacks,
+  amountMode: ManualAmountMode = "usage"
 ): QuotaForm {
   const { onSave, onDelete, onClose } = callbacks
-  const [fields, setFields] = useState<ManualQuotaFields>(() => toFields(initial))
+  const [fields, setFields] = useState<ManualQuotaFields>(() => toFields(initial, amountMode))
   const [fieldErrors, setFieldErrors] = useState<ManualQuotaFieldErrors>({})
   const [saveError, setSaveError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const pending = saving || deleting
-  const preview = remainingPercent1dp(fields.allowance, fields.used)
+  const preview = remainingPercent1dp(fields.allowance, usageOf(fields, amountMode))
 
   function setField(name: keyof ManualQuotaFields, value: string): void {
     setFields((previous) => ({ ...previous, [name]: value }))
@@ -73,7 +93,7 @@ export function useQuotaForm(
   async function handleSubmit(event: FormEvent): Promise<void> {
     event.preventDefault()
     if (pending) return
-    const errors = validateManualQuotaFields(fields)
+    const errors = validateManualQuotaFields(fields, amountMode)
     setFieldErrors(errors)
     if (Object.keys(errors).length > 0) return
     setSaving(true)
@@ -82,7 +102,7 @@ export function useQuotaForm(
         billing_start: fields.billingStart,
         billing_end: fields.billingEnd,
         allowance: fields.allowance.trim(),
-        current_usage: fields.used.trim(),
+        current_usage: usageOf(fields, amountMode),
       })
       onClose()
     } catch (error) {

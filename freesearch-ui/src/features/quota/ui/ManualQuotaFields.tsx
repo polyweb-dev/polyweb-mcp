@@ -1,4 +1,4 @@
-import type { ManualQuotaFieldErrors, ManualQuotaFields } from "../model/manualQuotaMath"
+import type { ManualAmountMode, ManualQuotaFieldErrors, ManualQuotaFields } from "../model/manualQuotaMath"
 import { ManualQuotaField } from "./ManualQuotaField"
 
 export interface ManualQuotaFieldsProps {
@@ -9,6 +9,8 @@ export interface ManualQuotaFieldsProps {
   fieldErrors: ManualQuotaFieldErrors
   pending: boolean
   onChange: (name: keyof ManualQuotaFields, value: string) => void
+  /** `balance` labels the second amount as the remaining balance. */
+  amountMode?: ManualAmountMode
 }
 
 /** Billing window form section: dates plus allowance/usage amounts. */
@@ -20,6 +22,7 @@ export function ManualQuotaFields({
   fieldErrors,
   pending,
   onChange,
+  amountMode = "usage",
 }: ManualQuotaFieldsProps) {
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -74,7 +77,11 @@ export function ManualQuotaFields({
       <ManualQuotaField
         id={"manual-quota-usage-" + providerId}
         testId="manual-quota-usage"
-        label={"Current usage (" + noun + ")"}
+        label={
+          amountMode === "balance"
+            ? "Balance remaining (" + noun + ")"
+            : "Current usage (" + noun + ")"
+        }
         error={fieldErrors.used}
         disabled={pending}
         render={(inputProps) => (

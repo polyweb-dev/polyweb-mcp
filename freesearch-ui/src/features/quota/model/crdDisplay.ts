@@ -193,7 +193,7 @@ export function providerCRDModel(input: ProviderCRDInput): ProviderCRDModel {
 }
 
 /** Sum exact amounts; null when any member amount is unknown. */
-function sumAmounts(values: Array<string | null>): string | null {
+export function sumAmounts(values: Array<string | null>): string | null {
   if (values.length === 0) return null
   let scale = 0
   const parsed: Scaled[] = []
@@ -211,7 +211,7 @@ function sumAmounts(values: Array<string | null>): string | null {
 }
 
 /** Remaining percentage, rounded half-up to one digit; null without a known positive base (never the remaining amount itself). */
-function percentRemaining(remaining: string | null, allowance: string | null): number | null {
+export function percentRemaining(remaining: string | null, allowance: string | null): number | null {
   if (remaining === null || allowance === null) return null
   const numerator = scaled(remaining)
   const denominator = scaled(allowance)

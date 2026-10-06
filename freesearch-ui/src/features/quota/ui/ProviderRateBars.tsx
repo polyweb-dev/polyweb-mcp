@@ -1,11 +1,13 @@
 import type { ReactNode } from "react"
-import type { CRDConfidence, RateProgressView } from "@/domains/dashboard"
+import type { CRDConfidence, RateBarView, RateProgressView } from "@/domains/dashboard"
 import { rateBarModel } from "../model/crdDisplay"
 import { ConfidenceLabel } from "./ConfidenceLabel"
 
 export interface ProviderRateBarsProps {
   providerName: string
   progress: RateProgressView[]
+  /** A rail without fetch support shows its fetch rate bars nowhere. */
+  fetchAvailable: boolean
 }
 
 const WINDOW_TEXT = { "1h": "hourly", "1d": "daily" } as const
@@ -18,29 +20,40 @@ function confidenceCell(confidence: CRDConfidence): ReactNode {
   return <ConfidenceLabel confidence={confidence} />
 }
 
-function rateText(remaining: string | null, limit: string | null): string {
-  if (remaining === null && limit === null) return "Unknown"
-  if (limit === null) return remaining + " left"
-  return (remaining ?? "—") + " of " + limit
+/** Known parts of one rate amount; an incomplete entry yields no row. */
+function rateText(bar: RateBarView): string | null {
+  if (bar.remaining === null && bar.limit === null) return null
+  if (bar.limit === null) return bar.remaining + " left"
+  if (bar.remaining === null) return "of " + bar.limit
+  return bar.remaining + " of " + bar.limit
 }
 
 /**
  * Hourly and daily rate capacity of one provider card.
  *
  * Only `1h` and `1d` progress entries become bars; second and minute windows
- * stay detail text. The bar carries a numeric `aria-valuenow` only when the
- * limit is known, so an unknown limit is never drawn as empty capacity.
+ * stay detail text. An entry of an unsupported operation and an entry without
+ * a known amount never creates a row. The bar carries a numeric
+ * `aria-valuenow` only when the limit is known, so an unknown limit is never
+ * drawn as empty capacity.
  */
-export function ProviderRateBars({ providerName, progress }: ProviderRateBarsProps): ReactNode {
+export function ProviderRateBars({
+  providerName,
+  progress,
+  fetchAvailable,
+}: ProviderRateBarsProps): ReactNode {
   const bars = progress
     .filter((entry) => entry.window === "1h" || entry.window === "1d")
+    .filter((entry) => entry.operation === "search" || fetchAvailable)
     .map((entry) => rateBarModel({ progress: entry }))
+    .map((bar) => ({ bar, text: rateText(bar) }))
+    .filter((row): row is { bar: RateBarView; text: string } => row.text !== null)
   if (bars.length === 0) return null
 
   return (
     <div className="space-y-2">
-      {bars.map((bar) => {
-        const windowText = WINDOW_TEXT[bar.window]
+      {bars.map(({ bar, text }) => {
+        const windowText = WINDOW_TEXT[bar.window as "1h" | "1d"]
         const unitText = UNIT_TEXT[bar.unit]
         return (
           <div key={bar.bucketId + "-" + bar.window} className="space-y-1">
@@ -49,7 +62,7 @@ export function ProviderRateBars({ providerName, progress }: ProviderRateBarsPro
                 {bar.operation === "search" ? "Search" : "Fetch"} {windowText} rate
               </span>
               <span className="tnum text-[var(--text)]">
-                {rateText(bar.remaining, bar.limit)} {unitText}
+                {text} {unitText}
               </span>
             </div>
             {bar.percentRemaining !== null && (

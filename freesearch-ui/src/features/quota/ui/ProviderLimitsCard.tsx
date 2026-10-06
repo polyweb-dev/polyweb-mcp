@@ -1,12 +1,19 @@
-import { useState } from "react"
+import { useMemo, useState } from "react"
 import type { ReactNode } from "react"
 import { Button } from "@/shared/ui/button"
 import { ProviderLogo } from "@/shared/ui/ProviderLogo"
-import type { ProviderAuthLimits, ProviderLimits } from "@/domains/dashboard"
-import { providerCRDModel } from "../model/crdDisplay"
-import { useProviderLimits } from "../model/useProviderLimits"
+import type { CRDUsageTotal, ProviderAuthLimits, ProviderLimits } from "@/domains/dashboard"
+import type { BackendManualQuota } from "@/domains/dashboard/api/manualQuotaWire"
+import type { UnitKind } from "@/shared/api/units"
+import { activeAuth, creditCardModel, operationAvailable } from "../model/crdCardModel"
+import type { ManualAmountMode } from "../model/manualQuotaMath"
+import type { ManualQuotaDefaults } from "../model/useQuotaForm"
+import { useManualQuota, type ManualQuotaOverlay } from "../model/useManualQuota"
+import { useProviderLimits, type ProviderLimitsController } from "../model/useProviderLimits"
 import { CRDGrantForm } from "./CRDGrantForm"
-import { LimitHistory } from "./LimitHistory"
+import { LimitHistoryModal } from "./LimitHistoryModal"
+import { ManualQuotaModal } from "./ManualQuotaModal"
+import { ProviderCreditSummary } from "./ProviderCreditSummary"
 import { ProviderLimitsDetail } from "./ProviderLimitsDetail"
 import { ProviderRateBars } from "./ProviderRateBars"
 import { ProviderTierBars } from "./ProviderTierBars"
@@ -15,24 +22,26 @@ export interface ProviderLimitsCardProps {
   providerId: string
   providerName: string
   limits: ProviderLimits
+  /** This provider's credit-unit use rows only. */
+  crdUsageTotals: CRDUsageTotal[]
+  refreshDashboard: () => Promise<void>
+  manualEligible: boolean
+}
+
+type CardModal = "manual" | "grant" | "history" | null
+
+interface ManualUnit {
+  unitKind: UnitKind | null
+  displayUnit: string | null
+  amountMode: ManualAmountMode
 }
 
 const CARD = "space-y-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] p-4"
 const LABEL = "text-[12px] text-[var(--muted)]"
-const VALUE = "tnum text-[15px] text-[var(--text-strong)]"
 const CHIP = "rounded-full border border-[var(--border-subtle)] bg-[var(--elevated)] px-2 py-0.5 text-[11px] text-[var(--muted)]"
 
 function slug(providerId: string): string {
   return providerId.toLowerCase().replace(/[^a-z0-9]+/g, "-")
-}
-
-function activeAuth(data: ProviderLimits): ProviderAuthLimits | undefined {
-  return data.auths.find((entry) => entry.auth_mode === data.active_auth_mode) ?? data.auths[0]
-}
-
-function canFetch(auth: ProviderAuthLimits): boolean {
-  if (auth.fetch === null) return false
-  return auth.fetch.supported && auth.fetch.transport_available
 }
 
 /** A new stored grant remounts the form, so its draft starts from the server. */
@@ -43,33 +52,195 @@ function grantKey(auth: ProviderAuthLimits): string {
 }
 
 /**
+ * The native unit of the manual anchor. A USD pool accepts the vendor USD
+ * balance; any other unit keeps the current usage entry.
+ */
+function manualUnit(auth: ProviderAuthLimits): ManualUnit {
+  const nativeUnit = auth.aggregate_pool?.native_unit ?? null
+  if (nativeUnit === "USD") {
+    return { unitKind: "USD", displayUnit: "USD", amountMode: "balance" }
+  }
+  if (nativeUnit === "REQUEST" || nativeUnit === "CREDIT" || nativeUnit === "FREE") {
+    return { unitKind: nativeUnit, displayUnit: nativeUnit, amountMode: "usage" }
+  }
+  return { unitKind: null, displayUnit: null, amountMode: "usage" }
+}
+
+function manualDefaultsOf(manual: BackendManualQuota | null): ManualQuotaDefaults | null {
+  if (manual === null) return null
+  return {
+    billingStart: manual.billing_start,
+    billingEnd: manual.billing_end,
+    allowance: manual.allowance,
+    used: manual.current_usage,
+  }
+}
+
+interface CardActionInput {
+  providerId: string
+  providerName: string
+  manualEligible: boolean
+  syncing: boolean
+  expanded: boolean
+  panelId: string
+  onSync: () => void
+  onOpenModal: (modal: CardModal) => void
+  onToggleExpanded: () => void
+}
+
+/** The card actions: sync, the two dialogs, the history dialog, and detail. */
+function cardActions(input: CardActionInput): ReactNode {
+  const { providerId, providerName, manualEligible, syncing, expanded, panelId } = input
+  const action = "px-3"
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <Button type="button" variant="outline" size="lg" className={action}
+        disabled={syncing} aria-label={"Sync limits for " + providerName} onClick={input.onSync}>
+        {syncing ? "Syncing…" : "Sync"}
+      </Button>
+      {manualEligible && (
+        <Button type="button" variant="outline" size="lg" className={action}
+          data-testid={"manual-quota-open-" + providerId}
+          aria-label={"Manual entry for " + providerName}
+          onClick={() => input.onOpenModal("manual")}>
+          Manual entry
+        </Button>
+      )}
+      <Button type="button" variant="outline" size="lg" className={action}
+        data-testid={"crd-grant-open-" + providerId}
+        aria-label={"Grant credit units for " + providerName}
+        onClick={() => input.onOpenModal("grant")}>
+        Grant
+      </Button>
+      <Button type="button" variant="outline" size="lg" className={action}
+        data-testid={"limit-history-open-" + providerId}
+        aria-label={"Balance history for " + providerName}
+        onClick={() => input.onOpenModal("history")}>
+        History
+      </Button>
+      <Button type="button" variant="outline" size="lg" className={action}
+        aria-expanded={expanded} aria-controls={panelId} onClick={input.onToggleExpanded}>
+        {expanded ? "Hide detail" : "Show detail"}
+      </Button>
+    </div>
+  )
+}
+
+interface CardModalInput {
+  providerId: string
+  providerName: string
+  modal: CardModal
+  manualEligible: boolean
+  unit: ManualUnit
+  defaults: ManualQuotaDefaults | null
+  manual: ManualQuotaOverlay
+  controller: ProviderLimitsController
+  auth: ProviderAuthLimits
+  fetchAvailable: boolean
+  onClose: () => void
+}
+
+/** At most one dialog of this card stays mounted, so one card opens one dialog. */
+function cardModals(input: CardModalInput): ReactNode {
+  const { modal, providerId, providerName, unit, defaults, manual, controller, auth } = input
+  const close = input.onClose
+  if (modal === "manual" && input.manualEligible) {
+    return (
+      <ManualQuotaModal
+        open
+        providerId={providerId}
+        providerName={providerName}
+        unitKind={unit.unitKind}
+        displayUnit={unit.displayUnit}
+        defaults={defaults}
+        amountMode={unit.amountMode}
+        onClose={close}
+        onSave={manual.save}
+        {...(manual.manual !== null ? { onDelete: manual.remove } : {})}
+      />
+    )
+  }
+  if (modal === "grant") {
+    return (
+      <ManualQuotaModal
+        mode="grant"
+        open
+        providerId={providerId}
+        providerName={providerName}
+        onClose={close}
+      >
+        <CRDGrantForm
+          key={grantKey(auth)}
+          providerName={providerName}
+          authMode={auth.auth_mode}
+          grants={auth.grants}
+          fetchAvailable={input.fetchAvailable}
+          saving={controller.saving}
+          saveError={controller.saveError}
+          staleVersion={controller.staleVersion}
+          onSave={controller.saveGrant}
+          onClose={close}
+          onReload={() => void controller.reload()}
+        />
+      </ManualQuotaModal>
+    )
+  }
+  if (modal === "history") {
+    return (
+      <LimitHistoryModal
+        open
+        providerName={providerName}
+        events={controller.history}
+        loading={controller.historyLoading}
+        error={controller.historyError}
+        hasMore={controller.hasMoreHistory}
+        onLoadMore={controller.loadMoreHistory}
+        onClose={close}
+      />
+    )
+  }
+  return null
+}
+
+/**
  * One provider credit-unit card.
  *
- * The card owns its expansion state, so a disclosure of one provider never
- * moves another. Credit-unit headlines lead the card; native and USD values
- * stay inside the disclosure.
+ * The card owns its expansion state and its one open modal, so a disclosure or
+ * a dialog of one provider never moves another. The dashboard payload supplies
+ * the funds, and the disclosure holds the known tier facts, the known rate
+ * bars, and the vendor detail.
  */
 export function ProviderLimitsCard({
   providerId,
   providerName,
   limits,
+  crdUsageTotals,
+  refreshDashboard,
+  manualEligible,
 }: ProviderLimitsCardProps): ReactNode {
-  const controller = useProviderLimits(providerId)
   const [expanded, setExpanded] = useState(false)
-  const data = controller.limits ?? limits
-  const auth = activeAuth(data)
+  const [modal, setModal] = useState<CardModal>(null)
+  const controller = useProviderLimits({
+    providerId,
+    limits,
+    refreshDashboard,
+    historyOpen: modal === "history",
+  })
+  const manualState = useManualQuota(providerId, manualEligible)
+  const manualDefaults = useMemo(
+    () => manualDefaultsOf(manualState.manual),
+    [manualState.manual]
+  )
+  const auth = activeAuth(limits)
   if (auth === undefined) {
     return <article className={CARD}>{providerName}: no limit data reported by the backend.</article>
   }
 
-  const model = providerCRDModel({
-    provider: data.provider,
-    providerName,
-    authMode: auth.auth_mode,
-    auth,
-  })
+  const model = creditCardModel({ auth, usageTotals: crdUsageTotals })
+  const unit = manualUnit(auth)
   const titleId = "limits-title-" + slug(providerId)
   const panelId = "limits-panel-" + slug(providerId)
+  const fetchAvailable = operationAvailable(auth, "fetch")
 
   return (
     <article aria-labelledby={titleId} className={CARD}>
@@ -81,62 +252,49 @@ export function ProviderLimitsCard({
           </h4>
           <span className={CHIP}>{auth.auth_mode} rail</span>
         </div>
-        <div className="flex items-center gap-2">
-          <Button type="button" variant="outline" size="lg" className="px-3"
-            disabled={controller.syncing} aria-label={"Sync limits for " + providerName}
-            onClick={() => void controller.syncNow()}>
-            {controller.syncing ? "Syncing…" : "Sync"}
-          </Button>
-          <Button type="button" variant="outline" size="lg" className="px-3"
-            aria-expanded={expanded} aria-controls={panelId}
-            onClick={() => setExpanded((previous) => !previous)}>
-            {expanded ? "Hide detail" : "Show detail"}
-          </Button>
-        </div>
+        {cardActions({
+          providerId,
+          providerName,
+          manualEligible,
+          syncing: controller.syncing,
+          expanded,
+          panelId,
+          onSync: () => void controller.syncNow(),
+          onOpenModal: setModal,
+          onToggleExpanded: () => setExpanded((previous) => !previous),
+        })}
       </div>
 
-      {controller.error !== null && (
-        <p role="alert" className="rounded border border-[var(--status-danger)]/40 p-2.5 text-[12px]"
-          style={{ color: "var(--status-danger)" }}>
-          {controller.error}
-        </p>
+      {controller.syncNote !== null && (
+        <p role="status" className={LABEL}>{controller.syncNote}</p>
       )}
 
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <div>
-          <div className={LABEL}>Search credit units left</div>
-          <div className={VALUE}>{model.searchHeadline}</div>
-        </div>
-        <div>
-          <div className={LABEL}>Fetch credit units left</div>
-          <div className={VALUE}>{model.fetchHeadline}</div>
-        </div>
-      </div>
-
-      {controller.syncNote !== null && <p role="status" className={LABEL}>{controller.syncNote}</p>}
-      {model.sharedNote !== null && <p className={LABEL}>{model.sharedNote}</p>}
-      {model.notes.length > 0 && (
-        <ul className="space-y-0.5 text-[12px] text-[var(--muted)]">
-          {model.notes.map((note) => <li key={note}>{note}</li>)}
-        </ul>
-      )}
-
-      <ProviderTierBars providerName={providerName} freeTiers={auth.free_tiers}
-        paidTiers={auth.paid_tiers} tierSplitKnown={auth.tier_split_known} />
-      <ProviderRateBars providerName={providerName} progress={auth.rate_progress} />
+      <ProviderCreditSummary providerName={providerName} model={model} />
+      {model.provenanceNote !== null && <p className={LABEL}>{model.provenanceNote}</p>}
 
       {expanded && (
         <div id={panelId} className="space-y-4 border-t border-[var(--border-subtle)] pt-3">
+          <ProviderTierBars providerName={providerName} freeTiers={auth.free_tiers}
+            paidTiers={auth.paid_tiers} tierSplitKnown={auth.tier_split_known} />
+          <ProviderRateBars providerName={providerName} progress={auth.rate_progress}
+            fetchAvailable={fetchAvailable} />
           <ProviderLimitsDetail providerName={providerName} auth={auth} />
-          <CRDGrantForm key={grantKey(auth)} providerName={providerName} authMode={auth.auth_mode}
-            grants={auth.grants} fetchAvailable={canFetch(auth)} saving={controller.saving}
-            saveError={controller.saveError} staleVersion={controller.staleVersion}
-            onSave={controller.saveGrant} onReload={() => void controller.reload()} />
-          <LimitHistory providerName={providerName} events={controller.history}
-            loading={controller.historyLoading} error={controller.historyError}
-            hasMore={controller.hasMoreHistory} onLoadMore={controller.loadMoreHistory} />
         </div>
       )}
+
+      {cardModals({
+        providerId,
+        providerName,
+        modal,
+        manualEligible,
+        unit,
+        defaults: manualDefaults,
+        manual: manualState,
+        controller,
+        auth,
+        fetchAvailable,
+        onClose: () => setModal(null),
+      })}
     </article>
   )
 }
