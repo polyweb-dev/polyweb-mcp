@@ -1,7 +1,7 @@
 ---
 name: simplified-technical-english
 description: Writes and rewrites text in Simplified Technical English (ASD-STE100), a controlled language for clear technical documentation. Use when the user asks for STE, Simplified Technical English, controlled language, or plain technical writing, and when the user asks to write, rewrite, review, or check technical documentation, procedures, manuals, instructions, warnings, or reports.
-license: MIT for the text of this skill. The word list in references/word-list.md comes from the ASD-STE100 dictionary, which is the property of ASD. Refer to NOTICE.md.
+license: MIT for the text of this skill. The word list in references/word-list.md comes from the ASD-STE100 dictionary, which is the property of ASD.
 metadata:
   source-specification: ASD-STE100 Issue 7 (2017-01-25)
 ---
@@ -87,7 +87,7 @@ The two types have different limits. Do not mix the two types in one paragraph.
 
 After you write, check your text. Do these steps:
 
-1. If you can run scripts, run: `python3 scripts/ste_check.py --mode <procedural|descriptive> <file>`.
+1. If you can run scripts, run this command from the repository root: `uv run python scripts/ste_check.py --mode mixed --word-list .agents/skills/simplified-technical-english/references/word-list.md <file>`.
 2. If you cannot run scripts, do a manual scan of the checklist below.
 3. Correct each error.
 4. Check the text again. Stop only when the text has no errors.
@@ -112,7 +112,6 @@ You must also compare your words with `references/word-list.md`.
 - `references/writing-rules.md` — all 53 rules and 4 recommendations, with examples. Read this file when you rewrite a document or when a rule is not clear.
 - `references/word-list.md` — the 869 approved words with their parts of speech and forms.
 - `references/substitutions.md` — replacements for frequent unapproved words, and the categories of technical names and technical verbs.
-- `examples/before-after.md` — examples of text before and after the change to STE.
 
 ## Basis
 
@@ -121,4 +120,3 @@ ASD releases new issues of the specification.
 You can get the specification free of charge from https://www.asd-ste100.org.
 This skill is not an official ASD document.
 This skill cannot make sure that your text obeys the official specification fully.
-Refer to NOTICE.md for the copyright information.

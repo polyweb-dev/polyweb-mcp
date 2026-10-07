@@ -9,13 +9,13 @@ Systematic Behavior-Driven Development (BDD) testing in Python using **Behave** 
 
 ## 1. Execution Path: Choose the Lightest Path
 
-**Workflow**: `Write .feature ──> uv run behave --dry-run (skeletons) ──> Implement features/steps/*.py ──> uv run behave`
+**Workflow**: `Write .feature ──> uv run behave --dry-run (skeletons) ──> Implement tests/bdd/features/steps/*.py ──> uv run behave`
 
 * **Inner Loop (Active Development / Single Scenario)**:
   ```bash
-  uv run behave features/search.feature:14       # Run specific line
-  uv run behave --tags=@smoke                    # Run specific tag
-  uv run behave features/routing.feature         # Run specific feature file
+  uv run behave tests/bdd/features/brave.feature   # Run specific feature file
+  uv run behave tests/bdd/features/quota.feature   # Run another feature file
+  uv run behave --tags=@smoke                      # Run specific tag
   ```
 * **Step Skeleton Discovery (Code Generation)**:
   ```bash
@@ -35,14 +35,16 @@ Systematic Behavior-Driven Development (BDD) testing in Python using **Behave** 
 ## 2. Directory Structure & File Conventions
 
 ```
-features/
+tests/bdd/features/
 ├── environment.py              # Global & scenario lifecycle hooks (setup/teardown)
-├── search.feature              # Declarative Gherkin feature specifications
-├── routing.feature
+├── brave.feature               # Declarative Gherkin feature specifications
+├── quota.feature
 └── steps/                      # Python step definitions
-    ├── search_steps.py         # @given, @when, @then step implementations
-    └── routing_steps.py
+    ├── brave_steps.py          # @given, @when, @then step implementations
+    └── quota_steps.py
 ```
+
+`pyproject.toml` sets `[tool.behave] paths = ["tests/bdd/features"]`. Do not place feature files in a root `features/` directory.
 
 ---
 
@@ -94,7 +96,7 @@ Feature: Provider Routing & Fallbacks
 
 ## 4. Step Implementations & Async Handling
 
-### Typed Step Matchers (`features/steps/*.py`)
+### Typed Step Matchers (`tests/bdd/features/steps/*.py`)
 Behave supports parse formatters: `{name}` (str), `{limit:d}` (int), `{cost:f}` (float), `{word:w}` (single word).
 
 ```python
@@ -140,7 +142,7 @@ def step_given_table(context: Any) -> None:
 
 ---
 
-## 5. Environment Lifecycle Hooks (`features/environment.py`)
+## 5. Environment Lifecycle Hooks (`tests/bdd/features/environment.py`)
 
 Manage async event loops, client sessions, database connections, and cleanup:
 
@@ -195,5 +197,5 @@ def before_tag(context: Any, tag: str) -> None:
 - **Declarative over Imperative**: Express user value and business behavior (`When I route search request`), not UI click sequences or low-level variable assignments.
 - **Tagging Strategy**: Tag scenarios by area (`@search`, `@routing`, `@storage`, `@mcp`) and test speed (`@unit`, `@live`, `@smoke`) for flexible CI execution.
 - **Isolate Scenarios**: Scenarios must never depend on the execution order or side-effects of preceding scenarios.
-- **Exempt from Complexity Rules**: Ensure `pyproject.toml` contains `per-file-ignores` for `features/**` (`C901`) to support multi-step validation flows.
+- **Exempt from Complexity Rules**: `pyproject.toml` contains `per-file-ignores` for `tests/**` (`C901`) to support multi-step validation flows.
 - **Never Run Mutation Tests on BDD**: Mutation testing targets pure, fast unit tests (`tests/`), never end-to-end BDD suites.
