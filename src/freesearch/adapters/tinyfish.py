@@ -36,6 +36,7 @@ from freesearch.models.contracts import (
     UsageEvent,
     UsageOperation,
 )
+from freesearch.models.provider_limits import NativeUsageSnapshot, UsageSyncRequest
 
 __all__ = ["TinyfishAdapter"]
 
@@ -361,6 +362,16 @@ class TinyfishAdapter(ProviderAdapter):
             observed_at=datetime.now(UTC),
             metadata={"cost_usd": Decimal("0")},
         )
+
+    async def usage_snapshot(self, request: UsageSyncRequest) -> NativeUsageSnapshot | None:
+        """Return no native observation: search and fetch have no wallet.
+
+        Tinyfish search and fetch draw no wallet budget. The adapter ignores
+        its Agent and Browser wallet endpoints for these operations. Its rate
+        counters are not funds, so no snapshot exists.
+        """
+
+        return None
 
     async def health(self) -> ProviderHealth:
         return ProviderHealth(
