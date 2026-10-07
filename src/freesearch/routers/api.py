@@ -291,6 +291,10 @@ def create_app(
             await auth.close()
             await close_adapters(routes, client if owns_client else None)
 
+    # The browser origin allowlist reaches the guard, the middleware, and the auth
+    # router through this composition only. An empty allowlist keeps the
+    # programmatic JSON pair and Bearer refresh contract for every client.
+    browser_origins = frozenset(get_settings().auth_browser_origins)
     app = FastAPI(title="FreeSearch", version="0.1.0", lifespan=lifespan)
     app.state.repository = repository
     app.state._routes = routes
@@ -300,6 +304,7 @@ def create_app(
     app.state._control_lock = asyncio.Lock()
     app.state.auth_service = accounts
     app.state._owns_auth_service = owns_auth_service
+    app.state.auth_browser_origins = browser_origins
     # Tracing starts disabled and is enabled by the lifespan once the trace
     # database is known, so tests that never enter the lifespan stay no-op.
     app.state.observability = NO_OP_OBSERVABILITY
@@ -312,6 +317,7 @@ def create_app(
     # request can neither reach an endpoint nor open a provider trace root.
     app.add_middleware(
         BearerAuthMiddleware,
+        browser_origins=browser_origins,
         verify_token=lambda token: _verify_access_token(app, token),
         verify_refresh_token=lambda token: _verify_refresh_token(app, token),
         registration_limit=lambda peer: _reserve_registration(app, peer),

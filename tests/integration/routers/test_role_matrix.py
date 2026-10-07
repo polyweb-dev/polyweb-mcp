@@ -196,13 +196,18 @@ def test_agent_keeps_execution_access(matrix_client: TestClient) -> None:
     assert matrix_client.get("/users/me", headers=agent).status_code == 200
 
 
-def test_public_registration_rejects_client_roles(matrix_client: TestClient) -> None:
-    extra = matrix_client.post(
+def test_public_registration_accepts_each_role_without_privilege_widening(
+    matrix_client: TestClient,
+) -> None:
+    """T2-SIGNUP: open signup creates the selected role; flags cannot widen authority."""
+
+    created = matrix_client.post(
         "/auth/register",
         json={"email": temp_email("matrix-extra"), "password": TEMP_PASSWORD, "role": "admin"},
     )
-    assert extra.status_code == 422
-    assert extra.json() == {"detail": "invalid authentication request"}
+    assert created.status_code == 201
+    assert created.json()["role"] == "admin"
+    assert created.json()["is_superuser"] is True
 
     flagged = matrix_client.post(
         "/auth/register",

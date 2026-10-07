@@ -790,29 +790,32 @@ def step_then_auth_misplaced_401(context: Any) -> None:
 
 @when("I prepare Admin, Developer, and Agent accounts")
 def step_when_auth_prepare_roles(context: Any) -> None:
+    from tests.fixtures.auth import create_temp_user
+
     context.role_pairs = {}
     with _auth_client(context) as client:
-        for role_name, role in (
-            ("admin", UserRole.ADMIN),
-            ("developer", UserRole.DEVELOPER),
-            ("agent", UserRole.AGENT),
-        ):
+        admin_email = f"matrix-admin-{uuid4().hex[:6]}@example.com"
+        registered = client.post(
+            "/auth/register",
+            json={"email": admin_email, "password": _AUTH_PASSWORD, "role": "admin"},
+        )
+        assert registered.status_code == 201
+        assert registered.json()["role"] == "admin"
+        logged_in = client.post(
+            "/auth/jwt/login", data={"username": admin_email, "password": _AUTH_PASSWORD}
+        )
+        assert logged_in.status_code == 200
+        context.role_pairs["admin"] = logged_in.json()
+        for role_name in ("developer", "agent"):
             email = f"matrix-{role_name}-{uuid4().hex[:6]}@example.com"
-            registered = client.post(
-                "/auth/register", json={"email": email, "password": _AUTH_PASSWORD}
+            context.loop.run_until_complete(
+                create_temp_user(
+                    context.repository,
+                    email,
+                    role=UserRole.DEVELOPER if role_name == "developer" else UserRole.AGENT,
+                    password=_AUTH_PASSWORD,
+                )
             )
-            assert registered.status_code == 201
-
-            async def _promote(target_email: str = email, target_role: UserRole = role) -> None:
-                async with context.repository.session() as session:
-                    database = UserDatabase(session, UserRow)
-                    account = await database.get_by_email(target_email)
-                    assert account is not None
-                    await database.set_role(account.id, target_role)
-                    await session.commit()
-
-            if role is not UserRole.AGENT:
-                context.loop.run_until_complete(_promote())
             logged_in = client.post(
                 "/auth/jwt/login", data={"username": email, "password": _AUTH_PASSWORD}
             )
@@ -871,3 +874,506 @@ def step_then_matrix_agent_search(context: Any) -> None:
         )
         assert response.status_code == 200
         assert response.json()["provider"] == "stubby"
+
+
+_BROWSER_ORIGIN = "http://localhost:5177"
+_BROWSER_MARKER = {"Origin": _BROWSER_ORIGIN, "X-FreeSearch-Client": "browser"}
+
+
+def _configure_browser_origins(context: Any) -> None:
+    import os
+
+    from freesearch.configuration.config import get_settings
+
+    previous = os.environ.get("FREESEARCH_AUTH_BROWSER_ORIGINS")
+    os.environ["FREESEARCH_AUTH_BROWSER_ORIGINS"] = f'["{_BROWSER_ORIGIN}"]'
+    get_settings.cache_clear()
+
+    def _restore() -> None:
+        if previous is None:
+            os.environ.pop("FREESEARCH_AUTH_BROWSER_ORIGINS", None)
+        else:
+            os.environ["FREESEARCH_AUTH_BROWSER_ORIGINS"] = previous
+        get_settings.cache_clear()
+
+    cleanups: list[Any] = getattr(context, "enc_cleanups", None) or []
+    context.enc_cleanups = cleanups
+    cleanups.append(_restore)
+
+
+@given("an offline users API with browser cookie transport")
+def step_given_users_browser_api(context: Any) -> None:
+    _configure_auth_secret(context)
+    _configure_browser_origins(context)
+    _open_users_repository(context)
+    context.adapters = [_UsersStubAdapter("stubby")]
+    context.app = create_app(context.adapters, repository=context.repository)
+    context.browser_cookie = None
+
+
+def _browser_cookie_headers(context: Any) -> dict[str, str]:
+    assert context.browser_cookie is not None
+    return {
+        **_BROWSER_MARKER,
+        "Cookie": f"__Secure-freesearch_refresh={context.browser_cookie}",
+    }
+
+
+@when("I log in through the browser")
+def step_when_browser_login(context: Any) -> None:
+    with _auth_client(context) as client:
+        context.browser_login_response = client.post(
+            "/auth/jwt/login",
+            data={"username": context.auth_email, "password": _AUTH_PASSWORD},
+            headers=dict(_BROWSER_MARKER),
+        )
+        if context.browser_login_response.status_code == 200:
+            context.browser_pair = context.browser_login_response.json()
+
+
+@then("the browser login should issue a strict cookie without a JSON refresh credential")
+def step_then_browser_login_cookie(context: Any) -> None:
+    from freesearch.infrastructure.browser_auth import (
+        REFRESH_COOKIE_NAME,
+        REFRESH_COOKIE_PATH,
+    )
+
+    response = context.browser_login_response
+    assert response.status_code == 200
+    body = response.json()
+    assert body["token_type"] == "bearer"
+    assert body["access_token"]
+    assert body["expires_in"] == 900
+    assert "refresh_token" not in body
+    assert "refresh_token" not in response.text
+    assert response.headers["cache-control"] == "no-store"
+    raw = response.headers.get("set-cookie", "")
+    assert raw.startswith(f"{REFRESH_COOKIE_NAME}=")
+    assert f"Path={REFRESH_COOKIE_PATH}" in raw
+    assert "HttpOnly" in raw
+    assert "Secure" in raw
+    assert "SameSite=Strict" in raw
+    assert "Domain=" not in raw
+    context.browser_cookie = raw.split(";", 1)[0].split("=", 1)[1]
+    assert context.browser_cookie != ""
+    assert context.browser_cookie not in response.text
+
+
+@then("the programmatic login should set no cookie")
+def step_then_programmatic_no_cookie(context: Any) -> None:
+    assert "set-cookie" not in context.login_response.headers
+    assert context.login_response.json()["refresh_token"]
+
+
+@when("I refresh through the browser cookie")
+def step_when_browser_refresh(context: Any) -> None:
+    context.browser_first_cookie = context.browser_cookie
+    with _auth_client(context) as client:
+        context.browser_refresh_response = client.post(
+            "/auth/jwt/refresh", headers=_browser_cookie_headers(context)
+        )
+        if context.browser_refresh_response.status_code == 200:
+            context.browser_rotated = context.browser_refresh_response.json()
+            raw = context.browser_refresh_response.headers.get("set-cookie", "")
+            context.browser_rotated_cookie = raw.split(";", 1)[0].split("=", 1)[1]
+
+
+@then("the browser refresh should rotate the cookie once")
+def step_then_browser_refresh_rotated(context: Any) -> None:
+    response = context.browser_refresh_response
+    assert response.status_code == 200
+    assert response.json()["access_token"]
+    assert "refresh_token" not in response.json()
+    assert response.headers["cache-control"] == "no-store"
+    assert context.browser_rotated_cookie != context.browser_first_cookie
+    assert context.browser_rotated_cookie not in response.text
+    context.browser_cookie = context.browser_rotated_cookie
+
+
+@when("I reuse the consumed browser cookie")
+def step_when_browser_reuse(context: Any) -> None:
+    with _auth_client(context) as client:
+        context.browser_reuse_response = client.post(
+            "/auth/jwt/refresh",
+            headers={
+                **_BROWSER_MARKER,
+                "Cookie": f"__Secure-freesearch_refresh={context.browser_first_cookie}",
+            },
+        )
+
+
+@then("the consumed browser reuse should fail with HTTP 401 and expire the cookie")
+def step_then_browser_reuse_401(context: Any) -> None:
+    response = context.browser_reuse_response
+    assert response.status_code == 401
+    raw = response.headers.get("set-cookie", "")
+    assert "Max-Age=0" in raw
+    assert "Path=/auth/jwt/refresh" in raw
+    assert context.browser_first_cookie not in response.text
+
+
+@then("the rotated browser credentials should fail at once")
+def step_then_browser_rotated_dead(context: Any) -> None:
+    with _auth_client(context) as client:
+        stale = client.post(
+            "/auth/jwt/refresh",
+            headers={
+                **_BROWSER_MARKER,
+                "Cookie": f"__Secure-freesearch_refresh={context.browser_rotated_cookie}",
+            },
+        )
+        assert stale.status_code == 401
+        probe = client.get(
+            "/users/me",
+            headers={"Authorization": f"Bearer {context.browser_rotated['access_token']}"},
+        )
+        assert probe.status_code == 401
+
+
+@when("I refresh with an invalid Origin")
+def step_when_browser_invalid_origin(context: Any) -> None:
+    with _auth_client(context) as client:
+        context.browser_forged_response = client.post(
+            "/auth/jwt/refresh",
+            headers={
+                "Origin": "https://evil.example.com",
+                "X-FreeSearch-Client": "browser",
+                "Cookie": f"__Secure-freesearch_refresh={context.browser_cookie}",
+            },
+        )
+
+
+@then("the invalid Origin refresh should fail with HTTP 403 without cookie deletion")
+def step_then_browser_forged_403(context: Any) -> None:
+    response = context.browser_forged_response
+    assert response.status_code == 403
+    assert "set-cookie" not in response.headers
+    assert context.browser_cookie not in response.text
+    with _auth_client(context) as client:
+        live = client.post("/auth/jwt/refresh", headers=_browser_cookie_headers(context))
+        assert live.status_code == 200
+        raw = live.headers.get("set-cookie", "")
+        context.browser_cookie = raw.split(";", 1)[0].split("=", 1)[1]
+
+
+@when("I log out through the browser cookie")
+def step_when_browser_logout(context: Any) -> None:
+    with _auth_client(context) as client:
+        context.browser_logout_response = client.request(
+            "DELETE", "/auth/jwt/refresh", headers=_browser_cookie_headers(context)
+        )
+
+
+@then("the browser logout should revoke the family and expire the cookie")
+def step_then_browser_logout_ok(context: Any) -> None:
+    response = context.browser_logout_response
+    assert response.status_code == 204
+    assert response.headers["cache-control"] == "no-store"
+    raw = response.headers.get("set-cookie", "")
+    assert "Max-Age=0" in raw
+    assert "Path=/auth/jwt/refresh" in raw
+    with _auth_client(context) as client:
+        assert (
+            client.post("/auth/jwt/refresh", headers=_browser_cookie_headers(context)).status_code
+            == 401
+        )
+
+
+def _role_account_id(context: Any, role: str) -> str:
+    with _auth_client(context) as client:
+        me = client.get("/users/me", headers=_role_headers(context, role))
+        assert me.status_code == 200
+        return str(me.json()["id"])
+
+
+@when('I register with role "{role}" as "{email}"')
+def step_when_register_with_role(context: Any, role: str, email: str) -> None:
+    context.auth_email = email
+    context.auth_role = role
+    with _auth_client(context) as client:
+        context.register_response = client.post(
+            "/auth/register", json={"email": email, "password": _AUTH_PASSWORD, "role": role}
+        )
+
+
+@then('the role signup should create "{role}" without tokens')
+def step_then_role_signup_ok(context: Any, role: str) -> None:
+    response = context.register_response
+    assert response.status_code == 201
+    body = response.json()
+    assert body["email"] == context.auth_email.lower()
+    assert body["role"] == role
+    assert body["is_active"] is True
+    assert body["is_superuser"] is (role == "admin")
+    assert "access_token" not in body
+    assert "refresh_token" not in body
+    assert "hashed_password" not in body
+
+
+@when('I log in with role "{role}" as "{email}"')
+def step_when_login_with_role(context: Any, role: str, email: str) -> None:
+    context.auth_email = email
+    with _auth_client(context) as client:
+        context.login_response = client.post(
+            "/auth/jwt/login", data={"username": email, "password": _AUTH_PASSWORD}
+        )
+        if context.login_response.status_code == 200:
+            context.auth_pair = context.login_response.json()
+
+
+@then('the role login should report "{role}" with a 900-second access token')
+def step_then_role_login_ok(context: Any, role: str) -> None:
+    assert context.login_response.status_code == 200
+    assert context.login_response.json()["access_token"]
+    with _auth_client(context) as client:
+        me = client.get(
+            "/users/me",
+            headers={"Authorization": f"Bearer {context.auth_pair['access_token']}"},
+        )
+    assert me.status_code == 200
+    assert me.json()["role"] == role
+
+
+@when('the Admin provisions an "{role}" account')
+@when('the Admin provisions a "{role}" account')
+def step_when_admin_provisions(context: Any, role: str) -> None:
+    email = f"provision-{role}-{uuid4().hex[:6]}@example.com"
+    context.provision_email = email
+    context.provision_role = role
+    with _auth_client(context) as client:
+        context.provision_response = client.post(
+            "/api/v1/users",
+            json={"email": email, "password": _AUTH_PASSWORD, "role": role},
+            headers=_role_headers(context, "admin"),
+        )
+
+
+@then('the provisioning should create "{role}" without credentials and keep the caller live')
+def step_then_provision_ok(context: Any, role: str) -> None:
+    response = context.provision_response
+    assert response.status_code == 201
+    body = response.json()
+    assert body["email"] == context.provision_email.lower()
+    assert body["role"] == role
+    assert set(body.keys()) == {"id", "email", "role", "is_active", "is_superuser", "is_verified"}
+    assert "access_token" not in body
+    assert "refresh_token" not in body
+    assert "hashed_password" not in body
+    assert "set-cookie" not in response.headers
+    with _auth_client(context) as client:
+        assert client.get("/users/me", headers=_role_headers(context, "admin")).status_code == 200
+        logged_in = client.post(
+            "/auth/jwt/login",
+            data={"username": context.provision_email, "password": _AUTH_PASSWORD},
+        )
+        assert logged_in.status_code == 200
+        me = client.get(
+            "/users/me",
+            headers={"Authorization": f"Bearer {logged_in.json()['access_token']}"},
+        )
+        assert me.status_code == 200
+        assert me.json()["role"] == role
+
+
+@then("a Developer provisioning should fail with HTTP 403")
+def step_then_developer_provision_403(context: Any) -> None:
+    with _auth_client(context) as client:
+        denied = client.post(
+            "/api/v1/users",
+            json={
+                "email": f"blocked-dev-{uuid4().hex[:6]}@example.com",
+                "password": _AUTH_PASSWORD,
+                "role": "agent",
+            },
+            headers=_role_headers(context, "developer"),
+        )
+        assert denied.status_code == 403
+        assert (
+            client.get("/users/me", headers=_role_headers(context, "developer")).status_code == 200
+        )
+
+
+@then("an Agent provisioning should fail with HTTP 403")
+def step_then_agent_provision_403(context: Any) -> None:
+    with _auth_client(context) as client:
+        denied = client.post(
+            "/api/v1/users",
+            json={
+                "email": f"blocked-agent-{uuid4().hex[:6]}@example.com",
+                "password": _AUTH_PASSWORD,
+                "role": "agent",
+            },
+            headers=_role_headers(context, "agent"),
+        )
+        assert denied.status_code == 403
+        assert client.get("/users/me", headers=_role_headers(context, "agent")).status_code == 200
+
+
+@then("an anonymous provisioning should fail with HTTP 401")
+def step_then_anonymous_provision_401(context: Any) -> None:
+    with _auth_client(context) as client:
+        assert (
+            client.post(
+                "/api/v1/users",
+                json={
+                    "email": f"blocked-anon-{uuid4().hex[:6]}@example.com",
+                    "password": _AUTH_PASSWORD,
+                    "role": "agent",
+                },
+            ).status_code
+            == 401
+        )
+
+
+@then("legacy account routes should deny every role with HTTP 403 and keep sessions live")
+def step_then_legacy_deny_all(context: Any) -> None:
+    denied_detail = "account management is not available before project association"
+    with _auth_client(context) as client:
+        me = client.get("/users/me", headers=_role_headers(context, "agent"))
+        assert me.status_code == 200
+        target = str(me.json()["id"])
+        unknown = str(uuid4())
+        for role in ("admin", "developer", "agent"):
+            headers = _role_headers(context, role)
+            for path in (
+                f"/api/v1/users/{target}",
+                f"/api/v1/users/{unknown}",
+                "/api/v1/users/not-a-uuid",
+            ):
+                denied = client.get(path, headers=headers)
+                assert denied.status_code == 403
+                assert denied.json() == {"detail": denied_detail}
+            for path in (f"/api/v1/users/{target}/role", f"/api/v1/users/{unknown}/role"):
+                denied = client.patch(path, json={"role": "agent"}, headers=headers)
+                assert denied.status_code == 403
+                assert denied.json() == {"detail": denied_detail}
+        # No denial changed a role and no denial revoked a family.
+        check = client.get("/users/me", headers=_role_headers(context, "agent"))
+        assert check.status_code == 200
+        assert check.json()["role"] == "agent"
+        for role in ("admin", "developer", "agent"):
+            assert client.get("/users/me", headers=_role_headers(context, role)).status_code == 200
+
+
+@when("I prepare one Admin account")
+def step_when_prepare_one_admin(context: Any) -> None:
+    context.role_pairs = {}
+    email = f"matrix-admin-{uuid4().hex[:6]}@example.com"
+    with _auth_client(context) as client:
+        registered = client.post(
+            "/auth/register", json={"email": email, "password": _AUTH_PASSWORD, "role": "admin"}
+        )
+        assert registered.status_code == 201
+        logged_in = client.post(
+            "/auth/jwt/login", data={"username": email, "password": _AUTH_PASSWORD}
+        )
+        assert logged_in.status_code == 200
+        context.role_pairs["admin"] = logged_in.json()
+
+
+@when("I consume the shared creation limit")
+def step_when_consume_shared_limit(context: Any) -> None:
+    with _auth_client(context) as client:
+        for index in range(4):
+            email = f"limit-share-{index}-{uuid4().hex[:4]}@example.com"
+            if index < 2:
+                response = client.post(
+                    "/auth/register", json={"email": email, "password": _AUTH_PASSWORD}
+                )
+            else:
+                response = client.post(
+                    "/api/v1/users",
+                    json={"email": email, "password": _AUTH_PASSWORD, "role": "agent"},
+                    headers=_role_headers(context, "admin"),
+                )
+            assert response.status_code == 201
+        context.limit_email = f"limit-share-5-{uuid4().hex[:4]}@example.com"
+        context.limit_response = client.post(
+            "/api/v1/users",
+            json={"email": context.limit_email, "password": _AUTH_PASSWORD, "role": "agent"},
+            headers=_role_headers(context, "admin"),
+        )
+
+
+@then("the sixth creation should fail with HTTP 429 and a retry delay")
+def step_then_shared_limit_429(context: Any) -> None:
+    response = context.limit_response
+    assert response.status_code == 429
+    assert response.headers.get("retry-after")
+    assert _AUTH_PASSWORD not in response.text
+
+
+@then("invalid creation roles should fail with safe HTTP 422")
+def step_then_invalid_creation_roles_422(context: Any) -> None:
+    with _auth_client(context) as client:
+        for bad in ("superadmin", "ADMIN", None):
+            rejected = client.post(
+                "/api/v1/users",
+                json={
+                    "email": f"bad-{uuid4().hex[:4]}@example.com",
+                    "password": _AUTH_PASSWORD,
+                    "role": bad,
+                },
+                headers=_role_headers(context, "admin"),
+            )
+            assert rejected.status_code == 422
+            assert rejected.json() == {"detail": "invalid authentication request"}
+
+
+@then("privileged creation fields should fail with safe HTTP 422")
+def step_then_privileged_fields_422(context: Any) -> None:
+    with _auth_client(context) as client:
+        rejected = client.post(
+            "/api/v1/users",
+            json={
+                "email": f"widen-{uuid4().hex[:4]}@example.com",
+                "password": _AUTH_PASSWORD,
+                "role": "agent",
+                "extra": "agent",
+            },
+            headers=_role_headers(context, "admin"),
+        )
+        assert rejected.status_code == 422
+        assert rejected.json() == {"detail": "invalid authentication request"}
+        flagged = client.post(
+            "/api/v1/users",
+            json={
+                "email": f"flag-{uuid4().hex[:4]}@example.com",
+                "password": _AUTH_PASSWORD,
+                "role": "agent",
+                "is_superuser": True,
+            },
+            headers=_role_headers(context, "admin"),
+        )
+        assert flagged.status_code == 201
+        assert flagged.json()["role"] == "agent"
+        assert flagged.json()["is_superuser"] is False
+
+
+@then("weak provisioned passwords and duplicate email should fail safely")
+def step_then_weak_and_duplicate_safe(context: Any) -> None:
+    with _auth_client(context) as client:
+        weak = client.post(
+            "/api/v1/users",
+            json={
+                "email": f"weak-{uuid4().hex[:4]}@example.com",
+                "password": "short",
+                "role": "agent",
+            },
+            headers=_role_headers(context, "admin"),
+        )
+        assert weak.status_code == 400
+        assert "short" not in weak.text
+        email = f"dup-bdd-{uuid4().hex[:6]}@example.com"
+        first = client.post(
+            "/api/v1/users",
+            json={"email": email, "password": _AUTH_PASSWORD, "role": "agent"},
+            headers=_role_headers(context, "admin"),
+        )
+        assert first.status_code == 201
+        second = client.post(
+            "/api/v1/users",
+            json={"email": email, "password": _AUTH_PASSWORD, "role": "agent"},
+            headers=_role_headers(context, "admin"),
+        )
+        assert second.status_code == 400

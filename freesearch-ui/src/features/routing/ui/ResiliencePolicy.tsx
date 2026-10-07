@@ -7,11 +7,15 @@ const MAX_DEPTH = 5
  * Resilience policy rows: persisted max-attempts depth and backend timeout disclosure.
  */
 export function ResiliencePolicy() {
-  const { fallbackConfig, updateFallbackConfig } = useFreeSearch()
+  const { fallbackConfig, updateFallbackConfig, canEditControls } = useFreeSearch()
 
   const setDepth = (next: number) => {
     updateFallbackConfig({ maxAttempts: Math.min(MAX_DEPTH, Math.max(MIN_DEPTH, next)) })
   }
+
+  const depthValue = fallbackConfig.enabled
+    ? "Up to " + fallbackConfig.maxAttempts + " fallback hops"
+    : "1 hop (single-shot)"
 
   return (
     <section className="space-y-4 w-full max-w-none">
@@ -37,31 +41,36 @@ export function ResiliencePolicy() {
               Max attempts are persisted for backend use; dispatch is currently single-attempt.
             </span>
           </div>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              aria-label="Decrease cascade depth"
-              onClick={() => setDepth(fallbackConfig.maxAttempts - 1)}
-              disabled={fallbackConfig.maxAttempts <= MIN_DEPTH}
-              className="p-1 rounded border border-[var(--border-subtle)] text-[var(--muted)] hover:text-[var(--text-strong)] transition-colors disabled:opacity-30 motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--signal)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--surface)]"
-            >
-              <Minus className="size-3.5" />
-            </button>
+          {canEditControls ? (
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                aria-label="Decrease cascade depth"
+                onClick={() => setDepth(fallbackConfig.maxAttempts - 1)}
+                disabled={fallbackConfig.maxAttempts <= MIN_DEPTH}
+                className="p-1 rounded border border-[var(--border-subtle)] text-[var(--muted)] hover:text-[var(--text-strong)] transition-colors disabled:opacity-30 motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--signal)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--surface)]"
+              >
+                <Minus className="size-3.5" />
+              </button>
+              <span className="text-[13px] text-[var(--text)] min-w-[140px] text-right tnum">
+                {depthValue}
+              </span>
+              <button
+                type="button"
+                aria-label="Increase cascade depth"
+                onClick={() => setDepth(fallbackConfig.maxAttempts + 1)}
+                disabled={fallbackConfig.maxAttempts >= MAX_DEPTH}
+                className="p-1 rounded border border-[var(--border-subtle)] text-[var(--muted)] hover:text-[var(--text-strong)] transition-colors disabled:opacity-30 motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--signal)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--surface)]"
+              >
+                <Plus className="size-3.5" />
+              </button>
+            </div>
+          ) : (
+            // A role without control-edit access sees the current value only.
             <span className="text-[13px] text-[var(--text)] min-w-[140px] text-right tnum">
-              {fallbackConfig.enabled
-                ? "Up to " + fallbackConfig.maxAttempts + " fallback hops"
-                : "1 hop (single-shot)"}
+              {depthValue}
             </span>
-            <button
-              type="button"
-              aria-label="Increase cascade depth"
-              onClick={() => setDepth(fallbackConfig.maxAttempts + 1)}
-              disabled={fallbackConfig.maxAttempts >= MAX_DEPTH}
-              className="p-1 rounded border border-[var(--border-subtle)] text-[var(--muted)] hover:text-[var(--text-strong)] transition-colors disabled:opacity-30 motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--signal)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--surface)]"
-            >
-              <Plus className="size-3.5" />
-            </button>
-          </div>
+          )}
         </div>
 
         <div className="flex items-center justify-between py-3 gap-4">

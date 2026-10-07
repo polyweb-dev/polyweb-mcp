@@ -6,7 +6,18 @@ import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { MemoryRouter, useLocation } from "react-router"
 import App from "@/App"
-import { installFetchStub, ok, err } from "@/test/fetchMock"
+import { installAuthStub, ok, err } from "@/test/fetchMock"
+import type { FetchHandler } from "@/test/fetchMock"
+import {
+  installFakeChannel,
+  installImmediateLocks,
+  removeLocks,
+} from "@/test/browserStubs"
+import {
+  adminAccountFixture,
+  agentAccountFixture,
+} from "@/test/authFixtures"
+import type { UserAccount } from "@/domains/auth"
 import {
   allProvidersFixture,
   routingConfigFixture,
@@ -56,8 +67,10 @@ function LocationProbe() {
   return <div data-testid="test-location">{location.pathname}</div>
 }
 
-async function renderApp(route = "/playground") {
-  installFetchStub((req) => {
+async function renderApp(route = "/playground", account: UserAccount = adminAccountFixture()) {
+  installImmediateLocks()
+  installFakeChannel()
+  const backendHandler: FetchHandler = (req) => {
     if (req.url === "/api/v1/providers" && req.method === "GET") {
       return ok(allProvidersFixture())
     }
@@ -66,7 +79,8 @@ async function renderApp(route = "/playground") {
     }
     if (req.url.startsWith("/dashboard")) return ok(dashboardFixture())
     return err(404, { detail: "unhandled test route" })
-  })
+  }
+  installAuthStub({ account }, backendHandler)
   const result = render(
     <MemoryRouter initialEntries={[route]}>
       <App />
@@ -87,6 +101,8 @@ const EXPECTED_VIEWS: Array<{ link: string; heading: string; path: string }> = [
   { link: "Usage", heading: "Usage", path: "/usage" },
   { link: "Activity", heading: "Activity", path: "/activity" },
   { link: "Settings", heading: "Settings", path: "/settings" },
+  { link: "Account", heading: "Account", path: "/account" },
+  { link: "Admin", heading: "Account roles", path: "/admin/users" },
 ]
 
 beforeEach(() => {
@@ -94,6 +110,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  removeLocks()
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
 })
@@ -141,8 +158,8 @@ describe("AC-SB-8b: legacy header topbar is gone", () => {
   })
 })
 
-describe("AC-SB-8c (C4, P1-FINAL): five sidebar links swap intact views via the URL", () => {
-  it("sidebar exposes all six workspaces as links with exact route hrefs", async () => {
+describe("AC-SB-8c (C4, P1-FINAL, R-UI): seven sidebar links swap intact views via the URL", () => {
+  it("sidebar exposes all seven workspaces as links with exact route hrefs", async () => {
     await renderApp()
     const nav = screen.getByRole("navigation", { name: "Primary" })
     for (const { link, path } of EXPECTED_VIEWS) {
@@ -202,7 +219,7 @@ describe("AC-SB-8d (C4): shell keeps the link+router contract", () => {
     await renderApp()
     const aside = document.querySelector("aside") as HTMLElement
     const nav = within(aside).getByRole("navigation", { name: "Primary" })
-    expect(within(nav).getAllByRole("link")).toHaveLength(5)
+    expect(within(nav).getAllByRole("link")).toHaveLength(7)
     expect(within(nav).queryByRole("button")).not.toBeInTheDocument()
     expect(within(aside).queryByRole("tab")).not.toBeInTheDocument()
     expect(within(aside).queryByRole("tablist")).not.toBeInTheDocument()
@@ -254,6 +271,8 @@ describe("AC-SB-8d (C4): shell keeps the link+router contract", () => {
       "/usage",
       "/activity",
       "/settings",
+      "/account",
+      "/admin/users",
     ]) {
       expect(routesSource).toContain(`"${routePath}"`)
     }
@@ -343,5 +362,46 @@ describe("AC-SB-8f: App source wires Sidebar into the flex-row shell", () => {
     expect(
       (document.querySelector("aside") as HTMLElement).className
     ).toMatch(/w-16/)
+  })
+})
+
+describe("AC4/AC5 (R-UI): auth session gate filters Admin by role", () => {
+  it("admin direct /admin/users URL renders the creation screen", async () => {
+    await renderApp("/admin/users", adminAccountFixture())
+    await waitFor(() => {
+      expect(
+        within(screen.getByRole("main")).getByRole("heading", {
+          name: "Account roles",
+        })
+      ).toBeInTheDocument()
+    })
+    expect(testPath()).toBe("/admin/users")
+    expect(
+      within(screen.getByRole("navigation", { name: "Primary" })).getByRole(
+        "link",
+        { name: "Admin", exact: true }
+      )
+    ).toBeInTheDocument()
+    expect(screen.getByLabelText("Email")).toBeInTheDocument()
+    expect(screen.getByLabelText("Account role")).toBeInTheDocument()
+    expect(screen.queryByLabelText("Account UUID")).not.toBeInTheDocument()
+  })
+
+  it("agent sees no Admin link and direct /admin/users URL renders no creation form", async () => {
+    await renderApp("/admin/users", agentAccountFixture())
+    await waitFor(() => {
+      expect(
+        screen.getByRole("heading", { name: "Search Playground" })
+      ).toBeInTheDocument()
+    })
+    expect(testPath()).toBe("/playground")
+    expect(
+      within(screen.getByRole("navigation", { name: "Primary" })).queryByRole(
+        "link",
+        { name: "Admin", exact: true }
+      )
+    ).not.toBeInTheDocument()
+    expect(screen.queryByLabelText("Account role")).not.toBeInTheDocument()
+    expect(screen.queryByLabelText("Account UUID")).not.toBeInTheDocument()
   })
 })

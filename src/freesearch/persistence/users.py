@@ -148,11 +148,29 @@ def _affected(result: object) -> int:
     return int(getattr(result, "rowcount", 0) or 0)
 
 
+def _registration_role(value: object) -> UserRole:
+    """Return the requested role, or the default role for an absent or bad value.
+
+    The request schema already accepts the three role values only. This helper is
+    the last gate: a direct caller cannot write a role outside the enum, and a
+    value outside the enum falls back to the least-privileged role instead of
+    widening authority.
+    """
+
+    if value is None:
+        return DEFAULT_REGISTRATION_ROLE
+    try:
+        return UserRole(str(value))
+    except ValueError:
+        return DEFAULT_REGISTRATION_ROLE
+
+
 class UserDatabase(SQLAlchemyUserDatabase[UserRow, UUID]):
     """Library adapter bound to one session, with local-account defaults.
 
-    ``create`` writes only server-chosen provider and privilege values, so a
-    client body can never set a role, a provider, or a privilege flag.
+    ``create`` writes server-chosen provider, active, and verification values. The
+    role comes from the request and must be a role value, and the privilege flag
+    follows that role, so no client field can widen the stored authority.
     """
 
     session: AsyncSession
@@ -167,22 +185,25 @@ class UserDatabase(SQLAlchemyUserDatabase[UserRow, UUID]):
         return await self._get_user(statement)
 
     async def create(self, create_dict: dict[str, Any]) -> UserRow:
-        """Insert a new local account in the Agent role, or raise on conflict.
+        """Insert a new local account in the requested role, or raise on conflict.
 
-        The base adapter commits; a uniqueness conflict must surface as the
-        library's duplicate-account error rather than as a database error, so a
-        concurrent registration loses its race with the library contract.
+        The role and its privilege flag are derived together, so the row can never
+        hold a superuser flag that disagrees with its role. The base adapter
+        commits; a uniqueness conflict must surface as the library's
+        duplicate-account error rather than as a database error, so a concurrent
+        registration loses its race with the library contract.
         """
 
+        role = _registration_role(create_dict.get("role"))
         payload: dict[str, Any] = {
             "email": normalize_email(str(create_dict["email"])),
             "hashed_password": create_dict.get("hashed_password"),
             "is_active": True,
-            "is_superuser": False,
+            "is_superuser": role is UserRole.ADMIN,
             "is_verified": False,
             "auth_provider": AuthProvider.LOCAL.value,
             "auth_provider_id": None,
-            "role": DEFAULT_REGISTRATION_ROLE.value,
+            "role": role.value,
         }
         user = self.user_table(**payload)
         self.session.add(user)

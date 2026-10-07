@@ -4,7 +4,18 @@ import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { MemoryRouter, useLocation } from "react-router"
 import App from "@/App"
-import { installFetchStub, ok, err } from "@/test/fetchMock"
+import { installAuthStub, ok, err } from "@/test/fetchMock"
+import type { FetchHandler } from "@/test/fetchMock"
+import {
+  installFakeChannel,
+  installImmediateLocks,
+  removeLocks,
+} from "@/test/browserStubs"
+import {
+  adminAccountFixture,
+  agentAccountFixture,
+} from "@/test/authFixtures"
+import type { UserAccount } from "@/domains/auth"
 import {
   allProvidersFixture,
   routingConfigFixture,
@@ -47,8 +58,10 @@ function LocationProbe() {
   return <div data-testid="test-location">{location.pathname}</div>
 }
 
-async function renderAt(route: string) {
-  installFetchStub((req) => {
+async function renderAt(route: string, account: UserAccount = adminAccountFixture()) {
+  installImmediateLocks()
+  installFakeChannel()
+  const backendHandler: FetchHandler = (req) => {
     if (req.url === "/api/v1/providers" && req.method === "GET") {
       return ok(allProvidersFixture())
     }
@@ -57,7 +70,8 @@ async function renderAt(route: string) {
     }
     if (req.url.startsWith("/dashboard")) return ok(dashboardFixture())
     return err(404, { detail: "unhandled test route" })
-  })
+  }
+  installAuthStub({ account }, backendHandler)
   const result = render(
     <MemoryRouter initialEntries={[route]}>
       <App />
@@ -106,6 +120,8 @@ const ROUTE_TABLE: Array<{ link: string; heading: string; path: string }> = [
   { link: "Usage", heading: "Usage", path: "/usage" },
   { link: "Activity", heading: "Activity", path: "/activity" },
   { link: "Settings", heading: "Settings", path: "/settings" },
+  { link: "Account", heading: "Account", path: "/account" },
+  { link: "Admin", heading: "Account roles", path: "/admin/users" },
 ]
 
 beforeEach(() => {
@@ -113,6 +129,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  removeLocks()
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
 })
@@ -351,5 +368,37 @@ describe("C4-7: no regression — shell, providers, views", () => {
         .getAllByRole("tab")
         .map((t) => t.textContent)
     ).toEqual(["Providers", "Keys", "Failover"])
+  })
+})
+
+describe("AC4/AC5 (R-UI): auth session gate filters Admin by role", () => {
+  it("admin direct /admin/users URL renders the creation screen", async () => {
+    await renderAt("/admin/users", adminAccountFixture())
+    await expectView("Admin", "Account roles", "/admin/users")
+    expect(screen.getByLabelText("Email")).toBeInTheDocument()
+    expect(screen.getByLabelText("Account role")).toBeInTheDocument()
+    expect(screen.queryByLabelText("Account UUID")).not.toBeInTheDocument()
+  })
+
+  it("agent sees no Admin link and direct /admin/users URL renders no creation form", async () => {
+    await renderAt("/playground", agentAccountFixture())
+    expect(
+      within(screen.getByRole("navigation", { name: "Primary" })).queryByRole(
+        "link",
+        { name: "Admin", exact: true }
+      )
+    ).not.toBeInTheDocument()
+  })
+
+  it("agent direct /admin/users URL is rejected without the creation form", async () => {
+    await renderAt("/admin/users", agentAccountFixture())
+    await waitFor(() => {
+      expect(
+        screen.getByRole("heading", { name: "Search Playground" })
+      ).toBeInTheDocument()
+    })
+    expect(testPath()).toBe("/playground")
+    expect(screen.queryByLabelText("Account role")).not.toBeInTheDocument()
+    expect(screen.queryByLabelText("Account UUID")).not.toBeInTheDocument()
   })
 })

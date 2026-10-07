@@ -6,9 +6,13 @@ import {
   Route,
   Search,
   Settings,
+  ShieldCheck,
+  UserRound,
 } from "lucide-react"
 import { cn } from "cn"
-import { TAB_PATHS, type TabId } from "../routes"
+import { useAuth } from "@/domains/auth"
+import type { UserRole } from "@/domains/auth"
+import { TAB_PATHS, canAccessRoute, type TabId } from "../routes"
 
 interface NavItem {
   id: TabId
@@ -22,6 +26,8 @@ const navItems: NavItem[] = [
   { id: "quotas", label: "Usage", icon: Gauge },
   { id: "activity", label: "Activity", icon: Activity },
   { id: "settings", label: "Settings", icon: Settings },
+  { id: "account", label: "Account", icon: UserRound },
+  { id: "adminUsers", label: "Admin", icon: ShieldCheck },
 ]
 
 interface NavListProps {
@@ -29,10 +35,18 @@ interface NavListProps {
   onNavigate?: () => void
 }
 
+/**
+ * Primary navigation. The list filters with the same permission helper as the
+ * route gate, so a role never sees a link to a page it cannot open.
+ */
 export function NavList({ collapsed, onNavigate }: NavListProps) {
+  const { account } = useAuth()
+  const role: UserRole = account?.role ?? "agent"
+  const visibleItems = navItems.filter((item) => canAccessRoute(item.id, role))
+
   return (
     <nav aria-label="Primary" className="flex flex-1 flex-col gap-1 px-2 py-3">
-      {navItems.map(({ id, label, icon: Icon }) => (
+      {visibleItems.map(({ id, label, icon: Icon }) => (
         <NavLink
           key={id}
           to={TAB_PATHS[id]}

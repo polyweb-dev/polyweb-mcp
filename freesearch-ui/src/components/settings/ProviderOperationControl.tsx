@@ -12,6 +12,8 @@ interface OperationControlProps {
   supported: boolean
   enabled: boolean
   globallyDisabled: boolean
+  /** False for a role without control-edit access: show the value only. */
+  canEdit: boolean
   onToggle: (enabled: boolean) => void
 }
 
@@ -21,6 +23,7 @@ export const OperationControl: React.FC<OperationControlProps> = ({
   supported,
   enabled,
   globallyDisabled,
+  canEdit,
   onToggle,
 }) => {
   if (!supported) {
@@ -40,6 +43,17 @@ export const OperationControl: React.FC<OperationControlProps> = ({
           {providerName} does not support {label.toLowerCase()}
         </TooltipContent>
       </Tooltip>
+    )
+  }
+
+  if (!canEdit) {
+    return (
+      <span
+        className="text-[12px] text-[var(--muted)]"
+        title="Read-only for your role"
+      >
+        {enabled ? "On" : "Off"}
+      </span>
     )
   }
 

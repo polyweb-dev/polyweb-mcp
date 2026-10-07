@@ -10,7 +10,8 @@ import userEvent from "@testing-library/user-event"
 import { readFileSync, existsSync, readdirSync } from "node:fs"
 import path from "node:path"
 import { PlaygroundPage } from "./PlaygroundPage"
-import { PLAYGROUND_PERSIST_KEY } from "@/store/playgroundPersistence"
+import { playgroundPersistKey } from "@/store/playgroundPersistence"
+import { ADMIN_ACCOUNT_ID } from "@/test/authFixtures"
 import { initialPlaygroundState } from "@/store/playgroundSlice"
 import type { SearchResponse } from "@/domains/execution"
 
@@ -43,7 +44,7 @@ function renderWithBackend(
     return err(404, { detail: "unhandled test route" })
   })
   const view = render(
-    <FreeSearchProvider>
+    <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
       <SearchPlayground />
     </FreeSearchProvider>
   )
@@ -419,7 +420,7 @@ function renderPlayground() {
     return err(404, { detail: "unhandled test route" })
   })
   return render(
-    <FreeSearchProvider>
+    <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
       <SearchPlayground />
     </FreeSearchProvider>
   )
@@ -823,7 +824,7 @@ function renderWithBackend(
     return err(404, { detail: "unhandled test route" })
   })
   const view = render(
-    <FreeSearchProvider>
+    <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
       <SearchPlayground />
     </FreeSearchProvider>
   )
@@ -1616,7 +1617,7 @@ function renderWithBackend(
     return err(404, { detail: "unhandled test route" })
   })
   const view = render(
-    <FreeSearchProvider>
+    <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
       <SearchPlayground />
     </FreeSearchProvider>
   )
@@ -1979,7 +1980,7 @@ function renderWithBackend(
     return err(404, { detail: "unhandled test route" })
   })
   const view = render(
-    <FreeSearchProvider>
+    <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
       <SearchPlayground />
     </FreeSearchProvider>
   )
@@ -2406,7 +2407,7 @@ function renderWithBackend(
     return err(404, { detail: "unhandled test route" })
   })
   const view = render(
-    <FreeSearchProvider>
+    <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
       <SearchPlayground />
     </FreeSearchProvider>
   )
@@ -2928,7 +2929,7 @@ function renderWithBackend(
     return err(404, { detail: "unhandled test route" })
   })
   const view = render(
-    <FreeSearchProvider>
+    <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
       <SearchPlayground />
     </FreeSearchProvider>
   )
@@ -3849,7 +3850,7 @@ function renderWithBackend(
     return err(404, { detail: "unhandled test route" })
   })
   const view = render(
-    <FreeSearchProvider>
+    <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
       <SearchPlayground />
     </FreeSearchProvider>
   )
@@ -4412,7 +4413,7 @@ function seedStorage(state: Record<string, unknown>): void {
   })) {
     encoded[field] = JSON.stringify(value)
   }
-  window.localStorage.setItem(PLAYGROUND_PERSIST_KEY, JSON.stringify(encoded))
+  window.localStorage.setItem(playgroundPersistKey(ADMIN_ACCOUNT_ID), JSON.stringify(encoded))
 }
 
 function stubBackend(
@@ -4482,7 +4483,7 @@ describe("PlaygroundPage persistence", () => {
     })
     const stub = refuseNetwork()
     render(
-      <FreeSearchProvider>
+      <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
         <PlaygroundPage />
       </FreeSearchProvider>
     )
@@ -4513,7 +4514,7 @@ describe("PlaygroundPage persistence", () => {
   it("keeps executed search and fetch state across a page remount with the same root store", async () => {
     const stub = stubBackend()
     const { rerender } = render(
-      <FreeSearchProvider>
+      <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
         <PlaygroundPage />
       </FreeSearchProvider>
     )
@@ -4526,13 +4527,13 @@ describe("PlaygroundPage persistence", () => {
 
     // Remount the page while the root provider (and its store) stays mounted.
     rerender(
-      <FreeSearchProvider>
+      <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
         <span data-testid="interstitial" />
       </FreeSearchProvider>
     )
     expect(await screen.findByTestId("interstitial")).toBeInTheDocument()
     rerender(
-      <FreeSearchProvider>
+      <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
         <PlaygroundPage />
       </FreeSearchProvider>
     )
@@ -4558,7 +4559,7 @@ describe("PlaygroundPage persistence", () => {
   it("reloads executed state in a recreated provider from localStorage without refetching", async () => {
     const liveStub = stubBackend()
     const first = render(
-      <FreeSearchProvider>
+      <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
         <PlaygroundPage />
       </FreeSearchProvider>
     )
@@ -4569,7 +4570,7 @@ describe("PlaygroundPage persistence", () => {
     // Wait for the bounded storage adapter to flush the completed run to disk.
     await waitFor(
       () => {
-        expect(window.localStorage.getItem(PLAYGROUND_PERSIST_KEY) ?? "").toContain(
+        expect(window.localStorage.getItem(playgroundPersistKey(ADMIN_ACCOUNT_ID)) ?? "").toContain(
           "reload probe"
         )
       },
@@ -4581,7 +4582,7 @@ describe("PlaygroundPage persistence", () => {
     // through PersistGate with no /search or /fetch request.
     const stub = refuseNetwork()
     render(
-      <FreeSearchProvider>
+      <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
         <PlaygroundPage />
       </FreeSearchProvider>
     )

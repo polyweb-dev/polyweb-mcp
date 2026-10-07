@@ -9,6 +9,7 @@ from pydantic import ValidationError
 
 from freesearch.models.users import UserPrincipal, UserRole
 from freesearch.routers.auth import (
+    BrowserTokenResponse,
     TokenPairResponse,
     UserCreate,
     UserRead,
@@ -103,13 +104,46 @@ async def test_auth_validation_errors_hide_credentials() -> None:
     assert b"SubmittedPass123" not in response.body
 
 
-def test_registration_body_rejects_roles_and_provider_fields() -> None:
+def test_registration_body_accepts_each_role_with_agent_default() -> None:
+    """T2-SIGNUP: public signup accepts each role and defaults to Agent."""
+
+    for role in (UserRole.ADMIN, UserRole.DEVELOPER, UserRole.AGENT):
+        created = UserCreate(
+            email="unit@example.com",
+            password="StrongPass123!x-Unit",
+            role=role,
+        )
+        assert created.role is role
+    assert (
+        UserCreate(email="unit@example.com", password="StrongPass123!x-Unit").role is UserRole.AGENT
+    )
+
+
+def test_registration_body_rejects_invalid_roles_and_provider_fields() -> None:
+    """T2-SIGNUP: null, unknown, and uppercase roles fail with safe validation."""
+
+    for bad in ("superadmin", "ADMIN", None):
+        with pytest.raises(ValidationError):
+            UserCreate(
+                email="unit@example.com",
+                password="StrongPass123!x-Unit",
+                role=bad,  # type: ignore[arg-type]
+            )
     with pytest.raises(ValidationError):
         UserCreate(
             email="unit@example.com",
             password="StrongPass123!x-Unit",
-            role="admin",  # type: ignore[call-arg]
+            role=UserRole.AGENT,
+            extra="agent",  # type: ignore[call-arg]
         )
+    # A library privilege flag stays accepted but never widens the stored row.
+    allowed = UserCreate(
+        email="unit@example.com",
+        password="StrongPass123!x-Unit",
+        role=UserRole.AGENT,
+        is_superuser=True,  # type: ignore[call-arg]
+    )
+    assert allowed.role is UserRole.AGENT
 
 
 def test_token_pair_response_defaults_to_bearer() -> None:
@@ -137,3 +171,66 @@ def test_user_read_carries_role_without_hash() -> None:
 
     assert read.role is UserRole.AGENT
     assert "hashed_password" not in read.model_dump()
+
+
+def test_browser_token_response_omits_refresh_key() -> None:
+    body = BrowserTokenResponse(
+        access_token="access-value",
+        expires_in=900,
+        refresh_expires_in=604800,
+    )
+
+    assert body.token_type == "bearer"
+    assert body.model_dump() == {
+        "access_token": "access-value",
+        "token_type": "bearer",
+        "expires_in": 900,
+        "refresh_expires_in": 604800,
+    }
+    assert "refresh_token" not in body.model_dump()
+    assert "refresh_token" not in body.model_dump_json()
+    assert "access-value" not in repr(body)
+
+
+def test_programmatic_pair_keeps_json_refresh_credential() -> None:
+    pair = TokenPairResponse(
+        access_token="access-value",
+        refresh_token="refresh-value",
+        expires_in=900,
+        refresh_expires_in=604800,
+    )
+
+    assert pair.token_type == "bearer"
+    assert pair.model_dump()["refresh_token"] == "refresh-value"
+
+
+def test_refresh_cookie_helpers_set_strict_scoped_attributes() -> None:
+    from starlette.responses import Response
+
+    from freesearch.infrastructure.browser_auth import (
+        REFRESH_COOKIE_NAME,
+        clear_refresh_cookie,
+        set_refresh_cookie,
+    )
+
+    issued = Response(content="ok")
+    set_refresh_cookie(issued, "opaque-refresh", 604800)
+    raw = issued.headers.get("set-cookie", "")
+
+    assert raw.startswith(f"{REFRESH_COOKIE_NAME}=opaque-refresh; ")
+    assert "Path=/auth/jwt/refresh" in raw
+    assert "HttpOnly" in raw
+    assert "Secure" in raw
+    assert "SameSite=Strict" in raw
+    assert "Domain=" not in raw
+
+    expired = Response(content="ok")
+    clear_refresh_cookie(expired)
+    deleted = expired.headers.get("set-cookie", "")
+
+    assert deleted.startswith(f"{REFRESH_COOKIE_NAME}=; ")
+    assert "Path=/auth/jwt/refresh" in deleted
+    assert "Max-Age=0" in deleted
+    assert "HttpOnly" in deleted
+    assert "Secure" in deleted
+    assert "SameSite=Strict" in deleted

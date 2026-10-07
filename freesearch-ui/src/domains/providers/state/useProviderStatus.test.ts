@@ -65,6 +65,7 @@ describe("useProviderStatus operation toggle persistence", () => {
           setProvidersLoading,
           setProvidersError,
           showToast,
+          canReadControls: true,
         })
       )
 
@@ -111,6 +112,7 @@ describe("useProviderStatus operation toggle persistence", () => {
           setProvidersLoading,
           setProvidersError,
           showToast,
+          canReadControls: true,
         })
       )
 
@@ -127,6 +129,53 @@ describe("useProviderStatus operation toggle persistence", () => {
 
       expect(loadOperationToggles().exa?.fetchEnabled).toBe(false)
       expect(providersState[0].fetchEnabled).toBe(false)
+    })
+
+    it("returns an empty catalog with clear flags when canReadControls is false", async () => {
+      let providersState: ProviderConfig[] = [
+        {
+          id: "exa",
+          name: "Exa",
+          capabilities: ["search", "fetch"],
+          priority: 1,
+          globalEnabled: true,
+          searchEnabled: true,
+          fetchEnabled: true,
+          hasKey: true,
+        } as ProviderConfig,
+      ]
+
+      const setProviders = vi.fn((update) => {
+        if (typeof update === "function") {
+          providersState = update(providersState)
+        } else {
+          providersState = update
+        }
+      })
+      const setProvidersLoading = vi.fn()
+      const setProvidersError = vi.fn()
+      const showToast = vi.fn()
+
+      const listProvidersSpy = vi.spyOn(apiService, "listProviders")
+
+      const { result } = renderHook(() =>
+        useProviderStatus({
+          setProviders,
+          setProvidersLoading,
+          setProvidersError,
+          showToast,
+          canReadControls: false,
+        })
+      )
+
+      await act(async () => {
+        await result.current.refreshProviders()
+      })
+
+      expect(listProvidersSpy).not.toHaveBeenCalled()
+      expect(providersState).toEqual([])
+      expect(setProvidersLoading).toHaveBeenCalledWith(false)
+      expect(setProvidersError).toHaveBeenCalledWith(null)
     })
   })
 })

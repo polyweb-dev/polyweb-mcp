@@ -23,6 +23,9 @@ export interface FreeSearchContextType {
   providers: ProviderConfig[]
   providersLoading: boolean
   providersError: string | null
+  /** Role capability flags from the composition. */
+  canReadControls: boolean
+  canEditControls: boolean
   fallbackConfig: FallbackConfig
   routingLoading: boolean
   routingError: string | null

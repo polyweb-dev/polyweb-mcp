@@ -186,6 +186,25 @@ uv run freesearch-mcp
 `FREESEARCH_API_PORT` and `FREESEARCH_MCP_PORT` in the gitignored `.env` file
 supply the binds. A missing port stops that transport at startup.
 
+### Setup of the account secret
+
+The account routes need one signing key. Set `FREESEARCH_AUTH_JWT_SECRET` in the
+gitignored `.env` file, or export it in the shell before the launch. Generate a
+value with at least 32 random bytes:
+
+```powershell
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+
+An absent, empty, or short value leaves every account route at HTTP 503. The
+browser then shows its configuration state message instead of a sign-in form, and
+it names this variable in that message. `POST /auth/register`,
+`POST /auth/jwt/login`, `POST /api/v1/users`, and the refresh route all answer
+503 until the value is present and the API process restarts.
+
+Keep the real value in the local environment file and out of the commit, the
+logs, and the browser. `.env.example` holds the empty placeholder only.
+
 | Check | Command | Result |
 | :--- | :--- | :--- |
 | Format | `uv run ruff format --check src tests` | `205 files already formatted` |
@@ -212,11 +231,125 @@ cases:
 
 ---
 
-## 9. Release boundary
+## 9. Browser refresh transport (Users UI, turn 1)
 
-This release covers the backend only. The user accepted UI work as a later
-cycle. The commit holds the backend slice, the migration, and this note. Local
-secrets and the local environment file stay outside the commit.
+The API answers two credential transports on the same auth routes.
+
+A request without browser evidence keeps the programmatic contract. The response
+holds one JSON credential pair, and `POST /auth/jwt/refresh` accepts the opaque
+refresh credential in the `Authorization` header. The MCP transport and every
+API client keep that contract.
+
+A request with browser evidence keeps the refresh credential in one strict
+cookie. The cookie name is `__Secure-freesearch_refresh`, and the cookie path is
+`/auth/jwt/refresh`. The cookie uses `HttpOnly`, `Secure`, and `SameSite=Strict`,
+and it carries no `Domain` attribute, so it stays host-only. The browser response
+omits the `refresh_token` key. The guard accepts this cookie on the refresh route
+only, so no cookie authenticates an ordinary API or MCP call.
+
+Browser evidence needs one exact allowed origin and the `X-FreeSearch-Client:
+browser` marker. Set `FREESEARCH_AUTH_BROWSER_ORIGINS` to the exact origin list.
+An empty list disables browser cookie transport. A failed evidence check returns
+HTTP 403 before any credential issue, rotation, or family revocation. The cookie
+is host-only, so it ignores the port: use a separate browser context or a
+distinct local host name for concurrent worktrees.
+
+The browser client reaches the account routes through the same-origin Vite
+proxy. It keeps the access credential in memory only, and it renews that
+credential under one Web Lock for the origin. `DELETE /auth/jwt/refresh` ends a
+browser session after the access credential expires.
+
+HTTPS is mandatory outside loopback development. A `Secure` cookie needs a
+secure context, and the browser rejects it over cleartext.
+
+The login, register, account, and account-creation screens, and per-account
+playground storage, follow in the later sections of this document. This turn
+claims no XSS protection and no CSRF protection beyond the exact origin check,
+the client marker, and the strict cookie.
+
+---
+
+## 10. Browser client (Users UI, turn 2)
+
+The dashboard client now owns a session.
+
+`/login` and `/register` stay outside the protected workspace, so an anonymous
+visitor mounts no control read. Every other path passes one session gate. The
+gate completes one cookie restore and one `GET /users/me` before it mounts the
+business providers, and it shows a retry view when the restore fails for a
+network or server reason. An anonymous deep link returns to `/login` with the
+internal destination, and the login screen accepts a destination from the
+current route set only.
+
+The client keeps the access credential in module memory. It holds no credential
+in Redux, in `redux-persist`, in `localStorage`, in `sessionStorage`, in
+`IndexedDB`, in a URL, or in browser history. One refresh promise serves every
+caller in a tab, and one Web Lock serializes cookie rotation across the tabs of
+one origin. A `BroadcastChannel` carries a session-change hint only. A browser
+without Web Locks or `BroadcastChannel` receives a compatibility error before
+any cookie request.
+
+`POST /api/v1/users` creates one standalone account for an Admin caller and
+returns the safe projection of that new account. A Developer, an Agent, and an
+anonymous caller receive HTTP 403 or HTTP 401 before any creation. The legacy
+`GET /api/v1/users/{user_id}` and `PATCH /api/v1/users/{user_id}/role` paths stay
+registered as compatibility boundaries, and they deny every authenticated caller.
+
+One permission helper serves the navigation filter and the route gate. An Agent
+sees the Playground, the Activity view, and the Account view. A Developer and an
+Admin also see the Routing, the Usage, and the Settings views. Only an Admin
+reaches the account-creation screen.
+
+The playground snapshot now uses one key per account:
+`freesearch:playground:v1:<account-uuid>`. The client discards the legacy
+unowned snapshot without assigning it to an account, and it remounts the store
+when the account changes. This isolation prevents accidental cross-account
+rehydration through this UI. It does not protect stored results against local
+device access or against a script that runs in the page, and the stored results
+stay unencrypted.
+
+---
+
+## 11. Open signup and account provisioning (Users UI, turn 2)
+
+Signup is open for all three roles.
+
+The register screen offers `Admin`, `Developer`, and `Agent`, and it starts on
+`Agent`. The server accepts each role value in every deployment, including
+localhost. An omitted role keeps the Agent default, so an older client holds its
+current contract. The server keeps the accepted password rule, the 4096-byte body
+cap, and the five-per-peer and 100-per-deployment attempt limits of public
+registration.
+
+The account model is a provisioning model, as in AWS and Azure. An Admin creates
+new accounts of all three roles through the account-creation screen. One Admin
+holds no authority over an existing account: the creation screen loads no target
+and changes no stored role. The legacy lookup and role-change paths return HTTP
+403 with the detail `account management is not available before project
+association` for every authenticated caller, including an Admin and a caller that
+names itself. That denial reads no account and revokes no session family.
+
+The authenticated route shares the public attempt counters. It reserves one
+attempt before any password hash work, and it starts no reservation for a
+forbidden non-Admin request. A duplicate email and an invalid password return the
+current registration errors. A storage failure returns HTTP 503.
+
+Creation stays standalone in this cycle. The repository has no project identity
+and no membership seam, so an account has no project membership and no
+association with another account. Project association follows in a later cycle.
+
+The login and register screens reuse the current palette, type, button, field,
+card, and footer classes. This slice adds no component library and no visual
+system.
+
+---
+
+## 12. Release boundary
+
+This release covers the backend slice, the browser refresh transport, the browser
+client, the role permissions of the control views, and the open-signup and
+provisioning policy of this cycle. Local secrets and the local environment file
+stay outside the commit.
 
 The commit gate needs the API end-to-end suites, the complete offline suite, the
 static checks, and Reviewer acceptance.

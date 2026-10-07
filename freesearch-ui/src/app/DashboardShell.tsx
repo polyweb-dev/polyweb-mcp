@@ -7,8 +7,12 @@ import { RoutingEngine } from "@/components/routing/RoutingEngine"
 import { QuotaAnalytics } from "@/components/quota/QuotaAnalytics"
 import { ActivityPage } from "@/features/activity/ui/ActivityPage"
 import { SettingsView } from "@/components/settings/SettingsView"
+import { AccountPage } from "@/features/auth/ui/AccountPage"
+import { AdminUsersPage } from "@/features/users/ui/AdminUsersPage"
 import { ToastContainer } from "@/components/common/ToastContainer"
-import { workspaceRoutes, type TabId } from "./routes"
+import { useAuth } from "@/domains/auth"
+import type { UserRole } from "@/domains/auth"
+import { TAB_PATHS, canAccessRoute, workspaceRoutes, type TabId } from "./routes"
 
 const routeElements: Record<TabId, ReactNode> = {
   playground: <PlaygroundPage />,
@@ -16,9 +20,22 @@ const routeElements: Record<TabId, ReactNode> = {
   quotas: <QuotaAnalytics />,
   activity: <ActivityPage />,
   settings: <SettingsView />,
+  account: <AccountPage />,
+  adminUsers: <AdminUsersPage />,
 }
 
+/**
+ * Route gate of the workspace.
+ *
+ * One permission helper serves the navigation filter and this gate, so a hidden
+ * link and a rejected direct URL can never disagree. An unauthorized path
+ * redirects to the workspace entry route instead of rendering the page. The
+ * legacy root, `/providers`, and unknown-path redirects stay verbatim.
+ */
 export function DashboardShell() {
+  const { account } = useAuth()
+  const role: UserRole = account?.role ?? "agent"
+
   return (
     <div
       className="flex min-h-screen flex-row font-sans"
@@ -32,7 +49,17 @@ export function DashboardShell() {
             <Route path="/" element={<Navigate to="/playground" replace />} />
             <Route path="/providers" element={<Navigate to="/settings" replace />} />
             {workspaceRoutes.map(({ id, path }) => (
-              <Route key={id} path={path} element={routeElements[id]} />
+              <Route
+                key={id}
+                path={path}
+                element={
+                  canAccessRoute(id, role) ? (
+                    routeElements[id]
+                  ) : (
+                    <Navigate to={TAB_PATHS.playground} replace />
+                  )
+                }
+              />
             ))}
             <Route path="*" element={<Navigate to="/playground" replace />} />
           </Routes>

@@ -292,3 +292,116 @@ def test_login_route_skips_the_registration_counter() -> None:
     status, _, _ = _run(guard, method="POST", path="/auth/jwt/login", body_chunks=[b"{}"])
     assert status == 200
     assert calls == []
+
+
+_BROWSER_ORIGIN = "http://localhost:5177"
+
+
+def _browser_cookie_headers(token: str = "good-refresh") -> list[tuple[bytes, bytes]]:
+    return [
+        (b"origin", _BROWSER_ORIGIN.encode("ascii")),
+        (b"x-freesearch-client", b"browser"),
+        (b"cookie", f"__Secure-freesearch_refresh={token}".encode("ascii")),
+    ]
+
+
+def test_cookie_routes_accept_valid_browser_cookie() -> None:
+    for method in ("POST", "DELETE"):
+        guard, seen = _guard(browser_origins=frozenset({_BROWSER_ORIGIN}))
+        status, _, _ = _run(
+            guard,
+            method=method,
+            path="/auth/jwt/refresh",
+            headers=_browser_cookie_headers(),
+        )
+        assert status == 200
+        assert seen["state_user"] == _PRINCIPAL
+
+
+def test_cookie_transport_needs_operator_allowlist() -> None:
+    guard, _ = _guard()
+    status, headers, _ = _run(
+        guard, method="POST", path="/auth/jwt/refresh", headers=_browser_cookie_headers()
+    )
+    assert status == 401
+    assert headers[b"www-authenticate"] == b"Bearer"
+    assert b"set-cookie" not in headers
+
+
+def test_cookie_evidence_failure_returns_403_without_cookie_deletion() -> None:
+    guard, _ = _guard(browser_origins=frozenset({_BROWSER_ORIGIN}))
+    status, headers, body = _run(
+        guard,
+        method="POST",
+        path="/auth/jwt/refresh",
+        headers=[(b"origin", b"https://evil.example.com"), *_browser_cookie_headers()[1:]],
+    )
+    assert status == 403
+    assert b"browser request rejected" in body
+    assert b"set-cookie" not in headers
+
+    guard, _ = _guard(browser_origins=frozenset({_BROWSER_ORIGIN}))
+    status, _, _ = _run(
+        guard,
+        method="POST",
+        path="/auth/jwt/refresh",
+        headers=[(b"cookie", b"__Secure-freesearch_refresh=good-refresh")],
+    )
+    assert status == 403
+
+
+def test_invalid_cookie_returns_401_and_expires_cookie() -> None:
+    guard, _ = _guard(browser_origins=frozenset({_BROWSER_ORIGIN}))
+    status, headers, _ = _run(
+        guard,
+        method="POST",
+        path="/auth/jwt/refresh",
+        headers=_browser_cookie_headers("bad-refresh"),
+    )
+    assert status == 401
+    assert headers[b"www-authenticate"] == b"Bearer"
+    deletion = headers[b"set-cookie"].decode("ascii")
+    assert deletion.startswith("__Secure-freesearch_refresh=; ")
+    assert "Max-Age=0" in deletion
+    assert "Path=/auth/jwt/refresh" in deletion
+
+
+def test_cookie_never_authenticates_ordinary_routes() -> None:
+    guard, _ = _guard(browser_origins=frozenset({_BROWSER_ORIGIN}))
+    status, _, _ = _run(guard, method="GET", path="/stats", headers=_browser_cookie_headers())
+    assert status == 401
+
+    guard, _ = _guard(browser_origins=frozenset({_BROWSER_ORIGIN}))
+    status, _, _ = _run(guard, method="POST", path="/search", headers=_browser_cookie_headers())
+    assert status == 401
+
+
+def test_provisioning_body_cap_applies_before_dispatch() -> None:
+    """T2-PROVISION: POST /api/v1/users carries the 4096-byte cap with Bearer auth."""
+
+    guard, seen = _guard()
+    status, _, body = _run(
+        guard,
+        method="POST",
+        path="/api/v1/users",
+        headers=_bearer("good-access"),
+        body_chunks=[b"X" * 4097],
+    )
+    assert status == 413
+    assert body == b'{"detail": "request body is too large"}'
+    assert "state_user" not in seen
+
+    guard, seen = _guard()
+    status, _, _ = _run(
+        guard,
+        method="POST",
+        path="/api/v1/users",
+        headers=_bearer("good-access"),
+        body_chunks=[b"Y" * 4096],
+    )
+    assert status == 200
+    assert seen["body"] == b"Y" * 4096
+
+    guard, _ = _guard()
+    status, _, _ = _run(guard, method="POST", path="/api/v1/users", headers=_bearer("bad-access"))
+    assert status == 401

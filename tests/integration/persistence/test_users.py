@@ -66,6 +66,63 @@ async def test_create_normalizes_email_and_defaults_to_agent(
     assert verified is True
 
 
+async def test_create_stores_each_role_with_consistent_superuser(
+    repository: SQLiteRepository,
+) -> None:
+    """T2-SIGNUP: create derives the role and the superuser flag together."""
+
+    for role, superuser in (
+        (UserRole.ADMIN, True),
+        (UserRole.DEVELOPER, False),
+        (UserRole.AGENT, False),
+    ):
+        async with repository.session() as session:
+            database = UserDatabase(session, UserRow)
+            user = await database.create(
+                {
+                    "email": temp_email(f"persist-{role.value}"),
+                    "hashed_password": _HELPER.hash(TEMP_PASSWORD),
+                    "role": role.value,
+                }
+            )
+        assert user.role == role.value
+        assert user.is_superuser is superuser
+        assert user.is_active is True
+        assert user.is_verified is False
+
+
+async def test_create_ignores_privilege_flags_and_bad_roles(
+    repository: SQLiteRepository,
+) -> None:
+    """T2-SIGNUP: client flags cannot widen authority; bad roles fall back to Agent."""
+
+    async with repository.session() as session:
+        database = UserDatabase(session, UserRow)
+        flagged = await database.create(
+            {
+                "email": temp_email("flagged"),
+                "hashed_password": _HELPER.hash(TEMP_PASSWORD),
+                "role": "agent",
+                "is_superuser": True,
+            }
+        )
+    assert flagged.role == UserRole.AGENT.value
+    assert flagged.is_superuser is False
+
+    for bad in ("superadmin", "ADMIN", None):
+        async with repository.session() as session:
+            database = UserDatabase(session, UserRow)
+            fallback = await database.create(
+                {
+                    "email": temp_email("fallback"),
+                    "hashed_password": _HELPER.hash(TEMP_PASSWORD),
+                    "role": bad,
+                }
+            )
+        assert fallback.role == UserRole.AGENT.value
+        assert fallback.is_superuser is False
+
+
 async def test_get_by_email_is_case_insensitive(repository: SQLiteRepository) -> None:
     await _create(repository, "Agent@Example.com")
 

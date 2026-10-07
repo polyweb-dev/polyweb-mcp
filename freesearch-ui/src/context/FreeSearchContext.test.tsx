@@ -4,6 +4,7 @@ import { renderHook, waitFor, act } from "@testing-library/react"
 import { FreeSearchProvider } from "./FreeSearchContext"
 import { useFreeSearch } from "./useFreeSearch"
 import { installFetchStub, ok, err, deferred, type FetchStub } from "@/test/fetchMock"
+import { ADMIN_ACCOUNT_ID, AGENT_ACCOUNT_ID } from "@/test/authFixtures"
 import {
   allProvidersFixture,
   routingConfigFixture,
@@ -29,7 +30,9 @@ import {
  */
 
 const wrapper = ({ children }: { children: React.ReactNode }) => (
-  <FreeSearchProvider>{children}</FreeSearchProvider>
+  <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
+    {children}
+  </FreeSearchProvider>
 )
 
 interface FakeBackend {
@@ -1286,5 +1289,154 @@ describe("FreeSearchContext Redux-backed runner lifecycle", () => {
     expect(result.current.fetchError).toBeNull()
     expect(result.current.isSearching).toBe(false)
     expect(result.current.isFetching).toBe(false)
+  })
+})
+
+/**
+ * Agent role without control reads: each control-read refresh returns before
+ * its request (empty catalog, local routing defaults, empty telemetry, clear
+ * busy flags), so startup makes no control request and the Agent receives no
+ * HTTP 403. Search/fetch stay available.
+ */
+describe("FreeSearchContext Agent without control reads", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  const agentWrapper = ({ children }: { children: React.ReactNode }) => (
+    <FreeSearchProvider
+      accountId={AGENT_ACCOUNT_ID}
+      canReadControls={false}
+      canEditControls={false}
+    >
+      {children}
+    </FreeSearchProvider>
+  )
+
+  function installAgentBackend(server: FakeBackend, statuses: number[]): FetchStub {
+    const record = (response: Response): Response => {
+      statuses.push(response.status)
+      return response
+    }
+    return installFetchStub((req) => {
+      if (req.url === "/api/v1/providers" && req.method === "GET") {
+        return record(ok(server.providers))
+      }
+      if (req.url === "/api/v1/routing/config" && req.method === "GET") {
+        return record(ok(server.routing))
+      }
+      if (req.url.startsWith("/dashboard") && req.method === "GET") {
+        return record(ok(server.dashboard))
+      }
+      if (req.url === "/search" && req.method === "POST") {
+        return record(ok(server.searchResponse))
+      }
+      if (req.url === "/fetch" && req.method === "POST") {
+        return record(ok(server.fetchResponse))
+      }
+      return record(err(404, { detail: `unhandled test route ${req.method} ${req.url}` }))
+    })
+  }
+
+  function controlReads(stub: FetchStub): number {
+    return stub.requests.filter(
+      (request) =>
+        request.method === "GET" &&
+        (request.url === "/api/v1/providers" ||
+          request.url === "/api/v1/routing/config" ||
+          request.url.startsWith("/dashboard"))
+    ).length
+  }
+
+  async function mountAgent(server?: FakeBackend) {
+    const backend = server ?? createServer()
+    const statuses: number[] = []
+    const stub = installAgentBackend(backend, statuses)
+    const utils = renderHook(() => useFreeSearch(), { wrapper: agentWrapper })
+    await waitFor(() => {
+      expect(utils.result.current.providersLoading).toBe(false)
+    })
+    return { stub, statuses, backend, ...utils }
+  }
+
+  it("starts with no control request, an empty catalog, and clear busy flags", async () => {
+    const { stub, statuses, result } = await mountAgent()
+
+    expect(
+      stub.requests.filter(
+        (request) => request.method === "GET" && request.url === "/api/v1/providers"
+      )
+    ).toHaveLength(0)
+    expect(
+      stub.requests.filter(
+        (request) => request.method === "GET" && request.url === "/api/v1/routing/config"
+      )
+    ).toHaveLength(0)
+    expect(
+      stub.requests.filter(
+        (request) => request.method === "GET" && request.url.startsWith("/dashboard")
+      )
+    ).toHaveLength(0)
+    expect(controlReads(stub)).toBe(0)
+    expect(result.current.providers).toEqual([])
+    expect(statuses.every((status) => status < 400)).toBe(true)
+    expect(result.current.providersLoading).toBe(false)
+    expect(result.current.routingLoading).toBe(false)
+    expect(result.current.usageLoading).toBe(false)
+    expect(result.current.providersError).toBeNull()
+    expect(result.current.routingError).toBeNull()
+    expect(result.current.usageError).toBeNull()
+    expect(result.current.canReadControls).toBe(false)
+  })
+
+  it("keeps runSearch available in Auto with an empty provider list", async () => {
+    const { stub, statuses, result } = await mountAgent()
+
+    let response!: unknown
+    await act(async () => {
+      response = await result.current.runSearch({
+        query: "agent query",
+        maxResults: 6,
+        timeoutMs: 5000,
+      })
+    })
+
+    const searches = stub.requestsTo("/search")
+    expect(searches).toHaveLength(1)
+    expect(searches[0].method).toBe("POST")
+    expect(searches[0].body).toMatchObject({
+      routing: { mode: "auto", providers: [] },
+    })
+    expect((response as { query: string }).query).toBe("live backend query")
+    expect(result.current.activeSearch?.results[0].title).toBe(
+      "Live backend result one"
+    )
+    expect(controlReads(stub)).toBe(0)
+    expect(statuses.every((status) => status < 400)).toBe(true)
+    expect(result.current.canReadControls).toBe(false)
+  })
+
+  it("keeps runFetch available with no control reads", async () => {
+    const { stub, statuses, result } = await mountAgent()
+
+    await act(async () => {
+      await result.current.runFetch({
+        url: "https://example.com/doc",
+        format: "markdown",
+        timeoutMs: 4000,
+      })
+    })
+
+    const fetches = stub.requestsTo("/fetch")
+    expect(fetches).toHaveLength(1)
+    expect(fetches[0].body).toEqual({
+      url: "https://example.com/doc",
+      max_chars: null,
+      routing: { mode: "auto", providers: [], allow_fallback: true },
+    })
+    expect(result.current.activeFetch?.document.title).toBe("Live document title")
+    expect(result.current.fetchError).toBeNull()
+    expect(controlReads(stub)).toBe(0)
+    expect(statuses.every((status) => status < 400)).toBe(true)
   })
 })

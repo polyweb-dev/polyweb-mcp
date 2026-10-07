@@ -6,6 +6,7 @@ import { FreeSearchProvider } from "@/context/FreeSearchContext"
 import { useFreeSearch } from "@/context/useFreeSearch"
 import { RoutingEngine } from "./RoutingEngine"
 import { installFetchStub, ok, err, deferred } from "@/test/fetchMock"
+import { ADMIN_ACCOUNT_ID } from "@/test/authFixtures"
 import {
   allProvidersFixture,
   routingConfigFixture,
@@ -41,7 +42,7 @@ function renderRouting(
     return err(404, { detail: "unhandled test route" })
   })
   const view = render(
-    <FreeSearchProvider>
+    <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
       <RoutingEngine />
       {withProbe && <RoutingPresetProbe />}
     </FreeSearchProvider>
@@ -263,7 +264,7 @@ describe("RoutingEngine (live backend)", () => {
       return err(404, { detail: "unhandled test route" })
     })
     render(
-      <FreeSearchProvider>
+      <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
         <RoutingEngine />
       </FreeSearchProvider>
     )

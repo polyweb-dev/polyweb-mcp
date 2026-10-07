@@ -5,10 +5,12 @@ import {
   MAX_PERSISTED_PLAYGROUND_BYTES,
   PLAYGROUND_PERSIST_KEY,
   PLAYGROUND_PERSIST_VERSION,
+  createPlaygroundPersistConfig,
   createPlaygroundStorage,
-  playgroundPersistConfig,
+  playgroundPersistKey,
   sanitizePersistedPlayground,
 } from "./playgroundPersistence"
+import { ADMIN_ACCOUNT_ID, AGENT_ACCOUNT_ID } from "@/test/authFixtures"
 import { initialPlaygroundState } from "./playgroundSlice"
 import type { PlaygroundState } from "./playgroundSlice"
 
@@ -102,14 +104,43 @@ describe("playgroundPersistence identity", () => {
   it("uses the exact namespaced key, empty prefix, and version 1", () => {
     expect(PLAYGROUND_PERSIST_KEY).toBe("freesearch:playground:v1")
     expect(PLAYGROUND_PERSIST_VERSION).toBe(1)
-    expect(playgroundPersistConfig.key).toBe("freesearch:playground:v1")
-    expect(playgroundPersistConfig.keyPrefix).toBe("")
-    expect(playgroundPersistConfig.version).toBe(1)
+    const config = createPlaygroundPersistConfig(ADMIN_ACCOUNT_ID)
+    expect(config.key).toBe(`freesearch:playground:v1:${ADMIN_ACCOUNT_ID}`)
+    expect(config.key).toBe(playgroundPersistKey(ADMIN_ACCOUNT_ID))
+    expect(config.keyPrefix).toBe("")
+    expect(config.version).toBe(1)
   })
 
   it("caps persisted snapshots at 2 MiB and names the interrupted-request error", () => {
     expect(MAX_PERSISTED_PLAYGROUND_BYTES).toBe(2 * 1024 * 1024)
     expect(INTERRUPTED_REQUEST_ERROR).toBe("Previous request was interrupted by reload.")
+  })
+
+  it("produces different keys for different account IDs", () => {
+    const adminKey = playgroundPersistKey(ADMIN_ACCOUNT_ID)
+    const agentKey = playgroundPersistKey(AGENT_ACCOUNT_ID)
+    expect(adminKey).not.toBe(agentKey)
+    expect(createPlaygroundPersistConfig(ADMIN_ACCOUNT_ID).key).toBe(adminKey)
+    expect(createPlaygroundPersistConfig(AGENT_ACCOUNT_ID).key).toBe(agentKey)
+    expect(createPlaygroundPersistConfig(ADMIN_ACCOUNT_ID).key).not.toBe(
+      createPlaygroundPersistConfig(AGENT_ACCOUNT_ID).key
+    )
+  })
+
+  it("removes the legacy PLAYGROUND_PERSIST_KEY snapshot from storage while keeping account snapshots", () => {
+    const adminKey = playgroundPersistKey(ADMIN_ACCOUNT_ID)
+    window.localStorage.setItem(PLAYGROUND_PERSIST_KEY, '{"stale":true}')
+    window.localStorage.setItem(adminKey, '{"kept":true}')
+    createPlaygroundPersistConfig(ADMIN_ACCOUNT_ID)
+    expect(window.localStorage.getItem(PLAYGROUND_PERSIST_KEY)).toBeNull()
+    expect(window.localStorage.getItem(adminKey)).toBe('{"kept":true}')
+  })
+
+  it("never reads the legacy key for an account config", async () => {
+    const storage = createPlaygroundStorage()
+    await storage.setItem(PLAYGROUND_PERSIST_KEY, versioned({ query: "legacy query" }))
+    const adminKey = playgroundPersistKey(ADMIN_ACCOUNT_ID)
+    await expect(storage.getItem(adminKey)).resolves.toBeNull()
   })
 })
 

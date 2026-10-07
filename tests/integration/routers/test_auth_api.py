@@ -131,18 +131,85 @@ def test_login_accepts_caseblind_email(auth_client: TestClient) -> None:
 
 
 def test_registration_rejects_extra_fields_and_bad_email(auth_client: TestClient) -> None:
+    """T2-SIGNUP: unknown fields stay rejected while each role is accepted."""
+
     extra = auth_client.post(
         "/auth/register",
-        json={"email": temp_email("extra"), "password": TEMP_PASSWORD, "role": "admin"},
+        json={
+            "email": temp_email("extra"),
+            "password": TEMP_PASSWORD,
+            "role": "agent",
+            "extra": "agent",
+        },
     )
     assert extra.status_code == 422
     assert extra.json() == {"detail": "invalid authentication request"}
+
+    flagged = auth_client.post(
+        "/auth/register",
+        json={
+            "email": temp_email("flagged"),
+            "password": TEMP_PASSWORD,
+            "role": "agent",
+            "is_superuser": True,
+        },
+    )
+    assert flagged.status_code == 201
+    assert flagged.json()["role"] == "agent"
+    assert flagged.json()["is_superuser"] is False
 
     bad_email = auth_client.post(
         "/auth/register", json={"email": "not-an-email", "password": TEMP_PASSWORD}
     )
     assert bad_email.status_code == 422
     assert bad_email.json() == {"detail": "invalid authentication request"}
+
+
+def test_public_registration_creates_each_role_with_safe_projection(
+    auth_client: TestClient,
+) -> None:
+    """T2-SIGNUP: public signup creates the selected role with safe flags."""
+
+    for role, superuser in (("admin", True), ("developer", False), ("agent", False)):
+        email = temp_email(f"public-{role}")
+        created = auth_client.post(
+            "/auth/register",
+            json={"email": email, "password": TEMP_PASSWORD, "role": role},
+        )
+        assert created.status_code == 201
+        body = created.json()
+        assert body["email"] == email.lower()
+        assert body["role"] == role
+        assert body["is_superuser"] is superuser
+        assert body["is_active"] is True
+        assert body["is_verified"] is False
+        assert "access_token" not in body
+        assert "refresh_token" not in body
+        assert "hashed_password" not in body
+        logged_in = auth_client.post(
+            "/auth/jwt/login", data={"username": email, "password": TEMP_PASSWORD}
+        )
+        assert logged_in.status_code == 200
+        me = auth_client.get(
+            "/users/me",
+            headers=raw_auth_headers(logged_in.json()["access_token"]),
+        )
+        assert me.status_code == 200
+        assert me.json()["role"] == role
+
+
+def test_public_registration_rejects_invalid_roles_safely(auth_client: TestClient) -> None:
+    """T2-SIGNUP: null, unknown, and uppercase roles return safe HTTP 422."""
+
+    for bad in ("superadmin", "ADMIN", None):
+        rejected = auth_client.post(
+            "/auth/register",
+            json={"email": temp_email("bad-role"), "password": TEMP_PASSWORD, "role": bad},
+        )
+        assert rejected.status_code == 422
+        assert rejected.json() == {"detail": "invalid authentication request"}
+        assert "superadmin" not in rejected.text
+        assert TEMP_PASSWORD not in rejected.text
 
 
 def test_bad_credentials_share_one_generic_error(auth_client: TestClient) -> None:

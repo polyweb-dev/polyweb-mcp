@@ -157,3 +157,92 @@ Feature: Local user accounts, migration, and settings
     And provider reads should allow Admin and Developer but deny Agent
     And provider mutations should allow Admin but deny Developer and Agent
     And Agent search should succeed
+
+  Scenario: Browser login issues a strict cookie without a JSON refresh credential
+    Given an offline users API with browser cookie transport
+    When I register account "browser-bdd@example.com"
+    Then the registration should create an Agent account without tokens
+    When I log in through the browser
+    Then the browser login should issue a strict cookie without a JSON refresh credential
+
+  Scenario: Non-browser clients keep JSON pairs without cookies
+    Given an offline users API with browser cookie transport
+    When I register account "programmatic-bdd@example.com"
+    Then the registration should create an Agent account without tokens
+    When I log in as the registered account
+    Then the login should return a Bearer pair with a 900-second access token
+    And the programmatic login should set no cookie
+
+  Scenario: Browser refresh rotates the cookie and reuse revokes the family
+    Given an offline users API with browser cookie transport
+    When I register account "browser-rotate-bdd@example.com"
+    Then the registration should create an Agent account without tokens
+    When I log in through the browser
+    Then the browser login should issue a strict cookie without a JSON refresh credential
+    When I refresh through the browser cookie
+    Then the browser refresh should rotate the cookie once
+    When I reuse the consumed browser cookie
+    Then the consumed browser reuse should fail with HTTP 401 and expire the cookie
+    And the rotated browser credentials should fail at once
+
+  Scenario: Browser logout deletes the cookie and invalid Origin keeps the family
+    Given an offline users API with browser cookie transport
+    When I register account "browser-logout-bdd@example.com"
+    Then the registration should create an Agent account without tokens
+    When I log in through the browser
+    Then the browser login should issue a strict cookie without a JSON refresh credential
+    When I refresh with an invalid Origin
+    Then the invalid Origin refresh should fail with HTTP 403 without cookie deletion
+    When I log out through the browser cookie
+    Then the browser logout should revoke the family and expire the cookie
+
+  Scenario: Each role signs up and logs in with its own role
+    Given an offline users API with account auth and stub adapters
+    When I register with role "admin" as "t2-admin-bdd@example.com"
+    Then the role signup should create "admin" without tokens
+    When I register with role "developer" as "t2-developer-bdd@example.com"
+    Then the role signup should create "developer" without tokens
+    When I register with role "agent" as "t2-agent-bdd@example.com"
+    Then the role signup should create "agent" without tokens
+    When I log in with role "admin" as "t2-admin-bdd@example.com"
+    Then the role login should report "admin" with a 900-second access token
+
+  Scenario: Old callers omit the role and still create Agent
+    Given an offline users API with account auth and stub adapters
+    When I register account "t2-omitted-bdd@example.com"
+    Then the registration should create an Agent account without tokens
+
+  Scenario: Admin creates each role without project association
+    Given an offline users API with account auth and stub adapters
+    When I prepare Admin, Developer, and Agent accounts
+    And the Admin provisions an "admin" account
+    Then the provisioning should create "admin" without credentials and keep the caller live
+    When the Admin provisions a "developer" account
+    Then the provisioning should create "developer" without credentials and keep the caller live
+    When the Admin provisions an "agent" account
+    Then the provisioning should create "agent" without credentials and keep the caller live
+
+  Scenario: Other roles cannot provision accounts
+    Given an offline users API with account auth and stub adapters
+    When I prepare Admin, Developer, and Agent accounts
+    Then a Developer provisioning should fail with HTTP 403
+    And an Agent provisioning should fail with HTTP 403
+    And an anonymous provisioning should fail with HTTP 401
+
+  Scenario: Legacy account lookup and role change deny every caller
+    Given an offline users API with account auth and stub adapters
+    When I prepare Admin, Developer, and Agent accounts
+    Then legacy account routes should deny every role with HTTP 403 and keep sessions live
+
+  Scenario: Public and provisioning creation share one limit
+    Given an offline users API with account auth and stub adapters
+    When I prepare one Admin account
+    And I consume the shared creation limit
+    Then the sixth creation should fail with HTTP 429 and a retry delay
+
+  Scenario: Creation input stays safe
+    Given an offline users API with account auth and stub adapters
+    When I prepare one Admin account
+    Then invalid creation roles should fail with safe HTTP 422
+    And privileged creation fields should fail with safe HTTP 422
+    And weak provisioned passwords and duplicate email should fail safely

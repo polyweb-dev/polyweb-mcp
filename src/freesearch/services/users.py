@@ -46,6 +46,7 @@ from freesearch.models.users import (
     REFRESH_TOKEN_LENGTH,
     AuthFamily,
     AuthTokens,
+    UserAccount,
     UserPrincipal,
     UserRole,
 )
@@ -136,18 +137,27 @@ def _new_refresh_token() -> str:
     return secrets.token_urlsafe(REFRESH_TOKEN_BYTES)
 
 
+def _stored_role(value: str) -> UserRole:
+    """Return the stored role, or the least-privileged role for a broken value.
+
+    A value outside the enum must never widen access. One policy therefore
+    governs the request principal and the Admin account projection, and no
+    caller can turn a broken row into a server error.
+    """
+
+    try:
+        return UserRole(value)
+    except ValueError:
+        return UserRole.AGENT
+
+
 def _principal(user: UserRow, family_id: UUID) -> UserPrincipal:
     """Project one account row plus its family id into the request principal."""
 
-    try:
-        role = UserRole(user.role)
-    except ValueError:
-        # An unknown stored value must never widen access.
-        role = UserRole.AGENT
     return UserPrincipal(
         id=user.id,
         email=user.email,
-        role=role,
+        role=_stored_role(user.role),
         session_id=family_id,
         is_active=bool(user.is_active),
         is_superuser=bool(user.is_superuser),
@@ -626,6 +636,23 @@ class AuthService:
             raise AuthRoleAssignmentFailed(user.id) from error
         return user.id
 
+    async def provision_account(self, user_create: schemas.BaseUserCreate) -> UserAccount:
+        """Create one standalone account in the role of the request.
+
+        The library manager owns the password rule, the duplicate-email check, and
+        the safe creation path, so a privilege flag of the request never reaches
+        the row. The response is the safe projection of the stored account, with
+        no credential material. The caller owns the attempt reservation, the role
+        gate, and the HTTP mapping.
+        """
+
+        async with self.user_manager() as manager:
+            created = await manager.create(user_create, safe=True)
+        account = await self.get_account(created.id)
+        if account is None:
+            raise AuthStorageUnavailable("the created account is not readable")
+        return account
+
     async def change_role(self, user_id: UUID, role: UserRole) -> None:
         """Set one account's role and revoke its families in one transaction.
 
@@ -641,6 +668,27 @@ class AuthService:
                 raise AuthUserNotFound("no account has this id")
             await AuthSessionRepository(session).revoke_user_families(user_id, now=now)
             await session.commit()
+
+    async def get_account(self, user_id: UUID) -> UserAccount | None:
+        """Return one account's safe projection, or ``None`` for an unknown id.
+
+        The projection holds the identity and the authorization flags of one
+        account. It holds no password hash and no session family identifier, so
+        an Admin route can confirm a target without credential material.
+        """
+
+        async with self._session() as session:
+            user = await session.get(UserRow, user_id)
+            if user is None:
+                return None
+            return UserAccount(
+                id=user.id,
+                email=user.email,
+                role=_stored_role(user.role),
+                is_active=user.is_active,
+                is_superuser=user.is_superuser,
+                is_verified=user.is_verified,
+            )
 
     async def _start_family(
         self, session: AsyncSession, user: UserRow, *, now: datetime

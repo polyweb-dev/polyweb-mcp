@@ -7,6 +7,8 @@ import userEvent from "@testing-library/user-event"
 import { MemoryRouter, useLocation } from "react-router"
 import App from "@/App"
 import { FreeSearchProvider } from "@/context/FreeSearchContext"
+import { ADMIN_ACCOUNT_ID, DEVELOPER_ACCOUNT_ID, accessResponseFixture, adminAccountFixture } from "@/test/authFixtures"
+import { installFakeChannel, installImmediateLocks, removeLocks } from "@/test/browserStubs"
 import { SettingsView } from "./SettingsView"
 import { installFetchStub, ok, err, deferred, type FetchStub } from "@/test/fetchMock"
 import { allProvidersFixture, routingConfigFixture, dashboardFixture } from "@/test/fixtures"
@@ -159,7 +161,7 @@ function renderSettings(): FetchStub {
     return err(404, { detail: "unhandled test route" })
   })
   render(
-    <FreeSearchProvider>
+    <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
       <SettingsView />
     </FreeSearchProvider>
   )
@@ -172,7 +174,15 @@ function LocationProbe() {
 }
 
 async function renderAppAt(route: string): Promise<FetchStub> {
+  installImmediateLocks()
+  installFakeChannel()
   const stub = installFetchStub((req) => {
+    if (req.url === "/auth/jwt/refresh" && req.method === "POST") {
+      return ok(accessResponseFixture())
+    }
+    if (req.url === "/users/me" && req.method === "GET") {
+      return ok(adminAccountFixture())
+    }
     if (req.url === "/api/v1/providers" && req.method === "GET") {
       return ok(allProvidersFixture())
     }
@@ -250,6 +260,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
+  removeLocks()
 })
 
 // ---------------------------------------------------------------------------
@@ -585,7 +596,7 @@ describe("P1F-6: Providers page retired — redirect + no providers nav", () => 
       expect(screen.getByRole("heading", { name: "Settings" })).toBeInTheDocument()
     })
     const nav = screen.getByRole("navigation", { name: "Primary" })
-    expect(within(nav).getAllByRole("link")).toHaveLength(5)
+    expect(within(nav).getAllByRole("link")).toHaveLength(7)
     expect(within(nav).queryByRole("link", { name: "Providers", exact: true })).not.toBeInTheDocument()
     for (const label of ["Playground", "Routing", "Usage", "Activity", "Settings"]) {
       expect(within(nav).getByRole("link", { name: label, exact: true })).toBeInTheDocument()
@@ -804,7 +815,7 @@ function renderSettings(): FetchStub {
     return err(404, { detail: "unhandled test route" })
   })
   render(
-    <FreeSearchProvider>
+    <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
       <SettingsView />
     </FreeSearchProvider>
   )
@@ -1496,7 +1507,7 @@ function renderSettingsWith(providers: WireProviderStatus[]): FetchStub {
     return err(404, { detail: "unhandled test route" })
   })
   render(
-    <FreeSearchProvider>
+    <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
       <SettingsView />
     </FreeSearchProvider>
   )
@@ -2119,7 +2130,7 @@ function renderSettings(): FetchStub {
     return err(404, { detail: "unhandled test route" })
   })
   render(
-    <FreeSearchProvider>
+    <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
       <SettingsView />
     </FreeSearchProvider>
   )
@@ -2587,7 +2598,7 @@ function renderSettings(): FetchStub {
     return err(404, { detail: "unhandled test route" })
   })
   render(
-    <FreeSearchProvider>
+    <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
       <SettingsView />
     </FreeSearchProvider>
   )
@@ -2993,4 +3004,65 @@ describe("S-P4-5: no regression — S-P1 table, S-P2 ranks, S-P3 buttons, Settin
     expect(settingsFeatureSource).not.toMatch(/src\/freesearch/)
   })
 })
+})
+
+describe("SettingsProviders Developer read-only (canReadControls, no edit)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
+
+  function renderDeveloperSettings(): FetchStub {
+    const stub = installFetchStub((req) => {
+      if (req.url === "/api/v1/providers" && req.method === "GET") {
+        return ok(allProvidersFixture())
+      }
+      if (req.url === "/api/v1/routing/config" && req.method === "GET") {
+        return ok(routingConfigFixture())
+      }
+      if (req.url.startsWith("/dashboard")) return ok(dashboardFixture())
+      return err(404, { detail: "unhandled test route" })
+    })
+    render(
+      <FreeSearchProvider accountId={DEVELOPER_ACCOUNT_ID} canReadControls canEditControls={false}>
+        <SettingsView />
+      </FreeSearchProvider>
+    )
+    return stub
+  }
+
+  async function waitForDeveloperProviders() {
+    await waitFor(() => {
+      expect(screen.getByText("Brave Search", { exact: true })).toBeInTheDocument()
+    })
+  }
+
+  it("shows stored state/rank/flags as read-only text with no probe button, modal, or switches, and sends no writes", async () => {
+    const stub = renderDeveloperSettings()
+    await waitForDeveloperProviders()
+
+    // Read-only markers present: merged headers intact, ranks P1..P8, Test cells read Hidden.
+    const headers = Array.from(screen.getByRole("table").querySelectorAll("thead th")).map(
+      (th) => th.textContent?.trim() ?? ""
+    )
+    expect(headers).toEqual(["Provider", "Endpoint", "Health", "Test", "Search", "Fetch", "Global"])
+    for (let rank = 1; rank <= 8; rank += 1) {
+      expect(screen.getByText(`P${rank}`, { exact: true })).toBeInTheDocument()
+    }
+    expect(screen.getAllByText("Hidden", { exact: true })).toHaveLength(8)
+    expect(screen.getAllByText("On", { exact: true }).length).toBeGreaterThan(0)
+    // Only the unsupported Brave fetch keeps its disabled switch; every editable switch is gone.
+    const switches = screen.getAllByRole("switch")
+    expect(switches).toHaveLength(1)
+    expect(switches[0].getAttribute("aria-label")).toBe("Brave Search fetch routing (not supported)")
+    // Mutation affordances absent: no probe buttons, no priority moves, no global switches, no modal.
+    expect(screen.queryByRole("button", { name: /test connection/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: /priority (up|down)/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole("switch", { name: /global routing/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
+    // Zero backend writes beyond the stubbed reads.
+    expect(
+      stub.requests.filter((r) => r.method === "PATCH" || r.method === "PUT" || r.method === "POST")
+    ).toHaveLength(0)
+  })
 })

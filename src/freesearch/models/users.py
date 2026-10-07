@@ -36,7 +36,7 @@ class UserRole(StrEnum):
     AGENT = "agent"
 
 
-#: Public registration creates this role only.
+#: Role of a registration that omits the role field.
 DEFAULT_REGISTRATION_ROLE: UserRole = UserRole.AGENT
 
 #: Refresh credentials are URL-safe base64 of 32 random bytes.
@@ -66,6 +66,21 @@ class UserPrincipal(ContractModel):
     email: str
     role: UserRole
     session_id: UUID
+    is_active: bool
+    is_superuser: bool
+    is_verified: bool
+
+
+class UserAccount(ContractModel):
+    """Safe account projection for an Admin route and for the account screen.
+
+    The projection carries the account identity and its authorization flags. It
+    carries no password hash and no session family identifier.
+    """
+
+    id: UUID
+    email: str
+    role: UserRole
     is_active: bool
     is_superuser: bool
     is_verified: bool

@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event"
 import { FreeSearchProvider } from "@/context/FreeSearchContext"
 import { QuotaAnalytics } from "./QuotaAnalytics"
 import { installFetchStub, ok, err } from "@/test/fetchMock"
+import { ADMIN_ACCOUNT_ID, DEVELOPER_ACCOUNT_ID } from "@/test/authFixtures"
 import {
   allProvidersFixture,
   routingConfigFixture,
@@ -38,7 +39,7 @@ function renderWithManualStub(latestQuota = canonicalQuotasFixture()) {
     return err(404, { detail: "unhandled test route" })
   })
   render(
-    <FreeSearchProvider>
+    <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
       <QuotaAnalytics />
     </FreeSearchProvider>
   )
@@ -149,5 +150,66 @@ describe("QuotaAnalytics manual billing entry", () => {
 
     // Button flips to Update usage for the next edit.
     expect(screen.getByTestId("manual-quota-open-brave")).toHaveTextContent("Update usage")
+  })
+})
+
+/**
+ * Developer role (control read without control edit): the permitted manual
+ * quota read stays visible, but no manual action button or modal and no
+ * provider OAuth slot renders. The stub serves reads only.
+ */
+describe("QuotaAnalytics Developer read-only", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it("shows quota reads with no manual actions and no OAuth slot (stub reads only)", async () => {
+    const stub = installFetchStub((req) => {
+      if (req.url === "/api/v1/providers" && req.method === "GET") {
+        return ok(allProvidersFixture())
+      }
+      if (req.url === "/api/v1/routing/config" && req.method === "GET") {
+        return ok(routingConfigFixture())
+      }
+      if (req.url.endsWith("/manual-quota") && req.method === "GET") {
+        return err(404, { detail: "no manual quota configured" })
+      }
+      if (req.url.startsWith("/dashboard")) {
+        return ok(dashboardFixture({ latest_quota: canonicalQuotasFixture() }))
+      }
+      return err(404, { detail: "unhandled test route" })
+    })
+    render(
+      <FreeSearchProvider
+        accountId={DEVELOPER_ACCOUNT_ID}
+        canReadControls
+        canEditControls={false}
+      >
+        <QuotaAnalytics />
+      </FreeSearchProvider>
+    )
+
+    // Permitted read: the quota rows render from the control reads.
+    await waitFor(() => {
+      expect(screen.getByText("Brave Search quota", { exact: true })).toBeInTheDocument()
+    })
+    expect(screen.getByText("Tinyfish quota", { exact: true })).toBeInTheDocument()
+    expect(
+      stub.requestsTo("/api/v1/providers/tinyfish/manual-quota").map((request) => request.method)
+    ).toContain("GET")
+
+    // No manual action buttons or modals without control edit access.
+    expect(screen.queryByTestId("manual-quota-open-brave")).toBeNull()
+    expect(screen.queryByTestId("manual-quota-open-parallel")).toBeNull()
+    expect(screen.queryByTestId("manual-quota-open-tinyfish")).toBeNull()
+    expect(screen.queryByRole("dialog")).toBeNull()
+
+    // No provider OAuth slot without control edit access.
+    expect(screen.queryByTestId("oauth-device-open-parallel")).toBeNull()
+    expect(screen.queryByTestId("oauth-device-disconnect")).toBeNull()
+
+    // Stub reads only: every request is a GET.
+    expect(stub.requests.length).toBeGreaterThan(0)
+    expect(stub.requests.every((request) => request.method === "GET")).toBe(true)
   })
 })

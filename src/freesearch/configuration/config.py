@@ -1,14 +1,16 @@
 """Application configuration loaded from environment variables and ``.env``."""
 
+import json
 import os
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Final, Literal
+from typing import Annotated, Any, Final, Literal
 from urllib.parse import urlsplit
 
 from pydantic import Field, SecretStr, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+from freesearch.infrastructure.browser_auth import normalize_origin
 from freesearch.infrastructure.cryptography import DEFAULT_KEY_FILE
 
 _MCP_BEARER_TOKEN_ENVIRONMENT_VARIABLE = "FREESEARCH_MCP_BEARER_TOKEN"
@@ -30,6 +32,40 @@ def _is_loopback_host(host: str | None) -> bool:
 
 #: Minimum secret material accepted for the access-token signing key.
 AUTH_JWT_SECRET_MIN_BYTES = 32
+
+
+def _parse_browser_origins(value: Any) -> list[str]:
+    """Normalize the browser origin allowlist, or reject an invalid entry.
+
+    A settings file can supply a JSON array or a comma-separated list. Every
+    entry must be an exact origin: scheme, host, and optional port only. No
+    wildcard, userinfo, path, query, or fragment is accepted, and HTTPS is
+    mandatory outside loopback development.
+    """
+
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return []
+        if text.startswith("["):
+            try:
+                value = json.loads(text)
+            except json.JSONDecodeError as invalid:
+                raise ValueError("browser origins must be a list of exact origins") from invalid
+        else:
+            value = text.split(",")
+    if not isinstance(value, (list, tuple, set, frozenset)):
+        raise ValueError("browser origins must be a list of exact origins")
+    origins: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            raise ValueError("browser origins must be exact origin strings")
+        normalized = normalize_origin(item)
+        if normalized is None:
+            raise ValueError("browser origins must be exact http or https origins")
+        if normalized not in origins:
+            origins.append(normalized)
+    return origins
 
 
 class Settings(BaseSettings):
@@ -66,6 +102,9 @@ class Settings(BaseSettings):
     auth_refresh_lifetime_seconds: int = Field(default=604800, gt=0)
     auth_issuer_url: str | None = None
     mcp_resource_url: str | None = None
+    # Exact browser origins allowed to use cookie transport. An empty list is the
+    # default and keeps the programmatic JSON pair plus Bearer refresh contract.
+    auth_browser_origins: Annotated[list[str], NoDecode] = Field(default_factory=list)
     # The stdio credential is read from the process environment only: the local
     # environment file must never supply an account credential.
     mcp_bearer_token: SecretStr | None = Field(default=None, repr=False)
@@ -120,6 +159,18 @@ class Settings(BaseSettings):
         if parsed.scheme == "http" and not _is_loopback_host(parsed.hostname):
             raise ValueError("override URLs must use https outside loopback development")
         return stripped.rstrip("/")
+
+    @field_validator("auth_browser_origins", mode="before")
+    @classmethod
+    def _exact_browser_origins(cls, value: Any) -> list[str]:
+        """Accept only an exact origin allowlist.
+
+        A wildcard, a path, userinfo, a fragment, the opaque origin ``null``, or
+        a cleartext non-loopback origin raises ``ValueError``, so a misconfigured
+        allowlist stops startup instead of widening cookie trust.
+        """
+
+        return _parse_browser_origins(value)
 
     def require_auth_secret(self) -> SecretStr:
         """Return the access-token signing key, or reject production startup.

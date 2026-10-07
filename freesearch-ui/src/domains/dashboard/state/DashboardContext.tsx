@@ -16,8 +16,10 @@ import { DashboardContext } from "./context";
 export const DashboardProvider: React.FC<{
   showToast: ShowToast;
   catalogNameOf: (id: string) => string | undefined;
+  canReadControls: boolean;
+  canEditControls: boolean;
   children: React.ReactNode;
-}> = ({ showToast, catalogNameOf, children }) => {
+}> = ({ showToast, catalogNameOf, canReadControls, canEditControls, children }) => {
   const [usageEvents, setUsageEvents] = useState<UsageEvent[]>([]);
   const [usageLoading, setUsageLoading] = useState(true);
   const [usageError, setUsageError] = useState<string | null>(null);
@@ -27,6 +29,17 @@ export const DashboardProvider: React.FC<{
   const quotaAvailable = dashboardQuotas.length > 0;
 
   const refreshDashboard = useCallback(async () => {
+    if (!canReadControls) {
+      // A role without control-read access keeps an empty telemetry state and a
+      // clear busy flag. This covers the startup read and the post-search read.
+      setUsageEvents([]);
+      setUsageTotals([]);
+      setDashboardQuotas([]);
+      setDashboardNotice(null);
+      setUsageError(null);
+      setUsageLoading(false);
+      return;
+    }
     setUsageLoading(true);
     setUsageError(null);
     try {
@@ -45,7 +58,7 @@ export const DashboardProvider: React.FC<{
     } finally {
       setUsageLoading(false);
     }
-  }, [showToast, catalogNameOf]);
+  }, [canReadControls, showToast, catalogNameOf]);
 
   const value = React.useMemo(
     () => ({
@@ -56,6 +69,8 @@ export const DashboardProvider: React.FC<{
       dashboardQuotas,
       quotaAvailable,
       dashboardNotice,
+      canReadControls,
+      canEditControls,
       refreshDashboard,
       prependUsageEvent: (event: UsageEvent) =>
         setUsageEvents((previous) => [event, ...previous]),
@@ -68,6 +83,8 @@ export const DashboardProvider: React.FC<{
       dashboardQuotas,
       quotaAvailable,
       dashboardNotice,
+      canReadControls,
+      canEditControls,
       refreshDashboard,
     ],
   );

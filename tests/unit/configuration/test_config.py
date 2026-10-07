@@ -92,3 +92,30 @@ def test_settings_repr_contains_no_secret_material() -> None:
     text = repr(settings)
     assert "s" * 32 not in text
     assert os.environ.get("FREESEARCH_AUTH_JWT_SECRET") != "s" * 32 or True
+
+
+def test_browser_origins_default_to_empty_programmatic_contract() -> None:
+    assert Settings().auth_browser_origins == []
+
+
+def test_browser_origins_accept_exact_loopback_and_https_origins() -> None:
+    settings = Settings(auth_browser_origins=["http://localhost:5177", "https://app.example.com"])
+    assert settings.auth_browser_origins == [
+        "http://localhost:5177",
+        "https://app.example.com",
+    ]
+
+
+def test_browser_origins_require_exact_https_outside_loopback() -> None:
+    for bad in (
+        "https://app.example.com/path",
+        "https://user@app.example.com",
+        "https://app.example.com?x=1",
+        "https://app.example.com#frag",
+        "null",
+        "https://*.example.com",
+        "http://example.com",
+        "http://192.168.1.10",
+    ):
+        with pytest.raises(ValidationError):
+            Settings(auth_browser_origins=[bad])
