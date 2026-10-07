@@ -5,7 +5,6 @@ import { isManualQuotaEligible } from "../model/quotaEligibility"
 import { manualEligibleProviders } from "../model/quotaRowModel"
 import { CRDPriceNote } from "./CRDPriceNote"
 import { Footnote } from "./Footnote"
-import { ProviderActionSlots } from "./ProviderActionSlots"
 import { ProviderLimitsCards } from "./ProviderLimitsCards"
 import type { OAuthSlotArgs } from "./QuotaRow"
 import { UsageTotals } from "./UsageTotals"
@@ -75,17 +74,11 @@ export function QuotaPage({
         crdUsageTotals={crdUsageTotals}
         refreshDashboard={refreshDashboard}
         manualEligible={manualEligible}
+        dashboardQuotas={dashboardQuotas}
+        {...(renderOAuthActions !== undefined ? { renderOAuthActions } : {})}
       />
 
       <UsageTotals crdUsageTotals={crdUsageTotals} providers={providers} />
-
-      <ProviderActionSlots
-        providers={providers}
-        dashboardQuotas={dashboardQuotas}
-        providerLimits={providerLimits}
-        manualQuotaEligible={manualQuotaEligible}
-        {...(renderOAuthActions !== undefined ? { renderOAuthActions } : {})}
-      />
 
       <CRDPriceNote providers={providers} providerLimits={providerLimits} />
     </div>

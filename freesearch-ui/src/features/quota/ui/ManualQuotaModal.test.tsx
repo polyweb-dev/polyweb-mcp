@@ -1,6 +1,7 @@
-import { describe, expect, it, vi } from "vitest"
+import { describe, expect, it } from "vitest"
 import { render, screen, within } from "@testing-library/react"
-import { BALANCE_ENTRY_NOTE, CREDIT_MODE_LABEL, SPEND_CAP_NOTE } from "../model/quotaLabels"
+import userEvent from "@testing-library/user-event"
+import { BALANCE_ENTRY, BALANCE_ENTRY_NOTE, CREDIT_MODE_LABEL, SPEND_CAP_NOTE } from "../model/quotaLabels"
 import { ManualQuotaModal } from "./ManualQuotaModal"
 
 /**
@@ -23,8 +24,8 @@ describe("ManualQuotaModal", () => {
         onSave={() => Promise.resolve({})}
       />,
     )
-    expect(screen.getByText("Allowance (USD)")).not.toBeNull()
-    expect(screen.getByText("Balance remaining (USD)")).not.toBeNull()
+    expect(screen.getByText("Allowance (USD)")).toBeInTheDocument()
+    expect(screen.getByText("Balance remaining (USD)")).toBeInTheDocument()
   })
 
   it("reuses the shell for the grant form with a provider title (UI7-08)", () => {
@@ -39,9 +40,8 @@ describe("ManualQuotaModal", () => {
         <p>grant-body</p>
       </ManualQuotaModal>,
     )
-    expect(screen.getByText("Budget Limit — Brave")).not.toBeNull()
-    expect(screen.getByText("grant-body")).not.toBeNull()
-    void vi
+    expect(screen.getByText("Budget Limit — Brave")).toBeInTheDocument()
+    expect(screen.getByText("grant-body")).toBeInTheDocument()
   })
 })
 
@@ -58,7 +58,7 @@ describe("ManualQuotaModal polish subtitles", () => {
         <p>grant-body</p>
       </ManualQuotaModal>,
     )
-    expect(screen.getByText(SPEND_CAP_NOTE)).not.toBeNull()
+    expect(screen.getByText(SPEND_CAP_NOTE)).toBeInTheDocument()
   })
 
   it("shows the balance entry note in balance mode", () => {
@@ -75,7 +75,7 @@ describe("ManualQuotaModal polish subtitles", () => {
         onSave={() => Promise.resolve({})}
       />,
     )
-    expect(screen.getByText(BALANCE_ENTRY_NOTE)).not.toBeNull()
+    expect(screen.getByText(BALANCE_ENTRY_NOTE)).toBeInTheDocument()
   })
 })
 
@@ -105,7 +105,7 @@ describe("ManualQuotaModal credit mode fields (CARD-4)", () => {
   it("shows the Credit mode combo first with three tier options in a one-column grid", () => {
     renderBalanceEntry()
     const combo = screen.getByRole("combobox", { name: "Credit mode" })
-    expect(combo).not.toBeNull()
+    expect(combo).toBeInTheDocument()
     const options = within(combo as HTMLElement).getAllByRole("option").map((entry) => entry.textContent)
     expect(options).toEqual(["Free credits", "Paid credits", "Free + Paid"])
     const grid = document.querySelector("div.grid-cols-1")
@@ -113,11 +113,258 @@ describe("ManualQuotaModal credit mode fields (CARD-4)", () => {
     expect(grid?.className ?? "").not.toContain("sm:grid-cols-2")
     const labels = Array.from(document.querySelectorAll("label")).map((entry) => entry.textContent)
     expect(labels).toEqual([
+      "Provider",
       "Credit mode",
       "Billing start",
       "Billing end",
       "Allowance (USD)",
       "Balance remaining (USD)",
     ])
+  })
+})
+
+describe("ManualQuotaModal provider balance title", () => {
+  function renderEntry(defaults: { billingStart: string; billingEnd: string; allowance: string; used: string } | null) {
+    render(
+      <ManualQuotaModal
+        open
+        providerId="brave"
+        providerName="Brave"
+        unitKind="USD"
+        displayUnit="USD"
+        defaults={defaults}
+        amountMode="balance"
+        onClose={() => {}}
+        onSave={() => Promise.resolve({})}
+      />,
+    )
+  }
+
+  it("uses the Provider Balance title for a new entry with no provider suffix", () => {
+    expect(BALANCE_ENTRY).toBe("Provider Balance")
+    renderEntry(null)
+    const heading = within(screen.getByRole("dialog")).getByRole("heading")
+    expect(heading.textContent).toBe("Provider Balance")
+    expect(heading.textContent).not.toContain("Brave")
+    expect(heading.textContent).not.toContain("—")
+  })
+
+  it("uses the Update provider balance title for an existing entry with no provider suffix", () => {
+    renderEntry({ billingStart: "2026-09-01", billingEnd: "2026-09-30", allowance: "5.00", used: "0.88" })
+    const heading = within(screen.getByRole("dialog")).getByRole("heading")
+    expect(heading.textContent).toBe("Update provider balance")
+    expect(heading.textContent).not.toContain("Brave")
+    expect(heading.textContent).not.toContain("—")
+  })
+})
+
+describe("ManualQuotaModal provider balance width", () => {
+  it("uses the md width class", () => {
+    render(
+      <ManualQuotaModal
+        open
+        providerId="brave"
+        providerName="Brave"
+        unitKind="USD"
+        displayUnit="USD"
+        defaults={null}
+        amountMode="balance"
+        onClose={() => {}}
+        onSave={() => Promise.resolve({})}
+      />,
+    )
+    const dialog = screen.getByRole("dialog")
+    expect(dialog.classList.contains("sm:max-w-md")).toBe(true)
+    expect(dialog.classList.contains("sm:max-w-2xl")).toBe(false)
+  })
+})
+
+describe("ManualQuotaModal provider target", () => {
+  it("shows the provider dropdown first with a badge and remounts the form on retarget", async () => {
+    const user = userEvent.setup()
+    render(
+      <ManualQuotaModal
+        open
+        providerId="brave"
+        providerName="Brave"
+        unitKind="USD"
+        displayUnit="USD"
+        defaults={null}
+        amountMode="balance"
+        providers={[{ id: "brave", name: "Brave" }, { id: "exa", name: "Exa" }] as never}
+        observed={{
+          brave: { allowance: "5.00", remaining: "4.995" },
+          exa: { allowance: "10.00", remaining: "9.00" },
+        }}
+        onClose={() => {}}
+        onSave={() => Promise.resolve({})}
+      />,
+    )
+    const labels = Array.from(document.querySelectorAll("label")).map((entry) => entry.textContent)
+    expect(labels[0]).toBe("Provider")
+    expect(labels).toEqual([
+      "Provider",
+      "Credit mode",
+      "Billing start",
+      "Billing end",
+      "Allowance (USD)",
+      "Balance remaining (USD)",
+    ])
+    const trigger = screen.getByRole("combobox", { name: "Provider" })
+    expect(trigger.getAttribute("data-testid")).toBe("manual-quota-provider")
+    expect(trigger.getAttribute("aria-haspopup")).toBe("listbox")
+    expect(trigger.getAttribute("aria-expanded")).toBe("false")
+    expect(screen.queryByRole("listbox")).toBeNull()
+    expect(screen.queryByRole("option", { name: "Brave" })).toBeNull()
+    expect(screen.queryByRole("option", { name: "Exa" })).toBeNull()
+    expect(within(trigger as HTMLElement).getByTestId("provider-logo-brave")).toBeInTheDocument()
+    expect(screen.getByTestId("manual-quota-allowance")).toHaveValue("5.00")
+    expect(screen.getByTestId("manual-quota-usage")).toHaveValue("4.995")
+    await user.click(trigger)
+    expect(trigger.getAttribute("aria-expanded")).toBe("true")
+    const popup = await screen.findByRole("listbox")
+    const options = within(popup as HTMLElement).getAllByRole("option")
+    expect(options.map((entry) => entry.textContent)).toEqual(["Brave", "Exa"])
+    expect(options.map((entry) => entry.getAttribute("aria-selected"))).toEqual(["true", "false"])
+    expect(within(options[0] as HTMLElement).getByTestId("provider-logo-brave")).toBeInTheDocument()
+    expect(within(options[1] as HTMLElement).getByTestId("provider-logo-exa")).toBeInTheDocument()
+    await user.click(screen.getByRole("option", { name: "Exa" }))
+    expect(screen.queryByRole("listbox")).toBeNull()
+    expect(screen.getByTestId("provider-logo-exa")).toBeInTheDocument()
+    expect(screen.getByTestId("manual-quota-allowance")).toHaveValue("10.00")
+    expect(screen.getByTestId("manual-quota-usage")).toHaveValue("9.00")
+  })
+
+  it("holds the logo inside the trigger with no separate badge beside the combo", () => {
+    render(
+      <ManualQuotaModal
+        open
+        providerId="brave"
+        providerName="Brave"
+        unitKind="USD"
+        displayUnit="USD"
+        defaults={null}
+        amountMode="balance"
+        providers={[{ id: "brave", name: "Brave" }, { id: "exa", name: "Exa" }] as never}
+        observed={{ brave: { allowance: "5.00", remaining: "4.995" } }}
+        onClose={() => {}}
+        onSave={() => Promise.resolve({})}
+      />,
+    )
+    const trigger = screen.getByRole("combobox", { name: "Provider" })
+    expect(within(trigger as HTMLElement).getByTestId("provider-logo-brave")).toBeInTheDocument()
+    expect(trigger.textContent).toContain("Brave")
+    const field = trigger.closest("div")
+    expect(field?.querySelectorAll('[data-testid^="provider-logo-"]').length).toBe(1)
+  })
+
+  it("opens with ArrowDown, moves with arrows, chooses with Enter, closes with Escape", async () => {
+    const user = userEvent.setup()
+    render(
+      <ManualQuotaModal
+        open
+        providerId="brave"
+        providerName="Brave"
+        unitKind="USD"
+        displayUnit="USD"
+        defaults={null}
+        amountMode="balance"
+        providers={[{ id: "brave", name: "Brave" }, { id: "exa", name: "Exa" }] as never}
+        observed={{
+          brave: { allowance: "5.00", remaining: "4.995" },
+          exa: { allowance: "10.00", remaining: "9.00" },
+        }}
+        onClose={() => {}}
+        onSave={() => Promise.resolve({})}
+      />,
+    )
+    const trigger = screen.getByRole("combobox", { name: "Provider" }) as HTMLElement
+    trigger.focus()
+    await user.keyboard("{ArrowDown}")
+    expect(trigger.getAttribute("aria-expanded")).toBe("true")
+    expect(await screen.findByRole("listbox")).toBeInTheDocument()
+    expect(trigger.getAttribute("aria-activedescendant")).toContain("-0")
+    await user.keyboard("{ArrowDown}")
+    expect(trigger.getAttribute("aria-activedescendant")).toContain("-1")
+    await user.keyboard("{Escape}")
+    expect(trigger.getAttribute("aria-expanded")).toBe("false")
+    expect(screen.queryByRole("listbox")).toBeNull()
+    expect(screen.getByTestId("manual-quota-allowance")).toHaveValue("5.00")
+    trigger.focus()
+    await user.keyboard("{Enter}")
+    await user.keyboard("{ArrowDown}")
+    await user.keyboard("{Enter}")
+    expect(screen.getByTestId("provider-logo-exa")).toBeInTheDocument()
+    expect(screen.getByTestId("manual-quota-allowance")).toHaveValue("10.00")
+    expect(screen.getByTestId("manual-quota-usage")).toHaveValue("9.00")
+  })
+
+  it("closes the open list on a click outside the combo", async () => {
+    const user = userEvent.setup()
+    render(
+      <ManualQuotaModal
+        open
+        providerId="brave"
+        providerName="Brave"
+        unitKind="USD"
+        displayUnit="USD"
+        defaults={null}
+        amountMode="balance"
+        providers={[{ id: "brave", name: "Brave" }, { id: "exa", name: "Exa" }] as never}
+        observed={{ brave: { allowance: "5.00", remaining: "4.995" } }}
+        onClose={() => {}}
+        onSave={() => Promise.resolve({})}
+      />,
+    )
+    const trigger = screen.getByRole("combobox", { name: "Provider" })
+    await user.click(trigger)
+    expect(await screen.findByRole("listbox")).toBeInTheDocument()
+    await user.click(screen.getByRole("heading", { name: "Provider Balance" }))
+    expect(screen.queryByRole("listbox")).toBeNull()
+    expect(trigger.getAttribute("aria-expanded")).toBe("false")
+  })
+})
+
+describe("ManualQuotaModal balance prefill", () => {
+  it("prefills a new entry from the observed pool with the estimate note", () => {
+    render(
+      <ManualQuotaModal
+        open
+        providerId="brave"
+        providerName="Brave"
+        unitKind="USD"
+        displayUnit="USD"
+        defaults={null}
+        amountMode="balance"
+        observed={{ brave: { allowance: "5.00", remaining: "4.995" } }}
+        onClose={() => {}}
+        onSave={() => Promise.resolve({})}
+      />,
+    )
+    expect(screen.getByTestId("manual-quota-allowance")).toHaveValue("5.00")
+    expect(screen.getByTestId("manual-quota-usage")).toHaveValue("4.995")
+    expect(screen.getByTestId("manual-quota-prefill")).toHaveTextContent(
+      "Prefilled from the observed provider balance, as an estimate.",
+    )
+  })
+
+  it("lets a saved entry win over the observed pool with no estimate note", () => {
+    render(
+      <ManualQuotaModal
+        open
+        providerId="brave"
+        providerName="Brave"
+        unitKind="USD"
+        displayUnit="USD"
+        defaults={{ billingStart: "2026-09-01", billingEnd: "2026-09-30", allowance: "5.00", used: "0.88" }}
+        amountMode="balance"
+        observed={{ brave: { allowance: "9.99", remaining: "9.00" } }}
+        onClose={() => {}}
+        onSave={() => Promise.resolve({})}
+      />,
+    )
+    expect(screen.getByTestId("manual-quota-allowance")).toHaveValue("5.00")
+    expect(screen.getByTestId("manual-quota-usage")).toHaveValue("4.12")
+    expect(screen.queryByTestId("manual-quota-prefill")).toBeNull()
   })
 })

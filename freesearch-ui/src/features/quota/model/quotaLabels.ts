@@ -23,12 +23,6 @@ export const CONTROL_SPLIT_NOTE =
 
 /** The credit tier of one rail: the free facts, the paid facts, or both. */
 export type CreditMode = "free" | "paid" | "both"
-/** The short tier word of one credit mode, for the credit note. */
-export const CREDIT_MODE_WORD: Record<CreditMode, string> = {
-  free: "Free",
-  paid: "Paid",
-  both: "Free + Paid",
-}
 /** The option label of one credit mode, for the mode combo. */
 export const CREDIT_MODE_LABEL: Record<CreditMode, string> = {
   free: "Free credits",

@@ -45,7 +45,7 @@ Feature: Provider quota display stays honest
 
   @stub @quota @oauth
   Scenario: Parallel OAuth pairing keeps its connect controls
-    Given the stubbed provider limits show "Brave finite credits"
+    Given the stubbed provider limits show "Brave finite credits plus Parallel card"
     And the stubbed credit totals show "Brave no use"
     And the stubbed OAuth pairing for "parallel" is empty
     When I navigate directly to "/usage"

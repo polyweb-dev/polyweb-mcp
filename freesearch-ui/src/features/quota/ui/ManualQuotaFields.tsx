@@ -1,3 +1,4 @@
+import type { ReactNode } from "react"
 import type { ManualAmountMode, ManualQuotaFieldErrors, ManualQuotaFields } from "../model/manualQuotaMath"
 import {
   CREDIT_MODE_FIELD,
@@ -18,6 +19,8 @@ export interface ManualQuotaFieldsProps {
   mode: CreditMode
   onModeChange: (mode: CreditMode) => void
   onChange: (name: keyof ManualQuotaFields, value: string) => void
+  /** The provider field of the shell, shown first. */
+  providerField?: ReactNode
   /** `balance` labels the second amount as the remaining balance. */
   amountMode?: ManualAmountMode
 }
@@ -53,7 +56,7 @@ function modeField(
   )
 }
 
-/** Billing window form section: the credit mode plus dates and allowance/usage amounts. */
+/** Billing window form section: the provider, the credit mode, the dates, and the amounts. */
 export function ManualQuotaFields({
   providerId,
   noun,
@@ -64,10 +67,12 @@ export function ManualQuotaFields({
   mode,
   onModeChange,
   onChange,
+  providerField,
   amountMode = "usage",
 }: ManualQuotaFieldsProps) {
   return (
     <div className="grid grid-cols-1 gap-3">
+      {providerField}
       {modeField(providerId, mode, pending, onModeChange)}
       <ManualQuotaField
         id={"manual-quota-start-" + providerId}

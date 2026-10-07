@@ -10,7 +10,7 @@
 import type { CRDResetRule, LimitRateWindow, NativePool, ProviderAuthLimits } from "@/domains/dashboard"
 import { dollarText, formatCRDAmount } from "./crdDisplay"
 import { operationAvailable, usdFromCRD } from "./crdCardModel"
-import { operationLabel, CREDIT_MODE_WORD, type CreditMode } from "./quotaLabels"
+import { operationLabel, type CreditMode } from "./quotaLabels"
 import { timestampOrNull } from "./timeText"
 
 /** One popover row: the fact label, its main value, and an optional quiet part. */
@@ -30,6 +30,25 @@ export interface ProviderInfo {
   creditMode: CreditMode | null
   /** The funds source of the card subtitle; an absent source yields null. */
   statement: string | null
+}
+
+/** The observed native funds of one rail: the estimate start of a new entry. */
+export interface BalancePrefill {
+  allowance: string
+  remaining: string
+}
+
+/**
+ * The observed balance of one rail: the aggregate pool first, else the detail.
+ *
+ * Both amounts stay exact decimal strings. A rail without a known allowance or
+ * a known remaining amount yields null, so no entry starts from a guess.
+ */
+export function balancePrefill(auth: ProviderAuthLimits): BalancePrefill | null {
+  const allowance = known(auth.aggregate_pool?.allowance) ?? known(auth.detail?.native_allowance)
+  const remaining = known(auth.aggregate_pool?.remaining) ?? known(auth.detail?.native_balance)
+  if (allowance === null || remaining === null) return null
+  return { allowance, remaining }
 }
 
 const OPERATIONS = ["search", "fetch"] as const
@@ -202,19 +221,16 @@ function periodWordOf(auth: ProviderAuthLimits): string | null {
 }
 
 /**
- * The credit note of the popover header: the tier, the period, and the unit.
+ * The credit note of the popover header: the period and the credit unit.
  *
- * The note comes from the plan metadata of the payload: the free and paid
- * facts, the allowance period, and the credit unit of the card. A rail without
- * a tier fact falls back to the reported plan name, so no note is invented.
+ * The note comes from the plan metadata of the payload: the allowance period
+ * and the credit unit of the card. The note never states a tier word. A rail
+ * without a period falls back to the reported plan name, so no note is invented.
  */
 function creditNoteOf(auth: ProviderAuthLimits): string | null {
-  const mode = creditModeOf(auth)
-  if (mode === null) return planNameOf(auth)
   const period = periodWordOf(auth)
-  return [CREDIT_MODE_WORD[mode], period, CREDIT_UNIT_WORD]
-    .filter((part): part is string => part !== null)
-    .join(" ")
+  if (period === null) return planNameOf(auth)
+  return [period, CREDIT_UNIT_WORD].join(" ")
 }
 
 /** Facts and usage link of one rail, in the shown order. */

@@ -443,6 +443,89 @@ export function unknownCreditLimits(): unknown[] {
   ]
 }
 
+/** Fund-less Parallel card so the relocated OAuth control mounts (NUDGE-5). */
+export function parallelCardLimits(): unknown[] {
+  return [
+    {
+      provider: "parallel",
+      active_auth_mode: "keyed",
+      auths: [
+        {
+          auth_mode: "keyed",
+          transport_available: true,
+          search: ui7SearchRecord({
+            provider: "parallel",
+            native_pool_id: null,
+            conversion_profile: ui7ConversionProfile({ native_usd_per_unit: null }),
+            plan_name: null,
+            usage_url: null,
+          }),
+          fetch: ui7FetchRecord(),
+          free_tiers: [],
+          paid_tiers: [],
+          unknown_tiers: [],
+          tier_split_known: true,
+          aggregate_pool: null,
+          crd_views: [
+            {
+              state: "unknown",
+              operation: "search",
+              remaining_crd: null,
+              local_remaining_crd: null,
+              request_cost_crd: null,
+              shared_pool_id: null,
+              possible_standard_calls: null,
+              price_version: null,
+              priced: false,
+            },
+            {
+              state: "unavailable",
+              operation: "fetch",
+              remaining_crd: null,
+              local_remaining_crd: null,
+              request_cost_crd: null,
+              shared_pool_id: null,
+              possible_standard_calls: null,
+              price_version: null,
+              priced: false,
+            },
+          ],
+          rate_progress: [],
+          grants: null,
+          detail: {
+            plan_name: null,
+            native_unit: null,
+            native_balance: null,
+            native_allowance: null,
+            usd_per_call: null,
+            actual_spend_usd: null,
+            reset_at: null,
+            reset_rule: "unknown",
+            usage_url: null,
+            source: "unknown",
+            confidence: "unknown",
+            last_sync_at: null,
+            stale: false,
+            price_version: "",
+            crd_split_note: null,
+            rate_windows: [],
+            tier_split_known: true,
+            aggregate_pool_id: null,
+          },
+        },
+      ],
+      documented_keyless_operations: [],
+      version: 1,
+      generated_at: FIXED_AT,
+    },
+  ]
+}
+
+/** Brave funds plus a fund-less Parallel card for the OAuth pairing flow. */
+export function bravePlusParallelLimits(): unknown[] {
+  return [...braveCreditLimits(), ...parallelCardLimits()]
+}
+
 /** One history event with exact CRD balances plus a native fallback event. */
 export function ui7HistoryEvents(): unknown[] {
   return [

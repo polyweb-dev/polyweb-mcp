@@ -133,7 +133,7 @@ describe("QuotaAnalytics shell (UI7)", () => {
     vi.unstubAllGlobals()
   })
 
-  it("renders the new page sections with no legacy grid (UI7-05)", async () => {
+  it("renders the new page sections with no legacy grid and no action section (UI7-05, NUDGE-5)", async () => {
     renderShell(dashboardFixture() as unknown as Record<string, unknown>)
     await waitFor(() => {
       expect(screen.getByText("Usage")).toBeInTheDocument()
@@ -141,7 +141,8 @@ describe("QuotaAnalytics shell (UI7)", () => {
     expect(screen.getByText("Provider credit units")).toBeInTheDocument()
     expect(screen.getByText("Usage totals")).toBeInTheDocument()
     expect(screen.getByText("How credit units are priced")).toBeInTheDocument()
-    expect(screen.getByText("Provider actions")).toBeInTheDocument()
+    // NUDGE-5: the Provider actions section left the page in full.
+    expect(screen.queryByText("Provider actions")).toBe(null)
     expect(screen.queryByText("Provider quota view")).toBe(null)
   })
 
