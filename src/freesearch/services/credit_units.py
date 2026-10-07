@@ -28,6 +28,8 @@ from freesearch.models.provider_limits import (
 
 ZERO: Final[Decimal] = Decimal("0")
 _ONE: Final[Decimal] = Decimal("1")
+# A Tavily advanced search bills twice the basic depth factor.
+_ADVANCED_DEPTH_FACTOR: Final[Decimal] = Decimal("2")
 
 
 def _unit_price(native_unit: UnitKind, profile: CRDPriceProfile) -> Decimal | None:
@@ -82,14 +84,25 @@ def request_native_cost(
 ) -> Decimal | None:
     """Return the exact native cost one request is expected to consume.
 
-    C0 prices the standard call only. Provider add-ons, such as the Firecrawl
-    JSON credits, the Tavily advanced depth, and the Exa or Parallel extra
-    result rule, arrive with slices C1 to C8.
+    The standard cost comes from the record's budget block. A Tavily advanced
+    search doubles that cost. The other provider add-ons arrive with their own
+    slices.
     """
 
     if record.budget is None or record.native_unit is None:
         return None
-    return record.budget.standard_native_cost
+    cost = record.budget.standard_native_cost
+    if request is None:
+        return cost
+    if record.provider == "tavily" and _is_advanced_search(request):
+        cost *= _ADVANCED_DEPTH_FACTOR
+    return cost
+
+
+def _is_advanced_search(request: SearchRequest | FetchRequest) -> bool:
+    """Return whether a search request asks for the advanced depth."""
+
+    return isinstance(request, SearchRequest) and request.mode == "advanced"
 
 
 def request_cost_crd(
