@@ -12,7 +12,7 @@ import asyncio
 import logging
 import time
 from collections.abc import AsyncIterator, Sequence
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, TypedDict
 
@@ -49,8 +49,6 @@ from freesearch.persistence.storage import SQLiteRepository
 from freesearch.services.aggregation import reciprocal_rank_fusion
 from freesearch.services.monitoring import (
     clear_quota_poll_cache,
-    effective_quota,
-    refresh_quotas,
     resolve_database_path,
     tracked_call,
 )
@@ -221,24 +219,41 @@ async def _route_state(
     active: Sequence[ProviderAdapter],
     secret_store: AsyncSecretStore | None,
 ) -> tuple[dict[str, ProviderHealth], dict[str, QuotaSnapshot]]:
-    """Collect routing state while degrading quota failures to unknown."""
+    """Collect routing state using batch lookups and non-blocking quota refresh."""
 
-    with suppress(Exception):
-        await refresh_quotas(repository, active, secret_store=secret_store)
+    if repository is None or not active:
+        return {}, {}
+    from freesearch.routers.api import _schedule_quota_refresh
+    from freesearch.services.monitoring import effective_quotas_batch
+
+    _schedule_quota_refresh(repository, active, secret_store)
+    names = [candidate.name for candidate in active]
     health: dict[str, ProviderHealth] = {}
+    try:
+        if hasattr(repository, "latest_health_batch"):
+            health = await repository.latest_health_batch(names)
+        else:
+            for candidate in active:
+                observation = await repository.latest_health(candidate.name)
+                if observation is not None:
+                    health[candidate.name] = observation
+    except Exception:
+        pass
+
     quotas: dict[str, QuotaSnapshot] = {}
-    if repository is None:
-        return health, quotas
-    for candidate in active:
-        try:
-            observation = await repository.latest_health(candidate.name)
-            if observation is not None:
-                health[candidate.name] = observation
-            snapshot = await effective_quota(repository, candidate.name)
-            if snapshot is not None:
-                quotas[candidate.name] = snapshot
-        except Exception:
-            continue
+    try:
+        if hasattr(repository, "latest_quota_batch"):
+            quotas = await effective_quotas_batch(repository, names)
+        else:
+            from freesearch.services.monitoring import effective_quota
+
+            for candidate in active:
+                snapshot = await effective_quota(repository, candidate.name)
+                if snapshot is not None:
+                    quotas[candidate.name] = snapshot
+    except Exception:
+        pass
+
     return health, quotas
 
 
@@ -270,8 +285,10 @@ async def _mcp_fanout_search(
     secret_store: AsyncSecretStore | None = None,
 ) -> dict[str, Any]:
     """Execute concurrent fanout search across active adapters for MCP."""
+    if request.routing.providers:
+        required_names = set(request.routing.providers)
+        active = [a for a in active if a.name in required_names]
     eligible = await _accessible_routes(active, repository, UsageOperation.SEARCH)
-    await _apply_parallel_seed(eligible, repository)
     health, quotas = await _route_state(repository, eligible, secret_store)
     fanout_req = request.model_copy(
         update={"routing": request.routing.model_copy(update={"mode": RoutingMode.FANOUT})}
@@ -418,12 +435,21 @@ def create_server(
                 "no provider is configured: store a key in the encrypted vault "
                 "(PUT /api/v1/providers/{id}/secret)"
             )
+        preference = request.routing
+        if preference.mode is RoutingMode.REQUIRE and preference.providers:
+            required_names = set(preference.providers)
+            matching = [adapter for adapter in active if adapter.name in required_names]
+            if not matching:
+                raise RuntimeError(
+                    f"no required provider is eligible: {', '.join(preference.providers)}"
+                )
+            active = matching
+
         repository = state["repository"]
         operation = (
             UsageOperation.SEARCH if isinstance(request, SearchRequest) else UsageOperation.FETCH
         )
         eligible = await _accessible_routes(active, repository, operation)
-        await _apply_parallel_seed(eligible, repository)
         health, quotas = await _route_state(repository, eligible, state["secret_store"])
         candidates = select_route(request, eligible, health, quotas)
         if not candidates:

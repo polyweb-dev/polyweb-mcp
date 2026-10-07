@@ -76,6 +76,7 @@ from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.control import (
     _build_with_resolved_secret,
     _resolve_secret,
+    clear_config_cache,
     effective_config_for_name,
     initialize_provider_configs,
     register_control_routes,
@@ -90,6 +91,7 @@ from freesearch.services.monitoring import (
     clear_quota_poll_cache,
     collect_stats,
     effective_quota,
+    effective_quotas_batch,
     refresh_quotas,
     resolve_database_path,
     tracked_call,
@@ -224,10 +226,12 @@ def create_app(
             await asyncio.to_thread(runtime.shutdown)
             if owns_repository and repo is not None:
                 clear_quota_poll_cache(repo, routes)
+                clear_config_cache(repo)
                 app.state.repository = None
                 await repo.close()
             else:
                 clear_quota_poll_cache(repository, routes)
+                clear_config_cache(repository)
             await close_adapters(routes, client if owns_client else None)
 
     app = FastAPI(title="FreeSearch", version="0.1.0", lifespan=lifespan)
@@ -329,7 +333,6 @@ async def _order_routes(
     preserved.
     """
 
-    await _apply_parallel_seed(routes, repository)
     eligible: list[tuple[int, ProviderAdapter]] = []
     for adapter in routes:
         config = await effective_config_for_name(repository, adapter.name, strict=True)
@@ -522,29 +525,62 @@ def _annotate_fetch_root(
     )
 
 
+_BACKGROUND_TASKS: set[asyncio.Task[Any]] = set()
+
+
+def _schedule_quota_refresh(
+    repository: SQLiteRepository | None,
+    routes: Sequence[ProviderAdapter],
+    secret_store: AsyncSecretStore | None,
+) -> None:
+    """Schedule asynchronous quota polling out-of-band without blocking the request hot path."""
+
+    if repository is None or not routes:
+        return
+    try:
+        loop = asyncio.get_running_loop()
+        task = loop.create_task(refresh_quotas(repository, routes, secret_store=secret_store))
+        _BACKGROUND_TASKS.add(task)
+        task.add_done_callback(_BACKGROUND_TASKS.discard)
+    except RuntimeError:
+        pass
+
+
 async def _routing_state(
     repository: SQLiteRepository | None,
     routes: Sequence[ProviderAdapter],
     secret_store: AsyncSecretStore,
 ) -> tuple[dict[str, ProviderHealth], dict[str, QuotaSnapshot]]:
-    """Refresh bounded quota state and collect health/quota maps for routing."""
+    """Refresh bounded quota state in background and collect health/quota maps for routing."""
 
-    if repository is None:
+    if repository is None or not routes:
         return {}, {}
-    with suppress(Exception):
-        await refresh_quotas(repository, routes, secret_store=secret_store)
+    _schedule_quota_refresh(repository, routes, secret_store)
+    provider_names = [adapter.name for adapter in routes]
     health: dict[str, ProviderHealth] = {}
+    try:
+        if hasattr(repository, "latest_health_batch"):
+            health = await repository.latest_health_batch(provider_names)
+        else:
+            for adapter in routes:
+                observation = await repository.latest_health(adapter.name)
+                if observation is not None:
+                    health[adapter.name] = observation
+    except Exception:
+        pass
+
     quotas: dict[str, QuotaSnapshot] = {}
-    for adapter in routes:
-        try:
-            observation = await repository.latest_health(adapter.name)
-            if observation is not None:
-                health[adapter.name] = observation
-            snapshot = await effective_quota(repository, adapter.name)
-            if snapshot is not None:
-                quotas[adapter.name] = snapshot
-        except Exception:
-            continue
+    try:
+        if hasattr(repository, "latest_quota_batch"):
+            quotas = await effective_quotas_batch(repository, provider_names)
+        else:
+            for adapter in routes:
+                snapshot = await effective_quota(repository, adapter.name)
+                if snapshot is not None:
+                    quotas[adapter.name] = snapshot
+    except Exception:
+        pass
+
     return health, quotas
 
 
@@ -576,6 +612,19 @@ async def _plan_route(
                 "(PUT /api/v1/providers/{id}/secret)"
             ),
         )
+
+    # Fast-path for explicit provider requirement
+    preference = request.routing
+    if preference.mode is RoutingMode.REQUIRE and preference.providers:
+        required_names = set(preference.providers)
+        matching = [adapter for adapter in routes if adapter.name in required_names]
+        if not matching:
+            raise HTTPException(
+                status_code=503,
+                detail=f"no required provider is eligible: {', '.join(preference.providers)}",
+            )
+        routes = tuple(matching)
+
     operation = _usage_operation(request)
     policy = await routing_policy(repository)
     try:
@@ -694,12 +743,24 @@ async def _dispatch_fanout_search(
                 "(PUT /api/v1/providers/{id}/secret)"
             ),
         )
+
+    fanout_routes = routes
+    if request.routing.providers:
+        required_names = set(request.routing.providers)
+        matching = [adapter for adapter in routes if adapter.name in required_names]
+        if not matching:
+            raise HTTPException(
+                status_code=503,
+                detail="no eligible provider is available for fanout",
+            )
+        fanout_routes = matching
+
     observability = current_observability()
     with observability.span(TraceSpanName.ROUTE, attributes=_request_attributes(request)):
         policy = await routing_policy(repository)
         try:
             ordered = await _order_routes(
-                routes, repository, policy.cost_optimization_preset, UsageOperation.SEARCH
+                fanout_routes, repository, policy.cost_optimization_preset, UsageOperation.SEARCH
             )
         except ProviderConfigError as error:
             raise HTTPException(status_code=503, detail=str(error)) from error

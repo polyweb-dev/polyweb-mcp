@@ -56,7 +56,7 @@ from freesearch.models.contracts import (
     manual_quota_remaining_percent,
 )
 from freesearch.models.provider_access import ALL_BITS, validate_mask
-from freesearch.persistence.storage import SQLiteRepository
+from freesearch.persistence.storage import SQLiteRepository, register_setting_listener
 from freesearch.services.monitoring import latency_p95_ms
 from freesearch.services.parallel_oauth import (
     PARALLEL_API_BASE_URL,
@@ -684,6 +684,39 @@ def _decimal_text(value: Decimal | None) -> str | None:
     return str(value) if value is not None else None
 
 
+_CONFIG_CACHE: dict[tuple[int, str], ProviderConfig] = {}
+_POLICY_CACHE: dict[int, RoutingConfigResponse] = {}
+
+
+def clear_config_cache(
+    repository: SQLiteRepository | None = None, provider: str | None = None
+) -> None:
+    """Clear cached provider and policy configurations."""
+
+    if repository is None:
+        if provider is None:
+            _CONFIG_CACHE.clear()
+            _POLICY_CACHE.clear()
+        else:
+            for key in [k for k in _CONFIG_CACHE if k[1] == provider]:
+                _CONFIG_CACHE.pop(key, None)
+    else:
+        repo_id = id(repository)
+        _POLICY_CACHE.pop(repo_id, None)
+        if provider is None:
+            for key in [k for k in _CONFIG_CACHE if k[0] == repo_id]:
+                _CONFIG_CACHE.pop(key, None)
+        else:
+            _CONFIG_CACHE.pop((repo_id, provider), None)
+
+
+def _on_setting_changed(repo: Any, key: str) -> None:
+    clear_config_cache(repo)
+
+
+register_setting_listener(_on_setting_changed)
+
+
 async def effective_provider_config(
     repository: SQLiteRepository | None, provider: ProviderName, *, strict: bool = False
 ) -> ProviderConfig:
@@ -756,6 +789,7 @@ async def _reconcile_provider_config(
 
     with suppress(Exception):
         await repository.update_runtime_setting(_provider_key(provider), _merge)
+        clear_config_cache(repository, provider.value)
 
 
 async def patch_provider_config(
@@ -785,6 +819,7 @@ async def patch_provider_config(
         return _provider_payload(config)
 
     await repository.update_runtime_setting(_provider_key(provider), _merge)
+    clear_config_cache(repository, provider.value)
     return outcome["config"]
 
 
@@ -808,11 +843,20 @@ async def effective_config_for_name(
 ) -> ProviderConfig:
     """Canonical-name wrapper for request-path lookups; unknown names default."""
 
+    if repository is not None:
+        cache_key = (id(repository), name)
+        cached = _CONFIG_CACHE.get(cache_key)
+        if cached is not None:
+            return cached
+
     try:
         provider = ProviderName(name)
     except ValueError:
         return ProviderConfig()
-    return await effective_provider_config(repository, provider, strict=strict)
+    config = await effective_provider_config(repository, provider, strict=strict)
+    if repository is not None:
+        _CONFIG_CACHE[(id(repository), name)] = config
+    return config
 
 
 async def persist_provider_config(
@@ -823,16 +867,24 @@ async def persist_provider_config(
     if repository is None:
         return
     await repository.set_runtime_setting(_provider_key(provider), _provider_payload(config))
+    clear_config_cache(repository, provider.value)
 
 
 async def routing_policy(repository: SQLiteRepository | None) -> RoutingConfigResponse:
     """Return the persisted routing policy or its defaults; corrupt data defaults."""
 
+    if repository is not None:
+        cached = _POLICY_CACHE.get(id(repository))
+        if cached is not None:
+            return cached
     payload = await _safe_runtime_setting(repository, _ROUTING_KEY)
+    policy = RoutingConfigResponse()
     if isinstance(payload, dict):
         with suppress(ValidationError):
-            return RoutingConfigResponse.model_validate(payload)
-    return RoutingConfigResponse()
+            policy = RoutingConfigResponse.model_validate(payload)
+    if repository is not None:
+        _POLICY_CACHE[id(repository)] = policy
+    return policy
 
 
 async def persist_routing_config(
@@ -847,6 +899,7 @@ async def persist_routing_config(
     if repository is None:
         return
     await repository.set_runtime_setting(_ROUTING_KEY, policy.model_dump(mode="json"))
+    _POLICY_CACHE.pop(id(repository), None)
 
 
 async def load_breaker(
