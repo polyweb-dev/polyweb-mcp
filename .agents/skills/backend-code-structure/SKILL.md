@@ -15,7 +15,7 @@ Modules are strictly organized by operational role and dependency layering:
 
 | Package | Purpose & Ownership | Constraints & Rules |
 | :--- | :--- | :--- |
-| **`models/`** | Domain contracts, DTOs, schemas, enums, validation. | Pure data structures. Zero I/O, database, or external library dependencies. |
+| **`models/`** | Domain contracts, DTOs, schemas, enums, validation. | Pure data structures. Use Pydantic explicitly for each contract. Do not import transport, database, or vendor SDK modules. |
 | **`configuration/`** | Settings models, environment variable loaders, provider configs, registries. | Exposes cached/singleton accessors. No operational business logic. |
 | **`services/`** | Core business logic, routing, monitoring, orchestration, and domain workflows. | Distinct from HTTP routers. Depends on models, persistence, and adapters via interfaces. |
 | **`adapters/`** | External third-party integrations implementing unified interfaces. | Encapsulates vendor-specific HTTP/SDK calls and error mapping into domain contracts. |
@@ -23,6 +23,8 @@ Modules are strictly organized by operational role and dependency layering:
 | **`persistence/`** | Storage repositories, database ORM/tables, migration runners, and Alembic version scripts. | Owns schema definitions and raw queries. Returns domain models or entity aggregates. |
 | **`routers/`** | Transport-layer endpoints (REST API, control plane). | Thin handlers: validate request parameters, call services, and return responses. No inline DB queries. |
 | **`mcp/`** | MCP server composition, surface schemas, tool registrations, and lifecycle execution. | Exposes capabilities via the Model Context Protocol; delegates work to services/adapters. |
+
+The codebase uses Pydantic actively. `models/contracts.py` and `models/observability.py` define the domain contracts as Pydantic models. Each new domain contract must use Pydantic explicitly.
 
 ---
 
@@ -61,7 +63,7 @@ Mirror the source tree under `tests/` split strictly by execution speed and runt
 tests/
   conftest.py                     # Root shared fixtures, fake adapters, and test configuration
   fixtures/                       # Static mock payloads and JSON fixtures
-  unit/                           # Fast, isolated tests (<10ms/test, zero live I/O)
+  unit/                           # Fast, isolated tests with zero live I/O
     adapters/                     # Mirrors src/<app>/adapters/
     configuration/                # Mirrors src/<app>/configuration/
     infrastructure/               # Mirrors src/<app>/infrastructure/
