@@ -241,7 +241,7 @@ describe("creditCardModel", () => {
       aggregate_pool: { ...(braveAuth().aggregate_pool as unknown as Record<string, unknown>), manual_anchor: true } as never,
     })
     const model = creditCardModel({ auth, usageTotals: [] })
-    expect(model.provenanceNote).toBe("Estimated · Balance entry")
+    expect(model.provenanceNote).toBe("Estimated · Provider Balance")
   })
 })
 
@@ -278,7 +278,7 @@ describe("polish provenance (Item 4+5)", () => {
       { provider: "brave", operation: "search", normalized_crd: "6", attempt_count: 1, volume_count: 1 },
     ]
     const model = creditCardModel({ auth, usageTotals: totals })
-    expect(model.provenanceNote).toBe("Estimated · Balance entry")
+    expect(model.provenanceNote).toBe("Estimated · Provider Balance")
     expect(model.remainingUSD).toBe("4.500")
     expect(model.pricedUseUSD).toBe("0.011")
   })

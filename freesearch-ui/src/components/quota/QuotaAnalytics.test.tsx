@@ -8,18 +8,106 @@ import {
   allProvidersFixture,
   routingConfigFixture,
   dashboardFixture,
-  canonicalQuotasFixture,
-  canonicalTotalsFixture,
   type WireDashboard,
 } from "@/test/fixtures"
 
 /**
- * RED (new file): quota telemetry comes from the dashboard — usage_totals
- * aggregates are shown, an empty latest_quota renders a "quota unavailable"
- * notice, per-provider null limits render "—"/blank (RF2: never 8), and no
- * invented savings/cache numbers (248/814/342) may appear.
+ * UI7 shell: QuotaAnalytics is a compatibility shell over QuotaPage.
+ * Legacy native rows left the page (UI7-05); one credit bar, CRD totals,
+ * and one price footer remain (UI7-02, UI7-06). Exact assertions only.
  */
-function renderWithBackend(dashboard: WireDashboard) {
+
+function braveCreditEntry(): Record<string, unknown> {
+  const profile = {
+    reference_usd_per_crd: "0.001",
+    native_usd_per_unit: "1",
+    cost_basis: "priced_native_use",
+    price_version: "v2026-09",
+    source: "documented",
+    estimated: false,
+  }
+  return {
+    provider: "brave",
+    active_auth_mode: "keyed",
+    auths: [
+      {
+        auth_mode: "keyed",
+        transport_available: true,
+        search: {
+          provider: "brave",
+          operation: "search",
+          auth_mode: "keyed",
+          supported: true,
+          transport_available: true,
+          rate: null,
+          budget: null,
+          native_pool_id: "brave:keyed:usd",
+          conversion_profile: profile,
+          plan_name: "Brave Search",
+          usage_url: "https://api-dashboard.search.brave.com/",
+          version: 1,
+        },
+        fetch: {
+          provider: "brave",
+          operation: "fetch",
+          auth_mode: "keyed",
+          supported: false,
+          transport_available: false,
+          rate: null,
+          budget: null,
+          native_pool_id: null,
+          conversion_profile: { ...profile, native_usd_per_unit: null },
+          plan_name: null,
+          usage_url: null,
+          version: 1,
+        },
+        free_tiers: [],
+        paid_tiers: [],
+        unknown_tiers: [],
+        tier_split_known: true,
+        aggregate_pool: {
+          pool_id: "brave:keyed:usd",
+          provider: "brave",
+          auth_mode: "keyed",
+          native_unit: "USD",
+          remaining: "4.500",
+          allowance: "5.000",
+          actual_spend_usd: null,
+          source: "vendor_headers",
+          confidence: "observed",
+          reset_at: "2026-10-01T00:00:00Z",
+          observed_at: "2026-09-06T10:05:00Z",
+          version: 1,
+          credential_generation: 1,
+          next_sync_at: null,
+          stale: false,
+          manual_anchor: false,
+        },
+        crd_views: [
+          {
+            state: "finite",
+            operation: "search",
+            remaining_crd: "4500",
+            local_remaining_crd: null,
+            request_cost_crd: "5",
+            shared_pool_id: "brave:keyed:usd",
+            possible_standard_calls: "900",
+            price_version: "v2026-09",
+            priced: true,
+          },
+        ],
+        rate_progress: [],
+        grants: null,
+        detail: null,
+      },
+    ],
+    documented_keyless_operations: [],
+    version: 1,
+    generated_at: "2026-09-06T10:05:00Z",
+  }
+}
+
+function renderShell(dashboard: Record<string, unknown>) {
   installFetchStub((req) => {
     if (req.url === "/api/v1/providers" && req.method === "GET") {
       return ok(allProvidersFixture())
@@ -28,6 +116,9 @@ function renderWithBackend(dashboard: WireDashboard) {
       return ok(routingConfigFixture())
     }
     if (req.url.startsWith("/dashboard")) return ok(dashboard)
+    if (req.url.endsWith("/manual-quota") && req.method === "GET") {
+      return err(404, { detail: "no manual quota configured" })
+    }
     return err(404, { detail: "unhandled test route" })
   })
   return render(
@@ -37,113 +128,77 @@ function renderWithBackend(dashboard: WireDashboard) {
   )
 }
 
-describe("QuotaAnalytics (live backend)", () => {
-  it("shows hourly resets as local time with minutes and AM/PM", async () => {
-    const resetAt = "2026-09-11T13:05:00Z"
-    renderWithBackend(dashboardFixture({ latest_quota: [{
-      provider: "keenable", source: "observed", observed_at: "2026-09-11T12:00:00Z",
-      remaining: "1000", limit: "1000", remaining_percent: "100",
-      unit_kind: "REQUEST", reset_at: resetAt,
-    }] }))
-    const expected = new Date(resetAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true })
-    await waitFor(() => {
-      expect(screen.getByText("Keenable quota", { exact: true }).closest("tr"))
-        .toHaveTextContent(`Resets ${expected}`)
-    })
-  })
-
+describe("QuotaAnalytics shell (UI7)", () => {
   afterEach(() => {
     vi.unstubAllGlobals()
   })
 
-  it("shows dashboard usage_totals aggregates without invented numbers", async () => {
-    renderWithBackend(dashboardFixture())
+  it("renders the new page sections with no legacy grid (UI7-05)", async () => {
+    renderShell(dashboardFixture() as unknown as Record<string, unknown>)
     await waitFor(() => {
-      expect(screen.getByText("Tavily", { exact: true })).toBeInTheDocument()
+      expect(screen.getByText("Usage")).toBeInTheDocument()
     })
-
-    // Real aggregate from the wire fixture
-    expect(screen.getByText(/3\.5/)).toBeInTheDocument()
-    const body = document.body.textContent ?? ""
-    for (const invented of ["248", "814", "342"]) {
-      expect(body).not.toContain(invented)
-    }
-    expect(body).not.toMatch(/\$[\d.]+ saved this cycle/)
+    expect(screen.getByText("Provider credit units")).toBeInTheDocument()
+    expect(screen.getByText("Usage totals")).toBeInTheDocument()
+    expect(screen.getByText("How credit units are priced")).toBeInTheDocument()
+    expect(screen.getByText("Provider actions")).toBeInTheDocument()
+    expect(screen.queryByText("Provider quota view")).toBe(null)
   })
 
-  it("renders a quota-unavailable notice when latest_quota is empty", async () => {
-    renderWithBackend(dashboardFixture({ latest_quota: [] }))
-    await waitFor(() => {
-      expect(screen.getByText("Tavily", { exact: true })).toBeInTheDocument()
+  it("shows one Brave credit bar with 90 percent and exact funds (UI7-02)", async () => {
+    renderShell({
+      ...(dashboardFixture() as unknown as Record<string, unknown>),
+      provider_limits: [braveCreditEntry()],
+      crd_usage_totals: [],
     })
-
-    expect(screen.getAllByText(/quota unavailable|unavailable/i).length).toBeGreaterThan(0)
+    await waitFor(() => {
+      expect(
+        screen.getByRole("progressbar", { name: "Brave Search credit units remaining" }),
+      ).toBeInTheDocument()
+    })
+    // CARD-3: credit fraction "4500 / 5000 CRD" renders as split spans; no single "4500 CRD" node.
+    expect(screen.getByText("4500")).toBeInTheDocument()
+    expect(screen.getByText("/ 5000")).toBeInTheDocument()
+    expect(screen.getByText("CRD")).toBeInTheDocument()
+    expect(screen.queryByText("4500 CRD")).toBe(null)
+    expect(screen.queryByText("CRD left")).toBe(null)
+    expect(screen.getByText("4500").closest("span")?.parentElement?.textContent?.replace(/\s+/g, "")).toBe("4500/5000CRD")
+    expect(screen.queryByText("n/a")).toBe(null)
+    expect(document.body.textContent ?? "").not.toContain("∞")
   })
 
-  it("RF2: renders per-provider null limits as —/blank, never 8 or numbers", async () => {
-    renderWithBackend(dashboardFixture())
-    await waitFor(() => {
-      expect(screen.getByText("Tavily", { exact: true })).toBeInTheDocument()
+  it("places card actions at the leading edge and the fraction at the trailing edge below the bar (CARD-3)", async () => {
+    renderShell({
+      ...(dashboardFixture() as unknown as Record<string, unknown>),
+      provider_limits: [braveCreditEntry()],
+      crd_usage_totals: [],
     })
-
-    // RF2: null limits stay blank/—; the configured provider count is legitimate.
-    expect(screen.getByText("8 configured")).toBeInTheDocument()
-    const body = (document.body.textContent ?? "").replace("8 configured", "")
-    expect(body).not.toContain("8")
-    expect(body).not.toContain("∞")
-    expect(screen.getAllByText(/—/).length).toBeGreaterThan(0)
+    await waitFor(() => {
+      expect(
+        screen.getByRole("progressbar", { name: "Brave Search credit units remaining" }),
+      ).toBeInTheDocument()
+    })
+    const card = screen.getByRole("heading", { name: "Brave Search" }).closest("article") as HTMLElement
+    expect(card.querySelector('[data-testid="provider-logo-brave"]')).not.toBeNull()
+    expect(screen.getByText("Observed from the vendor API")).toBeInTheDocument()
+    const buttons = Array.from(card.querySelectorAll("button")).map((button) => button.textContent)
+    expect(buttons.slice(0, 4)).toEqual(["Sync", "Provider Balance", "Budget Limit", "History"])
+    const creditRow = screen.getByText("4500").closest("span")?.parentElement?.parentElement
+    const children = Array.from(creditRow?.children ?? [])
+    expect(children.length).toBe(2)
+    expect(children[0]?.textContent).toContain("Sync")
+    expect(children[1]?.textContent?.replace(/\s+/g, "")).toContain("4500/5000CRD")
+    const bar = screen.getByRole("progressbar", { name: "Brave Search credit units remaining" })
+    expect((bar.compareDocumentPosition(creditRow as Node) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0).toBe(true)
   })
 
-  it("renders authoritative latest_quota values for Brave", async () => {
-    renderWithBackend(
-      dashboardFixture({
-        latest_quota: [
-          {
-            provider: "brave",
-            source: "authoritative",
-            observed_at: "2026-09-06T18:00:00Z",
-            remaining: "900",
-            limit: "1000",
-            reset_at: "2026-10-01T00:00:00Z",
-          },
-        ],
-      })
-    )
+  it("keeps an honest empty credit state with no invented rows (UI7-05)", async () => {
+    renderShell(dashboardFixture() as unknown as Record<string, unknown>)
     await waitFor(() => {
-      expect(screen.getByText("Brave Search quota", { exact: true })).toBeInTheDocument()
+      expect(screen.getByText("No provider limit data reported by the backend.")).toBeInTheDocument()
     })
-
-    const row =
-      screen.getByText("Brave Search quota", { exact: true }).closest("tr")!
-    expect(row.textContent).toContain("900")
-    expect(row.textContent).toContain("1000")
-  })
-
-  it("uses the canonical remaining_percent headline while retaining native details", async () => {
-    renderWithBackend(dashboardFixture({ latest_quota: canonicalQuotasFixture() }))
-    await waitFor(() => {
-      expect(screen.getByText("Tavily quota", { exact: true })).toBeInTheDocument()
-    })
-
-    const row = screen.getByText("Tavily quota", { exact: true }).closest("tr")!
-    expect(row.querySelector('[data-testid="quota-remaining-percent-tavily"]')?.textContent).toBe(
-      "90% remaining"
-    )
-    expect(row.textContent).toContain("90000.05/100000.10 credits")
-  })
-
-  it("labels quota windows and explains providers without a configured budget", async () => {
-    renderWithBackend(dashboardFixture({ latest_quota: [] }))
-    await waitFor(() => {
-      expect(screen.getByText("Parallel quota", { exact: true })).toBeInTheDocument()
-    })
-
-    const parallelRow = screen.getByText("Parallel quota", { exact: true }).closest("tr")!
-    expect(parallelRow.textContent).toMatch(/budget not configured.*monthly/i)
-    expect(parallelRow.textContent).toMatch(/no api-key balance endpoint/i)
-
-    const keenableRow = screen.getByText("Keenable quota", { exact: true }).closest("tr")!
-    expect(keenableRow.textContent).toMatch(/hourly quota pending.*Hourly/i)
+    expect(screen.queryByRole("progressbar")).toBe(null)
+    expect(document.body.textContent ?? "").not.toContain("∞")
   })
 
   it("renders the persistent usageError banner when the dashboard fails", async () => {
@@ -155,8 +210,6 @@ describe("QuotaAnalytics (live backend)", () => {
         return ok(routingConfigFixture())
       }
       if (req.url.startsWith("/dashboard")) {
-        // Distinctive detail: must surface in an error banner, not the
-        // generic quota/cache notice.
         return err(503, { detail: "quota store exploded zzz9" })
       }
       return err(404, { detail: "unhandled test route" })
@@ -175,196 +228,35 @@ describe("QuotaAnalytics (live backend)", () => {
     )
   })
 
-  it("exposes cache telemetry as unavailable instead of invented cache stats", async () => {
-    renderWithBackend(dashboardFixture())
+  it("exposes no invented cache numbers on the new page (UI7-05)", async () => {
+    renderShell(dashboardFixture() as unknown as Record<string, unknown>)
     await waitFor(() => {
-      expect(screen.getByText("Tavily", { exact: true })).toBeInTheDocument()
+      expect(screen.getByText("Usage")).toBeInTheDocument()
     })
-
-    expect(screen.getByText(/cache telemetry unavailable|cache.*unavailable/i)).toBeInTheDocument()
     const body = document.body.textContent ?? ""
-    expect(body).not.toContain("248")
+    for (const invented of ["248", "814", "342"]) {
+      expect(body).not.toContain(invented)
+    }
+    expect(body).not.toMatch(/\$[\d.]+ saved this cycle/)
   })
 
-  it("RF1: preserves exact limit strings verbatim on the quota view", async () => {
-    renderWithBackend(dashboardFixture({ latest_quota: canonicalQuotasFixture() }))
-    await waitFor(() => {
-      expect(screen.getByText("Tavily quota", { exact: true })).toBeInTheDocument()
+  it("lists one Brave price row with no fetch row in the footer (UI7-04, UI7-06)", async () => {
+    renderShell({
+      ...(dashboardFixture() as unknown as Record<string, unknown>),
+      provider_limits: [braveCreditEntry()],
+      crd_usage_totals: [],
     })
-
-    const tavilyRow = screen.getByText("Tavily quota", { exact: true }).closest("tr")!
-    expect(tavilyRow.textContent).toContain("100000.10")
-    expect(tavilyRow.textContent).not.toContain("100000.1 ")
-
-    const exaRow = screen.getByText("Exa quota", { exact: true }).closest("tr")!
-    expect(exaRow.textContent).toContain("0.00000001")
-    expect(exaRow.textContent).not.toContain("1e-8")
+    await waitFor(() => {
+      expect(
+        screen.getByRole("progressbar", { name: "Brave Search credit units remaining" }),
+      ).toBeInTheDocument()
+    })
+    expect(screen.getByText("0.005 USD")).toBeInTheDocument()
+    expect(screen.getByText("5 CRD")).toBeInTheDocument()
   })
 
-  it("renders AUTHORITATIVE credits with a visible confidence badge", async () => {
-    renderWithBackend(dashboardFixture({ latest_quota: canonicalQuotasFixture() }))
-    await waitFor(() => {
-      expect(screen.getByText("Tavily quota", { exact: true })).toBeInTheDocument()
-    })
-
-    const row = screen.getByText("Tavily quota", { exact: true }).closest("tr")!
-    expect(row.textContent).toContain("authoritative")
-    expect(row.textContent).toContain("90000.05")
-    expect(row.textContent).toContain("100000.10")
-    expect(row.textContent).toContain("credits")
-  })
-
-  it("renders OBSERVED requests with reset timing and confidence", async () => {
-    renderWithBackend(dashboardFixture({ latest_quota: canonicalQuotasFixture() }))
-    await waitFor(() => {
-      expect(screen.getByText("Brave Search quota", { exact: true })).toBeInTheDocument()
-    })
-
-    const row = screen.getByText("Brave Search quota", { exact: true }).closest("tr")!
-    expect(row.textContent).toContain("observed")
-    expect(row.textContent).toContain("950")
-    expect(row.textContent).toContain("1000")
-    expect(row.textContent).toMatch(/reset/i)
-  })
-
-  it("renders You.com ESTIMATED USD with limit null as remaining-only plus the no-hard-limit note", async () => {
-    renderWithBackend(dashboardFixture({ latest_quota: canonicalQuotasFixture() }))
-    await waitFor(() => {
-      expect(screen.getByText("You.com quota", { exact: true })).toBeInTheDocument()
-    })
-
-    const row = screen.getByText("You.com quota", { exact: true }).closest("tr")!
-    expect(row.textContent).toContain("estimated")
-    expect(row.textContent).toContain("4.75")
-    // RF2 (null-limit —) is locked by the dedicated RF2 test above; here we
-    // lock the You.com remaining-only note semantics.
-    expect(row.textContent).toMatch(/no hard limit/i)
-    expect(row.textContent).toMatch(/call equivalents are derived, not a vendor limit/i)
-  })
-
-  it("renders the null-kind legacy quota row without merging it into a known unit", async () => {
-    renderWithBackend(dashboardFixture({ latest_quota: canonicalQuotasFixture() }))
-    await waitFor(() => {
-      expect(screen.getByText("Exa quota", { exact: true })).toBeInTheDocument()
-    })
-
-    const row = screen.getByText("Exa quota", { exact: true }).closest("tr")!
-    expect(row.textContent).toContain("0.00000005")
-    expect(row.textContent).toContain("0.00000001")
-    expect(row.textContent).toMatch(/legacy|estimated/i)
-  })
-
-  it("keeps usage totals triple-keyed with a same-unit comparison caption", async () => {
-    renderWithBackend(dashboardFixture({ usage_totals: canonicalTotalsFixture() }))
-    await waitFor(() => {
-      expect(screen.getAllByText("Tavily", { exact: true }).length).toBeGreaterThanOrEqual(2)
-    })
-
-    const body = document.body.textContent ?? ""
-    expect(body).toMatch(/only within the same unit|comparable within the same unit/i)
-    // Both Tavily dimensions stay visible as separate rows.
-    expect(body).toContain("3.5")
-    expect(body).toContain("0.007")
-    expect(body).toMatch(/legacy.*mixed|mixed.*legacy/i)
-  })
-
-  it("shows confidence labels for dashboard snapshots", async () => {
-    renderWithBackend(dashboardFixture({ latest_quota: canonicalQuotasFixture() }))
-    await waitFor(() => {
-      expect(screen.getByText("Tavily quota", { exact: true })).toBeInTheDocument()
-    })
-
-    const body = document.body.textContent ?? ""
-    expect(body).toContain("authoritative")
-    expect(body).toContain("observed")
-    expect(body).toContain("estimated")
-  })
-
-
-  it("shows per-provider p95 in the Usage totals grid (shared across operation rows)", async () => {
-    renderWithBackend(dashboardFixture({ usage_totals: canonicalTotalsFixture() }))
-    await waitFor(() => {
-      expect(screen.getAllByText("Tavily", { exact: true }).length).toBeGreaterThanOrEqual(2)
-    })
-
-    const section = screen.getByText("Usage totals", { exact: true }).closest("section")!
-    const board = section.querySelector("div.overflow-x-auto")!
-    const grids = Array.from(board.querySelectorAll(":scope > div"))
-    // Header row + one row per triple-keyed total (2 Tavily + Brave + legacy Exa).
-    expect(grids.length).toBe(5)
-    expect(
-      Array.from(grids[0].querySelectorAll("span")).map((s) => s.textContent?.trim() ?? "")
-    ).toEqual(["Provider", "Operation", "Unit", "p95", "Total units"])
-    // Fixture p95 is 100 + rank*10: Brave 110ms, Tavily 130ms, Exa 140ms.
-    const p95Cells = (row: Element) =>
-      Array.from(row.querySelectorAll("span"))
-        .map((s) => s.textContent?.trim() ?? "")
-        .filter((t) => t === "110ms" || t === "130ms" || t === "140ms")
-    const bodyRows = grids.slice(1)
-    expect(p95Cells(bodyRows[0])).toEqual(["130ms"])
-    expect(p95Cells(bodyRows[1])).toEqual(["130ms"])
-    expect(p95Cells(bodyRows[2])).toEqual(["110ms"])
-    expect(p95Cells(bodyRows[3])).toEqual(["140ms"])
-    // Dimension-safe grouping note stays put.
-    expect(section.textContent).toMatch(/only within the same unit/i)
-  })
-
-  it("renders an em-dash p95 when the provider reports null latency", async () => {
-    const providers = allProvidersFixture().map((row) =>
-      row.provider_id === "exa" ? { ...row, latency_p95_ms: null } : row
-    )
-    installFetchStub((req) => {
-      if (req.url === "/api/v1/providers" && req.method === "GET") {
-        return ok(providers)
-      }
-      if (req.url === "/api/v1/routing/config" && req.method === "GET") {
-        return ok(routingConfigFixture())
-      }
-      if (req.url.startsWith("/dashboard"))
-        return ok(dashboardFixture({ usage_totals: canonicalTotalsFixture() }))
-      return err(404, { detail: "unhandled test route" })
-    })
-    render(
-      <FreeSearchProvider>
-        <QuotaAnalytics />
-      </FreeSearchProvider>
-    )
-    await waitFor(() => {
-      expect(screen.getAllByText("Tavily", { exact: true }).length).toBeGreaterThanOrEqual(2)
-    })
-
-    const section = screen.getByText("Usage totals", { exact: true }).closest("section")!
-    const board = section.querySelector("div.overflow-x-auto")!
-    const bodyRows = Array.from(board.querySelectorAll(":scope > div")).slice(1)
-    const exaRow = bodyRows.find((row) => row.textContent?.includes("Exa"))
-    expect(exaRow, "legacy Exa totals row must exist").toBeDefined()
-    expect(exaRow!.textContent).toContain("\u2014")
-    const braveRow = bodyRows.find((row) => row.textContent?.includes("Brave"))
-    expect(braveRow!.textContent).toContain("110ms")
-  })
-
-  it("flags a Keenable hourly row with a past reset as stale", async () => {
-    renderWithBackend(dashboardFixture({ latest_quota: [{
-      provider: "keenable", source: "observed", observed_at: "2026-09-11T12:00:00Z",
-      remaining: "999", limit: "1000", remaining_percent: "99.9",
-      unit_kind: "REQUEST", reset_at: "2000-01-01T00:00:00Z",
-    }] }))
-    await waitFor(() => {
-      expect(screen.getByText("Keenable quota", { exact: true }).closest("tr"))
-        .toHaveTextContent("Stale \u2014 refreshes on next use")
-    })
-  })
-
-  it("does not flag a Keenable hourly row with a future reset", async () => {
-    renderWithBackend(dashboardFixture({ latest_quota: [{
-      provider: "keenable", source: "observed", observed_at: "2026-09-11T12:00:00Z",
-      remaining: "999", limit: "1000", remaining_percent: "99.9",
-      unit_kind: "REQUEST", reset_at: "2999-01-01T00:00:00Z",
-    }] }))
-    await waitFor(() => {
-      expect(screen.getByText("Keenable quota", { exact: true })).toBeInTheDocument()
-    })
-    expect(screen.getByText("Keenable quota", { exact: true }).closest("tr")?.textContent)
-      .not.toContain("Stale \u2014 refreshes on next use")
+  it("keeps dashboard fixture type compatibility", () => {
+    const wire: WireDashboard = dashboardFixture()
+    expect(wire.latest_quota).toEqual([])
   })
 })

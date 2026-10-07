@@ -1,11 +1,12 @@
-import { describe, expect, it, vi } from "vitest"
+import { describe, expect, it } from "vitest"
 import { render, screen } from "@testing-library/react"
 import type { ProviderAuthLimits } from "@/domains/dashboard"
 import { ProviderLimitsDetail } from "./ProviderLimitsDetail"
 
 /**
- * UI7 detail: known fields only, no Unknown/n/a/dash rows, fetch rows
- * gated by operation support, safe usage links only. Covers UI7-01, UI7-04.
+ * CARD-2 detail: vendor spend + reset + budget-limit rows only.
+ * Plan, USD per call, CRD cost rows and the usage link live in the popover.
+ * Covers CARD-2 kept-row set and order.
  */
 
 function authFixture(): ProviderAuthLimits {
@@ -137,62 +138,116 @@ function authFixture(): ProviderAuthLimits {
   } as unknown as ProviderAuthLimits
 }
 
+function grantsFixture() {
+  return {
+    provider: "brave",
+    auth_mode: "keyed",
+    period_start: "2026-09-01",
+    period_end: "2026-09-30",
+    version: 3,
+    search_granted_crd: "100",
+    search_consumed_crd: "12",
+    search_reserved_crd: "0",
+    fetch_granted_crd: "50",
+    fetch_consumed_crd: "5",
+    fetch_reserved_crd: "0",
+  }
+}
+
+function withSpend(auth: ProviderAuthLimits, spend: string | null): ProviderAuthLimits {
+  const detail = { ...(auth.detail as object), actual_spend_usd: spend } as never
+  return { ...auth, detail }
+}
+
+function withGrants(auth: ProviderAuthLimits, grants: unknown): ProviderAuthLimits {
+  return { ...auth, grants: grants as never }
+}
+
+function withFetchSupport(auth: ProviderAuthLimits): ProviderAuthLimits {
+  return {
+    ...auth,
+    fetch: {
+      ...(auth.fetch as object),
+      supported: true,
+      transport_available: true,
+    } as never,
+  }
+}
+
+function labels(): Array<string | null> {
+  return Array.from(document.querySelectorAll("dt")).map((entry) => entry.textContent)
+}
+
 describe("ProviderLimitsDetail", () => {
-  it("shows known vendor rows with no invented placeholder (UI7-01)", () => {
+  it("hides the plan, call price, CRD cost rows and usage link that the popover owns (CARD-2)", () => {
     render(<ProviderLimitsDetail providerName="Brave" auth={authFixture()} />)
-    expect(screen.getByText("Brave Search")).not.toBeNull()
-    expect(screen.getByText("0.005")).not.toBeNull()
+    expect(screen.queryByText("Brave Search")).toBe(null)
+    expect(screen.queryByText("0.005")).toBe(null)
+    expect(screen.queryByText("Search CRD cost")).toBe(null)
+    expect(screen.queryByText("Fetch CRD cost")).toBe(null)
+    expect(screen.queryByRole("link", { name: "Brave usage page" })).toBe(null)
+    expect(screen.queryByText("Remaining balance")).toBe(null)
+    expect(screen.queryByText("Native balance")).toBe(null)
+    expect(screen.queryByText("Native allowance")).toBe(null)
+    expect(screen.queryByText("Aggregate pool")).toBe(null)
     expect(screen.queryByText("Unknown")).toBe(null)
     expect(screen.queryByText("n/a")).toBe(null)
     expect(screen.queryByText("Not reported")).toBe(null)
   })
 
-  it("labels the balance Remaining balance with dollar form and human pool name (final-polish 3a, 3d, 3e)", () => {
+  it("keeps the vendor reset row with exact text (CARD-2)", () => {
     render(<ProviderLimitsDetail providerName="Brave" auth={authFixture()} />)
-    expect(screen.getByText("Remaining balance")).not.toBeNull()
-    expect(screen.queryByText("Native balance")).toBe(null)
-    expect(screen.getByText("$4.5")).not.toBeNull()
-    expect(screen.getByText("Native allowance")).not.toBeNull()
-    expect(screen.getByText("$5")).not.toBeNull()
-    expect(screen.getByText("Keyed USD: $4.5 left of $5")).not.toBeNull()
-    expect(screen.queryByText("brave:keyed:usd")).toBe(null)
-    expect(screen.queryByText("4.500 USD")).toBe(null)
+    expect(screen.getByText("Reset")).not.toBeNull()
+    expect(screen.getByText("Resets on the vendor period")).not.toBeNull()
   })
 
-  it("groups credit units above plain facts above USD amounts with no alternation (final-polish 3b)", () => {
-    render(<ProviderLimitsDetail providerName="Brave" auth={authFixture()} />)
-    const labels = Array.from(document.querySelectorAll("dt")).map((entry) => entry.textContent)
-    expect(labels[0]).toBe("Search CRD cost")
-    const usdLabels = ["Remaining balance", "Native allowance", "USD per call", "Aggregate pool"]
-    const firstUsd = Math.min(...usdLabels.map((label) => labels.indexOf(label)))
-    expect(firstUsd).toBeGreaterThan(0)
-    for (const label of usdLabels) {
-      expect(labels.indexOf(label)).toBeGreaterThanOrEqual(firstUsd)
-    }
-    expect(labels.slice(-4)).toEqual(usdLabels)
-    expect(screen.queryByText("Native balance")).toBe(null)
+  it("keeps the vendor spend row with exact label when known (CARD-2)", () => {
+    render(<ProviderLimitsDetail providerName="Brave" auth={withSpend(authFixture(), "1.23")} />)
+    expect(screen.getByText("Vendor-reported USD spend")).not.toBeNull()
+    expect(screen.getByText("1.23")).not.toBeNull()
   })
 
-  it("hides the fetch cost row without fetch support (UI7-04)", () => {
+  it("shows no spend row without a known spend (CARD-2)", () => {
     render(<ProviderLimitsDetail providerName="Brave" auth={authFixture()} />)
-    expect(screen.getByText("Search CRD cost")).not.toBeNull()
-    expect(screen.queryByText("Fetch CRD cost")).toBe(null)
+    expect(screen.queryByText("Vendor-reported USD spend")).toBe(null)
   })
 
-  it("opens the safe usage link with noopener and noreferrer (UI7-01)", () => {
-    render(<ProviderLimitsDetail providerName="Brave" auth={authFixture()} />)
-    const link = screen.getByRole("link", { name: "Brave usage page" })
-    expect(link.getAttribute("href")).toBe("https://api-dashboard.search.brave.com/")
-    expect(link.getAttribute("target")).toBe("_blank")
-    expect(link.getAttribute("rel")).toContain("noopener")
-    expect(link.getAttribute("rel")).toContain("noreferrer")
-    void vi
+  it("shows the spend-cap period and search budget rows when grants exist (CARD-2)", () => {
+    render(
+      <ProviderLimitsDetail
+        providerName="Brave"
+        auth={withGrants(authFixture(), grantsFixture())}
+      />,
+    )
+    expect(screen.getByText("Budget Limit period")).not.toBeNull()
+    expect(screen.getByText("Search budget limit")).not.toBeNull()
+    expect(screen.queryByText("Fetch budget limit")).toBe(null)
+  })
+
+  it("locks the kept-row set and order: credit units, plain facts, USD last (CARD-2)", () => {
+    const auth = withGrants(withSpend(withFetchSupport(authFixture()), "1.23"), grantsFixture())
+    render(<ProviderLimitsDetail providerName="Brave" auth={auth} />)
+    expect(labels()).toEqual([
+      "Search budget limit",
+      "Fetch budget limit",
+      "Reset",
+      "Budget Limit period",
+      "Vendor-reported USD spend",
+    ])
   })
 
   it("keeps exact zero as known data (UI7-01)", () => {
-    const auth = authFixture()
-    const detail = { ...(auth.detail as object), actual_spend_usd: "0" } as never
-    render(<ProviderLimitsDetail providerName="Brave" auth={{ ...auth, detail }} />)
+    render(<ProviderLimitsDetail providerName="Brave" auth={withSpend(authFixture(), "0")} />)
+    expect(screen.getByText("Vendor-reported USD spend")).not.toBeNull()
     expect(screen.getByText("0")).not.toBeNull()
+  })
+
+  it("renders no block without a known row or split note (CARD-2)", () => {
+    const auth = authFixture()
+    const detail = { ...(auth.detail as object), reset_rule: "unknown" } as never
+    const { container } = render(
+      <ProviderLimitsDetail providerName="Brave" auth={{ ...auth, detail, grants: null }} />,
+    )
+    expect(container.firstChild).toBe(null)
   })
 })

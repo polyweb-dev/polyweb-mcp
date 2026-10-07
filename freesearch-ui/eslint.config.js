@@ -119,6 +119,7 @@ export default tseslint.config(
     files: [
       'src/shared/ui/button.tsx',
       'src/shared/ui/dialog.tsx',
+      'src/shared/ui/popover.tsx',
       'src/shared/ui/table.tsx',
       'src/shared/ui/tabs.tsx',
       'src/shared/ui/tooltip.tsx',

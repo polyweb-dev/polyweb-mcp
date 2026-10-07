@@ -25,20 +25,22 @@ function renderActions(overrides: Partial<ProviderCardActionsProps> = {}) {
 }
 
 describe("ProviderCardActions", () => {
-  it("names the balance entry control with its exact meaning", () => {
+  it("names the provider balance control with its exact meaning", () => {
     renderActions()
     const manual = screen.getByRole("button", {
-      name: "Balance entry for Brave. Records the balance the vendor dashboard shows, as an estimate.",
+      name: "Provider Balance for Brave. Records the balance the vendor dashboard shows, as an estimate.",
     })
     expect(manual.getAttribute("data-testid")).toBe("manual-quota-open-brave")
+    expect(manual).toHaveTextContent("Provider Balance")
   })
 
-  it("names the spend cap control with its exact meaning", () => {
+  it("names the budget limit control with its exact meaning", () => {
     renderActions()
     const grant = screen.getByRole("button", {
-      name: "Spend cap for Brave. Sets a local credit-unit ceiling that adds no vendor funds.",
+      name: "Budget Limit for Brave. Sets a local credit-unit ceiling that adds no vendor funds.",
     })
     expect(grant.getAttribute("data-testid")).toBe("crd-grant-open-brave")
+    expect(grant).toHaveTextContent("Budget Limit")
   })
 
   it("exposes history and sync controls with stable names", () => {
@@ -63,11 +65,14 @@ describe("ProviderCardActions", () => {
     expect(sync.textContent).toBe("Syncing…")
   })
 
-  it("toggles the detail disclosure with expanded state and panel control", () => {
+  it("mounts no detail disclosure; the info popover owns detail (CARD-3)", () => {
     const { rerender } = renderActions()
-    const collapsed = screen.getByRole("button", { name: "Show detail" })
-    expect(collapsed.getAttribute("aria-expanded")).toBe("false")
-    expect(collapsed.getAttribute("aria-controls")).toBe("brave-detail")
+    expect(screen.queryByRole("button", { name: "Show detail" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Hide detail" })).toBeNull()
+    expect(screen.getByTestId("manual-quota-open-brave")).not.toBeNull()
+    expect(screen.getByTestId("crd-grant-open-brave")).not.toBeNull()
+    expect(screen.getByTestId("limit-history-open-brave")).not.toBeNull()
+    expect(screen.getByRole("button", { name: "Sync limits for Brave" })).not.toBeNull()
 
     rerender(
       <ProviderCardActions
@@ -82,8 +87,16 @@ describe("ProviderCardActions", () => {
         onToggleExpanded={vi.fn()}
       />,
     )
-    const expanded = screen.getByRole("button", { name: "Hide detail" })
-    expect(expanded.getAttribute("aria-expanded")).toBe("true")
-    expect(expanded.getAttribute("aria-controls")).toBe("brave-detail")
+    expect(screen.queryByRole("button", { name: "Show detail" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Hide detail" })).toBeNull()
+    expect(screen.getByTestId("manual-quota-open-brave")).not.toBeNull()
+    expect(screen.getByTestId("crd-grant-open-brave")).not.toBeNull()
+    expect(screen.getByTestId("limit-history-open-brave")).not.toBeNull()
+  })
+
+  it("locks action order Sync, Provider Balance, Budget Limit, History (CARD-3)", () => {
+    renderActions()
+    const labels = screen.getAllByRole("button").map((button) => button.textContent)
+    expect(labels).toEqual(["Sync", "Provider Balance", "Budget Limit", "History"])
   })
 })

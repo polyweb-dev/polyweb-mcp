@@ -7,12 +7,12 @@
  */
 
 /** The credit control that records the balance of the vendor dashboard. */
-export const BALANCE_ENTRY = "Balance entry"
-/** One sentence that states what a balance entry records. */
+export const BALANCE_ENTRY = "Provider Balance"
+/** One sentence that states what the provider balance control records. */
 export const BALANCE_ENTRY_NOTE = "Records the balance the vendor dashboard shows, as an estimate."
 /** The credit control that sets the local spend ceiling. */
-export const SPEND_CAP = "Spend cap"
-/** One sentence that states what a spend cap does. */
+export const SPEND_CAP = "Budget Limit"
+/** One sentence that states what the budget limit control does. */
 export const SPEND_CAP_NOTE = "Sets a local credit-unit ceiling that adds no vendor funds."
 /** One visible sentence that states the difference between the two controls. */
 export const CONTROL_SPLIT_NOTE =
@@ -20,6 +20,25 @@ export const CONTROL_SPLIT_NOTE =
   " records the vendor dashboard balance as an estimate. " +
   SPEND_CAP +
   " sets a local credit-unit ceiling."
+
+/** The credit tier of one rail: the free facts, the paid facts, or both. */
+export type CreditMode = "free" | "paid" | "both"
+/** The short tier word of one credit mode, for the credit note. */
+export const CREDIT_MODE_WORD: Record<CreditMode, string> = {
+  free: "Free",
+  paid: "Paid",
+  both: "Free + Paid",
+}
+/** The option label of one credit mode, for the mode combo. */
+export const CREDIT_MODE_LABEL: Record<CreditMode, string> = {
+  free: "Free credits",
+  paid: "Paid credits",
+  both: "Free + Paid",
+}
+/** The mode options in the shown order. */
+export const CREDIT_MODES: CreditMode[] = ["free", "paid", "both"]
+/** The label of the mode combo. */
+export const CREDIT_MODE_FIELD = "Credit mode"
 
 /** Source keys that mean "no source reported"; they yield no text. */
 const ABSENT_KEYS = ["", "unknown", "n/a", "none"]

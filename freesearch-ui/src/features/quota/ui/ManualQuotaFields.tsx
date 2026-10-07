@@ -1,4 +1,10 @@
 import type { ManualAmountMode, ManualQuotaFieldErrors, ManualQuotaFields } from "../model/manualQuotaMath"
+import {
+  CREDIT_MODE_FIELD,
+  CREDIT_MODE_LABEL,
+  CREDIT_MODES,
+  type CreditMode,
+} from "../model/quotaLabels"
 import { ManualQuotaField } from "./ManualQuotaField"
 
 export interface ManualQuotaFieldsProps {
@@ -8,12 +14,46 @@ export interface ManualQuotaFieldsProps {
   fields: ManualQuotaFields
   fieldErrors: ManualQuotaFieldErrors
   pending: boolean
+  /** The credit tier of this entry. The API carries no tier field, so it shows only. */
+  mode: CreditMode
+  onModeChange: (mode: CreditMode) => void
   onChange: (name: keyof ManualQuotaFields, value: string) => void
   /** `balance` labels the second amount as the remaining balance. */
   amountMode?: ManualAmountMode
 }
 
-/** Billing window form section: dates plus allowance/usage amounts. */
+/** The mode combo of one manual entry. */
+function modeField(
+  providerId: string,
+  mode: CreditMode,
+  pending: boolean,
+  onModeChange: (mode: CreditMode) => void,
+) {
+  return (
+    <ManualQuotaField
+      id={"manual-quota-mode-" + providerId}
+      testId="manual-quota-mode"
+      label={CREDIT_MODE_FIELD}
+      error={undefined}
+      disabled={pending}
+      render={(inputProps) => (
+        <select
+          value={mode}
+          onChange={(event) => onModeChange(event.target.value as CreditMode)}
+          {...inputProps}
+        >
+          {CREDIT_MODES.map((option) => (
+            <option key={option} value={option}>
+              {CREDIT_MODE_LABEL[option]}
+            </option>
+          ))}
+        </select>
+      )}
+    />
+  )
+}
+
+/** Billing window form section: the credit mode plus dates and allowance/usage amounts. */
 export function ManualQuotaFields({
   providerId,
   noun,
@@ -21,11 +61,14 @@ export function ManualQuotaFields({
   fields,
   fieldErrors,
   pending,
+  mode,
+  onModeChange,
   onChange,
   amountMode = "usage",
 }: ManualQuotaFieldsProps) {
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+    <div className="grid grid-cols-1 gap-3">
+      {modeField(providerId, mode, pending, onModeChange)}
       <ManualQuotaField
         id={"manual-quota-start-" + providerId}
         testId="manual-quota-start"

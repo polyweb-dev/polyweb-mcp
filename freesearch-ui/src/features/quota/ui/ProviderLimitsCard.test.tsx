@@ -163,6 +163,17 @@ function renderBraveCard(): void {
   )
 }
 
+/** CARD-3 fraction oracle: "4500 / 5000 CRD" renders as split spans, never one "4500 CRD" node. */
+function expectFraction(remaining: string, total: string): void {
+  expect(screen.getByText(remaining)).not.toBeNull()
+  expect(screen.getByText(`/ ${total}`)).not.toBeNull()
+  expect(screen.getByText("CRD")).not.toBeNull()
+  expect(screen.queryByText(`${remaining} CRD`)).toBeNull()
+  expect(screen.queryByText("CRD left")).toBeNull()
+  const value = screen.getByText(remaining).closest("span")?.parentElement
+  expect(value?.textContent?.replace(/\s+/g, "")).toBe(`${remaining}/${total}CRD`)
+}
+
 describe("ProviderLimitsCard Brave", () => {
   it("shows one credit bar with 90 percent, CRD only, and no fetch headline (UI7-01, UI7-02, UI7-04, final-polish 3c)", () => {
     renderBraveCard()
@@ -171,12 +182,13 @@ describe("ProviderLimitsCard Brave", () => {
     expect(bar.getAttribute("aria-valuemin")).toBe("0")
     expect(bar.getAttribute("aria-valuemax")).toBe("100")
     expect(screen.getByText("90%")).not.toBeNull()
-    expect(screen.getByText("4500 CRD")).not.toBeNull()
+    // CARD-3: credit fraction "4500 / 5000 CRD" via split spans; no "CRD left" label.
+    expectFraction("4500", "5000")
     // Final-polish Item 3c: card shows CRD only. USD value sits in hover title and aria-label.
     expect(screen.queryByText("4.500")).toBeNull()
     expect(screen.queryByText("USD left")).toBeNull()
     expect(screen.queryByText("USD use (priced)")).toBeNull()
-    const crdValue = screen.getByText("4500 CRD")
+    const crdValue = screen.getByText("4500")
     expect(crdValue.getAttribute("title")).toBe("$4.5 left")
     expect(crdValue.getAttribute("aria-label")).toBe("$4.5 left")
     // Polish Item 6: no auth_mode chip, no "keyed rail" text on the card.
@@ -189,10 +201,12 @@ describe("ProviderLimitsCard Brave", () => {
 
   it("exposes USD value in hover title and aria-label only with CRD bar text intact (final-polish 3c, 3e)", () => {
     renderBraveCard()
-    const crdValue = screen.getByText("4500 CRD")
+    expectFraction("4500", "5000")
+    const crdValue = screen.getByText("4500")
     expect(crdValue.getAttribute("title")).toBe("$4.5 left")
     expect(crdValue.getAttribute("aria-label")).toBe("$4.5 left")
     expect(screen.queryByText("USD left")).toBeNull()
+    expect(screen.queryByText("CRD left")).toBeNull()
     const bar = screen.getByRole("progressbar", { name: "Brave credit units remaining" })
     expect(bar.getAttribute("aria-valuetext")).toBe("90% remaining, 4500 CRD left")
     vi.unstubAllGlobals()
@@ -223,7 +237,7 @@ describe("ProviderLimitsCard Brave", () => {
     installFetchStub(() => ok({ events: [], next_cursor: null }))
     renderBraveCard()
     const user = userEvent.setup()
-    await user.click(screen.getByRole("button", { name: "Spend cap for Brave. Sets a local credit-unit ceiling that adds no vendor funds." }))
+    await user.click(screen.getByRole("button", { name: "Budget Limit for Brave. Sets a local credit-unit ceiling that adds no vendor funds." }))
     expect(await screen.findByText("Search credit units (CRD)")).not.toBeNull()
     expect(screen.queryByLabelText(/Fetch credit units/i)).toBeNull()
     expect(screen.queryByText(/n\/a for this provider/)).toBeNull()
@@ -253,7 +267,7 @@ describe("ProviderLimitsCard Brave", () => {
         manualEligible
       />,
     )
-    expect(screen.getByText("4500 CRD")).not.toBeNull()
+    expectFraction("4500", "5000")
     const auth = braveAuth()
     const debited = {
       ...auth,
@@ -270,8 +284,41 @@ describe("ProviderLimitsCard Brave", () => {
         manualEligible
       />,
     )
-    expect(screen.getByText("4495 CRD")).not.toBeNull()
+    expectFraction("4495", "5000")
     expect(screen.getByText("89.9%")).not.toBeNull()
+    vi.unstubAllGlobals()
+  })
+
+  it("holds logo, name, and source statement in the header (CARD-3)", () => {
+    renderBraveCard()
+    expect(screen.getByTestId("provider-logo-brave")).not.toBeNull()
+    expect(screen.getByRole("heading", { name: "Brave" })).not.toBeNull()
+    expect(screen.getByText("Observed from the vendor API")).not.toBeNull()
+    const headerRow = screen.getByTestId("provider-logo-brave").closest("div.flex")
+    expect(headerRow?.textContent).toContain("Brave")
+    expect(headerRow?.textContent).toContain("Observed from the vendor API")
+    vi.unstubAllGlobals()
+  })
+
+  it("places actions at the leading edge and the fraction at the trailing edge below the bar (CARD-3)", () => {
+    renderBraveCard()
+    const buttons = screen.getAllByRole("button").map((button) => button.textContent)
+    expect(buttons.slice(0, 4)).toEqual(["Sync", "Provider Balance", "Budget Limit", "History"])
+    const info = screen.getByRole("button", { name: "Credit details for Brave" })
+    expect(info.getAttribute("data-testid")).toBe("credit-info-brave")
+    const creditRow = screen.getByText("4500").closest("span")?.parentElement?.parentElement
+    expect(creditRow?.className).toContain("justify-between")
+    const children = Array.from(creditRow?.children ?? [])
+    expect(children.length).toBe(2)
+    expect(children[0]?.textContent).toContain("Sync")
+    expect(children[0]?.textContent).toContain("Provider Balance")
+    expect(children[0]?.textContent).toContain("Budget Limit")
+    expect(children[0]?.textContent).toContain("History")
+    expect(children[1]?.textContent?.replace(/\s+/g, "")).toContain("4500/5000CRD")
+    const fractionSpan = screen.getByText("4500").closest("span")?.parentElement
+    expect(fractionSpan?.contains(info)).toBe(true)
+    const bar = screen.getByRole("progressbar", { name: "Brave credit units remaining" })
+    expect((bar.compareDocumentPosition(creditRow as Node) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0).toBe(true)
     vi.unstubAllGlobals()
   })
 })

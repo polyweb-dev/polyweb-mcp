@@ -52,7 +52,7 @@ export function ProviderRateBars({
   if (bars.length === 0) return null
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-2 border-t border-[var(--border-subtle)] pt-3">
       {bars.map(({ bar, text }) => {
         const windowText = WINDOW_TEXT[bar.window as "1h" | "1d"]
         const unitText = UNIT_TEXT[bar.unit]

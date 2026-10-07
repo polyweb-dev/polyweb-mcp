@@ -18,11 +18,11 @@ import {
 
 describe("quotaLabels controls", () => {
   it("keeps the balance entry control name exact", () => {
-    expect(BALANCE_ENTRY).toBe("Balance entry")
+    expect(BALANCE_ENTRY).toBe("Provider Balance")
   })
 
   it("keeps the spend cap control name exact", () => {
-    expect(SPEND_CAP).toBe("Spend cap")
+    expect(SPEND_CAP).toBe("Budget Limit")
   })
 
   it("keeps the balance entry note exact", () => {
@@ -40,7 +40,7 @@ describe("quotaLabels controls", () => {
 
   it("keeps the split note exact", () => {
     expect(CONTROL_SPLIT_NOTE).toBe(
-      "Balance entry records the vendor dashboard balance as an estimate. Spend cap sets a local credit-unit ceiling.",
+      "Provider Balance records the vendor dashboard balance as an estimate. Budget Limit sets a local credit-unit ceiling.",
     )
   })
 })
@@ -51,12 +51,12 @@ describe("quotaLabels sourceLabel", () => {
     expect(sourceLabel("local")).toBe("Local use")
     expect(sourceLabel("local_daily_estimate")).toBe("Daily estimate (UTC)")
     expect(sourceLabel("local_ledger")).toBe("Local ledger")
-    expect(sourceLabel("manual_anchor")).toBe("Balance entry")
+    expect(sourceLabel("manual_anchor")).toBe("Provider Balance")
   })
 
   it("labels every operator and vendor source key", () => {
     expect(sourceLabel("operator")).toBe("Operator action")
-    expect(sourceLabel("operator_grant")).toBe("Spend cap")
+    expect(sourceLabel("operator_grant")).toBe("Budget Limit")
     expect(sourceLabel("vendor_api")).toBe("Vendor API")
     expect(sourceLabel("vendor_headers")).toBe("Vendor headers")
   })
@@ -77,11 +77,11 @@ describe("quotaLabels sourceLabel", () => {
 
 describe("quotaLabels reasonLabel", () => {
   it("labels the spend cap reason", () => {
-    expect(reasonLabel("grant")).toBe("Spend cap")
+    expect(reasonLabel("grant")).toBe("Budget Limit")
   })
 
   it("labels the balance entry reason", () => {
-    expect(reasonLabel("manual_anchor")).toBe("Balance entry")
+    expect(reasonLabel("manual_anchor")).toBe("Provider Balance")
   })
 
   it("returns no text for an absent reason", () => {

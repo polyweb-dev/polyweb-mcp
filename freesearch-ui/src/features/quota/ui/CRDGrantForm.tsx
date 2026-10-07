@@ -90,7 +90,9 @@ function validateDraft(
 /** Stored facts of the reported operations only; an absent rail stays absent. */
 function storedText(grants: CRDGrantsSummary, fetchAvailable: boolean): string {
   const search =
-    "Stored spend cap: search " +
+    "Stored " +
+    SPEND_CAP.toLowerCase() +
+    ": search " +
     formatCRDAmount(grants.search_granted_crd) +
     " set, " +
     formatCRDAmount(grants.search_consumed_crd) +
@@ -166,10 +168,6 @@ export function CRDGrantForm(props: CRDGrantFormProps): ReactNode {
 
   return (
     <form onSubmit={(event) => void handleSubmit(event)} noValidate className="space-y-3">
-      <p className="text-[12px] text-[var(--muted)]">
-        {SPEND_CAP} for the {authMode} rail. One CRD is USD 0.001 of priced native use. The spend
-        cap sets a local ceiling above the vendor balance.
-      </p>
       {stored !== null && <p className="tnum text-[12px] text-[var(--muted)]">{stored}</p>}
       <div className="grid grid-cols-1 gap-3">
         {fields.map((field) => {

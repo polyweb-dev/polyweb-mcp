@@ -1,10 +1,11 @@
+import { useState } from "react"
 import type { ReactNode } from "react"
 import { Modal } from "@/shared/ui/Modal"
 import { unitLabel } from "@/services/api/mappers"
 import type { BackendManualQuotaPayload } from "@/domains/dashboard/api/manualQuotaWire"
 import type { UnitKind } from "@/shared/api/units"
 import { formatPercent1dp, type ManualAmountMode } from "../model/manualQuotaMath"
-import { BALANCE_ENTRY, BALANCE_ENTRY_NOTE } from "../model/quotaLabels"
+import { BALANCE_ENTRY, BALANCE_ENTRY_NOTE, type CreditMode } from "../model/quotaLabels"
 import { useQuotaForm, type ManualQuotaDefaults } from "../model/useQuotaForm"
 import { ManualQuotaFields } from "./ManualQuotaFields"
 import { ManualQuotaActions } from "./ManualQuotaActions"
@@ -18,6 +19,8 @@ export interface ManualEntryVariant {
   unitKind: UnitKind | null
   displayUnit?: string | null
   defaults?: ManualQuotaDefaults | null
+  /** The credit tier of the entry. The API carries no tier field, so it shows only. */
+  creditMode?: CreditMode
   /** `balance` accepts the remaining balance of a USD vendor dashboard. */
   amountMode?: ManualAmountMode
   onClose: () => void
@@ -59,6 +62,7 @@ export function ManualEntryModal(props: ManualEntryVariant): ReactNode {
   const noun = rawNoun === "legacy" ? "units" : rawNoun
   const placeholders = placeholdersFor(unitKind, amountMode)
   const isEditing = Boolean(defaults?.allowance)
+  const [creditMode, setCreditMode] = useState<CreditMode>(props.creditMode ?? "free")
   const form = useQuotaForm(
     defaults,
     {
@@ -85,6 +89,8 @@ export function ManualEntryModal(props: ManualEntryVariant): ReactNode {
           fields={form.fields}
           fieldErrors={form.fieldErrors}
           pending={form.pending}
+          mode={creditMode}
+          onModeChange={setCreditMode}
           onChange={form.setField}
           amountMode={amountMode}
         />

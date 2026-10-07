@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
-import { render, screen } from "@testing-library/react"
-import { BALANCE_ENTRY_NOTE, SPEND_CAP_NOTE } from "../model/quotaLabels"
+import { render, screen, within } from "@testing-library/react"
+import { BALANCE_ENTRY_NOTE, CREDIT_MODE_LABEL, SPEND_CAP_NOTE } from "../model/quotaLabels"
 import { ManualQuotaModal } from "./ManualQuotaModal"
 
 /**
@@ -39,7 +39,7 @@ describe("ManualQuotaModal", () => {
         <p>grant-body</p>
       </ManualQuotaModal>,
     )
-    expect(screen.getByText("Spend cap — Brave")).not.toBeNull()
+    expect(screen.getByText("Budget Limit — Brave")).not.toBeNull()
     expect(screen.getByText("grant-body")).not.toBeNull()
     void vi
   })
@@ -76,5 +76,48 @@ describe("ManualQuotaModal polish subtitles", () => {
       />,
     )
     expect(screen.getByText(BALANCE_ENTRY_NOTE)).not.toBeNull()
+  })
+})
+
+describe("ManualQuotaModal credit mode fields (CARD-4)", () => {
+  function renderBalanceEntry() {
+    render(
+      <ManualQuotaModal
+        open
+        providerId="brave"
+        providerName="Brave"
+        unitKind="USD"
+        displayUnit="USD"
+        defaults={null}
+        amountMode="balance"
+        onClose={() => {}}
+        onSave={() => Promise.resolve({})}
+      />,
+    )
+  }
+
+  it("keeps the credit-tier words exact for the combo and the popover note", () => {
+    expect(CREDIT_MODE_LABEL.free).toBe("Free credits")
+    expect(CREDIT_MODE_LABEL.paid).toBe("Paid credits")
+    expect(CREDIT_MODE_LABEL.both).toBe("Free + Paid")
+  })
+
+  it("shows the Credit mode combo first with three tier options in a one-column grid", () => {
+    renderBalanceEntry()
+    const combo = screen.getByRole("combobox", { name: "Credit mode" })
+    expect(combo).not.toBeNull()
+    const options = within(combo as HTMLElement).getAllByRole("option").map((entry) => entry.textContent)
+    expect(options).toEqual(["Free credits", "Paid credits", "Free + Paid"])
+    const grid = document.querySelector("div.grid-cols-1")
+    expect(grid?.className ?? "").toContain("grid-cols-1")
+    expect(grid?.className ?? "").not.toContain("sm:grid-cols-2")
+    const labels = Array.from(document.querySelectorAll("label")).map((entry) => entry.textContent)
+    expect(labels).toEqual([
+      "Credit mode",
+      "Billing start",
+      "Billing end",
+      "Allowance (USD)",
+      "Balance remaining (USD)",
+    ])
   })
 })

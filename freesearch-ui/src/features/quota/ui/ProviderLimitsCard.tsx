@@ -6,19 +6,17 @@ import type { BackendManualQuota } from "@/domains/dashboard/api/manualQuotaWire
 import type { UnitKind } from "@/shared/api/units"
 import { activeAuth, creditCardModel, operationAvailable } from "../model/crdCardModel"
 import type { ManualAmountMode } from "../model/manualQuotaMath"
-import { CONTROL_SPLIT_NOTE } from "../model/quotaLabels"
+import { providerInfo } from "../model/providerInfo"
+import type { CreditMode } from "../model/quotaLabels"
 import type { ManualQuotaDefaults } from "../model/useQuotaForm"
 import { useManualQuota, type ManualQuotaOverlay } from "../model/useManualQuota"
 import { useProviderLimits, type ProviderLimitsController } from "../model/useProviderLimits"
 import { CRDGrantForm } from "./CRDGrantForm"
-import { Footnote } from "./Footnote"
 import { LimitHistoryModal } from "./LimitHistoryModal"
 import { ManualQuotaModal } from "./ManualQuotaModal"
 import { ProviderCardActions, type CardModal } from "./ProviderCardActions"
 import { ProviderCreditSummary } from "./ProviderCreditSummary"
-import { ProviderLimitsDetail } from "./ProviderLimitsDetail"
-import { ProviderRateBars } from "./ProviderRateBars"
-import { ProviderTierBars } from "./ProviderTierBars"
+import { ProviderInfoPopover } from "./ProviderInfoPopover"
 
 export interface ProviderLimitsCardProps {
   providerId: string
@@ -86,6 +84,7 @@ interface CardModalInput {
   controller: ProviderLimitsController
   auth: ProviderAuthLimits
   fetchAvailable: boolean
+  creditMode: CreditMode | null
   onClose: () => void
 }
 
@@ -103,6 +102,7 @@ function cardModals(input: CardModalInput): ReactNode {
         displayUnit={unit.displayUnit}
         defaults={defaults}
         amountMode={unit.amountMode}
+        creditMode={input.creditMode ?? "free"}
         onClose={close}
         onSave={manual.save}
         {...(manual.manual !== null ? { onDelete: manual.remove } : {})}
@@ -154,10 +154,13 @@ function cardModals(input: CardModalInput): ReactNode {
 /**
  * One provider credit-unit card.
  *
- * The card owns its expansion state and its one open modal, so a disclosure or
- * a dialog of one provider never moves another. The dashboard payload supplies
- * the funds, and the disclosure holds the known tier facts, the known rate
- * bars, and the vendor detail.
+ * The header holds the logo, the name, and the source statement. The credit row
+ * holds the four actions at its leading edge and the credit fraction at its
+ * trailing edge. The card owns its one open modal, so a dialog of one provider
+ * never moves another. The dashboard payload supplies the funds. The info
+ * control states the call cost, the call count, the rate limit, the last sync
+ * time, the usage page, the known tier facts, the known rate bars, and the
+ * vendor detail.
  */
 export function ProviderLimitsCard({
   providerId,
@@ -167,7 +170,6 @@ export function ProviderLimitsCard({
   refreshDashboard,
   manualEligible,
 }: ProviderLimitsCardProps): ReactNode {
-  const [expanded, setExpanded] = useState(false)
   const [modal, setModal] = useState<CardModal>(null)
   const controller = useProviderLimits({
     providerId,
@@ -186,51 +188,51 @@ export function ProviderLimitsCard({
   }
 
   const model = creditCardModel({ auth, usageTotals: crdUsageTotals })
+  const info = providerInfo(auth)
   const unit = manualUnit(auth)
   const titleId = "limits-title-" + slug(providerId)
-  const panelId = "limits-panel-" + slug(providerId)
   const fetchAvailable = operationAvailable(auth, "fetch")
 
   return (
     <article aria-labelledby={titleId} className={CARD}>
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex min-w-0 items-center gap-2">
-          <ProviderLogo providerId={providerId} name={providerName} />
-          <h4 id={titleId} className="truncate text-[13px] font-semibold text-[var(--text-strong)]">
+      <div className="flex min-w-0 items-center gap-3">
+        <ProviderLogo providerId={providerId} name={providerName} className="size-9 rounded-full" />
+        <div className="min-w-0">
+          <h4 id={titleId} className="truncate text-[15px] font-semibold text-[var(--text-strong)]">
             {providerName}
           </h4>
+          {info.statement !== null && (
+            <p className="truncate text-[12px] text-[var(--muted)]">{info.statement}</p>
+          )}
         </div>
-        <ProviderCardActions
-          providerId={providerId}
-          providerName={providerName}
-          manualEligible={manualEligible}
-          syncing={controller.syncing}
-          expanded={expanded}
-          panelId={panelId}
-          onSync={() => void controller.syncNow()}
-          onOpenModal={setModal}
-          onToggleExpanded={() => setExpanded((previous) => !previous)}
-        />
       </div>
-
-      <Footnote>{CONTROL_SPLIT_NOTE}</Footnote>
 
       {controller.syncNote !== null && (
         <p role="status" className={LABEL}>{controller.syncNote}</p>
       )}
 
-      <ProviderCreditSummary providerName={providerName} model={model} />
-      {model.provenanceNote !== null && <Footnote>{model.provenanceNote}</Footnote>}
-
-      {expanded && (
-        <div id={panelId} className="space-y-4 border-t border-[var(--border-subtle)] pt-3">
-          <ProviderTierBars providerName={providerName} freeTiers={auth.free_tiers}
-            paidTiers={auth.paid_tiers} tierSplitKnown={auth.tier_split_known} />
-          <ProviderRateBars providerName={providerName} progress={auth.rate_progress}
-            fetchAvailable={fetchAvailable} />
-          <ProviderLimitsDetail providerName={providerName} auth={auth} />
-        </div>
-      )}
+      <ProviderCreditSummary
+        providerName={providerName}
+        model={model}
+        actions={
+          <ProviderCardActions
+            providerId={providerId}
+            providerName={providerName}
+            manualEligible={manualEligible}
+            syncing={controller.syncing}
+            onSync={() => void controller.syncNow()}
+            onOpenModal={setModal}
+          />
+        }
+        info={
+          <ProviderInfoPopover
+            providerId={providerId}
+            providerName={providerName}
+            info={info}
+            auth={auth}
+          />
+        }
+      />
 
       {cardModals({
         providerId,
@@ -243,6 +245,7 @@ export function ProviderLimitsCard({
         controller,
         auth,
         fetchAvailable,
+        creditMode: info.creditMode,
         onClose: () => setModal(null),
       })}
     </article>

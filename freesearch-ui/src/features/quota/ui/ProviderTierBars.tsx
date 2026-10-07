@@ -49,7 +49,7 @@ export function ProviderTierBars({
   if (rows.length === 0) return null
 
   return (
-    <dl className="space-y-1 text-[12px]" aria-label={providerName + " tier balances"}>
+    <dl className="space-y-1 border-t border-[var(--border-subtle)] pt-3 text-[12px]" aria-label={providerName + " tier balances"}>
       {rows.map(({ bar, amount }) => {
         const notes = knownNotes(bar)
         return (

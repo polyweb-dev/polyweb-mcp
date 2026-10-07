@@ -131,15 +131,44 @@ describe("ProviderLimitsCards", () => {
       />,
     )
     expect(screen.getByText("1 reported")).not.toBeNull()
-    // Final-polish Item 3c: card shows CRD left only; USD value sits in hover ARIA text.
-    expect(screen.getByText("CRD left")).not.toBeNull()
+    // CARD-3: no "CRD left" label; the fraction "4500 / 5000 CRD" renders as split spans.
+    expect(screen.queryByText("CRD left")).toBe(null)
     expect(screen.queryByText("USD left")).toBe(null)
-    expect(screen.getByText("4500 CRD")).not.toBeNull()
-    const crdValue = screen.getByText("4500 CRD")
+    expect(screen.getByText("4500")).not.toBeNull()
+    expect(screen.getByText("/ 5000")).not.toBeNull()
+    expect(screen.getByText("CRD")).not.toBeNull()
+    expect(screen.queryByText("4500 CRD")).toBe(null)
+    const crdValue = screen.getByText("4500")
     expect(crdValue.getAttribute("title")).toBe("$4.5 left")
     expect(crdValue.getAttribute("aria-label")).toBe("$4.5 left")
     expect(screen.queryByText("USD use (priced)")).toBe(null)
     expect(screen.queryByText("Parallel")).toBe(null)
+  })
+
+  it("holds logo, name, statement, ordered actions, and trailing fraction (CARD-3)", () => {
+    render(
+      <ProviderLimitsCards
+        providers={[{ id: "brave", name: "Brave" }, { id: "parallel", name: "Parallel" }] as never}
+        providerLimits={[braveEntry()] as never}
+        crdUsageTotals={[
+          { provider: "brave", operation: "search", normalized_crd: "5", attempt_count: 1, volume_count: 1 },
+        ]}
+        refreshDashboard={() => Promise.resolve()}
+        manualEligible={new Set(["brave"])}
+      />,
+    )
+    expect(screen.getByTestId("provider-logo-brave")).not.toBeNull()
+    expect(screen.getByRole("heading", { name: "Brave" })).not.toBeNull()
+    expect(screen.getByText("Observed from the vendor API")).not.toBeNull()
+    const buttons = screen.getAllByRole("button").map((button) => button.textContent)
+    expect(buttons.slice(0, 4)).toEqual(["Sync", "Provider Balance", "Budget Limit", "History"])
+    const creditRow = screen.getByText("4500").closest("span")?.parentElement?.parentElement
+    const children = Array.from(creditRow?.children ?? [])
+    expect(children.length).toBe(2)
+    expect(children[0]?.textContent).toContain("Sync")
+    expect(children[1]?.textContent?.replace(/\s+/g, "")).toContain("4500/5000CRD")
+    const bar = screen.getByRole("progressbar", { name: "Brave credit units remaining" })
+    expect((bar.compareDocumentPosition(creditRow as Node) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0).toBe(true)
   })
 
   it("shows an honest empty state with no invented card (UI7-05)", () => {

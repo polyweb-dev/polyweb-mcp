@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
 import { render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
+import { SPEND_CAP_NOTE } from "../model/quotaLabels"
 import { CRDGrantForm } from "./CRDGrantForm"
 
 /**
@@ -65,14 +66,14 @@ describe("CRDGrantForm", () => {
     const user = userEvent.setup()
     await user.clear(screen.getByLabelText("Search credit units (CRD)"))
     await user.type(screen.getByLabelText("Search credit units (CRD)"), "4.55")
-    await user.click(screen.getByRole("button", { name: "Save spend cap" }))
+    await user.click(screen.getByRole("button", { name: "Save budget limit" }))
     expect(await screen.findByText("Use at most one decimal digit (for example 3.8).")).not.toBeNull()
   })
 
   it("preserves the stored fetch amount when the input stays absent (UI7-08)", async () => {
     const { onSave } = renderForm(false)
     const user = userEvent.setup()
-    await user.click(screen.getByRole("button", { name: "Save spend cap" }))
+    await user.click(screen.getByRole("button", { name: "Save budget limit" }))
     expect(onSave).toHaveBeenCalledTimes(1)
     expect(onSave).toHaveBeenCalledWith({
       auth_mode: "keyed",
@@ -101,7 +102,7 @@ describe("CRDGrantForm", () => {
         onReload={() => {}}
       />,
     )
-    await user.click(screen.getByRole("button", { name: "Save spend cap" }))
+    await user.click(screen.getByRole("button", { name: "Save budget limit" }))
     expect(onClose).not.toHaveBeenCalled()
   })
 
@@ -115,7 +116,7 @@ describe("CRDGrantForm", () => {
     renderForm(false)
     const user = userEvent.setup()
     await user.clear(screen.getByLabelText("Search credit units (CRD)"))
-    await user.click(screen.getByRole("button", { name: "Save spend cap" }))
+    await user.click(screen.getByRole("button", { name: "Save budget limit" }))
     expect(await screen.findByText("Required.")).not.toBeNull()
     expect(screen.getByLabelText("Search credit units (CRD)").getAttribute("aria-invalid")).toBe("true")
   })
@@ -128,5 +129,11 @@ describe("CRDGrantForm", () => {
     expect(grid?.className ?? "").not.toContain("sm:grid-cols-2")
     const labels = Array.from(document.querySelectorAll("label")).map((entry) => entry.textContent)
     expect(labels).toEqual(["Search credit units (CRD)", "Period start", "Period end"])
+  })
+
+  it("shows stored facts without a helper paragraph (CARD-4)", () => {
+    renderForm(false)
+    expect(screen.getByText(/Stored budget limit/)).not.toBeNull()
+    expect(screen.queryByText(SPEND_CAP_NOTE)).toBe(null)
   })
 })

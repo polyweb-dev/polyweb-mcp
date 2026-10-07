@@ -1,6 +1,6 @@
 @stub @quota
 Feature: Provider quota display stays honest
-  The usage view renders one credit bar per card with exact CRD funds.
+  The usage view renders one credit bar per card with the exact CRD fraction.
   Unknown fields stay hidden and invented balances never appear.
   Manual entry and OAuth pairing keep their action-only controls.
 
@@ -14,8 +14,10 @@ Feature: Provider quota display stays honest
     When I navigate directly to "/usage"
     Then I should see the "Usage" heading
     And the Brave credit bar should show "90" percent
-    And the Brave card should show "4500 CRD" for "CRD left"
+    And the Brave card should show "4500 / 5000 CRD"
     And the Brave CRD value should carry "$4.5 left" hover text
+    And the Brave card subtitle should contain "Observed from the vendor API"
+    And the usage view should not show "CRD left"
     And the usage view should not show "∞"
     And the usage view should not show "n/a"
 
@@ -35,7 +37,8 @@ Feature: Provider quota display stays honest
     And the stubbed credit totals show "Brave no use"
     When I navigate directly to "/usage"
     And I open the credit manual entry for "brave"
-    Then the manual entry should show "Allowance (USD)"
+    Then the manual entry should show "Credit mode"
+    And the manual entry should show "Allowance (USD)"
     And the manual entry should show "Balance remaining (USD)"
     When I cancel the credit dialog
     Then the usage view should show "Brave"

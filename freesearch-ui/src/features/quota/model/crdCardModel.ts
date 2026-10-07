@@ -140,7 +140,8 @@ function nativeUnitPrice(nativeUnit: string, profile: CRDConversionProfile): str
   return profile.native_usd_per_unit
 }
 
-function usdFromCRD(crd: string, profile: CRDConversionProfile | null): string | null {
+/** USD value of one credit amount at the reference price of its profile. */
+export function usdFromCRD(crd: string, profile: CRDConversionProfile | null): string | null {
   const reference = referenceProfile(profile)
   return reference === null ? null : multiplyDecimal(crd, reference)
 }

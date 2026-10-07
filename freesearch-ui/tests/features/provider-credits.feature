@@ -1,6 +1,6 @@
 @stub @ui7
 Feature: Provider credit units display honestly
-  One credit bar with percent on the right. CRD left below the bar with USD value in hover text.
+  One credit bar with percent on the right. Credit fraction below the bar with USD value in hover text.
   Unknown fields stay hidden. Fetch controls show only where fetch has support.
 
   Background:
@@ -12,10 +12,16 @@ Feature: Provider credit units display honestly
     And the stubbed credit totals show "Brave no use"
     When I navigate directly to "/usage"
     Then the Brave credit bar should show "90" percent
-    And the Brave card should show "4500 CRD" for "CRD left"
+    And the Brave card should show "4500 / 5000 CRD"
     And the Brave CRD value should carry "$4.5 left" hover text
     And the Brave card should show one credit bar
+    And the usage view should not show "CRD left"
     And the usage view should not show "∞"
+    And the Brave card should show the "Sync" action
+    And the Brave card should show the "Provider Balance" action
+    And the Brave card should show the "Budget Limit" action
+    And the Brave card should show the "History" action
+    And the Brave card subtitle should contain "Observed from the vendor API"
 
   @stub @ui7 @precision
   Scenario: U7-B02 Zero tiny and fractional funds stay exact
@@ -43,8 +49,9 @@ Feature: Provider credit units display honestly
     Given the stubbed provider limits show "Brave funds without allowance"
     And the stubbed credit totals show "Brave no use"
     When I navigate directly to "/usage"
-    Then the Brave card should show "4500 CRD" for "CRD left"
+    Then the Brave card should show "4500" with no total
     And the Brave card should show no credit bar
+    And the usage view should not show "CRD left"
 
   @stub @ui7 @free
   Scenario: U7-B05 Free state shows no invented finite funds
@@ -64,7 +71,7 @@ Feature: Provider credit units display honestly
     And the stubbed credit totals show "Brave one search use"
     And I reload the page
     Then the Brave credit bar should show "89.9" percent
-    And the Brave card should show "4495 CRD" for "CRD left"
+    And the Brave card should show "4495 / 5000 CRD"
     And the Brave CRD value should carry "$4.495 left" hover text
 
   @stub @ui7 @totals
@@ -80,8 +87,13 @@ Feature: Provider credit units display honestly
     Given the stubbed provider limits show "Brave finite credits"
     And the stubbed credit totals show "Brave no use"
     When I navigate directly to "/usage"
-    And I expand the Brave detail
-    Then the Brave shared pool note should list one pool once
+    And I open the credit details for "Brave"
+    Then the credit details should show "Search CRD cost"
+    And the credit details should show "Searches left"
+    And the credit details should show "Rate limit"
+    And the credit details should show "Last sync"
+    And the credit details should show "usage page"
+    And the credit details should show "Reset"
 
   @stub @ui7 @fetch
   Scenario: U7-B09 Brave fetch absent shows no fetch row
@@ -98,7 +110,8 @@ Feature: Provider credit units display honestly
     And the stubbed credit totals show "Brave no use"
     When I navigate directly to "/usage"
     And I open the credit manual entry for "Brave"
-    Then the manual entry should show "Allowance (USD)"
+    Then the manual entry should show "Credit mode"
+    And the manual entry should show "Allowance (USD)"
     And the manual entry should show "Balance remaining (USD)"
 
   @stub @ui7 @manual-error
@@ -165,3 +178,10 @@ Feature: Provider credit units display honestly
     Then the grant form should show "Search credit units (CRD)"
     When I cancel the credit dialog
     Then the usage view should show "Brave"
+
+  @stub @ui7 @manual-subtitle
+  Scenario: U7-B18 Manual balance card states calculated usage
+    Given the stubbed provider limits show "Brave manual balance"
+    And the stubbed credit totals show "Brave no use"
+    When I navigate directly to "/usage"
+    Then the Brave card subtitle should contain "calculated usage"

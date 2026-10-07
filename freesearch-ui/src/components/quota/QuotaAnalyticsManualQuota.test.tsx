@@ -14,7 +14,7 @@ import {
 
 /**
  * UI7 manual entry through the shell: action-slot buttons read
- * "Balance entry", the dialog keeps native-anchor transport, and the
+ * "Provider Balance", the dialog keeps native-anchor transport, and the
  * card USD path translates balance to usage (see useQuotaForm tests
  * for the 5.00/4.12 to 0.88 contract). Covers UI7-07.
  */
@@ -52,13 +52,13 @@ describe("QuotaAnalytics manual billing entry (UI7)", () => {
     vi.unstubAllGlobals()
   })
 
-  it("offers Balance entry on Brave always and on unbudgeted Parallel, never on Tavily (UI7-07)", async () => {
+  it("offers Provider Balance on Brave always and on unbudgeted Parallel, never on Tavily (UI7-07)", async () => {
     renderWithManualStub()
     await waitFor(() => {
       expect(screen.getByTestId("manual-quota-open-brave")).toBeInTheDocument()
     })
-    expect(screen.getByTestId("manual-quota-open-brave")).toHaveTextContent("Balance entry")
-    expect(screen.getByTestId("manual-quota-open-parallel")).toHaveTextContent("Balance entry")
+    expect(screen.getByTestId("manual-quota-open-brave")).toHaveTextContent("Provider Balance")
+    expect(screen.getByTestId("manual-quota-open-parallel")).toHaveTextContent("Provider Balance")
     expect(screen.queryByTestId("manual-quota-open-tavily")).toBe(null)
   })
 
@@ -68,7 +68,7 @@ describe("QuotaAnalytics manual billing entry (UI7)", () => {
     await waitFor(() => {
       expect(screen.getByTestId("manual-quota-open-tinyfish")).toBeInTheDocument()
     })
-    expect(screen.getByTestId("manual-quota-open-tinyfish")).toHaveTextContent("Balance entry")
+    expect(screen.getByTestId("manual-quota-open-tinyfish")).toHaveTextContent("Provider Balance")
     await user.click(screen.getByTestId("manual-quota-open-tinyfish"))
     const dialog = await screen.findByRole("dialog")
     expect(dialog).toHaveTextContent("Tinyfish")
@@ -108,6 +108,21 @@ describe("QuotaAnalytics manual billing entry (UI7)", () => {
       allowance: "5.00",
       current_usage: "0.88",
     })
+  })
+
+  it("locks Provider Balance wording with its accessible meaning and no legacy labels (CARD-3)", async () => {
+    renderWithManualStub()
+    await waitFor(() => {
+      expect(screen.getByTestId("manual-quota-open-brave")).toBeInTheDocument()
+    })
+    expect(screen.getByTestId("manual-quota-open-brave")).toHaveTextContent("Provider Balance")
+    expect(
+      screen.getByRole("button", {
+        name: "Provider Balance for Brave Search. Records the balance the vendor dashboard shows, as an estimate.",
+      }),
+    ).toBeInTheDocument()
+    expect(screen.queryByText("Balance entry")).toBe(null)
+    expect(screen.queryByText("Manual entry")).toBe(null)
   })
 
   it("shows no legacy overlay row on the new page (UI7-05)", async () => {
