@@ -1,12 +1,15 @@
 ---
 name: frontend-design
-description: Guidance for distinctive, intentional visual design when building new UI or reshaping an existing one. Helps with aesthetic direction, typography, and making choices that don't read as templated defaults.
-license: Complete terms in LICENSE.txt
+description: Guidance for distinctive, intentional visual design of a new or reshaped UI surface. Use when the task is visual work on palette, typography, layout direction, or visual identity. Helps with aesthetic direction and with choices that do not read as templated defaults.
 ---
 
 # Frontend Design
 
 Approach this as the design lead at a design studio known for giving every client a distinct visual identity that is not mistaken for anyone else's. This client has already rejected proposals that felt cliché or templated, and is paying for a distinctive point of view: make deliberate, opinionated choices about palette, typography, and layout that are specific to this brief, and take aesthetic risk if justified.
+
+## Respect the existing design system
+
+Preserve the established design tokens for color, type, and spacing unless the brief asks for a redesign. Use the token values from the codebase. Do not add hardcoded values that duplicate a token.
 
 ## Ground your designs in the subject matter
 
