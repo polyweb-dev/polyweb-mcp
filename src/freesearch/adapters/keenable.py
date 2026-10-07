@@ -43,6 +43,13 @@ from freesearch.models.contracts import (
     UsageOperation,
 )
 from freesearch.models.observability import TraceAttribute, TraceSpanName
+from freesearch.models.provider_limits import (
+    AuthMode,
+    Confidence,
+    NativeUsageSnapshot,
+    UsageSyncRequest,
+    native_pool_id,
+)
 
 __all__ = ["KeenableAdapter"]
 
@@ -133,6 +140,12 @@ class KeenableAdapter(ProviderAdapter):
         return ProviderCapabilities(
             search=True, fetch=True, cost_estimate=True, quota=keyed == _KEYED
         )
+
+    @property
+    def limit_auth_mode(self) -> AuthMode:
+        """Return the rail of this instance: keyless without a key, else keyed."""
+
+        return AuthMode.KEYED if self._auth()[0] == _KEYED else AuthMode.KEYLESS
 
     def _auth(self) -> tuple[str, dict[str, str]]:
         """Resolve the API key lazily; absent or blank keys select keyless mode."""
@@ -448,6 +461,36 @@ class KeenableAdapter(ProviderAdapter):
             return None
         self._rollover_if_needed(datetime.now(UTC))
         return self._snapshot_sync()
+
+    async def usage_snapshot(self, request: UsageSyncRequest) -> NativeUsageSnapshot | None:
+        """Return the keyed monthly request ledger; keyless has no budget.
+
+        The keyed rail draws the shared monthly request allowance. The existing
+        local ledger holds the reported usage of that allowance. The ledger
+        keeps the free allowance and the paid SKU spend in separate counters. A
+        key with paid usage therefore reports no free remaining, not a
+        fabricated zero. Keyless access is unmetered, so it returns no
+        snapshot.
+        """
+
+        auth_mode = self.limit_auth_mode
+        if auth_mode is not AuthMode.KEYED:
+            return None
+        self._rollover_if_needed(datetime.now(UTC))
+        quota = self._snapshot_sync()
+        return NativeUsageSnapshot(
+            pool_id=native_pool_id(self.name, auth_mode, UnitKind.REQUEST),
+            provider=self.name,
+            auth_mode=auth_mode,
+            native_unit=UnitKind.REQUEST,
+            observed_at=request.observed_at,
+            source="local_ledger",
+            confidence=Confidence.OBSERVED,
+            remaining=quota.remaining,
+            allowance=quota.limit,
+            reset_at=quota.reset_at,
+            credential_generation=request.credential_generation,
+        )
 
     async def quota_after_success(self, response: object) -> QuotaSnapshot | None:
         mode, _headers = self._auth()
