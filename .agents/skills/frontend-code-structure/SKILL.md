@@ -1,6 +1,6 @@
 ---
 name: frontend-code-structure
-description: "Guidelines and conventions for frontend module boundaries, feature/domain separation, component extraction, state management, dependency cruiser rules, and test organization. Use when creating UI components, refactoring React code, structuring features, or auditing frontend boundaries."
+description: "Guidelines and conventions for frontend module boundaries, feature/domain separation, component extraction, state management, layer conventions, and test organization. Use when you create UI components, refactor React code, structure features, or audit frontend boundaries."
 ---
 
 # Frontend Code Structure & Architecture Guidelines
@@ -9,7 +9,7 @@ A modular, feature-and-domain driven React architecture designed to prevent mono
 
 ---
 
-## 1. Architectural Layers & Responsibilities (`src/`)
+## 1. Target Architectural Layers & Responsibilities (`freesearch-ui/src/`)
 
 ```text
 src/
@@ -38,6 +38,8 @@ src/
 tests/                 # Cross-feature browser BDD scenarios (Gherkin, Playwright steps, snapshots)
 ```
 
+This layout is the target architecture. Parts of it are not in place yet. Treat each path in this section as the goal for new code.
+
 ### Layer Ownership Matrix
 
 | Layer | Responsibility | What It May Import | What Must Never Enter |
@@ -52,7 +54,7 @@ tests/                 # Cross-feature browser BDD scenarios (Gherkin, Playwrigh
 
 ## 2. Dependency & Import Rules
 
-Enforced via Dependency Cruiser and linting:
+The layer bounds in this section are conventions. Dependency Cruiser does not declare them. The tool declares only three rules: `no-circular`, `not-to-unresolvable`, and `no-orphans`. ESLint enforces the size and nesting budgets in Section 4. Review the layer bounds during code review.
 
 1. **Unidirectional Import Flow**:
    $$\text{app} \longrightarrow \text{features} \longrightarrow \text{domains} \longrightarrow \text{shared}$$
@@ -96,7 +98,7 @@ Avoid multi-hundred-line monolithic files. Within a feature or domain:
 
 ### Strict Typing Guidelines
 - **External Data is Unknown**: Treat incoming API payloads as `unknown`; decode/validate through domain mappers before consuming in view models.
-- **Guard Array Access**: Always guard index lookups under `noUncheckedIndexedAccess` (`const item = list[i]; if (!item) return;`).
+- **Guard Array Access**: Always guard index lookups (`const item = list[i]; if (!item) return;`).
 - **Discriminated Unions**: Model mutually exclusive states (e.g., async status: `idle | loading | success | error`, OAuth pairing phases) with tagged unions to eliminate illegal state combinations.
 - **No Blanket `any`**: Use `satisfies` and explicit mock types; avoid type assertions (`as SomeType`) without verification.
 
@@ -118,7 +120,7 @@ Avoid multi-hundred-line monolithic files. Within a feature or domain:
 
 ## 6. Pre-Commit Verification Checklist
 
-Before opening a PR or completing a frontend refactoring slice, run:
+Before you open a PR or complete a frontend refactoring slice, run these commands from `freesearch-ui/`:
 
 - [ ] New components placed in the appropriate `features/`, `domains/`, or `shared/` layer.
 - [ ] No direct feature-to-feature or illegal upward imports.
