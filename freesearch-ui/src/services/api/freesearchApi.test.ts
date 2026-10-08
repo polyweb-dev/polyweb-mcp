@@ -174,6 +174,40 @@ describe("FreeSearchApiService (live HTTP)", () => {
     )
   })
 
+  it("patchProvider() sends one-bit search and fetch bodies", async () => {
+    const searchStub = installFetchStub(() => ok(allProvidersFixture()[3]))
+    await service.patchProvider("exa", { search_enabled: false } as never)
+    expect(searchStub.requests[0].url).toBe("/api/v1/providers/exa")
+    expect(searchStub.requests[0].method).toBe("PATCH")
+    expect(searchStub.requests[0].body).toEqual({ search_enabled: false })
+    vi.unstubAllGlobals()
+
+    const fetchStub = installFetchStub(() => ok(allProvidersFixture()[3]))
+    await service.patchProvider("exa", { fetch_enabled: true } as never)
+    expect(fetchStub.requests[0].body).toEqual({ fetch_enabled: true })
+    vi.unstubAllGlobals()
+  })
+
+  it("patchProvider() sends a complete enable_mask replacement as one key", async () => {
+    const stub = installFetchStub(() => ok(allProvidersFixture()[0]))
+    await service.patchProvider("brave", { enable_mask: 6 } as never)
+    expect(stub.requests[0].body).toEqual({ enable_mask: 6 })
+    expect(typeof (stub.requests[0].body as { enable_mask: unknown }).enable_mask).toBe(
+      "number",
+    )
+  })
+
+  it("patchProvider() never sends support_mask or unknown keys", async () => {
+    const stub = installFetchStub(() => ok(allProvidersFixture()[0]))
+    await service.patchProvider(
+      "brave",
+      { enabled: false, support_mask: 7, extra: true } as never,
+    )
+    expect(stub.requests[0].body).toEqual({ enabled: false })
+    expect("support_mask" in (stub.requests[0].body as object)).toBe(false)
+    expect("extra" in (stub.requests[0].body as object)).toBe(false)
+  })
+
   it("testProvider() POSTs relative /api/v1/providers/{id}/test", async () => {
     const wire = providerTestFixture()
     const stub = installFetchStub(() => ok(wire))

@@ -47,7 +47,25 @@ function renderSettings(): FetchStub {
     if (req.url.startsWith("/dashboard")) return ok(dashboardFixture())
     if (req.method === "PATCH" && req.url.startsWith("/api/v1/providers/")) {
       if (patchGate) return patchGate
-      return ok({ ...allProvidersFixture()[0], ...(req.body as object) })
+      const backendId = req.url.split("/").at(-1) ?? "unknown"
+      const wire = allProvidersFixture().find((p) => p.provider_id === backendId)
+      const base = { ...(wire ?? allProvidersFixture()[0]) } as Record<string, unknown> & {
+        enable_mask: number
+        priority: number
+      }
+      const patch = ((req.body as Record<string, unknown>) ?? {}) as Record<string, unknown>
+      let enableMask = base.enable_mask
+      if (typeof patch.enable_mask === "number") enableMask = patch.enable_mask
+      else {
+        if (patch.enabled === true) enableMask |= 1
+        if (patch.enabled === false) enableMask &= ~1
+        if (patch.search_enabled === true) enableMask |= 2
+        if (patch.search_enabled === false) enableMask &= ~2
+        if (patch.fetch_enabled === true) enableMask |= 4
+        if (patch.fetch_enabled === false) enableMask &= ~4
+      }
+      const priority = typeof patch.priority === "number" ? patch.priority : base.priority
+      return ok({ ...base, enable_mask: enableMask, enabled: (enableMask & 1) !== 0, priority })
     }
     if (req.url.endsWith("/secret") && req.method === "PUT") {
       const provider = req.url.split("/").at(-2) ?? "unknown"
@@ -183,7 +201,7 @@ describe("SettingsView (live backend)", () => {
       ).toBeDisabled()
     })
 
-    gate.resolve(ok({ ...allProvidersFixture()[0], enabled: false }))
+    gate.resolve(ok({ ...allProvidersFixture()[0], enable_mask: 6, enabled: false }))
     await waitFor(() => {
       expect(
         screen.getByRole("switch", { name: "Brave Search global routing" })
@@ -194,7 +212,7 @@ describe("SettingsView (live backend)", () => {
     expect(patches[0].body).toEqual({ enabled: false })
   })
 
-  it("keeps operation segments local-only and capability-gated", async () => {
+  it("persists operation switches via durable PATCH and capability-gates unsupported tools", async () => {
     const user = userEvent.setup()
     const stub = renderSettings()
     await waitForProviders()
@@ -203,11 +221,16 @@ describe("SettingsView (live backend)", () => {
     const searchSwitch = within(row).getByRole("switch", { name: "Brave Search search routing" })
     expect(searchSwitch).toHaveAttribute("aria-checked", "true")
     await user.click(searchSwitch)
-    expect(searchSwitch).toHaveAttribute("aria-checked", "false")
-    // Local-only: no PATCH for per-operation flips
-    expect(
-      stub.requests.filter((r) => r.method === "PATCH")
-    ).toHaveLength(0)
+    await waitFor(() => {
+      expect(
+        within(findProviderRow("Brave Search")).getByRole("switch", {
+          name: "Brave Search search routing",
+        }),
+      ).toHaveAttribute("aria-checked", "false")
+    })
+    const searchPatches = stub.requestsTo("/api/v1/providers/brave")
+    expect(searchPatches).toHaveLength(1)
+    expect(searchPatches[0].body).toEqual({ search_enabled: false })
     // Brave is search-only: fetch shows the disabled switch
     const fetchSwitch = within(row).getByRole("switch", { name: "Brave Search fetch routing (not supported)" })
     expect(fetchSwitch).toBeDisabled()
