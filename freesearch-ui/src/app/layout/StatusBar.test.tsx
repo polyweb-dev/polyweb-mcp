@@ -675,7 +675,7 @@ describe("AC-R1-8: page-level clusters removed, views intact", () => {
     expect(playgroundSource).toContain('data-testid="fetch-layout"')
     expect(playgroundSource).toContain("eligibleProviders")
     expect(playgroundSource).toContain("Auto arbitration")
-    expect(playgroundSource).toContain("<select")
+    expect(playgroundSource).toContain("ProviderSelect")
     expect(playgroundSource).toContain("ComposerShell")
   })
 

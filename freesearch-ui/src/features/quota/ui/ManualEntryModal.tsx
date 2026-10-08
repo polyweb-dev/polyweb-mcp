@@ -1,8 +1,7 @@
 import { useState } from "react"
 import type { ReactNode } from "react"
 import { Modal } from "@/shared/ui/Modal"
-import { ProviderBadge } from "@/shared/ui/ProviderBadge"
-import { Select } from "@/shared/ui/select"
+import { ProviderSelect } from "@/shared/ui/ProviderSelect"
 import { unitLabel } from "@/services/api/mappers"
 import type { BackendManualQuotaPayload } from "@/domains/dashboard/api/manualQuotaWire"
 import type { ProviderConfig } from "@/domains/providers"
@@ -52,18 +51,6 @@ function placeholdersFor(
   return { allowance: "100", used: "12" }
 }
 
-/** One provider row of the combo: the catalog logo and the provider name. */
-function providerRow(providerId: string, name: string): ReactNode {
-  return (
-    <ProviderBadge
-      providerId={providerId}
-      name={name}
-      className="shrink-0"
-      logoClassName="size-4"
-    />
-  )
-}
-
 /**
  * The provider field of the shell: the catalog combo of the target.
  *
@@ -86,15 +73,13 @@ function providerField(
       error={undefined}
       disabled={false}
       render={(inputProps) => (
-        <Select
+        <ProviderSelect
           id={inputProps.id}
           testId={inputProps["data-testid"]}
           className={inputProps.className}
           value={target.id}
           options={rows}
           onValueChange={(next) => onChange({ id: next, name: nameOf(next) })}
-          renderValue={(value) => providerRow(value, nameOf(value))}
-          renderOption={(option) => providerRow(option.value, option.label)}
         />
       )}
     />
