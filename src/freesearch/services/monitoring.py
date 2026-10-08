@@ -522,6 +522,42 @@ async def effective_quota(
     return snapshot
 
 
+async def effective_quotas_batch(
+    repository: SQLiteRepository | None, providers: Sequence[str]
+) -> dict[str, QuotaSnapshot]:
+    """Return the routable quota view for each requested provider in one batch."""
+
+    if repository is None or not providers:
+        return {}
+    raw_snapshots = await repository.latest_quota_batch(providers)
+    quotas: dict[str, QuotaSnapshot] = {}
+    for provider, snapshot in raw_snapshots.items():
+        snapshot = normalize_degenerate_quota(snapshot)
+        if snapshot.remaining == Decimal("0") and is_soft_quota_zero(provider, snapshot):
+            try:
+                events = await repository.list_usage(provider=provider)
+                successful = [
+                    event
+                    for event in events
+                    if event.status is UsageStatus.SUCCESS
+                    and event.observed_at > snapshot.observed_at
+                ]
+                if successful:
+                    cleared = snapshot.model_copy(
+                        update={
+                            "remaining": None,
+                            "observed_at": max(event.observed_at for event in successful),
+                            "metadata": {**snapshot.metadata, "soft_zero": False},
+                        }
+                    )
+                    await repository.record_quota(cleared)
+                    snapshot = cleared
+            except Exception:
+                pass
+        quotas[provider] = snapshot
+    return quotas
+
+
 async def _record_adapter_quota(
     repository: SQLiteRepository | None,
     adapter: ProviderAdapter,
