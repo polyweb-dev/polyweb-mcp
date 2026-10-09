@@ -1,11 +1,19 @@
 import { useEffect, useRef, useState } from "react"
 import type { KeyboardEvent, ReactNode } from "react"
-import { Check, ChevronDown } from "lucide-react"
+import { ChevronDown } from "lucide-react"
 import { cn } from "cn"
 
 export interface SelectOption {
   value: string
   label: string
+}
+
+/** The state of one row, which tells the caller how to present its content. */
+export interface SelectOptionState {
+  /** The shown value of the control. */
+  selected: boolean
+  /** The row of the keyboard cursor. */
+  active: boolean
 }
 
 export interface SelectProps {
@@ -17,7 +25,7 @@ export interface SelectProps {
   /** The trigger content of one value: the caller renders its own identity. */
   renderValue: (value: string) => ReactNode
   /** The popup row of one option: the caller renders its own identity. */
-  renderOption: (option: SelectOption) => ReactNode
+  renderOption: (option: SelectOption, state: SelectOptionState) => ReactNode
   disabled?: boolean
   className?: string
 }
@@ -29,10 +37,22 @@ interface KeyEffect {
   choose: boolean
 }
 
+/**
+ * The popup grows to its widest entry, so a long label never truncates and the
+ * list shows no horizontal scrollbar. The height cap keeps an extreme list on
+ * the screen; a normal list shows every entry without a scrollbar.
+ */
 const LIST =
-  "absolute left-0 right-0 z-50 mt-1 max-h-60 overflow-y-auto rounded border border-[var(--border-subtle)] bg-[var(--elevated)] p-1 shadow-lg"
+  "absolute left-0 right-0 z-50 mt-1 max-h-[70vh] w-max min-w-full overflow-y-auto rounded border border-[var(--border-subtle)] bg-[var(--elevated)] p-1 shadow-lg"
 const ITEM = "flex cursor-default items-center gap-2 rounded px-2 py-1.5 text-[13px] text-[var(--text)]"
 const ITEM_ACTIVE = "bg-[var(--surface)]"
+const ITEM_SELECTED = "bg-[var(--signal)] text-white"
+
+/** The row style: the shown value wins over the keyboard cursor. */
+function rowClass(selected: boolean, active: boolean): string {
+  if (selected) return ITEM_SELECTED
+  return active ? ITEM_ACTIVE : ""
+}
 
 /** The effect of one move key on an open list: the arrows, Home, and End. */
 function moveEffect(key: string, active: number, count: number): KeyEffect | null {
@@ -70,8 +90,10 @@ function keyEffect(key: string, open: boolean, active: number, count: number): K
  * One select with rich rows.
  *
  * The trigger and every option render caller content, so a caller can show a
- * logo and a name. The control keeps the combobox roles and full keyboard
- * access, and it closes on a click outside.
+ * logo and a name. A row holds no check gutter: the shown value takes the
+ * signal background and white text, and the keyboard cursor takes the surface
+ * tint. The control keeps the combobox roles, the `aria-selected` state, and
+ * full keyboard access, and it closes on a click outside.
  */
 export function Select({
   id,
@@ -153,14 +175,14 @@ export function Select({
               id={listId + "-" + index}
               role="option"
               aria-selected={option.value === value}
-              className={cn(ITEM, index === active && ITEM_ACTIVE)}
+              className={cn(ITEM, rowClass(option.value === value, index === active))}
               onMouseEnter={() => setActive(index)}
               onClick={() => commit(index)}
             >
-              <span className="flex size-4 shrink-0 items-center justify-center">
-                {option.value === value ? <Check className="size-3.5" aria-hidden="true" /> : null}
-              </span>
-              {renderOption(option)}
+              {renderOption(option, {
+                selected: option.value === value,
+                active: index === active,
+              })}
             </div>
           ))}
         </div>

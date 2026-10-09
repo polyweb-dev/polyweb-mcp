@@ -1,5 +1,6 @@
 import type { ReactNode } from "react"
-import { CircleUserRound } from "lucide-react"
+import { CircleUserRound, Layers, Sparkles } from "lucide-react"
+import type { LucideIcon } from "lucide-react"
 import { ProviderBadge } from "./ProviderBadge"
 import { Select, type SelectOption } from "./select"
 
@@ -17,26 +18,45 @@ export interface ProviderSelectProps {
   className?: string
 }
 
-/** The mark of an entry without a catalog logo, such as Auto arbitration. */
-function accountMark(): ReactNode {
+/** The size and the color of every entry mark. */
+const MARK_CLASS = "size-4 shrink-0 text-[var(--muted)]"
+
+/** The mark of the shown value, which inherits the white of the signal row. */
+const MARK_CLASS_SELECTED = "size-4 shrink-0"
+
+/**
+ * The thematic mark of each routing entry. Auto arbitration shows the
+ * arbitration spark; All Providers shows the fused provider layers.
+ */
+const SENTINEL_MARKS: Record<string, LucideIcon> = {
+  auto: Sparkles,
+  all: Layers,
+}
+
+/**
+ * The mark of one entry without a catalog logo: the thematic mark of a routing
+ * entry, else the generic account icon.
+ */
+function entryMark(value: string, selected: boolean): ReactNode {
+  const Mark = SENTINEL_MARKS[value] ?? CircleUserRound
   return (
-    <CircleUserRound
+    <Mark
       aria-hidden="true"
-      data-testid="provider-select-account"
-      className="size-4 shrink-0 text-[var(--muted)]"
+      data-testid="provider-select-mark"
+      className={selected ? MARK_CLASS_SELECTED : MARK_CLASS}
     />
   )
 }
 
-/** One entry of the list: the catalog logo and the name, else the account icon. */
-function pickerRow(option: SelectOption): ReactNode {
+/** One entry of the list: the catalog logo and the name, else the entry mark. */
+function pickerRow(option: SelectOption, selected = false): ReactNode {
   return (
     <ProviderBadge
       providerId={option.value}
       name={option.label}
       className="shrink-0"
       logoClassName="size-4"
-      fallback={accountMark()}
+      fallback={entryMark(option.value, selected)}
     />
   )
 }
@@ -48,7 +68,7 @@ function pickerRow(option: SelectOption): ReactNode {
  *
  * The shared `Select` supplies the combobox roles and the keyboard access. An
  * entry without a catalog logo, such as Auto arbitration or All Providers,
- * shows the generic account icon.
+ * shows a thematic mark, and any other such provider shows the account icon.
  */
 export function ProviderSelect({
   id,
@@ -72,7 +92,7 @@ export function ProviderSelect({
       disabled={disabled}
       className={className}
       renderValue={(current) => pickerRow(shownOf(current))}
-      renderOption={pickerRow}
+      renderOption={(option, state) => pickerRow(option, state.selected)}
     />
   )
 }
