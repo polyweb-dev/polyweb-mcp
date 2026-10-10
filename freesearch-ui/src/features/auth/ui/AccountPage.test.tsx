@@ -1,6 +1,5 @@
 import { describe, it, expect, afterEach, vi } from "vitest"
 import { screen } from "@testing-library/react"
-import userEvent from "@testing-library/user-event"
 import { AccountPage } from "./AccountPage"
 import { renderAuthenticated } from "@/test/renderAuthenticated"
 import {
@@ -21,18 +20,17 @@ describe("AccountPage", () => {
 
     expect(screen.getByText("admin@example.com")).toBeInTheDocument()
     expect(screen.getByText(ADMIN_ACCOUNT_ID)).toBeInTheDocument()
-    expect(screen.getByText("admin")).toBeInTheDocument()
+    expect(screen.getByText("Admin")).toBeInTheDocument()
     expect(screen.getAllByText("Active")).toHaveLength(2)
     expect(screen.getByText("Verified")).toBeInTheDocument()
   })
 
-  it("calls logout when the Sign out button is clicked", async () => {
-    const user = userEvent.setup()
-    const { logout } = renderAuthenticated(<AccountPage />, { account: adminAccountFixture() })
+  it("shows no Sign out action on the account page", () => {
+    renderAuthenticated(<AccountPage />, { account: adminAccountFixture() })
 
-    await user.click(screen.getByRole("button", { name: "Sign out" }))
-
-    expect(logout).toHaveBeenCalledTimes(1)
+    expect(
+      screen.queryByRole("button", { name: "Sign out" })
+    ).not.toBeInTheDocument()
   })
 
   it("shows the Admin creation link to an admin account", () => {

@@ -68,10 +68,16 @@ Then("reduced-motion transitions should be disabled", async ({ page }) => {
 })
 
 When("I walk from the header through Routing with keyboard only", async ({ page }) => {
-  // P1-FINAL: standalone Providers page retired — tab order is now
-  // Playground, Routing, Usage, Activity, Settings.
-  const headerLabels = ["Playground", "Routing"]
-  for (const label of headerLabels) {
+  // Sidebar redesign: the collapse control is the first focus stop, then the
+  // seven navigation links in order, then the account row trigger.
+  const collapseButton = page.getByRole("button", {
+    name: "Collapse sidebar",
+    exact: true,
+  })
+  await page.keyboard.press("Tab")
+  await expectFocusVisible(collapseButton)
+
+  for (const label of ["Playground", "Routing"]) {
     await page.keyboard.press("Tab")
     await expectFocusVisible(page.getByRole("link", { name: label, exact: true }))
   }
@@ -81,17 +87,17 @@ When("I walk from the header through Routing with keyboard only", async ({ page 
   await expect(page.getByRole("heading", { name: "Routing", exact: true })).toBeVisible()
   await expectFocusVisible(routingLink)
 
-  for (const label of ["Usage", "Activity", "Settings"]) {
+  for (const label of ["Usage", "Activity", "Settings", "Account", "Admin"]) {
     await page.keyboard.press("Tab")
     await expectFocusVisible(page.getByRole("link", { name: label, exact: true }))
   }
 
-  const collapseButton = page.getByRole("button", {
-    name: "Collapse sidebar",
+  const userMenuButton = page.getByRole("button", {
+    name: "Open user menu",
     exact: true,
   })
   await page.keyboard.press("Tab")
-  await expectFocusVisible(collapseButton)
+  await expectFocusVisible(userMenuButton)
 
   const strategyTab = page.getByRole("tab", { name: "Strategy", exact: true })
   await page.keyboard.press("Tab")

@@ -1,6 +1,5 @@
 import { Link } from "react-router"
-import { Button } from "@/shared/ui/button"
-import { useAuth } from "@/domains/auth"
+import { ROLE_LABELS, useAuth } from "@/domains/auth"
 import { TAB_PATHS } from "@/app/routes"
 
 /**
@@ -8,10 +7,10 @@ import { TAB_PATHS } from "@/app/routes"
  *
  * Every value comes from `GET /users/me`. The screen shows no access token, no
  * refresh credential, and no session family identifier, and it offers the Admin
- * link to an Admin account only.
+ * link to an Admin account only. Sign out lives in the sidebar account popup.
  */
 export function AccountPage() {
-  const { account, logout } = useAuth()
+  const { account } = useAuth()
   if (account === null) return null
 
   return (
@@ -23,19 +22,14 @@ export function AccountPage() {
             The identity and the role of this session.
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          {account.role === "admin" && (
-            <Link
-              to={TAB_PATHS.adminUsers}
-              className="text-[13px] underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--signal)]"
-            >
-              Create accounts
-            </Link>
-          )}
-          <Button type="button" variant="outline" onClick={() => void logout()}>
-            Sign out
-          </Button>
-        </div>
+        {account.role === "admin" && (
+          <Link
+            to={TAB_PATHS.adminUsers}
+            className="text-[13px] underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--signal)]"
+          >
+            Create accounts
+          </Link>
+        )}
       </header>
 
       <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -49,7 +43,7 @@ export function AccountPage() {
         </div>
         <div className="rounded border border-[var(--border-subtle)] px-3 py-2">
           <dt className="text-[12px] text-[var(--muted)]">Role</dt>
-          <dd className="text-[13px] text-[var(--text)]">{account.role}</dd>
+          <dd className="text-[13px] text-[var(--text)]">{ROLE_LABELS[account.role]}</dd>
         </div>
         <div className="rounded border border-[var(--border-subtle)] px-3 py-2">
           <dt className="text-[12px] text-[var(--muted)]">Active</dt>

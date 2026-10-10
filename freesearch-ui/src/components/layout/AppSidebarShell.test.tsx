@@ -405,3 +405,90 @@ describe("AC4/AC5 (R-UI): auth session gate filters Admin by role", () => {
     expect(screen.queryByLabelText("Account UUID")).not.toBeInTheDocument()
   })
 })
+
+describe("SB-ACTIONS (R-UI): shell Sign out exits the session", () => {
+  it("Sign out from the account popup reaches the login screen", async () => {
+    const user = userEvent.setup()
+    await renderApp("/playground", adminAccountFixture())
+
+    await user.click(
+      screen.getByRole("button", { name: "Open user menu", exact: true })
+    )
+    await screen.findByRole("dialog", { name: "User account" })
+    await user.click(screen.getByRole("button", { name: "Sign out", exact: true }))
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("heading", { name: "Sign in" })
+      ).toBeInTheDocument()
+    })
+    expect(
+      screen.queryByRole("navigation", { name: "Primary" })
+    ).not.toBeInTheDocument()
+  })
+
+  it("a route change resets the open account popup", async () => {
+    const user = userEvent.setup()
+    await renderApp("/playground", adminAccountFixture())
+
+    await user.click(
+      screen.getByRole("button", { name: "Open user menu", exact: true })
+    )
+    await screen.findByRole("dialog", { name: "User account" })
+    await user.click(
+      within(screen.getByRole("navigation", { name: "Primary" })).getByRole(
+        "link",
+        { name: "Routing", exact: true }
+      )
+    )
+
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("dialog", { name: "User account" })
+      ).not.toBeInTheDocument()
+    })
+    expect(testPath()).toBe("/routing")
+  })
+})
+
+describe("SB4-BRAND: shell header-control journey", () => {
+  it("collapse then logo-button expansion restores the rail", async () => {
+    const user = userEvent.setup()
+    await renderApp("/playground", adminAccountFixture())
+
+    await user.click(
+      screen.getByRole("button", { name: "Collapse sidebar", exact: true })
+    )
+    expect(
+      (document.querySelector("aside") as HTMLElement).className
+    ).toMatch(/w-16/)
+    const expand = screen.getByRole("button", {
+      name: "Expand sidebar",
+      exact: true,
+    })
+    expect(expand.querySelector("img")).not.toBeNull()
+
+    await user.click(expand)
+
+    expect(
+      screen.getByRole("button", { name: "Collapse sidebar", exact: true })
+    ).toBeInTheDocument()
+    expect(
+      (document.querySelector("aside") as HTMLElement).className
+    ).not.toMatch(/w-16/)
+    expect(testPath()).toBe("/playground")
+  })
+
+  it("collapsed rail exposes exactly one expansion control", async () => {
+    const user = userEvent.setup()
+    await renderApp("/playground", adminAccountFixture())
+
+    await user.click(
+      screen.getByRole("button", { name: "Collapse sidebar", exact: true })
+    )
+
+    expect(
+      screen.getAllByRole("button", { name: "Expand sidebar", exact: true })
+    ).toHaveLength(1)
+  })
+})

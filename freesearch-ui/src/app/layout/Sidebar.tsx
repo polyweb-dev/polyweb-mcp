@@ -1,7 +1,10 @@
-import { Menu, PanelLeftClose, PanelLeftOpen, X } from "lucide-react"
+import { Menu, PanelLeftClose, X } from "lucide-react"
+import { useLocation } from "react-router"
 import { cn } from "cn"
+import { useAuth } from "@/domains/auth"
 import { Brand } from "./SidebarBrand"
 import { NavList } from "./SidebarNavList"
+import { SidebarAccountMenu } from "./SidebarAccountMenu"
 import { useSidebarState } from "./useSidebarState"
 
 export interface SidebarProps {
@@ -10,11 +13,99 @@ export interface SidebarProps {
   onCollapsedChange?: (collapsed: boolean) => void
 }
 
+/** Collapse control label of one sidebar mode. */
+function collapseLabel(isCollapsed: boolean): string {
+  return isCollapsed ? "Expand sidebar" : "Collapse sidebar"
+}
+
+/**
+ * One reset key for the ephemeral account popup. A route, account, or sidebar
+ * mode change gives a new key, so no stale identity or action stays open.
+ */
+function accountMenuKey(
+  pathname: string,
+  accountId: string | undefined,
+  isCollapsed: boolean
+): string {
+  const mode = isCollapsed ? "collapsed" : "expanded"
+  return `${pathname}|${accountId ?? "anonymous"}|${mode}`
+}
+
+/**
+ * Brand row of the desktop rail.
+ *
+ * The collapsed rail shows the logo as the expansion control itself, so the
+ * rail keeps one button and a stable hit area. The expanded rail keeps the
+ * static brand and its adjacent collapse control.
+ */
+function renderBrandRow(isCollapsed: boolean, onToggle: () => void) {
+  if (isCollapsed) return <Brand collapsed onExpand={onToggle} />
+
+  return (
+    <div className="flex h-16 shrink-0 items-center justify-between pr-2">
+      <Brand />
+      <button
+        type="button"
+        aria-label={collapseLabel(isCollapsed)}
+        aria-expanded={!isCollapsed}
+        aria-controls="primary-sidebar"
+        onClick={onToggle}
+        className="grid size-9 shrink-0 place-items-center rounded-md text-[var(--muted)] transition-colors hover:bg-[var(--secondary)] hover:text-[var(--text-strong)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--signal)] motion-reduce:transition-none"
+      >
+        <PanelLeftClose aria-hidden="true" className="size-[18px]" />
+      </button>
+    </div>
+  )
+}
+
+/** Overlay drawer of the compact layout, with the account row at its foot. */
+function renderDrawer(
+  menuKey: string,
+  drawerOpen: boolean,
+  onClose: (returnFocus?: boolean) => void
+) {
+  return (
+    <div className="fixed inset-0 z-50 md:hidden">
+      <button
+        type="button"
+        aria-label="Dismiss navigation overlay"
+        data-testid="sidebar-scrim"
+        onClick={() => onClose(true)}
+        className="absolute inset-0 bg-[var(--surface)]/80"
+      />
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Navigation"
+        className="relative flex h-full w-72 flex-col border-r border-[var(--border-subtle)] bg-[var(--elevated)] motion-reduce:transition-none"
+      >
+        <div className="flex items-center justify-between pr-3">
+          <Brand />
+          <button
+            type="button"
+            aria-label="Close navigation"
+            onClick={() => onClose(true)}
+            className="grid size-9 place-items-center rounded-md text-[var(--muted)] hover:bg-[var(--secondary)] hover:text-[var(--text-strong)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--signal)]"
+          >
+            <X aria-hidden="true" className="size-5" />
+          </button>
+        </div>
+        <NavList collapsed={false} onNavigate={() => onClose()} />
+        <div className="shrink-0 p-2">
+          <SidebarAccountMenu key={`drawer|${drawerOpen}|${menuKey}`} collapsed={false} />
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export function Sidebar({
   collapsed,
   defaultCollapsed = false,
   onCollapsedChange,
 }: SidebarProps) {
+  const { pathname } = useLocation()
+  const { account } = useAuth()
   const {
     isCollapsed,
     drawerOpen,
@@ -27,6 +118,8 @@ export function Sidebar({
     defaultCollapsed,
     ...(onCollapsedChange !== undefined ? { onCollapsedChange } : {}),
   })
+
+  const menuKey = accountMenuKey(pathname, account?.id, isCollapsed)
 
   return (
     <>
@@ -47,60 +140,16 @@ export function Sidebar({
           isCollapsed ? "w-16" : "w-60"
         )}
       >
-        <Brand collapsed={isCollapsed} />
+        {renderBrandRow(isCollapsed, toggleCollapsed)}
+
         <NavList collapsed={isCollapsed} />
-        <button
-          type="button"
-          aria-label={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-          aria-expanded={!isCollapsed}
-          aria-controls="primary-sidebar"
-          onClick={toggleCollapsed}
-          className={cn(
-            "m-2 flex h-10 items-center rounded-md text-[13px] font-medium text-[var(--muted)] transition-colors hover:bg-[var(--secondary)] hover:text-[var(--text-strong)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--signal)] motion-reduce:transition-none",
-            isCollapsed ? "justify-center" : "gap-3 px-3"
-          )}
-        >
-          {isCollapsed ? (
-            <PanelLeftOpen aria-hidden="true" className="size-[18px]" />
-          ) : (
-            <>
-              <PanelLeftClose aria-hidden="true" className="size-[18px]" />
-              <span>Collapse</span>
-            </>
-          )}
-        </button>
+
+        <div className="shrink-0 p-2">
+          <SidebarAccountMenu key={menuKey} collapsed={isCollapsed} />
+        </div>
       </aside>
 
-      {drawerOpen && (
-        <div className="fixed inset-0 z-50 md:hidden">
-          <button
-            type="button"
-            aria-label="Dismiss navigation overlay"
-            data-testid="sidebar-scrim"
-            onClick={() => closeDrawer(true)}
-            className="absolute inset-0 bg-[var(--surface)]/80"
-          />
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-label="Navigation"
-            className="relative flex h-full w-72 flex-col border-r border-[var(--border-subtle)] bg-[var(--elevated)] motion-reduce:transition-none"
-          >
-            <div className="flex items-center justify-between pr-3">
-              <Brand />
-              <button
-                type="button"
-                aria-label="Close navigation"
-                onClick={() => closeDrawer(true)}
-                className="grid size-9 place-items-center rounded-md text-[var(--muted)] hover:bg-[var(--secondary)] hover:text-[var(--text-strong)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--signal)]"
-              >
-                <X aria-hidden="true" className="size-5" />
-              </button>
-            </div>
-            <NavList collapsed={false} onNavigate={() => closeDrawer()} />
-          </div>
-        </div>
-      )}
+      {drawerOpen && renderDrawer(menuKey, drawerOpen, closeDrawer)}
     </>
   )
 }

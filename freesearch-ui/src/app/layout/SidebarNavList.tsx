@@ -45,7 +45,10 @@ export function NavList({ collapsed, onNavigate }: NavListProps) {
   const visibleItems = navItems.filter((item) => canAccessRoute(item.id, role))
 
   return (
-    <nav aria-label="Primary" className="flex flex-1 flex-col gap-1 px-2 py-3">
+    <nav
+      aria-label="Primary"
+      className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto px-2 py-3"
+    >
       {visibleItems.map(({ id, label, icon: Icon }) => (
         <NavLink
           key={id}

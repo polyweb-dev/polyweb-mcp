@@ -891,3 +891,175 @@ describe("AC5 (R-UI): nav filters by confirmed role via canAccessRoute", () => {
     ).not.toBeInTheDocument()
   })
 })
+
+describe("SB-STRUCTURE: account row placement and header collapse", () => {
+  it("account trigger lives in the aside foot outside the Primary nav", () => {
+    renderSidebar()
+    const aside = asideEl()
+    expect(
+      within(aside).getByRole("button", { name: "Open user menu", exact: true })
+    ).toBeInTheDocument()
+    expect(
+      within(primaryNav()).queryByRole("button", {
+        name: "Open user menu",
+        exact: true,
+      })
+    ).not.toBeInTheDocument()
+  })
+
+  it("sidebar shows no direct Sign out button while the popup stays closed", () => {
+    renderSidebar()
+    expect(
+      within(asideEl()).queryByRole("button", { name: "Sign out", exact: true })
+    ).not.toBeInTheDocument()
+    expect(screen.queryByRole("dialog", { name: "User account" })).not.toBeInTheDocument()
+  })
+
+  it("navigation keeps scroll classes while the footer stays outside the nav", () => {
+    renderSidebar()
+    const nav = primaryNav()
+    expect(nav.className).toMatch(/flex-1/)
+    expect(nav.className).toMatch(/overflow-y-auto/)
+    expect(nav.className).toMatch(/min-h-0/)
+    const trigger = within(asideEl()).getByRole("button", {
+      name: "Open user menu",
+      exact: true,
+    })
+    expect(nav.contains(trigger)).toBe(false)
+  })
+
+  it("header collapse sits beside the brand with no separate bottom row", () => {
+    renderSidebar()
+    const aside = asideEl()
+    expect(
+      within(aside).getByRole("button", { name: "Collapse sidebar", exact: true })
+    ).toBeInTheDocument()
+    expect(screen.getByText("FreeSearch", { exact: true })).toBeInTheDocument()
+    const collapseControls = screen.getAllByRole("button", {
+      name: /^(Collapse|Expand) sidebar$/,
+    })
+    expect(collapseControls).toHaveLength(1)
+  })
+
+  it("collapse control is the first focus stop in the aside", () => {
+    renderSidebar()
+    const focusables = Array.from(
+      asideEl().querySelectorAll("a[href], button:not([disabled])")
+    )
+    expect(focusables.length).toBeGreaterThan(0)
+    expect(focusables[0]).toBe(
+      screen.getByRole("button", { name: "Collapse sidebar", exact: true })
+    )
+  })
+})
+
+describe("SB-POPOVER: portal bounds and nested Escape order", () => {
+  it("popup renders in a top-aligned portal outside the aside", async () => {
+    const user = userEvent.setup()
+    renderSidebar()
+    await user.click(
+      screen.getByRole("button", { name: "Open user menu", exact: true })
+    )
+    const dialog = await screen.findByRole("dialog", { name: "User account" })
+    expect(document.body.contains(dialog)).toBe(true)
+    expect(dialog.closest("aside")).toBeNull()
+    expect(document.querySelector(".z-60")).not.toBeNull()
+    expect(dialog.className).toMatch(/w-56/)
+    expect(
+      screen.getByRole("button", { name: "Sign out", exact: true })
+    ).toBeInTheDocument()
+  })
+
+  it("Escape closes the popup and returns focus to the trigger", async () => {
+    const user = userEvent.setup()
+    renderSidebar()
+    await user.click(
+      screen.getByRole("button", { name: "Open user menu", exact: true })
+    )
+    await screen.findByRole("dialog", { name: "User account" })
+
+    await user.keyboard("{Escape}")
+
+    expect(screen.queryByRole("dialog", { name: "User account" })).not.toBeInTheDocument()
+    expect(
+      screen.getByRole("button", { name: "Open user menu", exact: true })
+    ).toHaveFocus()
+  })
+
+  it("drawer Escape order closes the popup first, then the drawer", async () => {
+    const user = userEvent.setup()
+    renderSidebar()
+    const opener = screen.getByRole("button", {
+      name: "Open navigation",
+      exact: true,
+    })
+    await user.click(opener)
+    const drawer = screen.getByRole("dialog", { name: "Navigation" })
+    await user.click(
+      within(drawer).getByRole("button", { name: "Open user menu", exact: true })
+    )
+    await screen.findByRole("dialog", { name: "User account" })
+
+    await user.keyboard("{Escape}")
+
+    expect(screen.queryByRole("dialog", { name: "User account" })).not.toBeInTheDocument()
+    expect(screen.getByRole("dialog", { name: "Navigation" })).toBeInTheDocument()
+
+    await user.keyboard("{Escape}")
+
+    expect(screen.queryByTestId("sidebar-scrim")).not.toBeInTheDocument()
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
+    expect(document.activeElement).toBe(opener)
+  })
+})
+
+describe("SB4-BRAND: collapsed logo expansion contracts", () => {
+  it("collapsed rail exposes one logo expansion button with the accessible name", () => {
+    renderSidebar({ collapsed: true, onCollapsedChange: () => {} })
+
+    const buttons = screen.getAllByRole("button", {
+      name: "Expand sidebar",
+      exact: true,
+    })
+    expect(buttons).toHaveLength(1)
+    expect(buttons[0].querySelector("img")).not.toBeNull()
+    expect(buttons[0].querySelector("svg")).not.toBeNull()
+  })
+
+  it("logo expansion button carries the collapsed accessible attributes", () => {
+    renderSidebar({ collapsed: true, onCollapsedChange: () => {} })
+
+    const button = screen.getByRole("button", {
+      name: "Expand sidebar",
+      exact: true,
+    })
+    expect(button).toHaveAttribute("aria-expanded", "false")
+    expect(button).toHaveAttribute("aria-controls", "primary-sidebar")
+    expect(button).toHaveAttribute("title", "Expand sidebar")
+  })
+
+  it("logo button press reports expansion through onCollapsedChange", async () => {
+    const user = userEvent.setup()
+    const onCollapsedChange = vi.fn()
+    renderSidebar({ collapsed: true, onCollapsedChange })
+
+    await user.click(
+      screen.getByRole("button", { name: "Expand sidebar", exact: true })
+    )
+
+    expect(onCollapsedChange).toHaveBeenCalledTimes(1)
+    expect(onCollapsedChange).toHaveBeenCalledWith(false)
+  })
+
+  it("expanded rail keeps the static brand beside the collapse control", () => {
+    renderSidebar({ collapsed: false, onCollapsedChange: () => {} })
+
+    expect(screen.getByText("FreeSearch", { exact: true })).toBeInTheDocument()
+    expect(
+      screen.getByRole("button", { name: "Collapse sidebar", exact: true })
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "Expand sidebar", exact: true })
+    ).not.toBeInTheDocument()
+  })
+})
