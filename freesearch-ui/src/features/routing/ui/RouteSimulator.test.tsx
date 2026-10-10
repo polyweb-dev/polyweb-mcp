@@ -477,7 +477,7 @@ describe("R-SIM AC-R-SIM-5: operation toggle resets to hero", () => {
 
 describe("R-SIM AC-R-SIM-6: empty-eligible state", () => {
   it("shows the empty message with no pipeline in hero when nothing is eligible", async () => {
-    const disabled = allProvidersFixture().map((p) => ({ ...p, enabled: false }))
+    const disabled = allProvidersFixture().map((p) => ({ ...p, enable_mask: 0, enabled: false }))
     renderRouting(disabled as WireProviderStatus[])
     await openSimulator()
 
@@ -490,7 +490,7 @@ describe("R-SIM AC-R-SIM-6: empty-eligible state", () => {
   })
 
   it("Simulate with zero eligible only flips the gate (docked + message, still no pipeline)", async () => {
-    const disabled = allProvidersFixture().map((p) => ({ ...p, enabled: false }))
+    const disabled = allProvidersFixture().map((p) => ({ ...p, enable_mask: 0, enabled: false }))
     renderRouting(disabled as WireProviderStatus[])
     await openSimulator()
 

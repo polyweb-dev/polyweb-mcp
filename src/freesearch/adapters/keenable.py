@@ -12,11 +12,11 @@ rolling hourly rate limit.
 from collections import deque
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlsplit
 
 import httpx
-from pydantic import SecretStr
+from pydantic import SecretStr, ValidationError
 
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.infrastructure.dates import parse_iso_datetime
@@ -80,6 +80,20 @@ def _next_month_start(value: datetime) -> datetime:
 def _parse_published_at(value: Any) -> datetime | None:
     """Parse an ISO-8601 timestamp; unparseable values are None."""
     return parse_iso_datetime(value)
+
+
+def _parse_error_record(index: int) -> dict[str, object]:
+    """Return the safe record for one rejected search result item.
+
+    The record holds no raw payload, URL, key, query, or validation text, so a
+    rejected item can never leak response content into usage metadata.
+    """
+
+    return {
+        "index": index,
+        "code": "invalid_response",
+        "message": "malformed search result item",
+    }
 
 
 class KeenableAdapter(ProviderAdapter):
@@ -180,14 +194,31 @@ class KeenableAdapter(ProviderAdapter):
         ) as parse_span:
             try:
                 payload = response.json()
-                results = [self._normalize_result(item) for item in payload["results"]]
+                items = payload["results"]
+                if not isinstance(items, list):
+                    raise self._error("invalid_response", "malformed search response") from None
+                results: list[SearchResult] = []
+                parse_errors: list[dict[str, object]] = []
+                for index, item in enumerate(items):
+                    try:
+                        results.append(self._normalize_result(item))
+                    except ValidationError:
+                        parse_errors.append(_parse_error_record(index))
+                    except ProviderOperationError as exc:
+                        if exc.error.code != "invalid_response":
+                            raise
+                        parse_errors.append(_parse_error_record(index))
+                results = results[: request.limit]
                 parse_span.set_attributes({TraceAttribute.RESPONSE_RESULT_COUNT: len(results)})
+                usage = self._usage_event(UsageOperation.SEARCH, payload)
+                if parse_errors:
+                    usage.metadata["parse_errors"] = parse_errors
                 return SearchResponse(
                     query=request.query,
                     provider=self.name,
                     results=results,
                     total_results=len(results),
-                    usage=self._usage_event(UsageOperation.SEARCH, payload),
+                    usage=usage,
                     quota_snapshot=(self._keyless_snapshot() if mode == _KEYLESS else None),
                 )
             except ProviderOperationError:
@@ -210,13 +241,18 @@ class KeenableAdapter(ProviderAdapter):
         )
 
     def _normalize_result(self, item: Any) -> SearchResult:
+        if not isinstance(item, dict):
+            raise self._error("invalid_response", "malformed search result item")
+        url = item.get("url")
+        if not isinstance(url, str) or not url:
+            raise self._error("invalid_response", "malformed search result item")
         metadata: dict[str, Any] = {}
         for key in ("description", "acquired_at"):
             if item.get(key) is not None:
                 metadata[key] = item[key]
         return SearchResult(
             title=item.get("title") or "",
-            url=item["url"],
+            url=cast(Any, url),
             snippet=item.get("snippet") or "",
             published_at=_parse_published_at(item.get("published_at")),
             metadata=metadata,

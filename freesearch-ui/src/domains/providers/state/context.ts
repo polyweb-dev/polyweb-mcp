@@ -13,8 +13,8 @@ export interface ProvidersValue {
   canEditControls: boolean;
   refreshProviders: () => Promise<void>;
   toggleProvider: (id: string, enabled: boolean) => Promise<void>;
-  toggleProviderSearch: (id: string, enabled: boolean) => void;
-  toggleProviderFetch: (id: string, enabled: boolean) => void;
+  toggleProviderSearch: (id: string, enabled: boolean) => Promise<void>;
+  toggleProviderFetch: (id: string, enabled: boolean) => Promise<void>;
   updateProviderPriority: (id: string, newPriority: number) => Promise<boolean>;
   moveProviderPriority: (id: string, direction: "up" | "down") => Promise<void>;
   setCircuitBreaker: (id: string, status: CircuitBreakerStatus) => Promise<void>;

@@ -799,7 +799,7 @@ describe("AC-R1-9: edge states (loading neutral, error muted, 0-of-N)", () => {
   })
 
   it('shows the exact "0 of 7 providers" edge when nothing is eligible', async () => {
-    const disabled = allProvidersFixture().map((p) => ({ ...p, enabled: false }))
+    const disabled = allProvidersFixture().map((p) => ({ ...p, enable_mask: 0, enabled: false }))
     stubBackend({ providers: disabled as WireProviderStatus[] })
     render(
       <MemoryRouter initialEntries={["/playground"]}>

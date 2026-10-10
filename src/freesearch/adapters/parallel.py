@@ -11,10 +11,10 @@ malformed payloads are the redaction-safe, non-retryable ``invalid_response``.
 import logging
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, cast
 
 import httpx
-from pydantic import SecretStr
+from pydantic import SecretStr, ValidationError
 
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.infrastructure.borrowed_transport import BorrowedTransport
@@ -105,6 +105,20 @@ def _parse_published_at(value: Any) -> datetime | None:
     return parse_iso_datetime(value)
 
 
+def _parse_error_record(index: int) -> dict[str, object]:
+    """Return the safe record for one rejected search result item.
+
+    The record holds no raw payload, URL, key, query, or validation text, so a
+    rejected item can never leak response content into usage metadata.
+    """
+
+    return {
+        "index": index,
+        "code": "invalid_response",
+        "message": "malformed search result item",
+    }
+
+
 class ParallelAdapter(ProviderAdapter):
     """Search, fetch, and cost-estimate operations against the Parallel API."""
 
@@ -178,32 +192,56 @@ class ParallelAdapter(ProviderAdapter):
 
     def _search_response(self, request: SearchRequest, payload: dict[str, Any]) -> SearchResponse:
         request_id = self._require(payload, "search_id", str)
-        results = [
-            self._normalize_search_result(item) for item in self._require(payload, "results", list)
-        ]
+        results: list[SearchResult] = []
+        parse_errors: list[dict[str, object]] = []
+        for index, item in enumerate(self._require(payload, "results", list)):
+            try:
+                results.append(self._normalize_search_result(item))
+            except ValidationError:
+                parse_errors.append(_parse_error_record(index))
+            except ProviderOperationError as exc:
+                if exc.error.code != "invalid_response":
+                    raise
+                parse_errors.append(_parse_error_record(index))
+        results = results[: request.limit]
+        # Usage validation stays outside item recovery: malformed vendor usage
+        # is still fatal for the whole response.
+        usage = self._usage_event(
+            payload,
+            UsageOperation.SEARCH,
+            request_id,
+            mode=request.mode,
+            extra_bundles=request.extra_bundles,
+        )
+        usage_gap: dict[str, Any] | None = None
+        if parse_errors:
+            if usage is not None:
+                usage.metadata["parse_errors"] = parse_errors
+            else:
+                # No vendor usage: the record-only gap supplies the items and
+                # never fabricates a monetary event.
+                usage_gap = {"reason": "metering-unavailable", "parse_errors": parse_errors}
         return SearchResponse(
             query=request.query,
             provider=self.name,
             results=results,
             total_results=len(results),
-            usage=self._usage_event(
-                payload,
-                UsageOperation.SEARCH,
-                request_id,
-                mode=request.mode,
-                extra_bundles=request.extra_bundles,
-            ),
+            usage=usage,
+            usage_gap=usage_gap,
         )
 
     def _normalize_search_result(self, item: Any) -> SearchResult:
-        if not isinstance(item.get("url"), str):
-            raise self._error("invalid_response", "malformed search response")
+        if not isinstance(item, dict):
+            raise self._error("invalid_response", "malformed search result item")
+        url = item.get("url")
+        if not isinstance(url, str) or not url:
+            raise self._error("invalid_response", "malformed search result item")
         excerpts = item.get("excerpts")
-        if not isinstance(excerpts, list):
-            raise self._error("invalid_response", "malformed search response")
+        if not isinstance(excerpts, list) or any(not isinstance(e, str) for e in excerpts):
+            raise self._error("invalid_response", "malformed search result item")
         return SearchResult(
             title=item.get("title") or "",
-            url=item.get("url"),
+            url=cast(Any, url),
             snippet="\n\n".join(excerpts),
             published_at=_parse_published_at(item.get("publish_date")),
         )

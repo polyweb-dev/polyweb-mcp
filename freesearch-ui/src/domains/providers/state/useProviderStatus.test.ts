@@ -1,181 +1,264 @@
 import { describe, it, expect, vi, beforeEach } from "vitest"
 import { renderHook, act } from "@testing-library/react"
-import {
-  useProviderStatus,
-  loadOperationToggles,
-  saveOperationToggle,
-  OPERATION_TOGGLES_STORAGE_KEY,
-} from "./useProviderStatus"
+import { useProviderStatus } from "./useProviderStatus"
 import { apiService } from "@/services/api/freesearchApi"
-import { allProvidersFixture } from "@/test/backendFixtures"
+import { allProvidersFixture, providerStatus } from "@/test/backendFixtures"
 import type { ProviderConfig } from "@/domains/providers/model/types"
 
-describe("useProviderStatus operation toggle persistence", () => {
+function stateHarness(initial: ProviderConfig[] = []) {
+  let providersState = initial
+  const setProviders = vi.fn((update: React.SetStateAction<ProviderConfig[]>) => {
+    providersState =
+      typeof update === "function"
+        ? (update as (prev: ProviderConfig[]) => ProviderConfig[])(providersState)
+        : update
+  })
+  const setProvidersLoading = vi.fn()
+  const setProvidersError = vi.fn()
+  const showToast = vi.fn()
+  const getState = () => providersState
+  return { setProviders, setProvidersLoading, setProvidersError, showToast, getState }
+}
+
+describe("useProviderStatus database authority", () => {
   beforeEach(() => {
     localStorage.clear()
     vi.restoreAllMocks()
   })
 
-  describe("saveOperationToggle and loadOperationToggles", () => {
-    it("returns empty object when nothing has been stored", () => {
-      expect(loadOperationToggles()).toEqual({})
+  it("refreshes provider state from backend masks", async () => {
+    const harness = stateHarness()
+    vi.spyOn(apiService, "listProviders").mockResolvedValue(allProvidersFixture() as never)
+
+    const { result } = renderHook(() =>
+      useProviderStatus({
+        setProviders: harness.setProviders,
+        setProvidersLoading: harness.setProvidersLoading,
+        setProvidersError: harness.setProvidersError,
+        showToast: harness.showToast,
+        canReadControls: true,
+      }),
+    )
+
+    await act(async () => {
+      await result.current.refreshProviders()
     })
 
-    it("saves and loads operation toggles for providers", () => {
-      saveOperationToggle("exa", { searchEnabled: false })
-      expect(loadOperationToggles()).toEqual({
-        exa: { searchEnabled: false },
-      })
-
-      // Updates without overwriting existing keys
-      saveOperationToggle("exa", { fetchEnabled: true })
-      expect(loadOperationToggles()).toEqual({
-        exa: { searchEnabled: false, fetchEnabled: true },
-      })
-    })
-
-    it("handles corrupted localStorage gracefully", () => {
-      localStorage.setItem(OPERATION_TOGGLES_STORAGE_KEY, "invalid-json{{")
-      expect(loadOperationToggles()).toEqual({})
-    })
+    const providers = harness.getState()
+    expect(providers).toHaveLength(8)
+    const brave = providers.find((p) => p.id === "brave")!
+    expect(brave.enableMask).toBe(7)
+    expect(brave.supportMask).toBe(3)
+    expect(brave.globalEnabled).toBe(true)
+    expect(brave.searchEnabled).toBe(true)
+    // Raw admin fetch choice stays ON even though Brave cannot fetch.
+    expect(brave.fetchEnabled).toBe(true)
+    const exa = providers.find((p) => p.id === "exa")!
+    expect(exa.enableMask).toBe(7)
+    expect(exa.supportMask).toBe(7)
   })
 
-  describe("useProviderStatus hook hydration and toggles", () => {
-    it("hydrates search and fetch toggles from localStorage upon refreshProviders", async () => {
-      // Pre-save toggles in localStorage: Exa search is OFF
-      saveOperationToggle("exa", { searchEnabled: false })
+  it("ignores stale localStorage operation toggles on refresh", async () => {
+    localStorage.setItem(
+      "provider-operation-toggles",
+      JSON.stringify({ exa: { searchEnabled: false } }),
+    )
+    localStorage.setItem("OPERATION_TOGGLES_STORAGE_KEY", "invalid-json{{")
 
-      let providersState: ProviderConfig[] = []
-      const setProviders = vi.fn((update) => {
-        if (typeof update === "function") {
-          providersState = update(providersState)
-        } else {
-          providersState = update
-        }
-      })
-      const setProvidersLoading = vi.fn()
-      const setProvidersError = vi.fn()
-      const showToast = vi.fn()
+    const harness = stateHarness()
+    vi.spyOn(apiService, "listProviders").mockResolvedValue(allProvidersFixture() as never)
 
-      vi.spyOn(apiService, "listProviders").mockResolvedValue(allProvidersFixture() as any)
+    const { result } = renderHook(() =>
+      useProviderStatus({
+        setProviders: harness.setProviders,
+        setProvidersLoading: harness.setProvidersLoading,
+        setProvidersError: harness.setProvidersError,
+        showToast: harness.showToast,
+        canReadControls: true,
+      }),
+    )
 
-      const { result } = renderHook(() =>
-        useProviderStatus({
-          setProviders,
-          setProvidersLoading,
-          setProvidersError,
-          showToast,
-          canReadControls: true,
-        })
-      )
-
-      await act(async () => {
-        await result.current.refreshProviders()
-      })
-
-      const exa = providersState.find((p) => p.id === "exa")
-      expect(exa?.searchEnabled).toBe(false)
-      expect(exa?.fetchEnabled).toBe(true)
-
-      const brave = providersState.find((p) => p.id === "brave")
-      expect(brave?.searchEnabled).toBe(true)
+    await act(async () => {
+      await result.current.refreshProviders()
     })
 
-    it("persists toggles to localStorage when toggleProviderSearch is invoked", async () => {
-      let providersState: ProviderConfig[] = [
-        {
-          id: "exa",
-          name: "Exa",
-          capabilities: ["search", "fetch"],
-          priority: 1,
-          globalEnabled: true,
-          searchEnabled: true,
-          fetchEnabled: true,
-          hasKey: true,
-        } as ProviderConfig,
-      ]
+    const exa = harness.getState().find((p) => p.id === "exa")!
+    expect(exa.searchEnabled).toBe(true)
+    expect(exa.enableMask).toBe(7)
+  })
 
-      const setProviders = vi.fn((update) => {
-        if (typeof update === "function") {
-          providersState = update(providersState)
-        } else {
-          providersState = update
-        }
-      })
-      const setProvidersLoading = vi.fn()
-      const setProvidersError = vi.fn()
-      const showToast = vi.fn()
+  it("toggleProvider PATCHes one global bit and applies the response state", async () => {
+    const harness = stateHarness()
+    vi.spyOn(apiService, "listProviders").mockResolvedValue(allProvidersFixture() as never)
+    const patchSpy = vi
+      .spyOn(apiService, "patchProvider")
+      .mockResolvedValue(providerStatus("brave", { enable_mask: 6 }) as never)
 
-      const { result } = renderHook(() =>
-        useProviderStatus({
-          setProviders,
-          setProvidersLoading,
-          setProvidersError,
-          showToast,
-          canReadControls: true,
-        })
-      )
+    const { result } = renderHook(() =>
+      useProviderStatus({
+        setProviders: harness.setProviders,
+        setProvidersLoading: harness.setProvidersLoading,
+        setProvidersError: harness.setProvidersError,
+        showToast: harness.showToast,
+        canReadControls: true,
+      }),
+    )
 
-      act(() => {
-        result.current.toggleProviderSearch("exa", false)
-      })
+    await act(async () => {
+      await result.current.refreshProviders()
+    })
+    expect(harness.getState().find((p) => p.id === "brave")?.globalEnabled).toBe(true)
 
-      expect(loadOperationToggles().exa?.searchEnabled).toBe(false)
-      expect(providersState[0].searchEnabled).toBe(false)
-
-      act(() => {
-        result.current.toggleProviderFetch("exa", false)
-      })
-
-      expect(loadOperationToggles().exa?.fetchEnabled).toBe(false)
-      expect(providersState[0].fetchEnabled).toBe(false)
+    await act(async () => {
+      await result.current.toggleProvider("brave", false)
     })
 
-    it("returns an empty catalog with clear flags when canReadControls is false", async () => {
-      let providersState: ProviderConfig[] = [
-        {
-          id: "exa",
-          name: "Exa",
-          capabilities: ["search", "fetch"],
-          priority: 1,
-          globalEnabled: true,
-          searchEnabled: true,
-          fetchEnabled: true,
-          hasKey: true,
-        } as ProviderConfig,
-      ]
+    expect(patchSpy).toHaveBeenCalledWith("brave", { enabled: false })
+    const brave = harness.getState().find((p) => p.id === "brave")!
+    expect(brave.enableMask).toBe(6)
+    expect(brave.globalEnabled).toBe(false)
+    // Global OFF preserves the raw tool choices.
+    expect(brave.searchEnabled).toBe(true)
+    expect(brave.fetchEnabled).toBe(true)
+  })
 
-      const setProviders = vi.fn((update) => {
-        if (typeof update === "function") {
-          providersState = update(providersState)
-        } else {
-          providersState = update
-        }
-      })
-      const setProvidersLoading = vi.fn()
-      const setProvidersError = vi.fn()
-      const showToast = vi.fn()
+  it("toggleProviderSearch PATCHes one search bit and applies the response state", async () => {
+    const harness = stateHarness()
+    vi.spyOn(apiService, "listProviders").mockResolvedValue(allProvidersFixture() as never)
+    const patchSpy = vi
+      .spyOn(apiService, "patchProvider")
+      .mockResolvedValue(providerStatus("exa", { enable_mask: 5 }) as never)
 
-      const listProvidersSpy = vi.spyOn(apiService, "listProviders")
+    const { result } = renderHook(() =>
+      useProviderStatus({
+        setProviders: harness.setProviders,
+        setProvidersLoading: harness.setProvidersLoading,
+        setProvidersError: harness.setProvidersError,
+        showToast: harness.showToast,
+        canReadControls: true,
+      }),
+    )
 
-      const { result } = renderHook(() =>
-        useProviderStatus({
-          setProviders,
-          setProvidersLoading,
-          setProvidersError,
-          showToast,
-          canReadControls: false,
-        })
-      )
-
-      await act(async () => {
-        await result.current.refreshProviders()
-      })
-
-      expect(listProvidersSpy).not.toHaveBeenCalled()
-      expect(providersState).toEqual([])
-      expect(setProvidersLoading).toHaveBeenCalledWith(false)
-      expect(setProvidersError).toHaveBeenCalledWith(null)
+    await act(async () => {
+      await result.current.refreshProviders()
     })
+
+    await act(async () => {
+      await result.current.toggleProviderSearch("exa", false)
+    })
+
+    expect(patchSpy).toHaveBeenCalledWith("exa", { search_enabled: false })
+    const exa = harness.getState().find((p) => p.id === "exa")!
+    expect(exa.enableMask).toBe(5)
+    expect(exa.searchEnabled).toBe(false)
+    expect(exa.fetchEnabled).toBe(true)
+    expect(exa.globalEnabled).toBe(true)
+  })
+
+  it("toggleProviderFetch PATCHes one fetch bit and applies the response state", async () => {
+    const harness = stateHarness()
+    vi.spyOn(apiService, "listProviders").mockResolvedValue(allProvidersFixture() as never)
+    const patchSpy = vi
+      .spyOn(apiService, "patchProvider")
+      .mockResolvedValue(providerStatus("exa", { enable_mask: 3 }) as never)
+
+    const { result } = renderHook(() =>
+      useProviderStatus({
+        setProviders: harness.setProviders,
+        setProvidersLoading: harness.setProvidersLoading,
+        setProvidersError: harness.setProvidersError,
+        showToast: harness.showToast,
+        canReadControls: true,
+      }),
+    )
+
+    await act(async () => {
+      await result.current.refreshProviders()
+    })
+
+    await act(async () => {
+      await result.current.toggleProviderFetch("exa", false)
+    })
+
+    expect(patchSpy).toHaveBeenCalledWith("exa", { fetch_enabled: false })
+    const exa = harness.getState().find((p) => p.id === "exa")!
+    expect(exa.enableMask).toBe(3)
+    expect(exa.searchEnabled).toBe(true)
+    expect(exa.fetchEnabled).toBe(false)
+  })
+
+  it("preserves previous state and toasts on PATCH failure", async () => {
+    const harness = stateHarness()
+    vi.spyOn(apiService, "listProviders").mockResolvedValue(allProvidersFixture() as never)
+    vi.spyOn(apiService, "patchProvider").mockRejectedValue(new Error("db down"))
+
+    const { result } = renderHook(() =>
+      useProviderStatus({
+        setProviders: harness.setProviders,
+        setProvidersLoading: harness.setProvidersLoading,
+        setProvidersError: harness.setProvidersError,
+        showToast: harness.showToast,
+        canReadControls: true,
+      }),
+    )
+
+    await act(async () => {
+      await result.current.refreshProviders()
+    })
+    const before = harness.getState()
+
+    await act(async () => {
+      await result.current.toggleProviderSearch("exa", false)
+    })
+
+    expect(harness.getState()).toEqual(before)
+    expect(harness.showToast).toHaveBeenCalledWith(expect.stringContaining("db down"), "error")
+  })
+
+  it("returns an empty catalog with clear flags when canReadControls is false", async () => {
+    let providersState: ProviderConfig[] = [
+      {
+        id: "exa",
+        name: "Exa",
+        capabilities: ["search", "fetch"],
+        priority: 1,
+        globalEnabled: true,
+        searchEnabled: true,
+        fetchEnabled: true,
+        hasKey: true,
+      } as ProviderConfig,
+    ]
+
+    const setProviders = vi.fn((update: React.SetStateAction<ProviderConfig[]>) => {
+      if (typeof update === "function") {
+        providersState = (update as (prev: ProviderConfig[]) => ProviderConfig[])(providersState)
+      } else {
+        providersState = update
+      }
+    })
+    const setProvidersLoading = vi.fn()
+    const setProvidersError = vi.fn()
+    const showToast = vi.fn()
+
+    const listProvidersSpy = vi.spyOn(apiService, "listProviders")
+
+    const { result } = renderHook(() =>
+      useProviderStatus({
+        setProviders,
+        setProvidersLoading,
+        setProvidersError,
+        showToast,
+        canReadControls: false,
+      })
+    )
+
+    await act(async () => {
+      await result.current.refreshProviders()
+    })
+
+    expect(listProvidersSpy).not.toHaveBeenCalled()
+    expect(providersState).toEqual([])
+    expect(setProvidersLoading).toHaveBeenCalledWith(false)
+    expect(setProvidersError).toHaveBeenCalledWith(null)
   })
 })

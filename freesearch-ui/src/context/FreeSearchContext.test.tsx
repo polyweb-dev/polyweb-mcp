@@ -76,8 +76,34 @@ function installBackend(server: FakeBackend): FetchStub {
       const id = backendIdFromUrl(req.url)
       const entry = server.providers.find((p) => p.provider_id === id)
       if (!entry) return err(404, { detail: `unknown provider '${id}'` })
-      const patch = (req.body ?? {}) as Partial<WireProviderStatus>
-      Object.assign(entry, patch)
+      const patch = (req.body ?? {}) as {
+        enable_mask?: unknown
+        enabled?: unknown
+        search_enabled?: unknown
+        fetch_enabled?: unknown
+        priority?: unknown
+      }
+      if (patch.enable_mask !== undefined && typeof patch.enable_mask === "number") {
+        entry.enable_mask = patch.enable_mask
+      } else {
+        if (patch.enabled !== undefined && typeof patch.enabled === "boolean") {
+          entry.enable_mask = patch.enabled ? entry.enable_mask | 1 : entry.enable_mask & ~1
+        }
+        if (patch.search_enabled !== undefined && typeof patch.search_enabled === "boolean") {
+          entry.enable_mask = patch.search_enabled
+            ? entry.enable_mask | 2
+            : entry.enable_mask & ~2
+        }
+        if (patch.fetch_enabled !== undefined && typeof patch.fetch_enabled === "boolean") {
+          entry.enable_mask = patch.fetch_enabled
+            ? entry.enable_mask | 4
+            : entry.enable_mask & ~4
+        }
+      }
+      if (patch.priority !== undefined && typeof patch.priority === "number") {
+        entry.priority = patch.priority
+      }
+      entry.enabled = (entry.enable_mask & 1) !== 0
       return ok(entry)
     }
     if (req.method === "POST" && req.url.endsWith("/test")) {
@@ -256,7 +282,7 @@ describe("FreeSearchContext (live backend)", () => {
       result.current.providers.find((p) => p.id === "brave")?.globalEnabled
     ).toBe(true)
 
-    const updated = { ...server.providers[0], enabled: false }
+    const updated = { ...server.providers[0], enable_mask: 6, enabled: false }
     await act(async () => {
       gate.resolve(ok(updated))
       await togglePromise
@@ -273,50 +299,63 @@ describe("FreeSearchContext (live backend)", () => {
     })
   })
 
-  it("keeps per-operation toggles local-only and guards unsupported operations", async () => {
+  it("persists per-operation toggles via durable PATCH and keeps composed context behavior", async () => {
     const { stub, result } = await mountLoaded()
 
-    const callsBefore = stub.requests.length
-    act(() => {
-      result.current.toggleProviderSearch("keenable", false)
+    await act(async () => {
+      await result.current.toggleProviderSearch("keenable", false)
     })
     expect(
-      result.current.providers.find((p) => p.id === "keenable")?.searchEnabled
+      result.current.providers.find((p) => p.id === "keenable")?.searchEnabled,
     ).toBe(false)
-    expect(stub.requests.length).toBe(callsBefore)
+    expect(
+      result.current.providers.find((p) => p.id === "keenable")?.enableMask,
+    ).toBe(5)
+    expect(stub.requestsTo("/api/v1/providers/keenable").at(-1)?.body).toEqual({
+      search_enabled: false,
+    })
 
-    act(() => {
-      result.current.toggleProviderFetch("keenable", false)
+    await act(async () => {
+      await result.current.toggleProviderFetch("keenable", false)
     })
     expect(
-      result.current.providers.find((p) => p.id === "keenable")?.fetchEnabled
+      result.current.providers.find((p) => p.id === "keenable")?.fetchEnabled,
     ).toBe(false)
-    expect(stub.requests.length).toBe(callsBefore)
+    expect(stub.requestsTo("/api/v1/providers/keenable").at(-1)?.body).toEqual({
+      fetch_enabled: false,
+    })
 
-    // Brave is search-only: enabling fetch is a guarded no-op, still zero fetch
-    act(() => {
-      result.current.toggleProviderFetch("brave", true)
+    // Brave is search-only support (3): admin fetch ON still PATCHes and
+    // updates the raw choice, while effective access stays OFF elsewhere.
+    await act(async () => {
+      await result.current.toggleProviderFetch("brave", true)
     })
     expect(
-      result.current.providers.find((p) => p.id === "brave")?.fetchEnabled
-    ).toBe(false)
-    expect(stub.requests.length).toBe(callsBefore)
-
-    // Exa is fetch-capable: per-operation fetch toggle applies locally, still zero fetch
-    act(() => {
-      result.current.toggleProviderFetch("exa", false)
-    })
-    expect(
-      result.current.providers.find((p) => p.id === "exa")?.fetchEnabled
-    ).toBe(false)
-    expect(stub.requests.length).toBe(callsBefore)
-    act(() => {
-      result.current.toggleProviderFetch("exa", true)
-    })
-    expect(
-      result.current.providers.find((p) => p.id === "exa")?.fetchEnabled
+      result.current.providers.find((p) => p.id === "brave")?.fetchEnabled,
     ).toBe(true)
-    expect(stub.requests.length).toBe(callsBefore)
+    expect(stub.requestsTo("/api/v1/providers/brave").at(-1)?.body).toEqual({
+      fetch_enabled: true,
+    })
+
+    // Exa is fetch-capable: durable fetch toggle flips response state.
+    await act(async () => {
+      await result.current.toggleProviderFetch("exa", false)
+    })
+    expect(
+      result.current.providers.find((p) => p.id === "exa")?.fetchEnabled,
+    ).toBe(false)
+    expect(stub.requestsTo("/api/v1/providers/exa").at(-1)?.body).toEqual({
+      fetch_enabled: false,
+    })
+    await act(async () => {
+      await result.current.toggleProviderFetch("exa", true)
+    })
+    expect(
+      result.current.providers.find((p) => p.id === "exa")?.fetchEnabled,
+    ).toBe(true)
+    expect(stub.requestsTo("/api/v1/providers/exa").at(-1)?.body).toEqual({
+      fetch_enabled: true,
+    })
   })
 
   it("updateProviderPriority PATCHes {priority} and refreshes from the 200", async () => {

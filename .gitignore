@@ -26,3 +26,4 @@ FEEDBACK/
 *.secret_salt
 .agents/communication/
 .archive/
+test_reports/

@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+import json
 import sqlite3
 import subprocess
 import sys
@@ -638,3 +639,236 @@ def test_upgrade_database_enables_wal_mode(tmp_path: Path) -> None:
     with sqlite3.connect(database) as connection:
         journal_mode = connection.execute("PRAGMA journal_mode").fetchone()[0]
     assert journal_mode == "wal"
+
+
+_CANONICAL_PROVIDERS = [
+    "brave",
+    "exa",
+    "firecrawl",
+    "keenable",
+    "parallel",
+    "tavily",
+    "tinyfish",
+    "you",
+]
+
+
+def _seed_legacy_provider_rows(database: Path, *, enabled_on: set[str]) -> None:
+    with sqlite3.connect(database) as connection:
+        for provider in _CANONICAL_PROVIDERS:
+            enabled = provider in enabled_on
+            payload = json.dumps(
+                {
+                    "config": {
+                        "enabled": enabled,
+                        "priority": 100,
+                        "free_tier_estimates": {"search": "0", "fetch": "0"},
+                    }
+                },
+                separators=(",", ":"),
+            )
+            connection.execute(
+                "INSERT OR REPLACE INTO runtime_settings (key, value_json) VALUES (?, ?)",
+                (f"provider.{provider}", payload),
+            )
+        connection.execute(
+            "INSERT OR REPLACE INTO runtime_settings (key, value_json) VALUES (?, ?)",
+            ("theme", json.dumps("dark")),
+        )
+        connection.commit()
+
+
+def _provider_config(database: Path, provider: str) -> dict:
+    with sqlite3.connect(database) as connection:
+        row = connection.execute(
+            "SELECT value_json FROM runtime_settings WHERE key = ?", (f"provider.{provider}",)
+        ).fetchone()
+    assert row is not None
+    return json.loads(row[0])["config"]
+
+
+def test_upgrade_converts_legacy_on_off_to_masks(tmp_path: Path) -> None:
+    database = tmp_path / "masks-on-off.db"
+    migration_module.command.upgrade(_config_for(database), _PREVIOUS_HEAD)
+    _seed_legacy_provider_rows(database, enabled_on={"exa", "brave", "tavily"})
+
+    result = upgrade_database(database)
+
+    assert result.previous_revision == _PREVIOUS_HEAD
+    assert result.current_revision == migration_head()
+    for provider in ("exa", "brave", "tavily"):
+        config = _provider_config(database, provider)
+        assert config["enable_mask"] == 7
+        assert "enabled" not in config
+    for provider in set(_CANONICAL_PROVIDERS) - {"exa", "brave", "tavily"}:
+        config = _provider_config(database, provider)
+        assert config["enable_mask"] == 0
+        assert "enabled" not in config
+    assert _provider_config(database, "brave")["support_mask"] == 3
+    for provider in set(_CANONICAL_PROVIDERS) - {"brave"}:
+        assert _provider_config(database, provider)["support_mask"] == 7
+
+
+def test_upgrade_preserves_unrelated_fields_and_keys(tmp_path: Path) -> None:
+    database = tmp_path / "masks-preserve.db"
+    migration_module.command.upgrade(_config_for(database), _PREVIOUS_HEAD)
+    with sqlite3.connect(database) as connection:
+        payload = json.dumps(
+            {"config": {"enabled": True, "priority": 7, "reset_schedule": "monthly"}},
+            separators=(",", ":"),
+        )
+        connection.execute(
+            "INSERT OR REPLACE INTO runtime_settings (key, value_json) VALUES (?, ?)",
+            ("provider.exa", payload),
+        )
+        connection.execute(
+            "INSERT OR REPLACE INTO runtime_settings (key, value_json) VALUES (?, ?)",
+            ("theme", json.dumps("dark")),
+        )
+        connection.commit()
+
+    upgrade_database(database)
+
+    config = _provider_config(database, "exa")
+    assert config["enable_mask"] == 7
+    assert config["support_mask"] == 7
+    assert config["priority"] == 7
+    assert config["reset_schedule"] == "monthly"
+    with sqlite3.connect(database) as connection:
+        theme = connection.execute(
+            "SELECT value_json FROM runtime_settings WHERE key = ?", ("theme",)
+        ).fetchone()
+    assert json.loads(theme[0]) == "dark"
+
+
+def test_upgrade_preserves_new_masks_and_rejects_ambiguous(tmp_path: Path) -> None:
+    database = tmp_path / "masks-ambiguous.db"
+    migration_module.command.upgrade(_config_for(database), _PREVIOUS_HEAD)
+    with sqlite3.connect(database) as connection:
+        good = json.dumps(
+            {"config": {"enable_mask": 5, "support_mask": 7, "priority": 100}},
+            separators=(",", ":"),
+        )
+        bad = json.dumps(
+            {"config": {"enabled": True, "enable_mask": 7, "support_mask": 7}},
+            separators=(",", ":"),
+        )
+        connection.execute(
+            "INSERT OR REPLACE INTO runtime_settings (key, value_json) VALUES (?, ?)",
+            ("provider.exa", good),
+        )
+        connection.execute(
+            "INSERT OR REPLACE INTO runtime_settings (key, value_json) VALUES (?, ?)",
+            ("provider.brave", bad),
+        )
+        connection.commit()
+
+    with pytest.raises(DatabaseMigrationError, match="ambiguous"):
+        upgrade_database(database)
+
+    # The 0004 data revision fails after 0003 succeeds, so Alembic stays at
+    # 0003 and never reaches the head. The pre-migration backup is kept.
+    assert _revision(database) == ["0003_open_telemetry_spans"]
+    assert _revision(database) != [migration_head()]
+
+
+def test_upgrade_rejects_malformed_provider_rows(tmp_path: Path) -> None:
+    for name, payload in [
+        ("malformed-json", "{not valid json"),
+        ("invalid-legacy-type", json.dumps({"config": {"enabled": "yes"}})),
+        ("non-dict-config", json.dumps({"config": "oops"})),
+    ]:
+        database = tmp_path / f"masks-{name}.db"
+        migration_module.command.upgrade(_config_for(database), _PREVIOUS_HEAD)
+        with sqlite3.connect(database) as connection:
+            connection.execute(
+                "INSERT OR REPLACE INTO runtime_settings (key, value_json) VALUES (?, ?)",
+                ("provider.exa", payload),
+            )
+            connection.commit()
+
+        with pytest.raises(DatabaseMigrationError):
+            upgrade_database(database)
+
+        assert _revision(database) == ["0003_open_telemetry_spans"]
+        assert _revision(database) != [migration_head()]
+
+
+def test_upgrade_backup_contains_original_provider_rows(tmp_path: Path) -> None:
+    database = tmp_path / "masks-backup.db"
+    migration_module.command.upgrade(_config_for(database), _PREVIOUS_HEAD)
+    _seed_legacy_provider_rows(database, enabled_on={"exa"})
+    with sqlite3.connect(database) as connection:
+        original = connection.execute(
+            "SELECT key, value_json FROM runtime_settings WHERE key LIKE 'provider.%' ORDER BY key"
+        ).fetchall()
+
+    result = upgrade_database(database)
+
+    assert result.backup is not None
+    assert result.backup.is_file()
+    with sqlite3.connect(result.backup) as connection:
+        backed = connection.execute(
+            "SELECT key, value_json FROM runtime_settings WHERE key LIKE 'provider.%' ORDER BY key"
+        ).fetchall()
+        assert connection.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+    assert backed == original
+    assert json.loads(dict(backed)["provider.exa"])["config"]["enabled"] is True
+    assert _provider_config(database, "exa")["enable_mask"] == 7
+
+
+def test_upgrade_provider_masks_is_idempotent(tmp_path: Path) -> None:
+    database = tmp_path / "masks-idempotent.db"
+    migration_module.command.upgrade(_config_for(database), _PREVIOUS_HEAD)
+    _seed_legacy_provider_rows(database, enabled_on={"exa", "brave"})
+
+    first = upgrade_database(database)
+    before = _provider_config(database, "exa")
+    second = upgrade_database(database)
+
+    assert first.changed is True
+    assert second.changed is False
+    assert second.backup is None
+    assert _provider_config(database, "exa") == before
+    assert before["enable_mask"] == 7
+
+
+@pytest.mark.asyncio
+async def test_concurrent_provider_mask_upgrades_are_serialized(tmp_path: Path) -> None:
+    database = tmp_path / "masks-concurrent.db"
+    migration_module.command.upgrade(_config_for(database), _PREVIOUS_HEAD)
+    _seed_legacy_provider_rows(database, enabled_on={"exa", "tavily"})
+    original = _provider_config(database, "exa")
+
+    results = await asyncio.gather(
+        *(asyncio.to_thread(upgrade_database, database) for _ in range(4))
+    )
+
+    assert sum(result.changed for result in results) == 1
+    assert _provider_config(database, "exa")["enable_mask"] == 7
+    assert _provider_config(database, "tavily")["enable_mask"] == 7
+    assert original["enabled"] is True
+    validate_database_schema(database)
+
+
+def test_downgrade_decodes_global_bit_and_removes_masks(tmp_path: Path) -> None:
+    database = tmp_path / "masks-downgrade.db"
+    migration_module.command.upgrade(_config_for(database), _PREVIOUS_HEAD)
+    _seed_legacy_provider_rows(database, enabled_on={"exa"})
+    upgrade_database(database)
+    assert _provider_config(database, "exa")["enable_mask"] == 7
+
+    migration_module.command.downgrade(_config_for(database), "-1")
+
+    config = _provider_config(database, "exa")
+    assert config["enabled"] is True
+    assert "enable_mask" not in config
+    assert "support_mask" not in config
+    off = _provider_config(database, "brave")
+    # Brave was OFF in the seed, so Bit 0 decodes to False.
+    assert off["enabled"] is False
+
+    result = upgrade_database(database)
+    assert result.current_revision == migration_head()
+    assert _provider_config(database, "exa")["enable_mask"] == 7
+    validate_database_schema(database)

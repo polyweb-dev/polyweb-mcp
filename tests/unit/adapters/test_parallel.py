@@ -143,6 +143,14 @@ def _assert_no_secret_leak(error: ProviderOperationError, secret: str) -> None:
         assert secret not in text
 
 
+def _assert_no_records_leak(response: object, secret: str) -> None:
+    """Assert skipped-item records carry no secret or raw payload text."""
+    usage = response.usage  # type: ignore[union-attr]
+    assert usage is not None
+    assert secret not in repr(usage.metadata.get("parse_errors"))
+    assert secret not in repr(response.results)  # type: ignore[union-attr]
+
+
 # --- construction ---------------------------------------------------------
 
 
@@ -378,30 +386,30 @@ async def test_search_malformed_usage_raises_invalid_response(usage: object) -> 
     assert excinfo.value.error.retryable is False
 
 
-async def test_search_malformed_response_raises_redacted_nonretryable_error() -> None:
+async def test_search_item_missing_excerpts_records_redacted_error() -> None:
     payload = {
         "search_id": "search_x",
         "results": [{"url": "https://www.example.com/guide", "api_key": "super-secret"}],
+        "usage": [{"name": "sku_search", "count": 1}],
     }
     wire = _Wire([httpx.Response(200, json=payload)])
     caller = make_client(wire)
     try:
         adapter = make_adapter(caller)
-        with pytest.raises(ProviderOperationError) as excinfo:
-            await adapter.search(SearchRequest(query="bad"))
+        response = await adapter.search(SearchRequest(query="bad"))
     finally:
         await caller.aclose()
 
-    error = excinfo.value
-    assert error.error.provider == "parallel"
-    assert error.error.code == "invalid_response"
-    assert error.error.retryable is False
-    # A structurally malformed payload is normalized, never a raw failure.
-    assert error.__cause__ is None
-    _assert_no_secret_leak(error, "super-secret")
+    assert response.results == []
+    assert response.total_results == 0
+    assert response.usage is not None
+    assert response.usage.metadata.get("parse_errors") == [
+        {"index": 0, "code": "invalid_response", "message": "malformed search result item"}
+    ]
+    _assert_no_records_leak(response, "super-secret")
 
 
-async def test_search_result_missing_url_raises_invalid_response() -> None:
+async def test_search_result_missing_url_returns_empty_success() -> None:
     payload = _load_fixture("search.json") | {
         "results": [{"title": "missing url", "excerpts": ["x"]}]
     }
@@ -409,13 +417,256 @@ async def test_search_result_missing_url_raises_invalid_response() -> None:
     caller = make_client(wire)
     try:
         adapter = make_adapter(caller)
-        with pytest.raises(ProviderOperationError) as excinfo:
-            await adapter.search(SearchRequest(query="bad"))
+        response = await adapter.search(SearchRequest(query="bad"))
     finally:
         await caller.aclose()
 
-    assert excinfo.value.error.code == "invalid_response"
-    assert excinfo.value.error.retryable is False
+    assert response.results == []
+    assert response.total_results == 0
+    assert response.usage is not None
+    assert response.usage.metadata.get("parse_errors") == [
+        {"index": 0, "code": "invalid_response", "message": "malformed search result item"}
+    ]
+
+
+_GOOD_PARALLEL_ITEM = {
+    "url": "https://www.example.com/guide",
+    "title": "Example Guide",
+    "publish_date": "2024-01-15",
+    "excerpts": ["First relevant markdown excerpt.", "Second relevant markdown excerpt."],
+}
+
+_BAD_URL_ITEM = {
+    "title": "Bad address",
+    "url": "not-a-url",
+    "excerpts": ["An excerpt."],
+}
+
+_MISSING_URL_ITEM = {"title": "No address here", "excerpts": ["An excerpt."]}
+
+_MISSING_EXCERPTS_ITEM = {"title": "No excerpts", "url": "https://www.example.com/noex"}
+
+_SECOND_GOOD_ITEM = {
+    "url": "https://docs.example.org/api",
+    "title": "Second Guide",
+    "excerpts": ["Single excerpt without a title."],
+}
+
+_VALID_SKU_USAGE = [{"name": "sku_search", "count": 1}]
+
+_EXPECTED_RECORD = {
+    "code": "invalid_response",
+    "message": "malformed search result item",
+}
+
+_EXPECTED_GAP = {"reason": "metering-unavailable"}
+
+
+def _parallel_payload(items: object, usage: object = _VALID_SKU_USAGE) -> dict[str, object]:
+    payload: dict[str, object] = {"search_id": "search_test_1", "results": items}
+    payload["usage"] = usage
+    return payload
+
+
+def _parallel_records(response: object) -> object:
+    usage = response.usage  # type: ignore[union-attr]
+    if usage is not None:
+        return usage.metadata.get("parse_errors")
+    gap = response.usage_gap  # type: ignore[union-attr]
+    assert gap is not None
+    return gap.get("parse_errors")
+
+
+@pytest.mark.parametrize("usage", [_VALID_SKU_USAGE, None], ids=["sku-usage", "usage-absent"])
+@pytest.mark.parametrize(
+    ("items", "expected_urls", "expected_indices"),
+    [
+        (
+            [_GOOD_PARALLEL_ITEM, _BAD_URL_ITEM],
+            ["https://www.example.com/guide"],
+            [1],
+        ),
+        (
+            [_MISSING_URL_ITEM, _GOOD_PARALLEL_ITEM],
+            ["https://www.example.com/guide"],
+            [0],
+        ),
+        (
+            [_GOOD_PARALLEL_ITEM, _MISSING_EXCERPTS_ITEM, _SECOND_GOOD_ITEM],
+            ["https://www.example.com/guide", "https://docs.example.org/api"],
+            [1],
+        ),
+    ],
+)
+async def test_search_skips_invalid_items_and_records_errors(
+    usage: object, items: list[object], expected_urls: list[str], expected_indices: list[int]
+) -> None:
+    wire = _Wire([httpx.Response(200, json=_parallel_payload(items, usage))])
+    caller = make_client(wire)
+    try:
+        adapter = make_adapter(caller)
+        response = await adapter.search(SearchRequest(query="shape", limit=10))
+    finally:
+        await caller.aclose()
+
+    assert [str(item.url) for item in response.results] == expected_urls
+    assert response.query == "shape"
+    assert response.provider == "parallel"
+    assert response.total_results == len(expected_urls)
+    assert _parallel_records(response) == [
+        {"index": index, **_EXPECTED_RECORD} for index in expected_indices
+    ]
+    if usage is None:
+        assert response.usage is None
+        assert response.usage_gap is not None
+        assert response.usage_gap["reason"] == _EXPECTED_GAP["reason"]
+    else:
+        assert response.usage is not None
+        assert response.usage.units == Decimal("1")
+        assert response.usage.request_id == "search_test_1"
+
+
+@pytest.mark.parametrize("usage", [_VALID_SKU_USAGE, None], ids=["sku-usage", "usage-absent"])
+@pytest.mark.parametrize(
+    ("items", "expected_indices"),
+    [
+        ([{"title": "No address here", "excerpts": ["x"]}], [0]),
+        ([{"title": "Bad", "url": "not-a-url", "excerpts": ["x"]}], [0]),
+        ([{"title": "No excerpts", "url": "https://www.example.com/noex"}], [0]),
+    ],
+)
+async def test_search_all_invalid_items_returns_empty_success(
+    usage: object, items: list[object], expected_indices: list[int]
+) -> None:
+    wire = _Wire([httpx.Response(200, json=_parallel_payload(items, usage))])
+    caller = make_client(wire)
+    try:
+        adapter = make_adapter(caller)
+        response = await adapter.search(SearchRequest(query="shape", limit=10))
+    finally:
+        await caller.aclose()
+
+    assert response.results == []
+    assert response.total_results == 0
+    assert response.query == "shape"
+    assert response.provider == "parallel"
+    assert _parallel_records(response) == [
+        {"index": index, **_EXPECTED_RECORD} for index in expected_indices
+    ]
+    if usage is None:
+        assert response.usage is None
+    else:
+        assert response.usage is not None
+        assert response.usage.units == Decimal("1")
+
+
+@pytest.mark.parametrize("usage", [_VALID_SKU_USAGE, None], ids=["sku-usage", "usage-absent"])
+async def test_search_empty_list_has_no_parse_errors(usage: object) -> None:
+    wire = _Wire([httpx.Response(200, json=_parallel_payload([], usage))])
+    caller = make_client(wire)
+    try:
+        adapter = make_adapter(caller)
+        response = await adapter.search(SearchRequest(query="shape", limit=10))
+    finally:
+        await caller.aclose()
+
+    assert response.results == []
+    assert response.total_results == 0
+    if usage is None:
+        assert response.usage is None
+        assert response.usage_gap is None
+    else:
+        assert response.usage is not None
+        assert "parse_errors" not in response.usage.metadata
+
+
+@pytest.mark.parametrize(
+    ("limit", "items", "expected_urls", "expected_indices"),
+    [
+        (
+            1,
+            [_BAD_URL_ITEM, _GOOD_PARALLEL_ITEM, _SECOND_GOOD_ITEM],
+            ["https://www.example.com/guide"],
+            [0],
+        ),
+        (
+            2,
+            [_GOOD_PARALLEL_ITEM, _MISSING_URL_ITEM, _SECOND_GOOD_ITEM],
+            ["https://www.example.com/guide", "https://docs.example.org/api"],
+            [1],
+        ),
+    ],
+)
+async def test_search_limit_applies_after_invalid_item_filter(
+    limit: int, items: list[object], expected_urls: list[str], expected_indices: list[int]
+) -> None:
+    wire = _Wire([httpx.Response(200, json=_parallel_payload(items))])
+    caller = make_client(wire)
+    try:
+        adapter = make_adapter(caller)
+        response = await adapter.search(SearchRequest(query="shape", limit=limit))
+    finally:
+        await caller.aclose()
+
+    assert [str(item.url) for item in response.results] == expected_urls
+    assert response.total_results == len(expected_urls)
+    assert _parallel_records(response) == [
+        {"index": index, **_EXPECTED_RECORD} for index in expected_indices
+    ]
+
+
+async def test_search_invalid_tail_item_does_not_fail_response() -> None:
+    wire = _Wire(
+        [
+            httpx.Response(
+                200,
+                json=_parallel_payload([_GOOD_PARALLEL_ITEM, _SECOND_GOOD_ITEM, _BAD_URL_ITEM]),
+            )
+        ]
+    )
+    caller = make_client(wire)
+    try:
+        adapter = make_adapter(caller)
+        response = await adapter.search(SearchRequest(query="shape", limit=1))
+    finally:
+        await caller.aclose()
+
+    assert [str(item.url) for item in response.results] == ["https://www.example.com/guide"]
+    assert response.total_results == 1
+    assert _parallel_records(response) == [{"index": 2, **_EXPECTED_RECORD}]
+
+
+async def test_search_parse_errors_do_not_expose_payload_or_key() -> None:
+    wire = _Wire(
+        [
+            httpx.Response(
+                200,
+                json=_parallel_payload(
+                    [
+                        _GOOD_PARALLEL_ITEM,
+                        {
+                            "title": "leak sk-parallel-test-1",
+                            "url": "not-a-url",
+                            "excerpts": ["leak sk-parallel-test-1"],
+                        },
+                    ]
+                ),
+            )
+        ]
+    )
+    caller = make_client(wire)
+    try:
+        adapter = make_adapter(caller, key="sk-parallel-test-1")
+        response = await adapter.search(SearchRequest(query="shape", limit=10))
+    finally:
+        await caller.aclose()
+
+    assert [str(item.url) for item in response.results] == ["https://www.example.com/guide"]
+    errors = _parallel_records(response)
+    assert errors == [{"index": 1, **_EXPECTED_RECORD}]
+    assert "sk-parallel-test-1" not in repr(errors)
+    for record in errors:
+        assert set(record.keys()) == {"index", "code", "message"}
 
 
 # --- fetch normalization (AC-2) --------------------------------------------

@@ -19,8 +19,8 @@ describe("SearchPlayground.test.tsx", () => {
 
 /**
  * RED update: search now flows through the live backend (mocked fetch).
- * Results show real mapped fixture titles with a SINGLE-entry waterfall plus
- * an honest per-attempt-trace-unavailable note; failures show a banner while
+ * Results show real mapped fixture titles with a SINGLE-entry waterfall and
+ * no per-attempt trace note; failures show a banner while
  * keeping the last-good results.
  */
 function renderWithBackend(
@@ -89,7 +89,7 @@ describe("SearchPlayground (live backend)", () => {
     expect(document.body.textContent).not.toContain("Comprehensive Architecture")
   })
 
-  it("renders exactly ONE waterfall entry plus a trace-unavailable note", async () => {
+  it("renders exactly ONE waterfall entry with no trace-unavailable note", async () => {
     renderWithBackend()
     await waitFor(() => {
       expect(screen.getByPlaceholderText(/Search across all providers/i)).toBeInTheDocument()
@@ -120,8 +120,9 @@ describe("SearchPlayground (live backend)", () => {
       const occurrences = (document.body.textContent?.match(/resultsCount/g) ?? []).length
       expect(occurrences).toBe(1)
     })
-    // Honest note: per-attempt fallback trace is unavailable from the backend
-    expect(screen.getByText(/trace (is )?unavailable|waterfall unavailable/i)).toBeInTheDocument()
+    // No per-attempt trace note exists in the UI: WaterfallPanel renders
+    // timings only, so the page must show no unavailable-trace text.
+    expect(screen.queryByText(/trace (is )?unavailable|waterfall unavailable/i)).not.toBeInTheDocument()
     // Never fake multi-hop cascade text for a single-attempt response
     expect(document.body.textContent).not.toMatch(/[2-9]\d* hops evaluated/)
   })

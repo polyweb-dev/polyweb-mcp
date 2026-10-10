@@ -18,7 +18,7 @@ interface ProviderRegistryRowProps {
   rank: number
   providerCount: number
   testing: boolean
-  globalPending: boolean
+  accessPending: boolean
   canMoveUp: boolean
   canMoveDown: boolean
   /** False for a role without control-edit access: read-only values only. */
@@ -35,7 +35,7 @@ export const ProviderRegistryRow: React.FC<ProviderRegistryRowProps> = ({
   rank,
   providerCount,
   testing,
-  globalPending,
+  accessPending,
   canMoveUp,
   canMoveDown,
   canEdit,
@@ -100,7 +100,7 @@ export const ProviderRegistryRow: React.FC<ProviderRegistryRowProps> = ({
       <ProviderRegistryControls
         provider={provider}
         canEdit={canEdit}
-        globalPending={globalPending}
+        accessPending={accessPending}
         onToggleGlobal={onToggleGlobal}
         onToggleSearch={onToggleSearch}
         onToggleFetch={onToggleFetch}

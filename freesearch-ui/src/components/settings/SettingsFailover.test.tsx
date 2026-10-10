@@ -159,7 +159,25 @@ function renderSettings(): FetchStub {
     }
     if (req.url.startsWith("/dashboard")) return ok(dashboardFixture())
     if (req.method === "PATCH" && req.url.startsWith("/api/v1/providers/")) {
-      return ok({ ...allProvidersFixture()[0], ...((req.body as object) ?? {}) })
+      const backendId = req.url.split("/").at(-1) ?? "unknown"
+      const wire = allProvidersFixture().find((p) => p.provider_id === backendId)
+      const base = { ...(wire ?? allProvidersFixture()[0]) } as Record<string, unknown> & {
+        enable_mask: number
+        priority: number
+      }
+      const patch = ((req.body as Record<string, unknown>) ?? {}) as Record<string, unknown>
+      let enableMask = base.enable_mask
+      if (typeof patch.enable_mask === "number") enableMask = patch.enable_mask
+      else {
+        if (patch.enabled === true) enableMask |= 1
+        if (patch.enabled === false) enableMask &= ~1
+        if (patch.search_enabled === true) enableMask |= 2
+        if (patch.search_enabled === false) enableMask &= ~2
+        if (patch.fetch_enabled === true) enableMask |= 4
+        if (patch.fetch_enabled === false) enableMask &= ~4
+      }
+      const priority = typeof patch.priority === "number" ? patch.priority : base.priority
+      return ok({ ...base, enable_mask: enableMask, enabled: (enableMask & 1) !== 0, priority })
     }
     if (req.method === "POST" && req.url.endsWith("/test")) {
       return ok({

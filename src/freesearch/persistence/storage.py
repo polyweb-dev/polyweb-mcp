@@ -1,9 +1,10 @@
 """Async SQLite persistence for provider-neutral operational data."""
 
 import asyncio
+import contextlib
 import json
 import math
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -12,7 +13,7 @@ from pathlib import Path
 from typing import Any, Self, cast, overload
 from uuid import UUID
 
-from sqlalchemy import CHAR, URL, Index, Integer, Text, event, insert, select
+from sqlalchemy import CHAR, URL, Index, Integer, Text, event, func, insert, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Row
 from sqlalchemy.ext.asyncio import (
@@ -453,6 +454,20 @@ def configure_sqlite_engine(engine: AsyncEngine) -> None:
         cursor.close()
 
 
+_SETTING_LISTENERS: list[Callable[[Any, str], None]] = []
+
+
+def register_setting_listener(listener: Callable[[Any, str], None]) -> None:
+    """Register a callback for runtime setting changes."""
+    _SETTING_LISTENERS.append(listener)
+
+
+def _notify_setting_changed(repo: Any, key: str) -> None:
+    for listener in _SETTING_LISTENERS:
+        with contextlib.suppress(Exception):
+            listener(repo, key)
+
+
 class SQLiteRepository:
     """Persist shared operational models without provider-specific dependencies."""
 
@@ -729,6 +744,49 @@ class SQLiteRepository:
             row = await session.scalar(statement)
         return self._quota_from_row(row) if row is not None else None
 
+    async def latest_quota_batch(self, providers: Sequence[str]) -> dict[str, QuotaSnapshot]:
+        """Return the newest quota snapshot for each requested provider in one query."""
+
+        if not providers:
+            return {}
+        subq = (
+            select(
+                QuotaSnapshotRow.id,
+                QuotaSnapshotRow.provider,
+                QuotaSnapshotRow.source,
+                QuotaSnapshotRow.remaining,
+                QuotaSnapshotRow.limit_units,
+                QuotaSnapshotRow.reset_at,
+                QuotaSnapshotRow.observed_at,
+                QuotaSnapshotRow.unit_kind,
+                QuotaSnapshotRow.display_unit,
+                QuotaSnapshotRow.metadata_json,
+                func.row_number()
+                .over(
+                    partition_by=QuotaSnapshotRow.provider,
+                    order_by=(QuotaSnapshotRow.observed_at.desc(), QuotaSnapshotRow.id.desc()),
+                )
+                .label("rn"),
+            )
+            .where(QuotaSnapshotRow.provider.in_(providers))
+            .subquery()
+        )
+        statement = select(
+            subq.c.id,
+            subq.c.provider,
+            subq.c.source,
+            subq.c.remaining,
+            subq.c.limit_units,
+            subq.c.reset_at,
+            subq.c.observed_at,
+            subq.c.unit_kind,
+            subq.c.display_unit,
+            subq.c.metadata_json,
+        ).where(subq.c.rn == 1)
+        async with self._session_factory() as session:
+            rows = (await session.execute(statement)).all()
+        return {row.provider: self._quota_from_row(row) for row in rows}
+
     async def record_health(self, health: ProviderHealth) -> None:
         """Append a provider health observation."""
 
@@ -755,6 +813,39 @@ class SQLiteRepository:
             )
         return self._health_from_row(row) if row is not None else None
 
+    async def latest_health_batch(self, providers: Sequence[str]) -> dict[str, ProviderHealth]:
+        """Return the newest health observation for each requested provider in one query."""
+
+        if not providers:
+            return {}
+        subq = (
+            select(
+                ProviderHealthRow.id,
+                ProviderHealthRow.provider,
+                ProviderHealthRow.status,
+                ProviderHealthRow.checked_at,
+                ProviderHealthRow.message,
+                func.row_number()
+                .over(
+                    partition_by=ProviderHealthRow.provider,
+                    order_by=(ProviderHealthRow.checked_at.desc(), ProviderHealthRow.id.desc()),
+                )
+                .label("rn"),
+            )
+            .where(ProviderHealthRow.provider.in_(providers))
+            .subquery()
+        )
+        statement = select(
+            subq.c.id,
+            subq.c.provider,
+            subq.c.status,
+            subq.c.checked_at,
+            subq.c.message,
+        ).where(subq.c.rn == 1)
+        async with self._session_factory() as session:
+            rows = (await session.execute(statement)).all()
+        return {row.provider: self._health_from_row(row) for row in rows}
+
     async def get_runtime_setting(self, key: str) -> Any:
         """Return the JSON-decoded runtime setting stored under ``key``."""
 
@@ -774,6 +865,40 @@ class SQLiteRepository:
         async with self._session_factory() as session:
             await session.execute(statement)
             await session.commit()
+        _notify_setting_changed(self, key)
+
+    async def update_runtime_setting(self, key: str, update: Callable[[Any], Any]) -> Any:
+        """Read, change, and store one runtime setting in a single write transaction.
+
+        ``update`` is a synchronous pure callback. The helper reserves the
+        SQLite write lock with ``BEGIN IMMEDIATE``, reads the current payload
+        inside that transaction, and commits the new payload once. A callback,
+        encoding, or database error rolls the transaction back and keeps the
+        stored payload. The new payload is the return value.
+        """
+
+        async with self._engine.connect() as connection:
+            await connection.exec_driver_sql("BEGIN IMMEDIATE")
+            try:
+                row = await connection.execute(
+                    select(RuntimeSettingRow.value_json).where(RuntimeSettingRow.key == key)
+                )
+                current_json = row.scalar_one_or_none()
+                current = json.loads(current_json) if current_json is not None else None
+                value = update(current)
+                payload = json.dumps(value, separators=(",", ":"), allow_nan=False)
+                statement = sqlite_insert(RuntimeSettingRow).values(key=key, value_json=payload)
+                statement = statement.on_conflict_do_update(
+                    index_elements=[RuntimeSettingRow.key],
+                    set_={"value_json": statement.excluded.value_json},
+                )
+                await connection.execute(statement)
+                await connection.commit()
+            except BaseException:
+                await connection.rollback()
+                raise
+        _notify_setting_changed(self, key)
+        return value
 
     @staticmethod
     def _usage_from_row(row: UsageEventRow) -> UsageEvent:
@@ -795,7 +920,7 @@ class SQLiteRepository:
         )
 
     @staticmethod
-    def _quota_from_row(row: QuotaSnapshotRow) -> QuotaSnapshot:
+    def _quota_from_row(row: QuotaSnapshotRow | Row[Any]) -> QuotaSnapshot:
         try:
             kind = UnitKind(row.unit_kind) if row.unit_kind else None
         except ValueError:
@@ -817,7 +942,7 @@ class SQLiteRepository:
         )
 
     @staticmethod
-    def _health_from_row(row: ProviderHealthRow) -> ProviderHealth:
+    def _health_from_row(row: ProviderHealthRow | Row[Any]) -> ProviderHealth:
         return ProviderHealth(
             provider=row.provider,
             status=HealthStatus(row.status),

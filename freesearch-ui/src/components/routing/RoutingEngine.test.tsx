@@ -113,7 +113,7 @@ describe("RoutingEngine (live backend)", () => {
   })
 
   it("renders an explicit empty state when no providers are eligible", async () => {
-    const disabled = allProvidersFixture().map((p) => ({ ...p, enabled: false }))
+    const disabled = allProvidersFixture().map((p) => ({ ...p, enable_mask: 0, enabled: false }))
     renderRouting(disabled as WireProviderStatus[])
     await openSimulator()
 

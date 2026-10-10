@@ -27,6 +27,7 @@ from fastapi import Depends, FastAPI, HTTPException
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.adapters.registry import adapter_factory, build_adapters, close_adapters
 from freesearch.configuration.config import get_settings, require_transport_port
+from freesearch.configuration.provider_config import ProviderConfigError
 from freesearch.infrastructure.auth_asgi import BearerAuthMiddleware
 from freesearch.infrastructure.cryptography import SecretCodec, load_or_create_master_key
 from freesearch.infrastructure.encrypted_store import (
@@ -81,7 +82,9 @@ from freesearch.routers.auth import register_auth_routes, require_control_reader
 from freesearch.routers.control import (
     _build_with_resolved_secret,
     _resolve_secret,
+    clear_config_cache,
     effective_config_for_name,
+    initialize_provider_configs,
     register_control_routes,
     routing_policy,
 )
@@ -94,6 +97,7 @@ from freesearch.services.monitoring import (
     clear_quota_poll_cache,
     collect_stats,
     effective_quota,
+    effective_quotas_batch,
     refresh_quotas,
     resolve_database_path,
     tracked_call,
@@ -116,12 +120,14 @@ async def _build_app_adapters(
     client: httpx.AsyncClient | None,
     store: AsyncSecretStore,
 ) -> None:
-    """Build enabled adapters from app-scoped encrypted vault secrets."""
+    """Build credential-ready adapters from app-scoped encrypted vault secrets.
 
+    An administrator OFF choice does not skip construction: each request
+    filters the candidate list, so a later ON choice needs no restart.
+    """
+
+    await initialize_provider_configs(repository)
     for provider in ProviderName:
-        config = await effective_config_for_name(repository, provider)
-        if not config.enabled:
-            continue
         key, _source = await _resolve_secret(provider, store)
         if key is None and provider is not ProviderName.KEENABLE:
             continue
@@ -258,6 +264,10 @@ def create_app(
                     )
                 else:
                     routes.extend(build_adapters(app.state._client))
+            elif isinstance(repo, SQLiteRepository):
+                # Injected adapters with an owned database still need the
+                # canonical provider records before the first request.
+                await initialize_provider_configs(repo)
             # Restore locally derived quota state before the first dashboard
             # read.  This hydrates Keenable's rolling-hour keyless counter and
             # applies any persisted Parallel monthly budget without requiring
@@ -284,10 +294,12 @@ def create_app(
             await asyncio.to_thread(runtime.shutdown)
             if owns_repository and repo is not None:
                 clear_quota_poll_cache(repo, routes)
+                clear_config_cache(repo)
                 app.state.repository = None
                 await repo.close()
             else:
                 clear_quota_poll_cache(repository, routes)
+                clear_config_cache(repository)
             await auth.close()
             await close_adapters(routes, client if owns_client else None)
 
@@ -400,22 +412,25 @@ async def _order_routes(
     routes: Sequence[ProviderAdapter],
     repository: SQLiteRepository | None,
     preset: CostPreset,
+    operation: UsageOperation,
 ) -> list[ProviderAdapter]:
-    """Filter disabled adapters and sort by persisted priority.
+    """Filter inaccessible adapters and sort by persisted priority.
 
-    The sort is stable: adapters with equal persisted priority keep their
-    startup order (``build_adapters`` already emits the configured
-    ``(priority, name)`` order, and injected routes keep the caller's order),
-    so the pinned single-candidate routing contracts are preserved.
+    A candidate stays only when ``config.allows(operation)`` holds, so the
+    admin mask, the system support mask, and the global gate all apply before
+    any provider call. The sort is stable: adapters with equal persisted
+    priority keep their startup order (``build_adapters`` already emits the
+    configured ``(priority, name)`` order, and injected routes keep the
+    caller's order), so the pinned single-candidate routing contracts are
+    preserved.
     """
 
-    await _apply_parallel_seed(routes, repository)
-    enabled: list[tuple[int, ProviderAdapter]] = []
+    eligible: list[tuple[int, ProviderAdapter]] = []
     for adapter in routes:
-        config = await effective_config_for_name(repository, adapter.name)
-        if config.enabled:
-            enabled.append((config.priority, adapter))
-    ordered = [adapter for _, adapter in sorted(enabled, key=lambda item: item[0])]
+        config = await effective_config_for_name(repository, adapter.name, strict=True)
+        if config.allows(operation):
+            eligible.append((config.priority, adapter))
+    ordered = [adapter for _, adapter in sorted(eligible, key=lambda item: item[0])]
     return _pin_free_first(ordered, preset)
 
 
@@ -489,30 +504,169 @@ def _result_count(response: SearchResponse | FetchResponse) -> int:
     return len(response.results) if isinstance(response, SearchResponse) else 1
 
 
+def _annotate_root_error(observability: ObservabilityRuntime, error: BaseException) -> None:
+    """Mark the root span as failed with a low-cardinality type and message.
+
+    FastAPI turns an unhandled handler failure into a response inside the app,
+    so the root span would otherwise look successful; annotating the error keeps
+    the Activity row honest (and the failing child keeps the exception event).
+    """
+
+    observability.annotate_root(
+        {
+            TraceAttribute.ERROR_TYPE: error_type_of(error),
+            TraceAttribute.ERROR_MESSAGE: str(error),
+        }
+    )
+
+
+def _annotate_root_request_identity(
+    observability: ObservabilityRuntime,
+    request: SearchRequest | FetchRequest,
+    provider: ProviderAdapter,
+) -> None:
+    """Keep the request identity on a failed root span.
+
+    The success path projects the same fields from the response. A failure
+    never reaches that projection, so the Activity row would lose its title
+    and the Provider column would show a dash.
+    """
+
+    attributes: dict[str, object] = {
+        TraceAttribute.OPERATION: _operation_name(request).value,
+        TraceAttribute.PROVIDER: provider.name,
+    }
+    if isinstance(request, SearchRequest):
+        attributes[TraceAttribute.REQUEST_QUERY] = request.query
+    observability.annotate_root(attributes)
+
+
+def _annotate_root(
+    observability: ObservabilityRuntime,
+    request: SearchRequest | FetchRequest,
+    response: SearchResponse | FetchResponse,
+) -> None:
+    """Project the request/response onto the root span (the exporter's summary).
+
+    Root attributes are the single source of the Activity summary row: the
+    operation, provider, input text, result count, partial flag, and the tagged
+    output payload the trace read API serves back.
+    """
+
+    if isinstance(request, SearchRequest) and isinstance(response, SearchResponse):
+        _annotate_search_root(observability, request, response)
+    elif isinstance(request, FetchRequest) and isinstance(response, FetchResponse):
+        _annotate_fetch_root(observability, request, response)
+
+
+def _annotate_search_root(
+    observability: ObservabilityRuntime, request: SearchRequest, response: SearchResponse
+) -> None:
+    """Annotate the root span of a search request."""
+
+    output = TraceSearchOutput(query=response.query, results=_search_results_payload(response))
+    observability.annotate_root(
+        {
+            TraceAttribute.OPERATION: TraceOperation.SEARCH.value,
+            TraceAttribute.PROVIDER: response.provider,
+            TraceAttribute.REQUEST_QUERY: request.query,
+            TraceAttribute.REQUEST_LIMIT: request.limit,
+            TraceAttribute.RESPONSE_RESULT_COUNT: len(response.results),
+            TraceAttribute.RESPONSE_PARTIAL: any(item.error for item in response.waterfall),
+            TraceAttribute.RESPONSE_OUTPUT_JSON: output.model_dump_json(),
+        }
+    )
+
+
+def _annotate_fetch_root(
+    observability: ObservabilityRuntime, request: FetchRequest, response: FetchResponse
+) -> None:
+    """Annotate the root span of a fetch request."""
+
+    document = response.document
+    output = TraceFetchOutput(
+        url=str(document.url),
+        title=document.title,
+        content=document.content,
+        content_length=len(document.content),
+        truncated=bool(document.metadata.get("truncated")),
+    )
+    observability.annotate_root(
+        {
+            TraceAttribute.OPERATION: TraceOperation.FETCH.value,
+            TraceAttribute.PROVIDER: response.provider,
+            TraceAttribute.REQUEST_URL: str(request.url),
+            TraceAttribute.REQUEST_LIMIT: request.max_chars,
+            TraceAttribute.RESPONSE_RESULT_COUNT: 1,
+            TraceAttribute.RESPONSE_PARTIAL: False,
+            TraceAttribute.RESPONSE_OUTPUT_JSON: output.model_dump_json(),
+        }
+    )
+
+
+_BACKGROUND_TASKS: set[asyncio.Task[Any]] = set()
+
+
+def _schedule_quota_refresh(
+    repository: SQLiteRepository | None,
+    routes: Sequence[ProviderAdapter],
+    secret_store: AsyncSecretStore | None,
+) -> None:
+    """Schedule asynchronous quota polling out-of-band without blocking the request hot path."""
+
+    if repository is None or not routes:
+        return
+    try:
+        loop = asyncio.get_running_loop()
+        task = loop.create_task(refresh_quotas(repository, routes, secret_store=secret_store))
+        _BACKGROUND_TASKS.add(task)
+        task.add_done_callback(_BACKGROUND_TASKS.discard)
+    except RuntimeError:
+        pass
+
+
 async def _routing_state(
     repository: SQLiteRepository | None,
     routes: Sequence[ProviderAdapter],
     secret_store: AsyncSecretStore,
 ) -> tuple[dict[str, ProviderHealth], dict[str, QuotaSnapshot]]:
-    """Refresh bounded quota state and collect health/quota maps for routing."""
+    """Refresh bounded quota state in background and collect health/quota maps for routing."""
 
-    if repository is None:
+    if repository is None or not routes:
         return {}, {}
-    with suppress(Exception):
-        await refresh_quotas(repository, routes, secret_store=secret_store)
+    _schedule_quota_refresh(repository, routes, secret_store)
+    provider_names = [adapter.name for adapter in routes]
     health: dict[str, ProviderHealth] = {}
+    try:
+        if hasattr(repository, "latest_health_batch"):
+            health = await repository.latest_health_batch(provider_names)
+        else:
+            for adapter in routes:
+                observation = await repository.latest_health(adapter.name)
+                if observation is not None:
+                    health[adapter.name] = observation
+    except Exception:
+        pass
+
     quotas: dict[str, QuotaSnapshot] = {}
-    for adapter in routes:
-        try:
-            observation = await repository.latest_health(adapter.name)
-            if observation is not None:
-                health[adapter.name] = observation
-            snapshot = await effective_quota(repository, adapter.name)
-            if snapshot is not None:
-                quotas[adapter.name] = snapshot
-        except Exception:
-            continue
+    try:
+        if hasattr(repository, "latest_quota_batch"):
+            quotas = await effective_quotas_batch(repository, provider_names)
+        else:
+            for adapter in routes:
+                snapshot = await effective_quota(repository, adapter.name)
+                if snapshot is not None:
+                    quotas[adapter.name] = snapshot
+    except Exception:
+        pass
+
     return health, quotas
+
+
+def _usage_operation(request: SearchRequest | FetchRequest) -> UsageOperation:
+    """Return the usage operation of a provider-querying request."""
+
+    return UsageOperation.SEARCH if isinstance(request, SearchRequest) else UsageOperation.FETCH
 
 
 async def _plan_route(
@@ -523,10 +677,10 @@ async def _plan_route(
 ) -> tuple[ProviderAdapter, ...]:
     """Return the ordered adapters to attempt for ``request``.
 
-    The in-memory routes are filtered by the persisted enablement, sorted by
-    persisted priority, pinned for the cost preset, truncated by the fallback
-    policy, and finally ranked by ``select_route``. A single candidate path
-    stays identical to the pre-control routing contract.
+    The in-memory routes are filtered by effective access, sorted by persisted
+    priority, pinned for the cost preset, truncated by the fallback policy,
+    and finally ranked by ``select_route``. A single candidate path stays
+    identical to the pre-control routing contract.
     """
 
     if not routes:
@@ -537,8 +691,27 @@ async def _plan_route(
                 "(PUT /api/v1/providers/{id}/secret)"
             ),
         )
+
+    # Fast-path for explicit provider requirement
+    preference = request.routing
+    if preference.mode is RoutingMode.REQUIRE and preference.providers:
+        required_names = set(preference.providers)
+        matching = [adapter for adapter in routes if adapter.name in required_names]
+        if not matching:
+            raise HTTPException(
+                status_code=503,
+                detail=f"no required provider is eligible: {', '.join(preference.providers)}",
+            )
+        routes = tuple(matching)
+
+    operation = _usage_operation(request)
     policy = await routing_policy(repository)
-    ordered = await _order_routes(routes, repository, policy.cost_optimization_preset)
+    try:
+        ordered = await _order_routes(
+            routes, repository, policy.cost_optimization_preset, operation
+        )
+    except ProviderConfigError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
     if policy.fallback_policy is FallbackPolicy.FIRST_ONLY:
         ordered = ordered[:1]
     health_snapshots, quota_snapshots = await _routing_state(repository, ordered, secret_store)
@@ -546,6 +719,11 @@ async def _plan_route(
         candidates = select_route(request, ordered, health_snapshots, quota_snapshots)
     except RoutingError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    if not candidates:
+        raise HTTPException(
+            status_code=503,
+            detail=f"no eligible provider is available for {operation.value}",
+        )
     # A per-request allow_fallback=false already truncates inside select_route;
     # the global first_only policy truncates above.
     chained = request.routing.allow_fallback and policy.fallback_policy is FallbackPolicy.CHAINED
@@ -608,6 +786,7 @@ async def _dispatch[
             )
         except Exception as error:
             _annotate_root_error(observability, error)
+            _annotate_root_request_identity(observability, request, provider)
             raise
         provider_span.add_event(
             TRACE_EVENT_PROVIDER_RESPONSE, attributes=_provider_response_event(response)
@@ -644,10 +823,27 @@ async def _dispatch_fanout_search(
                 "(PUT /api/v1/providers/{id}/secret)"
             ),
         )
+
+    fanout_routes = routes
+    if request.routing.providers:
+        required_names = set(request.routing.providers)
+        matching = [adapter for adapter in routes if adapter.name in required_names]
+        if not matching:
+            raise HTTPException(
+                status_code=503,
+                detail="no eligible provider is available for fanout",
+            )
+        fanout_routes = matching
+
     observability = current_observability()
     with observability.span(TraceSpanName.ROUTE, attributes=_request_attributes(request)):
         policy = await routing_policy(repository)
-        ordered = await _order_routes(routes, repository, policy.cost_optimization_preset)
+        try:
+            ordered = await _order_routes(
+                fanout_routes, repository, policy.cost_optimization_preset, UsageOperation.SEARCH
+            )
+        except ProviderConfigError as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
         health_snapshots, quota_snapshots = await _routing_state(repository, ordered, secret_store)
         fanout_request = request.model_copy(
             update={"routing": request.routing.model_copy(update={"mode": RoutingMode.FANOUT})}

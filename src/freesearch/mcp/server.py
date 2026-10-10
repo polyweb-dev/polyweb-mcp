@@ -79,8 +79,6 @@ from freesearch.persistence.storage import SQLiteRepository
 from freesearch.services.aggregation import reciprocal_rank_fusion
 from freesearch.services.monitoring import (
     clear_quota_poll_cache,
-    effective_quota,
-    refresh_quotas,
     resolve_database_path,
     tracked_call,
 )
@@ -249,7 +247,7 @@ async def _build_generation(
     from freesearch.routers.control import (
         _build_with_resolved_secret,
         _resolve_secret,
-        effective_config_for_name,
+        initialize_provider_configs,
     )
 
     client = create_async_client()
@@ -260,12 +258,13 @@ async def _build_generation(
         repository = state["repository"]
         if isinstance(repository, SQLiteRepository):
             state["secret_store"] = _encrypted_store(repository)
+            await initialize_provider_configs(repository)
         store = state["secret_store"]
         if isinstance(repository, SQLiteRepository) and store is not None:
+            # An administrator OFF choice does not skip construction: each
+            # request filters the candidates, so a later ON choice needs no
+            # server restart.
             for provider in ProviderName:
-                config = await effective_config_for_name(repository, provider)
-                if not config.enabled:
-                    continue
                 key, _source = await _resolve_secret(provider, store)
                 if key is None and provider is not ProviderName.KEENABLE:
                     continue
@@ -321,7 +320,10 @@ async def _detach_generation(state: _ServerState, *, owns_repository: bool) -> N
     state["secret_store"] = None
     await _close_traces(state)
     if owned_repo is not None:
+        from freesearch.routers.control import clear_config_cache
+
         clear_quota_poll_cache(owned_repo, owned_routes or [])
+        clear_config_cache(owned_repo)
         state["repository"] = None
         await owned_repo.close()
     await close_adapters(owned_routes or [], client)
@@ -332,25 +334,63 @@ async def _route_state(
     active: Sequence[ProviderAdapter],
     secret_store: AsyncSecretStore | None,
 ) -> tuple[dict[str, ProviderHealth], dict[str, QuotaSnapshot]]:
-    """Collect routing state while degrading quota failures to unknown."""
+    """Collect routing state using batch lookups and non-blocking quota refresh."""
 
-    with suppress(Exception):
-        await refresh_quotas(repository, active, secret_store=secret_store)
+    if repository is None or not active:
+        return {}, {}
+    from freesearch.routers.api import _schedule_quota_refresh
+    from freesearch.services.monitoring import effective_quotas_batch
+
+    _schedule_quota_refresh(repository, active, secret_store)
+    names = [candidate.name for candidate in active]
     health: dict[str, ProviderHealth] = {}
+    try:
+        if hasattr(repository, "latest_health_batch"):
+            health = await repository.latest_health_batch(names)
+        else:
+            for candidate in active:
+                observation = await repository.latest_health(candidate.name)
+                if observation is not None:
+                    health[candidate.name] = observation
+    except Exception:
+        pass
+
     quotas: dict[str, QuotaSnapshot] = {}
-    if repository is None:
-        return health, quotas
-    for candidate in active:
-        try:
-            observation = await repository.latest_health(candidate.name)
-            if observation is not None:
-                health[candidate.name] = observation
-            snapshot = await effective_quota(repository, candidate.name)
-            if snapshot is not None:
-                quotas[candidate.name] = snapshot
-        except Exception:
-            continue
+    try:
+        if hasattr(repository, "latest_quota_batch"):
+            quotas = await effective_quotas_batch(repository, names)
+        else:
+            from freesearch.services.monitoring import effective_quota
+
+            for candidate in active:
+                snapshot = await effective_quota(repository, candidate.name)
+                if snapshot is not None:
+                    quotas[candidate.name] = snapshot
+    except Exception:
+        pass
+
     return health, quotas
+
+
+async def _accessible_routes(
+    active: Sequence[ProviderAdapter],
+    repository: SQLiteRepository | None,
+    operation: UsageOperation,
+) -> list[ProviderAdapter]:
+    """Return the adapters whose current masks allow ``operation``.
+
+    The request reads the current masks before route selection, so an earlier
+    admin change applies to the next call without a restart.
+    """
+
+    from freesearch.routers.control import effective_config_for_name
+
+    accessible: list[ProviderAdapter] = []
+    for adapter in active:
+        config = await effective_config_for_name(repository, adapter.name, strict=True)
+        if config.allows(operation):
+            accessible.append(adapter)
+    return accessible
 
 
 async def _mcp_fanout_search(
@@ -360,12 +400,15 @@ async def _mcp_fanout_search(
     secret_store: AsyncSecretStore | None = None,
 ) -> dict[str, Any]:
     """Execute concurrent fanout search across active adapters for MCP."""
-    await _apply_parallel_seed(active, repository)
-    health, quotas = await _route_state(repository, active, secret_store)
+    if request.routing.providers:
+        required_names = set(request.routing.providers)
+        active = [a for a in active if a.name in required_names]
+    eligible = await _accessible_routes(active, repository, UsageOperation.SEARCH)
+    health, quotas = await _route_state(repository, eligible, secret_store)
     fanout_req = request.model_copy(
         update={"routing": request.routing.model_copy(update={"mode": RoutingMode.FANOUT})}
     )
-    candidates = select_route(fanout_req, active, health, quotas)
+    candidates = select_route(fanout_req, eligible, health, quotas)
     if not candidates:
         raise RuntimeError("no eligible provider is available for search")
 
@@ -450,10 +493,27 @@ async def _route_adapter(
             "no provider is configured: store a key in the encrypted vault "
             "(PUT /api/v1/providers/{id}/secret)"
         )
+    # Fast-path: a REQUIRE request with pinned providers skips unrequested
+    # provider evaluation entirely (perf: eliminate route selection latency).
+    preference = request.routing
+    if preference.mode is RoutingMode.REQUIRE and preference.providers:
+        required_names = set(preference.providers)
+        matching = [adapter for adapter in active if adapter.name in required_names]
+        if not matching:
+            raise RuntimeError(
+                f"no required provider is eligible: {', '.join(preference.providers)}"
+            )
+        active = matching
     repository = state["repository"]
-    await _apply_parallel_seed(active, repository)
-    health, quotas = await _route_state(repository, active, state["secret_store"])
-    return select_route(request, active, health, quotas)[0].adapter
+    operation = (
+        UsageOperation.SEARCH if isinstance(request, SearchRequest) else UsageOperation.FETCH
+    )
+    eligible = await _accessible_routes(active, repository, operation)
+    health, quotas = await _route_state(repository, eligible, state["secret_store"])
+    candidates = select_route(request, eligible, health, quotas)
+    if not candidates:
+        raise RuntimeError(f"no eligible provider is available for {operation.value}")
+    return candidates[0].adapter
 
 
 async def _search_response(
@@ -614,7 +674,10 @@ def create_server(
                 if last_exit:
                     await _detach_generation(state, owns_repository=owns_repository)
             else:
+                from freesearch.routers.control import clear_config_cache
+
                 clear_quota_poll_cache(repository, routes or [])
+                clear_config_cache(repository)
                 await close_adapters(routes or [], None)
                 # The injected repository stays open for its owner, so the
                 # runtime is flushed (never closed) at each session exit.
