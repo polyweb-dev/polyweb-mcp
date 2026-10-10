@@ -208,7 +208,10 @@ async def _detach_generation(state: _ServerState, *, owns_repository: bool) -> N
     state["routes"] = None
     state["secret_store"] = None
     if owned_repo is not None:
+        from freesearch.routers.control import clear_config_cache
+
         clear_quota_poll_cache(owned_repo, owned_routes or [])
+        clear_config_cache(owned_repo)
         state["repository"] = None
         await owned_repo.close()
     await close_adapters(owned_routes or [], client)
@@ -420,7 +423,10 @@ def create_server(
                 if last_exit:
                     await _detach_generation(state, owns_repository=owns_repository)
             else:
+                from freesearch.routers.control import clear_config_cache
+
                 clear_quota_poll_cache(repository, routes or [])
+                clear_config_cache(repository)
                 await close_adapters(routes or [], None)
 
     server = FastMCP("freesearch", lifespan=lifespan, stateless_http=stateless_http)

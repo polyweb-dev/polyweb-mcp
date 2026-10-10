@@ -1,6 +1,7 @@
 """Async SQLite repository tests for the stage-2 usage/data persistence layer."""
 
-from collections.abc import AsyncIterator
+import contextlib
+from collections.abc import AsyncIterator, Callable
 from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -8,6 +9,7 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 from sqlalchemy import URL, inspect
+from sqlalchemy import event as sa_event
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -16,11 +18,15 @@ from freesearch.models.contracts import (
     ProviderHealth,
     QuotaSnapshot,
     QuotaSource,
+    UnitKind,
     UsageEvent,
     UsageOperation,
+    UsageStatus,
 )
 from freesearch.persistence.database_migrations import DatabaseMigrationError
 from freesearch.persistence.storage import SQLiteRepository, UsageEventRow
+from freesearch.routers.control import clear_config_cache
+from freesearch.services.monitoring import clear_quota_poll_cache, effective_quotas_batch
 
 # Baseline raw-SQL schema contract: column -> (SQLite type, PRAGMA notnull=0 -> nullable).
 _SCHEMA: dict[str, dict[str, object]] = {
@@ -515,3 +521,389 @@ async def test_repository_configures_wal_and_performance_pragmas(tmp_path: Path)
     assert journal_mode == "wal"
     assert synchronous == 1
     await repo.close()
+
+
+def _install_select_counter(
+    repository: SQLiteRepository,
+) -> tuple[dict[str, int], Callable[[], None]]:
+    """Count SELECT statements on the repository engine until the remover runs."""
+
+    counts = {"select": 0}
+    sync_engine = repository._engine.sync_engine
+
+    def _before_cursor_execute(
+        conn: object,
+        cursor: object,
+        statement: str,
+        parameters: object,
+        context: object,
+        executemany: bool,
+    ) -> None:
+        if statement.lstrip().upper().startswith("SELECT"):
+            counts["select"] += 1
+
+    sa_event.listen(sync_engine, "before_cursor_execute", _before_cursor_execute)
+
+    def _remove_counter() -> None:
+        sa_event.remove(sync_engine, "before_cursor_execute", _before_cursor_execute)
+
+    return counts, _remove_counter
+
+
+@contextlib.asynccontextmanager
+async def _soft_zero_case(
+    tmp_path: Path, name: str
+) -> AsyncIterator[tuple[SQLiteRepository, list[QuotaSnapshot]]]:
+    """Open an isolated repository with a record_quota spy for one soft-zero case."""
+
+    clear_config_cache()
+    clear_quota_poll_cache()
+    database = await SQLiteRepository.open(tmp_path / f"{name}.db")
+    recorded: list[QuotaSnapshot] = []
+    real_record_quota = database.record_quota
+
+    async def _counting_record_quota(snapshot: QuotaSnapshot) -> None:
+        recorded.append(snapshot)
+        await real_record_quota(snapshot)
+
+    database.record_quota = _counting_record_quota
+    try:
+        yield database, recorded
+    finally:
+        database.record_quota = real_record_quota
+        await database.close()
+        clear_config_cache()
+        clear_quota_poll_cache()
+
+
+async def test_latest_quota_batch_matches_single(repository: SQLiteRepository) -> None:
+    """Batch quota reads match unfiltered single reads with one SELECT per batch."""
+    clear_config_cache()
+    clear_quota_poll_cache()
+    counts, remove_counter = _install_select_counter(repository)
+    try:
+        t0 = datetime(2026, 3, 1, 0, 0, tzinfo=UTC)
+        tie_first = QuotaSnapshot(
+            provider="tie-q",
+            source=QuotaSource.ESTIMATED,
+            remaining=Decimal("10"),
+            limit=Decimal("100"),
+            observed_at=t0,
+            metadata={"round": 1},
+        )
+        tie_second = QuotaSnapshot(
+            provider="tie-q",
+            source=QuotaSource.ESTIMATED,
+            remaining=Decimal("9.75"),
+            limit=Decimal("100"),
+            observed_at=t0,
+            metadata={"round": 2},
+        )
+        alpha_old = QuotaSnapshot(
+            provider="alpha",
+            source=QuotaSource.AUTHORITATIVE,
+            remaining=Decimal("100"),
+            limit=Decimal("1000"),
+            observed_at=t0,
+        )
+        alpha_new = QuotaSnapshot(
+            provider="alpha",
+            source=QuotaSource.AUTHORITATIVE,
+            remaining=Decimal("90.5"),
+            limit=Decimal("1000"),
+            observed_at=t0 + timedelta(hours=1),
+        )
+        mixed_auth = QuotaSnapshot(
+            provider="mixed",
+            source=QuotaSource.AUTHORITATIVE,
+            remaining=Decimal("50"),
+            limit=Decimal("500"),
+            observed_at=t0,
+        )
+        mixed_est = QuotaSnapshot(
+            provider="mixed",
+            source=QuotaSource.ESTIMATED,
+            remaining=Decimal("40"),
+            observed_at=t0 + timedelta(hours=2),
+        )
+        for snapshot in (tie_first, tie_second, alpha_old, alpha_new, mixed_auth, mixed_est):
+            await repository.record_quota(snapshot)
+
+        counts["select"] = 0
+        batch = await repository.latest_quota_batch(["tie-q", "alpha", "mixed"])
+        assert counts["select"] == 1
+        assert batch == {"tie-q": tie_second, "alpha": alpha_new, "mixed": mixed_est}
+        assert await repository.latest_quota("tie-q") == tie_second
+        assert await repository.latest_quota("tie-q") == batch["tie-q"]
+        assert await repository.latest_quota("alpha") == batch["alpha"]
+        assert await repository.latest_quota("mixed") == batch["mixed"]
+
+        counts["select"] = 0
+        duplicate = await repository.latest_quota_batch(["alpha", "alpha", "mixed"])
+        assert counts["select"] == 1
+        assert duplicate == {"alpha": alpha_new, "mixed": mixed_est}
+
+        counts["select"] = 0
+        subset = await repository.latest_quota_batch(["alpha"])
+        assert counts["select"] == 1
+        assert subset == {"alpha": alpha_new}
+        assert "mixed" not in subset
+
+        counts["select"] = 0
+        absent = await repository.latest_quota_batch(["ghost"])
+        assert counts["select"] == 1
+        assert absent == {}
+        assert await repository.latest_quota("ghost") is None
+
+        counts["select"] = 0
+        assert await repository.latest_quota_batch([]) == {}
+        assert counts["select"] == 0
+    finally:
+        remove_counter()
+        clear_config_cache()
+        clear_quota_poll_cache()
+
+
+async def test_latest_health_batch_matches_single(repository: SQLiteRepository) -> None:
+    """Batch health reads match single reads with one SELECT per batch."""
+    clear_config_cache()
+    clear_quota_poll_cache()
+    counts, remove_counter = _install_select_counter(repository)
+    try:
+        t0 = datetime(2026, 3, 1, 0, 0, tzinfo=UTC)
+        tie_first = ProviderHealth(
+            provider="tie-h",
+            status=HealthStatus.DEGRADED,
+            checked_at=t0,
+            message="slow",
+        )
+        tie_second = ProviderHealth(
+            provider="tie-h", status=HealthStatus.HEALTHY, checked_at=t0
+        )
+        alpha_old = ProviderHealth(
+            provider="alpha",
+            status=HealthStatus.DEGRADED,
+            checked_at=t0,
+            message="slow",
+        )
+        alpha_new = ProviderHealth(
+            provider="alpha",
+            status=HealthStatus.UNAVAILABLE,
+            checked_at=t0 + timedelta(minutes=30),
+            message="down",
+        )
+        beta = ProviderHealth(provider="beta", status=HealthStatus.HEALTHY, checked_at=t0)
+        for health in (tie_first, tie_second, alpha_old, alpha_new, beta):
+            await repository.record_health(health)
+
+        counts["select"] = 0
+        batch = await repository.latest_health_batch(["tie-h", "alpha", "beta"])
+        assert counts["select"] == 1
+        assert batch == {"tie-h": tie_second, "alpha": alpha_new, "beta": beta}
+        assert await repository.latest_health("tie-h") == tie_second
+        assert await repository.latest_health("tie-h") == batch["tie-h"]
+        assert await repository.latest_health("alpha") == batch["alpha"]
+        assert await repository.latest_health("beta") == batch["beta"]
+
+        counts["select"] = 0
+        duplicate = await repository.latest_health_batch(["alpha", "alpha", "beta"])
+        assert counts["select"] == 1
+        assert duplicate == {"alpha": alpha_new, "beta": beta}
+
+        counts["select"] = 0
+        subset = await repository.latest_health_batch(["beta"])
+        assert counts["select"] == 1
+        assert subset == {"beta": beta}
+        assert "alpha" not in subset
+
+        counts["select"] = 0
+        absent = await repository.latest_health_batch(["ghost"])
+        assert counts["select"] == 1
+        assert absent == {}
+        assert await repository.latest_health("ghost") is None
+
+        counts["select"] = 0
+        assert await repository.latest_health_batch([]) == {}
+        assert counts["select"] == 0
+    finally:
+        remove_counter()
+        clear_config_cache()
+        clear_quota_poll_cache()
+
+
+async def test_effective_quotas_batch_soft_zero_persistence(tmp_path: Path) -> None:
+    """Parallel soft zero clears only after a strictly later success, one write each."""
+    t0 = datetime(2026, 4, 1, 0, 0, tzinfo=UTC)
+
+    def _quota_zero(
+        observed_at: datetime,
+        *,
+        provider: str = "parallel",
+        source: QuotaSource = QuotaSource.ESTIMATED,
+        limit: Decimal = Decimal("100"),
+        metadata: dict[str, object] | None = None,
+    ) -> QuotaSnapshot:
+        return QuotaSnapshot(
+            provider=provider,
+            source=source,
+            remaining=Decimal("0"),
+            limit=limit,
+            unit_kind=UnitKind.CREDIT,
+            display_unit="credits",
+            reset_at=observed_at + timedelta(days=1),
+            observed_at=observed_at,
+            metadata=dict(metadata) if metadata is not None else {},
+        )
+
+    def _usage(
+        observed_at: datetime,
+        status: UsageStatus = UsageStatus.SUCCESS,
+        *,
+        provider: str = "parallel",
+    ) -> UsageEvent:
+        return UsageEvent(
+            provider=provider,
+            operation=UsageOperation.SEARCH,
+            units=Decimal("1"),
+            observed_at=observed_at,
+            status=status,
+        )
+
+    async with _soft_zero_case(tmp_path, "m2-later-success") as (database, recorded):
+        await database.record_quota(
+            _quota_zero(t0, metadata={"origin": "estimate", "depth": 2})
+        )
+        await database.record_usage(_usage(t0 + timedelta(hours=1)))
+        calls = len(recorded)
+        result = await effective_quotas_batch(database, ["parallel"])
+        assert len(recorded) - calls == 1
+        view = result["parallel"]
+        assert view.remaining is None
+        assert view.limit == Decimal("100")
+        assert isinstance(view.limit, Decimal)
+        assert view.source == QuotaSource.ESTIMATED
+        assert view.provider == "parallel"
+        assert view.observed_at == t0 + timedelta(hours=1)
+        assert view.metadata == {"origin": "estimate", "depth": 2, "soft_zero": False}
+        assert view.unit_kind == UnitKind.CREDIT
+        assert view.display_unit == "credits"
+        assert view.reset_at == t0 + timedelta(days=1)
+        assert recorded[calls] == view
+        assert await database.latest_quota("parallel") == view
+
+    async with _soft_zero_case(tmp_path, "m2-no-usage") as (database, recorded):
+        zero = _quota_zero(t0)
+        await database.record_quota(zero)
+        calls = len(recorded)
+        result = await effective_quotas_batch(database, ["parallel"])
+        assert len(recorded) - calls == 0
+        assert result["parallel"] == zero
+        assert result["parallel"].remaining == Decimal("0")
+
+    async with _soft_zero_case(tmp_path, "m2-earlier-success") as (database, recorded):
+        await database.record_quota(_quota_zero(t0 + timedelta(hours=2)))
+        await database.record_usage(_usage(t0 + timedelta(hours=1)))
+        calls = len(recorded)
+        result = await effective_quotas_batch(database, ["parallel"])
+        assert len(recorded) - calls == 0
+        assert result["parallel"].remaining == Decimal("0")
+        assert result["parallel"].observed_at == t0 + timedelta(hours=2)
+
+    async with _soft_zero_case(tmp_path, "m2-equal-timestamp") as (database, recorded):
+        await database.record_quota(_quota_zero(t0 + timedelta(hours=1)))
+        await database.record_usage(_usage(t0 + timedelta(hours=1)))
+        calls = len(recorded)
+        result = await effective_quotas_batch(database, ["parallel"])
+        assert len(recorded) - calls == 0
+        assert result["parallel"].remaining == Decimal("0")
+        assert result["parallel"].observed_at == t0 + timedelta(hours=1)
+
+    async with _soft_zero_case(tmp_path, "m2-later-failure") as (database, recorded):
+        await database.record_quota(_quota_zero(t0))
+        await database.record_usage(_usage(t0 + timedelta(hours=1), UsageStatus.FAILURE))
+        calls = len(recorded)
+        result = await effective_quotas_batch(database, ["parallel"])
+        assert len(recorded) - calls == 0
+        assert result["parallel"].remaining == Decimal("0")
+        assert result["parallel"].observed_at == t0
+
+    async with _soft_zero_case(tmp_path, "m2-multiple-successes") as (database, recorded):
+        await database.record_quota(_quota_zero(t0))
+        await database.record_usage(_usage(t0 - timedelta(hours=1)))
+        await database.record_usage(_usage(t0 + timedelta(hours=1)))
+        await database.record_usage(_usage(t0 + timedelta(hours=3)))
+        calls = len(recorded)
+        result = await effective_quotas_batch(database, ["parallel"])
+        assert len(recorded) - calls == 1
+        assert result["parallel"].remaining is None
+        assert result["parallel"].observed_at == t0 + timedelta(hours=3)
+        assert recorded[calls] == result["parallel"]
+
+    async with _soft_zero_case(tmp_path, "m2-hard-zero") as (database, recorded):
+        hard = QuotaSnapshot(
+            provider="parallel",
+            source=QuotaSource.AUTHORITATIVE,
+            remaining=Decimal("0"),
+            limit=Decimal("100"),
+            observed_at=t0,
+        )
+        await database.record_quota(hard)
+        await database.record_usage(_usage(t0 + timedelta(hours=1)))
+        calls = len(recorded)
+        result = await effective_quotas_batch(database, ["parallel"])
+        assert len(recorded) - calls == 0
+        assert result["parallel"] == hard
+        assert result["parallel"].remaining == Decimal("0")
+
+    async with _soft_zero_case(tmp_path, "m2-degenerate-zero") as (database, recorded):
+        await database.record_quota(_quota_zero(t0, limit=Decimal("0")))
+        await database.record_usage(_usage(t0 + timedelta(hours=1)))
+        calls = len(recorded)
+        result = await effective_quotas_batch(database, ["parallel"])
+        assert len(recorded) - calls == 0
+        view = result["parallel"]
+        assert view.remaining is None
+        assert view.limit is None
+        assert view.reset_at is None
+        assert view.source == QuotaSource.ESTIMATED
+        assert view.metadata == {}
+        assert view.observed_at == t0
+
+    async with _soft_zero_case(tmp_path, "m2-combined") as (database, recorded):
+        await database.record_quota(
+            _quota_zero(t0, limit=Decimal("250.5"), metadata={"batch": "h1"})
+        )
+        await database.record_usage(_usage(t0 + timedelta(hours=2)))
+        await database.record_quota(
+            _quota_zero(t0, provider="exa", limit=Decimal("75"), metadata={"batch": "h2"})
+        )
+        await database.record_usage(_usage(t0 + timedelta(hours=5), provider="exa"))
+        await database.record_quota(
+            QuotaSnapshot(
+                provider="tavily",
+                source=QuotaSource.AUTHORITATIVE,
+                remaining=Decimal("0"),
+                limit=Decimal("1000"),
+                observed_at=t0,
+            )
+        )
+        await database.record_usage(_usage(t0 + timedelta(hours=1), provider="tavily"))
+        calls = len(recorded)
+        combined = await effective_quotas_batch(database, ["parallel", "exa", "tavily"])
+        assert len(recorded) - calls == 2
+        assert {snapshot.provider for snapshot in recorded[calls:]} == {"parallel", "exa"}
+        for snapshot in recorded[calls:]:
+            assert combined[snapshot.provider] == snapshot
+        assert combined["parallel"].remaining is None
+        assert combined["parallel"].limit == Decimal("250.5")
+        assert combined["parallel"].observed_at == t0 + timedelta(hours=2)
+        assert combined["parallel"].metadata == {"batch": "h1", "soft_zero": False}
+        assert combined["exa"].remaining is None
+        assert combined["exa"].limit == Decimal("75")
+        assert combined["exa"].observed_at == t0 + timedelta(hours=5)
+        assert combined["exa"].metadata == {"batch": "h2", "soft_zero": False}
+        assert combined["tavily"].remaining == Decimal("0")
+        repeat_calls = len(recorded)
+        repeated = await effective_quotas_batch(database, ["parallel", "exa", "tavily"])
+        assert len(recorded) - repeat_calls == 0
+        assert repeated == combined

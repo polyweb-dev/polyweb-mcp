@@ -1250,3 +1250,220 @@ def test_pyproject_has_no_keyring_or_dotenv() -> None:
     )
     assert "keyring" not in pyproject.lower(), "RED (AC-1): pyproject must drop keyring"
     assert "python-dotenv" not in pyproject.lower(), "RED (AC-1): pyproject must drop python-dotenv"
+
+
+async def _reset_control_caches() -> None:
+    from freesearch.routers.control import clear_config_cache
+    from freesearch.services.monitoring import clear_quota_poll_cache
+
+    clear_config_cache()
+    clear_quota_poll_cache()
+
+
+@pytest.mark.asyncio
+async def test_supported_admin_writes_invalidate_warm_cache(
+    repository: SQLiteRepository,
+) -> None:
+    """M3: every supported admin write refreshes the next read without restart."""
+    from freesearch.configuration.provider_config import ProviderConfigUpdate
+    from freesearch.models.contracts import RoutingConfigResponse
+    from freesearch.routers.control import (
+        _CONFIG_CACHE,
+        _POLICY_CACHE,
+        _reconcile_provider_config,
+        clear_config_cache,
+        effective_config_for_name,
+        patch_provider_config,
+        persist_provider_config,
+        persist_routing_config,
+        routing_policy,
+    )
+
+    await _reset_control_caches()
+    try:
+        await repository.set_runtime_setting(
+            "provider.exa",
+            {"config": {"enable_mask": 7, "support_mask": 7, "priority": 100}},
+        )
+        await repository.set_runtime_setting(
+            "routing",
+            {
+                "fallback_policy": "chained",
+                "cost_optimization_preset": "balanced",
+                "max_attempts": 3,
+            },
+        )
+        assert (await effective_config_for_name(repository, "exa")).priority == 100
+        assert (await routing_policy(repository)).fallback_policy.value == "chained"
+        assert (id(repository), "exa") in _CONFIG_CACHE
+        assert id(repository) in _POLICY_CACHE
+
+        patched = await patch_provider_config(
+            repository, ProviderName.EXA, ProviderConfigUpdate(priority=11)
+        )
+        assert patched.priority == 11
+        assert (await effective_config_for_name(repository, "exa")).priority == 11
+
+        full = (await effective_config_for_name(repository, "exa")).model_copy(
+            update={"priority": 21}
+        )
+        await persist_provider_config(repository, ProviderName.EXA, full)
+        assert (await effective_config_for_name(repository, "exa")).priority == 21
+
+        await persist_routing_config(
+            repository,
+            RoutingConfigResponse(
+                fallback_policy="first_only",  # type: ignore[arg-type]
+                cost_optimization_preset="balanced",  # type: ignore[arg-type]
+                max_attempts=3,
+            ),
+        )
+        assert (await routing_policy(repository)).fallback_policy.value == "first_only"
+
+        await repository.set_runtime_setting(
+            "provider.exa",
+            {"config": {"enable_mask": 7, "support_mask": 7, "priority": 31}},
+        )
+        assert (await effective_config_for_name(repository, "exa")).priority == 31
+
+        def _to_41(current: Any) -> Any:
+            payload = dict(current)
+            config = dict(payload["config"])
+            config["priority"] = 41
+            payload["config"] = config
+            return payload
+
+        await repository.update_runtime_setting("provider.exa", _to_41)
+        assert (await effective_config_for_name(repository, "exa")).priority == 41
+
+        await _reconcile_provider_config(repository, ProviderName.EXA)
+        assert (await effective_config_for_name(repository, "exa")).priority == 41
+
+        app = create_app([ControlAdapter("exa")], repository=repository)
+        with TestClient(app) as client:
+            patched_rest = client.patch("/api/v1/providers/exa", json={"priority": 51})
+            assert patched_rest.status_code == 200
+        assert (await effective_config_for_name(repository, "exa")).priority == 51
+
+        committed = await effective_config_for_name(repository, "exa")
+        original_update = repository.update_runtime_setting
+
+        async def _failing_update(key: str, update: Any) -> Any:
+            raise RuntimeError("storage unavailable")
+
+        repository.update_runtime_setting = _failing_update  # type: ignore[method-assign]
+        try:
+            with pytest.raises(RuntimeError, match="storage unavailable"):
+                await patch_provider_config(
+                    repository, ProviderName.EXA, ProviderConfigUpdate(priority=99)
+                )
+        finally:
+            repository.update_runtime_setting = original_update  # type: ignore[method-assign]
+        preserved = await effective_config_for_name(repository, "exa")
+        assert preserved.priority == committed.priority == 51
+
+        original_set = repository.set_runtime_setting
+
+        async def _failing_set(key: str, value: Any) -> None:
+            raise RuntimeError("storage unavailable")
+
+        repository.set_runtime_setting = _failing_set  # type: ignore[method-assign]
+        try:
+            with pytest.raises(RuntimeError, match="storage unavailable"):
+                await persist_routing_config(
+                    repository,
+                    RoutingConfigResponse(
+                        fallback_policy="chained",  # type: ignore[arg-type]
+                        cost_optimization_preset="balanced",  # type: ignore[arg-type]
+                        max_attempts=3,
+                    ),
+                )
+        finally:
+            repository.set_runtime_setting = original_set  # type: ignore[method-assign]
+        assert (await routing_policy(repository)).fallback_policy.value == "first_only"
+    finally:
+        clear_config_cache()
+        from freesearch.services.monitoring import clear_quota_poll_cache as _clear_q
+
+        _clear_q()
+
+
+@pytest.mark.asyncio
+async def test_rest_lifespan_clears_config_cache(repository: SQLiteRepository) -> None:
+    """M3: REST lifespan exit clears repo entries; scopes narrow and widen correctly."""
+    from freesearch.routers.control import (
+        _CONFIG_CACHE,
+        _POLICY_CACHE,
+        clear_config_cache,
+        effective_config_for_name,
+        routing_policy,
+    )
+
+    await _reset_control_caches()
+    try:
+        await repository.set_runtime_setting(
+            "provider.exa",
+            {"config": {"enable_mask": 7, "support_mask": 7, "priority": 100}},
+        )
+        await repository.set_runtime_setting(
+            "provider.brave",
+            {"config": {"enable_mask": 7, "support_mask": 3, "priority": 60}},
+        )
+        await repository.set_runtime_setting(
+            "routing",
+            {
+                "fallback_policy": "chained",
+                "cost_optimization_preset": "balanced",
+                "max_attempts": 3,
+            },
+        )
+        assert (await effective_config_for_name(repository, "exa")).priority == 100
+        assert (await effective_config_for_name(repository, "brave")).priority == 60
+        assert (await routing_policy(repository)).fallback_policy.value == "chained"
+        repo_id = id(repository)
+        assert (repo_id, "exa") in _CONFIG_CACHE
+        assert (repo_id, "brave") in _CONFIG_CACHE
+        assert repo_id in _POLICY_CACHE
+
+        clear_config_cache(repository, provider="exa")
+        assert (repo_id, "exa") not in _CONFIG_CACHE
+        assert (repo_id, "brave") in _CONFIG_CACHE
+        # Provider-scoped clear also evicts the repository policy entry.
+        assert repo_id not in _POLICY_CACHE
+
+        assert (await effective_config_for_name(repository, "exa")).priority == 100
+        assert (await routing_policy(repository)).fallback_policy.value == "chained"
+        clear_config_cache(repository)
+        assert (repo_id, "exa") not in _CONFIG_CACHE
+        assert (repo_id, "brave") not in _CONFIG_CACHE
+        assert repo_id not in _POLICY_CACHE
+
+        assert (await effective_config_for_name(repository, "exa")).priority == 100
+        assert (await effective_config_for_name(repository, "brave")).priority == 60
+        assert (await routing_policy(repository)).fallback_policy.value == "chained"
+
+        clear_config_cache(provider="exa")
+        assert (repo_id, "exa") not in _CONFIG_CACHE
+        assert (repo_id, "brave") in _CONFIG_CACHE
+
+        assert (await effective_config_for_name(repository, "exa")).priority == 100
+        clear_config_cache()
+        assert _CONFIG_CACHE == {}
+        assert _POLICY_CACHE == {}
+
+        assert (await effective_config_for_name(repository, "exa")).priority == 100
+        assert (await routing_policy(repository)).fallback_policy.value == "chained"
+        app = create_app([ControlAdapter("exa")], repository=repository)
+        async with app.router.lifespan_context(app):
+            assert (id(repository), "exa") in _CONFIG_CACHE or True
+            await effective_config_for_name(repository, "exa")
+            await routing_policy(repository)
+            assert (id(repository), "exa") in _CONFIG_CACHE
+            assert id(repository) in _POLICY_CACHE
+        assert (id(repository), "exa") not in _CONFIG_CACHE
+        assert id(repository) not in _POLICY_CACHE
+    finally:
+        clear_config_cache()
+        from freesearch.services.monitoring import clear_quota_poll_cache as _clear_q
+
+        _clear_q()

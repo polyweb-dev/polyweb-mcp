@@ -146,7 +146,7 @@ async def test_search_normalizes_status_errors_without_key_leaks(
     assert excinfo.value.__cause__ is None
 
 
-@pytest.mark.parametrize("payload", [{}, {"web": {}}, {"web": {"results": [{}]}}])
+@pytest.mark.parametrize("payload", [{}, {"web": {}}])
 async def test_search_rejects_malformed_payloads(payload: dict[str, object]) -> None:
     adapter, client = _adapter(lambda request: httpx.Response(200, json=payload))
     try:
@@ -158,6 +158,209 @@ async def test_search_rejects_malformed_payloads(payload: dict[str, object]) -> 
     assert excinfo.value.error.code == "invalid_response"
     assert excinfo.value.error.retryable is False
     assert excinfo.value.__cause__ is None
+
+
+_GOOD_BRAVE_ITEM = {
+    "title": "Example",
+    "url": "https://example.com/article",
+    "description": "A result snippet.",
+    "page_age": "2024-01-02T03:04:05Z",
+    "language": "en",
+}
+
+_BAD_URL_ITEM = {"title": "Bad address", "url": "not-a-url"}
+
+_MISSING_URL_ITEM = {"title": "No address here"}
+
+_EMPTY_URL_ITEM = {"title": "Empty address", "url": ""}
+
+_SECOND_GOOD_ITEM = {
+    "title": "Second",
+    "url": "https://example.com/second",
+    "description": "Second snippet.",
+}
+
+_EXPECTED_RECORD = {
+    "code": "invalid_response",
+    "message": "malformed search result item",
+}
+
+
+def _brave_adapter_for(
+    results: object,
+) -> tuple[BraveAdapter, httpx.AsyncClient]:
+    payload: dict[str, object] = {"web": {"results": results}}
+    return _adapter(lambda request: httpx.Response(200, json=payload))
+
+
+def _brave_parse_errors(response: SearchResponse) -> object:
+    assert response.usage is not None
+    return response.usage.metadata.get("parse_errors")
+
+
+@pytest.mark.parametrize(
+    ("items", "expected_urls", "expected_indices"),
+    [
+        (
+            [_GOOD_BRAVE_ITEM, _BAD_URL_ITEM],
+            ["https://example.com/article"],
+            [1],
+        ),
+        (
+            [_MISSING_URL_ITEM, _GOOD_BRAVE_ITEM],
+            ["https://example.com/article"],
+            [0],
+        ),
+        (
+            [_GOOD_BRAVE_ITEM, _EMPTY_URL_ITEM, _SECOND_GOOD_ITEM],
+            ["https://example.com/article", "https://example.com/second"],
+            [1],
+        ),
+        (
+            [_BAD_URL_ITEM, _GOOD_BRAVE_ITEM, _MISSING_URL_ITEM, _SECOND_GOOD_ITEM],
+            ["https://example.com/article", "https://example.com/second"],
+            [0, 2],
+        ),
+    ],
+)
+async def test_search_skips_invalid_items_and_records_errors(
+    items: list[object], expected_urls: list[str], expected_indices: list[int]
+) -> None:
+    adapter, client = _brave_adapter_for(items)
+    try:
+        response = await adapter.search(SearchRequest(query="query", limit=10))
+    finally:
+        await client.aclose()
+
+    assert [str(item.url) for item in response.results] == expected_urls
+    assert response.query == "query"
+    assert response.provider == "brave"
+    assert response.total_results == len(expected_urls)
+    assert response.usage is not None
+    assert response.usage.units == Decimal("1")
+    assert _brave_parse_errors(response) == [
+        {"index": index, **_EXPECTED_RECORD} for index in expected_indices
+    ]
+
+
+@pytest.mark.parametrize(
+    ("items", "expected_indices"),
+    [
+        ([{"title": "No address here"}], [0]),
+        ([{"title": "Bad", "url": "not-a-url"}], [0]),
+        ([{"title": "Empty", "url": ""}], [0]),
+        ([_BAD_URL_ITEM, _MISSING_URL_ITEM, _EMPTY_URL_ITEM], [0, 1, 2]),
+    ],
+)
+async def test_search_all_invalid_items_returns_empty_success(
+    items: list[object], expected_indices: list[int]
+) -> None:
+    adapter, client = _brave_adapter_for(items)
+    try:
+        response = await adapter.search(SearchRequest(query="query", limit=10))
+    finally:
+        await client.aclose()
+
+    assert response.results == []
+    assert response.total_results == 0
+    assert response.query == "query"
+    assert response.provider == "brave"
+    assert response.usage is not None
+    assert response.usage.units == Decimal("1")
+    assert response.quota_snapshot is not None
+    assert _brave_parse_errors(response) == [
+        {"index": index, **_EXPECTED_RECORD} for index in expected_indices
+    ]
+
+
+async def test_search_empty_list_has_no_parse_errors() -> None:
+    adapter, client = _brave_adapter_for([])
+    try:
+        response = await adapter.search(SearchRequest(query="query", limit=10))
+    finally:
+        await client.aclose()
+
+    assert response.results == []
+    assert response.total_results == 0
+    assert response.usage is not None
+    assert "parse_errors" not in response.usage.metadata
+
+
+@pytest.mark.parametrize(
+    ("limit", "items", "expected_urls", "expected_indices"),
+    [
+        (
+            1,
+            [_BAD_URL_ITEM, _GOOD_BRAVE_ITEM, _SECOND_GOOD_ITEM],
+            ["https://example.com/article"],
+            [0],
+        ),
+        (
+            2,
+            [_GOOD_BRAVE_ITEM, _MISSING_URL_ITEM, _SECOND_GOOD_ITEM],
+            ["https://example.com/article", "https://example.com/second"],
+            [1],
+        ),
+    ],
+)
+async def test_search_limit_applies_after_invalid_item_filter(
+    limit: int, items: list[object], expected_urls: list[str], expected_indices: list[int]
+) -> None:
+    adapter, client = _brave_adapter_for(items)
+    try:
+        response = await adapter.search(SearchRequest(query="query", limit=limit))
+    finally:
+        await client.aclose()
+
+    assert [str(item.url) for item in response.results] == expected_urls
+    assert response.total_results == len(expected_urls)
+    assert _brave_parse_errors(response) == [
+        {"index": index, **_EXPECTED_RECORD} for index in expected_indices
+    ]
+
+
+async def test_search_invalid_tail_item_does_not_fail_response() -> None:
+    adapter, client = _brave_adapter_for([_GOOD_BRAVE_ITEM, _SECOND_GOOD_ITEM, _BAD_URL_ITEM])
+    try:
+        response = await adapter.search(SearchRequest(query="query", limit=1))
+    finally:
+        await client.aclose()
+
+    assert [str(item.url) for item in response.results] == ["https://example.com/article"]
+    assert response.total_results == 1
+    assert _brave_parse_errors(response) == [{"index": 2, **_EXPECTED_RECORD}]
+
+
+async def test_search_parse_errors_do_not_expose_payload_or_key() -> None:
+    adapter, client = _adapter(
+        lambda request: httpx.Response(
+            200,
+            json={
+                "web": {
+                    "results": [
+                        _GOOD_BRAVE_ITEM,
+                        {
+                            "title": "leak sentinel-key-abc123",
+                            "url": "not-a-url",
+                            "description": "sentinel-key-abc123",
+                        },
+                    ]
+                }
+            },
+        ),
+        key="sentinel-key-abc123",
+    )
+    try:
+        response = await adapter.search(SearchRequest(query="query", limit=10))
+    finally:
+        await client.aclose()
+
+    assert [str(item.url) for item in response.results] == ["https://example.com/article"]
+    errors = _brave_parse_errors(response)
+    assert errors == [{"index": 1, **_EXPECTED_RECORD}]
+    assert "sentinel-key-abc123" not in repr(errors)
+    for record in errors:
+        assert set(record.keys()) == {"index", "code", "message"}
 
 
 async def test_every_concurrent_search_enters_shared_runner() -> None:
