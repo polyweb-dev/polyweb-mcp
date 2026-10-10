@@ -24,12 +24,19 @@ from freesearch.models.contracts import (
     SearchResponse,
     UsageOperation,
 )
+from freesearch.models.users import UserRole
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
 from freesearch.services.parallel_oauth import (
     METADATA_RUNTIME_KEY,
     clear_oauth_poll_state,
     poll_oauth_balance_snapshot,
+)
+from tests.fixtures.auth import (
+    TEMP_PASSWORD,
+    configure_bdd_secret,
+    promote_account,
+    temp_email,
 )
 from tests.integration.services.oauth.oauth_stubs import (
     ACCESS_TOKEN_VALUE,
@@ -161,6 +168,7 @@ def _close_adv(context: Any) -> None:
 
 def _setup_adv(context: Any) -> None:
     _close_adv(context)
+    configure_bdd_secret(context)
     tmpdir = Path(".runtime-tmp/adv-behave-dbs")
     tmpdir.mkdir(parents=True, exist_ok=True)
     # uuid names: counters reset per process and stale files must never collide.
@@ -192,6 +200,14 @@ def _setup_adv(context: Any) -> None:
     context.adv_bodies = []
     context.adv_records = records
     context.adv_log_handler = handler
+    # OAuth routes need the Admin role.
+    email = temp_email("adv-admin")
+    registered = client.post("/auth/register", json={"email": email, "password": TEMP_PASSWORD})
+    assert registered.status_code == 201
+    context.loop.run_until_complete(promote_account(repo, email, UserRole.ADMIN))
+    logged_in = client.post("/auth/jwt/login", data={"username": email, "password": TEMP_PASSWORD})
+    assert logged_in.status_code == 200
+    context.adv_auth_headers = {"Authorization": f"Bearer {logged_in.json()['access_token']}"}
 
 
 def _client(context: Any) -> TestClient:
@@ -248,12 +264,13 @@ def _expire_access(context: Any) -> None:
 
 def _connect(context: Any) -> dict[str, Any]:
     client = _client(context)
-    context.adv_last = client.post(_device_path("parallel"))
+    headers = context.adv_auth_headers
+    context.adv_last = client.post(_device_path("parallel"), headers=headers)
     started = _require_parallel(context, "POST device-code")
     assert started.status_code == 200, started.text[:500]
     last: dict[str, Any] = {}
     for _ in range(8):
-        probe = client.get(_status_path("parallel"))
+        probe = client.get(_status_path("parallel"), headers=headers)
         assert probe.status_code == 200, probe.text[:500]
         last = probe.json()
         context.adv_last = probe
@@ -276,7 +293,7 @@ def _poll_balance(context: Any) -> Any:
 
 
 def _dashboard_parallel(context: Any) -> dict[str, Any] | None:
-    response = _client(context).get("/dashboard")
+    response = _client(context).get("/dashboard", headers=context.adv_auth_headers)
     assert response.status_code == 200, response.text[:500]
     context.adv_last = response
     for entry in response.json().get("latest_quota", []):
@@ -353,7 +370,12 @@ def step_seeded_anchored(context: Any, credit: int, pending: int) -> None:
     _server(context).credit_cents = credit
     _server(context).pending_cents = pending
     client = _client(context)
-    seed = client.patch("/api/v1/providers/parallel", json={"parallel_free_seed_usd": "5.00"})
+    headers = context.adv_auth_headers
+    seed = client.patch(
+        "/api/v1/providers/parallel",
+        json={"parallel_free_seed_usd": "5.00"},
+        headers=headers,
+    )
     assert seed.status_code == 200, seed.text[:300]
     manual = client.put(
         "/api/v1/providers/parallel/manual-quota",
@@ -363,25 +385,32 @@ def step_seeded_anchored(context: Any, credit: int, pending: int) -> None:
             "allowance": "999.00",
             "current_usage": "0.00",
         },
+        headers=headers,
     )
     assert manual.status_code == 200, manual.text[:300]
 
 
 @when('I request a device code for "{provider_id}"')
 def step_request_device(context: Any, provider_id: str) -> None:
-    context.adv_last = _client(context).post(_device_path(provider_id))
+    context.adv_last = _client(context).post(
+        _device_path(provider_id), headers=context.adv_auth_headers
+    )
 
 
 @when("I request a device code with an extra smuggled field")
 def step_request_device_extra(context: Any) -> None:
     context.adv_last = _client(context).post(
-        _device_path("parallel"), json={"smuggled": "token-material"}
+        _device_path("parallel"),
+        json={"smuggled": "token-material"},
+        headers=context.adv_auth_headers,
     )
 
 
 @when('I read OAuth status for "{provider_id}"')
 def step_read_status(context: Any, provider_id: str) -> None:
-    context.adv_last = _client(context).get(_status_path(provider_id))
+    context.adv_last = _client(context).get(
+        _status_path(provider_id), headers=context.adv_auth_headers
+    )
 
 
 @when('I disconnect OAuth for "{provider_id}"')
@@ -389,14 +418,17 @@ def step_disconnect(context: Any, provider_id: str) -> None:
     # Mark the shared order log so the Then step only sees this disconnect's window
     # (earlier entries belong to the connect flow's own vault cleanup).
     context.adv_order_mark = len(context.adv_shared)
-    context.adv_last = _client(context).delete(_oauth_path(provider_id))
+    context.adv_last = _client(context).delete(
+        _oauth_path(provider_id), headers=context.adv_auth_headers
+    )
 
 
 @when('I disconnect OAuth for "parallel" twice')
 def step_disconnect_twice(context: Any) -> None:
     client = _client(context)
-    first = client.delete(_oauth_path("parallel"))
-    second = client.delete(_oauth_path("parallel"))
+    headers = context.adv_auth_headers
+    first = client.delete(_oauth_path("parallel"), headers=headers)
+    second = client.delete(_oauth_path("parallel"), headers=headers)
     context.adv_first = first
     context.adv_last = second
 
@@ -404,11 +436,12 @@ def step_disconnect_twice(context: Any) -> None:
 @when("I start the device flow and poll status to terminal")
 def step_poll_terminal(context: Any) -> None:
     client = _client(context)
-    context.adv_last = client.post(_device_path("parallel"))
+    headers = context.adv_auth_headers
+    context.adv_last = client.post(_device_path("parallel"), headers=headers)
     started = _require_parallel(context, "POST device-code")
     assert started.status_code == 200, started.text[:500]
     for _ in range(8):
-        probe = client.get(_status_path("parallel"))
+        probe = client.get(_status_path("parallel"), headers=headers)
         assert probe.status_code == 200, probe.text[:500]
         context.adv_last = probe
         if probe.json().get("status") != "pending":
@@ -419,22 +452,23 @@ def step_poll_terminal(context: Any) -> None:
 @when("I start the device flow and poll status rapidly")
 def step_poll_rapid(context: Any) -> None:
     client = _client(context)
-    context.adv_last = client.post(_device_path("parallel"))
+    headers = context.adv_auth_headers
+    context.adv_last = client.post(_device_path("parallel"), headers=headers)
     started = _require_parallel(context, "POST device-code")
     assert started.status_code == 200, started.text[:500]
-    first = client.get(_status_path("parallel"))
+    first = client.get(_status_path("parallel"), headers=headers)
     assert first.status_code == 200, first.text[:300]
     context.adv_last = first
     assert first.json()["status"] == "pending", first.text[:300]
     context.adv_cached_pending = 0
     for _ in range(4):
-        probe = client.get(_status_path("parallel"))
+        probe = client.get(_status_path("parallel"), headers=headers)
         assert probe.json()["status"] == "pending", probe.text[:300]
         context.adv_last = probe
         context.adv_cached_pending += 1
     _rewind(context)
     for _ in range(6):
-        probe = client.get(_status_path("parallel"))
+        probe = client.get(_status_path("parallel"), headers=headers)
         context.adv_last = probe
         if probe.json().get("status") == "ready":
             return
@@ -455,7 +489,7 @@ def step_status_repeated(context: Any) -> None:
     context.adv_baseline = server.poll_calls + server.refresh_calls
     bodies: list[str] = []
     for _ in range(5):
-        probe = _client(context).get(_status_path("parallel"))
+        probe = _client(context).get(_status_path("parallel"), headers=context.adv_auth_headers)
         assert probe.status_code == 200, probe.text[:300]
         context.adv_last = probe
         bodies.append(probe.text)
@@ -487,23 +521,24 @@ def step_poll_failures(context: Any) -> None:
 @when("I drive every OAuth error path")
 def step_error_paths(context: Any) -> None:
     client = _client(context)
+    headers = context.adv_auth_headers
     server = _server(context)
     bodies: list[str] = []
-    bodies.append(client.post(_device_path("parallel")).text)
+    bodies.append(client.post(_device_path("parallel"), headers=headers).text)
     server.poll_script = ["access_denied"]  # type: ignore[list-item]
-    bodies.append(client.get(_status_path("parallel")).text)
-    bodies.append(client.delete(_oauth_path("parallel")).text)
-    bodies.append(client.post(_device_path("parallel")).text)
+    bodies.append(client.get(_status_path("parallel"), headers=headers).text)
+    bodies.append(client.delete(_oauth_path("parallel"), headers=headers).text)
+    bodies.append(client.post(_device_path("parallel"), headers=headers).text)
     server.poll_script = ["expired_token"]  # type: ignore[list-item]
-    bodies.append(client.get(_status_path("parallel")).text)
-    bodies.append(client.delete(_oauth_path("parallel")).text)
-    bodies.append(client.post(_device_path("parallel")).text)
+    bodies.append(client.get(_status_path("parallel"), headers=headers).text)
+    bodies.append(client.delete(_oauth_path("parallel"), headers=headers).text)
+    bodies.append(client.post(_device_path("parallel"), headers=headers).text)
     server.poll_script = ["authorization_pending", "success"]
     server.refresh_reject = "invalid_grant"
-    bodies.append(client.get(_status_path("parallel")).text)
-    bodies.append(client.delete(_oauth_path("parallel")).text)
+    bodies.append(client.get(_status_path("parallel"), headers=headers).text)
+    bodies.append(client.delete(_oauth_path("parallel"), headers=headers).text)
     server.refresh_reject = "none"
-    bodies.append(client.get("/dashboard").text)
+    bodies.append(client.get("/dashboard", headers=headers).text)
     context.adv_bodies = bodies
 
 
@@ -577,7 +612,7 @@ def step_idempotent(context: Any) -> None:
     _assert_no_egress(context)
     assert context.adv_first.status_code == 204, context.adv_first.text[:300]
     assert context.adv_last.status_code == 204, context.adv_last.text[:300]
-    probe = _client(context).get(_status_path("parallel"))
+    probe = _client(context).get(_status_path("parallel"), headers=context.adv_auth_headers)
     assert probe.status_code == 200
     assert probe.json()["status"] == "unpaired", probe.text[:300]
 

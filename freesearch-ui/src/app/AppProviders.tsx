@@ -1,12 +1,19 @@
 import type { ReactNode } from "react"
-import { FreeSearchProvider } from "@/context/FreeSearchContext"
+import { AuthProvider } from "@/domains/auth"
 import { TooltipProvider } from "@/shared/ui/tooltip"
 
-/** Root provider composition: business state above tooltip behavior. */
+/**
+ * Root provider composition.
+ *
+ * Auth sits above every business provider, so the session gate can mount and
+ * unmount the workspace providers with the confirmed account. The playground
+ * store and the domain providers now live below that gate, inside
+ * `ProtectedWorkspace`.
+ */
 export function AppProviders({ children }: { children: ReactNode }) {
   return (
-    <FreeSearchProvider>
+    <AuthProvider>
       <TooltipProvider>{children}</TooltipProvider>
-    </FreeSearchProvider>
+    </AuthProvider>
   )
 }

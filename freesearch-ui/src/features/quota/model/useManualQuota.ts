@@ -74,3 +74,16 @@ export function useManualQuota(providerId: string, eligible: boolean): ManualQuo
 
   return { manual, estimate: toEstimate(manual), save, remove }
 }
+
+/**
+ * Save one manual entry for any provider through the one manual-quota path.
+ *
+ * The balance modal retargets its provider, so the same PUT route serves every
+ * target. The payload stays unchanged.
+ */
+export async function saveManualQuotaFor(
+  providerId: string,
+  payload: BackendManualQuotaPayload
+): Promise<void> {
+  await apiService.putManualQuota(toBackendId(providerId), payload)
+}

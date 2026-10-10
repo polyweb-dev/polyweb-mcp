@@ -3,28 +3,32 @@ Feature: Visual and keyboard regression
 
   @visual
   Scenario: V1 desktop routing shell
-    Given I open the visual app at 1440 by 900
+    Given the sidebar session belongs to an admin account
+    And I open the visual app at 1440 by 900
     When I select the "Routing" header tab
     Then I should see the "Routing" heading
     And the visual page screenshot "routing-desktop.png" should match
 
   @visual
   Scenario: V2 mobile simulator shell
-    Given I open the visual app at 390 by 844
+    Given the sidebar session belongs to an admin account
+    And I open the visual app at 390 by 844
     When I select the "Routing" header tab
     And I open the "Simulator" routing tab
     Then the visual page screenshot "simulator-mobile.png" should match
 
   @visual
   Scenario: V3 mobile settings shell
-    Given I open the visual app at 390 by 844
+    Given the sidebar session belongs to an admin account
+    And I open the visual app at 390 by 844
     When I select the "Settings" header tab
     And I open the "Providers" settings tab
     Then the visual page screenshot "settings-mobile.png" should match
 
   @visual
   Scenario: R1 reduced motion removes transition timing
-    Given I open the visual app at 1440 by 900 with reduced motion
+    Given the sidebar session belongs to an admin account
+    And I open the visual app at 1440 by 900 with reduced motion
     When I select the "Routing" header tab
     Then I should see the "Routing" heading
     And reduced-motion transitions should be disabled
@@ -32,13 +36,15 @@ Feature: Visual and keyboard regression
 
   @keyboard @visual
   Scenario: K1 keyboard focus follows the header and routing controls
-    Given I open the visual app at 1440 by 900
+    Given the sidebar session belongs to an admin account
+    And I open the visual app at 1440 by 900
     When I walk from the header through Routing with keyboard only
     Then the focused-control screenshot "routing-keyboard-focus.png" should match
 
   @keyboard @visual
   Scenario: K2 keyboard toggles failover without trapping sub-switches
-    Given I open the visual app at 390 by 844
+    Given the sidebar session belongs to an admin account
+    And I open the visual app at 390 by 844
     When I move to the "Settings" view using keyboard only
     And I open the "Failover" settings tab using keyboard only
     And I focus the "Fallback chaining" switch using keyboard only
@@ -48,7 +54,8 @@ Feature: Visual and keyboard regression
 
   @keyboard @visual
   Scenario: K3 keyboard changes the simulator operation
-    Given I open the visual app at 390 by 844
+    Given the sidebar session belongs to an admin account
+    And I open the visual app at 390 by 844
     When I move to the "Routing" view using keyboard only
     And I open the "Simulator" routing tab using keyboard only
     And I choose "Fetch" in the simulator operation using keyboard only

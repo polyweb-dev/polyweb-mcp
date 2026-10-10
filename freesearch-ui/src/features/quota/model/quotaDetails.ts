@@ -92,8 +92,9 @@ export function quotaCaptionFor(
 }
 
 
+/** Visible p95 text, empty when the provider reports no latency (never a placeholder). */
 export function formatUsageP95(latency: number | null): string {
-  return latency === null ? "—" : latency + "ms"
+  return latency === null ? "" : latency + "ms"
 }
 
 /** True when a rolling-window reset is in the past (idle snapshot, recovers on next use). */

@@ -28,6 +28,7 @@ from freesearch.models.contracts import (
 )
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
+from tests.fixtures.auth import raw_auth_headers, register_and_login, temp_email
 
 
 class _StubAdapter(ProviderAdapter):
@@ -82,37 +83,78 @@ class _StubAdapter(ProviderAdapter):
         pass
 
 
-def test_search_endpoint_routes_and_returns_contract_shape() -> None:
-    client = TestClient(create_app([_StubAdapter("brave", fetch=False)]))
-    response = client.post("/search", json={"query": "python asyncio"})
+async def test_search_endpoint_routes_and_returns_contract_shape(
+    repository: SQLiteRepository,
+    auth_secret: str,
+) -> None:
+    # Use one Agent account for the call.
+    app = create_app([_StubAdapter("brave", fetch=False)], repository=repository)
+    with TestClient(app) as client:
+        anonymous = client.post("/search", json={"query": "python asyncio"})
+        assert anonymous.status_code == 401
+        assert anonymous.headers["www-authenticate"] == "Bearer"
+
+        pair = register_and_login(client, temp_email("rest-search"))
+        headers = raw_auth_headers(pair["access_token"])
+        response = client.post("/search", json={"query": "python asyncio"}, headers=headers)
     assert response.status_code == 200
     assert response.json()["provider"] == "brave"
     assert response.json()["results"][0]["title"] == "brave result"
 
 
-def test_fetch_endpoint_returns_document() -> None:
-    client = TestClient(create_app([_StubAdapter("youcom")]))
-    response = client.post("/fetch", json={"url": "https://example.com/page"})
+async def test_fetch_endpoint_returns_document(
+    repository: SQLiteRepository,
+    auth_secret: str,
+) -> None:
+    # Use one Agent account for the call.
+    app = create_app([_StubAdapter("youcom")], repository=repository)
+    with TestClient(app) as client:
+        anonymous = client.post("/fetch", json={"url": "https://example.com/page"})
+        assert anonymous.status_code == 401
+
+        pair = register_and_login(client, temp_email("rest-fetch"))
+        headers = raw_auth_headers(pair["access_token"])
+        response = client.post("/fetch", json={"url": "https://example.com/page"}, headers=headers)
     assert response.status_code == 200
     assert response.json()["provider"] == "youcom"
     assert response.json()["document"]["content"] == "youcom content"
 
 
-def test_search_without_any_adapter_returns_503() -> None:
-    client = TestClient(create_app([]))
-    response = client.post("/search", json={"query": "anything"})
+async def test_search_without_any_adapter_returns_503(
+    repository: SQLiteRepository,
+    auth_secret: str,
+) -> None:
+    # Anonymous call fails first. Agent call shows the 503 shape.
+    app = create_app([], repository=repository)
+    with TestClient(app) as client:
+        anonymous = client.post("/search", json={"query": "anything"})
+        assert anonymous.status_code == 401
+
+        pair = register_and_login(client, temp_email("rest-empty"))
+        headers = raw_auth_headers(pair["access_token"])
+        response = client.post("/search", json={"query": "anything"}, headers=headers)
     assert response.status_code == 503
     assert "no provider is configured" in response.json()["detail"]
 
 
-def test_openapi_docs_are_served() -> None:
-    client = TestClient(create_app([_StubAdapter("brave", fetch=False)]))
-    docs = client.get("/openapi.json")
-    assert docs.status_code == 200
-    assert client.get("/docs").status_code == 200
+async def test_openapi_docs_are_served(
+    repository: SQLiteRepository,
+    auth_secret: str,
+) -> None:
+    # Docs need any valid JWT. Anonymous calls fail first.
+    app = create_app([_StubAdapter("brave", fetch=False)], repository=repository)
+    with TestClient(app) as client:
+        assert client.get("/openapi.json").status_code == 401
+        assert client.get("/docs").status_code == 401
+
+        pair = register_and_login(client, temp_email("rest-docs"))
+        headers = raw_auth_headers(pair["access_token"])
+        docs = client.get("/openapi.json", headers=headers)
+        assert docs.status_code == 200
+        assert client.get("/docs", headers=headers).status_code == 200
 
 
-def test_api_lifespan_cleans_up() -> None:
+def test_api_lifespan_cleans_up(auth_secret: str) -> None:
     closed: list[str] = []
 
     class _ClosingStub(_StubAdapter):
@@ -158,14 +200,18 @@ def _trace_id_of(response: object) -> str:
 
 async def test_search_emits_trace_header_matching_detail_hierarchy(
     repository: SQLiteRepository,
+    auth_secret: str,
 ) -> None:
+    # Use one Agent account for search and trace reads.
     app = create_app([_StubAdapter("stubby")], repository=repository)
 
     with TestClient(app) as client:
-        response = client.post("/search", json={"query": "consensus algorithms"})
+        pair = register_and_login(client, temp_email("trace-search"))
+        headers = raw_auth_headers(pair["access_token"])
+        response = client.post("/search", json={"query": "consensus algorithms"}, headers=headers)
         assert response.status_code == 200
         trace_id = _trace_id_of(response)
-        detail = client.get(f"/api/v1/traces/{trace_id}").json()
+        detail = client.get(f"/api/v1/traces/{trace_id}", headers=headers).json()
 
     assert detail["trace_id"] == trace_id
     assert detail["operation"] == "search"
@@ -193,14 +239,20 @@ async def test_search_emits_trace_header_matching_detail_hierarchy(
     assert spans["freesearch.provider"]["error"] is None
 
 
-async def test_fetch_route_mirrors_search_tracing(repository: SQLiteRepository) -> None:
+async def test_fetch_route_mirrors_search_tracing(
+    repository: SQLiteRepository,
+    auth_secret: str,
+) -> None:
+    # Use one Agent account for fetch and trace reads.
     app = create_app([_StubAdapter("stubby")], repository=repository)
 
     with TestClient(app) as client:
-        response = client.post("/fetch", json={"url": "https://example.com/page"})
+        pair = register_and_login(client, temp_email("trace-fetch"))
+        headers = raw_auth_headers(pair["access_token"])
+        response = client.post("/fetch", json={"url": "https://example.com/page"}, headers=headers)
         assert response.status_code == 200
         trace_id = _trace_id_of(response)
-        detail = client.get(f"/api/v1/traces/{trace_id}").json()
+        detail = client.get(f"/api/v1/traces/{trace_id}", headers=headers).json()
 
     assert detail["operation"] == "fetch"
     assert detail["outcome"] == "success"
@@ -212,23 +264,27 @@ async def test_fetch_route_mirrors_search_tracing(repository: SQLiteRepository) 
 
 async def test_unhandled_provider_error_writes_error_trace_without_header(
     repository: SQLiteRepository,
+    auth_secret: str,
 ) -> None:
+    # Use one Agent account for search and trace reads.
     app = create_app([_FailingAdapter("flaky")], repository=repository)
 
     with TestClient(app, raise_server_exceptions=False) as client:
-        response = client.post("/search", json={"query": "consensus"})
+        pair = register_and_login(client, temp_email("trace-error"))
+        headers = raw_auth_headers(pair["access_token"])
+        response = client.post("/search", json={"query": "consensus"}, headers=headers)
         assert response.status_code == 500
         # Unhandled failures propagate above the tracing middleware, so the
         # 500 cannot carry the header — the trace is still persisted.
         assert "x-trace-id" not in response.headers
-        items = client.get("/api/v1/traces").json()["items"]
+        items = client.get("/api/v1/traces", headers=headers).json()["items"]
 
     assert len(items) == 1
     assert items[0]["outcome"] == "error"
     assert items[0]["error"]["type"] == "http_error"
 
     with TestClient(app, raise_server_exceptions=False) as client:
-        detail = client.get(f"/api/v1/traces/{items[0]['trace_id']}").json()
+        detail = client.get(f"/api/v1/traces/{items[0]['trace_id']}", headers=headers).json()
 
     assert detail["error"] == {"type": "http_error", "message": "flaky: http_error: HTTP 502"}
     # No fabricated results on a failed request.
@@ -238,14 +294,18 @@ async def test_unhandled_provider_error_writes_error_trace_without_header(
 
 async def test_handled_routing_error_carries_header_and_error_outcome(
     repository: SQLiteRepository,
+    auth_secret: str,
 ) -> None:
+    # Use one Agent account for search and trace reads.
     app = create_app([], repository=repository)
 
     with TestClient(app) as client:
-        response = client.post("/search", json={"query": "consensus"})
+        pair = register_and_login(client, temp_email("trace-routing"))
+        headers = raw_auth_headers(pair["access_token"])
+        response = client.post("/search", json={"query": "consensus"}, headers=headers)
         assert response.status_code == 503
         trace_id = _trace_id_of(response)
-        detail = client.get(f"/api/v1/traces/{trace_id}").json()
+        detail = client.get(f"/api/v1/traces/{trace_id}", headers=headers).json()
 
     assert detail["outcome"] == "error"
     assert detail["output"] is None

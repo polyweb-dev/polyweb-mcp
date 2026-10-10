@@ -2,7 +2,12 @@ import { FileText } from "lucide-react"
 import { Button } from "@/shared/ui/button"
 import { ComposerShell } from "@/shared/ui/ComposerShell"
 import { PillTabsList } from "@/shared/ui/PillTabsList"
+import { ProviderSelect } from "@/shared/ui/ProviderSelect"
 import type { PlaygroundController } from "../model/usePlaygroundController"
+
+/** The provider field style of the composer footer. */
+const providerFieldClass =
+  "min-w-48 rounded border border-[var(--border-subtle)] bg-[var(--elevated)] px-2.5 py-1 text-[13px] text-[var(--text)] outline-none"
 
 /**
  * Fetch request form via the shared composer shell. Mounted once per Fetch
@@ -56,19 +61,21 @@ export function FetchComposer({ controller }: { controller: PlaygroundController
         footer={
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div className="flex items-center gap-2">
-              <span>Provider:</span>
-              <select
+              <label htmlFor="playground-fetch-provider">Provider:</label>
+              <ProviderSelect
+                id="playground-fetch-provider"
+                testId="playground-fetch-provider"
+                className={providerFieldClass}
                 value={selectedProviderId}
-                onChange={(e) => setSelectedProviderId(e.target.value)}
-                className="rounded border border-[var(--border-subtle)] bg-[var(--elevated)] px-2.5 py-1 text-[13px] text-[var(--text)] outline-none"
-              >
-                <option value="auto">Auto arbitration</option>
-                {eligibleProviders.map((provider) => (
-                  <option key={provider.id} value={provider.id}>
-                    {provider.name}
-                  </option>
-                ))}
-              </select>
+                options={[
+                  { value: "auto", label: "Auto arbitration" },
+                  ...eligibleProviders.map((provider) => ({
+                    value: provider.id,
+                    label: provider.name,
+                  })),
+                ]}
+                onValueChange={setSelectedProviderId}
+              />
             </div>
 
             <div

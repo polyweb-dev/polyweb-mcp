@@ -99,7 +99,5 @@ def test_support_mask_from_capabilities_full_mapping() -> None:
 def test_support_mask_from_capabilities_partial_and_global_flags() -> None:
     assert support_mask_from_capabilities(search=False, fetch=False) == 1
     assert support_mask_from_capabilities(search=False, fetch=True) == 5
-    assert (
-        support_mask_from_capabilities(search=True, fetch=True, global_supported=False) == 6
-    )
+    assert support_mask_from_capabilities(search=True, fetch=True, global_supported=False) == 6
     assert support_mask_from_capabilities(search=False, fetch=False, global_supported=False) == 0

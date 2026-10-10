@@ -11,6 +11,7 @@ from tests.integration.services.oauth.conftest import (
     NON_PARALLEL_IDS,
     TERMINAL_STATUSES,
     VAULT_KEYS,
+    admin_auth_headers,
     build_app,
     connect_parallel,
     oauth_paths,
@@ -40,7 +41,9 @@ def _open(repository: Any, secret_store: Any) -> TestClient:
     return client
 
 
-def test_oauth_routes_registered_for_parallel(repository: Any, secret_store: Any) -> None:
+def test_oauth_routes_registered_for_parallel(
+    repository: Any, secret_store: Any, auth_secret: str
+) -> None:
     app = build_app(repository, secret_store)
     paths = {getattr(route, "path", "") for route in app.routes}
     assert "/api/v1/providers/{provider_id}/oauth/device-code" in paths, sorted(paths)
@@ -48,13 +51,17 @@ def test_oauth_routes_registered_for_parallel(repository: Any, secret_store: Any
     assert "/api/v1/providers/{provider_id}/oauth" in paths, sorted(paths)
 
 
-def test_device_code_shape_exact(
-    repository: Any, secret_store: Any, stub_server: StubOAuthServer
+async def test_device_code_shape_exact(
+    repository: Any, secret_store: Any, stub_server: StubOAuthServer, auth_secret: str
 ) -> None:
     client = _open(repository, secret_store)
     try:
+        # Anonymous calls need a 401 challenge.
+        assert client.post("/api/v1/providers/parallel/oauth/device-code").status_code == 401
+        # Use one Admin account for the OAuth route.
+        headers = await admin_auth_headers(client, repository)
         response = require_implemented(
-            client.post("/api/v1/providers/parallel/oauth/device-code"),
+            client.post("/api/v1/providers/parallel/oauth/device-code", headers=headers),
             "POST device-code",
         )
         assert response.status_code == 200, response.text[:500]
@@ -74,18 +81,21 @@ def test_device_code_shape_exact(
         client.__exit__(None, None, None)
 
 
-def test_device_code_extra_body_ignored_never_reflected(
-    repository: Any, secret_store: Any, stub_server: StubOAuthServer
+async def test_device_code_extra_body_ignored_never_reflected(
+    repository: Any, secret_store: Any, stub_server: StubOAuthServer, auth_secret: str
 ) -> None:
     # NOTE (contract question, not a failure): the frozen shape defines no request
     # body, so a strict extra=forbid reading would demand 422 while a bodiless-POST
     # reading ignores it. Either way the smuggled value must never surface.
     client = _open(repository, secret_store)
     try:
+        # Use one Admin account for the OAuth route.
+        headers = await admin_auth_headers(client, repository)
         response = require_implemented(
             client.post(
                 "/api/v1/providers/parallel/oauth/device-code",
                 json={"smuggled": "token-material"},
+                headers=headers,
             ),
             "POST device-code",
         )
@@ -98,32 +108,39 @@ def test_device_code_extra_body_ignored_never_reflected(
 
 
 async def test_device_vendor_failure_leaves_no_partial_state(
-    repository: Any, secret_store: Any, stub_server: StubOAuthServer
+    repository: Any, secret_store: Any, stub_server: StubOAuthServer, auth_secret: str
 ) -> None:
     stub_server.device_status = 500
     client = _open(repository, secret_store)
     try:
+        # Use one Admin account for the OAuth routes.
+        headers = await admin_auth_headers(client, repository)
         response = require_implemented(
-            client.post("/api/v1/providers/parallel/oauth/device-code"),
+            client.post("/api/v1/providers/parallel/oauth/device-code", headers=headers),
             "POST device-code",
         )
         assert response.status_code == 502, response.text[:500]
         for key in VAULT_KEYS:
             assert secret_store.values.get(key) is None, "partial vault state: " + key
-        status = client.get("/api/v1/providers/parallel/oauth/status")
+        status = client.get("/api/v1/providers/parallel/oauth/status", headers=headers)
         assert status.status_code == 200
         assert status.json()["status"] == "unpaired", status.text[:300]
     finally:
         client.__exit__(None, None, None)
 
 
-def test_status_shape_exact_and_unpaired_when_fresh(
-    repository: Any, secret_store: Any, stub_server: StubOAuthServer
+async def test_status_shape_exact_and_unpaired_when_fresh(
+    repository: Any, secret_store: Any, stub_server: StubOAuthServer, auth_secret: str
 ) -> None:
     client = _open(repository, secret_store)
     try:
+        # Anonymous calls need a 401 challenge.
+        assert client.get("/api/v1/providers/parallel/oauth/status").status_code == 401
+        # Use one Admin account for the OAuth route.
+        headers = await admin_auth_headers(client, repository)
         response = require_implemented(
-            client.get("/api/v1/providers/parallel/oauth/status"), "GET status"
+            client.get("/api/v1/providers/parallel/oauth/status", headers=headers),
+            "GET status",
         )
         assert response.status_code == 200, response.text[:500]
         body = response.json()
@@ -144,21 +161,24 @@ async def test_device_terminal_edges(
     repository: Any,
     secret_store: Any,
     stub_server: StubOAuthServer,
+    auth_secret: str,
     outcome: str,
     status: str,
 ) -> None:
     stub_server.poll_script = [outcome]  # type: ignore[list-item]
     client = _open(repository, secret_store)
     try:
+        # Use one Admin account for the OAuth routes.
+        headers = await admin_auth_headers(client, repository)
         started = require_implemented(
-            client.post("/api/v1/providers/parallel/oauth/device-code"),
+            client.post("/api/v1/providers/parallel/oauth/device-code", headers=headers),
             "POST device-code",
         )
         assert started.status_code == 200, started.text[:500]
-        probe = client.get("/api/v1/providers/parallel/oauth/status")
+        probe = client.get("/api/v1/providers/parallel/oauth/status", headers=headers)
         assert probe.status_code == 200, probe.text[:500]
         assert probe.json()["status"] == status, probe.text[:300]
-        again = client.get("/api/v1/providers/parallel/oauth/status")
+        again = client.get("/api/v1/providers/parallel/oauth/status", headers=headers)
         assert again.json()["status"] == status, "terminal state must stick"
         assert stub_server.poll_calls == 1, "terminal must stop polling"
     finally:
@@ -166,39 +186,51 @@ async def test_device_terminal_edges(
 
 
 @pytest.mark.parametrize("provider_id", NON_PARALLEL_IDS)
-def test_non_parallel_oauth_always_404(
-    repository: Any, secret_store: Any, stub_server: StubOAuthServer, provider_id: str
+async def test_non_parallel_oauth_always_404(
+    repository: Any,
+    secret_store: Any,
+    stub_server: StubOAuthServer,
+    auth_secret: str,
+    provider_id: str,
 ) -> None:
     client = _open(repository, secret_store)
     try:
+        # Use one Admin account for the OAuth routes.
+        headers = await admin_auth_headers(client, repository)
         device_path, status_path, oauth_path = oauth_paths(provider_id)
-        assert client.post(device_path).status_code == 404, provider_id
-        assert client.get(status_path).status_code == 404, provider_id
-        assert client.delete(oauth_path).status_code == 404, provider_id
+        assert client.post(device_path, headers=headers).status_code == 404, provider_id
+        assert client.get(status_path, headers=headers).status_code == 404, provider_id
+        assert client.delete(oauth_path, headers=headers).status_code == 404, provider_id
     finally:
         client.__exit__(None, None, None)
 
 
-def test_unknown_provider_oauth_404(
-    repository: Any, secret_store: Any, stub_server: StubOAuthServer
+async def test_unknown_provider_oauth_404(
+    repository: Any, secret_store: Any, stub_server: StubOAuthServer, auth_secret: str
 ) -> None:
     client = _open(repository, secret_store)
     try:
+        # Anonymous calls need a 401 challenge.
+        assert client.get("/api/v1/providers/ghost/oauth/status").status_code == 401
+        # Use one Admin account for the OAuth routes.
+        headers = await admin_auth_headers(client, repository)
         device_path, status_path, oauth_path = oauth_paths("ghost")
-        assert client.post(device_path).status_code == 404
-        assert client.get(status_path).status_code == 404
-        assert client.delete(oauth_path).status_code == 404
+        assert client.post(device_path, headers=headers).status_code == 404
+        assert client.get(status_path, headers=headers).status_code == 404
+        assert client.delete(oauth_path, headers=headers).status_code == 404
     finally:
         client.__exit__(None, None, None)
 
 
 async def test_status_responses_carry_no_token_fields(
-    repository: Any, secret_store: Any, stub_server: StubOAuthServer
+    repository: Any, secret_store: Any, stub_server: StubOAuthServer, auth_secret: str
 ) -> None:
     client = _open(repository, secret_store)
     try:
-        await connect_parallel(client, stub_server, repository)
-        probe = client.get("/api/v1/providers/parallel/oauth/status")
+        # Use one Admin account for OAuth and status reads.
+        headers = await admin_auth_headers(client, repository)
+        await connect_parallel(client, stub_server, repository, headers=headers)
+        probe = client.get("/api/v1/providers/parallel/oauth/status", headers=headers)
         assert probe.status_code == 200
         body = probe.json()
         assert set(body) == STATUS_KEYS, repr(sorted(body))

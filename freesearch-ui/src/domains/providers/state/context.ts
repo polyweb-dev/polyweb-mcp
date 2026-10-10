@@ -8,6 +8,9 @@ export interface ProvidersValue {
   providers: ProviderConfig[];
   providersLoading: boolean;
   providersError: string | null;
+  /** Role capability flags from the composition. */
+  canReadControls: boolean;
+  canEditControls: boolean;
   refreshProviders: () => Promise<void>;
   toggleProvider: (id: string, enabled: boolean) => Promise<void>;
   toggleProviderSearch: (id: string, enabled: boolean) => Promise<void>;

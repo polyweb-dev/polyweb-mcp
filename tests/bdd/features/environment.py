@@ -74,6 +74,8 @@ def before_scenario(context: Any, scenario: Any) -> None:
         _has_monitoring_tag(scenario)
         or _has_control_tag(scenario)
         or _has_fanout_tag(scenario)
+        or _has_limits_tag(scenario)
+        or _has_users_tag(scenario)
         or (_has_quota_tag(scenario) and not _has_live_tag(scenario))
         or (_has_tinyfish_tag(scenario) and not _has_live_tag(scenario))
     ):
@@ -325,10 +327,55 @@ def _has_fanout_tag(scenario: Any) -> bool:
     return _tags_include_fanout((*tags, *feature_tags))
 
 
+def _has_limits_tag(scenario: Any) -> bool:
+    """Return True for offline limit/CRD scenarios, including feature tags.
+
+    Limit scenarios run fully offline against synthetic records and stub
+    adapters built in their own steps; they must never construct live
+    provider adapters.
+    """
+
+    effective_tags = getattr(scenario, "effective_tags", None)
+    if effective_tags:
+        return _tags_include_limits(effective_tags)
+    tags = getattr(scenario, "tags", None) or ()
+    feature_tags = getattr(getattr(scenario, "feature", None), "tags", None) or ()
+    return _tags_include_limits((*tags, *feature_tags))
+
+
+def _tags_include_limits(tags: Iterable[Any]) -> bool:
+    """Return True when ``tags`` carries 'limits' or 's0' (str or Tag forms)."""
+
+    names = {str(getattr(tag, "name", tag)).lstrip("@") for tag in tags}
+    return "limits" in names or "s0" in names
+
+
 def _tags_include_fanout(tags: Iterable[Any]) -> bool:
     """Return True when ``tags`` carries 'fanout' (str or Tag forms)."""
 
     return any(str(getattr(tag, "name", tag)).lstrip("@") == "fanout" for tag in tags)
+
+
+def _has_users_tag(scenario: Any) -> bool:
+    """Return True for offline users scenarios, including feature-level tags.
+
+    The users tag sits on the feature (features/users.feature), and Behave
+    gives scenarios only their direct tags, so detection also reads the
+    effective tag set, mirroring the monitoring/control helpers.
+    """
+
+    effective_tags = getattr(scenario, "effective_tags", None)
+    if effective_tags:
+        return _tags_include_users(effective_tags)
+    tags = getattr(scenario, "tags", None) or ()
+    feature_tags = getattr(getattr(scenario, "feature", None), "tags", None) or ()
+    return _tags_include_users((*tags, *feature_tags))
+
+
+def _tags_include_users(tags: Iterable[Any]) -> bool:
+    """Return True when ``tags`` carries 'users' (str or Tag forms)."""
+
+    return any(str(getattr(tag, "name", tag)).lstrip("@") == "users" for tag in tags)
 
 
 def _has_youcom_tag(scenario: Any) -> bool:

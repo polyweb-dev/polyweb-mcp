@@ -1,0 +1,169 @@
+import { useState } from "react"
+import { Popover as PopoverPrimitive } from "@base-ui/react/popover"
+import { LogOut } from "lucide-react"
+import { cn } from "cn"
+import { ROLE_LABELS, authErrorText, useAuth } from "@/domains/auth"
+
+const SIGN_OUT_FAILURE = "Sign out failed. Try again."
+
+/** Account name presentation: the local part of the confirmed email address. */
+function accountName(email: string): string {
+  const separator = email.indexOf("@")
+  return separator > 0 ? email.slice(0, separator) : email
+}
+
+/** One letter of the text avatar. */
+function avatarLetter(email: string): string {
+  return accountName(email).slice(0, 1).toUpperCase() || "?"
+}
+
+/**
+ * Sign out action of the account popup with its pending and error states.
+ *
+ * The action stays disabled while the logout promise waits. The error line
+ * shows safe text only.
+ */
+function renderSignOutAction(
+  pending: boolean,
+  error: string | null,
+  onSignOut: () => void
+) {
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => void onSignOut()}
+        disabled={pending}
+        className="flex h-10 w-full items-center gap-3 rounded-md px-3 text-left text-[13px] font-medium text-[var(--muted)] transition-colors hover:bg-[var(--secondary)] hover:text-[var(--text-strong)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--signal)] disabled:cursor-not-allowed disabled:opacity-60 motion-reduce:transition-none"
+      >
+        <LogOut aria-hidden="true" className="size-[18px] shrink-0" strokeWidth={1.8} />
+        <span>Sign out</span>
+      </button>
+
+      {error !== null && (
+        <p role="alert" className="px-3 pb-2 pt-1 text-[11px] text-[var(--status-danger)]">
+          {error}
+        </p>
+      )}
+    </>
+  )
+}
+
+interface SidebarAccountMenuProps {
+  collapsed: boolean
+}
+
+/**
+ * Account row of the sidebar foot and its account popover.
+ *
+ * One inset divider sits above the whole expanded account row. The row shows
+ * the account name above the account role. The popup shows the account name
+ * above the email address, then the Sign out action. The component reads the
+ * safe account projection and the logout action from the auth barrel; it holds
+ * no credential, and it renders nothing without a confirmed account.
+ */
+export function SidebarAccountMenu({ collapsed }: SidebarAccountMenuProps) {
+  const { account, logout } = useAuth()
+  const [open, setOpen] = useState(false)
+  const [pending, setPending] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  if (account === null) return null
+
+  const name = accountName(account.email)
+
+  /** One accepted Sign out action on the current logout seam. */
+  async function handleSignOut(): Promise<void> {
+    if (pending) return
+    setPending(true)
+    setError(null)
+    try {
+      await logout()
+      setOpen(false)
+    } catch (reason) {
+      setError(authErrorText(reason, SIGN_OUT_FAILURE))
+    } finally {
+      setPending(false)
+    }
+  }
+
+  return (
+    <PopoverPrimitive.Root open={open} onOpenChange={setOpen} modal={false}>
+      {/* The divider sits before the entire avatar-and-text row and outside the
+          trigger, so the row stays one button, both ends keep a visible gap,
+          and the collapsed avatar-only row holds no rule. */}
+      {!collapsed && (
+        <div aria-hidden="true" className="mx-2 mb-1 h-px bg-[var(--border-subtle)]" />
+      )}
+
+      <PopoverPrimitive.Trigger
+        type="button"
+        aria-label="Open user menu"
+        title={collapsed ? account.email : undefined}
+        className={cn(
+          "flex min-h-12 w-full items-center rounded-md text-[13px] font-medium text-[var(--muted)] transition-colors hover:bg-[var(--secondary)] hover:text-[var(--text-strong)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--signal)] motion-reduce:transition-none",
+          collapsed ? "justify-center px-0" : "gap-3 px-3"
+        )}
+      >
+        <span
+          aria-hidden="true"
+          className="grid size-8 shrink-0 place-items-center rounded-full border border-[var(--border-subtle)] bg-[var(--secondary)] text-[11px] font-semibold leading-none text-[var(--text-strong)]"
+        >
+          {avatarLetter(account.email)}
+        </span>
+        {!collapsed && (
+          <span className="flex min-w-0 flex-col text-left">
+            <span className="truncate text-[13px] font-medium text-[var(--text-strong)]">
+              {name}
+            </span>
+            {/* The row shows the display label of the role, not the code value. */}
+            <span className="truncate text-[11px] text-[var(--muted)]">
+              {ROLE_LABELS[account.role]}
+            </span>
+          </span>
+        )}
+      </PopoverPrimitive.Trigger>
+
+      <PopoverPrimitive.Portal>
+        <PopoverPrimitive.Positioner
+          side="top"
+          align="start"
+          sideOffset={8}
+          className="z-60 outline-none"
+        >
+          <PopoverPrimitive.Popup
+            // The first Escape closes this popup only: the drawer keeps its
+            // own document listener and must not consume the same key press.
+            onKeyDown={(event) => {
+              if (open && event.key === "Escape") event.stopPropagation()
+            }}
+            className="w-56 max-w-[calc(100vw-1rem)] rounded-lg border border-[var(--border-subtle)] bg-[var(--elevated)] p-1.5 text-[var(--text)] shadow-lg outline-none"
+          >
+            <PopoverPrimitive.Title className="sr-only">User account</PopoverPrimitive.Title>
+
+            <div className="flex items-center gap-3 px-2 py-2">
+              <span
+                aria-hidden="true"
+                className="grid size-10 shrink-0 place-items-center rounded-full border border-[var(--border-subtle)] bg-[var(--secondary)] text-[13px] font-semibold leading-none text-[var(--text-strong)]"
+              >
+                {avatarLetter(account.email)}
+              </span>
+              <span className="flex min-w-0 flex-col text-left">
+                <span className="truncate text-[13px] font-medium text-[var(--text-strong)]">
+                  {name}
+                </span>
+                <span className="truncate text-[11px] text-[var(--muted)]">
+                  {account.email}
+                </span>
+              </span>
+            </div>
+
+            <div className="mx-2 my-1.5 h-px bg-[var(--border-subtle)]" />
+
+            {renderSignOutAction(pending, error, handleSignOut)}
+          </PopoverPrimitive.Popup>
+        </PopoverPrimitive.Positioner>
+      </PopoverPrimitive.Portal>
+    </PopoverPrimitive.Root>
+  )
+}

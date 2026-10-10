@@ -92,7 +92,7 @@ describe("manualBudgetMissing", () => {
   })
 
   it("never treats other providers as budget-missing", () => {
-    expect(manualBudgetMissing(quotaProvider("brave"), undefined, null)).toBe(false)
+    expect(manualBudgetMissing(quotaProvider("firecrawl"), undefined, null)).toBe(false)
     expect(manualBudgetMissing(quotaProvider("tavily"), snapshot("tavily"), null)).toBe(false)
   })
 })

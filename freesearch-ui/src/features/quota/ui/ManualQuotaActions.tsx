@@ -1,4 +1,5 @@
 import { Button } from "@/shared/ui/button"
+import { BALANCE_ENTRY } from "../model/quotaLabels"
 
 export interface ManualQuotaActionsProps {
   isEditing: boolean
@@ -48,7 +49,7 @@ export function ManualQuotaActions({
           Cancel
         </Button>
         <Button type="submit" size="lg" className="px-3" data-testid="manual-quota-save" disabled={pending}>
-          {saving ? "Saving…" : isEditing ? "Save usage" : "Save budget"}
+          {saving ? "Saving…" : "Save " + BALANCE_ENTRY.toLowerCase()}
         </Button>
       </span>
     </div>

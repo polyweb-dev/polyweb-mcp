@@ -1,16 +1,22 @@
 import { configureStore } from "@reduxjs/toolkit"
 import { FLUSH, PAUSE, PERSIST, PURGE, REGISTER, REHYDRATE, persistReducer } from "redux-persist"
-import { playgroundPersistConfig } from "./playgroundPersistence"
+import { createPlaygroundPersistConfig } from "./playgroundPersistence"
 import { playgroundReducer } from "./playgroundSlice"
 
-const persistedPlaygroundReducer = persistReducer(playgroundPersistConfig, playgroundReducer)
-
 /**
- * Builds one application store. Only the playground slice is persisted, so a
- * future page adds one slice file plus one reducer-map entry here — never a
- * second store or Provider.
+ * Builds one application store for one confirmed account.
+ *
+ * The persisted playground reducer is created inside this factory, so the
+ * account-specific storage key exists before rehydration starts. A remount for
+ * another account therefore cannot read the previous account's snapshot. Only
+ * the playground slice is persisted, so a future page adds one slice file plus
+ * one reducer-map entry here — never a second store or Provider.
  */
-export function makeStore() {
+export function makeStore(accountId: string) {
+  const persistedPlaygroundReducer = persistReducer(
+    createPlaygroundPersistConfig(accountId),
+    playgroundReducer
+  )
   return configureStore({
     reducer: { playground: persistedPlaygroundReducer },
     middleware: (getDefaultMiddleware) =>

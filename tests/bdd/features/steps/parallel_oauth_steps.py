@@ -23,6 +23,7 @@ from freesearch.models.contracts import (
     SearchResponse,
     UsageOperation,
 )
+from freesearch.models.users import UserRole
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
 from freesearch.services.monitoring import refresh_quotas
@@ -32,6 +33,7 @@ from freesearch.services.parallel_oauth import (
     clear_oauth_test_seams,
     set_oauth_test_seams,
 )
+from tests.fixtures.auth import TEMP_PASSWORD, configure_bdd_secret, promote_account, temp_email
 
 _BALANCE_PATH = "/account/service/v1/balance"
 
@@ -145,9 +147,26 @@ class _PlatformStub:
         )
 
 
+def _login_admin(context: Any) -> dict[str, str]:
+    # Register one account, assign the Admin role, and return one access header.
+    email = temp_email("oauth-admin")
+    with _client(context) as client:
+        registered = client.post("/auth/register", json={"email": email, "password": TEMP_PASSWORD})
+        assert registered.status_code == 201
+        context.loop.run_until_complete(promote_account(context.repository, email, UserRole.ADMIN))
+        logged_in = client.post(
+            "/auth/jwt/login", data={"username": email, "password": TEMP_PASSWORD}
+        )
+        assert logged_in.status_code == 200
+        headers = {"Authorization": f"Bearer {logged_in.json()['access_token']}"}
+    context.auth_headers = headers
+    return headers
+
+
 def _open_oauth_api(context: Any, stub: _PlatformStub | None = None) -> None:
     clear_oauth_test_seams()
     clear_oauth_poll_state()
+    configure_bdd_secret(context)
     previous = getattr(context, "http_client", None)
     if previous is not None:
         context.loop.run_until_complete(previous.aclose())
@@ -169,6 +188,8 @@ def _open_oauth_api(context: Any, stub: _PlatformStub | None = None) -> None:
         secret_store=context.secret_store,
     )
     context.app.state.oauth_http_client = context.http_client
+    # OAuth routes need the Admin role.
+    _login_admin(context)
 
 
 def _client(context: Any) -> TestClient:
@@ -177,7 +198,9 @@ def _client(context: Any) -> TestClient:
 
 def _start_flow(context: Any) -> None:
     with _client(context) as client:
-        context.device_response = client.post("/api/v1/providers/parallel/oauth/device-code")
+        context.device_response = client.post(
+            "/api/v1/providers/parallel/oauth/device-code", headers=context.auth_headers
+        )
         context.device_body = context.device_response.json()
 
 
@@ -186,7 +209,9 @@ def _pair_bearer(context: Any) -> None:
     assert context.device_response.status_code == 200
     context.platform_stub.token_queue.append(context.platform_stub.token_success())
     with _client(context) as client:
-        response = client.get("/api/v1/providers/parallel/oauth/status")
+        response = client.get(
+            "/api/v1/providers/parallel/oauth/status", headers=context.auth_headers
+        )
     assert response.status_code == 200
     assert response.json()["status"] == "ready"
 
@@ -260,7 +285,9 @@ def step_then_device_no_secrets(context: Any) -> None:
 def step_when_check_status(context: Any) -> None:
     context.token_calls_before = len(context.platform_stub.calls_to("/getServiceKeys/token"))
     with _client(context) as client:
-        context.status_response = client.get("/api/v1/providers/parallel/oauth/status")
+        context.status_response = client.get(
+            "/api/v1/providers/parallel/oauth/status", headers=context.auth_headers
+        )
         context.status_body = context.status_response.json()
 
 
@@ -307,8 +334,8 @@ def step_then_bounded_poll(context: Any) -> None:
 @when("I check the Parallel OAuth status twice in quick succession")
 def step_when_check_status_twice(context: Any) -> None:
     with _client(context) as client:
-        first = client.get("/api/v1/providers/parallel/oauth/status")
-        second = client.get("/api/v1/providers/parallel/oauth/status")
+        first = client.get("/api/v1/providers/parallel/oauth/status", headers=context.auth_headers)
+        second = client.get("/api/v1/providers/parallel/oauth/status", headers=context.auth_headers)
     context.status_response = second
     context.status_body = second.json()
     assert first.status_code == 200
@@ -335,7 +362,9 @@ def step_then_status_denied(context: Any) -> None:
 def step_when_check_status_again(context: Any) -> None:
     context.token_calls_before = len(context.platform_stub.calls_to("/getServiceKeys/token"))
     with _client(context) as client:
-        context.status_response = client.get("/api/v1/providers/parallel/oauth/status")
+        context.status_response = client.get(
+            "/api/v1/providers/parallel/oauth/status", headers=context.auth_headers
+        )
         context.status_body = context.status_response.json()
 
 
@@ -392,7 +421,7 @@ def step_then_authoritative_snapshot(context: Any, expected: str) -> None:
     assert isinstance(snapshot.remaining, Decimal)
     assert snapshot.remaining == Decimal(expected)
     with _client(context) as client:
-        dashboard = client.get("/dashboard")
+        dashboard = client.get("/dashboard", headers=context.auth_headers)
     assert dashboard.status_code == 200
     entries = [item for item in dashboard.json()["latest_quota"] if item["provider"] == "parallel"]
     assert len(entries) == 1
@@ -439,7 +468,7 @@ def step_then_balance_outcome(context: Any, outcome: str) -> None:
         )
         assert snapshot.limit is None, "neutralized limit must be unknown: " + repr(snapshot)
         with _client(context) as client:
-            dashboard = client.get("/dashboard")
+            dashboard = client.get("/dashboard", headers=context.auth_headers)
         assert dashboard.status_code == 200
         entries = [
             item for item in dashboard.json()["latest_quota"] if item["provider"] == "parallel"
@@ -466,7 +495,9 @@ def step_when_rejected_bearer(context: Any) -> None:
 @then("the OAuth status should be unpaired")
 def step_then_status_unpaired(context: Any) -> None:
     with _client(context) as client:
-        response = client.get("/api/v1/providers/parallel/oauth/status")
+        response = client.get(
+            "/api/v1/providers/parallel/oauth/status", headers=context.auth_headers
+        )
     assert response.status_code == 200
     body = response.json()
     assert set(body) == {"provider", "status", "expires_in"}
@@ -493,7 +524,9 @@ def step_then_no_extra_balance_call(context: Any) -> None:
 def step_when_start_flow_again(context: Any) -> None:
     context.vendor_calls_before = len(context.platform_stub.calls)
     with _client(context) as client:
-        context.conflict_response = client.post("/api/v1/providers/parallel/oauth/device-code")
+        context.conflict_response = client.post(
+            "/api/v1/providers/parallel/oauth/device-code", headers=context.auth_headers
+        )
 
 
 @then("the device flow should conflict with 409 and the bearer should survive")
@@ -501,14 +534,16 @@ def step_then_conflict(context: Any) -> None:
     assert context.conflict_response.status_code == 409
     assert len(context.platform_stub.calls) == context.vendor_calls_before
     with _client(context) as client:
-        status = client.get("/api/v1/providers/parallel/oauth/status")
+        status = client.get("/api/v1/providers/parallel/oauth/status", headers=context.auth_headers)
     assert status.json()["status"] == "ready"
 
 
 @when("I disconnect the Parallel OAuth pairing")
 def step_when_disconnect(context: Any) -> None:
     with _client(context) as client:
-        context.disconnect_response = client.delete("/api/v1/providers/parallel/oauth")
+        context.disconnect_response = client.delete(
+            "/api/v1/providers/parallel/oauth", headers=context.auth_headers
+        )
 
 
 @then("the revocation should precede the deletion and the status should be unpaired")
@@ -524,14 +559,18 @@ def step_then_revoke_before_delete(context: Any) -> None:
     assert context.secret_store.get("parallel:oauth:refresh") is None
     assert context.secret_store.get("parallel:oauth:device") is None
     with _client(context) as client:
-        response = client.get("/api/v1/providers/parallel/oauth/status")
+        response = client.get(
+            "/api/v1/providers/parallel/oauth/status", headers=context.auth_headers
+        )
     assert response.json()["status"] == "unpaired"
 
 
 @when("I disconnect the Parallel OAuth pairing again")
 def step_when_disconnect_again(context: Any) -> None:
     with _client(context) as client:
-        context.disconnect_response = client.delete("/api/v1/providers/parallel/oauth")
+        context.disconnect_response = client.delete(
+            "/api/v1/providers/parallel/oauth", headers=context.auth_headers
+        )
 
 
 @then("the disconnect should still return 204")
@@ -543,7 +582,8 @@ def step_then_disconnect_idempotent(context: Any) -> None:
 def step_when_start_flow_for(context: Any, provider_id: str) -> None:
     with _client(context) as client:
         context.oauth_error_response = client.post(
-            f"/api/v1/providers/{provider_id}/oauth/device-code"
+            f"/api/v1/providers/{provider_id}/oauth/device-code",
+            headers=context.auth_headers,
         )
 
 
@@ -556,7 +596,9 @@ def step_then_oauth_not_supported(context: Any) -> None:
 @when('I check the OAuth status for "{provider_id}"')
 def step_when_check_status_for(context: Any, provider_id: str) -> None:
     with _client(context) as client:
-        context.oauth_error_response = client.get(f"/api/v1/providers/{provider_id}/oauth/status")
+        context.oauth_error_response = client.get(
+            f"/api/v1/providers/{provider_id}/oauth/status", headers=context.auth_headers
+        )
 
 
 @then("the OAuth response should be 404 unknown provider")

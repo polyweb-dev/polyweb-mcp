@@ -122,7 +122,7 @@ def _indexes(database: Path) -> set[str]:
         }
 
 
-# Exact ``trace_spans`` contract per PLAN §3.1 (revision 0003).
+# Exact ``trace_spans`` contract per PLAN §8 (revision 0004 adds ``user_id``).
 _TRACE_SPAN_COLUMNS = frozenset(
     {
         "span_id",
@@ -139,6 +139,7 @@ _TRACE_SPAN_COLUMNS = frozenset(
         "error_type",
         "operation",
         "provider",
+        "user_id",
         "input_text",
         "output_json",
         "result_count",
@@ -164,6 +165,47 @@ _TRACE_SPAN_NOTNULL = frozenset(
 )
 _TRACE_SPAN_NULLABLE = _TRACE_SPAN_COLUMNS - _TRACE_SPAN_NOTNULL - {"span_id"}
 _TRACE_INDEXES = frozenset({"trace_spans_trace_started_at", "trace_spans_root_started_at"})
+_TRACE_USER_INDEX = "trace_spans_user_root_started_at"
+_AUTH_TABLES = frozenset({"user", "login_throttle", "auth_sessions", "refresh_tokens"})
+_AUTH_INDEXES = frozenset(
+    {
+        "ix_user_email",
+        "user_email_lower_key",
+        "user_provider_identity_key",
+        "auth_sessions_user_id",
+        "auth_sessions_expires_at",
+        "refresh_tokens_family_id",
+    }
+)
+_HEAD_TABLES = frozenset(
+    {
+        "usage_events",
+        "runtime_settings",
+        "quota_snapshots",
+        "provider_health",
+        "trace_spans",
+        "user",
+        "login_throttle",
+        "auth_sessions",
+        "refresh_tokens",
+    }
+)
+_HEAD_INDEXES = frozenset(
+    {
+        "usage_events_provider_observed_at",
+        "quota_snapshots_provider_source_observed_at",
+        "provider_health_provider_checked_at",
+        "trace_spans_trace_started_at",
+        "trace_spans_root_started_at",
+        "trace_spans_user_root_started_at",
+        "ix_user_email",
+        "user_email_lower_key",
+        "user_provider_identity_key",
+        "auth_sessions_user_id",
+        "auth_sessions_expires_at",
+        "refresh_tokens_family_id",
+    }
+)
 
 
 def _table_info(database: Path, table: str) -> dict[str, tuple[bool, bool]]:
@@ -192,7 +234,7 @@ def _index_sql(database: Path, index: str) -> str:
 
 
 def _assert_trace_spans_schema(database: Path) -> None:
-    """Assert the exact ``trace_spans`` table/column/index contract."""
+    """Assert the exact ``trace_spans`` table/column/index contract (head 0004)."""
 
     assert _columns(database, "trace_spans") == set(_TRACE_SPAN_COLUMNS)
     info = _table_info(database, "trace_spans")
@@ -201,13 +243,17 @@ def _assert_trace_spans_schema(database: Path) -> None:
         assert info[column][0] is True, column
     for column in _TRACE_SPAN_NULLABLE:
         assert info[column][0] is False, column
+    assert info["user_id"] == (False, False)
     assert _indexes(database) >= _TRACE_INDEXES
+    assert _TRACE_USER_INDEX in _indexes(database)
     assert _index_columns(database, "trace_spans_trace_started_at") == [
         "trace_id",
         "started_at",
     ]
     assert _index_columns(database, "trace_spans_root_started_at") == ["started_at"]
     assert "parent_span_id IS NULL" in _index_sql(database, "trace_spans_root_started_at")
+    assert _index_columns(database, _TRACE_USER_INDEX) == ["user_id", "started_at", "span_id"]
+    assert "parent_span_id IS NULL" in _index_sql(database, _TRACE_USER_INDEX)
 
 
 def _seed_at_0002(database: Path) -> None:
@@ -453,28 +499,68 @@ def test_upgrade_database_rejects_unrelated_or_incompatible_schema(tmp_path: Pat
     assert database_status(incompatible).current_revision is None
 
 
+_LIMIT_TABLES = frozenset(
+    {
+        "provider_limits",
+        "provider_native_pools",
+        "provider_crd_grants",
+        "provider_limit_events",
+        "provider_limit_admissions",
+        "provider_rate_observations",
+        "provider_rate_attempts",
+    }
+)
+_LIMIT_INDEXES = frozenset(
+    {
+        "provider_limit_events_provider_auth_observed",
+        "provider_limit_admissions_created_at",
+        "provider_rate_attempts_bucket_attempted",
+        "provider_rate_attempts_expires_at",
+    }
+)
+
+
+def test_validate_database_schema_rejects_missing_auth_foreign_keys(tmp_path: Path) -> None:
+    database = tmp_path / "no-fk.db"
+    upgrade_database(database)
+    validate_database_schema(database)
+
+    with sqlite3.connect(database) as connection:
+        connection.execute("PRAGMA foreign_keys=OFF")
+        connection.execute(
+            """
+            CREATE TABLE refresh_tokens_new (
+                token_hash VARCHAR(64) NOT NULL PRIMARY KEY,
+                family_id CHAR(36) NOT NULL,
+                issued_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                consumed_at TEXT NULL
+            )
+            """
+        )
+        connection.execute("INSERT INTO refresh_tokens_new SELECT * FROM refresh_tokens")
+        connection.execute("DROP TABLE refresh_tokens")
+        connection.execute("ALTER TABLE refresh_tokens_new RENAME TO refresh_tokens")
+        connection.execute("CREATE INDEX refresh_tokens_family_id ON refresh_tokens (family_id)")
+        connection.execute("PRAGMA foreign_keys=ON")
+
+    with pytest.raises(DatabaseMigrationError, match="missing foreign keys"):
+        validate_database_schema(database)
+
+
 def test_fresh_database_at_head_has_no_cache_metadata(tmp_path: Path) -> None:
     database = tmp_path / "fresh-no-cache.db"
 
     result = upgrade_database(database)
 
     assert result.current_revision == migration_head()
+    assert result.current_revision == "0004_local_users"
     assert "cache_metadata" not in _tables(database)
     assert "cache_metadata_expires_at" not in _indexes(database)
-    assert _indexes(database) == {
-        "usage_events_provider_observed_at",
-        "quota_snapshots_provider_source_observed_at",
-        "provider_health_provider_checked_at",
-        "trace_spans_trace_started_at",
-        "trace_spans_root_started_at",
-    }
-    assert _tables(database) == {
-        "usage_events",
-        "runtime_settings",
-        "quota_snapshots",
-        "provider_health",
-        "trace_spans",
-    }
+    assert _indexes(database) == set(_HEAD_INDEXES) | set(_LIMIT_INDEXES)
+    assert _tables(database) == set(_HEAD_TABLES) | set(_LIMIT_TABLES)
+    assert _tables(database) >= _AUTH_TABLES
+    assert _indexes(database) >= _AUTH_INDEXES
     _assert_trace_spans_schema(database)
     validate_database_schema(database)
 
@@ -512,8 +598,9 @@ def test_upgrade_from_0002_drops_seeded_cache_rows_preserving_unrelated_data(
     assert _all_rows(database, "quota_snapshots", "id")[0][4] == "100.00"
     assert _indexes(database) == (indexes_before - {"cache_metadata_expires_at"}) | set(
         _TRACE_INDEXES
-    )
+    ) | {_TRACE_USER_INDEX} | set(_AUTH_INDEXES) | set(_LIMIT_INDEXES)
     _assert_trace_spans_schema(database)
+    assert _tables(database) >= _AUTH_TABLES
     # The 0002 database had no trace store: upgrade creates it empty.
     with sqlite3.connect(database) as connection:
         assert connection.execute("SELECT COUNT(*) FROM trace_spans").fetchone() == (0,)
@@ -530,10 +617,10 @@ def test_downgrade_recreates_cache_metadata_table_and_index(tmp_path: Path) -> N
     database = tmp_path / "downgrade-cache.db"
     upgrade_database(database)
 
-    # Three steps back from the 0004 head: past the access masks (0004) and
-    # the trace store (bf9f40b58cef) to the last revision that still owns
-    # the cache table (0002).
-    migration_module.command.downgrade(_config_for(database), "-3")
+    # Explicit target: from the 0004 head back to the last revision that
+    # still owns the cache table (0002). Head-relative "-2" is ambiguous
+    # once the later 0004 revisions exist, so name the revision directly.
+    migration_module.command.downgrade(_config_for(database), _PREVIOUS_HEAD)
 
     assert _revision(database) == [_PREVIOUS_HEAD]
     assert "cache_metadata" in _tables(database)
@@ -548,9 +635,15 @@ def test_downgrade_recreates_cache_metadata_table_and_index(tmp_path: Path) -> N
         "size_bytes",
     }
     assert "cache_metadata_expires_at" in _indexes(database)
-    # Downgrade drops only the trace store added by revision 0003.
+    # Downgrade drops the trace store added by revision 0003, the seven
+    # limit tables added by the limits revision, and every auth object.
     assert "trace_spans" not in _tables(database)
     assert not (_TRACE_INDEXES & _indexes(database))
+    assert _TRACE_USER_INDEX not in _indexes(database)
+    assert not (_AUTH_TABLES & _tables(database))
+    assert not (_AUTH_INDEXES & _indexes(database))
+    assert not (_LIMIT_TABLES & _tables(database))
+    assert not (_LIMIT_INDEXES & _indexes(database))
 
     result = upgrade_database(database)
 
@@ -558,6 +651,8 @@ def test_downgrade_recreates_cache_metadata_table_and_index(tmp_path: Path) -> N
     assert result.current_revision == migration_head()
     assert "cache_metadata" not in _tables(database)
     assert "cache_metadata_expires_at" not in _indexes(database)
+    assert _tables(database) >= _LIMIT_TABLES
+    assert _indexes(database) >= _LIMIT_INDEXES
     _assert_trace_spans_schema(database)
     validate_database_schema(database)
 

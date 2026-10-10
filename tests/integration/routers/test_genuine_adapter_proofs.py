@@ -40,9 +40,11 @@ from freesearch.adapters.youcom import YoucomAdapter
 from freesearch.configuration.config import get_settings
 from freesearch.infrastructure.secrets import PROVIDER_ENV_VARS, ProviderName
 from freesearch.models.contracts import SearchRequest
+from freesearch.models.users import UserRole
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
 from tests.encrypted_secrets_helpers import SENTINEL_PROVIDER_KEYS, assert_no_sentinels
+from tests.fixtures.auth import raw_auth_headers, register_promote_login, temp_email
 from tests.integration.services.oauth.oauth_stubs import install_http_stub
 
 PASSPHRASE = "genuine-proof-passphrase-9f31"
@@ -288,9 +290,10 @@ async def test_put_then_on_demand_test_constructs_genuine_adapter(
     monkeypatch,
     repository,
     provider,  # type: ignore[no-untyped-def]
+    auth_secret: str,
 ) -> None:
     """PUT encrypted key -> /test 200 with no env/.env/keyring key (genuine build)."""
-
+    # Use one Admin account for write, probe, and search.
     wire = _VendorWire()
     install_http_stub(monkeypatch, wire)
     sentinel = SENTINEL_PROVIDER_KEYS[provider.value]
@@ -299,14 +302,24 @@ async def test_put_then_on_demand_test_constructs_genuine_adapter(
     # One TestClient session: exiting the block runs lifespan shutdown, which
     # closes the app-owned shared client, so PUT/probe/search must share it.
     with TestClient(app) as client:
-        put = client.put(f"/api/v1/providers/{provider.value}/secret", json={"key": sentinel})
+        pair = await register_promote_login(
+            client, repository, temp_email(f"proof-put-{provider.value}"), UserRole.ADMIN
+        )
+        headers = raw_auth_headers(pair["access_token"])
+        put = client.put(
+            f"/api/v1/providers/{provider.value}/secret",
+            json={"key": sentinel},
+            headers=headers,
+        )
         assert put.status_code == 200
         assert put.json()["source"] == "encrypted_db", put.text
-        probe = client.post(f"/api/v1/providers/{provider.value}/test")
+        probe = client.post(f"/api/v1/providers/{provider.value}/test", headers=headers)
         search = None
         if provider is ProviderName.KEENABLE and probe.status_code == 200:
             # A bare 200 also passes silently keyless: prove keyed use on the wire.
-            search = client.post("/search", json={"query": "keenable keyed proof", "limit": 3})
+            search = client.post(
+                "/search", json={"query": "keenable keyed proof", "limit": 3}, headers=headers
+            )
     assert probe.status_code == 200, (
         f"genuine {provider.value} on-demand construction failed: {probe.text[:500]}"
     )
@@ -331,9 +344,10 @@ async def test_restart_routes_search_through_encrypted_key(
     monkeypatch,
     tmp_path,
     provider,  # type: ignore[no-untyped-def]
+    auth_secret: str,
 ) -> None:
     """Persist key -> full restart -> /search (no preceding /test) uses it."""
-
+    # Use one Admin account. The token works after restart on the same file.
     wire = _VendorWire()
     install_http_stub(monkeypatch, wire)
     sentinel = SENTINEL_PROVIDER_KEYS[provider.value]
@@ -343,12 +357,25 @@ async def test_restart_routes_search_through_encrypted_key(
     try:
         app = create_app(None, repository=first)
         with TestClient(app) as client:
-            put = client.put(f"/api/v1/providers/{provider.value}/secret", json={"key": sentinel})
+            pair = await register_promote_login(
+                client,
+                first,
+                temp_email(f"proof-restart-{provider.value}"),
+                UserRole.ADMIN,
+            )
+            headers = raw_auth_headers(pair["access_token"])
+            put = client.put(
+                f"/api/v1/providers/{provider.value}/secret",
+                json={"key": sentinel},
+                headers=headers,
+            )
             assert put.status_code == 200
             assert put.json()["source"] == "encrypted_db", put.text
             if provider is not ProviderName.KEENABLE:
                 # Isolate the proof: keyless Keenable would otherwise shadow routing.
-                disable = client.patch("/api/v1/providers/keenable", json={"enabled": False})
+                disable = client.patch(
+                    "/api/v1/providers/keenable", json={"enabled": False}, headers=headers
+                )
                 assert disable.status_code == 200, disable.text
     finally:
         await first.close()
@@ -357,7 +384,9 @@ async def test_restart_routes_search_through_encrypted_key(
     try:
         app = create_app(None, repository=second)
         with TestClient(app) as client:
-            search = client.post("/search", json={"query": "restart routing proof", "limit": 3})
+            search = client.post(
+                "/search", json={"query": "restart routing proof", "limit": 3}, headers=headers
+            )
     finally:
         await second.close()
 
@@ -379,9 +408,10 @@ async def test_env_key_is_ignored_vault_key_reaches_wire(
     monkeypatch,
     repository,
     provider,  # type: ignore[no-untyped-def]
+    auth_secret: str,
 ) -> None:
     """Env decoy set + vault PUT -> /search sends the vault key, never the env key."""
-
+    # Use one Admin account for write, config, and search.
     wire = _VendorWire()
     install_http_stub(monkeypatch, wire)
     vault_sentinel = SENTINEL_PROVIDER_KEYS[provider.value]
@@ -390,14 +420,26 @@ async def test_env_key_is_ignored_vault_key_reaches_wire(
 
     app = create_app(None, repository=repository)
     with TestClient(app) as client:
-        put = client.put(f"/api/v1/providers/{provider.value}/secret", json={"key": vault_sentinel})
+        pair = await register_promote_login(
+            client, repository, temp_email(f"proof-env-{provider.value}"), UserRole.ADMIN
+        )
+        headers = raw_auth_headers(pair["access_token"])
+        put = client.put(
+            f"/api/v1/providers/{provider.value}/secret",
+            json={"key": vault_sentinel},
+            headers=headers,
+        )
         assert put.status_code == 200
         assert put.json()["source"] == "encrypted_db", put.text
         if provider is not ProviderName.KEENABLE:
             # Isolate the proof: keyless Keenable would otherwise shadow routing.
-            disable = client.patch("/api/v1/providers/keenable", json={"enabled": False})
+            disable = client.patch(
+                "/api/v1/providers/keenable", json={"enabled": False}, headers=headers
+            )
             assert disable.status_code == 200, disable.text
-        search = client.post("/search", json={"query": "env ignored proof", "limit": 3})
+        search = client.post(
+            "/search", json={"query": "env ignored proof", "limit": 3}, headers=headers
+        )
 
     assert search.status_code == 200, (
         f"vault routing failed for {provider.value}: {search.text[:500]}"

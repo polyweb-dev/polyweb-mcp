@@ -6,6 +6,7 @@ import userEvent from "@testing-library/user-event"
 import { FreeSearchProvider } from "@/context/FreeSearchContext"
 import { QuotaAnalytics } from "../quota/QuotaAnalytics"
 import { installFetchStub, ok, err, type FetchStub } from "@/test/fetchMock"
+import { ADMIN_ACCOUNT_ID, DEVELOPER_ACCOUNT_ID } from "@/test/authFixtures"
 import {
   allProvidersFixture,
   routingConfigFixture,
@@ -67,7 +68,7 @@ function renderWithOAuthStub(state: { latest: WireDashboardQuota[]; oauth: unkno
     return err(404, { detail: "unhandled test route" })
   })
   render(
-    <FreeSearchProvider>
+    <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
       <QuotaAnalytics />
     </FreeSearchProvider>
   )
@@ -154,7 +155,7 @@ describe("QuotaAnalytics OAuth pairing", () => {
       return err(404, { detail: "unhandled test route" })
     })
     render(
-      <FreeSearchProvider>
+      <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
         <QuotaAnalytics />
       </FreeSearchProvider>
     )
@@ -201,6 +202,41 @@ describe("QuotaAnalytics OAuth pairing", () => {
     expect(within(row).queryByTestId("manual-quota-open-parallel")).toBeNull()
   })
 
+})
+
+describe("QuotaAnalytics OAuth pairing (Developer read-only)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it("hides OAuth connect and disconnect controls while quota reads still render", async () => {
+    installFetchStub((req) => {
+      if (req.url === "/api/v1/providers" && req.method === "GET") {
+        return ok(allProvidersFixture())
+      }
+      if (req.url === "/api/v1/routing/config" && req.method === "GET") {
+        return ok(routingConfigFixture())
+      }
+      if (req.url.endsWith("/oauth/status") && req.method === "GET") {
+        return err(404, { detail: "no OAuth pairing for 'parallel'" })
+      }
+      if (req.url.startsWith("/dashboard")) {
+        return ok(dashboardFixture({ latest_quota: parallelUnseeded }))
+      }
+      return err(404, { detail: "unhandled test route" })
+    })
+    render(
+      <FreeSearchProvider accountId={DEVELOPER_ACCOUNT_ID} canReadControls canEditControls={false}>
+        <QuotaAnalytics />
+      </FreeSearchProvider>
+    )
+    await waitFor(() => {
+      expect(screen.getByText("Parallel quota", { exact: true })).toBeInTheDocument()
+    })
+    expect(screen.queryByTestId("oauth-device-open-parallel")).toBeNull()
+    expect(screen.queryByTestId("oauth-device-disconnect")).toBeNull()
+    expect(screen.queryByTestId("oauth-device-confirm-disconnect")).toBeNull()
+  })
 })
 
 

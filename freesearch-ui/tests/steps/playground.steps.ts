@@ -49,17 +49,19 @@ Then("the playground should not show multi-hop fallback text", async ({ page }) 
  */
 
 When("I pin the playground provider to {string}", async ({ page }, provider: string) => {
-  const select = page.locator("main select").first()
-  await expect(select).toBeVisible()
-  await select.selectOption({ label: provider })
+  const trigger = page.getByTestId("playground-search-provider")
+  await expect(trigger).toBeVisible()
+  await trigger.click()
+  await page.getByRole("option", { name: provider }).click()
 })
 
 When(
   "I pin the playground fetch provider to {string}",
   async ({ page }, provider: string) => {
-    const select = page.locator("main select").first()
-    await expect(select).toBeVisible()
-    await select.selectOption({ label: provider })
+    const trigger = page.getByTestId("playground-fetch-provider")
+    await expect(trigger).toBeVisible()
+    await trigger.click()
+    await page.getByRole("option", { name: provider }).click()
   }
 )
 
@@ -84,12 +86,12 @@ Then("the playground should show fetch content or an error banner", async ({ pag
 Then(
   "the fetch provider picker should not offer {string}",
   async ({ page }, provider: string) => {
-    const select = page.locator("main select").first()
-    await expect(select).toBeVisible()
-    const options = select.locator("option")
-    await expect(options.first()).toBeAttached()
-    const labels = await options.allTextContents()
-    expect(labels).not.toContain(provider)
+    const trigger = page.getByTestId("playground-fetch-provider")
+    await expect(trigger).toBeVisible()
+    await trigger.click()
+    await expect(page.getByRole("listbox")).toBeVisible()
+    await expect(page.getByRole("option", { name: provider })).toHaveCount(0)
+    await page.keyboard.press("Escape")
   }
 )
 

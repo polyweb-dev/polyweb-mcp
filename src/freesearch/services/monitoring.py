@@ -20,19 +20,23 @@ from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
-from pydantic import AwareDatetime, model_serializer
+from pydantic import AwareDatetime, Field, model_serializer
 
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.adapters.brave import COST_USD_PER_REQUEST, FREE_CREDITS_USD, brave_spend_usd
 from freesearch.infrastructure.secrets import AsyncSecretStore, ProviderName
 from freesearch.models.contracts import (
     ContractModel,
+    FetchRequest,
     FetchResponse,
     HealthStatus,
+    ProviderError,
     ProviderHealth,
     QuotaSnapshot,
+    SearchRequest,
     SearchResponse,
     UnitKind,
     UsageEvent,
@@ -40,7 +44,19 @@ from freesearch.models.contracts import (
     UsageStatus,
     is_soft_quota_zero,
 )
+from freesearch.models.provider_limits import (
+    AuthMode,
+    CRDUsageTotal,
+    LimitCallContext,
+    LimitDeniedError,
+    LimitOperation,
+    LimitStoreUnavailable,
+    ProviderLimitsResponse,
+)
 from freesearch.persistence.storage import LegacyUsageTotal, SQLiteRepository, UsageTotal
+
+if TYPE_CHECKING:
+    from freesearch.services.provider_limits import ProviderLimitsService
 
 logger = logging.getLogger(__name__)
 
@@ -165,6 +181,7 @@ class StatsResponse(ContractModel):
     recent_usage: list[RecentUsageEntry]
     latest_quota: list[QuotaSnapshot]
     latest_health: list[LatestHealthEntry]
+    crd_usage_totals: list[CRDUsageTotal] = Field(default_factory=list)
 
     @model_serializer(mode="wrap")
     def _serialize_compat(self, handler: Any) -> Any:
@@ -182,16 +199,49 @@ class DashboardResponse(StatsResponse):
     """JSON dashboard snapshot: the stats read plus its generation instant."""
 
     generated_at: AwareDatetime
+    provider_limits: list[ProviderLimitsResponse] = Field(default_factory=list)
+
+
+def _environment_file_value(name: str) -> str | None:
+    """Return one entry from the local ``.env`` file, or ``None``.
+
+    The file is parsed directly instead of through the settings loader so this
+    resolver stays importable from persistence and the database CLI without a
+    configuration dependency, and so a missing file is not an error.
+    """
+
+    path = Path(".env")
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        key, separator, value = line.partition("=")
+        if separator and key.strip() == name:
+            stripped = value.strip().strip('"').strip("'")
+            return stripped or None
+    return None
 
 
 def resolve_database_path(database: str | Path | None = None) -> Path:
-    """Return the telemetry database path: env override, argument, then default."""
+    """Return the telemetry database path.
+
+    Precedence: the process ``FREESEARCH_DB`` variable, an explicit argument, the
+    local environment file, then the filename default. Process environment wins
+    over the file so a worktree can override its own ``.env`` entry.
+    """
 
     from_environment = os.environ.get(DB_ENV_VAR)
     if from_environment:
         return Path(from_environment)
     if database is not None:
         return Path(database)
+    from_file = _environment_file_value(DB_ENV_VAR)
+    if from_file:
+        return Path(from_file)
     return Path(DEFAULT_DB_FILENAME)
 
 
@@ -352,6 +402,8 @@ async def tracked_call[ResponseT: (SearchResponse, FetchResponse)](
     call: Callable[[ProviderAdapter], Awaitable[ResponseT]],
     *,
     operation: UsageOperation,
+    request: SearchRequest | FetchRequest | None = None,
+    limits: "ProviderLimitsService | None" = None,
 ) -> ResponseT:
     """Await ``call(adapter)`` recording success and failure telemetry around it.
 
@@ -360,12 +412,21 @@ async def tracked_call[ResponseT: (SearchResponse, FetchResponse)](
     latency plus a degraded observation, then re-raise the original error;
     successful responses record the measured latency and success status with
     their usage event (when present) and a healthy observation.
+
+    When ``limits`` is supplied, a durable funds and rate admission runs after
+    the unchanged route selection and before the vendor call. A local denial is
+    raised before any vendor I/O, so it consumes no rate capacity and never
+    counts as a provider health failure.
     """
 
     started_at = time.perf_counter()
+    admission = await _admit_call(limits, adapter, operation, request)
     try:
         response = await call(adapter)
+    except LimitDeniedError:
+        raise
     except Exception as exc:
+        await _finalize_failure(limits, admission, exc, request=request)
         await _record_failure_usage(
             repository,
             provider=adapter.name,
@@ -378,6 +439,8 @@ async def tracked_call[ResponseT: (SearchResponse, FetchResponse)](
             repository, adapter, "quota_after_error", status, operation=operation
         )
         raise
+    if limits is not None and admission is not None:
+        await limits.record_success(admission, response, request=request)
     await record_response_telemetry(
         repository,
         response,
@@ -387,6 +450,88 @@ async def tracked_call[ResponseT: (SearchResponse, FetchResponse)](
         repository, adapter, "quota_after_success", response, operation=operation
     )
     return response
+
+
+def _adapter_auth_mode(adapter: ProviderAdapter) -> AuthMode:
+    """Return an adapter's limit rail, defaulting to the keyed rail."""
+
+    mode = getattr(adapter, "limit_auth_mode", None)
+    return mode if isinstance(mode, AuthMode) else AuthMode.KEYED
+
+
+async def _admit_call(
+    limits: "ProviderLimitsService | None",
+    adapter: ProviderAdapter,
+    operation: UsageOperation,
+    request: SearchRequest | FetchRequest | None,
+) -> Any:
+    """Reserve funds and rate capacity for one call, or raise a local denial."""
+
+    if limits is None or operation is UsageOperation.COST_ESTIMATE:
+        return None
+    auth_mode = _adapter_auth_mode(adapter)
+    limit_operation = LimitOperation(operation.value)
+    if not limits.supports(adapter.name, limit_operation, auth_mode):
+        # A synthetic adapter without a catalog record stays ungated.
+        return None
+    context = LimitCallContext(
+        provider=adapter.name,
+        operation=limit_operation,
+        auth_mode=auth_mode,
+        attempt_id=uuid4().hex,
+        request=request,
+        requested_at=datetime.now(UTC),
+    )
+    try:
+        return await limits.admit(context)
+    except LimitDeniedError:
+        raise
+    except Exception as error:
+        raise LimitStoreUnavailable(adapter.name) from error
+
+
+async def _finalize_failure(
+    limits: "ProviderLimitsService | None",
+    admission: Any,
+    error: Exception,
+    *,
+    request: SearchRequest | FetchRequest | None,
+) -> None:
+    """Finalize or release one failed admission with its confirmed charge."""
+
+    if limits is None or admission is None:
+        return
+    provider_error = getattr(error, "error", None)
+    if provider_error is None:
+        await limits.record_failure(
+            admission,
+            ProviderError(
+                provider=admission.provider,
+                code=type(error).__name__,
+                message="local call failure",
+                retryable=False,
+            ),
+        )
+        return
+    details = provider_error.details if isinstance(provider_error.details, dict) else {}
+    await limits.record_failure(
+        admission,
+        provider_error,
+        charged_native=_charged_native(details),
+        charged_document=bool(details.get("charged_document")),
+    )
+
+
+def _charged_native(details: dict[str, Any]) -> Decimal | None:
+    """Return a confirmed native charge reported by an adapter failure."""
+
+    value = details.get("native_credits")
+    if value is None:
+        return None
+    try:
+        return Decimal(str(value))
+    except (ArithmeticError, ValueError):
+        return None
 
 
 async def refresh_quotas(
@@ -628,6 +773,7 @@ async def collect_stats(
     *,
     adapter_names: Sequence[str] = (),
     recent_limit: int = DEFAULT_RECENT_LIMIT,
+    limits: "ProviderLimitsService | None" = None,
 ) -> StatsResponse:
     """Read the monitoring snapshot; every read path is failure-safe."""
 
@@ -646,13 +792,29 @@ async def collect_stats(
     except Exception:
         logger.warning("monitoring reads could not be collected")
         return _empty_stats()
+    crd_totals = await _crd_usage_totals(limits)
     return StatsResponse(
         notice=MONITORING_NOTICE,
         usage_totals=_contract_totals(totals),
         recent_usage=_contract_recent(recent),
         latest_quota=latest_quota,
         latest_health=_contract_health(latest_health),
+        crd_usage_totals=crd_totals,
     )
+
+
+async def _crd_usage_totals(
+    limits: "ProviderLimitsService | None",
+) -> list[CRDUsageTotal]:
+    """Read the credit-unit totals best effort; a failure yields no totals."""
+
+    if limits is None:
+        return []
+    try:
+        return await limits.usage_totals()
+    except Exception:
+        logger.warning("credit-unit totals could not be collected")
+        return []
 
 
 def _brave_request_success_total(

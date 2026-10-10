@@ -1,10 +1,10 @@
 """You.com (YDC Index) provider adapter built on the shared HTTPX client."""
 
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 import httpx
-from pydantic import SecretStr
+from pydantic import SecretStr, ValidationError
 
 from freesearch.adapters._youcom_support import (
     _BALANCE_URL,
@@ -43,6 +43,20 @@ from freesearch.models.contracts import (
 __all__ = ["YoucomAdapter"]
 
 _NAME = "you"
+
+
+def _parse_error_record(index: int) -> dict[str, object]:
+    """Return the safe record for one rejected search result item.
+
+    The index is the position in the flattened web-then-news item list. The
+    record holds no raw payload, URL, key, query, or validation text.
+    """
+
+    return {
+        "index": index,
+        "code": "invalid_response",
+        "message": "malformed search result item",
+    }
 
 
 class YoucomAdapter(ProviderAdapter):
@@ -91,22 +105,36 @@ class YoucomAdapter(ProviderAdapter):
                 self.name, lambda: _search_request(self._owned_http, request)
             )
             items = self._search_items(self._payload(response, "search"))
-            normalized = [self._normalize_result(item) for item in items][: request.limit]
+            results: list[SearchResult] = []
+            parse_errors: list[dict[str, object]] = []
+            for index, item in enumerate(items):
+                try:
+                    results.append(self._normalize_result(item))
+                except ValidationError:
+                    parse_errors.append(_parse_error_record(index))
+                except ProviderOperationError as exc:
+                    if exc.error.code != "invalid_response":
+                        raise
+                    parse_errors.append(_parse_error_record(index))
+            results = results[: request.limit]
         except ProviderOperationError as exc:
             raise self._remap_error(exc) from None
         except Exception:
             raise self._error("invalid_response", "malformed search response") from None
+        gap: dict[str, Any] = {
+            "reason": "metering-unavailable",
+            "estimated": True,
+            "units": _SEARCH_UNIT_PRICE,
+            "currency": "USD",
+        }
+        if parse_errors:
+            gap["parse_errors"] = parse_errors
         return SearchResponse(
             query=request.query,
             provider=self.name,
-            results=normalized,
-            total_results=len(normalized),
-            usage_gap={
-                "reason": "metering-unavailable",
-                "estimated": True,
-                "units": _SEARCH_UNIT_PRICE,
-                "currency": "USD",
-            },
+            results=results,
+            total_results=len(results),
+            usage_gap=gap,
         )
 
     def _search_items(self, payload: Any) -> list[Any]:
@@ -125,9 +153,14 @@ class YoucomAdapter(ProviderAdapter):
         ]
 
     def _normalize_result(self, item: Any) -> SearchResult:
+        if not isinstance(item, dict):
+            raise self._error("invalid_response", "malformed search result item")
+        url = item.get("url")
+        if not isinstance(url, str) or not url:
+            raise self._error("invalid_response", "malformed search result item")
         return SearchResult(
             title=item.get("title") or "",
-            url=item["url"],
+            url=cast(Any, url),
             snippet=self._snippet(item),
             published_at=self._published_at(item),
             score=None,

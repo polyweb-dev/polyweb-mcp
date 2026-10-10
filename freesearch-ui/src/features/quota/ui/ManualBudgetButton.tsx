@@ -4,11 +4,20 @@ export interface ManualBudgetButtonProps {
   providerId: string
   providerName: string
   label: string
+  /** One sentence of the control meaning, added to its accessible name. */
+  note?: string
   onOpen: () => void
 }
 
 /** Opens the manual billing window for one provider row. */
-export function ManualBudgetButton({ providerId, providerName, label, onOpen }: ManualBudgetButtonProps) {
+export function ManualBudgetButton({
+  providerId,
+  providerName,
+  label,
+  note,
+  onOpen,
+}: ManualBudgetButtonProps) {
+  const name = label + " for " + providerName + (note === undefined ? "" : ". " + note)
   return (
     <Button
       type="button"
@@ -16,7 +25,7 @@ export function ManualBudgetButton({ providerId, providerName, label, onOpen }: 
       size="lg"
       className="px-3"
       data-testid={"manual-quota-open-" + providerId}
-      aria-label={label + " for " + providerName}
+      aria-label={name}
       onClick={onOpen}
     >
       {label}
