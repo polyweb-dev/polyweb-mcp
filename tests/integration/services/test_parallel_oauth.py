@@ -24,6 +24,7 @@ from fastapi.testclient import TestClient
 from pydantic import SecretStr, ValidationError
 
 from freesearch.models.contracts import QuotaSnapshot, QuotaSource, UnitKind, UsageOperation
+from freesearch.models.users import UserRole
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
 from freesearch.services.monitoring import _record_adapter_quota, refresh_quotas
@@ -53,6 +54,7 @@ from freesearch.services.parallel_oauth import (
     set_oauth_test_seams,
     start_device_flow,
 )
+from tests.fixtures.auth import raw_auth_headers, register_promote_login, temp_email
 
 FIXED_NOW = datetime(2026, 9, 10, 12, 0, 0, tzinfo=UTC)
 
@@ -1018,12 +1020,21 @@ def _control_app(
 
 async def test_control_device_code_shape_and_presence(
     repository: SQLiteRepository,
+    auth_secret: str,
 ) -> None:
     stub = _StubPlatform()
     store = AsyncVaultDouble()
     app = _control_app(repository, store, stub)
     with app as client:
-        response = client.post("/api/v1/providers/parallel/oauth/device-code")
+        # Anonymous calls need a 401 challenge.
+        anonymous = client.post("/api/v1/providers/parallel/oauth/device-code")
+        assert anonymous.status_code == 401
+        # Use one Admin account for the OAuth route.
+        pair = await register_promote_login(
+            client, repository, temp_email("oauth-admin"), UserRole.ADMIN
+        )
+        headers = raw_auth_headers(pair["access_token"])
+        response = client.post("/api/v1/providers/parallel/oauth/device-code", headers=headers)
     assert response.status_code == 200
     assert set(response.json()) == {
         "provider",
@@ -1038,51 +1049,81 @@ async def test_control_device_code_shape_and_presence(
 
 async def test_control_status_shape_and_terminal_views(
     repository: SQLiteRepository,
+    auth_secret: str,
 ) -> None:
     stub = _StubPlatform()
     store = AsyncVaultDouble()
     app = _control_app(repository, store, stub)
     with app as client:
-        assert client.get("/api/v1/providers/parallel/oauth/status").json() == {
+        # Anonymous calls need a 401 challenge.
+        anonymous = client.get("/api/v1/providers/parallel/oauth/status")
+        assert anonymous.status_code == 401
+        # Use one Admin account for the OAuth routes.
+        pair = await register_promote_login(
+            client, repository, temp_email("oauth-admin"), UserRole.ADMIN
+        )
+        headers = raw_auth_headers(pair["access_token"])
+        assert client.get("/api/v1/providers/parallel/oauth/status", headers=headers).json() == {
             "provider": "parallel",
             "status": "unpaired",
             "expires_in": None,
         }
-        assert client.post("/api/v1/providers/parallel/oauth/device-code").status_code == 200
-        pending = client.get("/api/v1/providers/parallel/oauth/status").json()
+        assert (
+            client.post("/api/v1/providers/parallel/oauth/device-code", headers=headers).status_code
+            == 200
+        )
+        pending = client.get("/api/v1/providers/parallel/oauth/status", headers=headers).json()
         assert set(pending) == {"provider", "status", "expires_in"}
         assert pending["status"] == "pending"
 
 
 async def test_control_rejects_other_and_unknown_providers(
     repository: SQLiteRepository,
+    auth_secret: str,
 ) -> None:
     stub = _StubPlatform()
     store = AsyncVaultDouble()
     app = _control_app(repository, store, stub)
     with app as client:
+        # Anonymous calls need a 401 challenge.
+        anonymous = client.get("/api/v1/providers/exa/oauth/status")
+        assert anonymous.status_code == 401
+        # Use one Admin account for the OAuth routes.
+        pair = await register_promote_login(
+            client, repository, temp_email("oauth-admin"), UserRole.ADMIN
+        )
+        headers = raw_auth_headers(pair["access_token"])
         for method, path in (
             ("post", "/api/v1/providers/exa/oauth/device-code"),
             ("get", "/api/v1/providers/exa/oauth/status"),
             ("delete", "/api/v1/providers/exa/oauth"),
         ):
-            response = client.request(method.upper(), path)
+            response = client.request(method.upper(), path, headers=headers)
             assert response.status_code == 404
             assert "oauth-not-supported" in response.text
-        ghost = client.get("/api/v1/providers/ghost/oauth/status")
+        ghost = client.get("/api/v1/providers/ghost/oauth/status", headers=headers)
         assert ghost.status_code == 404
     assert stub.requests == []
 
 
 async def test_control_disconnect_is_idempotent_204(
     repository: SQLiteRepository,
+    auth_secret: str,
 ) -> None:
     stub = _StubPlatform()
     store = AsyncVaultDouble()
     app = _control_app(repository, store, stub)
     with app as client:
-        assert client.delete("/api/v1/providers/parallel/oauth").status_code == 204
-        assert client.delete("/api/v1/providers/parallel/oauth").status_code == 204
+        # Anonymous calls need a 401 challenge.
+        anonymous = client.delete("/api/v1/providers/parallel/oauth")
+        assert anonymous.status_code == 401
+        # Use one Admin account for the OAuth route.
+        pair = await register_promote_login(
+            client, repository, temp_email("oauth-admin"), UserRole.ADMIN
+        )
+        headers = raw_auth_headers(pair["access_token"])
+        assert client.delete("/api/v1/providers/parallel/oauth", headers=headers).status_code == 204
+        assert client.delete("/api/v1/providers/parallel/oauth", headers=headers).status_code == 204
 
 
 # --- round-2 rulings: 409 gate, invalid_grant expiry, tombstones ---
@@ -1134,18 +1175,33 @@ async def test_start_device_flow_conflicts_when_paired(
 
 async def test_control_device_code_409_when_paired(
     repository: SQLiteRepository,
+    auth_secret: str,
 ) -> None:
     stub = _StubPlatform()
     store = AsyncVaultDouble()
     app = _control_app(repository, store, stub)
     with app as client:
-        assert client.post("/api/v1/providers/parallel/oauth/device-code").status_code == 200
+        # Anonymous calls need a 401 challenge.
+        anonymous = client.post("/api/v1/providers/parallel/oauth/device-code")
+        assert anonymous.status_code == 401
+        # Use one Admin account for the OAuth routes.
+        pair = await register_promote_login(
+            client, repository, temp_email("oauth-admin"), UserRole.ADMIN
+        )
+        headers = raw_auth_headers(pair["access_token"])
+        assert (
+            client.post("/api/v1/providers/parallel/oauth/device-code", headers=headers).status_code
+            == 200
+        )
         stub.token_queue.append(_StubPlatform.token_success())
-        status = client.get("/api/v1/providers/parallel/oauth/status")
+        status = client.get("/api/v1/providers/parallel/oauth/status", headers=headers)
         assert status.json()["status"] == "ready"
-        conflict = client.post("/api/v1/providers/parallel/oauth/device-code")
+        conflict = client.post("/api/v1/providers/parallel/oauth/device-code", headers=headers)
         assert conflict.status_code == 409, conflict.text[:300]
-        assert client.get("/api/v1/providers/parallel/oauth/status").json()["status"] == "ready"
+        assert (
+            client.get("/api/v1/providers/parallel/oauth/status", headers=headers).json()["status"]
+            == "ready"
+        )
 
 
 async def test_device_invalid_grant_fails_closed_to_expired(

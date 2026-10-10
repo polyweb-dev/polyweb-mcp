@@ -23,9 +23,8 @@ import type {
   BackendManualQuota,
   BackendManualQuotaPayload,
 } from "@/domains/dashboard/api/manualQuotaWire"
-import { ApiError, parseDetail, toApiError } from "@/shared/api/http"
-
-const API_BASE = (import.meta.env.VITE_API_URL as string | undefined) ?? ""
+import { requestJson } from "@/shared/api/client"
+import { ApiError } from "@/shared/api/http"
 
 type RoutingConfigPatch = Partial<BackendRoutingConfig>
 type ProviderPatch = {
@@ -44,41 +43,12 @@ export type TraceListFilters = {
 }
 
 export class FreeSearchApiService {
-  private async request<T>(path: string, init?: RequestInit): Promise<T> {
-    const headers = new Headers(init?.headers)
-    if (init?.body !== undefined && !headers.has("Content-Type")) {
-      headers.set("Content-Type", "application/json")
-    }
-
-    try {
-      const response = await fetch(`${API_BASE}${path}`, {
-        ...init,
-        headers,
-      })
-      const body = await this.readBody(response)
-      if (!response.ok) {
-        const detail = parseDetail(body)
-        throw new ApiError(response.status, detail, body)
-      }
-      return body as T
-    } catch (error) {
-      throw toApiError(error)
-    }
-  }
-
-  private async readBody(response: Response): Promise<unknown> {
-    let text: string
-    try {
-      text = await response.text()
-    } catch {
-      return undefined
-    }
-    if (!text) return undefined
-    try {
-      return JSON.parse(text) as unknown
-    } catch {
-      return text
-    }
+  /**
+   * Every method of this service uses the one shared transport, so Bearer
+   * attachment, abort handling, and error normalization stay identical.
+   */
+  private request<T>(path: string, init?: RequestInit): Promise<T> {
+    return requestJson<T>(path, init)
   }
 
   listProviders(): Promise<BackendProviderStatus[]> {

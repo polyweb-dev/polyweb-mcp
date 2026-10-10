@@ -2,9 +2,11 @@ from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from decimal import Decimal
 
+import pytest
 import pytest_asyncio
 
 from freesearch.adapters.base import ProviderAdapter
+from freesearch.configuration.config import get_settings
 from freesearch.models.contracts import (
     CostEstimate,
     FetchedDocument,
@@ -65,3 +67,20 @@ class FakeAdapter(ProviderAdapter):
 @pytest_asyncio.fixture
 async def fake_adapter() -> AsyncIterator[FakeAdapter]:
     yield FakeAdapter()
+
+
+@pytest.fixture
+def auth_secret(monkeypatch: pytest.MonkeyPatch) -> str:
+    """Point one test at a generated JWT secret, restored on cleanup.
+
+    Explicit per-test credential only. Not autouse. Each test still creates
+    its own temporary accounts and tokens through ``tests.fixtures.auth``.
+    """
+
+    from tests.fixtures.auth import install_auth_secret
+
+    secret = install_auth_secret(monkeypatch)
+    try:
+        yield secret
+    finally:
+        get_settings.cache_clear()

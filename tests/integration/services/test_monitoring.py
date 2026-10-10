@@ -21,7 +21,7 @@ import pytest
 import pytest_asyncio
 from fastapi.testclient import TestClient
 from mcp.server.fastmcp.exceptions import ToolError
-from pydantic import ValidationError
+from pydantic import SecretStr, ValidationError
 
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.mcp.server import _quota_state_changed, close_adapters, create_server
@@ -42,10 +42,19 @@ from freesearch.models.contracts import (
     UsageEvent,
     UsageOperation,
 )
+from freesearch.models.users import UserRole
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
 from freesearch.services import monitoring
 from freesearch.services.parallel_oauth import clear_oauth_poll_state
+from tests.fixtures.auth import (
+    http_jwt_service,
+    mcp_account_token,
+    raw_auth_headers,
+    register_and_login,
+    register_promote_login,
+    temp_email,
+)
 
 
 class _StubAdapter(ProviderAdapter):
@@ -307,12 +316,23 @@ def _assert_dashboard_contract_keys(body: Any) -> None:
 
 async def test_rest_search_persists_usage_and_healthy_health(
     repository: SQLiteRepository,
+    auth_secret: str,
 ) -> None:
     adapter = _StubAdapter("rest-provider", fetch_units=None)
     app = create_app([adapter], repository=repository)
 
     with TestClient(app) as client:
-        response = client.post("/search", json={"query": "offline"})
+        # Anonymous calls need a 401 challenge.
+        anonymous = client.post("/search", json={"query": "offline"})
+        assert anonymous.status_code == 401
+        assert anonymous.headers["www-authenticate"] == "Bearer"
+        # Use one Agent account for the search call.
+        pair = register_and_login(client, temp_email("monitor-search"))
+        response = client.post(
+            "/search",
+            json={"query": "offline"},
+            headers=raw_auth_headers(pair["access_token"]),
+        )
 
     assert response.status_code == 200
     assert response.json()["provider"] == "rest-provider"
@@ -388,13 +408,29 @@ async def test_numeric_exa_usage_persists_with_healthy_health(
 
 async def test_rest_fetch_and_mcp_search_fetch_persist_identical_usage(
     repository: SQLiteRepository,
+    auth_secret: str,
 ) -> None:
     adapter = _StubAdapter("shared-provider")
     rest_app = create_app([adapter], repository=repository)
     with TestClient(rest_app) as client:
-        rest_response = client.post("/fetch", json={"url": "https://example.com/rest"})
+        # Anonymous calls need a 401 challenge.
+        anonymous = client.post("/fetch", json={"url": "https://example.com/rest"})
+        assert anonymous.status_code == 401
+        assert anonymous.headers["www-authenticate"] == "Bearer"
+        # Use one Agent account for the fetch call.
+        pair = register_and_login(client, temp_email("monitor-fetch"))
+        rest_response = client.post(
+            "/fetch",
+            json={"url": "https://example.com/rest"},
+            headers=raw_auth_headers(pair["access_token"]),
+        )
 
-    server = create_server([adapter], repository=repository)
+    server = create_server(
+        [adapter],
+        repository=repository,
+        auth_service=http_jwt_service(repository),
+        stdio_token=SecretStr(pair["access_token"]),
+    )
     mcp_search = await server.call_tool("search", {"request": {"query": "mcp"}})
     mcp_fetch = await server.call_tool("fetch", {"request": {"url": "https://example.com/mcp"}})
 
@@ -419,13 +455,24 @@ async def test_rest_fetch_and_mcp_search_fetch_persist_identical_usage(
     assert shared_health.status is HealthStatus.HEALTHY
 
 
-async def test_usage_none_still_records_healthy_health(repository: SQLiteRepository) -> None:
+async def test_usage_none_still_records_healthy_health(
+    repository: SQLiteRepository, auth_secret: str
+) -> None:
     adapter = _StubAdapter("health-only", search_units=None, fetch_units=None)
     app = create_app([adapter], repository=repository)
     start = datetime.now(UTC) - timedelta(seconds=1)
 
     with TestClient(app) as client:
-        response = client.post("/search", json={"query": "no usage"})
+        # Anonymous calls need a 401 challenge.
+        anonymous = client.post("/search", json={"query": "no usage"})
+        assert anonymous.status_code == 401
+        # Use one Agent account for the search call.
+        pair = register_and_login(client, temp_email("monitor-health"))
+        response = client.post(
+            "/search",
+            json={"query": "no usage"},
+            headers=raw_auth_headers(pair["access_token"]),
+        )
 
     end = datetime.now(UTC) + timedelta(seconds=1)
     assert response.status_code == 200
@@ -440,12 +487,22 @@ async def test_usage_none_still_records_healthy_health(repository: SQLiteReposit
 
 async def test_fetch_without_usage_uses_document_fetched_at_for_health(
     repository: SQLiteRepository,
+    auth_secret: str,
 ) -> None:
     adapter = _StubAdapter("fetch-health-only", search_units=None, fetch_units=None)
     app = create_app([adapter], repository=repository)
 
     with TestClient(app) as client:
-        response = client.post("/fetch", json={"url": "https://example.com/no-usage"})
+        # Anonymous calls need a 401 challenge.
+        anonymous = client.post("/fetch", json={"url": "https://example.com/no-usage"})
+        assert anonymous.status_code == 401
+        # Use one Agent account for the fetch call.
+        pair = register_and_login(client, temp_email("monitor-fetch-health"))
+        response = client.post(
+            "/fetch",
+            json={"url": "https://example.com/no-usage"},
+            headers=raw_auth_headers(pair["access_token"]),
+        )
 
     assert response.status_code == 200
     assert response.json()["usage"] is None
@@ -460,13 +517,23 @@ async def test_fetch_without_usage_uses_document_fetched_at_for_health(
 
 async def test_adapter_failure_records_degraded_and_preserves_rest_and_mcp_errors(
     repository: SQLiteRepository,
+    auth_secret: str,
 ) -> None:
     rest_app = create_app(
         [_StubAdapter("rest-failure", fail_search=True)],
         repository=repository,
     )
     with TestClient(rest_app, raise_server_exceptions=False) as client:
-        rest_response = client.post("/search", json={"query": "failure"})
+        # Anonymous calls need a 401 challenge.
+        anonymous = client.post("/search", json={"query": "failure"})
+        assert anonymous.status_code == 401
+        # Use one Agent account for the search call.
+        pair = register_and_login(client, temp_email("monitor-failure"))
+        rest_response = client.post(
+            "/search",
+            json={"query": "failure"},
+            headers=raw_auth_headers(pair["access_token"]),
+        )
 
     assert rest_response.status_code == 500
     rest_health = await repository.latest_health("rest-failure")
@@ -478,6 +545,8 @@ async def test_adapter_failure_records_degraded_and_preserves_rest_and_mcp_error
     mcp_server = create_server(
         [_StubAdapter("mcp-failure", fail_search=True)],
         repository=repository,
+        auth_service=http_jwt_service(repository),
+        stdio_token=SecretStr(pair["access_token"]),
     )
     with pytest.raises(ToolError, match="adapter exploded"):
         await mcp_server.call_tool("search", {"request": {"query": "failure"}})
@@ -488,12 +557,24 @@ async def test_adapter_failure_records_degraded_and_preserves_rest_and_mcp_error
     assert mcp_health.message is None
 
 
-async def test_telemetry_failure_never_breaks_rest_request() -> None:
+async def test_telemetry_failure_never_breaks_rest_request(
+    repository: SQLiteRepository,
+    auth_secret: str,
+) -> None:
     adapter = _StubAdapter("telemetry-down")
-    app = create_app([adapter], repository=_FailingTelemetryRepository())
+    # Log in on the real repository first, then swap in the failure seam.
+    # Auth keeps the real repository, telemetry uses the failing double.
+    app = create_app([adapter], repository=repository)
 
     with TestClient(app) as client:
-        response = client.post("/search", json={"query": "still works"})
+        # Anonymous calls need a 401 challenge.
+        anonymous = client.post("/search", json={"query": "still works"})
+        assert anonymous.status_code == 401
+        # Use one Agent account for the search call.
+        pair = register_and_login(client, temp_email("monitor-telemetry"))
+        headers = raw_auth_headers(pair["access_token"])
+        app.state.repository = _FailingTelemetryRepository()
+        response = client.post("/search", json={"query": "still works"}, headers=headers)
 
     assert response.status_code == 200
     assert response.json()["provider"] == "telemetry-down"
@@ -668,6 +749,7 @@ async def test_stats_projection_strips_health_message_usage_metadata_and_request
 
 async def test_stats_endpoint_omits_sensitive_keys_end_to_end(
     repository: SQLiteRepository,
+    auth_secret: str,
 ) -> None:
     observed_at = datetime(2026, 1, 1, tzinfo=UTC)
     await repository.record_health(
@@ -691,7 +773,15 @@ async def test_stats_endpoint_omits_sensitive_keys_end_to_end(
     app = create_app([], repository=repository)
 
     with TestClient(app) as client:
-        response = client.get("/stats")
+        # Anonymous calls need a 401 challenge.
+        anonymous = client.get("/stats")
+        assert anonymous.status_code == 401
+        # Use one Developer account for the stats read.
+        pair = await register_promote_login(
+            client, repository, temp_email("monitor-stats"), UserRole.DEVELOPER
+        )
+        headers = raw_auth_headers(pair["access_token"])
+        response = client.get("/stats", headers=headers)
 
     assert response.status_code == 200
     body = response.json()
@@ -713,6 +803,7 @@ async def test_stats_endpoint_omits_sensitive_keys_end_to_end(
 
 async def test_stats_endpoint_clamps_recent_limit_and_returns_contract_shape(
     repository: SQLiteRepository,
+    auth_secret: str,
 ) -> None:
     t0 = datetime(2026, 1, 1, tzinfo=UTC)
     for index in range(monitoring.MAX_RECENT_LIMIT + 1):
@@ -727,8 +818,16 @@ async def test_stats_endpoint_clamps_recent_limit_and_returns_contract_shape(
     app = create_app([_StubAdapter("alpha")], repository=repository)
 
     with TestClient(app) as client:
-        low = client.get("/stats?limit=0")
-        high = client.get("/stats?limit=1000")
+        # Anonymous calls need a 401 challenge.
+        anonymous = client.get("/stats?limit=0")
+        assert anonymous.status_code == 401
+        # Use one Developer account for the stats reads.
+        pair = await register_promote_login(
+            client, repository, temp_email("monitor-clamp"), UserRole.DEVELOPER
+        )
+        headers = raw_auth_headers(pair["access_token"])
+        low = client.get("/stats?limit=0", headers=headers)
+        high = client.get("/stats?limit=1000", headers=headers)
 
     assert low.status_code == 200
     assert high.status_code == 200
@@ -747,50 +846,53 @@ async def test_stats_endpoint_clamps_recent_limit_and_returns_contract_shape(
     )
 
 
-def test_dashboard_route_declares_pydantic_response_model() -> None:
+def test_dashboard_route_declares_pydantic_response_model(auth_secret: str) -> None:
     app = create_app([_StubAdapter("response-model")], repository=None)
     dashboard_route = next(route for route in app.routes if route.path == "/dashboard")
 
     assert dashboard_route.response_model is _dashboard_response_model()
 
 
-async def test_no_repository_stats_and_dashboard_reads_are_empty_200() -> None:
+async def test_no_repository_stats_and_dashboard_reads_are_empty_200(
+    auth_secret: str,
+) -> None:
+    # A repository=None composition cannot verify a JWT, so the guard
+    # rejects every protected read. The old empty-200 contract no longer
+    # applies under the whole-app Bearer guard.
     app = create_app([_StubAdapter("no-repository")], repository=None)
-    before_dashboard = datetime.now(UTC)
 
     with TestClient(app) as client:
         stats = client.get("/stats")
         dashboard = client.get("/dashboard")
 
-    after_dashboard = datetime.now(UTC)
-    assert stats.status_code == 200
-    assert stats.json() == {
-        "notice": monitoring.MONITORING_NOTICE,
-        "usage_totals": [],
-        "recent_usage": [],
-        "latest_quota": [],
-        "latest_health": [],
-    }
-    assert dashboard.status_code == 200
-    assert "application/json" in dashboard.headers["content-type"]
-    assert "text/html" not in dashboard.headers["content-type"]
-    dashboard_body = dashboard.json()
-    _assert_dashboard_contract_keys(dashboard_body)
-    assert dashboard_body["usage_totals"] == []
-    assert dashboard_body["recent_usage"] == []
-    assert dashboard_body["latest_quota"] == []
-    assert dashboard_body["latest_health"] == []
-    generated_at = _parse_utc_datetime(dashboard_body["generated_at"])
-    assert before_dashboard <= generated_at <= after_dashboard
+    assert stats.status_code == 401
+    assert stats.headers["www-authenticate"] == "Bearer"
+    assert dashboard.status_code == 401
+    assert dashboard.headers["www-authenticate"] == "Bearer"
 
 
-async def test_monitoring_read_failures_return_empty_stats_and_json_dashboard() -> None:
-    repository = cast(SQLiteRepository, _ReadFailingRepository())
+async def test_monitoring_read_failures_return_empty_stats_and_json_dashboard(
+    repository: SQLiteRepository,
+    auth_secret: str,
+) -> None:
+    # Log in on the real repository first, then swap in the read-failure
+    # seam. Auth keeps the real repository, monitoring reads use the
+    # failing double.
+    failing = cast(SQLiteRepository, _ReadFailingRepository())
     app = create_app([_StubAdapter("read-failure")], repository=repository)
 
     with TestClient(app) as client:
-        stats = client.get("/stats")
-        dashboard = client.get("/dashboard")
+        # Anonymous calls need a 401 challenge.
+        anonymous = client.get("/stats")
+        assert anonymous.status_code == 401
+        # Use one Developer account for the stats reads.
+        pair = await register_promote_login(
+            client, repository, temp_email("monitor-read-fail"), UserRole.DEVELOPER
+        )
+        headers = raw_auth_headers(pair["access_token"])
+        app.state.repository = failing
+        stats = client.get("/stats", headers=headers)
+        dashboard = client.get("/dashboard", headers=headers)
 
     assert stats.status_code == 200
     assert stats.json() == {
@@ -863,6 +965,7 @@ def test_dashboard_response_contract_is_strict_and_decimal_round_trip() -> None:
 
 async def test_dashboard_endpoint_matches_stats_and_preserves_quota_provenance(
     repository: SQLiteRepository,
+    auth_secret: str,
 ) -> None:
     observed_at = datetime(2026, 1, 1, tzinfo=UTC)
     await repository.record_usage(_event("alpha", UsageOperation.SEARCH, "1.25", observed_at))
@@ -884,8 +987,16 @@ async def test_dashboard_endpoint_matches_stats_and_preserves_quota_provenance(
     before_dashboard = datetime.now(UTC)
 
     with TestClient(app) as client:
-        stats_response = client.get("/stats")
-        dashboard_response = client.get("/dashboard")
+        # Anonymous calls need a 401 challenge.
+        anonymous = client.get("/stats")
+        assert anonymous.status_code == 401
+        # Use one Developer account for the stats reads.
+        pair = await register_promote_login(
+            client, repository, temp_email("monitor-match"), UserRole.DEVELOPER
+        )
+        headers = raw_auth_headers(pair["access_token"])
+        stats_response = client.get("/stats", headers=headers)
+        dashboard_response = client.get("/dashboard", headers=headers)
 
     after_dashboard = datetime.now(UTC)
     assert stats_response.status_code == 200
@@ -910,6 +1021,7 @@ async def test_dashboard_endpoint_matches_stats_and_preserves_quota_provenance(
 
 async def test_dashboard_endpoint_accepts_canonical_quota_computed_fields(
     repository: SQLiteRepository,
+    auth_secret: str,
 ) -> None:
     """Computed wire fields must not be fed back through strict input validation."""
 
@@ -928,7 +1040,15 @@ async def test_dashboard_endpoint_accepts_canonical_quota_computed_fields(
     app = create_app([_StubAdapter("tavily")], repository=repository)
 
     with TestClient(app) as client:
-        response = client.get("/dashboard")
+        # Anonymous calls need a 401 challenge.
+        anonymous = client.get("/dashboard")
+        assert anonymous.status_code == 401
+        # Use one Developer account for the dashboard read.
+        pair = await register_promote_login(
+            client, repository, temp_email("monitor-canonical"), UserRole.DEVELOPER
+        )
+        headers = raw_auth_headers(pair["access_token"])
+        response = client.get("/dashboard", headers=headers)
 
     assert response.status_code == 200
     quota = response.json()["latest_quota"][0]
@@ -939,6 +1059,7 @@ async def test_dashboard_endpoint_accepts_canonical_quota_computed_fields(
 
 async def test_dashboard_endpoint_clamps_recent_limit_and_orders_newest_first(
     repository: SQLiteRepository,
+    auth_secret: str,
 ) -> None:
     observed_at = datetime(2026, 1, 1, tzinfo=UTC)
     for index in range(monitoring.MAX_RECENT_LIMIT + 1):
@@ -953,8 +1074,16 @@ async def test_dashboard_endpoint_clamps_recent_limit_and_orders_newest_first(
     app = create_app([_StubAdapter("limit-provider")], repository=repository)
 
     with TestClient(app) as client:
-        low = client.get("/dashboard?limit=0")
-        high = client.get("/dashboard?limit=1000")
+        # Anonymous calls need a 401 challenge.
+        anonymous = client.get("/dashboard?limit=0")
+        assert anonymous.status_code == 401
+        # Use one Developer account for the dashboard reads.
+        pair = await register_promote_login(
+            client, repository, temp_email("monitor-limit"), UserRole.DEVELOPER
+        )
+        headers = raw_auth_headers(pair["access_token"])
+        low = client.get("/dashboard?limit=0", headers=headers)
+        high = client.get("/dashboard?limit=1000", headers=headers)
 
     assert low.status_code == 200
     assert high.status_code == 200
@@ -975,6 +1104,7 @@ async def test_dashboard_endpoint_clamps_recent_limit_and_orders_newest_first(
 
 async def test_dashboard_endpoint_omits_sensitive_projection_fields_and_values(
     repository: SQLiteRepository,
+    auth_secret: str,
 ) -> None:
     observed_at = datetime(2026, 1, 1, tzinfo=UTC)
     private_query = "PRIVATE_QUERY_should_not_be_rendered"
@@ -1005,8 +1135,16 @@ async def test_dashboard_endpoint_omits_sensitive_projection_fields_and_values(
     app = create_app([_StubAdapter("privacy-provider")], repository=repository)
 
     with TestClient(app) as client:
-        stats_response = client.get("/stats")
-        dashboard_response = client.get("/dashboard")
+        # Anonymous calls need a 401 challenge.
+        anonymous = client.get("/stats")
+        assert anonymous.status_code == 401
+        # Use one Developer account for the stats reads.
+        pair = await register_promote_login(
+            client, repository, temp_email("monitor-privacy"), UserRole.DEVELOPER
+        )
+        headers = raw_auth_headers(pair["access_token"])
+        stats_response = client.get("/stats", headers=headers)
+        dashboard_response = client.get("/dashboard", headers=headers)
 
     assert stats_response.status_code == 200
     assert dashboard_response.status_code == 200
@@ -1060,33 +1198,26 @@ async def test_dashboard_endpoint_omits_sensitive_projection_fields_and_values(
             assert forbidden not in payload_text
 
 
-async def test_dashboard_generated_at_is_utc_and_non_decreasing_on_empty_repository() -> None:
+async def test_dashboard_generated_at_is_utc_and_non_decreasing_on_empty_repository(
+    auth_secret: str,
+) -> None:
+    # A repository=None composition cannot verify a JWT, so the guard
+    # rejects every protected read. The old empty-200 contract no longer
+    # applies under the whole-app Bearer guard.
     app = create_app([_StubAdapter("freshness-provider")], repository=None)
 
     with TestClient(app) as client:
         first = client.get("/dashboard")
         second = client.get("/dashboard")
 
-    assert first.status_code == 200
-    assert second.status_code == 200
-    assert "application/json" in first.headers["content-type"]
-    assert "application/json" in second.headers["content-type"]
-    first_body = first.json()
-    second_body = second.json()
-    _assert_dashboard_contract_keys(first_body)
-    _assert_dashboard_contract_keys(second_body)
-    for body in (first_body, second_body):
-        assert body["usage_totals"] == []
-        assert body["recent_usage"] == []
-        assert body["latest_quota"] == []
-        assert body["latest_health"] == []
-    first_generated_at = _parse_utc_datetime(first_body["generated_at"])
-    second_generated_at = _parse_utc_datetime(second_body["generated_at"])
-    assert first_generated_at <= second_generated_at
+    assert first.status_code == 401
+    assert first.headers["www-authenticate"] == "Bearer"
+    assert second.status_code == 401
+    assert second.headers["www-authenticate"] == "Bearer"
 
 
 async def test_app_owned_repository_lifespan_creates_and_closes_database(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, auth_secret: str
 ) -> None:
     monkeypatch.setattr("freesearch.routers.api.build_adapters", lambda _client: [])
     closed: list[SQLiteRepository] = []
@@ -1111,12 +1242,21 @@ async def test_app_owned_repository_lifespan_creates_and_closes_database(
 
 async def test_app_lifespan_hydrates_local_quota_before_first_dashboard_read(
     repository: SQLiteRepository,
+    auth_secret: str,
 ) -> None:
     adapter = _HydratingStubAdapter("keenable")
     app = create_app([adapter], repository=repository)
 
     with TestClient(app) as client:
-        response = client.get("/dashboard")
+        # Anonymous calls need a 401 challenge.
+        anonymous = client.get("/dashboard")
+        assert anonymous.status_code == 401
+        # Use one Developer account for the dashboard read.
+        pair = await register_promote_login(
+            client, repository, temp_email("monitor-hydrate"), UserRole.DEVELOPER
+        )
+        headers = raw_auth_headers(pair["access_token"])
+        response = client.get("/dashboard", headers=headers)
 
     assert response.status_code == 200
     assert response.json()["latest_quota"] == [
@@ -1186,6 +1326,12 @@ async def test_server_owned_lifespan_refcounted_across_overlapping_sessions(
     tmp_path: Path,
     exit_order: tuple[str, str],
 ) -> None:
+    database = tmp_path / "ref.db"
+    # Seed one account before the open spy goes in, so the spy counts only
+    # the server generation. The service repository stays open for the test.
+    service_repository = await SQLiteRepository.open(database)
+    service, token, _email = await mcp_account_token(service_repository, "mcp-overlap")
+    stdio_credential = SecretStr(token.get_secret_value())
     monkeypatch.setattr(
         "freesearch.mcp.server.adapter_factory",
         lambda name: (
@@ -1209,7 +1355,9 @@ async def test_server_owned_lifespan_refcounted_across_overlapping_sessions(
         await real_close(repository)
 
     monkeypatch.setattr(SQLiteRepository, "close", close_spy)
-    server = create_server(None, database=tmp_path / "ref.db")
+    server = create_server(
+        None, database=database, auth_service=service, stdio_token=stdio_credential
+    )
     lifespans = {
         "a": server._mcp_server.lifespan(server),
         "b": server._mcp_server.lifespan(server),
@@ -1270,6 +1418,7 @@ async def test_server_owned_lifespan_refcounted_across_overlapping_sessions(
         for repository in opened:
             if repository not in closed:
                 await real_close(repository)
+        await real_close(service_repository)
 
 
 async def test_server_owned_lifespan_sequential_sessions_reuse_fresh_generation(
@@ -1309,7 +1458,12 @@ async def test_server_owned_lifespan_sequential_sessions_reuse_fresh_generation(
 
     monkeypatch.setattr(SQLiteRepository, "close", close_spy)
     database = tmp_path / "seq.db"
-    server = create_server(None, database=database)
+    service_repository = await real_open(database)
+    service, token, _email = await mcp_account_token(service_repository, "mcp-sequential")
+    stdio_credential = SecretStr(token.get_secret_value())
+    server = create_server(
+        None, database=database, auth_service=service, stdio_token=stdio_credential
+    )
 
     async with server._mcp_server.lifespan(server):
         first_result = await server.call_tool("search", {"request": {"query": "session one"}})
@@ -1344,6 +1498,7 @@ async def test_server_owned_lifespan_sequential_sessions_reuse_fresh_generation(
         ("x", UsageOperation.SEARCH, Decimal("1.25")),
         ("x", UsageOperation.SEARCH, Decimal("1.25")),
     ]
+    await real_close(service_repository)
 
 
 async def test_server_owned_lifespan_delayed_teardown_does_not_close_new_session_resources(
@@ -1392,7 +1547,13 @@ async def test_server_owned_lifespan_delayed_teardown_does_not_close_new_session
         await real_close_adapters(adapters, client)
 
     monkeypatch.setattr("freesearch.mcp.server.close_adapters", close_adapters_spy)
-    server = create_server(None, database=tmp_path / "race.db")
+    database = tmp_path / "race.db"
+    service_repository = await real_open(database)
+    service, token, _email = await mcp_account_token(service_repository, "mcp-race")
+    stdio_credential = SecretStr(token.get_secret_value())
+    server = create_server(
+        None, database=database, auth_service=service, stdio_token=stdio_credential
+    )
     lifespans = {name: server._mcp_server.lifespan(server) for name in ("a", "b", "c")}
     entered: set[str] = set()
     exited: set[str] = set()
@@ -1444,6 +1605,7 @@ async def test_server_owned_lifespan_delayed_teardown_does_not_close_new_session
         for name in ("a", "b", "c"):
             if name in entered and name not in exited:
                 await lifespans[name].__aexit__(None, None, None)
+        await real_close(service_repository)
 
     inspection_repository = await real_open(tmp_path / "race.db")
     try:
@@ -1458,7 +1620,7 @@ async def test_server_owned_lifespan_delayed_teardown_does_not_close_new_session
 
 
 async def test_injected_repository_remains_open_after_app_lifespan(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, auth_secret: str
 ) -> None:
     repository = await SQLiteRepository.open(tmp_path / "injected-app.db")
     closed: list[SQLiteRepository] = []

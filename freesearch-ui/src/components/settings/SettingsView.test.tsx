@@ -3,6 +3,7 @@ import { describe, expect, it, afterEach, vi } from "vitest"
 import { render, screen, within, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { FreeSearchProvider } from "@/context/FreeSearchContext"
+import { ADMIN_ACCOUNT_ID, DEVELOPER_ACCOUNT_ID } from "@/test/authFixtures"
 import { ToastContainer } from "@/components/common/ToastContainer"
 import { SettingsView } from "./SettingsView"
 import { installFetchStub, ok, err, deferred, type FetchStub } from "@/test/fetchMock"
@@ -104,7 +105,7 @@ function renderSettings(): FetchStub {
     return err(404, { detail: "unhandled test route" })
   })
   render(
-    <FreeSearchProvider>
+    <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
       <SettingsView />
       <ToastContainer />
     </FreeSearchProvider>
@@ -382,5 +383,50 @@ describe("SettingsView (live backend)", () => {
     const text = card.textContent ?? ""
     expect(text).not.toContain("yc_l")
     expect(text).not.toContain("6789")
+  })
+})
+
+describe("SettingsView Developer read-only (canReadControls, no edit)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  function renderDeveloperSettings(): FetchStub {
+    const stub = installFetchStub((req) => {
+      if (req.url === "/api/v1/providers" && req.method === "GET") {
+        return ok(allProvidersFixture())
+      }
+      if (req.url === "/api/v1/routing/config" && req.method === "GET") {
+        return ok(routingConfigFixture())
+      }
+      if (req.url.startsWith("/dashboard")) return ok(dashboardFixture())
+      return err(404, { detail: "unhandled test route" })
+    })
+    render(
+      <FreeSearchProvider accountId={DEVELOPER_ACCOUNT_ID} canReadControls canEditControls={false}>
+        <SettingsView />
+        <ToastContainer />
+      </FreeSearchProvider>
+    )
+    return stub
+  }
+
+  it("hides the Keys tab so the key vault never mounts, keeps Providers/Failover, and sends no writes", async () => {
+    const stub = renderDeveloperSettings()
+    await waitForProviders()
+
+    // Read-only markers present: exactly Providers + Failover tabs.
+    expect(screen.getAllByRole("tab")).toHaveLength(2)
+    expect(screen.getByRole("tab", { name: /^Providers$/ })).toBeInTheDocument()
+    expect(screen.getByRole("tab", { name: /^Failover$/ })).toBeInTheDocument()
+    // Mutation affordances absent: no Keys tab, so the vault never mounts.
+    expect(screen.queryByRole("tab", { name: /^Keys$/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole("heading", { name: "Key vault" })).not.toBeInTheDocument()
+    expect(screen.queryByRole("textbox", { name: /API key/ })).not.toBeInTheDocument()
+    expect(document.body.querySelector('input[type="password"]')).toBeNull()
+    // Zero backend writes beyond the stubbed reads.
+    expect(
+      stub.requests.filter((r) => r.method === "PATCH" || r.method === "PUT" || r.method === "POST")
+    ).toHaveLength(0)
   })
 })

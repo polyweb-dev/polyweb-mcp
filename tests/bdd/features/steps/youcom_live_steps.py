@@ -23,10 +23,17 @@ from fastapi.testclient import TestClient
 from freesearch.configuration.config import get_settings
 from freesearch.infrastructure.secrets import ProviderName
 from freesearch.models.contracts import FetchRequest, SearchRequest
+from freesearch.models.users import UserRole
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
 from freesearch.routers.control import _build_with_resolved_secret, _resolve_secret
 from tests.encrypted_secrets_helpers import assert_no_sentinels
+from tests.fixtures.auth import (
+    TEMP_PASSWORD,
+    configure_bdd_secret,
+    promote_account,
+    temp_email,
+)
 from tests.integration.services.oauth.oauth_stubs import collect_sqlite_texts
 
 YOU_ENV = "FREESEARCH_YOU_API_KEY"
@@ -96,6 +103,7 @@ def step_given_live_vault_youcom(context: Any) -> None:
         os.environ.pop(PASSPHRASE_ENV, None)
     os.environ[KEY_FILE_ENV] = str(scenario_dir / ".secret_key")
     get_settings.cache_clear()
+    configure_bdd_secret(context)
 
     db_path = scenario_dir / f"live-you-{uuid4().hex}.db"
     context.database_path = str(db_path)
@@ -108,8 +116,22 @@ def step_given_live_vault_youcom(context: Any) -> None:
     root.addHandler(handler)
     _push_cleanup(context, lambda: root.removeHandler(handler))
 
+    # Vault writes need the Admin role.
+    email = temp_email("live-you-admin")
     with TestClient(context.app) as client:
-        put = client.put("/api/v1/providers/you/secret", json={"key": live_key})
+        registered = client.post("/auth/register", json={"email": email, "password": TEMP_PASSWORD})
+        assert registered.status_code == 201, registered.text
+        context.loop.run_until_complete(promote_account(context.repository, email, UserRole.ADMIN))
+        logged_in = client.post(
+            "/auth/jwt/login", data={"username": email, "password": TEMP_PASSWORD}
+        )
+        assert logged_in.status_code == 200, logged_in.text
+        context.live_auth_headers = {"Authorization": f"Bearer {logged_in.json()['access_token']}"}
+        put = client.put(
+            "/api/v1/providers/you/secret",
+            json={"key": live_key},
+            headers=context.live_auth_headers,
+        )
         assert put.status_code == 200, put.text
         assert put.json()["source"] == "encrypted_db"
         context.live_put_body = put.text

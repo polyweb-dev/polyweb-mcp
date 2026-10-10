@@ -1,5 +1,7 @@
 """Offline Behave steps for all-providers fanout search with ranked fusion."""
 
+import tempfile
+from pathlib import Path
 from typing import Any
 
 from behave import given, then, when  # type: ignore[import-untyped]
@@ -16,7 +18,9 @@ from freesearch.models.contracts import (
     SearchResult,
     UsageOperation,
 )
+from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
+from tests.fixtures.auth import TEMP_PASSWORD, configure_bdd_secret, temp_email
 
 
 class _FanoutStubAdapter(ProviderAdapter):
@@ -64,12 +68,44 @@ class _FanoutStubAdapter(ProviderAdapter):
         )
 
 
+def _open_fanout_repository(context: Any) -> None:
+    # Open one temp database for account access in this scenario.
+    with tempfile.NamedTemporaryFile(
+        prefix="freesearch-fanout-",
+        suffix=".db",
+        dir=Path.cwd(),
+        delete=False,
+    ) as temporary_file:
+        context.database_path = Path(temporary_file.name)
+    context.repository = context.loop.run_until_complete(
+        SQLiteRepository.open(context.database_path)
+    )
+
+
+def _ensure_agent_headers(client: TestClient, context: Any) -> dict[str, str]:
+    # Register one Agent account on first use and return one access header.
+    existing = getattr(context, "fanout_auth_headers", None)
+    if existing is not None:
+        return existing
+    email = temp_email("fanout-agent")
+    registered = client.post("/auth/register", json={"email": email, "password": TEMP_PASSWORD})
+    assert registered.status_code == 201
+    logged_in = client.post("/auth/jwt/login", data={"username": email, "password": TEMP_PASSWORD})
+    assert logged_in.status_code == 200
+    headers = {"Authorization": f"Bearer {logged_in.json()['access_token']}"}
+    context.fanout_auth_headers = headers
+    return headers
+
+
 @given("an offline fanout search harness")
 def step_given_fanout_harness(context: Any) -> None:
     """Reset scenario-local fanout state; stubs are registered per scenario."""
+    configure_bdd_secret(context)
+    _open_fanout_repository(context)
     context.fanout_adapters = []
     context.fanout_response = None
     context.fanout_status = None
+    context.fanout_auth_headers = None
 
 
 @given("the following fanout provider registry:")
@@ -92,12 +128,14 @@ def _post_fanout_search(
     context: Any, query: str, limit: int, allow_list: tuple[str, ...] = ()
 ) -> None:
     """POST a fanout search through the real FastAPI app with stub adapters."""
-    app = create_app(list(context.fanout_adapters))
-    client = TestClient(app)
+    app = create_app(list(context.fanout_adapters), repository=context.repository)
     payload: dict[str, Any] = {"query": query, "fanout": True, "limit": limit}
     if allow_list:
         payload["routing"] = {"mode": "fanout", "providers": list(allow_list)}
-    response = client.post("/search", json=payload)
+    with TestClient(app) as client:
+        headers = _ensure_agent_headers(client, context)
+        # Fanout search needs any authenticated role.
+        response = client.post("/search", json=payload, headers=headers)
     context.fanout_status = response.status_code
     context.fanout_response = response.json() if response.content else None
 

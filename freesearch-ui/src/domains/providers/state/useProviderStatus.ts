@@ -11,10 +11,26 @@ interface StatusDeps {
   setProvidersLoading: React.Dispatch<React.SetStateAction<boolean>>;
   setProvidersError: React.Dispatch<React.SetStateAction<string | null>>;
   showToast: ShowToast;
+  /** False for a role without control-read access: no request, empty state. */
+  canReadControls: boolean;
 }
 
-export function useProviderStatus({ setProviders, setProvidersLoading, setProvidersError, showToast }: StatusDeps) {
+export function useProviderStatus({
+  setProviders,
+  setProvidersLoading,
+  setProvidersError,
+  showToast,
+  canReadControls,
+}: StatusDeps) {
   const refreshProviders = useCallback(async () => {
+    if (!canReadControls) {
+      // A role without control-read access keeps an empty catalog and a clear
+      // busy flag. The client never manufactures provider health or presence.
+      setProviders([]);
+      setProvidersError(null);
+      setProvidersLoading(false);
+      return;
+    }
     setProvidersLoading(true);
     setProvidersError(null);
     try {
@@ -28,7 +44,7 @@ export function useProviderStatus({ setProviders, setProvidersLoading, setProvid
     } finally {
       setProvidersLoading(false);
     }
-  }, [setProviders, setProvidersLoading, setProvidersError, showToast]);
+  }, [canReadControls, setProviders, setProvidersLoading, setProvidersError, showToast]);
 
   const toggleProvider = useCallback(
     async (id: string, enabled: boolean): Promise<void> => {

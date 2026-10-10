@@ -8,7 +8,13 @@ import { MemoryRouter } from "react-router"
 import App from "@/App"
 import { FreeSearchProvider } from "@/context/FreeSearchContext"
 import { RoutingEngine } from "./RoutingEngine"
-import { installFetchStub, ok, err } from "@/test/fetchMock"
+import { installAuthStub, installFetchStub, ok, err } from "@/test/fetchMock"
+import { ADMIN_ACCOUNT_ID, adminAccountFixture } from "@/test/authFixtures"
+import {
+  installFakeChannel,
+  installImmediateLocks,
+  removeLocks,
+} from "@/test/browserStubs"
 import {
   allProvidersFixture,
   routingConfigFixture,
@@ -152,7 +158,7 @@ function renderRouting(providers: WireProviderStatus[] = allProvidersFixture()) 
     return err(404, { detail: "unhandled test route" })
   })
   const view = render(
-    <FreeSearchProvider>
+    <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
       <RoutingEngine />
     </FreeSearchProvider>
   )
@@ -219,6 +225,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  removeLocks()
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
 })
@@ -568,7 +575,9 @@ describe("R-SIM AC-R-REG-1: regressions stay GREEN (Search/Fetch, bar, tabs, log
   })
 
   it("R1 bar renders on the routing route beside the Strategy cards", async () => {
-    installFetchStub((req) => {
+    installImmediateLocks()
+    installFakeChannel()
+    installAuthStub({ account: adminAccountFixture() }, (req) => {
       if (req.url === "/api/v1/providers" && req.method === "GET") {
         return ok(allProvidersFixture())
       }

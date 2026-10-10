@@ -10,7 +10,10 @@ from pathlib import Path
 
 import httpx
 import pytest
+import pytest_asyncio
+from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
+from pydantic import SecretStr
 
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.infrastructure.secrets import ProviderName
@@ -27,6 +30,7 @@ from freesearch.models.contracts import (
     UsageOperation,
 )
 from freesearch.persistence.storage import SQLiteRepository
+from tests.fixtures.auth import mcp_account_token
 
 
 class _StubAdapter(ProviderAdapter):
@@ -81,28 +85,55 @@ class _StubAdapter(ProviderAdapter):
         pass
 
 
-async def test_search_routes_to_only_search_adapter() -> None:
-    server = create_server([_StubAdapter("brave", fetch=False)])
+@pytest_asyncio.fixture
+async def repository(tmp_path: Path) -> SQLiteRepository:
+    repo = await SQLiteRepository.open(tmp_path / "mcp-server.db")
+    yield repo
+    await repo.close()
+
+
+async def _authed_server(
+    repository: SQLiteRepository, adapters: list[ProviderAdapter], prefix: str
+) -> FastMCP:
+    """Build one tool server with a real account and its explicit stdio credential."""
+
+    service, token, _email = await mcp_account_token(repository, prefix)
+    return create_server(
+        adapters,
+        repository=repository,
+        auth_service=service,
+        stdio_token=SecretStr(token.get_secret_value()),
+    )
+
+
+async def test_search_routes_to_only_search_adapter(repository: SQLiteRepository) -> None:
+    server = await _authed_server(repository, [_StubAdapter("brave", fetch=False)], "tool-search")
     response = await server.call_tool("search", {"request": {"query": "python asyncio"}})
     assert response[1]["provider"] == "brave"
     assert response[1]["query"] == "python asyncio"
 
 
-async def test_fetch_routes_to_fetch_capable_adapter() -> None:
-    server = create_server([_StubAdapter("youcom")])
+async def test_fetch_routes_to_fetch_capable_adapter(repository: SQLiteRepository) -> None:
+    server = await _authed_server(repository, [_StubAdapter("youcom")], "tool-fetch")
     response = await server.call_tool("fetch", {"request": {"url": "https://example.com/page"}})
     assert response[1]["provider"] == "youcom"
     assert response[1]["document"]["content"] == "youcom content"
 
 
-async def test_search_without_any_adapter_raises() -> None:
-    server = create_server([])
+async def test_search_without_any_adapter_raises(repository: SQLiteRepository) -> None:
+    server = await _authed_server(repository, [], "tool-empty")
     with pytest.raises(ToolError, match="no provider is configured"):
         await server.call_tool("search", {"request": {"query": "anything"}})
 
 
-async def test_search_fanout_runs_multiple_adapters_and_fuses() -> None:
-    server = create_server([_StubAdapter("brave", fetch=False), _StubAdapter("exa", fetch=False)])
+async def test_search_fanout_runs_multiple_adapters_and_fuses(
+    repository: SQLiteRepository,
+) -> None:
+    server = await _authed_server(
+        repository,
+        [_StubAdapter("brave", fetch=False), _StubAdapter("exa", fetch=False)],
+        "tool-fanout",
+    )
     response = await server.call_tool("search", {"request": {"query": "python", "fanout": True}})
     data = response[1]
     assert data["provider"] == "aggregated"
@@ -178,33 +209,31 @@ def test_create_server_stateless_http_flag() -> None:
     assert server_stateless.settings.stateless_http is True
 
 
-def test_main_cli_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_main_cli_dispatch(monkeypatch: pytest.MonkeyPatch, auth_secret: str) -> None:
+    import freesearch.mcp.server as server_module
     from freesearch.mcp.server import main
 
-    invocations: list[tuple[str, bool, str, int]] = []
+    calls: list[tuple[str, bool, int | None]] = []
 
-    def fake_run(self: object, transport: str = "stdio") -> None:
-        settings = getattr(self, "settings", None)
-        invocations.append(
-            (
-                transport,
-                getattr(settings, "stateless_http", False),
-                getattr(settings, "host", ""),
-                getattr(settings, "port", 0),
-            )
-        )
+    async def fake_stdio(server: object, *, auth_service: object, settings: object) -> None:
+        port = getattr(settings, "mcp_port", None)
+        calls.append(("stdio", auth_service is not None, port))
 
-    from mcp.server.fastmcp import FastMCP
+    async def fake_http(server: object, *, auth_service: object, settings: object) -> None:
+        port = getattr(settings, "mcp_port", None)
+        calls.append(("streamable-http", auth_service is not None, port))
 
-    monkeypatch.setattr(FastMCP, "run", fake_run)
+    monkeypatch.setattr(server_module, "run_stdio_server", fake_stdio)
+    monkeypatch.setattr(server_module, "run_http_server", fake_http)
 
     # 1. Test stdio dispatch
     main(["--transport", "stdio"])
-    assert invocations[-1][0] == "stdio"
+    assert calls[-1][0] == "stdio"
+    assert calls[-1][1] is True
 
     # 2. Test streamable-http with stateless flag and custom port
     main(["--transport", "streamable-http", "--stateless", "--port", "8888"])
-    assert invocations[-1] == ("streamable-http", True, "127.0.0.1", 8888)
+    assert calls[-1] == ("streamable-http", True, 8888)
 
 
 class _MaskStub(_StubAdapter):

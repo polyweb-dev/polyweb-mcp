@@ -4,6 +4,7 @@ import { render, screen, waitFor } from "@testing-library/react"
 import { FreeSearchProvider } from "@/context/FreeSearchContext"
 import { QuotaAnalytics } from "./QuotaAnalytics"
 import { installFetchStub, ok, err } from "@/test/fetchMock"
+import { ADMIN_ACCOUNT_ID } from "@/test/authFixtures"
 import {
   allProvidersFixture,
   routingConfigFixture,
@@ -31,7 +32,7 @@ function renderWithBackend(dashboard: WireDashboard) {
     return err(404, { detail: "unhandled test route" })
   })
   return render(
-    <FreeSearchProvider>
+    <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
       <QuotaAnalytics />
     </FreeSearchProvider>
   )
@@ -162,7 +163,7 @@ describe("QuotaAnalytics (live backend)", () => {
       return err(404, { detail: "unhandled test route" })
     })
     render(
-      <FreeSearchProvider>
+      <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
         <QuotaAnalytics />
       </FreeSearchProvider>
     )
@@ -325,7 +326,7 @@ describe("QuotaAnalytics (live backend)", () => {
       return err(404, { detail: "unhandled test route" })
     })
     render(
-      <FreeSearchProvider>
+      <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
         <QuotaAnalytics />
       </FreeSearchProvider>
     )

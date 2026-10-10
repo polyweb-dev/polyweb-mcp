@@ -10,14 +10,22 @@ export type { ShowToast } from "./context";
 
 export const ProvidersProvider: React.FC<{
   showToast: ShowToast;
+  canReadControls: boolean;
+  canEditControls: boolean;
   children: React.ReactNode;
-}> = ({ showToast, children }) => {
+}> = ({ showToast, canReadControls, canEditControls, children }) => {
   const [providers, setProviders] = useState<ProviderConfig[]>([]);
   const [providersLoading, setProvidersLoading] = useState(true);
   const [providersError, setProvidersError] = useState<string | null>(null);
 
   const { refreshProviders, toggleProvider, toggleProviderSearch, toggleProviderFetch } =
-    useProviderStatus({ setProviders, setProvidersLoading, setProvidersError, showToast });
+    useProviderStatus({
+      setProviders,
+      setProvidersLoading,
+      setProvidersError,
+      showToast,
+      canReadControls,
+    });
   const { updateProviderPriority, moveProviderPriority } = useProviderPriority({
     providers,
     setProviders,
@@ -36,6 +44,8 @@ export const ProvidersProvider: React.FC<{
       providers,
       providersLoading,
       providersError,
+      canReadControls,
+      canEditControls,
       refreshProviders,
       toggleProvider,
       toggleProviderSearch,
@@ -51,6 +61,8 @@ export const ProvidersProvider: React.FC<{
       providers,
       providersLoading,
       providersError,
+      canReadControls,
+      canEditControls,
       refreshProviders,
       toggleProvider,
       toggleProviderSearch,

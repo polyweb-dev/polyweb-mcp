@@ -16,10 +16,10 @@ from contextlib import suppress
 from datetime import UTC, datetime
 from decimal import Decimal
 from hashlib import sha256
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 import httpx
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from pydantic import SecretStr, ValidationError
 
 from freesearch.adapters.base import ProviderAdapter
@@ -56,7 +56,9 @@ from freesearch.models.contracts import (
     manual_quota_remaining_percent,
 )
 from freesearch.models.provider_access import ALL_BITS, validate_mask
+from freesearch.models.users import UserPrincipal
 from freesearch.persistence.storage import SQLiteRepository, register_setting_listener
+from freesearch.routers.auth import require_admin, require_control_reader
 from freesearch.services.monitoring import latency_p95_ms
 from freesearch.services.parallel_oauth import (
     PARALLEL_API_BASE_URL,
@@ -70,6 +72,14 @@ from freesearch.services.parallel_oauth import (
 )
 
 SecretSource = Literal["encrypted_db", "none"]
+
+#: Role gates from the approved P1a matrix. ``require_admin`` guards every
+#: control mutation and every provider OAuth handler; ``require_control_reader``
+#: guards the sanitized reads. Both answer 401 before 403, and both run before
+#: any provider call or persistence write. Provider OAuth status follows its side
+#: effects, not its HTTP verb, so the GET requires Admin.
+_AdminPrincipal = Annotated[UserPrincipal, Depends(require_admin)]
+_ReaderPrincipal = Annotated[UserPrincipal, Depends(require_control_reader)]
 
 _ROUTING_KEY = "routing"
 
@@ -85,7 +95,9 @@ def register_control_routes(app: FastAPI) -> None:
     """
 
     @app.get("/api/v1/providers", response_model=list[ProviderStatusResponse])
-    async def list_providers(request: Request) -> list[ProviderStatusResponse]:
+    async def list_providers(
+        _principal: _ReaderPrincipal, request: Request
+    ) -> list[ProviderStatusResponse]:
         """Enumerate every canonical provider with its current control state."""
 
         repository: SQLiteRepository | None = request.app.state.repository
@@ -104,7 +116,9 @@ def register_control_routes(app: FastAPI) -> None:
         return ordered
 
     @app.get("/api/v1/providers/{provider_id}", response_model=ProviderStatusResponse)
-    async def get_provider(provider_id: str, request: Request) -> ProviderStatusResponse:
+    async def get_provider(
+        _principal: _ReaderPrincipal, provider_id: str, request: Request
+    ) -> ProviderStatusResponse:
         """Return one canonical provider's control-plane status entry."""
 
         name = _require_provider(provider_id)
@@ -113,6 +127,7 @@ def register_control_routes(app: FastAPI) -> None:
 
     @app.patch("/api/v1/providers/{provider_id}", response_model=ProviderStatusResponse)
     async def patch_provider(
+        _principal: _AdminPrincipal,
         provider_id: str,
         request: Request,
         update: ProviderConfigUpdate | None = None,
@@ -130,7 +145,9 @@ def register_control_routes(app: FastAPI) -> None:
         return await _provider_entry(repository, name, request.app.state.secret_store)
 
     @app.post("/api/v1/providers/{provider_id}/test", response_model=ProviderTestResponse)
-    async def test_provider(provider_id: str, request: Request) -> ProviderTestResponse:
+    async def test_provider(
+        _principal: _AdminPrincipal, provider_id: str, request: Request
+    ) -> ProviderTestResponse:
         """Run a timed health probe; UNKNOWN counts as ok with explanatory detail."""
 
         name = _require_provider(provider_id)
@@ -161,7 +178,7 @@ def register_control_routes(app: FastAPI) -> None:
         response_model=CircuitBreakerStatusResponse,
     )
     async def reset_circuit_breaker(
-        provider_id: str, request: Request
+        _principal: _AdminPrincipal, provider_id: str, request: Request
     ) -> CircuitBreakerStatusResponse:
         """Persist a closed breaker state and report it; idempotent."""
 
@@ -174,7 +191,10 @@ def register_control_routes(app: FastAPI) -> None:
 
     @app.put("/api/v1/providers/{provider_id}/secret", response_model=SecretStatusResponse)
     async def put_secret(
-        provider_id: str, body: SetSecretRequest, request: Request
+        _principal: _AdminPrincipal,
+        provider_id: str,
+        body: SetSecretRequest,
+        request: Request,
     ) -> SecretStatusResponse:
         """Store the key write-only in the encrypted vault and report its status."""
 
@@ -197,7 +217,9 @@ def register_control_routes(app: FastAPI) -> None:
         )
 
     @app.delete("/api/v1/providers/{provider_id}/secret", response_model=SecretStatusResponse)
-    async def delete_secret(provider_id: str, request: Request) -> SecretStatusResponse:
+    async def delete_secret(
+        _principal: _AdminPrincipal, provider_id: str, request: Request
+    ) -> SecretStatusResponse:
         """Remove the encrypted vault key idempotently and report its status."""
 
         name = _require_provider(provider_id)
@@ -228,14 +250,16 @@ def register_control_routes(app: FastAPI) -> None:
         )
 
     @app.get("/api/v1/routing/config", response_model=RoutingConfigResponse)
-    async def get_routing_config(request: Request) -> RoutingConfigResponse:
+    async def get_routing_config(
+        _principal: _ReaderPrincipal, request: Request
+    ) -> RoutingConfigResponse:
         """Return the persisted global routing defaults."""
 
         return await routing_policy(request.app.state.repository)
 
     @app.put("/api/v1/routing/config", response_model=RoutingConfigResponse)
     async def put_routing_config(
-        update: RoutingConfigUpdate, request: Request
+        _principal: _AdminPrincipal, update: RoutingConfigUpdate, request: Request
     ) -> RoutingConfigResponse:
         """Merge and persist a routing-policy update; omitted fields are kept."""
 
@@ -263,7 +287,9 @@ def _register_manual_quota_routes(app: FastAPI) -> None:
         "/api/v1/providers/{provider_id}/manual-quota",
         response_model=ManualQuotaResponse,
     )
-    async def get_manual_quota(provider_id: str, request: Request) -> ManualQuotaResponse:
+    async def get_manual_quota(
+        _principal: _ReaderPrincipal, provider_id: str, request: Request
+    ) -> ManualQuotaResponse:
         """Return the operator-entered billing anchor; never touches routing."""
 
         name = _require_provider(provider_id)
@@ -277,7 +303,10 @@ def _register_manual_quota_routes(app: FastAPI) -> None:
         response_model=ManualQuotaResponse,
     )
     async def put_manual_quota(
-        provider_id: str, update: ManualQuotaUpdate, request: Request
+        _principal: _AdminPrincipal,
+        provider_id: str,
+        update: ManualQuotaUpdate,
+        request: Request,
     ) -> ManualQuotaResponse:
         """Store the billing anchor and return the ESTIMATED capacity view."""
 
@@ -289,7 +318,9 @@ def _register_manual_quota_routes(app: FastAPI) -> None:
         return response
 
     @app.delete("/api/v1/providers/{provider_id}/manual-quota", status_code=204)
-    async def delete_manual_quota(provider_id: str, request: Request) -> None:
+    async def delete_manual_quota(
+        _principal: _AdminPrincipal, provider_id: str, request: Request
+    ) -> None:
         """Clear the billing anchor and any Exa manual-credit limit idempotently."""
 
         name = _require_provider(provider_id)
@@ -342,7 +373,9 @@ def _register_oauth_routes(app: FastAPI) -> None:
         "/api/v1/providers/{provider_id}/oauth/device-code",
         response_model=DeviceCodeResponse,
     )
-    async def start_oauth_device_code(provider_id: str, request: Request) -> DeviceCodeResponse:
+    async def start_oauth_device_code(
+        _principal: _AdminPrincipal, provider_id: str, request: Request
+    ) -> DeviceCodeResponse:
         """Initiate a device flow; 409 while paired, never destructive on 409."""
 
         _require_oauth_provider(provider_id)
@@ -378,7 +411,9 @@ def _register_oauth_routes(app: FastAPI) -> None:
         "/api/v1/providers/{provider_id}/oauth/status",
         response_model=OAuthStatusResponse,
     )
-    async def oauth_status(provider_id: str, request: Request) -> OAuthStatusResponse:
+    async def oauth_status(
+        _principal: _AdminPrincipal, provider_id: str, request: Request
+    ) -> OAuthStatusResponse:
         """Report pairing status with one bounded token attempt unless terminal."""
 
         _require_oauth_provider(provider_id)
@@ -407,7 +442,7 @@ def _register_oauth_routes(app: FastAPI) -> None:
             ) from None
 
     @app.delete("/api/v1/providers/{provider_id}/oauth", status_code=204)
-    async def delete_oauth(provider_id: str, request: Request) -> None:
+    async def delete_oauth(_principal: _AdminPrincipal, provider_id: str, request: Request) -> None:
         """Revoke bearer material before deleting it; idempotent."""
 
         _require_oauth_provider(provider_id)

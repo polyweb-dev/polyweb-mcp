@@ -18,9 +18,11 @@ from freesearch.configuration.provider_config import (
 )
 from freesearch.infrastructure.secrets import PROVIDER_ENV_VARS, ProviderName
 from freesearch.models.contracts import UsageEvent, UsageOperation, UsageStatus
+from freesearch.models.users import UserRole
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
 from tests.conftest import FakeAdapter
+from tests.fixtures.auth import raw_auth_headers, register_promote_login, temp_email
 
 CANONICAL_ALPHA_ORDER = [
     "brave",
@@ -35,14 +37,21 @@ CANONICAL_ALPHA_ORDER = [
 
 
 @pytest.mark.asyncio
-async def test_fresh_database_has_today_defaults_and_alphabetical_tie_break(tmp_path: Path) -> None:
+async def test_fresh_database_has_today_defaults_and_alphabetical_tie_break(
+    tmp_path: Path, auth_secret: str
+) -> None:
     """AC-10: a new DB preserves enabled/100/closed and canonical tie order."""
+    # Use one Developer account for the reads.
     repository = await SQLiteRepository.open(tmp_path / "fresh.db")
     try:
         app = create_app([], repository=repository)
         with TestClient(app) as client:
-            providers = client.get("/api/v1/providers")
-            routing = client.get("/api/v1/routing/config")
+            pair = await register_promote_login(
+                client, repository, temp_email("runtime-fresh"), UserRole.DEVELOPER
+            )
+            headers = raw_auth_headers(pair["access_token"])
+            providers = client.get("/api/v1/providers", headers=headers)
+            routing = client.get("/api/v1/routing/config", headers=headers)
 
         assert providers.status_code == 200
         body = providers.json()
@@ -230,8 +239,10 @@ async def test_released_lock_persists_reconciled_support_mask(
 async def test_corrupt_persisted_provider_config_falls_back_to_defaults_without_500(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    auth_secret: str,
 ) -> None:
     """AC-10: strict-invalid persisted config is self-healed at every read seam."""
+    # Use one Developer account for reads and search. Developer also searches.
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv(PROVIDER_ENV_VARS[ProviderName.EXA], raising=False)
     repository = await SQLiteRepository.open(tmp_path / "corrupt-settings.db")
@@ -242,9 +253,13 @@ async def test_corrupt_persisted_provider_config_falls_back_to_defaults_without_
         app = create_app([adapter], repository=repository)
 
         with TestClient(app, raise_server_exceptions=False) as client:
-            item = client.get("/api/v1/providers/exa")
-            listing = client.get("/api/v1/providers")
-            search = client.post("/search", json={"query": "corrupt settings"})
+            pair = await register_promote_login(
+                client, repository, temp_email("runtime-corrupt"), UserRole.DEVELOPER
+            )
+            headers = raw_auth_headers(pair["access_token"])
+            item = client.get("/api/v1/providers/exa", headers=headers)
+            listing = client.get("/api/v1/providers", headers=headers)
+            search = client.post("/search", json={"query": "corrupt settings"}, headers=headers)
 
         assert item.status_code == 200
         assert item.json()["enabled"] is True
@@ -340,8 +355,10 @@ async def test_legacy_usage_table_is_upgraded_additively_on_open(tmp_path: Path)
 @pytest.mark.asyncio
 async def test_provider_latency_p95_uses_nearest_rank_over_last_100_non_null(
     tmp_path: Path,
+    auth_secret: str,
 ) -> None:
     """AC-9: p95 is nearest-rank and ignores null legacy latency values."""
+    # Use one Developer account for the read.
     repository = await SQLiteRepository.open(tmp_path / "latency.db")
     try:
         start = datetime(2026, 1, 1, tzinfo=UTC)
@@ -370,7 +387,11 @@ async def test_provider_latency_p95_uses_nearest_rank_over_last_100_non_null(
 
         app = create_app([], repository=repository)
         with TestClient(app) as client:
-            providers = client.get("/api/v1/providers")
+            pair = await register_promote_login(
+                client, repository, temp_email("runtime-p95b"), UserRole.DEVELOPER
+            )
+            headers = raw_auth_headers(pair["access_token"])
+            providers = client.get("/api/v1/providers", headers=headers)
 
         assert providers.status_code == 200
         exa = next(item for item in providers.json() if item["provider_id"] == "exa")
@@ -381,13 +402,18 @@ async def test_provider_latency_p95_uses_nearest_rank_over_last_100_non_null(
 
 
 @pytest.mark.asyncio
-async def test_empty_latency_sample_reports_none(tmp_path: Path) -> None:
+async def test_empty_latency_sample_reports_none(tmp_path: Path, auth_secret: str) -> None:
     """AC-9: no measured latency is represented as JSON null."""
+    # Use one Developer account for the read.
     repository = await SQLiteRepository.open(tmp_path / "empty-latency.db")
     try:
         app = create_app([], repository=repository)
         with TestClient(app) as client:
-            providers = client.get("/api/v1/providers")
+            pair = await register_promote_login(
+                client, repository, temp_email("runtime-empty"), UserRole.DEVELOPER
+            )
+            headers = raw_auth_headers(pair["access_token"])
+            providers = client.get("/api/v1/providers", headers=headers)
         assert providers.status_code == 200
         assert all(item["latency_p95_ms"] is None for item in providers.json())
     finally:
@@ -397,8 +423,10 @@ async def test_empty_latency_sample_reports_none(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_legacy_recent_usage_projection_has_new_fields_with_compatibility_defaults(
     tmp_path: Path,
+    auth_secret: str,
 ) -> None:
     """AC-9: legacy rows project latency null and status success."""
+    # Use one Developer account for stats and dashboard.
     repository = await SQLiteRepository.open(tmp_path / "projection.db")
     try:
         await repository.record_usage(
@@ -413,8 +441,12 @@ async def test_legacy_recent_usage_projection_has_new_fields_with_compatibility_
         )
         app = create_app([], repository=repository)
         with TestClient(app) as client:
-            stats = client.get("/stats")
-            dashboard = client.get("/dashboard")
+            pair = await register_promote_login(
+                client, repository, temp_email("runtime-proj"), UserRole.DEVELOPER
+            )
+            headers = raw_auth_headers(pair["access_token"])
+            stats = client.get("/stats", headers=headers)
+            dashboard = client.get("/dashboard", headers=headers)
 
         for response in (stats, dashboard):
             assert response.status_code == 200

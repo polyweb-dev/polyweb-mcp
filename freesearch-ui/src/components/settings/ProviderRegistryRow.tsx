@@ -1,19 +1,17 @@
 import React from "react"
 import { RefreshCw } from "lucide-react"
 import { ProviderLogo } from "@/components/common/ProviderLogo"
-import { Switch } from "@/shared/ui/Switch"
 import { Button } from "@/shared/ui/button"
 import {
   TableCell,
   TableRow,
 } from "@/shared/ui/table"
 import type { ProviderConfig } from "@/domains/providers"
-import { FETCH_BIT, GLOBAL_BIT, SEARCH_BIT } from "@/domains/providers"
 import { stripProtocol } from "./providerDisplay"
 import { HealthStatus } from "./ProviderHealthStatus"
 import { PriorityIndicator } from "./ProviderPriorityControl"
+import { ProviderRegistryControls } from "./ProviderRegistryControls"
 import { RowPill } from "./ProviderRowPill"
-import { OperationControl } from "./ProviderOperationControl"
 
 interface ProviderRegistryRowProps {
   provider: ProviderConfig
@@ -23,6 +21,8 @@ interface ProviderRegistryRowProps {
   accessPending: boolean
   canMoveUp: boolean
   canMoveDown: boolean
+  /** False for a role without control-edit access: read-only values only. */
+  canEdit: boolean
   onMovePriority: (direction: "up" | "down") => void
   onToggleGlobal: (enabled: boolean) => void
   onToggleSearch: (enabled: boolean) => void
@@ -38,6 +38,7 @@ export const ProviderRegistryRow: React.FC<ProviderRegistryRowProps> = ({
   accessPending,
   canMoveUp,
   canMoveDown,
+  canEdit,
   onMovePriority,
   onToggleGlobal,
   onToggleSearch,
@@ -56,6 +57,7 @@ export const ProviderRegistryRow: React.FC<ProviderRegistryRowProps> = ({
             providerCount={providerCount}
             canMoveUp={canMoveUp}
             canMoveDown={canMoveDown}
+            canEdit={canEdit}
             onMovePriority={onMovePriority}
           />
           <div className="flex items-center gap-2">
@@ -77,49 +79,32 @@ export const ProviderRegistryRow: React.FC<ProviderRegistryRowProps> = ({
         <HealthStatus status={health} />
       </TableCell>
       <TableCell className="whitespace-nowrap px-3 py-2.5">
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          type="button"
-          onClick={onOpenTest}
-          disabled={testing}
-          aria-label={`${provider.name} test connection`}
-          title={`Test ${provider.name} connection`}
-        >
-          <RefreshCw aria-hidden="true" className={`size-3.5 ${testing ? "animate-spin" : ""}`} />
-        </Button>
+        {canEdit ? (
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            type="button"
+            onClick={onOpenTest}
+            disabled={testing}
+            aria-label={`${provider.name} test connection`}
+            title={`Test ${provider.name} connection`}
+          >
+            <RefreshCw aria-hidden="true" className={`size-3.5 ${testing ? "animate-spin" : ""}`} />
+          </Button>
+        ) : (
+          <span className="text-[12px] text-[var(--muted)]" title="Read-only for your role">
+            Hidden
+          </span>
+        )}
       </TableCell>
-      <TableCell className="whitespace-nowrap px-3 py-2.5">
-        <OperationControl
-          label="Search"
-          providerName={provider.name}
-          supported={(provider.supportMask & SEARCH_BIT) !== 0}
-          enabled={provider.searchEnabled}
-          globallyDisabled={!provider.globalEnabled}
-          pending={accessPending}
-          onToggle={onToggleSearch}
-        />
-      </TableCell>
-      <TableCell className="whitespace-nowrap px-3 py-2.5">
-        <OperationControl
-          label="Fetch"
-          providerName={provider.name}
-          supported={(provider.supportMask & FETCH_BIT) !== 0}
-          enabled={provider.fetchEnabled}
-          globallyDisabled={!provider.globalEnabled}
-          pending={accessPending}
-          onToggle={onToggleFetch}
-        />
-      </TableCell>
-      <TableCell className="whitespace-nowrap px-3 py-2.5">
-        <span className="sr-only">Global</span>
-        <Switch
-          checked={provider.globalEnabled}
-          onChange={onToggleGlobal}
-          disabled={accessPending || (provider.supportMask & GLOBAL_BIT) === 0}
-          ariaLabel={`${provider.name} global routing`}
-        />
-      </TableCell>
+      <ProviderRegistryControls
+        provider={provider}
+        canEdit={canEdit}
+        accessPending={accessPending}
+        onToggleGlobal={onToggleGlobal}
+        onToggleSearch={onToggleSearch}
+        onToggleFetch={onToggleFetch}
+      />
     </TableRow>
   )
 }

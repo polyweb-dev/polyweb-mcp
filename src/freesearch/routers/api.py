@@ -19,15 +19,16 @@ from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.adapters.registry import adapter_factory, build_adapters, close_adapters
-from freesearch.configuration.config import get_settings
+from freesearch.configuration.config import get_settings, require_transport_port
 from freesearch.configuration.provider_config import ProviderConfigError
+from freesearch.infrastructure.auth_asgi import BearerAuthMiddleware
 from freesearch.infrastructure.cryptography import SecretCodec, load_or_create_master_key
 from freesearch.infrastructure.encrypted_store import (
     EncryptedDbSecretStore,
@@ -40,10 +41,16 @@ from freesearch.infrastructure.observability import (
     SpanKindName,
     build_observability,
     current_observability,
-    error_type_of,
 )
 from freesearch.infrastructure.observability_asgi import ProviderTraceMiddleware
 from freesearch.infrastructure.secrets import AsyncSecretStore, ProviderName
+from freesearch.infrastructure.trace_payloads import (
+    _annotate_root,
+    _annotate_root_error,
+    _operation_name,
+    _request_attributes,
+    _search_results_payload,
+)
 from freesearch.mcp.server import _apply_parallel_seed
 from freesearch.models.contracts import (
     CostPreset,
@@ -64,15 +71,14 @@ from freesearch.models.observability import (
     TRACE_EVENT_PROVIDER_REQUEST,
     TRACE_EVENT_PROVIDER_RESPONSE,
     TraceAttribute,
-    TraceFetchOutput,
     TraceOperation,
     TraceRootSpan,
-    TraceSearchOutput,
-    TraceSearchResult,
     TraceSpanName,
 )
+from freesearch.models.users import UserPrincipal
 from freesearch.persistence.database_migrations import upgrade_database
 from freesearch.persistence.storage import SQLiteRepository
+from freesearch.routers.auth import register_auth_routes, require_control_reader
 from freesearch.routers.control import (
     _build_with_resolved_secret,
     _resolve_secret,
@@ -97,6 +103,7 @@ from freesearch.services.monitoring import (
     tracked_call,
 )
 from freesearch.services.routing import RoutingError, select_route
+from freesearch.services.users import AuthService
 
 # Route templates that receive a root server span. Extending provider-querying
 # coverage means adding one entry here (plus its operation shape) — the
@@ -133,12 +140,61 @@ async def _build_app_adapters(
             continue
 
 
+async def _verify_access_token(app: FastAPI, token: str) -> UserPrincipal | None:
+    """Verify one access JWT through the app's auth service."""
+
+    service: AuthService | None = app.state.auth_service
+    if service is None:
+        return None
+    return await service.verify_token(token)
+
+
+async def _verify_refresh_token(app: FastAPI, token: str) -> UserPrincipal | None:
+    """Verify one opaque refresh credential for the protected refresh route."""
+
+    service: AuthService | None = app.state.auth_service
+    if service is None:
+        return None
+    return await service.verify_refresh_token(token)
+
+
+async def _reserve_registration(app: FastAPI, peer_address: str) -> int | None:
+    """Reserve public-registration capacity before the endpoint runs."""
+
+    service: AuthService | None = app.state.auth_service
+    if service is None:
+        raise RuntimeError("account authentication is not configured")
+    return await service.reserve_registration(peer_address=peer_address)
+
+
+async def _open_accounts(
+    auth: AuthService,
+    *,
+    repo: SQLiteRepository | None,
+    database: str | Path | None,
+    owns_auth_service: bool,
+) -> None:
+    """Attach the app's repository to a composed auth service, then open it.
+
+    An injected service always opens. A composed service opens when it has a real
+    database: the app's repository, an explicit database argument, or the database
+    it owns. A composition with only injected adapters keeps no account store, so
+    it creates no stray database file.
+    """
+
+    if owns_auth_service and isinstance(repo, SQLiteRepository):
+        auth.attach_repository(repo)
+    if not owns_auth_service or auth.repository is not None or database is not None:
+        await auth.open()
+
+
 def create_app(
     adapters: Sequence[ProviderAdapter] | None = None,
     repository: SQLiteRepository | None = None,
     *,
     database: str | Path | None = None,
     secret_store: AsyncSecretStore | None = None,
+    auth_service: AuthService | None = None,
 ) -> FastAPI:
     """Create the FastAPI app routing every operation to a configured adapter.
 
@@ -146,6 +202,10 @@ def create_app(
     backed by the local master key; injected ``secret_store`` values remain
     offline seams. On-demand adapter construction receives the resolved
     app-scoped vault key.
+
+    Account authentication reuses this app's operational repository without
+    taking ownership of it. Only an injected ``auth_service`` keeps its own
+    database and lifecycle.
     """
 
     owns_client = adapters is None
@@ -154,14 +214,22 @@ def create_app(
     # The repository is owned only when neither adapters nor a repository was
     # injected: the composition root then opens (and closes) its own database.
     owns_repository = repository is None and adapters is None
+    owns_auth_service = auth_service is None
+    accounts = auth_service or AuthService(get_settings(), repository=repository, database=database)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         repo: SQLiteRepository | None = app.state.repository
+        auth: AuthService = app.state.auth_service
         try:
             if owns_repository:
                 repo = await SQLiteRepository.open(resolve_database_path(database))
                 app.state.repository = repo
+            # Account access is available before the first request: an owned
+            # database is migrated by ``open`` and validated by ``upgrade``.
+            await _open_accounts(
+                auth, repo=repo, database=database, owns_auth_service=owns_auth_service
+            )
             if isinstance(repo, SQLiteRepository) and app.state._uses_default_secret_store:
                 settings = get_settings()
                 passphrase = (
@@ -232,8 +300,13 @@ def create_app(
             else:
                 clear_quota_poll_cache(repository, routes)
                 clear_config_cache(repository)
+            await auth.close()
             await close_adapters(routes, client if owns_client else None)
 
+    # The browser origin allowlist reaches the guard, the middleware, and the auth
+    # router through this composition only. An empty allowlist keeps the
+    # programmatic JSON pair and Bearer refresh contract for every client.
+    browser_origins = frozenset(get_settings().auth_browser_origins)
     app = FastAPI(title="FreeSearch", version="0.1.0", lifespan=lifespan)
     app.state.repository = repository
     app.state._routes = routes
@@ -241,6 +314,9 @@ def create_app(
     app.state.secret_store = secret_store
     app.state._uses_default_secret_store = secret_store is None
     app.state._control_lock = asyncio.Lock()
+    app.state.auth_service = accounts
+    app.state._owns_auth_service = owns_auth_service
+    app.state.auth_browser_origins = browser_origins
     # Tracing starts disabled and is enabled by the lifespan once the trace
     # database is known, so tests that never enter the lifespan stay no-op.
     app.state.observability = NO_OP_OBSERVABILITY
@@ -249,6 +325,16 @@ def create_app(
         runtime_getter=lambda: app.state.observability,
         traced_routes=_TRACED_ROUTES,
     )
+    # Added last, so the guard sits outside the trace middleware: a rejected
+    # request can neither reach an endpoint nor open a provider trace root.
+    app.add_middleware(
+        BearerAuthMiddleware,
+        browser_origins=browser_origins,
+        verify_token=lambda token: _verify_access_token(app, token),
+        verify_refresh_token=lambda token: _verify_refresh_token(app, token),
+        registration_limit=lambda peer: _reserve_registration(app, peer),
+    )
+    register_auth_routes(app)
     register_control_routes(app)
     register_observability_routes(app)
 
@@ -288,7 +374,10 @@ def create_app(
             )
 
     @app.get("/stats", response_model=StatsResponse)
-    async def stats(limit: int = 20) -> StatsResponse:
+    async def stats(
+        _principal: Annotated[UserPrincipal, Depends(require_control_reader)],
+        limit: int = 20,
+    ) -> StatsResponse:
         """Return the read-only, local-observed monitoring snapshot."""
         return await collect_stats(
             app.state.repository,
@@ -297,7 +386,10 @@ def create_app(
         )
 
     @app.get("/dashboard", response_model=DashboardResponse)
-    async def dashboard(limit: int = 20) -> DashboardResponse:
+    async def dashboard(
+        _principal: Annotated[UserPrincipal, Depends(require_control_reader)],
+        limit: int = 20,
+    ) -> DashboardResponse:
         """Return the JSON snapshot the future React dashboard consumes."""
         snapshot = await collect_stats(
             app.state.repository,
@@ -368,25 +460,6 @@ def _trace_database(repo: SQLiteRepository | None, database: str | Path | None) 
     return resolve_database_path(database)
 
 
-def _operation_name(request: SearchRequest | FetchRequest) -> TraceOperation:
-    """Return the trace operation for a provider-querying request."""
-
-    return TraceOperation.SEARCH if isinstance(request, SearchRequest) else TraceOperation.FETCH
-
-
-def _request_attributes(request: SearchRequest | FetchRequest) -> dict[str, Any]:
-    """Provider-neutral request shape for backend/route span attributes."""
-
-    attributes: dict[str, Any] = {
-        TraceAttribute.OPERATION: _operation_name(request).value,
-        TraceAttribute.ROUTING_MODE: request.routing.mode.value,
-    }
-    attributes[TraceAttribute.REQUEST_LIMIT] = (
-        request.limit if isinstance(request, SearchRequest) else request.max_chars
-    )
-    return attributes
-
-
 def _provider_request_event(request: SearchRequest | FetchRequest) -> dict[str, Any]:
     """Outbound provider input event: content yes, credentials/headers never."""
 
@@ -406,21 +479,6 @@ def _provider_request_event(request: SearchRequest | FetchRequest) -> dict[str, 
         "json_extract": request.json_extract,
         "enhanced": request.enhanced,
     }
-
-
-def _search_results_payload(response: SearchResponse) -> list[TraceSearchResult]:
-    """Normalized results out, in the one shape the trace read API serves."""
-
-    return [
-        TraceSearchResult(
-            title=result.title,
-            url=str(result.url),
-            snippet=result.snippet,
-            source=result.source,
-            score=result.score,
-        )
-        for result in response.results
-    ]
 
 
 def _provider_response_event(response: SearchResponse | FetchResponse) -> dict[str, Any]:
@@ -929,28 +987,41 @@ def main(argv: Sequence[str] | None = None) -> None:
     Injected stores remain available for offline tests.
 
     The bind address is loopback by default for local development; containers
-    override it with ``--host 0.0.0.0`` (or ``FREESEARCH_API_HOST``).
+    override it with ``--host 0.0.0.0`` (or ``FREESEARCH_API_HOST``). The port
+    comes from ``FREESEARCH_API_PORT`` or from an explicit ``--port`` value, and
+    no numeric fallback exists, so a missing port stops the launch.
     """
     import argparse
-    import os
 
     import uvicorn
 
     parser = argparse.ArgumentParser(description="FreeSearch REST API")
     parser.add_argument(
         "--host",
-        default=os.getenv("FREESEARCH_API_HOST", "127.0.0.1"),
-        help="HTTP host (default: 127.0.0.1, env: FREESEARCH_API_HOST)",
+        default=None,
+        help="HTTP host override (env: FREESEARCH_API_HOST)",
     )
     parser.add_argument(
         "--port",
         type=int,
-        default=int(os.getenv("FREESEARCH_API_PORT", "8001")),
-        help="HTTP port (default: 8001, env: FREESEARCH_API_PORT)",
+        default=None,
+        help="HTTP port override (env: FREESEARCH_API_PORT)",
     )
     args = parser.parse_args(argv)
 
-    uvicorn.run(create_app(), host=args.host, port=args.port)
+    settings = get_settings()
+    overrides: dict[str, Any] = {}
+    if args.host:
+        overrides["api_host"] = args.host
+    if args.port is not None:
+        overrides["api_port"] = args.port
+    effective = settings.model_copy(update=overrides) if overrides else settings
+
+    uvicorn.run(
+        create_app(),
+        host=effective.api_host,
+        port=require_transport_port(effective, transport="api"),
+    )
 
 
 if __name__ == "__main__":

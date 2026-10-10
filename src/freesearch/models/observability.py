@@ -62,6 +62,7 @@ class TraceAttribute:
 
     SCHEMA_VERSION: Final[str] = "freesearch.trace.schema_version"
     OPERATION: Final[str] = "freesearch.operation.name"
+    USER_ID: Final[str] = "freesearch.user.id"
     PROVIDER: Final[str] = "freesearch.provider.name"
     ROUTING_MODE: Final[str] = "freesearch.routing.mode"
     ROUTING_CANDIDATE_COUNT: Final[str] = "freesearch.routing.candidate_count"
@@ -102,15 +103,23 @@ class TraceSpanName:
 
 
 class TraceRootSpan(StrEnum):
-    """Inbound route templates that receive a root server span."""
+    """Inbound surfaces that receive a root server span.
+
+    The API values are route templates. The MCP values name one tool call on
+    either transport, because a stdio call has no HTTP route.
+    """
 
     SEARCH = "POST /search"
     FETCH = "POST /fetch"
+    MCP_SEARCH = "mcp search"
+    MCP_FETCH = "mcp fetch"
 
 
 _ROOT_STAGES: Final[dict[str, str]] = {
     TraceRootSpan.SEARCH.value: "Search request",
     TraceRootSpan.FETCH.value: "Fetch request",
+    TraceRootSpan.MCP_SEARCH.value: "MCP search request",
+    TraceRootSpan.MCP_FETCH.value: "MCP fetch request",
 }
 
 _STAGES: Final[dict[str, str]] = {
@@ -223,9 +232,14 @@ class TraceSpanDetail(ContractModel):
 
 
 class TraceSummary(ContractModel):
-    """Fast, scannable Activity list row (never carries query or output)."""
+    """Fast, scannable Activity list row (never carries query or output).
+
+    ``user_id`` is the canonical account UUID of the trace root. A historical
+    row without an owner keeps ``None`` and stays outside every account read.
+    """
 
     trace_id: str
+    user_id: str | None = None
     operation: TraceOperation | None = None
     started_at: AwareDatetime
     duration_ms: int = Field(ge=0)
@@ -253,8 +267,8 @@ class TraceListResponse(ContractModel):
 class TraceSpanRecord(ContractModel):
     """One exporter row: the persisted projection of one finished span.
 
-    Root spans additionally carry the summary projection (``operation``
-    through ``result_count``); child spans leave those at their defaults.
+    Root spans additionally carry the summary projection (``user_id`` through
+    ``result_count``); child spans leave those at their defaults.
     """
 
     span_id: str
@@ -269,6 +283,7 @@ class TraceSpanRecord(ContractModel):
     outcome: TraceOutcome = TraceOutcome.SUCCESS
     error_type: str | None = None
     parent_span_id: str | None = None
+    user_id: str | None = None
     operation: TraceOperation | None = None
     provider: str | None = None
     input_text: str | None = None

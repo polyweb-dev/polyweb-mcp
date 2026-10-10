@@ -34,8 +34,10 @@ from freesearch.models.contracts import (
     UsageOperation,
 )
 from freesearch.models.provider_access import is_operation_enabled
+from freesearch.models.users import UserRole
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
+from tests.fixtures.auth import TEMP_PASSWORD, configure_bdd_secret, promote_account, temp_email
 
 
 class _MemorySecretStore:
@@ -194,6 +196,22 @@ def _client(context: Any, *, raise_server_exceptions: bool = True) -> Iterator[T
             os.chdir(previous_cwd)
 
 
+def _login_headers(context: Any, role: UserRole, prefix: str) -> dict[str, str]:
+    # Register one account, assign one role, and return one access header.
+    email = temp_email(prefix)
+    with _client(context) as client:
+        registered = client.post("/auth/register", json={"email": email, "password": TEMP_PASSWORD})
+        assert registered.status_code == 201
+        if role is not UserRole.AGENT:
+            context.loop.run_until_complete(promote_account(context.repository, email, role))
+        logged_in = client.post(
+            "/auth/jwt/login", data={"username": email, "password": TEMP_PASSWORD}
+        )
+        assert logged_in.status_code == 200
+        token = logged_in.json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}
+
+
 def _reset_counts(context: Any) -> None:
     for adapter in getattr(context, "adapters", []):
         reset = getattr(adapter, "reset_counts", None)
@@ -234,9 +252,13 @@ def _reopen_control_repository(context: Any) -> None:
 
 @given("an offline control API with stub adapters")
 def step_given_control_api(context: Any) -> None:
+    configure_bdd_secret(context)
     _open_repository(context)
     context.adapters = [_ControlAdapter("exa"), _ControlAdapter("brave")]
     _build_app(context)
+    # Admin owns mutations, Developer owns reads. One account per role is enough.
+    context.admin_headers = _login_headers(context, UserRole.ADMIN, "control-admin")
+    context.developer_headers = _login_headers(context, UserRole.DEVELOPER, "control-dev")
 
 
 @given("an offline control API with stub adapters and call counters")
@@ -265,25 +287,33 @@ def step_given_control_api_counters_mcp(context: Any) -> None:
 
 @given("an offline control API with an in-memory secret store")
 def step_given_control_api_secret_store(context: Any) -> None:
+    configure_bdd_secret(context)
     _open_repository(context)
     context.temp_directory = _ScenarioDirectory()
     context.control_directory = Path(context.temp_directory.name)
     context.adapters = [_ControlAdapter("exa"), _ControlAdapter("brave")]
     context.secret_store = _MemorySecretStore()
     _build_app(context)
+    # Secret writes need the Admin role.
+    context.admin_headers = _login_headers(context, UserRole.ADMIN, "control-admin")
 
 
 @given("an offline control API with a failing adapter")
 def step_given_failing_control_api(context: Any) -> None:
+    configure_bdd_secret(context)
     _open_repository(context)
     context.adapters = [_ControlAdapter("exa", fail=True), _ControlAdapter("brave")]
     _build_app(context)
+    # Search needs any role, stats and dashboard need the Reader role.
+    context.developer_headers = _login_headers(context, UserRole.DEVELOPER, "control-dev")
 
 
 @when("I list the control-plane providers")
 def step_when_list_control_providers(context: Any) -> None:
     with _client(context) as client:
-        context.providers_response = client.get("/api/v1/providers")
+        context.providers_response = client.get(
+            "/api/v1/providers", headers=context.developer_headers
+        )
 
 
 @then("the control-plane provider list should contain the eight canonical providers")
@@ -314,9 +344,13 @@ def step_then_control_defaults(context: Any) -> None:
 def step_when_disable_provider(context: Any, provider: str) -> None:
     with _client(context) as client:
         context.patch_response = client.patch(
-            f"/api/v1/providers/{provider}", json={"enabled": False}
+            f"/api/v1/providers/{provider}",
+            json={"enabled": False},
+            headers=context.admin_headers,
         )
-        context.provider_response = client.get(f"/api/v1/providers/{provider}")
+        context.provider_response = client.get(
+            f"/api/v1/providers/{provider}", headers=context.developer_headers
+        )
 
 
 @then('the control-plane GET for "{provider}" should report enabled false')
@@ -331,7 +365,7 @@ def step_then_provider_disabled(context: Any, provider: str) -> None:
 def step_then_provider_disabled_after_reopen(context: Any) -> None:
     _reopen_control_repository(context)
     with _client(context) as client:
-        response = client.get("/api/v1/providers/exa")
+        response = client.get("/api/v1/providers/exa", headers=context.developer_headers)
     assert response.status_code == 200
     assert response.json()["enabled"] is False
 
@@ -344,7 +378,9 @@ def step_when_write_secret(context: Any, provider: str) -> None:
     context.raw_key = "offline-control-secret"
     with _client(context) as client:
         context.secret_write_response = client.put(
-            f"/api/v1/providers/{provider}/secret", json={"key": context.raw_key}
+            f"/api/v1/providers/{provider}/secret",
+            json={"key": context.raw_key},
+            headers=context.admin_headers,
         )
 
 
@@ -360,7 +396,9 @@ def step_then_secret_configured(context: Any) -> None:
 @when('I delete the "{provider}" secret through the control API')
 def step_when_delete_secret(context: Any, provider: str) -> None:
     with _client(context) as client:
-        context.secret_delete_response = client.delete(f"/api/v1/providers/{provider}/secret")
+        context.secret_delete_response = client.delete(
+            f"/api/v1/providers/{provider}/secret", headers=context.admin_headers
+        )
 
 
 @then("the secret response should report missing and contain no raw key")
@@ -380,6 +418,7 @@ def step_when_update_routing(context: Any) -> None:
                 "cost_optimization_preset": "free_first",
                 "max_attempts": 2,
             },
+            headers=context.admin_headers,
         )
 
 
@@ -387,7 +426,7 @@ def step_when_update_routing(context: Any) -> None:
 def step_then_routing_round_trip(context: Any) -> None:
     assert context.routing_response.status_code == 200
     with _client(context) as client:
-        response = client.get("/api/v1/routing/config")
+        response = client.get("/api/v1/routing/config", headers=context.developer_headers)
     assert response.status_code == 200
     assert response.json() == {
         "fallback_policy": "first_only",
@@ -399,8 +438,10 @@ def step_then_routing_round_trip(context: Any) -> None:
 @when("I submit an offline control search")
 def step_when_control_search(context: Any) -> None:
     with _client(context) as client:
-        context.search_response = client.post("/search", json={"query": "control activity"})
-        context.dashboard_response = client.get("/dashboard")
+        context.search_response = client.post(
+            "/search", json={"query": "control activity"}, headers=context.developer_headers
+        )
+        context.dashboard_response = client.get("/dashboard", headers=context.developer_headers)
 
 
 @then("the dashboard recent activity should contain a non-negative latency and success status")
@@ -417,9 +458,11 @@ def step_then_dashboard_latency_status(context: Any) -> None:
 @when("I submit a failing offline control search")
 def step_when_failing_control_search(context: Any) -> None:
     with _client(context, raise_server_exceptions=False) as client:
-        context.failure_response = client.post("/search", json={"query": "control failure"})
-        context.stats_response = client.get("/stats")
-        context.dashboard_response = client.get("/dashboard")
+        context.failure_response = client.post(
+            "/search", json={"query": "control failure"}, headers=context.developer_headers
+        )
+        context.stats_response = client.get("/stats", headers=context.developer_headers)
+        context.dashboard_response = client.get("/dashboard", headers=context.developer_headers)
 
 
 @then("the control request should return HTTP 500")

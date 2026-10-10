@@ -41,6 +41,7 @@ from freesearch.models.contracts import (
     UsageEvent,
     UsageOperation,
 )
+from freesearch.models.users import UserRole
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
 from freesearch.services.parallel_oauth import (
@@ -60,6 +61,12 @@ from tests.encrypted_secrets_helpers import (
     maybe_await,
     require_cryptography,
     require_encrypted_store_module,
+)
+from tests.fixtures.auth import (
+    TEMP_PASSWORD,
+    configure_bdd_secret,
+    promote_account,
+    temp_email,
 )
 from tests.integration.services.oauth.oauth_stubs import (
     ACCESS_TOKEN_VALUE,
@@ -236,6 +243,22 @@ def _client(context: Any) -> Iterator[TestClient]:
         yield client
 
 
+def _login_admin(context: Any) -> dict[str, str]:
+    # Register one account, assign the Admin role, and return one access header.
+    email = temp_email("enc-admin")
+    with _client(context) as client:
+        registered = client.post("/auth/register", json={"email": email, "password": TEMP_PASSWORD})
+        assert registered.status_code == 201
+        context.loop.run_until_complete(promote_account(context.repository, email, UserRole.ADMIN))
+        logged_in = client.post(
+            "/auth/jwt/login", data={"username": email, "password": TEMP_PASSWORD}
+        )
+        assert logged_in.status_code == 200
+        headers = {"Authorization": f"Bearer {logged_in.json()['access_token']}"}
+    context.auth_headers = headers
+    return headers
+
+
 class _AttrShim:
     """Minimal setattr recorder so the network guard can be undone per scenario."""
 
@@ -306,16 +329,22 @@ def _call_vault_migration(context: Any) -> Any:
 def step_given_passphrase_api(context: Any) -> None:
     _new_scenario_dir(context)
     _isolate_process_state(context, passphrase=SENTINEL_PASSPHRASE)
+    configure_bdd_secret(context)
     _open_repository(context)
     _build_app(context, ["exa", "brave"])
+    # Control mutations and secrets need the Admin role.
+    _login_admin(context)
 
 
 @given("an offline encrypted control API in auto-generate mode")
 def step_given_autogen_api(context: Any) -> None:
     _new_scenario_dir(context)
     _isolate_process_state(context, passphrase=None)
+    configure_bdd_secret(context)
     _open_repository(context)
     _build_app(context, ["tavily"])
+    # Control mutations and secrets need the Admin role.
+    _login_admin(context)
 
 
 @given("an offline encrypted control API in passphrase mode with captured logs")
@@ -334,9 +363,12 @@ def step_given_encrypted_oauth_api(context: Any) -> None:
     clear_oauth_poll_state()
     _new_scenario_dir(context)
     _isolate_process_state(context, passphrase=SENTINEL_PASSPHRASE)
+    configure_bdd_secret(context)
     _open_repository(context)
     _build_app(context, ["parallel"])
     _ensure_oauth_stub(context)
+    # OAuth routes need the Admin role.
+    _login_admin(context)
 
 
 # --- When ----------------------------------------------------------------
@@ -348,6 +380,7 @@ def step_when_write_sentinel(context: Any, provider: str) -> None:
         context.secret_response = client.put(
             f"/api/v1/providers/{provider}/secret",
             json={"key": SENTINEL_PROVIDER_KEYS[provider]},
+            headers=context.auth_headers,
         )
     context.last_provider = provider
 
@@ -359,6 +392,7 @@ def step_when_write_all_sentinels(context: Any) -> None:
             response = client.put(
                 f"/api/v1/providers/{provider.value}/secret",
                 json={"key": SENTINEL_PROVIDER_KEYS[provider.value]},
+                headers=context.auth_headers,
             )
             assert response.status_code == 200, response.text
 
@@ -390,15 +424,19 @@ def _rewind_oauth_poll(context: Any) -> None:
 def step_when_pair_oauth(context: Any) -> None:
     _ensure_oauth_stub(context)
     with _client(context) as client:
-        device = client.post("/api/v1/providers/parallel/oauth/device-code")
+        device = client.post(
+            "/api/v1/providers/parallel/oauth/device-code", headers=context.auth_headers
+        )
         assert device.status_code == 200, device.text
-        first = client.get("/api/v1/providers/parallel/oauth/status")
+        first = client.get("/api/v1/providers/parallel/oauth/status", headers=context.auth_headers)
         assert first.status_code == 200, first.text
         assert first.json()["status"] == "pending"
         last = first
         for _ in range(8):
             _rewind_oauth_poll(context)
-            probe = client.get("/api/v1/providers/parallel/oauth/status")
+            probe = client.get(
+                "/api/v1/providers/parallel/oauth/status", headers=context.auth_headers
+            )
             assert probe.status_code == 200, probe.text
             last = probe
             if last.json()["status"] == "ready":
@@ -410,27 +448,37 @@ def step_when_pair_oauth(context: Any) -> None:
 @when("I disconnect OAuth")
 def step_when_disconnect_oauth(context: Any) -> None:
     with _client(context) as client:
-        context.disconnect_response = client.delete("/api/v1/providers/parallel/oauth")
+        context.disconnect_response = client.delete(
+            "/api/v1/providers/parallel/oauth", headers=context.auth_headers
+        )
 
 
 @when("I disconnect OAuth again")
 def step_when_disconnect_oauth_again(context: Any) -> None:
     with _client(context) as client:
-        context.second_disconnect = client.delete("/api/v1/providers/parallel/oauth")
+        context.second_disconnect = client.delete(
+            "/api/v1/providers/parallel/oauth", headers=context.auth_headers
+        )
 
 
 @when('I read back the provider "{provider}" status and secret routes')
 def step_when_read_back(context: Any, provider: str) -> None:
     with _client(context) as client:
-        context.status_response = client.get(f"/api/v1/providers/{provider}")
-        context.secret_delete_probe = client.delete(f"/api/v1/providers/{provider}/secret")
+        context.status_response = client.get(
+            f"/api/v1/providers/{provider}", headers=context.auth_headers
+        )
+        context.secret_delete_probe = client.delete(
+            f"/api/v1/providers/{provider}/secret", headers=context.auth_headers
+        )
     context.last_provider = provider
 
 
 @when('I delete the sentinel secret for "{provider}" through the control API')
 def step_when_delete_sentinel(context: Any, provider: str) -> None:
     with _client(context) as client:
-        context.secret_response = client.delete(f"/api/v1/providers/{provider}/secret")
+        context.secret_response = client.delete(
+            f"/api/v1/providers/{provider}/secret", headers=context.auth_headers
+        )
 
 
 @when("I run the vault migration")
@@ -462,7 +510,7 @@ def step_then_encrypted_source(context: Any) -> None:
 @then('the provider "{provider}" should probe successfully')
 def step_then_probe_ok(context: Any, provider: str) -> None:
     with _client(context) as client:
-        probe = client.post(f"/api/v1/providers/{provider}/test")
+        probe = client.post(f"/api/v1/providers/{provider}/test", headers=context.auth_headers)
     assert probe.status_code == 200
     assert probe.json()["ok"] is True
 
@@ -496,7 +544,7 @@ def step_then_key_file_perms(context: Any) -> None:
 def step_then_secret_still_resolves(context: Any, provider: str) -> None:
     assert _run(context, _enc_store(context).get(provider)) == SENTINEL_PROVIDER_KEYS[provider]
     with _client(context) as client:
-        status = client.get(f"/api/v1/providers/{provider}")
+        status = client.get(f"/api/v1/providers/{provider}", headers=context.auth_headers)
     assert status.json()["secret_presence"] == "configured"
 
 
@@ -537,7 +585,7 @@ def step_then_metadata_clean(context: Any) -> None:
 @then('the provider "{provider}" should report no usable secret')
 def step_then_no_usable_secret(context: Any, provider: str) -> None:
     with _client(context) as client:
-        status = client.get(f"/api/v1/providers/{provider}")
+        status = client.get(f"/api/v1/providers/{provider}", headers=context.auth_headers)
     assert status.status_code == 200
     assert status.json()["secret_presence"] == "missing"
     context.last_status_text = status.text
@@ -569,7 +617,11 @@ def step_then_nondeterministic_rows(context: Any) -> None:
     first = _run(context, context.repository.get_runtime_setting(f"secret.enc:{provider}"))
     with _client(context) as client:
         assert (
-            client.put(f"/api/v1/providers/{provider}/secret", json={"key": sentinel}).status_code
+            client.put(
+                f"/api/v1/providers/{provider}/secret",
+                json={"key": sentinel},
+                headers=context.auth_headers,
+            ).status_code
             == 200
         )
     second = _run(context, context.repository.get_runtime_setting(f"secret.enc:{provider}"))
@@ -584,7 +636,7 @@ def step_then_tombstone_missing(context: Any, provider: str) -> None:
         "RED (AC-6): get must return None while the tombstone is present"
     )
     with _client(context) as client:
-        status = client.get(f"/api/v1/providers/{provider}")
+        status = client.get(f"/api/v1/providers/{provider}", headers=context.auth_headers)
     assert status.status_code == 200
     assert status.json()["secret_presence"] == "missing"
     prefix = _tombstone_prefix()
@@ -669,8 +721,12 @@ def step_then_secret_missing_none(context: Any) -> None:
 @then("unknown provider secret routes should return 404")
 def step_then_unknown_404(context: Any) -> None:
     with _client(context) as client:
-        put = client.put("/api/v1/providers/ghost/secret", json={"key": "unused"})
-        delete = client.delete("/api/v1/providers/ghost/secret")
+        put = client.put(
+            "/api/v1/providers/ghost/secret",
+            json={"key": "unused"},
+            headers=context.auth_headers,
+        )
+        delete = client.delete("/api/v1/providers/ghost/secret", headers=context.auth_headers)
     assert put.status_code == 404
     assert delete.status_code == 404
 
@@ -678,6 +734,6 @@ def step_then_unknown_404(context: Any) -> None:
 @then('the "{provider}" provider should report keyless public presence')
 def step_then_keyless_public(context: Any, provider: str) -> None:
     with _client(context) as client:
-        status = client.get(f"/api/v1/providers/{provider}")
+        status = client.get(f"/api/v1/providers/{provider}", headers=context.auth_headers)
     assert status.status_code == 200
     assert status.json()["secret_presence"] == "keyless_public"

@@ -36,6 +36,7 @@ describe("useProviderStatus database authority", () => {
         setProvidersLoading: harness.setProvidersLoading,
         setProvidersError: harness.setProvidersError,
         showToast: harness.showToast,
+        canReadControls: true,
       }),
     )
 
@@ -73,6 +74,7 @@ describe("useProviderStatus database authority", () => {
         setProvidersLoading: harness.setProvidersLoading,
         setProvidersError: harness.setProvidersError,
         showToast: harness.showToast,
+        canReadControls: true,
       }),
     )
 
@@ -98,6 +100,7 @@ describe("useProviderStatus database authority", () => {
         setProvidersLoading: harness.setProvidersLoading,
         setProvidersError: harness.setProvidersError,
         showToast: harness.showToast,
+        canReadControls: true,
       }),
     )
 
@@ -132,6 +135,7 @@ describe("useProviderStatus database authority", () => {
         setProvidersLoading: harness.setProvidersLoading,
         setProvidersError: harness.setProvidersError,
         showToast: harness.showToast,
+        canReadControls: true,
       }),
     )
 
@@ -164,6 +168,7 @@ describe("useProviderStatus database authority", () => {
         setProvidersLoading: harness.setProvidersLoading,
         setProvidersError: harness.setProvidersError,
         showToast: harness.showToast,
+        canReadControls: true,
       }),
     )
 
@@ -193,6 +198,7 @@ describe("useProviderStatus database authority", () => {
         setProvidersLoading: harness.setProvidersLoading,
         setProvidersError: harness.setProvidersError,
         showToast: harness.showToast,
+        canReadControls: true,
       }),
     )
 
@@ -207,5 +213,52 @@ describe("useProviderStatus database authority", () => {
 
     expect(harness.getState()).toEqual(before)
     expect(harness.showToast).toHaveBeenCalledWith(expect.stringContaining("db down"), "error")
+  })
+
+  it("returns an empty catalog with clear flags when canReadControls is false", async () => {
+    let providersState: ProviderConfig[] = [
+      {
+        id: "exa",
+        name: "Exa",
+        capabilities: ["search", "fetch"],
+        priority: 1,
+        globalEnabled: true,
+        searchEnabled: true,
+        fetchEnabled: true,
+        hasKey: true,
+      } as ProviderConfig,
+    ]
+
+    const setProviders = vi.fn((update: React.SetStateAction<ProviderConfig[]>) => {
+      if (typeof update === "function") {
+        providersState = (update as (prev: ProviderConfig[]) => ProviderConfig[])(providersState)
+      } else {
+        providersState = update
+      }
+    })
+    const setProvidersLoading = vi.fn()
+    const setProvidersError = vi.fn()
+    const showToast = vi.fn()
+
+    const listProvidersSpy = vi.spyOn(apiService, "listProviders")
+
+    const { result } = renderHook(() =>
+      useProviderStatus({
+        setProviders,
+        setProvidersLoading,
+        setProvidersError,
+        showToast,
+        canReadControls: false,
+      })
+    )
+
+    await act(async () => {
+      await result.current.refreshProviders()
+    })
+
+    expect(listProvidersSpy).not.toHaveBeenCalled()
+    expect(providersState).toEqual([])
+    expect(setProvidersLoading).toHaveBeenCalledWith(false)
+    expect(setProvidersError).toHaveBeenCalledWith(null)
   })
 })

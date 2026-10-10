@@ -184,14 +184,46 @@ class DashboardResponse(StatsResponse):
     generated_at: AwareDatetime
 
 
+def _environment_file_value(name: str) -> str | None:
+    """Return one entry from the local ``.env`` file, or ``None``.
+
+    The file is parsed directly instead of through the settings loader so this
+    resolver stays importable from persistence and the database CLI without a
+    configuration dependency, and so a missing file is not an error.
+    """
+
+    path = Path(".env")
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        key, separator, value = line.partition("=")
+        if separator and key.strip() == name:
+            stripped = value.strip().strip('"').strip("'")
+            return stripped or None
+    return None
+
+
 def resolve_database_path(database: str | Path | None = None) -> Path:
-    """Return the telemetry database path: env override, argument, then default."""
+    """Return the telemetry database path.
+
+    Precedence: the process ``FREESEARCH_DB`` variable, an explicit argument, the
+    local environment file, then the filename default. Process environment wins
+    over the file so a worktree can override its own ``.env`` entry.
+    """
 
     from_environment = os.environ.get(DB_ENV_VAR)
     if from_environment:
         return Path(from_environment)
     if database is not None:
         return Path(database)
+    from_file = _environment_file_value(DB_ENV_VAR)
+    if from_file:
+        return Path(from_file)
     return Path(DEFAULT_DB_FILENAME)
 
 
