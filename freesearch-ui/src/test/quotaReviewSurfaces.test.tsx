@@ -269,7 +269,7 @@ function renderUsageWithProviders(
     return err(404, { detail: "unhandled test route" })
   })
   return render(
-    <FreeSearchProvider>
+    <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
       <QuotaAnalytics />
     </FreeSearchProvider>
   )

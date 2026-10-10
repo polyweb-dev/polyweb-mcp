@@ -261,16 +261,17 @@ describe("QuotaAnalytics manual billing entry (UI7)", () => {
 })
 
 /**
- * Developer role (control read without control edit): the permitted manual
- * quota read stays visible, but no manual action button or modal and no
- * provider OAuth slot renders. The stub serves reads only.
+ * Developer role (control read without control edit): the card controls stay
+ * visible, but every mutation is rejected with 403. The stub serves reads
+ * plus 403 on both PUT paths. Each failed save keeps its alert and its open
+ * modal, and nothing persists.
  */
 describe("QuotaAnalytics Developer read-only", () => {
   afterEach(() => {
     vi.unstubAllGlobals()
   })
 
-  it("shows quota reads with no manual actions and no OAuth slot (stub reads only)", async () => {
+  it("shows Balance and Spend controls but rejects Developer saves with 403 and keeps no data", async () => {
     const stub = installFetchStub((req) => {
       if (req.url === "/api/v1/providers" && req.method === "GET") {
         return ok(allProvidersFixture())
@@ -281,8 +282,25 @@ describe("QuotaAnalytics Developer read-only", () => {
       if (req.url.endsWith("/manual-quota") && req.method === "GET") {
         return err(404, { detail: "no manual quota configured" })
       }
+      if (req.url.endsWith("/manual-quota") && req.method === "PUT") {
+        return err(403, { detail: "insufficient role" })
+      }
+      if (req.url.includes("/crd-grants/") && req.method === "PUT") {
+        return err(403, { detail: "insufficient role" })
+      }
       if (req.url.startsWith("/dashboard")) {
-        return ok(dashboardFixture({ latest_quota: canonicalQuotasFixture() }))
+        return ok({
+          ...(dashboardFixture({ latest_quota: manualQuotaRows() }) as unknown as Record<
+            string,
+            unknown
+          >),
+          provider_limits: [
+            limitEntry("brave"),
+            limitEntry("exa"),
+            limitEntry("parallel"),
+            limitEntry("tinyfish"),
+          ],
+        })
       }
       return err(404, { detail: "unhandled test route" })
     })
@@ -295,28 +313,59 @@ describe("QuotaAnalytics Developer read-only", () => {
         <QuotaAnalytics />
       </FreeSearchProvider>
     )
+    const user = userEvent.setup()
 
-    // Permitted read: the quota rows render from the control reads.
+    // Controls stay visible for Developer reads.
     await waitFor(() => {
-      expect(screen.getByText("Brave Search quota", { exact: true })).toBeInTheDocument()
+      expect(screen.getByTestId("manual-quota-open-tinyfish")).toBeInTheDocument()
     })
-    expect(screen.getByText("Tinyfish quota", { exact: true })).toBeInTheDocument()
+    expect(screen.getByTestId("manual-quota-open-tinyfish")).toHaveTextContent("Provider Balance")
+    expect(screen.getByTestId("crd-grant-open-tinyfish")).toHaveTextContent("Budget Limit")
+
+    // Manual save attempt rejects with 403, keeps the alert and the open modal.
+    await user.click(screen.getByTestId("manual-quota-open-tinyfish"))
+    await screen.findByRole("dialog")
+    fireEvent.change(screen.getByTestId("manual-quota-start"), {
+      target: { value: "2026-09-01" },
+    })
+    fireEvent.change(screen.getByTestId("manual-quota-end"), {
+      target: { value: "2026-09-30" },
+    })
+    fireEvent.change(screen.getByTestId("manual-quota-allowance"), {
+      target: { value: "5.00" },
+    })
+    fireEvent.change(screen.getByTestId("manual-quota-usage"), {
+      target: { value: "0.88" },
+    })
+    await user.click(screen.getByTestId("manual-quota-save"))
+    const manualAlert = await screen.findByTestId("manual-quota-error")
+    expect(manualAlert).toHaveTextContent("insufficient role")
+    expect(screen.getByRole("dialog")).toBeInTheDocument()
     expect(
       stub.requestsTo("/api/v1/providers/tinyfish/manual-quota").map((request) => request.method)
-    ).toContain("GET")
+    ).toContain("PUT")
 
-    // No manual action buttons or modals without control edit access.
-    expect(screen.queryByTestId("manual-quota-open-brave")).toBeNull()
-    expect(screen.queryByTestId("manual-quota-open-parallel")).toBeNull()
-    expect(screen.queryByTestId("manual-quota-open-tinyfish")).toBeNull()
-    expect(screen.queryByRole("dialog")).toBeNull()
+    // Close the manual modal before the grant attempt.
+    await user.click(screen.getByTestId("manual-quota-cancel"))
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull()
+    })
 
-    // No provider OAuth slot without control edit access.
-    expect(screen.queryByTestId("oauth-device-open-parallel")).toBeNull()
-    expect(screen.queryByTestId("oauth-device-disconnect")).toBeNull()
+    // Grant save attempt rejects with 403, keeps the alert and the open modal.
+    await user.click(screen.getByTestId("crd-grant-open-tinyfish"))
+    await screen.findByRole("dialog")
+    await user.clear(screen.getByLabelText("Search credit units (CRD)"))
+    await user.type(screen.getByLabelText("Search credit units (CRD)"), "5")
+    await user.click(screen.getByRole("button", { name: "Save budget limit" }))
+    const grantAlert = await screen.findByRole("alert")
+    expect(grantAlert).toHaveTextContent("insufficient role")
+    expect(screen.getByRole("dialog")).toBeInTheDocument()
+    expect(
+      stub.requestsTo(/\/crd-grants\//).map((request) => request.method)
+    ).toContain("PUT")
 
-    // Stub reads only: every request is a GET.
-    expect(stub.requests.length).toBeGreaterThan(0)
-    expect(stub.requests.every((request) => request.method === "GET")).toBe(true)
+    // Nothing persists: no estimate appears and no dashboard refresh follows a rejection.
+    expect(screen.queryByTestId("manual-quota-estimate-tinyfish")).toBeNull()
+    expect(stub.requestsTo(/\/dashboard/).length).toBe(1)
   })
 })

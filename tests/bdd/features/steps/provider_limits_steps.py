@@ -805,13 +805,28 @@ def step_task_clean(context: Any) -> None:
 def step_batch(context: Any) -> None:
     from fastapi.testclient import TestClient
 
+    from freesearch.models.users import UserRole
     from freesearch.routers.api import create_app
+    from tests.fixtures.auth import (
+        configure_bdd_secret,
+        raw_auth_headers,
+        register_promote_login,
+        temp_email,
+    )
     from tests.integration.services.test_monitoring import _StubAdapter
 
+    configure_bdd_secret(context)
     app = create_app([_StubAdapter("synth-gate")], repository=context.repository)
     with TestClient(app) as client:
+        pair = _run(
+            context,
+            register_promote_login(
+                client, context.repository, temp_email("s0-batch"), UserRole.DEVELOPER
+            ),
+        )
+        headers = raw_auth_headers(pair["access_token"])
         context.batch_response = client.post(
-            "/fetch", json={"url": "https://example.com/a", "url_count": 2}
+            "/fetch", json={"url": "https://example.com/a", "url_count": 2}, headers=headers
         )
 
 
@@ -1423,10 +1438,20 @@ def step_brave_manual(context: Any) -> None:
 
 @given("a Brave app with seeded catalog and monthly headers of 900 left of 1000")
 def step_brave_app(context: Any) -> None:
+    from fastapi.testclient import TestClient
+
     from freesearch.models.contracts import SearchRequest
     from freesearch.models.provider_limits import UsageSyncRequest
+    from freesearch.models.users import UserRole
     from freesearch.routers.api import create_app
+    from tests.fixtures.auth import (
+        configure_bdd_secret,
+        raw_auth_headers,
+        register_promote_login,
+        temp_email,
+    )
 
+    configure_bdd_secret(context)
     _open_repo(context)
     context.vendor_calls = []
 
@@ -1443,6 +1468,14 @@ def step_brave_app(context: Any) -> None:
     context.brave_adapter = adapter
     context.brave_client = client
     context.brave_app = create_app([adapter], repository=context.repository)
+    with TestClient(context.brave_app) as http_client:
+        pair = _run(
+            context,
+            register_promote_login(
+                http_client, context.repository, temp_email("s1-brave"), UserRole.ADMIN
+            ),
+        )
+        context.brave_admin_headers = raw_auth_headers(pair["access_token"])
     _run(context, context.brave_adapter.search(SearchRequest(query="q", limit=2)))
     snapshot = _run(
         context,
@@ -1487,6 +1520,7 @@ def step_brave_fetch_grant_422(context: Any) -> None:
                 "search_crd": "10",
                 "fetch_crd": "4",
             },
+            headers=context.brave_admin_headers,
         )
     assert response.status_code == 422
 
