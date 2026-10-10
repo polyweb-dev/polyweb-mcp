@@ -7,6 +7,8 @@ export interface ProviderBadgeProps {
   name: string
   className?: string
   logoClassName?: string
+  /** The mark of an identity with no catalog logo; the letter avatar is the default. */
+  fallback?: ReactNode
 }
 
 /**
@@ -19,10 +21,16 @@ export function ProviderBadge({
   name,
   className,
   logoClassName,
+  fallback,
 }: ProviderBadgeProps): ReactNode {
   return (
     <span className={cn("inline-flex min-w-0 items-center gap-1.5", className)}>
-      <ProviderLogo providerId={providerId} name={name} className={logoClassName} />
+      <ProviderLogo
+        providerId={providerId}
+        name={name}
+        className={logoClassName}
+        fallback={fallback}
+      />
       <span className="min-w-0 [overflow-wrap:anywhere]">{name}</span>
     </span>
   )

@@ -140,16 +140,12 @@ async def test_cache_clear_scopes(
         await other.close()
 
 
-async def test_cache_identity_reuse_after_clear(
-    monkeypatch: pytest.MonkeyPatch, tmp_path
-) -> None:  # type: ignore[no-untyped-def]
+async def test_cache_identity_reuse_after_clear(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:  # type: ignore[no-untyped-def]
     """A replacement repository reads its own values after lifecycle clear."""
 
     repo_a = await SQLiteRepository.open(tmp_path / "control-unit-a.db")
     try:
-        await patch_provider_config(
-            repo_a, ProviderName.TAVILY, ProviderConfigUpdate(priority=11)
-        )
+        await patch_provider_config(repo_a, ProviderName.TAVILY, ProviderConfigUpdate(priority=11))
         config_a = await effective_config_for_name(repo_a, "tavily")
         assert config_a.priority == 11
         assert (await routing_policy(repo_a)).fallback_policy is FallbackPolicy.CHAINED
@@ -162,9 +158,7 @@ async def test_cache_identity_reuse_after_clear(
 
     repo_b = await SQLiteRepository.open(tmp_path / "control-unit-b.db")
     try:
-        await patch_provider_config(
-            repo_b, ProviderName.TAVILY, ProviderConfigUpdate(priority=77)
-        )
+        await patch_provider_config(repo_b, ProviderName.TAVILY, ProviderConfigUpdate(priority=77))
         await persist_routing_config(
             repo_b, RoutingConfigResponse(fallback_policy=FallbackPolicy.FIRST_ONLY)
         )

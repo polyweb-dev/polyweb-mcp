@@ -112,9 +112,7 @@ class _QuotaAdapter(ProviderAdapter):
         return self._quota_snapshot
 
     async def health(self) -> ProviderHealth:
-        return ProviderHealth(
-            provider=self._name, status=HealthStatus.UNKNOWN, checked_at=FIXED_AT
-        )
+        return ProviderHealth(provider=self._name, status=HealthStatus.UNKNOWN, checked_at=FIXED_AT)
 
 
 class _SimpleAdapter(ProviderAdapter):
@@ -407,9 +405,7 @@ async def test_auto_route_plan_read_budget(tmp_path: Path) -> None:
                 health_calls.clear()
                 quota_calls.clear()
                 select_counts[0] = 0
-                warm_task = asyncio.create_task(
-                    client.post("/search", json={"query": "warm plan"})
-                )
+                warm_task = asyncio.create_task(client.post("/search", json={"query": "warm plan"}))
                 with suppress(asyncio.TimeoutError, TimeoutError):
                     await asyncio.wait_for(entered.wait(), timeout=5)
                 warm_resp = await asyncio.wait_for(warm_task, timeout=5)
@@ -438,6 +434,3 @@ async def test_auto_route_plan_read_budget(tmp_path: Path) -> None:
         clear_config_cache()
         clear_quota_poll_cache()
         await repository.close()
-
-
-

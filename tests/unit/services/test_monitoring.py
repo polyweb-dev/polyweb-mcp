@@ -131,9 +131,7 @@ async def test_effective_quotas_batch_soft_zero(
         providers = ["parallel", "exa"]
         for provider in providers:
             await repo.record_quota(
-                _soft_zero_snapshot(
-                    provider, FIXED_AT, metadata={"origin": "vendor-poll"}
-                )
+                _soft_zero_snapshot(provider, FIXED_AT, metadata={"origin": "vendor-poll"})
             )
             await repo.record_usage(_usage_event(provider, FIXED_AT + timedelta(minutes=30)))
             await repo.record_usage(_usage_event(provider, FIXED_AT + timedelta(hours=1)))
@@ -175,9 +173,7 @@ async def test_effective_quotas_batch_soft_zero(
         )
         await repo.record_usage(_usage_event(provider, FIXED_AT + timedelta(hours=1)))
     elif scenario == "degenerate_limit_zero":
-        await repo.record_quota(
-            _soft_zero_snapshot(provider, FIXED_AT, remaining="0", limit="0")
-        )
+        await repo.record_quota(_soft_zero_snapshot(provider, FIXED_AT, remaining="0", limit="0"))
     else:  # pragma: no cover - parametrized ids are fixed above
         raise AssertionError(f"unknown scenario {scenario!r}")
     writes.clear()
@@ -255,9 +251,7 @@ class BlockingQuotaAdapter(ProviderAdapter):
     async def fetch(self, request: FetchRequest) -> FetchResponse:
         raise NotImplementedError
 
-    async def estimate_cost(
-        self, request: SearchRequest | FetchRequest
-    ) -> CostEstimate:
+    async def estimate_cost(self, request: SearchRequest | FetchRequest) -> CostEstimate:
         raise NotImplementedError
 
     async def quota(self) -> QuotaSnapshot | None:
@@ -295,9 +289,7 @@ class FailingQuotaAdapter(ProviderAdapter):
     async def fetch(self, request: FetchRequest) -> FetchResponse:
         raise NotImplementedError
 
-    async def estimate_cost(
-        self, request: SearchRequest | FetchRequest
-    ) -> CostEstimate:
+    async def estimate_cost(self, request: SearchRequest | FetchRequest) -> CostEstimate:
         raise NotImplementedError
 
     async def quota(self) -> QuotaSnapshot | None:
@@ -312,9 +304,7 @@ async def test_concurrent_quota_poll_uses_one_network_call(
 
     oauth_calls: list[int] = []
 
-    async def _no_oauth(
-        repository: Any, *, now: Any = None, secret_store: Any = None
-    ) -> None:
+    async def _no_oauth(repository: Any, *, now: Any = None, secret_store: Any = None) -> None:
         oauth_calls.append(1)
         return None
 

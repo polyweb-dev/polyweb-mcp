@@ -34,6 +34,13 @@ _LEGACY_APP_TABLES = frozenset(
         "quota_snapshots",
         "provider_health",
         "trace_spans",
+        "provider_limits",
+        "provider_native_pools",
+        "provider_crd_grants",
+        "provider_limit_events",
+        "provider_limit_admissions",
+        "provider_rate_observations",
+        "provider_rate_attempts",
     }
 )
 _AUTH_TABLES = frozenset({"user", "login_throttle", "auth_sessions", "refresh_tokens"})
@@ -63,7 +70,135 @@ _TRACE_SPAN_COLUMNS = frozenset(
         "resource_json",
     }
 )
+_LIMIT_TABLE_COLUMNS: dict[str, frozenset[str]] = {
+    "provider_limits": frozenset(
+        {
+            "provider",
+            "operation",
+            "auth_mode",
+            "supported",
+            "transport_available",
+            "rate_json",
+            "budget_json",
+            "native_unit",
+            "native_pool_id",
+            "conversion_profile_json",
+            "plan_name",
+            "usage_url",
+            "version",
+        }
+    ),
+    "provider_native_pools": frozenset(
+        {
+            "pool_id",
+            "provider",
+            "auth_mode",
+            "native_unit",
+            "remaining_text",
+            "allowance_text",
+            "actual_spend_usd_text",
+            "source",
+            "confidence",
+            "reset_at",
+            "observed_at",
+            "version",
+            "credential_generation",
+            "next_sync_at",
+            "lease_owner",
+            "lease_until",
+            "sync_error_code",
+            "stale",
+            "manual_anchor",
+            "tier_json",
+            "tier_split_known",
+            "last_tier_observed_at",
+        }
+    ),
+    "provider_crd_grants": frozenset(
+        {
+            "provider",
+            "operation",
+            "auth_mode",
+            "period_start",
+            "period_end",
+            "granted_crd_text",
+            "consumed_crd_text",
+            "reserved_crd_text",
+            "version",
+        }
+    ),
+    "provider_limit_events": frozenset(
+        {
+            "event_id",
+            "provider",
+            "operation",
+            "auth_mode",
+            "pool_id",
+            "observed_at",
+            "source",
+            "reason",
+            "old_native_text",
+            "new_native_text",
+            "old_crd_json",
+            "new_crd_json",
+            "crd_debit_text",
+            "native_debit_text",
+            "actual_usd_text",
+            "confidence",
+            "local_attempt_id",
+            "detail_json",
+        }
+    ),
+    "provider_limit_admissions": frozenset(
+        {
+            "attempt_id",
+            "provider",
+            "operation",
+            "auth_mode",
+            "pool_id",
+            "reserved_crd_text",
+            "reserved_native_text",
+            "state",
+            "created_at",
+            "expires_at",
+            "rate_reservations_json",
+            "local_only",
+        }
+    ),
+    "provider_rate_observations": frozenset(
+        {
+            "bucket_id",
+            "provider",
+            "auth_mode",
+            "window",
+            "unit",
+            "operation",
+            "limit_text",
+            "remaining_text",
+            "reset_at",
+            "observed_at",
+            "source",
+            "confidence",
+            "stale",
+        }
+    ),
+    "provider_rate_attempts": frozenset(
+        {
+            "attempt_id",
+            "bucket_id",
+            "provider",
+            "auth_mode",
+            "operation",
+            "window",
+            "unit",
+            "units_text",
+            "attempted_at",
+            "expires_at",
+        }
+    ),
+}
 _CORE_COLUMNS: dict[str, frozenset[str]] = {
+    **_LIMIT_TABLE_COLUMNS,
     "usage_events": frozenset(
         {"id", "provider", "operation", "units", "observed_at", "request_id", "metadata"}
     ),
@@ -76,6 +211,7 @@ _CORE_COLUMNS: dict[str, frozenset[str]] = {
 }
 _HEAD_COLUMNS: dict[str, frozenset[str]] = {
     **_CORE_COLUMNS,
+    **_LIMIT_TABLE_COLUMNS,
     "usage_events": _CORE_COLUMNS["usage_events"]
     | frozenset({"latency_ms", "status", "unit_kind"}),
     "quota_snapshots": _CORE_COLUMNS["quota_snapshots"]
@@ -114,6 +250,10 @@ _HEAD_INDEXES = frozenset(
         "auth_sessions_user_id",
         "auth_sessions_expires_at",
         "refresh_tokens_family_id",
+        "provider_limit_events_provider_auth_observed",
+        "provider_limit_admissions_created_at",
+        "provider_rate_attempts_bucket_attempted",
+        "provider_rate_attempts_expires_at",
     }
 )
 _LOCK_TIMEOUT_SECONDS = 30.0

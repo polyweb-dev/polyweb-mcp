@@ -15,6 +15,19 @@ import { ADMIN_ACCOUNT_ID } from "@/test/authFixtures"
 import { initialPlaygroundState } from "@/store/playgroundSlice"
 import type { SearchResponse } from "@/domains/execution"
 
+/**
+ * Open the shared provider picker and choose one row by its visible name.
+ * Rows carry role option only while the list is open, so the open click
+ * must come first. Returns the trigger button for text asserts.
+ */
+async function pinProvider(testId: string, name: string): Promise<HTMLElement> {
+  const trigger = screen.getByTestId(testId)
+  fireEvent.click(trigger)
+  const row = await screen.findByRole("option", { name })
+  fireEvent.click(row)
+  return trigger
+}
+
 describe("SearchPlayground.test.tsx", () => {
 
 /**
@@ -171,18 +184,16 @@ describe("SearchPlayground (live backend)", () => {
     })
 
     // Brave is search-only: pick it in the search provider filter. The
-    // catalog arrives asynchronously, so wait for its option first.
-    await screen.findByRole("option", { name: "Brave Search" })
-    const searchSelect = screen.getByRole("combobox") as HTMLSelectElement
-    fireEvent.change(searchSelect, { target: { value: "brave" } })
-    expect(searchSelect.value).toBe("brave")
+    // catalog arrives asynchronously, so open the picker and wait for its row.
+    const searchTrigger = await pinProvider("playground-search-provider", "Brave Search")
+    expect(searchTrigger.textContent).toContain("Brave Search")
 
     // Switching operations must clear the selected-provider state because
     // Brave cannot serve fetches.
     fireEvent.click(screen.getByRole("tab", { name: "Fetch", exact: true }))
 
-    const fetchSelect = screen.getByRole("combobox") as HTMLSelectElement
-    expect(fetchSelect).toHaveValue("auto")
+    const fetchTrigger = screen.getByTestId("playground-fetch-provider")
+    expect(fetchTrigger.textContent).toContain("Auto arbitration")
 
     const urlInput = screen.getByPlaceholderText(
       /Enter a URL to fetch/i
@@ -285,9 +296,11 @@ describe("SearchPlayground (live backend)", () => {
       expect(screen.getByPlaceholderText(/Search across all providers/i)).toBeInTheDocument()
     })
 
-    const select = screen.getByRole("combobox") as HTMLSelectElement
-    fireEvent.change(select, { target: { value: "all" } })
-    expect(select.value).toBe("all")
+    const searchTrigger = await pinProvider(
+      "playground-search-provider",
+      "All Providers (Ranked Fusion)"
+    )
+    expect(searchTrigger.textContent).toContain("All Providers")
 
     await submitQuery("fanout test")
 
@@ -1219,13 +1232,13 @@ describe("PG-F1 AC-PG-F1-5: Fetch composer via shared ComposerShell (Fetch ONLY)
     expect(footer.className).toContain("text-[var(--muted)]")
     // Footer owns the Provider row (exact Search footer token strings).
     expect(footer.textContent).toMatch(/Provider:/)
-    const select = within(footer).getByRole("combobox") as HTMLSelectElement
-    expect(select.value).toBe("auto")
+    const trigger = within(footer).getByTestId("playground-fetch-provider")
+    expect(trigger).toHaveAccessibleName("Provider:")
+    expect(trigger.textContent).toContain("Auto arbitration")
+    fireEvent.click(trigger)
     expect(
-      Array.from(select.querySelectorAll("option")).map((o) =>
-        o.textContent?.trim()
-      )
-    ).toContain("Auto arbitration")
+      await within(footer).findByRole("option", { name: "Auto arbitration" })
+    ).toBeInTheDocument()
     // Fetch footer carries no Search-only controls.
     expect(
       within(footer).queryByRole("spinbutton", { name: "Number of results" })
@@ -3423,11 +3436,9 @@ describe("PG-S4 AC-PG-S4-6: eligible-inherit else auto + markdown/4000ms contrac
     await readyForSearch()
 
     // Firecrawl is search+fetch: eligible in both modes. The catalog arrives
-    // asynchronously, so wait for its option before pinning it.
-    await screen.findByRole("option", { name: "Firecrawl" })
-    const searchSelect = screen.getByRole("combobox") as HTMLSelectElement
-    fireEvent.change(searchSelect, { target: { value: "firecrawl" } })
-    expect(searchSelect.value).toBe("firecrawl")
+    // asynchronously, so open the picker and wait for its row before pinning it.
+    const searchTrigger = await pinProvider("playground-search-provider", "Firecrawl")
+    expect(searchTrigger.textContent).toContain("Firecrawl")
 
     await searchAndWait()
     fireEvent.click(screen.getByTestId("fetch-result-tavily-0"))
@@ -3441,9 +3452,9 @@ describe("PG-S4 AC-PG-S4-6: eligible-inherit else auto + markdown/4000ms contrac
       routing: { mode: "require", providers: ["firecrawl"], allow_fallback: true },
     })
     // Provider selection survives the mode switch (still Firecrawl in Fetch).
-    expect(
-      screen.getByRole("combobox") as HTMLSelectElement
-    ).toHaveValue("firecrawl")
+    expect(screen.getByTestId("playground-fetch-provider").textContent).toContain(
+      "Firecrawl"
+    )
   })
 
   it("resets a fetch-ineligible provider (Brave search-only) to auto", async () => {
@@ -3451,11 +3462,9 @@ describe("PG-S4 AC-PG-S4-6: eligible-inherit else auto + markdown/4000ms contrac
     await readyForSearch()
 
     // Brave is search-only: fetch-ineligible. The catalog arrives
-    // asynchronously, so wait for its option before pinning it.
-    await screen.findByRole("option", { name: "Brave Search" })
-    const searchSelect = screen.getByRole("combobox") as HTMLSelectElement
-    fireEvent.change(searchSelect, { target: { value: "brave" } })
-    expect(searchSelect.value).toBe("brave")
+    // asynchronously, so open the picker and wait for its row before pinning it.
+    const searchTrigger = await pinProvider("playground-search-provider", "Brave Search")
+    expect(searchTrigger.textContent).toContain("Brave Search")
 
     await searchAndWait()
     fireEvent.click(screen.getByTestId("fetch-result-tavily-0"))
@@ -3469,8 +3478,8 @@ describe("PG-S4 AC-PG-S4-6: eligible-inherit else auto + markdown/4000ms contrac
       routing: { mode: "auto", providers: [], allow_fallback: true },
     })
     expect(
-      screen.getByRole("combobox") as HTMLSelectElement
-    ).toHaveValue("auto")
+      screen.getByTestId("playground-fetch-provider").textContent
+    ).toContain("Auto arbitration")
   })
 
   it("calls runFetch directly with markdown + 4000ms inside handleFetchResult", () => {
@@ -3955,13 +3964,14 @@ describe("PG-S5 AC-PG-S5-1: footer Results number input replaces Depth", () => {
     await readyForSearch()
 
     const footer = screen.getByTestId("search-composer-footer")
-    const select = within(footer).getByRole("combobox") as HTMLSelectElement
-    expect(select).toBeInTheDocument()
-    expect(select.value).toBe("auto")
-    const options = Array.from(select.querySelectorAll("option")).map((o) =>
-      o.textContent?.trim()
-    )
-    expect(options).toContain("Auto arbitration")
+    const trigger = within(footer).getByTestId("playground-search-provider")
+    expect(trigger).toBeInTheDocument()
+    expect(trigger).toHaveAccessibleName("Provider:")
+    expect(trigger.textContent).toContain("Auto arbitration")
+    fireEvent.click(trigger)
+    expect(
+      await within(footer).findByRole("option", { name: "Auto arbitration" })
+    ).toBeInTheDocument()
     expect(footer.textContent).toMatch(/Provider:/)
   })
 
@@ -4012,13 +4022,9 @@ describe("PG-S5 AC-PG-S5-2: /search limit + routing wiring", () => {
     const { stub } = renderWithBackend()
     await readyForSearch()
 
-    const select = within(
-      screen.getByTestId("search-composer-footer")
-    ).getByRole("combobox") as HTMLSelectElement
-    // The catalog arrives asynchronously — await the pinned option first.
-    await screen.findByRole("option", { name: "Tavily" })
-    fireEvent.change(select, { target: { value: "tavily" } })
-    expect(select.value).toBe("tavily")
+    // The catalog arrives asynchronously — open the picker and await the row.
+    const searchTrigger = await pinProvider("playground-search-provider", "Tavily")
+    expect(searchTrigger.textContent).toContain("Tavily")
     expect(resultsSpinInFooter() as HTMLInputElement).toHaveValue(6)
 
     await submitQueryViaClick("pinned default query")
@@ -4133,11 +4139,8 @@ describe("PG-S5 AC-PG-S5-2: /search limit + routing wiring", () => {
     })
 
     // Pinned case must be require, never prefer.
-    const select = within(
-      screen.getByTestId("search-composer-footer")
-    ).getByRole("combobox") as HTMLSelectElement
-    await screen.findByRole("option", { name: "Tavily" })
-    fireEvent.change(select, { target: { value: "tavily" } })
+    const pinnedTrigger = await pinProvider("playground-search-provider", "Tavily")
+    expect(pinnedTrigger.textContent).toContain("Tavily")
     await submitQueryViaClick("prefer guard pinned")
     await waitFor(() => {
       expect(stub.requestsTo("/search")).toHaveLength(2)
@@ -4495,9 +4498,15 @@ describe("PlaygroundPage persistence", () => {
     )
     expect(screen.getByRole("spinbutton", { name: "Number of results" })).toHaveValue(25)
     // The provider catalog arrives asynchronously; the persisted pin only
-    // displays once its option exists.
-    await screen.findByRole("option", { name: "Brave Search" })
-    expect(screen.getByRole("combobox")).toHaveValue("brave")
+    // displays once its entry exists. Picker rows exist only while open.
+    const trigger = screen.getByTestId("playground-search-provider")
+    await waitFor(() => {
+      expect(trigger.textContent).toContain("Brave Search")
+    })
+    fireEvent.click(trigger)
+    expect(
+      await screen.findByRole("option", { name: "Brave Search" })
+    ).toBeInTheDocument()
     expect(await screen.findByText("Seeded result title")).toBeInTheDocument()
 
     // Fetch tab: rehydrated URL draft and the persisted error banner.

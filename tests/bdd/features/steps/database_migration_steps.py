@@ -272,9 +272,7 @@ def given_legacy_provider_access_rows(context: Any) -> None:
     context.rows_before = _raw_rows(database)
 
 
-@then(
-    "the migrated provider masks should be ON 7 and OFF 0 with Brave support 3 and others 7"
-)
+@then("the migrated provider masks should be ON 7 and OFF 0 with Brave support 3 and others 7")
 def then_migrated_provider_masks(context: Any) -> None:
     _assert_migrated_masks(Path(context.database_path))
 

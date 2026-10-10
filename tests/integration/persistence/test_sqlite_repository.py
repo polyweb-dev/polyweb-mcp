@@ -677,9 +677,7 @@ async def test_latest_health_batch_matches_single(repository: SQLiteRepository) 
             checked_at=t0,
             message="slow",
         )
-        tie_second = ProviderHealth(
-            provider="tie-h", status=HealthStatus.HEALTHY, checked_at=t0
-        )
+        tie_second = ProviderHealth(provider="tie-h", status=HealthStatus.HEALTHY, checked_at=t0)
         alpha_old = ProviderHealth(
             provider="alpha",
             status=HealthStatus.DEGRADED,
@@ -770,9 +768,7 @@ async def test_effective_quotas_batch_soft_zero_persistence(tmp_path: Path) -> N
         )
 
     async with _soft_zero_case(tmp_path, "m2-later-success") as (database, recorded):
-        await database.record_quota(
-            _quota_zero(t0, metadata={"origin": "estimate", "depth": 2})
-        )
+        await database.record_quota(_quota_zero(t0, metadata={"origin": "estimate", "depth": 2}))
         await database.record_usage(_usage(t0 + timedelta(hours=1)))
         calls = len(recorded)
         result = await effective_quotas_batch(database, ["parallel"])

@@ -11,7 +11,9 @@ import type {
   SearchResponse,
 } from "@/domains/execution"
 import type {
+  CRDUsageTotal,
   DashboardQuota,
+  ProviderLimits,
   UsageEvent,
   UsageTotal,
 } from "@/domains/dashboard"
@@ -42,6 +44,8 @@ export interface FreeSearchContextType {
   usageError: string | null
   usageTotals: UsageTotal[]
   dashboardQuotas: DashboardQuota[]
+  providerLimits: ProviderLimits[]
+  crdUsageTotals: CRDUsageTotal[]
   quotaAvailable: boolean
   dashboardNotice: string | null
   toasts: ToastNotification[]

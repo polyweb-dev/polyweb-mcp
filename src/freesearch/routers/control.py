@@ -46,19 +46,20 @@ from freesearch.models.contracts import (
     ProviderHealth,
     ProviderStatusResponse,
     ProviderTestResponse,
-    QuotaSource,
     RoutingConfigResponse,
     RoutingConfigUpdate,
     SecretPresence,
     SecretStatusResponse,
     SetSecretRequest,
-    manual_quota_remaining,
-    manual_quota_remaining_percent,
 )
 from freesearch.models.provider_access import ALL_BITS, validate_mask
 from freesearch.models.users import UserPrincipal
 from freesearch.persistence.storage import SQLiteRepository, register_setting_listener
 from freesearch.routers.auth import require_admin, require_control_reader
+from freesearch.services.manual_quota import clear_manual_quota as clear_shared_manual_quota
+from freesearch.services.manual_quota import load_manual_quota as load_shared_manual_quota
+from freesearch.services.manual_quota import manual_quota_response
+from freesearch.services.manual_quota import persist_manual_quota as persist_shared_manual_quota
 from freesearch.services.monitoring import latency_p95_ms
 from freesearch.services.parallel_oauth import (
     PARALLEL_API_BASE_URL,
@@ -208,6 +209,7 @@ def register_control_routes(app: FastAPI) -> None:
         await persist_secret_record(request.app.state.repository, name, fingerprint, now)
         with suppress(HTTPException):
             await _ensure_provider_adapter(request, name, force_rebuild=True)
+        await _notify_credential_change(request, name)
         return SecretStatusResponse(
             provider=name.value,
             presence=_secret_presence(name, key),
@@ -230,6 +232,7 @@ def register_control_routes(app: FastAPI) -> None:
         fingerprint = secret_fingerprint(name.value, key) if key is not None else None
         await persist_secret_record(request.app.state.repository, name, fingerprint, now)
         await _eject_provider_adapter(request, name)
+        await _notify_credential_change(request, name)
         repo: SQLiteRepository | None = request.app.state.repository
         if repo is not None and key is None and name is not ProviderName.KEENABLE:
             with suppress(Exception):
@@ -315,6 +318,7 @@ def _register_manual_quota_routes(app: FastAPI) -> None:
             request.app.state.repository, name, update, datetime.now(UTC)
         )
         await _apply_exa_manual_credits(request, name, update.allowance)
+        await _notify_manual_anchor(request, name, response)
         return response
 
     @app.delete("/api/v1/providers/{provider_id}/manual-quota", status_code=204)
@@ -326,6 +330,34 @@ def _register_manual_quota_routes(app: FastAPI) -> None:
         name = _require_provider(provider_id)
         await clear_manual_quota(request.app.state.repository, name)
         await _apply_exa_manual_credits(request, name, None)
+        await _notify_manual_anchor(request, name, None)
+
+
+async def _notify_manual_anchor(
+    request: Request, provider: ProviderName, anchor: ManualQuotaResponse | None
+) -> None:
+    """Project a manual native anchor into the provider limit store.
+
+    The anchor is an operator estimate, so it never replaces a fresh
+    authoritative vendor observation, and a deletion restores the unknown state
+    instead of a manufactured zero balance.
+    """
+
+    limits = getattr(request.app.state, "limits", None)
+    if limits is None:
+        return
+    with suppress(Exception):
+        await limits.apply_manual_anchor(provider.value, anchor)
+
+
+async def _notify_credential_change(request: Request, provider: ProviderName) -> None:
+    """Invalidate stale credential generations in the provider limit store."""
+
+    limits = getattr(request.app.state, "limits", None)
+    if limits is None:
+        return
+    with suppress(Exception):
+        await limits.credential_changed(provider.value)
 
 
 async def _apply_exa_manual_credits(
@@ -988,51 +1020,17 @@ def _manual_quota_key(provider: ProviderName) -> str:
 def _manual_quota_response(
     provider: ProviderName, quota: ManualQuota, updated_at: datetime
 ) -> ManualQuotaResponse:
-    """Build the ESTIMATED capacity view with Decimal-exact derived fields."""
+    """Delegate the ESTIMATED capacity view to the shared anchor service."""
 
-    return ManualQuotaResponse(
-        provider=provider.value,
-        billing_start=quota.billing_start,
-        billing_end=quota.billing_end,
-        allowance=quota.allowance,
-        current_usage=quota.current_usage,
-        remaining=manual_quota_remaining(quota.allowance, quota.current_usage),
-        remaining_percent=manual_quota_remaining_percent(quota.allowance, quota.current_usage),
-        source=QuotaSource.ESTIMATED,
-        updated_at=updated_at,
-        note=quota.note,
-    )
+    return manual_quota_response(provider, quota, updated_at)
 
 
 async def load_manual_quota(
     repository: SQLiteRepository | None, provider: ProviderName
 ) -> ManualQuotaResponse | None:
-    """Return the stored billing anchor view, or None when absent/corrupt."""
+    """Delegate the stored billing anchor read to the shared anchor service."""
 
-    payload = await _safe_runtime_setting(repository, _manual_quota_key(provider))
-    if not isinstance(payload, dict):
-        return None
-    raw_updated_at = payload.get("updated_at")
-    quota_payload = {
-        key: payload.get(key)
-        for key in (
-            "billing_start",
-            "billing_end",
-            "allowance",
-            "current_usage",
-            "note",
-        )
-    }
-    try:
-        quota = ManualQuota.model_validate(quota_payload)
-        updated_at = (
-            datetime.fromisoformat(str(raw_updated_at)) if isinstance(raw_updated_at, str) else None
-        )
-    except (ValidationError, ValueError):
-        return None
-    if updated_at is None:
-        return None
-    return _manual_quota_response(provider, quota, updated_at)
+    return await load_shared_manual_quota(repository, provider)
 
 
 async def persist_manual_quota(
@@ -1041,30 +1039,15 @@ async def persist_manual_quota(
     update: ManualQuotaUpdate,
     now: datetime,
 ) -> ManualQuotaResponse:
-    """Persist the billing anchor and return its ESTIMATED capacity view."""
+    """Delegate the billing anchor write to the shared anchor service."""
 
-    quota = ManualQuota.model_validate(update.model_dump(mode="json"))
-    if repository is not None:
-        await repository.set_runtime_setting(
-            _manual_quota_key(provider),
-            {
-                "billing_start": quota.billing_start.isoformat(),
-                "billing_end": quota.billing_end.isoformat(),
-                "allowance": str(quota.allowance),
-                "current_usage": str(quota.current_usage),
-                "note": quota.note,
-                "updated_at": _iso(now),
-            },
-        )
-    return _manual_quota_response(provider, quota, now)
+    return await persist_shared_manual_quota(repository, provider, update, now)
 
 
 async def clear_manual_quota(repository: SQLiteRepository | None, provider: ProviderName) -> None:
     """Clear the billing anchor idempotently; unknown providers never reach here."""
 
-    if repository is None:
-        return
-    await repository.set_runtime_setting(_manual_quota_key(provider), None)
+    await clear_shared_manual_quota(repository, provider)
 
 
 async def _latest_health(

@@ -21,16 +21,36 @@ from pathlib import Path
 
 # Rule 3.5: the only approved "-ing" words in the STE dictionary.
 ING_APPROVED = {
-    "mating", "missing", "remaining",          # adjectives
-    "lighting", "opening", "routing", "servicing",  # nouns
-    "during",                                  # preposition
+    "mating",
+    "missing",
+    "remaining",  # adjectives
+    "lighting",
+    "opening",
+    "routing",
+    "servicing",  # nouns
+    "during",  # preposition
 }
 
 # Words that end in "ing" where "ing" is not a verb suffix.
 ING_NOT_SUFFIX = {
-    "ring", "spring", "string", "king", "thing", "wing", "sing",
-    "bring", "sting", "swing", "nothing", "anything", "everything",
-    "something", "bearing", "ceiling", "morning", "evening",
+    "ring",
+    "spring",
+    "string",
+    "king",
+    "thing",
+    "wing",
+    "sing",
+    "bring",
+    "sting",
+    "swing",
+    "nothing",
+    "anything",
+    "everything",
+    "something",
+    "bearing",
+    "ceiling",
+    "morning",
+    "evening",
 }
 
 # Rule 3.2 and the dictionary: approved helping verbs are CAN, MUST, WILL.
@@ -62,26 +82,26 @@ PASSIVE_BY = re.compile(
     re.IGNORECASE,
 )
 
-BE_ING = re.compile(
-    r"\b(?:is|are|was|were|be|been|am)\s+\w+ing\b", re.IGNORECASE
-)
+BE_ING = re.compile(r"\b(?:is|are|was|were|be|been|am)\s+\w+ing\b", re.IGNORECASE)
 
 SENT_SPLIT = re.compile(r"(?<=[.!?:])\s+")
-WORDISH = re.compile(r"[A-Za-z0-9'&/’-]+")
+# The right single quotation mark is a deliberate match for curly apostrophes.
+WORDISH = re.compile(r"[A-Za-z0-9'&/’-]+")  # noqa: RUF001
 
 LIMITS = {"procedural": 20, "descriptive": 25, "mixed": 25}
 
 
 # ---------------------------------------------------------------- helpers
 
+
 def strip_markdown(text):
     """Remove parts of the text that the STE rules do not control."""
-    text = re.sub(r"^---\n.*?\n---\n", "", text, flags=re.DOTALL)   # frontmatter
-    text = re.sub(r"```.*?```", " ", text, flags=re.DOTALL)          # code blocks
-    text = re.sub(r"`[^`\n]+`", " CODE ", text)                      # inline code
-    text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text)             # links
-    text = re.sub(r"https?://\S+", " URL ", text)                    # bare URLs
-    text = re.sub(r"^>.*$", " ", text, flags=re.MULTILINE)           # block quotes
+    text = re.sub(r"^---\n.*?\n---\n", "", text, flags=re.DOTALL)  # frontmatter
+    text = re.sub(r"```.*?```", " ", text, flags=re.DOTALL)  # code blocks
+    text = re.sub(r"`[^`\n]+`", " CODE ", text)  # inline code
+    text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text)  # links
+    text = re.sub(r"https?://\S+", " URL ", text)  # bare URLs
+    text = re.sub(r"^>.*$", " ", text, flags=re.MULTILINE)  # block quotes
     # quoted text counts as one word and is not controlled (rule 8.6)
     text = re.sub(r"\"[^\"\n]*\"|“[^”\n]*”", " QUOTED ", text)
     return text
@@ -93,9 +113,9 @@ def count_words(sentence):
     A number, an identifier, a hyphenated group, and text in
     parentheses each count as one word.
     """
-    s = re.sub(r"\([^)]*\)", " PAREN ", sentence)   # rule 8.5
-    s = re.sub(r"\*\*|\*|__|_|#+", " ", s)          # markdown marks
-    tokens = WORDISH.findall(s)                     # hyphenated group = 1 (rule 8.7)
+    s = re.sub(r"\([^)]*\)", " PAREN ", sentence)  # rule 8.5
+    s = re.sub(r"\*\*|\*|__|_|#+", " ", s)  # markdown marks
+    tokens = WORDISH.findall(s)  # hyphenated group = 1 (rule 8.7)
     return len(tokens)
 
 
@@ -135,6 +155,7 @@ def load_word_list(path):
 
 # ---------------------------------------------------------------- checks
 
+
 class Report:
     def __init__(self):
         self.errors = []
@@ -153,54 +174,70 @@ def check_sentence(sent, mode, report, loc):
     n = count_words(sent)
     head = sent if len(sent) <= 60 else sent[:57] + "..."
     if n > 25:
-        report.error(loc, "5.1/6.3", f"sentence has {n} words (max {limit}): \"{head}\"")
+        report.error(loc, "5.1/6.3", f'sentence has {n} words (max {limit}): "{head}"')
     elif n > 20:
         if mode == "procedural":
-            report.error(loc, "5.1", f"sentence has {n} words (max 20): \"{head}\"")
+            report.error(loc, "5.1", f'sentence has {n} words (max 20): "{head}"')
         elif mode == "mixed":
-            report.warn(loc, "5.1", f"sentence has {n} words (max 20 if procedural): \"{head}\"")
+            report.warn(loc, "5.1", f'sentence has {n} words (max 20 if procedural): "{head}"')
 
     if ";" in sent:
-        report.error(loc, "8.1", f"semicolon found: \"{head}\". Write two sentences.")
+        report.error(loc, "8.1", f'semicolon found: "{head}". Write two sentences.')
 
     m = CONTRACTION.search(sent)
     if m:
-        report.error(loc, "4.2", f"contraction \"{m.group(0)}\": write the full words.")
+        report.error(loc, "4.2", f'contraction "{m.group(0)}": write the full words.')
 
     m = HAVE_PARTICIPLE.search(sent)
     if m:
-        report.error(loc, "3.4", f"helping verb structure \"{m.group(0)}\": use the simple past tense.")
+        report.error(
+            loc,
+            "3.4",
+            f'helping verb structure "{m.group(0)}": use the simple past tense.',
+        )
 
     m = COMPLEX_PASSIVE.search(sent)
     if m:
-        report.error(loc, "3.4", f"complex passive \"{m.group(0)}\": make the sentence active.")
+        report.error(loc, "3.4", f'complex passive "{m.group(0)}": make the sentence active.')
 
     m = PASSIVE_BY.search(sent)
     if m:
-        report.error(loc, "3.6", f"passive voice \"{m.group(0)}\": make the agent the subject.")
+        report.error(loc, "3.6", f'passive voice "{m.group(0)}": make the agent the subject.')
 
     m = BE_ING.search(sent)
     if m:
         tail = m.group(0).split()[-1].lower()
         if tail not in ING_APPROVED:
-            report.error(loc, "3.5", f"progressive form \"{m.group(0)}\": use a simple tense.")
+            report.error(loc, "3.5", f'progressive form "{m.group(0)}": use a simple tense.')
 
+    check_word_forms(sent, report, loc)
+
+
+def check_word_forms(sent, report, loc):
+    """Check modal verbs and -ing forms word by word."""
     for word in re.findall(r"[A-Za-z-]+", sent):
         lw = word.lower()
         if lw in BANNED_MODALS:
             report.error(
-                loc, "3.2",
-                f"\"{word}\" is not approved. Use \"must\" (requirement), \"can\" "
-                f"(possibility), \"will\" (future), or remove it.",
+                loc,
+                "3.2",
+                f'"{word}" is not approved. Use "must" (requirement), "can" '
+                f'(possibility), "will" (future), or remove it.',
             )
         elif lw == "could":
-            report.warn(loc, "3.2", "\"could\" is approved only as the past tense of \"can\".")
-        elif lw.endswith("ing") and len(lw) > 4 and not word.isupper():
-            if lw not in ING_APPROVED and lw not in ING_NOT_SUFFIX:
-                report.warn(
-                    loc, "3.5",
-                    f"\"{word}\": an \"-ing\" form is permitted only in a technical name.",
-                )
+            report.warn(loc, "3.2", '"could" is approved only as the past tense of "can".')
+        elif (
+            lw.endswith("ing")
+            and len(lw) > 4
+            and not word.isupper()
+            and lw not in ING_APPROVED
+            and lw not in ING_NOT_SUFFIX
+        ):
+            report.warn(
+                loc,
+                "3.5",
+                f'"{word}": an "-ing" form is permitted only in a technical name.',
+            )
 
 
 def check_vocab(text, report, approved):
@@ -237,11 +274,11 @@ def check_text(text, mode, report, name, approved):
             continue
         lines = par.splitlines()
         bullet = re.compile(r"\s*(?:[-*+]|\d+\.)\s")
-        items = [l for l in lines if bullet.match(l)]
-        prose = [l for l in lines if not bullet.match(l)]
+        items = [line for line in lines if bullet.match(line)]
+        prose = [line for line in lines if not bullet.match(line)]
         # a list item counts as its own sentence (rule 8.4)
-        for l in items:
-            item = re.sub(r"^\s*(?:[-*+]|\d+\.)\s+", "", l)
+        for line in items:
+            item = re.sub(r"^\s*(?:[-*+]|\d+\.)\s+", "", line)
             for s in iter_sentences(item):
                 check_sentence(s, mode, report, f"{name}:list")
             if approved:
@@ -252,15 +289,24 @@ def check_text(text, mode, report, name, approved):
 
 # ---------------------------------------------------------------- main
 
+
 def main():
     ap = argparse.ArgumentParser(description="Check text against the STE writing rules.")
     ap.add_argument("files", nargs="*", help="files to check (default: stdin)")
-    ap.add_argument("--mode", choices=["procedural", "descriptive", "mixed"],
-                    default="mixed", help="text type (default: mixed)")
-    ap.add_argument("--word-list", default=None,
-                    help="path to word-list.md (default: ../references/word-list.md)")
-    ap.add_argument("--no-vocab", action="store_true",
-                    help="do not check words against the approved word list")
+    ap.add_argument(
+        "--mode",
+        choices=["procedural", "descriptive", "mixed"],
+        default="mixed",
+        help="text type (default: mixed)",
+    )
+    ap.add_argument(
+        "--word-list",
+        default=None,
+        help="path to word-list.md (default: ../references/word-list.md)",
+    )
+    ap.add_argument(
+        "--no-vocab", action="store_true", help="do not check words against the approved word list"
+    )
     args = ap.parse_args()
 
     approved = None
@@ -287,7 +333,7 @@ def main():
         words = sorted(report.unknown, key=report.unknown.get, reverse=True)
         print(f"\nCHECK   {len(words)} words are not in the approved word list.")
         print("        Each must be an approved technical name or technical verb:")
-        for chunk in [words[i:i + 10] for i in range(0, len(words), 10)]:
+        for chunk in [words[i : i + 10] for i in range(0, len(words), 10)]:
             print("        " + ", ".join(chunk))
 
     print(f"\nResult: {len(report.errors)} errors, {len(report.warnings)} warnings.")

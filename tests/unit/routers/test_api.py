@@ -17,8 +17,8 @@ from fastapi import HTTPException
 from pydantic import AnyHttpUrl
 
 import freesearch.routers.api as api_module
-from freesearch.configuration.config import Settings
 from freesearch.adapters.base import ProviderAdapter
+from freesearch.configuration.config import Settings
 from freesearch.configuration.provider_config import ProviderConfig
 from freesearch.models.contracts import (
     CostEstimate,
@@ -77,14 +77,10 @@ class StubAdapter(ProviderAdapter):
     async def fetch(self, request: FetchRequest) -> FetchResponse:
         return FetchResponse(
             provider=self._name,
-            document=FetchedDocument(
-                url=request.url, content="stub body", fetched_at=FIXED_AT
-            ),
+            document=FetchedDocument(url=request.url, content="stub body", fetched_at=FIXED_AT),
         )
 
-    async def estimate_cost(
-        self, request: SearchRequest | FetchRequest
-    ) -> CostEstimate:
+    async def estimate_cost(self, request: SearchRequest | FetchRequest) -> CostEstimate:
         operation = (
             UsageOperation.SEARCH if isinstance(request, SearchRequest) else UsageOperation.FETCH
         )
@@ -98,15 +94,11 @@ class SpyBatchRepository:
         self.health_batch_names: list[list[str]] = []
         self.quota_batch_names: list[list[str]] = []
 
-    async def latest_health_batch(
-        self, providers: Sequence[str]
-    ) -> dict[str, ProviderHealth]:
+    async def latest_health_batch(self, providers: Sequence[str]) -> dict[str, ProviderHealth]:
         self.health_batch_names.append(list(providers))
         return {}
 
-    async def latest_quota_batch(
-        self, providers: Sequence[str]
-    ) -> dict[str, QuotaSnapshot]:
+    async def latest_quota_batch(self, providers: Sequence[str]) -> dict[str, QuotaSnapshot]:
         self.quota_batch_names.append(list(providers))
         return {}
 
@@ -144,14 +136,10 @@ class BatchlessRepository:
 class ExplodingBatchRepository:
     """Injected store whose batch reads always fail."""
 
-    async def latest_health_batch(
-        self, providers: Sequence[str]
-    ) -> dict[str, ProviderHealth]:
+    async def latest_health_batch(self, providers: Sequence[str]) -> dict[str, ProviderHealth]:
         raise RuntimeError("health store down")
 
-    async def latest_quota_batch(
-        self, providers: Sequence[str]
-    ) -> dict[str, QuotaSnapshot]:
+    async def latest_quota_batch(self, providers: Sequence[str]) -> dict[str, QuotaSnapshot]:
         raise RuntimeError("quota store down")
 
 
@@ -162,9 +150,7 @@ def _install_plan_spies(
 ) -> None:
     """Patch consumer lookup sites used by ``_plan_route``/``_routing_state``."""
 
-    async def _fake_config(
-        repository: Any, name: str, *, strict: bool = False
-    ) -> ProviderConfig:
+    async def _fake_config(repository: Any, name: str, *, strict: bool = False) -> ProviderConfig:
         config_names.append(name)
         return ProviderConfig()
 
@@ -218,9 +204,7 @@ async def test_require_filters_before_state_reads(
     repository.health_batch_names.clear()
     repository.quota_batch_names.clear()
     scheduled.clear()
-    fetch_plan = await _plan_route(
-        _fetch_require(("alpha", "gamma")), adapters, repository, None
-    )
+    fetch_plan = await _plan_route(_fetch_require(("alpha", "gamma")), adapters, repository, None)
 
     assert [adapter.name for adapter in fetch_plan] == ["alpha", "gamma"]
     assert sorted(config_names) == ["alpha", "gamma"]
@@ -323,9 +307,7 @@ async def test_batchless_repository_fallback(
     _install_plan_spies(monkeypatch, config_names, scheduled)
 
     health = {
-        "alpha": ProviderHealth(
-            provider="alpha", status=HealthStatus.HEALTHY, checked_at=FIXED_AT
-        )
+        "alpha": ProviderHealth(provider="alpha", status=HealthStatus.HEALTHY, checked_at=FIXED_AT)
     }
     quotas = {
         "alpha": QuotaSnapshot(

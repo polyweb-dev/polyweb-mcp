@@ -1,80 +1,103 @@
 import { catalogNameOf } from "@/services/api/providerCatalog"
-import { unitLabel } from "@/services/api/mappers"
 import { ProviderLogo } from "@/components/common/ProviderLogo"
 import type { ProviderConfig } from "@/domains/providers"
-import type { UsageTotal } from "@/domains/dashboard"
+import type { CRDUsageTotal } from "@/domains/dashboard"
+import { formatCRDAmount } from "../model/crdDisplay"
 import { formatUsageP95 } from "../model/quotaDetails"
+import { Footnote } from "./Footnote"
 
 export interface UsageTotalsProps {
-  usageTotals: UsageTotal[]
+  crdUsageTotals: CRDUsageTotal[]
   providers: ProviderConfig[]
 }
 
-/** Recorded aggregates grouped by provider, operation, and unit. */
-export function UsageTotals({ usageTotals, providers }: UsageTotalsProps) {
-  const p95ByProvider = new Map(providers.map((provider) => [provider.id, provider.latencyP95Ms]))
+const HEAD = "grid items-center border-b border-[var(--border-subtle)] bg-[var(--elevated)] px-4 py-2.5 text-[12px] text-[var(--muted)]"
+const CELL = "grid items-center border-b border-[var(--border-subtle)] px-4 py-3 last:border-b-0"
+const FOUR = "grid-cols-[1fr_1fr_1fr_1fr]"
+const CARD = "overflow-hidden rounded-lg border border-[var(--border-subtle)]"
+const HEAD_BAR = "border-b border-[var(--border-subtle)] bg-[var(--elevated)] px-4 py-2.5"
+const TITLE = "text-[13px] font-semibold text-[var(--text-strong)]"
+const EMPTY = "p-8 text-center text-[13px] text-[var(--muted)]"
+const NAME = "truncate text-[13px] font-medium text-[var(--text-strong)]"
+const MUTED = "text-[13px] text-[var(--muted)]"
+
+function volumeText(operation: string, volume: number): string {
+  return volume + " " + (operation === "fetch" ? "URLs" : "searches")
+}
+
+/** A known p95 only; an unreported latency yields no text at all. */
+function p95Text(providers: ProviderConfig[], providerId: string): string {
+  const latency = providers.find((provider) => provider.id === providerId)?.latencyP95Ms ?? null
+  return formatUsageP95(latency)
+}
+
+/**
+ * Usage totals: credit-unit cost first, then search and URL volume.
+ *
+ * Native totals left this page with the legacy grid, because native units of
+ * different providers do not compare. Credit units are the one common scale.
+ */
+export function UsageTotals({ crdUsageTotals, providers }: UsageTotalsProps) {
+  const nameOf = (providerId: string) => catalogNameOf(providerId) ?? providerId
   return (
-    <section aria-labelledby="usage-totals-heading" className="overflow-hidden rounded-lg border border-[var(--border-subtle)]">
-      <div className="border-b border-[var(--border-subtle)] bg-[var(--elevated)] px-4 py-2.5">
-        <h3 id="usage-totals-heading" className="text-[13px] font-semibold text-[var(--text-strong)]">Usage totals</h3>
-        <p className="mt-1 text-[12px] text-[var(--muted)]">
-          Grouped by provider, operation, and unit. Compare values only within the same unit.
-        </p>
-      </div>
-      {usageTotals.length === 0 ? (
-        <p className="p-8 text-center text-[13px] text-[var(--muted)]">
-          No usage totals recorded yet.
-        </p>
-      ) : (
-        <div className="overflow-x-auto">
-          <div className="grid grid-cols-[1fr_1fr_1fr_1fr_1fr] items-center py-2.5 px-4 bg-[var(--elevated)] border-b border-[var(--border-subtle)] text-[12px] text-[var(--muted)]">
-            <span>Provider</span>
-            <span>Operation</span>
-            <span>Unit</span>
-            <span>p95</span>
-            <span className="text-right">Total units</span>
-          </div>
-          {usageTotals.map((total) => (
-            <div
-              key={total.provider + "-" + total.operation + "-" + (total.unitKind ?? "legacy")}
-              className="grid grid-cols-[1fr_1fr_1fr_1fr_1fr] items-center py-3 px-4 border-b last:border-b-0 border-[var(--border-subtle)]"
-            >
-              <div className="flex items-center gap-2 min-w-0">
-                <ProviderLogo providerId={total.provider} name={catalogNameOf(total.provider) ?? total.provider} />
-                <span className="text-[13px] font-medium text-[var(--text-strong)] truncate">
-                  {catalogNameOf(total.provider) ?? total.provider}
-                </span>
-              </div>
-              <span className="text-[13px] capitalize text-[var(--muted)]">{total.operation}</span>
-              <span className="text-[13px] text-[var(--muted)]">
-                {total.unitKind === null ? (
-                  <span title="Recorded before canonical units existed; dimension could not be recovered">
-                    legacy (mixed)
-                  </span>
-                ) : (
-                  unitLabel(total.unitKind, null)
-                )}
-              </span>
-              <span className="text-[13px] tnum text-[var(--muted)]">
-                {formatUsageP95(p95ByProvider.get(total.provider) ?? null)}
-              </span>
-              <span className="text-right text-[13px] tnum text-[var(--text)]">
-                {total.total_units}
-                <span className="ml-1.5 text-[12px] text-[var(--muted)]">
-                  ({total.eventCount} {total.eventCount === 1 ? "event" : "events"})
-                </span>
-              </span>
+    <section aria-labelledby="usage-totals-heading" className="space-y-4">
+      <h3 id="usage-totals-heading" className={TITLE}>Usage totals</h3>
+
+      <div className={CARD}>
+        <div className={HEAD_BAR}><h4 className={TITLE}>Credit-unit use</h4></div>
+        {crdUsageTotals.length === 0 ? (
+          <p className={EMPTY}>No credit-unit use recorded yet.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <div className={HEAD + " " + FOUR}>
+              <span>Provider</span><span>Operation</span><span>Attempts</span><span className="text-right">CRD cost</span>
             </div>
-          ))}
-        </div>
-      )}
-      {usageTotals.some((total) => total.unitKind === null) && (
-        <p className="border-t border-[var(--border-subtle)] px-4 py-2.5 text-[12px] text-[var(--muted)]">
-          Legacy (mixed) rows predate canonical units and are shown with
-          their raw values only â€” they are excluded from dimension totals
-          and never converted.
-        </p>
-      )}
+            {crdUsageTotals.map((total) => (
+              <div key={"crd-" + total.provider + "-" + total.operation} className={CELL + " " + FOUR}>
+                <div className="flex min-w-0 items-center gap-2">
+                  <ProviderLogo providerId={total.provider} name={nameOf(total.provider)} />
+                  <span className={NAME}>{nameOf(total.provider)}</span>
+                </div>
+                <span className={MUTED + " capitalize"}>{total.operation}</span>
+                <span className={MUTED + " tnum"}>{total.attempt_count}</span>
+                <span className="tnum text-right text-[13px] text-[var(--text)]">{formatCRDAmount(total.normalized_crd)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className={CARD}>
+        <div className={HEAD_BAR}><h4 className={TITLE}>Search and URL volume</h4></div>
+        {crdUsageTotals.length === 0 ? (
+          <p className={EMPTY}>No volume recorded yet.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <div className={HEAD + " " + FOUR}>
+              <span>Provider</span><span>Operation</span><span>Volume</span><span className="text-right">p95</span>
+            </div>
+            {crdUsageTotals.map((total) => {
+              const p95 = p95Text(providers, total.provider)
+              return (
+                <div key={"volume-" + total.provider + "-" + total.operation} className={CELL + " " + FOUR}>
+                  <span className={NAME}>{nameOf(total.provider)}</span>
+                  <span className={MUTED + " capitalize"}>{total.operation}</span>
+                  <span className={MUTED + " tnum"}>{volumeText(total.operation, total.volume_count)}</span>
+                  {p95 === "" ? (
+                    <span />
+                  ) : (
+                    <span className={MUTED + " tnum text-right"}>{p95}</span>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
+
+      <Footnote className="border-t border-[var(--border-subtle)]/60 pt-2">
+        Credit-unit cost uses one common scale: one CRD is USD 0.001 of priced native use. Volume counts searches and fetched URLs separately.
+      </Footnote>
     </section>
   )
 }

@@ -13,6 +13,7 @@ describe("ProviderOperationControl", () => {
         supported={false}
         enabled={false}
         globallyDisabled={false}
+        canEdit
         pending={false}
         onToggle={() => {}}
       />,
@@ -36,6 +37,7 @@ describe("ProviderOperationControl", () => {
         supported={false}
         enabled={false}
         globallyDisabled
+        canEdit
         pending={false}
         onToggle={() => {}}
       />,
@@ -58,6 +60,7 @@ describe("ProviderOperationControl", () => {
         supported
         enabled
         globallyDisabled={false}
+        canEdit
         pending={false}
         onToggle={onToggle}
       />,
@@ -76,6 +79,7 @@ describe("ProviderOperationControl", () => {
         supported
         enabled
         globallyDisabled={false}
+        canEdit
         pending
         onToggle={onToggle}
       />,
@@ -94,6 +98,7 @@ describe("ProviderOperationControl", () => {
         supported
         enabled
         globallyDisabled
+        canEdit
         pending={false}
         onToggle={() => {}}
       />,
@@ -110,6 +115,7 @@ describe("ProviderOperationControl", () => {
         supported
         enabled
         globallyDisabled={false}
+        canEdit
         pending={false}
         onToggle={() => {}}
       />,
@@ -127,6 +133,7 @@ describe("ProviderOperationControl", () => {
         supported
         enabled={false}
         globallyDisabled={false}
+        canEdit
         pending={false}
         onToggle={() => {}}
       />,
@@ -143,6 +150,7 @@ describe("ProviderOperationControl", () => {
         supported
         enabled
         globallyDisabled={false}
+        canEdit
         pending={false}
         onToggle={() => {}}
       />,

@@ -666,9 +666,7 @@ def test_legacy_env_entry_migrates_to_enable_mask(monkeypatch) -> None:
 
 
 def test_legacy_env_mixed_with_mask_is_rejected(monkeypatch) -> None:
-    monkeypatch.setenv(
-        OVERRIDES_ENV, json.dumps({"exa": {"enabled": True, "enable_mask": 7}})
-    )
+    monkeypatch.setenv(OVERRIDES_ENV, json.dumps({"exa": {"enabled": True, "enable_mask": 7}}))
 
     with pytest.raises(ValidationError):
         ProviderConfigSettings()

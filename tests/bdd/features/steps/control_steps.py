@@ -697,10 +697,7 @@ def step_then_call_counts(
     assert brave.fetch_calls == brave_fetch, (brave.fetch_calls, brave_fetch)
 
 
-@then(
-    'a fresh control-plane read for "{provider}" should still report enable mask '
-    "{enable_mask:d}"
-)
+@then('a fresh control-plane read for "{provider}" should still report enable mask {enable_mask:d}')
 def step_then_fresh_masks(context: Any, provider: str, enable_mask: int) -> None:
     _reopen_control_repository(context)
     with _client(context) as client:
@@ -734,9 +731,7 @@ def step_then_fanout_participants(context: Any, expected: str) -> None:
         context.rest_fanout_status,
         context.rest_fanout_body,
     )
-    assert context.rest_fanout_body["participating_providers"] == wanted, (
-        context.rest_fanout_body
-    )
+    assert context.rest_fanout_body["participating_providers"] == wanted, context.rest_fanout_body
 
 
 @then('the fanout search should fail with {status:d} containing "{detail}"')

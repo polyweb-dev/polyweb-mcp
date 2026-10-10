@@ -429,7 +429,12 @@ async def test_mcp_require_unknown_fails_fast_without_unrelated_reads(
             with pytest.raises(ToolError, match="no required provider"):
                 await server.call_tool(
                     "search",
-                    {"request": {"query": "ghost", "routing": {"mode": "require", "providers": ["ghost"]}}},  # noqa: E501
+                    {
+                        "request": {
+                            "query": "ghost",
+                            "routing": {"mode": "require", "providers": ["ghost"]},
+                        }
+                    },
                 )
             with pytest.raises(ToolError, match="no required provider"):
                 await server.call_tool(
@@ -496,7 +501,12 @@ async def test_mcp_auto_and_prefer_inspect_all_eligible(tmp_path: Path) -> None:
             assert first[1]["provider"] in {"exa", "brave", "tavily"}
             prefer = await server.call_tool(
                 "search",
-                {"request": {"query": "prefer", "routing": {"mode": "prefer", "providers": ["brave"]}}},  # noqa: E501
+                {
+                    "request": {
+                        "query": "prefer",
+                        "routing": {"mode": "prefer", "providers": ["brave"]},
+                    }
+                },
             )
             assert prefer[1]["provider"] in {"exa", "brave", "tavily"}
         finally:
@@ -865,7 +875,9 @@ async def test_mcp_object_identity_after_lifespan(
                 {"config": {"enable_mask": 7, "support_mask": 7, "priority": 5}},
             )
             real_id = builtins.id
-            monkeypatch.setattr(builtins, "id", lambda obj: repo_a_id if obj is repo_b else real_id(obj))  # noqa: E501
+            monkeypatch.setattr(
+                builtins, "id", lambda obj: repo_a_id if obj is repo_b else real_id(obj)
+            )
             try:
                 fresh = await effective_config_for_name(repo_b, "exa")
             finally:

@@ -135,6 +135,146 @@ async function waitForUsage() {
   })
 }
 
+// UI7-05 and UI7-06 helpers: the page holds no native grid. UsageTotals shows
+// two cards with empty texts, and one price note lists Brave call costs.
+function dashboardWithExtras(
+  base: WireDashboard,
+  extras: Record<string, unknown>
+): WireDashboard {
+  return { ...base, ...extras } as unknown as WireDashboard
+}
+
+function bravePriceLimitsWire(): Record<string, unknown> {
+  const profile = {
+    reference_usd_per_crd: "0.001",
+    native_usd_per_unit: "1",
+    cost_basis: "priced_native_use",
+    price_version: "v2026-09",
+    source: "documented",
+    estimated: false,
+  }
+  return {
+    provider: "brave",
+    active_auth_mode: "keyed",
+    version: 1,
+    generated_at: "2026-03-10T12:00:00Z",
+    documented_keyless_operations: [],
+    auths: [
+      {
+        auth_mode: "keyed",
+        transport_available: true,
+        search: {
+          provider: "brave",
+          operation: "search",
+          auth_mode: "keyed",
+          supported: true,
+          transport_available: true,
+          native_pool_id: "brave:keyed:usd",
+          rate: null,
+          budget: null,
+          conversion_profile: profile,
+          plan_name: "Brave Search",
+          usage_url: "https://api-dashboard.search.brave.com/",
+          version: 1,
+        },
+        fetch: {
+          provider: "brave",
+          operation: "fetch",
+          auth_mode: "keyed",
+          supported: false,
+          transport_available: false,
+          native_pool_id: null,
+          rate: null,
+          budget: null,
+          conversion_profile: profile,
+          plan_name: null,
+          usage_url: null,
+          version: 1,
+        },
+        free_tiers: [],
+        paid_tiers: [],
+        unknown_tiers: [],
+        tier_split_known: true,
+        aggregate_pool: null,
+        crd_views: [
+          {
+            state: "finite",
+            operation: "search",
+            remaining_crd: "4500",
+            local_remaining_crd: null,
+            request_cost_crd: "5",
+            shared_pool_id: "brave:keyed:usd",
+            possible_standard_calls: "900",
+            price_version: "v2026-09",
+            priced: true,
+          },
+          {
+            state: "unavailable",
+            operation: "fetch",
+            remaining_crd: null,
+            local_remaining_crd: null,
+            request_cost_crd: null,
+            shared_pool_id: null,
+            possible_standard_calls: null,
+            price_version: null,
+            priced: false,
+          },
+        ],
+        rate_progress: [],
+        grants: null,
+        detail: null,
+      },
+    ],
+  }
+}
+
+function crdTotalsWire(): Record<string, unknown>[] {
+  return [
+    {
+      provider: "brave",
+      operation: "search",
+      normalized_crd: "0.599",
+      attempt_count: 2,
+      volume_count: 3,
+    },
+    {
+      provider: "tavily",
+      operation: "search",
+      normalized_crd: "0.05",
+      attempt_count: 1,
+      volume_count: 1,
+    },
+    {
+      provider: "exa",
+      operation: "search",
+      normalized_crd: "0",
+      attempt_count: 1,
+      volume_count: 1,
+    },
+  ]
+}
+
+function renderUsageWithProviders(
+  dashboard: WireDashboard,
+  providers: unknown[]
+) {
+  installFetchStub((req) => {
+    if (req.url === "/api/v1/providers" && req.method === "GET") {
+      return ok(providers)
+    }
+    if (req.url === "/api/v1/routing/config" && req.method === "GET") {
+      return ok(routingConfigFixture())
+    }
+    if (req.url.startsWith("/dashboard")) return ok(dashboard)
+    return err(404, { detail: "unhandled test route" })
+  })
+  return render(
+    <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
+      <QuotaAnalytics />
+    </FreeSearchProvider>
+  )
+}
+
 describe("RF2: null limits render as — on ranks / simulator / settings", () => {
   afterEach(() => {
     vi.unstubAllGlobals()
@@ -167,7 +307,7 @@ describe("RF2: null limits render as — on ranks / simulator / settings", () =>
     expect(body).toContain("—")
   })
 
-  it("quota drill-down + Usage view show em-dash blanks for null limits, never infinity", async () => {
+  it("quota drill-down shows em-dash blank; Usage view shows empty texts, never infinity (UI7-05)", async () => {
     const user = userEvent.setup()
     renderSettings(dashboardFixture())
     await waitForSettings()
@@ -183,14 +323,12 @@ describe("RF2: null limits render as — on ranks / simulator / settings", () =>
 
     renderUsage(dashboardFixture())
     await waitForUsage()
-    // "Usage totals" renders with zero rows, so await the data-dependent
-    // em-dash blank (PersistGate + dashboard both async by design).
-    await waitFor(() => {
-      expect(document.body.textContent ?? "").toMatch(/[\u2014]/)
-    })
+    // UI7-05: the native grid left the page. Empty totals show empty texts,
+    // not an em-dash blank. The em-dash above covers the Settings modal only.
+    expect(screen.getByText("No credit-unit use recorded yet.")).toBeInTheDocument()
+    expect(screen.getByText("No volume recorded yet.")).toBeInTheDocument()
     const body = document.body.textContent ?? ""
     expect(body).not.toContain("∞")
-    expect(body).toMatch(/[\u2014]/)
   })
 
   it("RF1 verbatim: canonical Tavily limit '100000.10' survives on the ranks surface", async () => {
@@ -298,7 +436,7 @@ describe("RF4: visible unavailable/confidence semantics in Settings modal + Usag
     expect(dialog.textContent).toMatch(/authoritative|observed|estimated|unavailable|no quota/i)
   })
 
-  it("modal + Usage quota view lead with normalized remaining capacity and its period", async () => {
+  it("modal keeps normalized capacity; Usage view shows CRD cost and volume cards (UI7-05)", async () => {
     const user = userEvent.setup()
     renderSettings(dashboardFixture({ latest_quota: canonicalQuotasFixture() }))
     await waitForSettings()
@@ -309,17 +447,33 @@ describe("RF4: visible unavailable/confidence semantics in Settings modal + Usag
     expect(dialog.textContent).toMatch(/950\/1000 requests/)
     cleanup()
 
-    renderUsage(dashboardFixture({ latest_quota: canonicalQuotasFixture() }))
+    // UI7-05: the native quota rows left UsageTotals. Credit-unit cost uses
+    // normalized CRD headlines, and a null p95 stays blank, not an em-dash.
+    const nullBraveProviders = allProvidersFixture().map((entry) =>
+      entry.provider_id === "brave" ? { ...entry, latency_p95_ms: null } : entry
+    )
+    const dashboard = dashboardWithExtras(
+      dashboardFixture({ latest_quota: canonicalQuotasFixture() }),
+      { crd_usage_totals: crdTotalsWire() }
+    )
+    renderUsageWithProviders(dashboard, nullBraveProviders)
     await waitForUsage()
-    // Await the data-dependent quota row, not the static "Usage totals" shell.
-    await screen.findByTestId("quota-remaining-percent-brave")
-    expect(screen.getByTestId("quota-remaining-percent-brave")).toHaveTextContent("95% remaining")
-    const usageBody = document.body.textContent ?? ""
-    expect(usageBody).toMatch(/95% remaining.*monthly.*950\/1000 requests/i)
-    expect(usageBody).toMatch(/hourly quota pending.*Hourly/i)
+    // Await the data-dependent CRD row, not the static "Usage totals" shell.
+    await screen.findByText("≈0.6 CRD", undefined, { timeout: 10_000 })
+    expect(screen.getByText("Credit-unit use")).toBeInTheDocument()
+    expect(screen.getByText("≈0.6 CRD")).toBeInTheDocument()
+    expect(screen.getByText("<0.1 CRD")).toBeInTheDocument()
+    expect(screen.getByText("0 CRD")).toBeInTheDocument()
+    expect(screen.getByText("Search and URL volume")).toBeInTheDocument()
+    const usageSection = document.querySelector(
+      'section[aria-labelledby="usage-totals-heading"]'
+    )
+    expect(usageSection).not.toBeNull()
+    expect(usageSection!.textContent).not.toContain("—")
+    expect(document.querySelector('[data-testid^="quota-remaining-percent-"]')).toBeNull()
   })
 
-  it("modal + Usage view show a visible unavailable marker when the dashboard has no snapshots", async () => {
+  it("modal shows unavailable visibly; Usage view shows empty texts (UI7-05)", async () => {
     const user = userEvent.setup()
     renderSettings(dashboardFixture({ latest_quota: [] }))
     await waitForSettings()
@@ -329,9 +483,12 @@ describe("RF4: visible unavailable/confidence semantics in Settings modal + Usag
     expect(dialog.textContent).toMatch(/unavailable|no quota|[\u2014]/i)
     cleanup()
 
+    // UI7-05: UsageTotals holds no unavailable marker. Empty totals show
+    // empty texts.
     renderUsage(dashboardFixture({ latest_quota: [] }))
     await waitForUsage()
-    expect(document.body.textContent).toMatch(/unavailable|no quota|[\u2014]/i)
+    expect(screen.getByText("No credit-unit use recorded yet.")).toBeInTheDocument()
+    expect(screen.getByText("No volume recorded yet.")).toBeInTheDocument()
   })
 
   it("test modal shows quota confidence/unavailable visibly, not title-only", async () => {
@@ -350,5 +507,42 @@ describe("RF4: visible unavailable/confidence semantics in Settings modal + Usag
 
     const dialog = await screen.findByRole("dialog")
     expect(dialog.textContent).toMatch(/authoritative|observed|estimated|unavailable|no quota/i)
+  })
+
+  it("page shows exactly one price note with Brave cost and version once (UI7-06)", async () => {
+    // UI7-06: one footer lists call costs and each known price version once.
+    // The C1 catalog reports Brave search at 0.005 USD and 5 CRD per call.
+    const dashboard = dashboardWithExtras(dashboardFixture({ latest_quota: [] }), {
+      provider_limits: [bravePriceLimitsWire()],
+      crd_usage_totals: [],
+    })
+    renderUsage(dashboard)
+    // Await the data-dependent price row, not the static price shell.
+    await screen.findByText("0.005 USD", undefined, { timeout: 10_000 })
+    await waitFor(() => {
+      expect(screen.getByText("How credit units are priced")).toBeInTheDocument()
+    })
+
+    const sections = document.querySelectorAll(
+      'section[aria-labelledby="crd-price-note-heading"]'
+    )
+    expect(sections).toHaveLength(1)
+    expect(screen.getAllByText("How credit units are priced")).toHaveLength(1)
+    expect(screen.getByText("Provider credit units")).toBeInTheDocument()
+
+    const note = sections[0] as HTMLElement
+    expect(within(note).getByText("Provider")).toBeInTheDocument()
+    expect(within(note).getByText("Operation")).toBeInTheDocument()
+    expect(within(note).getByText("USD per call")).toBeInTheDocument()
+    expect(within(note).getByText("CRD per call")).toBeInTheDocument()
+    expect(within(note).getByText("Brave Search")).toBeInTheDocument()
+    expect(within(note).getByText("0.005 USD")).toBeInTheDocument()
+    expect(within(note).getByText("5 CRD")).toBeInTheDocument()
+    expect(within(note).queryByText("fetch")).toBeNull()
+
+    const body = document.body.textContent ?? ""
+    const versionHits = body.match(/v2026-09/g) ?? []
+    expect(versionHits).toHaveLength(1)
+    expect(body).toMatch(/Price profile: v2026-09/)
   })
 })

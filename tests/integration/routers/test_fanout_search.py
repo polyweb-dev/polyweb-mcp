@@ -597,7 +597,11 @@ async def test_pinned_fanout_reads_only_subset(repository: SQLiteRepository) -> 
         adapters = [
             FakeSearchAdapter(
                 name,
-                [SearchResult(title=name, url=AnyHttpUrl(f"https://example.com/{name}"), snippet=name)],  # noqa: E501
+                [
+                    SearchResult(
+                        title=name, url=AnyHttpUrl(f"https://example.com/{name}"), snippet=name
+                    )
+                ],
             )
             for name in ("p1", "p2", "p3", "p4")
         ]
@@ -729,9 +733,7 @@ async def test_fanout_all_fail_first_error_deterministic(
             if trace_id is not None:
                 detail = client.get(f"/api/v1/traces/{trace_id}").json()
                 assert detail["outcome"] == "error"
-                providers = [
-                    s for s in detail["spans"] if s["name"] == "freesearch.provider"
-                ]
+                providers = [s for s in detail["spans"] if s["name"] == "freesearch.provider"]
                 assert len(providers) == 2
                 assert all(s["outcome"] == "error" for s in providers)
         assert first.search_calls == 1

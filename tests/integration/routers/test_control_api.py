@@ -442,13 +442,9 @@ async def test_provider_patch_search_toggle_changes_only_search_bit(
         )
         headers = raw_auth_headers(pair["access_token"])
         before = client.get("/api/v1/providers/exa", headers=headers)
-        off = client.patch(
-            "/api/v1/providers/exa", json={"search_enabled": False}, headers=headers
-        )
+        off = client.patch("/api/v1/providers/exa", json={"search_enabled": False}, headers=headers)
         after_off = client.get("/api/v1/providers/exa", headers=headers)
-        on = client.patch(
-            "/api/v1/providers/exa", json={"search_enabled": True}, headers=headers
-        )
+        on = client.patch("/api/v1/providers/exa", json={"search_enabled": True}, headers=headers)
 
     assert before.json()["enable_mask"] == 7
     assert off.status_code == 200
@@ -473,12 +469,8 @@ async def test_provider_patch_fetch_toggle_changes_only_fetch_bit(
             client, repository, temp_email("control-fetch-bit"), UserRole.ADMIN
         )
         headers = raw_auth_headers(pair["access_token"])
-        off = client.patch(
-            "/api/v1/providers/exa", json={"fetch_enabled": False}, headers=headers
-        )
-        on = client.patch(
-            "/api/v1/providers/exa", json={"fetch_enabled": True}, headers=headers
-        )
+        off = client.patch("/api/v1/providers/exa", json={"fetch_enabled": False}, headers=headers)
+        on = client.patch("/api/v1/providers/exa", json={"fetch_enabled": True}, headers=headers)
 
     assert off.status_code == 200
     assert off.json()["enable_mask"] == 3
@@ -500,9 +492,7 @@ async def test_provider_patch_enable_mask_replaces_all_bits(
             client, repository, temp_email("control-mask-replace"), UserRole.ADMIN
         )
         headers = raw_auth_headers(pair["access_token"])
-        replaced = client.patch(
-            "/api/v1/providers/exa", json={"enable_mask": 3}, headers=headers
-        )
+        replaced = client.patch("/api/v1/providers/exa", json={"enable_mask": 3}, headers=headers)
         reread = client.get("/api/v1/providers/exa", headers=headers)
 
     assert replaced.status_code == 200

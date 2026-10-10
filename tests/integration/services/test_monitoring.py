@@ -32,6 +32,7 @@ from freesearch.models.contracts import (
     FetchResponse,
     HealthStatus,
     ProviderCapabilities,
+    ProviderError,
     ProviderHealth,
     QuotaSnapshot,
     QuotaSource,
@@ -42,11 +43,24 @@ from freesearch.models.contracts import (
     UsageEvent,
     UsageOperation,
 )
+from freesearch.models.provider_limits import (
+    AuthMode,
+    BudgetBlock,
+    BudgetModel,
+    CRDPriceProfile,
+    CRDUsageTotal,
+    LimitCallContext,
+    LimitOperation,
+    NativeUsageSnapshot,
+    ProviderLimitRecord,
+    RateBlock,
+)
 from freesearch.models.users import UserRole
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
 from freesearch.services import monitoring
 from freesearch.services.parallel_oauth import clear_oauth_poll_state
+from freesearch.services.provider_limits import ProviderLimitsService
 from tests.fixtures.auth import (
     http_jwt_service,
     mcp_account_token,
@@ -290,6 +304,17 @@ _DASHBOARD_KEYS = {
     "latest_quota",
     "latest_health",
     "generated_at",
+    "crd_usage_totals",
+    "provider_limits",
+}
+
+_STATS_KEYS = {
+    "notice",
+    "usage_totals",
+    "recent_usage",
+    "latest_quota",
+    "latest_health",
+    "crd_usage_totals",
 }
 
 
@@ -312,6 +337,13 @@ def _assert_dashboard_contract_keys(body: Any) -> None:
     assert isinstance(body, dict)
     assert set(body) == _DASHBOARD_KEYS
     assert body["notice"] == monitoring.MONITORING_NOTICE
+    assert isinstance(body["crd_usage_totals"], list)
+    assert isinstance(body["provider_limits"], list)
+
+
+def _assert_stats_contract_keys(body: Any) -> None:
+    assert isinstance(body, dict)
+    assert set(body) == _STATS_KEYS
 
 
 async def test_rest_search_persists_usage_and_healthy_health(
@@ -678,8 +710,10 @@ async def test_collect_stats_shape_ordering_grouping_and_quota_provenance(
         "recent_usage",
         "latest_quota",
         "latest_health",
+        "crd_usage_totals",
     }
     assert stats.notice == monitoring.MONITORING_NOTICE
+    assert stats.crd_usage_totals == []
     assert [
         (total.provider, total.operation, total.total_units, total.event_count)
         for total in stats.usage_totals
@@ -701,6 +735,78 @@ async def test_collect_stats_shape_ordering_grouping_and_quota_provenance(
     }
     assert all(snapshot.source is not None for snapshot in stats.latest_quota)
     assert {health.provider for health in stats.latest_health} == {"alpha", "beta"}
+
+
+async def test_crd_usage_totals_sum_exact_success_volume_only(
+    repository: SQLiteRepository,
+) -> None:
+    """T2: populated totals sum exact success debits; a released failure is absent."""
+    t0 = datetime(2026, 1, 1, tzinfo=UTC)
+    record = ProviderLimitRecord(
+        provider="totals-provider",
+        operation=LimitOperation.SEARCH,
+        auth_mode=AuthMode.KEYED,
+        supported=True,
+        transport_available=True,
+        rate=RateBlock(windows=[], published=False),
+        budget=BudgetBlock(model=BudgetModel.USD, standard_native_cost=Decimal("0.005")),
+        native_unit=UnitKind.USD,
+        native_pool_id="totals-provider:keyed:USD",
+        conversion_profile=CRDPriceProfile(),
+    )
+    limits = ProviderLimitsService(repository.limits, records=[record], tier_defaults={})
+    await limits.initialize()
+    await repository.limits.apply_snapshot(
+        NativeUsageSnapshot(
+            pool_id="totals-provider:keyed:USD",
+            provider="totals-provider",
+            auth_mode=AuthMode.KEYED,
+            native_unit=UnitKind.USD,
+            observed_at=t0,
+            remaining=Decimal("5.000"),
+            allowance=Decimal("5.000"),
+            credential_generation=0,
+        )
+    )
+    for attempt in ("totals-1", "totals-2"):
+        admission = await limits.admit(
+            LimitCallContext(
+                provider="totals-provider",
+                operation=LimitOperation.SEARCH,
+                auth_mode=AuthMode.KEYED,
+                attempt_id=attempt,
+                requested_at=t0,
+            )
+        )
+        await limits.record_success(
+            admission,
+            SearchResponse(query="totals", results=[], provider="totals-provider"),
+        )
+    released = await limits.admit(
+        LimitCallContext(
+            provider="totals-provider",
+            operation=LimitOperation.SEARCH,
+            auth_mode=AuthMode.KEYED,
+            attempt_id="totals-3",
+            requested_at=t0,
+        )
+    )
+    await limits.record_failure(
+        released,
+        ProviderError(provider="totals-provider", code="timeout", message="synthetic timeout"),
+    )
+
+    stats = await monitoring.collect_stats(repository, adapter_names=(), limits=limits)
+
+    assert stats.crd_usage_totals == [
+        CRDUsageTotal(
+            provider="totals-provider",
+            operation=LimitOperation.SEARCH,
+            normalized_crd=Decimal("10"),
+            attempt_count=2,
+            volume_count=2,
+        )
+    ]
 
 
 async def test_stats_projection_strips_health_message_usage_metadata_and_request_id() -> None:
@@ -837,7 +943,9 @@ async def test_stats_endpoint_clamps_recent_limit_and_returns_contract_shape(
         "recent_usage",
         "latest_quota",
         "latest_health",
+        "crd_usage_totals",
     }
+    assert low.json()["crd_usage_totals"] == []
     assert len(low.json()["recent_usage"]) == 1
     assert len(high.json()["recent_usage"]) == monitoring.MAX_RECENT_LIMIT
     assert (
@@ -901,6 +1009,7 @@ async def test_monitoring_read_failures_return_empty_stats_and_json_dashboard(
         "recent_usage": [],
         "latest_quota": [],
         "latest_health": [],
+        "crd_usage_totals": [],
     }
     assert dashboard.status_code == 200
     assert "application/json" in dashboard.headers["content-type"]
@@ -911,6 +1020,8 @@ async def test_monitoring_read_failures_return_empty_stats_and_json_dashboard(
     assert dashboard_body["recent_usage"] == []
     assert dashboard_body["latest_quota"] == []
     assert dashboard_body["latest_health"] == []
+    assert dashboard_body["crd_usage_totals"] == []
+    assert dashboard_body["provider_limits"] == []
     _parse_utc_datetime(dashboard_body["generated_at"])
 
 
@@ -949,10 +1060,13 @@ def test_dashboard_response_contract_is_strict_and_decimal_round_trip() -> None:
 
     dashboard = dashboard_model.model_validate(payload)
     assert set(dashboard_model.model_fields) == set(monitoring.StatsResponse.model_fields) | {
-        "generated_at"
+        "generated_at",
+        "provider_limits",
     }
     assert dashboard_model.model_config.get("extra") == "forbid"
-    assert dashboard.model_dump() == payload
+    assert dashboard.provider_limits == []
+    assert dashboard.crd_usage_totals == []
+    assert dashboard.model_dump() == {**payload, "provider_limits": []}
     assert dashboard.usage_totals[0].total_units == Decimal("123.456789")
     assert dashboard.recent_usage[0].units == Decimal("0.000001")
     assert dashboard.latest_quota[0].remaining == Decimal("97.5")
@@ -1006,9 +1120,19 @@ async def test_dashboard_endpoint_matches_stats_and_preserves_quota_provenance(
     stats_body = stats_response.json()
     dashboard_body = dashboard_response.json()
     _assert_dashboard_contract_keys(dashboard_body)
+    _assert_stats_contract_keys(stats_body)
     assert {
-        key: value for key, value in dashboard_body.items() if key != "generated_at"
+        key: value
+        for key, value in dashboard_body.items()
+        if key not in ("generated_at", "provider_limits")
     } == stats_body
+    assert dashboard_body["crd_usage_totals"] == stats_body["crd_usage_totals"] == []
+    assert isinstance(dashboard_body["provider_limits"], list)
+    catalog_records = await repository.limits.list_records()
+    expected_cards = len({record.provider for record in catalog_records})
+    assert len(dashboard_body["provider_limits"]) == expected_cards
+    for entry in dashboard_body["provider_limits"]:
+        assert set(entry) >= {"provider", "active_auth_mode", "auths"}
     assert {(entry["provider"], entry["source"]) for entry in dashboard_body["latest_quota"]} == {
         ("alpha", "authoritative"),
         ("beta", "observed"),
@@ -1152,6 +1276,13 @@ async def test_dashboard_endpoint_omits_sensitive_projection_fields_and_values(
     stats_body = stats_response.json()
     dashboard_body = dashboard_response.json()
     _assert_dashboard_contract_keys(dashboard_body)
+    _assert_stats_contract_keys(stats_body)
+    assert stats_body["crd_usage_totals"] == []
+    assert dashboard_body["crd_usage_totals"] == []
+    assert isinstance(dashboard_body["provider_limits"], list)
+    catalog_records = await repository.limits.list_records()
+    expected_cards = len({record.provider for record in catalog_records})
+    assert len(dashboard_body["provider_limits"]) == expected_cards
     for body in (stats_body, dashboard_body):
         assert len(body["usage_totals"]) == 1
         assert set(body["usage_totals"][0]) == {

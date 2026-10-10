@@ -1,7 +1,7 @@
 """Add local accounts, session families, login limits, and trace ownership.
 
 Revision ID: 0004_local_users
-Revises: 0003_open_telemetry_spans
+Revises: 0004_provider_limits
 Create Date: 2026-10-06
 
 One forward revision covers the whole users feature so the schema has a single
@@ -28,7 +28,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "0004_local_users"
-down_revision: str | None = "0003_open_telemetry_spans"
+down_revision: str | None = "0004_provider_limits"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

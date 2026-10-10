@@ -34,5 +34,12 @@ export interface BackendDashboard {
   }>
   latest_quota: BackendDashboardQuota[]
   latest_health: BackendDashboardHealth[]
+  /**
+   * Additive raw limit fields. Each entry stays `unknown` here and is decoded
+   * by `decodeProviderLimits` / `decodeCRDUsageTotals` in the dashboard state,
+   * so a partial payload never becomes a fabricated balance.
+   */
+  provider_limits?: unknown[]
+  crd_usage_totals?: unknown[]
   generated_at: string
 }

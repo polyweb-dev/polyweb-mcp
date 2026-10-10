@@ -1,5 +1,11 @@
 import { createContext } from "react";
-import type { DashboardQuota, UsageEvent, UsageTotal } from "@/domains/dashboard";
+import type {
+  CRDUsageTotal,
+  DashboardQuota,
+  ProviderLimits,
+  UsageEvent,
+  UsageTotal,
+} from "@/domains/dashboard";
 
 export interface DashboardValue {
   usageEvents: UsageEvent[];
@@ -7,6 +13,10 @@ export interface DashboardValue {
   usageError: string | null;
   usageTotals: UsageTotal[];
   dashboardQuotas: DashboardQuota[];
+  /** Decoded credit-unit limit state, one entry per provider rail. */
+  providerLimits: ProviderLimits[];
+  /** Exact credit-unit use totals from the dashboard payload. */
+  crdUsageTotals: CRDUsageTotal[];
   quotaAvailable: boolean;
   dashboardNotice: string | null;
   /** Role capability flags from the composition. */

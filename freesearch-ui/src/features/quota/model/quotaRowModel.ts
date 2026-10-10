@@ -1,6 +1,8 @@
 import type { ProviderConfig } from "@/domains/providers"
 import { isMissingQuotaSnapshot } from "@/domains/dashboard"
 import type { DashboardQuota } from "@/domains/dashboard"
+import { isManualQuotaEligible, MANUAL_ENTRY_PROVIDERS } from "./quotaEligibility"
+import { resolveQuota } from "./quotaDetails"
 import type { ManualQuotaEstimate } from "./useManualQuota"
 
 export interface QuotaRowEstimates {
@@ -9,9 +11,30 @@ export interface QuotaRowEstimates {
 }
 
 /**
- * Whether Exa/Parallel/Tinyfish lack a vendor budget (Brave callers always pass an
- * eligible row). A missing snapshot with no comparable percentage means the
- * row can only offer Manual Entry.
+ * Providers that may hold a manual native anchor under the current dashboard
+ * snapshot. Eligibility keeps its current rule: Brave always, and the other
+ * providers only while no vendor budget is configured.
+ */
+export function manualEligibleProviders(
+  providers: ProviderConfig[],
+  dashboardQuotas: DashboardQuota[],
+  manualQuotaEligible: typeof isManualQuotaEligible
+): Set<string> {
+  const ids = new Set<string>()
+  for (const provider of providers) {
+    const latest = dashboardQuotas.find((quota) => quota.provider === provider.id)
+    const { display } = resolveQuota(provider, latest)
+    const budgetNotConfigured = manualBudgetMissing(provider, latest, display.remainingPercent)
+    if (manualQuotaEligible(provider.id, budgetNotConfigured)) ids.add(provider.id)
+  }
+  return ids
+}
+
+/**
+ * Whether one provider lacks a vendor budget. A provider whose vendor reports a
+ * snapshot or a comparable percentage needs no manual anchor. A missing
+ * snapshot with no comparable percentage means the row can only offer Manual
+ * Entry.
  */
 export function manualBudgetMissing(
   provider: ProviderConfig,
@@ -20,9 +43,26 @@ export function manualBudgetMissing(
 ): boolean {
   const noSnapshot = isMissingQuotaSnapshot(latestQuota)
   return (
-    ["exa", "parallel", "tinyfish"].includes(provider.id) &&
+    MANUAL_ENTRY_PROVIDERS.includes(provider.id) &&
     noSnapshot &&
     remainingPercent === null
+  )
+}
+
+/**
+ * Whether the snapshot alone is pairing evidence for one provider.
+ *
+ * An AUTHORITATIVE remaining-only snapshot proves a pair even while the status
+ * endpoint is unreachable, so Disconnect stays available.
+ */
+export function pairedSnapshotOf(
+  providerId: string,
+  latestQuota: DashboardQuota | undefined
+): boolean {
+  return (
+    providerId === "parallel" &&
+    latestQuota?.source === "authoritative" &&
+    latestQuota.remaining !== null
   )
 }
 
@@ -42,9 +82,6 @@ export function resolveQuotaRow(
   return {
     hasUsableEstimate:
       remainingPercent !== null || manualEstimate !== null || vendorBalance,
-    pairedSnapshot:
-      provider.id === "parallel" &&
-      latestQuota?.source === "authoritative" &&
-      latestQuota.remaining !== null,
+    pairedSnapshot: pairedSnapshotOf(provider.id, latestQuota),
   }
 }

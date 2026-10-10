@@ -167,9 +167,7 @@ async def test_locked_reconcile_write_keeps_strict_search_at_200(
         )
 
         async def _locked_update(key: str, update: object) -> object:
-            raise OperationalError(
-                "UPDATE runtime_settings", {}, Exception("database is locked")
-            )
+            raise OperationalError("UPDATE runtime_settings", {}, Exception("database is locked"))
 
         monkeypatch.setattr(repository, "update_runtime_setting", _locked_update)
         adapter = FakeAdapter()
@@ -209,9 +207,7 @@ async def test_released_lock_persists_reconciled_support_mask(
         real_update = repository.update_runtime_setting
 
         async def _locked_update(key: str, update: object) -> object:
-            raise OperationalError(
-                "UPDATE runtime_settings", {}, Exception("database is locked")
-            )
+            raise OperationalError("UPDATE runtime_settings", {}, Exception("database is locked"))
 
         monkeypatch.setattr(repository, "update_runtime_setting", _locked_update)
         app = create_app([], repository=repository)

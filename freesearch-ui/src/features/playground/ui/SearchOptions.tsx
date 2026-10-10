@@ -1,4 +1,5 @@
 import { PillTabsList } from "@/shared/ui/PillTabsList"
+import { ProviderSelect } from "@/shared/ui/ProviderSelect"
 import type { PlaygroundController } from "../model/usePlaygroundController"
 
 const quickQueries = [
@@ -8,12 +9,21 @@ const quickQueries = [
   "react server components streaming",
 ]
 
+/** The provider field style of the composer footer. */
+const providerFieldClass =
+  "min-w-48 rounded border border-[var(--border-subtle)] bg-[var(--elevated)] px-2.5 py-1 text-[13px] text-[var(--text)] outline-none"
+
 /**
  * Search footer tray: suggestions plus provider/count controls. Lives inside
  * the composer box so the input row and its options read as one surface.
  */
 export function SearchOptions({ controller }: { controller: PlaygroundController }) {
   const { setQuery, selectedProviderId, setSelectedProviderId, eligibleProviders, resultCount, setResultCount } = controller
+  const providerOptions = [
+    { value: "all", label: "All Providers (Ranked Fusion)" },
+    { value: "auto", label: "Auto arbitration" },
+    ...eligibleProviders.map((provider) => ({ value: provider.id, label: provider.name })),
+  ]
   return (
     <>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
@@ -33,20 +43,15 @@ export function SearchOptions({ controller }: { controller: PlaygroundController
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div className="flex flex-wrap items-center gap-4">
           <div className="flex items-center gap-2">
-            <span>Provider:</span>
-            <select
+            <label htmlFor="playground-search-provider">Provider:</label>
+            <ProviderSelect
+              id="playground-search-provider"
+              testId="playground-search-provider"
+              className={providerFieldClass}
               value={selectedProviderId}
-              onChange={(e) => setSelectedProviderId(e.target.value)}
-              className="rounded border border-[var(--border-subtle)] bg-[var(--elevated)] px-2.5 py-1 text-[13px] text-[var(--text)] outline-none"
-            >
-              <option value="all">All Providers (Ranked Fusion)</option>
-              <option value="auto">Auto arbitration</option>
-              {eligibleProviders.map((provider) => (
-                <option key={provider.id} value={provider.id}>
-                  {provider.name}
-                </option>
-              ))}
-            </select>
+              options={providerOptions}
+              onValueChange={setSelectedProviderId}
+            />
           </div>
 
           <label className="flex items-center gap-2">

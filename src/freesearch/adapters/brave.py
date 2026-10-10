@@ -28,6 +28,17 @@ from freesearch.models.contracts import (
     UsageEvent,
     UsageOperation,
 )
+from freesearch.models.provider_limits import (
+    AuthMode,
+    Confidence,
+    LimitOperation,
+    NativeUsageSnapshot,
+    RateObservation,
+    RateUnit,
+    RateWindowName,
+    UsageSyncRequest,
+    native_pool_id,
+)
 
 _NAME = "brave"
 _SEARCH_URL = "https://api.search.brave.com/res/v1/web/search"
@@ -185,6 +196,13 @@ class BraveAdapter(ProviderAdapter):
         self._monthly_used = Decimal("0")
         self._ledger_month = _month_start(datetime.now(UTC))
         self._hydrated_month: datetime | None = None
+        # The burst element of the rate-limit comma pair is a one-second rate
+        # observation only. It never enters the monthly budget figures.
+        self._burst_remaining: int | None = None
+        self._burst_observed_at: datetime | None = None
+        # True once a monthly header element or a vendor exhaustion arrived, so
+        # a projection cannot replace a vendor observation.
+        self._monthly_observed = False
 
     @property
     def name(self) -> str:
@@ -242,7 +260,15 @@ class BraveAdapter(ProviderAdapter):
             params=self._params(request),
             headers=headers,
         )
-        return await self._client.send(wire_request, auth=None, follow_redirects=False)
+        response = await self._client.send(wire_request, auth=None, follow_redirects=False)
+        # Brave splits its 429 answer: RATE_LIMITED means rate pressure, and
+        # QUOTA_LIMITED means a spent budget. The budget answer is final, so it
+        # leaves this closure as a normalized non-retryable error and never
+        # reaches the shared retry policy. A rate answer keeps its status, its
+        # Retry-After header, and the unchanged runner policy.
+        if response.status_code == 429 and self._is_quota_exhaustion(response):
+            raise self._http_error(response)
+        return response
 
     def _params(self, request: SearchRequest) -> dict[str, str | int]:
         params: dict[str, str | int] = {
@@ -349,6 +375,10 @@ class BraveAdapter(ProviderAdapter):
         self._ledger_month = month
         self._monthly_used = Decimal("0")
         self._hydrated_month = None
+        # A new month voids the previous month's observation and burst headroom.
+        self._monthly_observed = False
+        self._burst_remaining = None
+        self._burst_observed_at = None
 
     def _usage_event(self, response: httpx.Response) -> UsageEvent:
         self._rollover_if_needed(datetime.now(UTC))
@@ -357,6 +387,8 @@ class BraveAdapter(ProviderAdapter):
         remaining = self._rate_limit_remaining(response.headers.get("X-RateLimit-Remaining"))
         if remaining is not None:
             metadata["rate_limit_remaining"] = remaining
+            self._burst_remaining = remaining
+            self._burst_observed_at = datetime.now(UTC)
         return UsageEvent(
             provider=self.name,
             operation=UsageOperation.SEARCH,
@@ -407,6 +439,8 @@ class BraveAdapter(ProviderAdapter):
         remaining = monthly_header_value(response.headers.get("X-RateLimit-Remaining"))
         limit = monthly_header_value(response.headers.get("X-RateLimit-Limit"))
         reset = monthly_header_value(response.headers.get("X-RateLimit-Reset"))
+        if any(value is not None for value in (remaining, limit, reset)):
+            self._monthly_observed = True
         if limit == Decimal("0"):
             return QuotaSnapshot(
                 provider=self.name,
@@ -494,6 +528,7 @@ class BraveAdapter(ProviderAdapter):
         metadata = self._base_metadata()
         metadata["exhaustion"] = True
         metadata["exhaustion_status"] = status
+        self._monthly_observed = True
         snapshot = QuotaSnapshot(
             provider=self.name,
             source=QuotaSource.OBSERVED,
@@ -508,16 +543,90 @@ class BraveAdapter(ProviderAdapter):
         self._last_quota = snapshot
         return snapshot
 
-    def _http_error(self, response: httpx.Response) -> ProviderOperationError:
-        status = response.status_code
-        if status != 429 and self._is_quota_exhaustion(response):
-            return self._error(
-                "quota_exhausted",
-                f"HTTP {status}",
-                retryable=False,
-                status=status,
+    async def usage_snapshot(self, request: UsageSyncRequest) -> NativeUsageSnapshot | None:
+        """Return the observed USD budget of the Brave search rail.
+
+        The adapter prices the monthly element of the rate-limit header pair
+        with the documented per-request cost. The monthly pair element supplies
+        the allowance and the remaining. The burst element of the same pair
+        becomes a one-second rate observation only, never a budget figure. A
+        request count the vendor never reported stays absent.
+        """
+
+        auth_mode = self.limit_auth_mode
+        observed_at = request.observed_at
+        self._rollover_if_needed(datetime.now(UTC))
+        quota = (
+            self._last_quota
+            if self._monthly_observed
+            else self._snapshot_from_counter(datetime.now(UTC), None)
+        )
+        limit = quota.limit
+        # A figure is vendor-header sourced only when the vendor supplied the
+        # monthly limit and no local projection stands behind the value.
+        vendor_limit = self._monthly_limit is not None and not self._monthly_limit_implied
+        from_headers = (
+            vendor_limit and limit is not None and not bool(quota.metadata.get("limit_implied"))
+        )
+        return NativeUsageSnapshot(
+            pool_id=native_pool_id(self.name, auth_mode, UnitKind.USD),
+            provider=self.name,
+            auth_mode=auth_mode,
+            native_unit=UnitKind.USD,
+            observed_at=observed_at,
+            source="vendor_headers" if from_headers else "local_ledger",
+            confidence=Confidence.OBSERVED if from_headers else Confidence.ESTIMATED,
+            remaining=self._usd_from_requests(quota.remaining),
+            allowance=self._usd_from_requests(limit),
+            reset_at=quota.reset_at,
+            credential_generation=request.credential_generation,
+            rate_observations=self._burst_observations(auth_mode),
+        )
+
+    @staticmethod
+    def _usd_from_requests(value: Decimal | None) -> Decimal | None:
+        """Convert an integral request count to documented USD, else None."""
+
+        if value is None or not value.is_finite() or value < 0:
+            return None
+        if value != value.to_integral_value():
+            return None
+        return brave_spend_usd(value)
+
+    def _burst_observations(self, auth_mode: AuthMode) -> list[RateObservation]:
+        """Return the last observed per-second burst headroom, if any."""
+
+        remaining = self._burst_remaining
+        observed_at = self._burst_observed_at
+        if remaining is None or observed_at is None:
+            return []
+        return [
+            RateObservation(
+                bucket_id=f"{self.name}:{auth_mode.value}:search:{RateUnit.REQUESTS.value}",
+                provider=self.name,
+                auth_mode=auth_mode,
+                window=RateWindowName.SECOND,
+                unit=RateUnit.REQUESTS,
+                remaining=Decimal(remaining),
+                observed_at=observed_at,
+                operation=LimitOperation.SEARCH,
+                source="vendor_headers",
+                confidence=Confidence.OBSERVED,
             )
-        if status == 402:
+        ]
+
+    def _http_error(self, response: httpx.Response) -> ProviderOperationError:
+        """Return the normalized error of one failed Brave response.
+
+        A body marker or a 402 answer means a spent budget, so the error is
+        final and keeps the vendor status. Every other answer is a transport
+        error whose retryability follows the shared status policy.
+        """
+
+        status = response.status_code
+        if status == 402 or self._is_quota_exhaustion(response):
+            # An exhausted budget is never retried, and a 429 QUOTA_LIMITED
+            # keeps its original vendor status in the record.
             return self._error(
                 "quota_exhausted",
                 f"HTTP {status}",

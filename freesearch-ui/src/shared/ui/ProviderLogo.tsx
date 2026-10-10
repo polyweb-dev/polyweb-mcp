@@ -1,4 +1,5 @@
 import React from "react"
+import type { ReactNode } from "react"
 import braveLogo from "@/assets/brave.webp"
 import exaLogo from "@/assets/exa.webp"
 import firecrawlLogo from "@/assets/firecrawl.webp"
@@ -26,18 +27,25 @@ export interface ProviderLogoProps {
   providerId?: string
   name?: string
   className?: string
+  /**
+   * The mark of an identity with no catalog logo. The letter avatar is the
+   * default, so a picker can show a generic account icon in its place.
+   */
+  fallback?: ReactNode
 }
 
 export const ProviderLogo: React.FC<ProviderLogoProps> = ({
   providerId,
   name,
   className,
+  fallback,
 }) => {
   if (!providerId && !name) return null
   const key = (providerId || name || "").toLowerCase().trim()
   const logo = LOGO_MAP[key]
 
   if (!logo) {
+    if (fallback !== undefined) return <>{fallback}</>
     const fallbackLetter = (name || providerId || "?").trim().charAt(0).toUpperCase()
     return (
       <span

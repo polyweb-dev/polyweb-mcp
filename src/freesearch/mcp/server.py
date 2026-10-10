@@ -77,11 +77,13 @@ from freesearch.models.observability import (
 from freesearch.models.users import UserPrincipal
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.services.aggregation import reciprocal_rank_fusion
+from freesearch.services.limits_sync import LimitSyncService
 from freesearch.services.monitoring import (
     clear_quota_poll_cache,
     resolve_database_path,
     tracked_call,
 )
+from freesearch.services.provider_limits import ProviderLimitsService
 from freesearch.services.routing import select_route
 from freesearch.services.users import AuthService
 
@@ -100,7 +102,48 @@ class _ServerState(TypedDict):
     client: httpx.AsyncClient | None
     routes: list[ProviderAdapter] | None
     secret_store: AsyncSecretStore | None
+    limits: "ProviderLimitsService | None"
+    limits_sync: "LimitSyncService | None"
+    limits_task: "asyncio.Task[None] | None"
+    limits_stop: asyncio.Event | None
     observability: ObservabilityRuntime
+
+
+async def _start_limits_generation(state: _ServerState, routes: Sequence[ProviderAdapter]) -> None:
+    """Seed the limit catalog and start ONE schedule task for this generation.
+
+    A server without a repository has no limit store, so no task starts. The
+    task is per generation, never per MCP session.
+    """
+
+    repository = state["repository"]
+    if not isinstance(repository, SQLiteRepository):
+        return
+    limits = ProviderLimitsService(repository.limits)
+    await limits.initialize()
+    stop = asyncio.Event()
+    sync = LimitSyncService(repository.limits, limits, lambda: state["routes"] or [])
+    state["limits"] = limits
+    state["limits_sync"] = sync
+    state["limits_stop"] = stop
+    state["limits_task"] = asyncio.create_task(sync.run(stop))
+
+
+async def _stop_limits_generation(state: _ServerState) -> None:
+    """Stop and await the schedule task before the repository and adapters close."""
+
+    stop = state["limits_stop"]
+    if stop is not None:
+        stop.set()
+    task = state["limits_task"]
+    if task is not None:
+        task.cancel()
+        with suppress(Exception, asyncio.CancelledError):
+            await task
+    state["limits"] = None
+    state["limits_sync"] = None
+    state["limits_task"] = None
+    state["limits_stop"] = None
 
 
 def _trace_database(
@@ -279,14 +322,17 @@ async def _build_generation(
         else:
             owned_routes = build_adapters(client)
         await _apply_parallel_seed(owned_routes, repository)
+        await _start_limits_generation(state, owned_routes)
         # The trace runtime belongs to this generation, so it is built only after
         # the repository that owns the trace table is open and migrated.
         state["observability"] = build_observability(
             get_settings(), database=_trace_database(state["repository"], database)
         )
     except BaseException:
-        # A failed enter never increments: close the freshly built client and
-        # adapters so a failed open cannot leak a partial generation.
+        # A failed enter never increments: stop any schedule task, then close the
+        # freshly built client and adapters so a failed open cannot leak a
+        # partial generation.
+        await _stop_limits_generation(state)
         await close_adapters(owned_routes, client)
         raise
     state["client"] = client
@@ -315,6 +361,7 @@ async def _detach_generation(state: _ServerState, *, owns_repository: bool) -> N
     client = state["client"]
     owned_routes = state["routes"]
     owned_repo = state["repository"] if owns_repository else None
+    await _stop_limits_generation(state)
     state["client"] = None
     state["routes"] = None
     state["secret_store"] = None
@@ -398,6 +445,7 @@ async def _mcp_fanout_search(
     active: Sequence[ProviderAdapter],
     repository: SQLiteRepository | None,
     secret_store: AsyncSecretStore | None = None,
+    limits: "ProviderLimitsService | None" = None,
 ) -> dict[str, Any]:
     """Execute concurrent fanout search across active adapters for MCP."""
     if request.routing.providers:
@@ -422,6 +470,8 @@ async def _mcp_fanout_search(
                 candidate_adapter,
                 lambda target: target.search(request),
                 operation=UsageOperation.SEARCH,
+                request=request,
+                limits=limits,
             )
             elapsed = int((time.perf_counter() - call_start) * 1000)
             return (candidate_adapter.name, res, elapsed, "success", len(res.results), None)
@@ -523,7 +573,11 @@ async def _search_response(
 
     if request.fanout or request.routing.mode is RoutingMode.FANOUT:
         payload = await _mcp_fanout_search(
-            request, active, state["repository"], state["secret_store"]
+            request,
+            active,
+            state["repository"],
+            state["secret_store"],
+            limits=state["limits"],
         )
         return SearchResponse.model_validate(payload)
     adapter = await _route_adapter(request, active=active, state=state)
@@ -532,6 +586,8 @@ async def _search_response(
         adapter,
         lambda target: target.search(request),
         operation=UsageOperation.SEARCH,
+        request=request,
+        limits=state["limits"],
     )
 
 
@@ -540,12 +596,15 @@ async def _fetch_response(
 ) -> FetchResponse:
     """Run one fetch call and return its typed response."""
 
+    _require_single_url(request)
     adapter = await _route_adapter(request, active=active, state=state)
     return await tracked_call(
         state["repository"],
         adapter,
         lambda target: target.fetch(request),
         operation=UsageOperation.FETCH,
+        request=request,
+        limits=state["limits"],
     )
 
 
@@ -635,6 +694,10 @@ def create_server(
         "secret_store": _encrypted_store(repository)
         if isinstance(repository, SQLiteRepository)
         else None,
+        "limits": None,
+        "limits_sync": None,
+        "limits_task": None,
+        "limits_stop": None,
         # An injected composition has no generation lifecycle, so its trace
         # runtime is built here and lives as long as the injected repository.
         # The owned path builds a fresh runtime per generation instead.
@@ -709,6 +772,13 @@ def create_server(
     )
 
     return server
+
+
+def _require_single_url(request: FetchRequest) -> None:
+    """Reject an executable batch fetch before admission and vendor I/O."""
+
+    if request.url_count != 1:
+        raise ValueError("this release executes exactly one URL per fetch request")
 
 
 def main(argv: Sequence[str] | None = None) -> None:
