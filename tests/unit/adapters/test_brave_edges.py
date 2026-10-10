@@ -84,12 +84,6 @@ async def test_rate_limit_header_normalization(
         {"web": []},
         {"web": "not-a-mapping"},
         {"web": {"results": "not-a-list"}},
-        {"web": {"results": ["not-a-dict"]}},
-        {"web": {"results": [42]}},
-        {"web": {"results": [{"title": "T", "url": "not-a-url"}]}},
-        {"web": {"results": [{"title": "T"}]}},
-        {"web": {"results": [{"url": "https://example.com", "page_age": "soon"}]}},
-        {"web": {"results": [{"url": "https://example.com", "page_age": "2024-13-45"}]}},
     ],
 )
 async def test_malformed_results_and_page_age_map_to_invalid_response(
@@ -105,6 +99,38 @@ async def test_malformed_results_and_page_age_map_to_invalid_response(
     assert excinfo.value.error.code == "invalid_response"
     assert excinfo.value.error.retryable is False
     assert excinfo.value.__cause__ is None
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"web": {"results": ["not-a-dict"]}},
+        {"web": {"results": [42]}},
+        {"web": {"results": [{"title": "T", "url": "not-a-url"}]}},
+        {"web": {"results": [{"title": "T"}]}},
+        {"web": {"results": [{"url": "https://example.com", "page_age": "soon"}]}},
+        {"web": {"results": [{"url": "https://example.com", "page_age": "2024-13-45"}]}},
+    ],
+)
+async def test_invalid_items_skip_with_error_records(
+    payload: dict[str, object],
+) -> None:
+    adapter, client = _adapter(lambda request: httpx.Response(200, json=payload))
+    try:
+        response = await adapter.search(SearchRequest(query="query"))
+    finally:
+        await client.aclose()
+
+    assert response.results == []
+    assert response.total_results == 0
+    assert response.usage is not None
+    assert response.usage.metadata.get("parse_errors") == [
+        {
+            "index": 0,
+            "code": "invalid_response",
+            "message": "malformed search result item",
+        }
+    ]
 
 
 async def test_numeric_page_age_is_coerced_to_unix_datetime() -> None:

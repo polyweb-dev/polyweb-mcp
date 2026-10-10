@@ -462,6 +462,27 @@ def _annotate_root_error(observability: ObservabilityRuntime, error: BaseExcepti
     )
 
 
+def _annotate_root_request_identity(
+    observability: ObservabilityRuntime,
+    request: SearchRequest | FetchRequest,
+    provider: ProviderAdapter,
+) -> None:
+    """Keep the request identity on a failed root span.
+
+    The success path projects the same fields from the response. A failure
+    never reaches that projection, so the Activity row would lose its title
+    and the Provider column would show a dash.
+    """
+
+    attributes: dict[str, object] = {
+        TraceAttribute.OPERATION: _operation_name(request).value,
+        TraceAttribute.PROVIDER: provider.name,
+    }
+    if isinstance(request, SearchRequest):
+        attributes[TraceAttribute.REQUEST_QUERY] = request.query
+    observability.annotate_root(attributes)
+
+
 def _annotate_root(
     observability: ObservabilityRuntime,
     request: SearchRequest | FetchRequest,
@@ -707,6 +728,7 @@ async def _dispatch[
             )
         except Exception as error:
             _annotate_root_error(observability, error)
+            _annotate_root_request_identity(observability, request, provider)
             raise
         provider_span.add_event(
             TRACE_EVENT_PROVIDER_RESPONSE, attributes=_provider_response_event(response)

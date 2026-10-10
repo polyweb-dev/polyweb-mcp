@@ -450,8 +450,8 @@ async def test_http_status_error_mapping(
     [
         b"<html>gateway timeout</html>",
         {},
+        ["not", "an", "object"],
         {"results": "not a list"},
-        {"results": [{"no_url": True}]},
     ],
 )
 async def test_malformed_search_payloads_raise_invalid_response(payload: object) -> None:
@@ -467,6 +467,213 @@ async def test_malformed_search_payloads_raise_invalid_response(payload: object)
 
     assert raised.value.error.code == "invalid_response"
     assert raised.value.error.retryable is False
+
+
+_GOOD_SEARCH_ITEM = {
+    "position": 1,
+    "site_name": "Example Site",
+    "title": "Example Result",
+    "snippet": "A test snippet from Tinyfish.",
+    "url": "https://example.com/item",
+    "date": "2026-06-01T12:00:00Z",
+}
+
+_BAD_URL_ITEM = {"title": "Bad URL", "snippet": "unusable address", "url": "not-a-url"}
+
+_SECOND_GOOD_ITEM = {
+    "position": 3,
+    "site_name": "Second Site",
+    "title": "Second Result",
+    "snippet": "Another snippet.",
+    "url": "https://example.com/second",
+}
+
+_EXPECTED_ERROR_RECORD = {
+    "code": "invalid_response",
+    "message": "malformed search result item",
+}
+
+
+def _search_adapter_for(payload: object) -> TinyfishAdapter:
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    return _adapter(_Transport(handler=handler))
+
+
+def _parse_errors_of(response: object) -> Any:
+    usage = response.usage  # type: ignore[union-attr]
+    assert usage is not None
+    return usage.metadata.get("parse_errors")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("items", "expected_urls", "expected_indices"),
+    [
+        ([_GOOD_SEARCH_ITEM, _BAD_URL_ITEM], ["https://example.com/item"], [1]),
+        ([_BAD_URL_ITEM, _GOOD_SEARCH_ITEM], ["https://example.com/item"], [0]),
+        (
+            [_GOOD_SEARCH_ITEM, _BAD_URL_ITEM, _SECOND_GOOD_ITEM],
+            ["https://example.com/item", "https://example.com/second"],
+            [1],
+        ),
+        (
+            [_BAD_URL_ITEM, _GOOD_SEARCH_ITEM, _BAD_URL_ITEM, _SECOND_GOOD_ITEM],
+            ["https://example.com/item", "https://example.com/second"],
+            [0, 2],
+        ),
+    ],
+)
+async def test_search_skips_invalid_items_and_records_errors(
+    items: list[object], expected_urls: list[str], expected_indices: list[int]
+) -> None:
+    adapter = _search_adapter_for({"results": items})
+
+    response = await adapter.search(SearchRequest(query="test", limit=10))
+
+    assert [str(item.url) for item in response.results] == expected_urls
+    assert response.query == "test"
+    assert response.provider == "tinyfish"
+    assert response.total_results == len(expected_urls)
+    assert _parse_errors_of(response) == [
+        {"index": index, **_EXPECTED_ERROR_RECORD} for index in expected_indices
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("items", "expected_indices"),
+    [
+        ([{"no_url": True}], [0]),
+        ([{"url": "not-a-url"}], [0]),
+        (
+            [
+                {},
+                {"url": ""},
+                {"url": 123},
+                "not-a-dict",
+                {"url": "https://example.com/a", "title": ["x"]},
+            ],
+            [0, 1, 2, 3, 4],
+        ),
+    ],
+)
+async def test_search_all_invalid_items_returns_empty_success(
+    items: list[object], expected_indices: list[int]
+) -> None:
+    adapter = _search_adapter_for({"results": items})
+
+    response = await adapter.search(SearchRequest(query="test", limit=10))
+
+    assert response.results == []
+    assert response.total_results == 0
+    assert response.query == "test"
+    assert response.provider == "tinyfish"
+    assert response.usage is not None
+    assert response.usage.units == Decimal("1")
+    assert _parse_errors_of(response) == [
+        {"index": index, **_EXPECTED_ERROR_RECORD} for index in expected_indices
+    ]
+
+
+@pytest.mark.asyncio
+async def test_search_empty_list_returns_success_without_error_metadata() -> None:
+    adapter = _search_adapter_for({"results": []})
+
+    response = await adapter.search(SearchRequest(query="test", limit=10))
+
+    assert response.results == []
+    assert response.total_results == 0
+    assert response.usage is not None
+    assert "parse_errors" not in response.usage.metadata
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("limit", "items", "expected_urls", "expected_indices", "payload_total", "expected_total"),
+    [
+        (
+            1,
+            [_BAD_URL_ITEM, _GOOD_SEARCH_ITEM, _SECOND_GOOD_ITEM],
+            ["https://example.com/item"],
+            [0],
+            None,
+            1,
+        ),
+        (
+            2,
+            [_GOOD_SEARCH_ITEM, _SECOND_GOOD_ITEM, _BAD_URL_ITEM],
+            ["https://example.com/item", "https://example.com/second"],
+            [2],
+            None,
+            2,
+        ),
+        (
+            10,
+            [_GOOD_SEARCH_ITEM, _BAD_URL_ITEM],
+            ["https://example.com/item"],
+            [1],
+            50,
+            50,
+        ),
+        (
+            10,
+            [_GOOD_SEARCH_ITEM, _BAD_URL_ITEM],
+            ["https://example.com/item"],
+            [1],
+            -3,
+            1,
+        ),
+    ],
+)
+async def test_search_limit_applies_after_invalid_item_filter(
+    limit: int,
+    items: list[object],
+    expected_urls: list[str],
+    expected_indices: list[int],
+    payload_total: object,
+    expected_total: int,
+) -> None:
+    payload: dict[str, object] = {"results": items}
+    if payload_total is not None:
+        payload["total_results"] = payload_total
+    adapter = _search_adapter_for(payload)
+
+    response = await adapter.search(SearchRequest(query="test", limit=limit))
+
+    assert [str(item.url) for item in response.results] == expected_urls
+    assert response.total_results == expected_total
+    assert _parse_errors_of(response) == [
+        {"index": index, **_EXPECTED_ERROR_RECORD} for index in expected_indices
+    ]
+
+
+@pytest.mark.asyncio
+async def test_search_parse_errors_do_not_expose_payload_or_key() -> None:
+    key_text = _VALID_KEY.get_secret_value()
+    adapter = _search_adapter_for(
+        {
+            "results": [
+                _GOOD_SEARCH_ITEM,
+                {
+                    "title": f"leak {key_text}",
+                    "snippet": key_text,
+                    "url": "not-a-url",
+                    "password": key_text,
+                },
+            ]
+        }
+    )
+
+    response = await adapter.search(SearchRequest(query="test", limit=10))
+
+    assert [str(item.url) for item in response.results] == ["https://example.com/item"]
+    errors = _parse_errors_of(response)
+    assert errors == [{"index": 1, **_EXPECTED_ERROR_RECORD}]
+    assert key_text not in repr(errors)
+    for record in errors:
+        assert set(record.keys()) == {"index", "code", "message"}
 
 
 @pytest.mark.asyncio
