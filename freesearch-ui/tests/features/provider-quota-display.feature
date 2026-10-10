@@ -1,84 +1,67 @@
 @stub @quota
 Feature: Provider quota display stays honest
-  The usage view renders verbatim quota strings with em-dash blanks (never
-  an infinity marker). Brave shows observed requests; Parallel seeded shows
-  a USD budget while unseeded shows an explainer instead of a balance;
-  Keenable keyless shows rolling hourly request headroom with a shared-pool
-  caveat rather than presenting it as a monthly allowance.
+  The usage view renders one credit bar per card with the exact CRD fraction.
+  Unknown fields stay hidden and invented balances never appear.
+  Manual entry and OAuth pairing keep their action-only controls.
 
   Background:
     Given I navigate to the web application
 
   @stub @quota @brave
-  Scenario: Brave observed quota renders verbatim with confidence
-    Given the stubbed dashboard shows "Brave observed quota"
+  Scenario: Brave finite credits render one bar with exact funds
+    Given the stubbed provider limits show "Brave finite credits"
+    And the stubbed credit totals show "Brave no use"
     When I navigate directly to "/usage"
     Then I should see the "Usage" heading
-    And the usage view should show "950"
-    And the usage view should show "1000"
-    And the usage view should show "requests"
-    And the usage view should show "observed"
-    And the usage view should show "—"
+    And the Brave credit bar should show "90" percent
+    And the Brave card should show "4500 / 5000 CRD"
+    And the Brave CRD value should carry "$4.5 left" hover text
+    And the Brave card subtitle should contain "Observed from the vendor API"
+    And the usage view should not show "CRD left"
     And the usage view should not show "∞"
+    And the usage view should not show "n/a"
 
   @stub @quota @parallel
-  Scenario: Parallel seeded spend and unseeded explainer stay honest
-    Given the stubbed dashboard shows "Parallel seeded quota"
+  Scenario: Parallel without a card keeps an action slot and no invented balance
+    Given the stubbed provider limits show "Brave finite credits"
+    And the stubbed credit totals show "Brave no use"
     When I navigate directly to "/usage"
     Then I should see the "Usage" heading
-    And the usage view should show "3.75/5.00"
-    And the usage view should show "USD"
-    And the usage view should show "estimated"
-    Given the stubbed dashboard shows "Parallel unseeded quota"
-    And I reload the page
-    Then the usage view should show "Budget not configured"
-    And the usage view should show "Monthly"
-    And the usage view should show "No API-key balance endpoint is available. Configure a local monthly USD budget to calculate remaining capacity."
-    And the usage view should show "—"
+    And the usage view should show "How credit units are priced"
     And the usage view should not show "∞"
+    And the usage view should not show "Tier split unavailable"
 
   @stub @quota @manual
-  Scenario: Brave manual budget entry shows an estimated overlay
-    Given the stubbed dashboard shows "Brave observed quota"
-    And the stubbed manual quota for "brave" is empty
+  Scenario: Brave manual entry opens a USD balance dialog from the card
+    Given the stubbed provider limits show "Brave finite credits"
+    And the stubbed credit totals show "Brave no use"
     When I navigate directly to "/usage"
-    And I open the manual budget entry for provider "brave"
-    And I enter the manual billing window "2026-09-01" to "2026-09-30" with allowance "5.00" and usage "0.88"
-    And I save the manual budget entry
-    Then the usage view should show "82.4% remaining"
-    And the usage view should show "Manual Entry"
-    And the manual overlay progress bar for provider "brave" should show "82.4"
-    And the usage view should show "Vendor: 950/1000 requests"
-    And the usage view should show "observed"
-    And the usage view should show "estimated"
-    And the usage view should not show "95% remaining"
-    And the usage view should not show "∞"
+    And I open the credit manual entry for "brave"
+    Then the manual entry should show "Credit mode"
+    And the manual entry should show "Allowance (USD)"
+    And the manual entry should show "Balance remaining (USD)"
+    When I cancel the credit dialog
+    Then the usage view should show "Brave"
 
   @stub @quota @oauth
-  Scenario: Parallel OAuth pairing shows an authoritative balance
-    Given the stubbed dashboard shows "Parallel unseeded quota"
+  Scenario: Parallel OAuth pairing keeps its connect controls
+    Given the stubbed provider limits show "Brave finite credits plus Parallel card"
+    And the stubbed credit totals show "Brave no use"
     And the stubbed OAuth pairing for "parallel" is empty
     When I navigate directly to "/usage"
     And I open the OAuth pairing for provider "parallel"
     Then the pairing code "ABCD-EFGH" should be visible
     When the stubbed OAuth status for "parallel" becomes "ready"
-    And the stubbed dashboard shows "Parallel paired quota"
-    Then the pairing should close
-    And the usage view should show "Balance available"
-    And the usage view should show "3.75"
-    And the OAuth disconnect control should be visible
-    And the usage view should not show "Budget not configured"
+    Then the OAuth disconnect control should be visible
     And the usage view should not show "∞"
 
   @stub @quota @keenable
-  Scenario: Keenable keyless pool renders rolling hourly headroom
-    Given the stubbed dashboard shows "Keenable keyless quota"
+  Scenario: Unknown credits render no invented bar or funds
+    Given the stubbed provider limits show "Brave unknown credits"
+    And the stubbed credit totals show "Brave no use"
     When I navigate directly to "/usage"
     Then I should see the "Usage" heading
-    And the usage view should show "99.9% remaining"
-    And the usage view should show "999/1000 requests"
-    And the usage view should show "observed"
-    And the usage view should show "hourly"
-    And the usage view should show "locally observed"
-    And the usage view should show "shared rate limits still apply"
+    And the Brave card should show no credit bar
+    And the usage view should not show "Unknown"
+    And the usage view should not show "n/a"
     And the usage view should not show "∞"

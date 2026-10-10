@@ -51,6 +51,10 @@ Copy-Item .env.example .env
 
 Keep `.env` for non-secret runtime settings. Store provider credentials in the encrypted vault through the settings dashboard (the same encrypted-vault API the dashboard itself uses). Keenable can remain keyless.
 
+Local accounts need one more entry in that file: `FREESEARCH_AUTH_JWT_SECRET`. Supply at least 32 random bytes. The API and the MCP server reject a missing secret at the first account check, so a real deployment must set it. The gitignored `.env` file holds the real value, and `.env.example` holds an empty placeholder. The operator account CLI does not need that value.
+
+Full account rules, limits, token lifetimes, and the rollback procedure: [docs/releases/local-users.md](docs/releases/local-users.md).
+
 ---
 
 ### 3. Backend Setup & Dependencies
@@ -83,6 +87,17 @@ FreeSearch includes a dedicated database management CLI tool (`freesearch-db`):
   *(Note: `upgrade` automatically makes an integrity-verified pre-migration backup before applying schema changes, preserving existing data.)*
 
 > **Tip:** You do not have to run `freesearch-db upgrade` manually every time. When the backend server starts, it will automatically verify the schema and run pending migrations up to Alembic head.
+
+#### Local account bootstrap
+
+Public registration creates Agent accounts only. Create the first Admin account with the operator CLI, and assign a later role by explicit account UUID:
+
+```bash
+uv run freesearch-users create-admin --email admin@example.com
+uv run freesearch-users set-role --user-id <account-uuid> --role developer
+```
+
+The command reads the password from a masked terminal prompt, refuses a password argument, and prints only the account UUID and the role. It requires a database file that is present, so run `freesearch-db upgrade` first. A failed promotion leaves an Agent account, and the command reports that state.
 
 ---
 
@@ -220,6 +235,22 @@ uv run freesearch-api
 - **Interactive Swagger Docs:** `http://127.0.0.1:8001/docs`
 - **Alternative ReDoc:** `http://127.0.0.1:8001/redoc`
 
+### Local accounts and access control
+
+Every API route except `POST /auth/register` and `POST /auth/jwt/login` needs a JWT Bearer credential. The MCP resource and the SDK metadata routes need the same credential.
+
+- **Register:** `POST /auth/register` with `{"email": ..., "password": ...}` creates an active Agent account and returns no token.
+- **Log in:** `POST /auth/jwt/login` with the OAuth2 form (`username` holds the email) returns `access_token`, `refresh_token`, `token_type`, `expires_in`, and `refresh_expires_in`.
+- **Refresh:** `POST /auth/jwt/refresh` takes the opaque refresh credential in the Bearer header and rotates it once. A second use of a consumed credential revokes that family.
+- **Log out:** `POST /auth/jwt/logout` revokes the current family, so its access and refresh credentials stop at once.
+- **Current account:** `GET /users/me` returns the account record without the password hash.
+- **Roles:** Admin changes provider controls and provider OAuth, Developer reads the sanitized control views and statistics, and Agent searches and fetches. Every role reads only its own traces.
+- **Guarded documentation:** `/docs`, `/redoc`, and `/openapi.json` need an access JWT, because this release adds no anonymous discovery route.
+- **Limits:** 5 pair attempts and 20 peer-address attempts per 900 seconds for login, 5 peer-address attempts and 100 deployment attempts per 900 seconds for registration, and a 4096-byte cap on a public auth body.
+- **Token lifetime:** 900 seconds for an access JWT and 604800 seconds for the absolute refresh family. An ordinary API call and an ordinary MCP call never extend a token.
+
+The API and the MCP transports read `FREESEARCH_API_PORT` and `FREESEARCH_MCP_PORT` from the gitignored `.env` file, so a launch command never hardcodes a port. The full account rules and the release procedure are in [docs/releases/local-users.md](docs/releases/local-users.md).
+
 ### Start the Frontend Dashboard
 
 In a separate terminal, navigate to `freesearch-ui` and start the Vite dev server:
@@ -264,9 +295,10 @@ children; a handled provider failure marks that child `error` and the root `part
   (Alembic revision `0003_open_telemetry_spans`). Root rows double as the Activity summary.
   Exports are batched, so the middleware flushes once per traced request after the root span
   ends — that is what makes the row visible without a refresh.
-- **Read API:** `GET /api/v1/traces` returns summary rows only (no query, no results);
-  `GET /api/v1/traces/{trace_id}` returns the full input, tagged output, and ordered stage
-  timeline. `404` for absent or malformed ids.
+- **Read API:** `GET /api/v1/traces` returns the account's own summary rows only (no query,
+  no results); `GET /api/v1/traces/{trace_id}` returns the full input, tagged output, and
+  ordered stage timeline. An absent, foreign-owned, or historical unowned trace gives the
+  same `404`. Every root span carries the verified account UUID in `freesearch.user.id`.
 - **Correlation:** every traced response carries `X-Trace-Id: <32-lowercase-hex>` (including
   handled error responses) matching the detail API's `trace_id`.
 - **Activity UI:** the Activity page lists those traces and discloses query in, results out,
@@ -316,6 +348,8 @@ uv run freesearch-mcp --transport stdio
 ```
 
 - Exposes provider-neutral `search` and `fetch` tools with automatic route selection and quota tracking.
+- The HTTP transport needs an access JWT on every route, and the SDK metadata routes are guarded too.
+- The stdio transport needs `FREESEARCH_MCP_BEARER_TOKEN` in the child process environment. The parent renews that access JWT after expiry and restarts the child, and the child never receives a refresh credential.
 - Transports and flags can also be configured via `FREESEARCH_MCP_TRANSPORT` (`stdio` or `streamable-http`) and `FREESEARCH_MCP_STATELESS` (`true`/`false`).
 
 ---

@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+import json
 import sqlite3
 import subprocess
 import sys
@@ -121,7 +122,7 @@ def _indexes(database: Path) -> set[str]:
         }
 
 
-# Exact ``trace_spans`` contract per PLAN §3.1 (revision 0003).
+# Exact ``trace_spans`` contract per PLAN §8 (revision 0004 adds ``user_id``).
 _TRACE_SPAN_COLUMNS = frozenset(
     {
         "span_id",
@@ -138,6 +139,7 @@ _TRACE_SPAN_COLUMNS = frozenset(
         "error_type",
         "operation",
         "provider",
+        "user_id",
         "input_text",
         "output_json",
         "result_count",
@@ -163,6 +165,47 @@ _TRACE_SPAN_NOTNULL = frozenset(
 )
 _TRACE_SPAN_NULLABLE = _TRACE_SPAN_COLUMNS - _TRACE_SPAN_NOTNULL - {"span_id"}
 _TRACE_INDEXES = frozenset({"trace_spans_trace_started_at", "trace_spans_root_started_at"})
+_TRACE_USER_INDEX = "trace_spans_user_root_started_at"
+_AUTH_TABLES = frozenset({"user", "login_throttle", "auth_sessions", "refresh_tokens"})
+_AUTH_INDEXES = frozenset(
+    {
+        "ix_user_email",
+        "user_email_lower_key",
+        "user_provider_identity_key",
+        "auth_sessions_user_id",
+        "auth_sessions_expires_at",
+        "refresh_tokens_family_id",
+    }
+)
+_HEAD_TABLES = frozenset(
+    {
+        "usage_events",
+        "runtime_settings",
+        "quota_snapshots",
+        "provider_health",
+        "trace_spans",
+        "user",
+        "login_throttle",
+        "auth_sessions",
+        "refresh_tokens",
+    }
+)
+_HEAD_INDEXES = frozenset(
+    {
+        "usage_events_provider_observed_at",
+        "quota_snapshots_provider_source_observed_at",
+        "provider_health_provider_checked_at",
+        "trace_spans_trace_started_at",
+        "trace_spans_root_started_at",
+        "trace_spans_user_root_started_at",
+        "ix_user_email",
+        "user_email_lower_key",
+        "user_provider_identity_key",
+        "auth_sessions_user_id",
+        "auth_sessions_expires_at",
+        "refresh_tokens_family_id",
+    }
+)
 
 
 def _table_info(database: Path, table: str) -> dict[str, tuple[bool, bool]]:
@@ -191,7 +234,7 @@ def _index_sql(database: Path, index: str) -> str:
 
 
 def _assert_trace_spans_schema(database: Path) -> None:
-    """Assert the exact ``trace_spans`` table/column/index contract."""
+    """Assert the exact ``trace_spans`` table/column/index contract (head 0004)."""
 
     assert _columns(database, "trace_spans") == set(_TRACE_SPAN_COLUMNS)
     info = _table_info(database, "trace_spans")
@@ -200,13 +243,17 @@ def _assert_trace_spans_schema(database: Path) -> None:
         assert info[column][0] is True, column
     for column in _TRACE_SPAN_NULLABLE:
         assert info[column][0] is False, column
+    assert info["user_id"] == (False, False)
     assert _indexes(database) >= _TRACE_INDEXES
+    assert _TRACE_USER_INDEX in _indexes(database)
     assert _index_columns(database, "trace_spans_trace_started_at") == [
         "trace_id",
         "started_at",
     ]
     assert _index_columns(database, "trace_spans_root_started_at") == ["started_at"]
     assert "parent_span_id IS NULL" in _index_sql(database, "trace_spans_root_started_at")
+    assert _index_columns(database, _TRACE_USER_INDEX) == ["user_id", "started_at", "span_id"]
+    assert "parent_span_id IS NULL" in _index_sql(database, _TRACE_USER_INDEX)
 
 
 def _seed_at_0002(database: Path) -> None:
@@ -452,28 +499,68 @@ def test_upgrade_database_rejects_unrelated_or_incompatible_schema(tmp_path: Pat
     assert database_status(incompatible).current_revision is None
 
 
+_LIMIT_TABLES = frozenset(
+    {
+        "provider_limits",
+        "provider_native_pools",
+        "provider_crd_grants",
+        "provider_limit_events",
+        "provider_limit_admissions",
+        "provider_rate_observations",
+        "provider_rate_attempts",
+    }
+)
+_LIMIT_INDEXES = frozenset(
+    {
+        "provider_limit_events_provider_auth_observed",
+        "provider_limit_admissions_created_at",
+        "provider_rate_attempts_bucket_attempted",
+        "provider_rate_attempts_expires_at",
+    }
+)
+
+
+def test_validate_database_schema_rejects_missing_auth_foreign_keys(tmp_path: Path) -> None:
+    database = tmp_path / "no-fk.db"
+    upgrade_database(database)
+    validate_database_schema(database)
+
+    with sqlite3.connect(database) as connection:
+        connection.execute("PRAGMA foreign_keys=OFF")
+        connection.execute(
+            """
+            CREATE TABLE refresh_tokens_new (
+                token_hash VARCHAR(64) NOT NULL PRIMARY KEY,
+                family_id CHAR(36) NOT NULL,
+                issued_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                consumed_at TEXT NULL
+            )
+            """
+        )
+        connection.execute("INSERT INTO refresh_tokens_new SELECT * FROM refresh_tokens")
+        connection.execute("DROP TABLE refresh_tokens")
+        connection.execute("ALTER TABLE refresh_tokens_new RENAME TO refresh_tokens")
+        connection.execute("CREATE INDEX refresh_tokens_family_id ON refresh_tokens (family_id)")
+        connection.execute("PRAGMA foreign_keys=ON")
+
+    with pytest.raises(DatabaseMigrationError, match="missing foreign keys"):
+        validate_database_schema(database)
+
+
 def test_fresh_database_at_head_has_no_cache_metadata(tmp_path: Path) -> None:
     database = tmp_path / "fresh-no-cache.db"
 
     result = upgrade_database(database)
 
     assert result.current_revision == migration_head()
+    assert result.current_revision == "0004_local_users"
     assert "cache_metadata" not in _tables(database)
     assert "cache_metadata_expires_at" not in _indexes(database)
-    assert _indexes(database) == {
-        "usage_events_provider_observed_at",
-        "quota_snapshots_provider_source_observed_at",
-        "provider_health_provider_checked_at",
-        "trace_spans_trace_started_at",
-        "trace_spans_root_started_at",
-    }
-    assert _tables(database) == {
-        "usage_events",
-        "runtime_settings",
-        "quota_snapshots",
-        "provider_health",
-        "trace_spans",
-    }
+    assert _indexes(database) == set(_HEAD_INDEXES) | set(_LIMIT_INDEXES)
+    assert _tables(database) == set(_HEAD_TABLES) | set(_LIMIT_TABLES)
+    assert _tables(database) >= _AUTH_TABLES
+    assert _indexes(database) >= _AUTH_INDEXES
     _assert_trace_spans_schema(database)
     validate_database_schema(database)
 
@@ -511,8 +598,9 @@ def test_upgrade_from_0002_drops_seeded_cache_rows_preserving_unrelated_data(
     assert _all_rows(database, "quota_snapshots", "id")[0][4] == "100.00"
     assert _indexes(database) == (indexes_before - {"cache_metadata_expires_at"}) | set(
         _TRACE_INDEXES
-    )
+    ) | {_TRACE_USER_INDEX} | set(_AUTH_INDEXES) | set(_LIMIT_INDEXES)
     _assert_trace_spans_schema(database)
+    assert _tables(database) >= _AUTH_TABLES
     # The 0002 database had no trace store: upgrade creates it empty.
     with sqlite3.connect(database) as connection:
         assert connection.execute("SELECT COUNT(*) FROM trace_spans").fetchone() == (0,)
@@ -529,9 +617,10 @@ def test_downgrade_recreates_cache_metadata_table_and_index(tmp_path: Path) -> N
     database = tmp_path / "downgrade-cache.db"
     upgrade_database(database)
 
-    # Two steps back from the 0003 head: past the trace store (bf9f40b58cef)
-    # to the last revision that still owns the cache table (0002).
-    migration_module.command.downgrade(_config_for(database), "-2")
+    # Explicit target: from the 0004 head back to the last revision that
+    # still owns the cache table (0002). Head-relative "-2" is ambiguous
+    # once the later 0004 revisions exist, so name the revision directly.
+    migration_module.command.downgrade(_config_for(database), _PREVIOUS_HEAD)
 
     assert _revision(database) == [_PREVIOUS_HEAD]
     assert "cache_metadata" in _tables(database)
@@ -546,9 +635,15 @@ def test_downgrade_recreates_cache_metadata_table_and_index(tmp_path: Path) -> N
         "size_bytes",
     }
     assert "cache_metadata_expires_at" in _indexes(database)
-    # Downgrade drops only the trace store added by revision 0003.
+    # Downgrade drops the trace store added by revision 0003, the seven
+    # limit tables added by the limits revision, and every auth object.
     assert "trace_spans" not in _tables(database)
     assert not (_TRACE_INDEXES & _indexes(database))
+    assert _TRACE_USER_INDEX not in _indexes(database)
+    assert not (_AUTH_TABLES & _tables(database))
+    assert not (_AUTH_INDEXES & _indexes(database))
+    assert not (_LIMIT_TABLES & _tables(database))
+    assert not (_LIMIT_INDEXES & _indexes(database))
 
     result = upgrade_database(database)
 
@@ -556,6 +651,8 @@ def test_downgrade_recreates_cache_metadata_table_and_index(tmp_path: Path) -> N
     assert result.current_revision == migration_head()
     assert "cache_metadata" not in _tables(database)
     assert "cache_metadata_expires_at" not in _indexes(database)
+    assert _tables(database) >= _LIMIT_TABLES
+    assert _indexes(database) >= _LIMIT_INDEXES
     _assert_trace_spans_schema(database)
     validate_database_schema(database)
 
@@ -569,3 +666,236 @@ def test_upgrade_database_enables_wal_mode(tmp_path: Path) -> None:
     with sqlite3.connect(database) as connection:
         journal_mode = connection.execute("PRAGMA journal_mode").fetchone()[0]
     assert journal_mode == "wal"
+
+
+_CANONICAL_PROVIDERS = [
+    "brave",
+    "exa",
+    "firecrawl",
+    "keenable",
+    "parallel",
+    "tavily",
+    "tinyfish",
+    "you",
+]
+
+
+def _seed_legacy_provider_rows(database: Path, *, enabled_on: set[str]) -> None:
+    with sqlite3.connect(database) as connection:
+        for provider in _CANONICAL_PROVIDERS:
+            enabled = provider in enabled_on
+            payload = json.dumps(
+                {
+                    "config": {
+                        "enabled": enabled,
+                        "priority": 100,
+                        "free_tier_estimates": {"search": "0", "fetch": "0"},
+                    }
+                },
+                separators=(",", ":"),
+            )
+            connection.execute(
+                "INSERT OR REPLACE INTO runtime_settings (key, value_json) VALUES (?, ?)",
+                (f"provider.{provider}", payload),
+            )
+        connection.execute(
+            "INSERT OR REPLACE INTO runtime_settings (key, value_json) VALUES (?, ?)",
+            ("theme", json.dumps("dark")),
+        )
+        connection.commit()
+
+
+def _provider_config(database: Path, provider: str) -> dict:
+    with sqlite3.connect(database) as connection:
+        row = connection.execute(
+            "SELECT value_json FROM runtime_settings WHERE key = ?", (f"provider.{provider}",)
+        ).fetchone()
+    assert row is not None
+    return json.loads(row[0])["config"]
+
+
+def test_upgrade_converts_legacy_on_off_to_masks(tmp_path: Path) -> None:
+    database = tmp_path / "masks-on-off.db"
+    migration_module.command.upgrade(_config_for(database), _PREVIOUS_HEAD)
+    _seed_legacy_provider_rows(database, enabled_on={"exa", "brave", "tavily"})
+
+    result = upgrade_database(database)
+
+    assert result.previous_revision == _PREVIOUS_HEAD
+    assert result.current_revision == migration_head()
+    for provider in ("exa", "brave", "tavily"):
+        config = _provider_config(database, provider)
+        assert config["enable_mask"] == 7
+        assert "enabled" not in config
+    for provider in set(_CANONICAL_PROVIDERS) - {"exa", "brave", "tavily"}:
+        config = _provider_config(database, provider)
+        assert config["enable_mask"] == 0
+        assert "enabled" not in config
+    assert _provider_config(database, "brave")["support_mask"] == 3
+    for provider in set(_CANONICAL_PROVIDERS) - {"brave"}:
+        assert _provider_config(database, provider)["support_mask"] == 7
+
+
+def test_upgrade_preserves_unrelated_fields_and_keys(tmp_path: Path) -> None:
+    database = tmp_path / "masks-preserve.db"
+    migration_module.command.upgrade(_config_for(database), _PREVIOUS_HEAD)
+    with sqlite3.connect(database) as connection:
+        payload = json.dumps(
+            {"config": {"enabled": True, "priority": 7, "reset_schedule": "monthly"}},
+            separators=(",", ":"),
+        )
+        connection.execute(
+            "INSERT OR REPLACE INTO runtime_settings (key, value_json) VALUES (?, ?)",
+            ("provider.exa", payload),
+        )
+        connection.execute(
+            "INSERT OR REPLACE INTO runtime_settings (key, value_json) VALUES (?, ?)",
+            ("theme", json.dumps("dark")),
+        )
+        connection.commit()
+
+    upgrade_database(database)
+
+    config = _provider_config(database, "exa")
+    assert config["enable_mask"] == 7
+    assert config["support_mask"] == 7
+    assert config["priority"] == 7
+    assert config["reset_schedule"] == "monthly"
+    with sqlite3.connect(database) as connection:
+        theme = connection.execute(
+            "SELECT value_json FROM runtime_settings WHERE key = ?", ("theme",)
+        ).fetchone()
+    assert json.loads(theme[0]) == "dark"
+
+
+def test_upgrade_preserves_new_masks_and_rejects_ambiguous(tmp_path: Path) -> None:
+    database = tmp_path / "masks-ambiguous.db"
+    migration_module.command.upgrade(_config_for(database), _PREVIOUS_HEAD)
+    with sqlite3.connect(database) as connection:
+        good = json.dumps(
+            {"config": {"enable_mask": 5, "support_mask": 7, "priority": 100}},
+            separators=(",", ":"),
+        )
+        bad = json.dumps(
+            {"config": {"enabled": True, "enable_mask": 7, "support_mask": 7}},
+            separators=(",", ":"),
+        )
+        connection.execute(
+            "INSERT OR REPLACE INTO runtime_settings (key, value_json) VALUES (?, ?)",
+            ("provider.exa", good),
+        )
+        connection.execute(
+            "INSERT OR REPLACE INTO runtime_settings (key, value_json) VALUES (?, ?)",
+            ("provider.brave", bad),
+        )
+        connection.commit()
+
+    with pytest.raises(DatabaseMigrationError, match="ambiguous"):
+        upgrade_database(database)
+
+    # The 0004 data revision fails after 0003 succeeds, so Alembic stays at
+    # 0003 and never reaches the head. The pre-migration backup is kept.
+    assert _revision(database) == ["0003_open_telemetry_spans"]
+    assert _revision(database) != [migration_head()]
+
+
+def test_upgrade_rejects_malformed_provider_rows(tmp_path: Path) -> None:
+    for name, payload in [
+        ("malformed-json", "{not valid json"),
+        ("invalid-legacy-type", json.dumps({"config": {"enabled": "yes"}})),
+        ("non-dict-config", json.dumps({"config": "oops"})),
+    ]:
+        database = tmp_path / f"masks-{name}.db"
+        migration_module.command.upgrade(_config_for(database), _PREVIOUS_HEAD)
+        with sqlite3.connect(database) as connection:
+            connection.execute(
+                "INSERT OR REPLACE INTO runtime_settings (key, value_json) VALUES (?, ?)",
+                ("provider.exa", payload),
+            )
+            connection.commit()
+
+        with pytest.raises(DatabaseMigrationError):
+            upgrade_database(database)
+
+        assert _revision(database) == ["0003_open_telemetry_spans"]
+        assert _revision(database) != [migration_head()]
+
+
+def test_upgrade_backup_contains_original_provider_rows(tmp_path: Path) -> None:
+    database = tmp_path / "masks-backup.db"
+    migration_module.command.upgrade(_config_for(database), _PREVIOUS_HEAD)
+    _seed_legacy_provider_rows(database, enabled_on={"exa"})
+    with sqlite3.connect(database) as connection:
+        original = connection.execute(
+            "SELECT key, value_json FROM runtime_settings WHERE key LIKE 'provider.%' ORDER BY key"
+        ).fetchall()
+
+    result = upgrade_database(database)
+
+    assert result.backup is not None
+    assert result.backup.is_file()
+    with sqlite3.connect(result.backup) as connection:
+        backed = connection.execute(
+            "SELECT key, value_json FROM runtime_settings WHERE key LIKE 'provider.%' ORDER BY key"
+        ).fetchall()
+        assert connection.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+    assert backed == original
+    assert json.loads(dict(backed)["provider.exa"])["config"]["enabled"] is True
+    assert _provider_config(database, "exa")["enable_mask"] == 7
+
+
+def test_upgrade_provider_masks_is_idempotent(tmp_path: Path) -> None:
+    database = tmp_path / "masks-idempotent.db"
+    migration_module.command.upgrade(_config_for(database), _PREVIOUS_HEAD)
+    _seed_legacy_provider_rows(database, enabled_on={"exa", "brave"})
+
+    first = upgrade_database(database)
+    before = _provider_config(database, "exa")
+    second = upgrade_database(database)
+
+    assert first.changed is True
+    assert second.changed is False
+    assert second.backup is None
+    assert _provider_config(database, "exa") == before
+    assert before["enable_mask"] == 7
+
+
+@pytest.mark.asyncio
+async def test_concurrent_provider_mask_upgrades_are_serialized(tmp_path: Path) -> None:
+    database = tmp_path / "masks-concurrent.db"
+    migration_module.command.upgrade(_config_for(database), _PREVIOUS_HEAD)
+    _seed_legacy_provider_rows(database, enabled_on={"exa", "tavily"})
+    original = _provider_config(database, "exa")
+
+    results = await asyncio.gather(
+        *(asyncio.to_thread(upgrade_database, database) for _ in range(4))
+    )
+
+    assert sum(result.changed for result in results) == 1
+    assert _provider_config(database, "exa")["enable_mask"] == 7
+    assert _provider_config(database, "tavily")["enable_mask"] == 7
+    assert original["enabled"] is True
+    validate_database_schema(database)
+
+
+def test_downgrade_decodes_global_bit_and_removes_masks(tmp_path: Path) -> None:
+    database = tmp_path / "masks-downgrade.db"
+    migration_module.command.upgrade(_config_for(database), _PREVIOUS_HEAD)
+    _seed_legacy_provider_rows(database, enabled_on={"exa"})
+    upgrade_database(database)
+    assert _provider_config(database, "exa")["enable_mask"] == 7
+
+    migration_module.command.downgrade(_config_for(database), "-1")
+
+    config = _provider_config(database, "exa")
+    assert config["enabled"] is True
+    assert "enable_mask" not in config
+    assert "support_mask" not in config
+    off = _provider_config(database, "brave")
+    # Brave was OFF in the seed, so Bit 0 decodes to False.
+    assert off["enabled"] is False
+
+    result = upgrade_database(database)
+    assert result.current_revision == migration_head()
+    assert _provider_config(database, "exa")["enable_mask"] == 7
+    validate_database_schema(database)

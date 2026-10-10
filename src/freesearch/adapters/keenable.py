@@ -12,11 +12,11 @@ rolling hourly rate limit.
 from collections import deque
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlsplit
 
 import httpx
-from pydantic import SecretStr
+from pydantic import SecretStr, ValidationError
 
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.infrastructure.dates import parse_iso_datetime
@@ -43,6 +43,13 @@ from freesearch.models.contracts import (
     UsageOperation,
 )
 from freesearch.models.observability import TraceAttribute, TraceSpanName
+from freesearch.models.provider_limits import (
+    AuthMode,
+    Confidence,
+    NativeUsageSnapshot,
+    UsageSyncRequest,
+    native_pool_id,
+)
 
 __all__ = ["KeenableAdapter"]
 
@@ -82,6 +89,20 @@ def _parse_published_at(value: Any) -> datetime | None:
     return parse_iso_datetime(value)
 
 
+def _parse_error_record(index: int) -> dict[str, object]:
+    """Return the safe record for one rejected search result item.
+
+    The record holds no raw payload, URL, key, query, or validation text, so a
+    rejected item can never leak response content into usage metadata.
+    """
+
+    return {
+        "index": index,
+        "code": "invalid_response",
+        "message": "malformed search result item",
+    }
+
+
 class KeenableAdapter(ProviderAdapter):
     """Search, fetch, and cost-estimate operations against the Keenable API."""
 
@@ -119,6 +140,12 @@ class KeenableAdapter(ProviderAdapter):
         return ProviderCapabilities(
             search=True, fetch=True, cost_estimate=True, quota=keyed == _KEYED
         )
+
+    @property
+    def limit_auth_mode(self) -> AuthMode:
+        """Return the rail of this instance: keyless without a key, else keyed."""
+
+        return AuthMode.KEYED if self._auth()[0] == _KEYED else AuthMode.KEYLESS
 
     def _auth(self) -> tuple[str, dict[str, str]]:
         """Resolve the API key lazily; absent or blank keys select keyless mode."""
@@ -180,14 +207,31 @@ class KeenableAdapter(ProviderAdapter):
         ) as parse_span:
             try:
                 payload = response.json()
-                results = [self._normalize_result(item) for item in payload["results"]]
+                items = payload["results"]
+                if not isinstance(items, list):
+                    raise self._error("invalid_response", "malformed search response") from None
+                results: list[SearchResult] = []
+                parse_errors: list[dict[str, object]] = []
+                for index, item in enumerate(items):
+                    try:
+                        results.append(self._normalize_result(item))
+                    except ValidationError:
+                        parse_errors.append(_parse_error_record(index))
+                    except ProviderOperationError as exc:
+                        if exc.error.code != "invalid_response":
+                            raise
+                        parse_errors.append(_parse_error_record(index))
+                results = results[: request.limit]
                 parse_span.set_attributes({TraceAttribute.RESPONSE_RESULT_COUNT: len(results)})
+                usage = self._usage_event(UsageOperation.SEARCH, payload)
+                if parse_errors:
+                    usage.metadata["parse_errors"] = parse_errors
                 return SearchResponse(
                     query=request.query,
                     provider=self.name,
                     results=results,
                     total_results=len(results),
-                    usage=self._usage_event(UsageOperation.SEARCH, payload),
+                    usage=usage,
                     quota_snapshot=(self._keyless_snapshot() if mode == _KEYLESS else None),
                 )
             except ProviderOperationError:
@@ -210,13 +254,18 @@ class KeenableAdapter(ProviderAdapter):
         )
 
     def _normalize_result(self, item: Any) -> SearchResult:
+        if not isinstance(item, dict):
+            raise self._error("invalid_response", "malformed search result item")
+        url = item.get("url")
+        if not isinstance(url, str) or not url:
+            raise self._error("invalid_response", "malformed search result item")
         metadata: dict[str, Any] = {}
         for key in ("description", "acquired_at"):
             if item.get(key) is not None:
                 metadata[key] = item[key]
         return SearchResult(
             title=item.get("title") or "",
-            url=item["url"],
+            url=cast(Any, url),
             snippet=item.get("snippet") or "",
             published_at=_parse_published_at(item.get("published_at")),
             metadata=metadata,
@@ -412,6 +461,36 @@ class KeenableAdapter(ProviderAdapter):
             return None
         self._rollover_if_needed(datetime.now(UTC))
         return self._snapshot_sync()
+
+    async def usage_snapshot(self, request: UsageSyncRequest) -> NativeUsageSnapshot | None:
+        """Return the keyed monthly request ledger; keyless has no budget.
+
+        The keyed rail draws the shared monthly request allowance. The existing
+        local ledger holds the reported usage of that allowance. The ledger
+        keeps the free allowance and the paid SKU spend in separate counters. A
+        key with paid usage therefore reports no free remaining, not a
+        fabricated zero. Keyless access is unmetered, so it returns no
+        snapshot.
+        """
+
+        auth_mode = self.limit_auth_mode
+        if auth_mode is not AuthMode.KEYED:
+            return None
+        self._rollover_if_needed(datetime.now(UTC))
+        quota = self._snapshot_sync()
+        return NativeUsageSnapshot(
+            pool_id=native_pool_id(self.name, auth_mode, UnitKind.REQUEST),
+            provider=self.name,
+            auth_mode=auth_mode,
+            native_unit=UnitKind.REQUEST,
+            observed_at=request.observed_at,
+            source="local_ledger",
+            confidence=Confidence.OBSERVED,
+            remaining=quota.remaining,
+            allowance=quota.limit,
+            reset_at=quota.reset_at,
+            credential_generation=request.credential_generation,
+        )
 
     async def quota_after_success(self, response: object) -> QuotaSnapshot | None:
         mode, _headers = self._auth()

@@ -10,6 +10,7 @@ from typing import Any
 
 from behave import given, then, when  # type: ignore[import-untyped]
 from fastapi.testclient import TestClient
+from pydantic import SecretStr
 
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.mcp.server import create_server
@@ -29,8 +30,16 @@ from freesearch.models.contracts import (
     UsageEvent,
     UsageOperation,
 )
+from freesearch.models.users import UserRole
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
+from tests.fixtures.auth import (
+    TEMP_PASSWORD,
+    configure_bdd_secret,
+    mcp_account_token,
+    promote_account,
+    temp_email,
+)
 
 
 class _MonitoringStubAdapter(ProviderAdapter):
@@ -164,8 +173,25 @@ def _parse_utc_timestamp(value: Any) -> datetime:
     return timestamp
 
 
+def _login_headers(context: Any, role: UserRole, prefix: str) -> dict[str, str]:
+    # Register one account, assign one role, and return one access header.
+    email = temp_email(prefix)
+    with _rest_client(context) as client:
+        registered = client.post("/auth/register", json={"email": email, "password": TEMP_PASSWORD})
+        assert registered.status_code == 201
+        if role is not UserRole.AGENT:
+            context.loop.run_until_complete(promote_account(context.repository, email, role))
+        logged_in = client.post(
+            "/auth/jwt/login", data={"username": email, "password": TEMP_PASSWORD}
+        )
+        assert logged_in.status_code == 200
+        token = logged_in.json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}
+
+
 @given("an offline monitoring repository and REST adapters")
 def step_given_rest_monitoring(context: Any) -> None:
+    configure_bdd_secret(context)
     _open_repository(context)
     context.adapters = [
         _MonitoringStubAdapter(
@@ -184,15 +210,21 @@ def step_given_rest_monitoring(context: Any) -> None:
     _seed_quota(context, "rest-search", QuotaSource.AUTHORITATIVE)
     _seed_quota(context, "rest-fetch", QuotaSource.OBSERVED)
     context.app = create_app(context.adapters, repository=context.repository)
+    # Stats and dashboard need the Reader role, search and fetch need any role.
+    context.auth_headers = _login_headers(context, UserRole.DEVELOPER, "monitor-dev")
 
 
 @when('I submit REST search query "{query}" and fetch URL "{url}"')
 def step_when_rest_search_and_fetch(context: Any, query: str, url: str) -> None:
     with _rest_client(context) as client:
-        context.search_response = client.post("/search", json={"query": query, "limit": 1})
-        context.fetch_response = client.post("/fetch", json={"url": url})
-        context.stats_response = client.get("/stats")
-        context.dashboard_response = client.get("/dashboard")
+        context.search_response = client.post(
+            "/search", json={"query": query, "limit": 1}, headers=context.auth_headers
+        )
+        context.fetch_response = client.post(
+            "/fetch", json={"url": url}, headers=context.auth_headers
+        )
+        context.stats_response = client.get("/stats", headers=context.auth_headers)
+        context.dashboard_response = client.get("/dashboard", headers=context.auth_headers)
 
 
 @then("REST telemetry should contain search and fetch totals for their providers")
@@ -268,7 +300,18 @@ def step_given_mcp_monitoring(context: Any) -> None:
             fetch_units=Decimal("2.50"),
         ),
     ]
-    context.server = create_server(context.adapters, repository=context.repository)
+
+    async def _authed_service() -> tuple[Any, str]:
+        service, token, _email = await mcp_account_token(context.repository, "monitor-mcp")
+        return service, token.get_secret_value()
+
+    service, raw_token = context.loop.run_until_complete(_authed_service())
+    context.server = create_server(
+        context.adapters,
+        repository=context.repository,
+        auth_service=service,
+        stdio_token=SecretStr(raw_token),
+    )
 
 
 @when("I call the MCP search and fetch tools")
@@ -305,9 +348,12 @@ def step_then_mcp_telemetry(context: Any) -> None:
 
 @given("an offline monitoring repository and a privacy-safe REST adapter")
 def step_given_privacy_safe_monitoring(context: Any) -> None:
+    configure_bdd_secret(context)
     _open_repository(context)
     context.adapters = [_MonitoringStubAdapter("privacy-provider")]
     context.app = create_app(context.adapters, repository=context.repository)
+    # Stats and dashboard need the Reader role, search and fetch need any role.
+    context.auth_headers = _login_headers(context, UserRole.DEVELOPER, "monitor-dev")
 
 
 @when("I submit a private REST search and fetch request")
@@ -316,11 +362,13 @@ def step_when_private_rest_requests(context: Any) -> None:
     context.private_url = "https://secret.example/private-document"
     with _rest_client(context) as client:
         context.private_search_response = client.post(
-            "/search", json={"query": context.private_query}
+            "/search", json={"query": context.private_query}, headers=context.auth_headers
         )
-        context.private_fetch_response = client.post("/fetch", json={"url": context.private_url})
-        context.private_stats_response = client.get("/stats")
-        context.private_dashboard_response = client.get("/dashboard")
+        context.private_fetch_response = client.post(
+            "/fetch", json={"url": context.private_url}, headers=context.auth_headers
+        )
+        context.private_stats_response = client.get("/stats", headers=context.auth_headers)
+        context.private_dashboard_response = client.get("/dashboard", headers=context.auth_headers)
 
 
 @then("telemetry metadata should contain numeric values only")
@@ -374,14 +422,30 @@ class _FailingTelemetryRepository:
 
 @given("a REST app with a failing telemetry repository")
 def step_given_failing_telemetry_app(context: Any) -> None:
+    configure_bdd_secret(context)
+    _open_repository(context)
     context.adapters = [_MonitoringStubAdapter("resilient-provider")]
-    context.app = create_app(context.adapters, repository=_FailingTelemetryRepository())
+    context.app = create_app(context.adapters, repository=context.repository)
+
+    # Keep account access on the real database, fail only telemetry writes.
+    async def _fail_usage(event: Any) -> None:
+        raise OSError("telemetry database unavailable")
+
+    async def _fail_health(health: Any) -> None:
+        raise OSError("telemetry database unavailable")
+
+    context.repository.record_usage = _fail_usage  # type: ignore[method-assign]
+    context.repository.record_health = _fail_health  # type: ignore[method-assign]
+    # Search needs any authenticated role.
+    context.auth_headers = _login_headers(context, UserRole.AGENT, "monitor-agent")
 
 
 @when("I submit a resilient REST search request")
 def step_when_resilient_rest_search(context: Any) -> None:
     with _rest_client(context) as client:
-        context.resilient_response = client.post("/search", json={"query": "resilient"})
+        context.resilient_response = client.post(
+            "/search", json={"query": "resilient"}, headers=context.auth_headers
+        )
 
 
 @then("the REST request should succeed despite telemetry failure")

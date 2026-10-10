@@ -23,15 +23,28 @@ logger = logging.getLogger(__name__)
 # the cache application API was removed in 0.1.0 and revision bf9f40b58cef
 # drops the retained ``cache_metadata`` table + ``cache_metadata_expires_at``
 # index going forward. Downgrade recreates them exactly for rollback only.
-_APP_TABLES = frozenset(
+#
+# ``_LEGACY_APP_TABLES`` is the pre-auth adoption contract: an unversioned
+# database is recognized by these tables only, so the account schema never
+# becomes a preflight requirement.
+_LEGACY_APP_TABLES = frozenset(
     {
         "usage_events",
         "runtime_settings",
         "quota_snapshots",
         "provider_health",
         "trace_spans",
+        "provider_limits",
+        "provider_native_pools",
+        "provider_crd_grants",
+        "provider_limit_events",
+        "provider_limit_admissions",
+        "provider_rate_observations",
+        "provider_rate_attempts",
     }
 )
+_AUTH_TABLES = frozenset({"user", "login_throttle", "auth_sessions", "refresh_tokens"})
+_APP_TABLES = _LEGACY_APP_TABLES | _AUTH_TABLES
 _TRACE_SPAN_COLUMNS = frozenset(
     {
         "span_id",
@@ -48,6 +61,7 @@ _TRACE_SPAN_COLUMNS = frozenset(
         "error_type",
         "operation",
         "provider",
+        "user_id",
         "input_text",
         "output_json",
         "result_count",
@@ -56,7 +70,135 @@ _TRACE_SPAN_COLUMNS = frozenset(
         "resource_json",
     }
 )
+_LIMIT_TABLE_COLUMNS: dict[str, frozenset[str]] = {
+    "provider_limits": frozenset(
+        {
+            "provider",
+            "operation",
+            "auth_mode",
+            "supported",
+            "transport_available",
+            "rate_json",
+            "budget_json",
+            "native_unit",
+            "native_pool_id",
+            "conversion_profile_json",
+            "plan_name",
+            "usage_url",
+            "version",
+        }
+    ),
+    "provider_native_pools": frozenset(
+        {
+            "pool_id",
+            "provider",
+            "auth_mode",
+            "native_unit",
+            "remaining_text",
+            "allowance_text",
+            "actual_spend_usd_text",
+            "source",
+            "confidence",
+            "reset_at",
+            "observed_at",
+            "version",
+            "credential_generation",
+            "next_sync_at",
+            "lease_owner",
+            "lease_until",
+            "sync_error_code",
+            "stale",
+            "manual_anchor",
+            "tier_json",
+            "tier_split_known",
+            "last_tier_observed_at",
+        }
+    ),
+    "provider_crd_grants": frozenset(
+        {
+            "provider",
+            "operation",
+            "auth_mode",
+            "period_start",
+            "period_end",
+            "granted_crd_text",
+            "consumed_crd_text",
+            "reserved_crd_text",
+            "version",
+        }
+    ),
+    "provider_limit_events": frozenset(
+        {
+            "event_id",
+            "provider",
+            "operation",
+            "auth_mode",
+            "pool_id",
+            "observed_at",
+            "source",
+            "reason",
+            "old_native_text",
+            "new_native_text",
+            "old_crd_json",
+            "new_crd_json",
+            "crd_debit_text",
+            "native_debit_text",
+            "actual_usd_text",
+            "confidence",
+            "local_attempt_id",
+            "detail_json",
+        }
+    ),
+    "provider_limit_admissions": frozenset(
+        {
+            "attempt_id",
+            "provider",
+            "operation",
+            "auth_mode",
+            "pool_id",
+            "reserved_crd_text",
+            "reserved_native_text",
+            "state",
+            "created_at",
+            "expires_at",
+            "rate_reservations_json",
+            "local_only",
+        }
+    ),
+    "provider_rate_observations": frozenset(
+        {
+            "bucket_id",
+            "provider",
+            "auth_mode",
+            "window",
+            "unit",
+            "operation",
+            "limit_text",
+            "remaining_text",
+            "reset_at",
+            "observed_at",
+            "source",
+            "confidence",
+            "stale",
+        }
+    ),
+    "provider_rate_attempts": frozenset(
+        {
+            "attempt_id",
+            "bucket_id",
+            "provider",
+            "auth_mode",
+            "operation",
+            "window",
+            "unit",
+            "units_text",
+            "attempted_at",
+            "expires_at",
+        }
+    ),
+}
 _CORE_COLUMNS: dict[str, frozenset[str]] = {
+    **_LIMIT_TABLE_COLUMNS,
     "usage_events": frozenset(
         {"id", "provider", "operation", "units", "observed_at", "request_id", "metadata"}
     ),
@@ -69,11 +211,30 @@ _CORE_COLUMNS: dict[str, frozenset[str]] = {
 }
 _HEAD_COLUMNS: dict[str, frozenset[str]] = {
     **_CORE_COLUMNS,
+    **_LIMIT_TABLE_COLUMNS,
     "usage_events": _CORE_COLUMNS["usage_events"]
     | frozenset({"latency_ms", "status", "unit_kind"}),
     "quota_snapshots": _CORE_COLUMNS["quota_snapshots"]
     | frozenset({"unit_kind", "display_unit", "metadata"}),
     "trace_spans": _TRACE_SPAN_COLUMNS,
+    "user": frozenset(
+        {
+            "id",
+            "email",
+            "hashed_password",
+            "is_active",
+            "is_superuser",
+            "is_verified",
+            "auth_provider",
+            "auth_provider_id",
+            "role",
+        }
+    ),
+    "login_throttle": frozenset({"key", "attempts", "expires_at"}),
+    "auth_sessions": frozenset({"id", "user_id", "created_at", "expires_at", "revoked_at"}),
+    "refresh_tokens": frozenset(
+        {"token_hash", "family_id", "issued_at", "expires_at", "consumed_at"}
+    ),
 }
 _HEAD_INDEXES = frozenset(
     {
@@ -82,11 +243,28 @@ _HEAD_INDEXES = frozenset(
         "provider_health_provider_checked_at",
         "trace_spans_trace_started_at",
         "trace_spans_root_started_at",
+        "trace_spans_user_root_started_at",
+        "ix_user_email",
+        "user_email_lower_key",
+        "user_provider_identity_key",
+        "auth_sessions_user_id",
+        "auth_sessions_expires_at",
+        "refresh_tokens_family_id",
+        "provider_limit_events_provider_auth_observed",
+        "provider_limit_admissions_created_at",
+        "provider_rate_attempts_bucket_attempted",
+        "provider_rate_attempts_expires_at",
     }
 )
 _LOCK_TIMEOUT_SECONDS = 30.0
 _SQLITE_TIMEOUT_SECONDS = 30.0
 _ALEMBIC_THREAD_LOCK = threading.Lock()
+
+#: The foreign keys the auth tables must declare: table -> (local column, target).
+_HEAD_FOREIGN_KEYS: dict[str, frozenset[tuple[str, str]]] = {
+    "auth_sessions": frozenset({("user_id", "user")}),
+    "refresh_tokens": frozenset({("family_id", "auth_sessions")}),
+}
 
 
 class DatabaseMigrationError(RuntimeError):
@@ -187,7 +365,7 @@ def _inspect(database: Path) -> tuple[str | None, set[str]]:
 def _preflight_unversioned(database: Path, tables: set[str]) -> None:
     if not tables:
         return
-    recognized = tables & _APP_TABLES
+    recognized = tables & _LEGACY_APP_TABLES
     if not recognized:
         names = ", ".join(sorted(tables))
         raise DatabaseMigrationError(
@@ -201,6 +379,32 @@ def _preflight_unversioned(database: Path, tables: set[str]) -> None:
                 raise DatabaseMigrationError(
                     f"refusing to adopt {database}: {table} is missing core columns {names}"
                 )
+
+
+def _foreign_keys(connection: sqlite3.Connection, table: str) -> frozenset[tuple[str, str]]:
+    """Return the ``(local column, target table)`` pairs one table declares."""
+
+    rows = connection.execute(f"PRAGMA foreign_key_list({table})").fetchall()
+    return frozenset((str(row[3]), str(row[2])) for row in rows)
+
+
+def _validate_foreign_keys(connection: sqlite3.Connection) -> None:
+    """Assert that the auth foreign keys exist and that no row breaks one.
+
+    The table, column, and index checks cannot see a missing key, so a database
+    with intact tables and absent keys would otherwise pass validation. The
+    ``PRAGMA foreign_key_check`` pass then rejects stored rows that break a
+    declared key.
+    """
+
+    for table, expected in _HEAD_FOREIGN_KEYS.items():
+        missing = expected - _foreign_keys(connection, table)
+        if missing:
+            names = ", ".join(f"{column} -> {target}" for column, target in sorted(missing))
+            raise DatabaseMigrationError(f"{table} is missing foreign keys: {names}")
+    violations = connection.execute("PRAGMA foreign_key_check").fetchall()
+    if violations:
+        raise DatabaseMigrationError(f"database has {len(violations)} foreign key violation(s)")
 
 
 def validate_database_schema(database: str | Path) -> None:
@@ -230,6 +434,7 @@ def validate_database_schema(database: str | Path) -> None:
         if missing_indexes:
             names = ", ".join(sorted(missing_indexes))
             raise DatabaseMigrationError(f"database is missing indexes: {names}")
+        _validate_foreign_keys(connection)
 
 
 def _lock_file(file: BinaryIO) -> bool:

@@ -10,16 +10,30 @@ import userEvent from "@testing-library/user-event"
 import { readFileSync, existsSync, readdirSync } from "node:fs"
 import path from "node:path"
 import { PlaygroundPage } from "./PlaygroundPage"
-import { PLAYGROUND_PERSIST_KEY } from "@/store/playgroundPersistence"
+import { playgroundPersistKey } from "@/store/playgroundPersistence"
+import { ADMIN_ACCOUNT_ID } from "@/test/authFixtures"
 import { initialPlaygroundState } from "@/store/playgroundSlice"
 import type { SearchResponse } from "@/domains/execution"
+
+/**
+ * Open the shared provider picker and choose one row by its visible name.
+ * Rows carry role option only while the list is open, so the open click
+ * must come first. Returns the trigger button for text asserts.
+ */
+async function pinProvider(testId: string, name: string): Promise<HTMLElement> {
+  const trigger = screen.getByTestId(testId)
+  fireEvent.click(trigger)
+  const row = await screen.findByRole("option", { name })
+  fireEvent.click(row)
+  return trigger
+}
 
 describe("SearchPlayground.test.tsx", () => {
 
 /**
  * RED update: search now flows through the live backend (mocked fetch).
- * Results show real mapped fixture titles with a SINGLE-entry waterfall plus
- * an honest per-attempt-trace-unavailable note; failures show a banner while
+ * Results show real mapped fixture titles with a SINGLE-entry waterfall and
+ * no per-attempt trace note; failures show a banner while
  * keeping the last-good results.
  */
 function renderWithBackend(
@@ -43,7 +57,7 @@ function renderWithBackend(
     return err(404, { detail: "unhandled test route" })
   })
   const view = render(
-    <FreeSearchProvider>
+    <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
       <SearchPlayground />
     </FreeSearchProvider>
   )
@@ -88,7 +102,7 @@ describe("SearchPlayground (live backend)", () => {
     expect(document.body.textContent).not.toContain("Comprehensive Architecture")
   })
 
-  it("renders exactly ONE waterfall entry plus a trace-unavailable note", async () => {
+  it("renders exactly ONE waterfall entry with no trace-unavailable note", async () => {
     renderWithBackend()
     await waitFor(() => {
       expect(screen.getByPlaceholderText(/Search across all providers/i)).toBeInTheDocument()
@@ -119,8 +133,9 @@ describe("SearchPlayground (live backend)", () => {
       const occurrences = (document.body.textContent?.match(/resultsCount/g) ?? []).length
       expect(occurrences).toBe(1)
     })
-    // Honest note: per-attempt fallback trace is unavailable from the backend
-    expect(screen.getByText(/trace (is )?unavailable|waterfall unavailable/i)).toBeInTheDocument()
+    // No per-attempt trace note exists in the UI: WaterfallPanel renders
+    // timings only, so the page must show no unavailable-trace text.
+    expect(screen.queryByText(/trace (is )?unavailable|waterfall unavailable/i)).not.toBeInTheDocument()
     // Never fake multi-hop cascade text for a single-attempt response
     expect(document.body.textContent).not.toMatch(/[2-9]\d* hops evaluated/)
   })
@@ -169,18 +184,16 @@ describe("SearchPlayground (live backend)", () => {
     })
 
     // Brave is search-only: pick it in the search provider filter. The
-    // catalog arrives asynchronously, so wait for its option first.
-    await screen.findByRole("option", { name: "Brave Search" })
-    const searchSelect = screen.getByRole("combobox") as HTMLSelectElement
-    fireEvent.change(searchSelect, { target: { value: "brave" } })
-    expect(searchSelect.value).toBe("brave")
+    // catalog arrives asynchronously, so open the picker and wait for its row.
+    const searchTrigger = await pinProvider("playground-search-provider", "Brave Search")
+    expect(searchTrigger.textContent).toContain("Brave Search")
 
     // Switching operations must clear the selected-provider state because
     // Brave cannot serve fetches.
     fireEvent.click(screen.getByRole("tab", { name: "Fetch", exact: true }))
 
-    const fetchSelect = screen.getByRole("combobox") as HTMLSelectElement
-    expect(fetchSelect).toHaveValue("auto")
+    const fetchTrigger = screen.getByTestId("playground-fetch-provider")
+    expect(fetchTrigger.textContent).toContain("Auto arbitration")
 
     const urlInput = screen.getByPlaceholderText(
       /Enter a URL to fetch/i
@@ -283,9 +296,11 @@ describe("SearchPlayground (live backend)", () => {
       expect(screen.getByPlaceholderText(/Search across all providers/i)).toBeInTheDocument()
     })
 
-    const select = screen.getByRole("combobox") as HTMLSelectElement
-    fireEvent.change(select, { target: { value: "all" } })
-    expect(select.value).toBe("all")
+    const searchTrigger = await pinProvider(
+      "playground-search-provider",
+      "All Providers (Ranked Fusion)"
+    )
+    expect(searchTrigger.textContent).toContain("All Providers")
 
     await submitQuery("fanout test")
 
@@ -419,7 +434,7 @@ function renderPlayground() {
     return err(404, { detail: "unhandled test route" })
   })
   return render(
-    <FreeSearchProvider>
+    <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
       <SearchPlayground />
     </FreeSearchProvider>
   )
@@ -823,7 +838,7 @@ function renderWithBackend(
     return err(404, { detail: "unhandled test route" })
   })
   const view = render(
-    <FreeSearchProvider>
+    <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
       <SearchPlayground />
     </FreeSearchProvider>
   )
@@ -1217,13 +1232,13 @@ describe("PG-F1 AC-PG-F1-5: Fetch composer via shared ComposerShell (Fetch ONLY)
     expect(footer.className).toContain("text-[var(--muted)]")
     // Footer owns the Provider row (exact Search footer token strings).
     expect(footer.textContent).toMatch(/Provider:/)
-    const select = within(footer).getByRole("combobox") as HTMLSelectElement
-    expect(select.value).toBe("auto")
+    const trigger = within(footer).getByTestId("playground-fetch-provider")
+    expect(trigger).toHaveAccessibleName("Provider:")
+    expect(trigger.textContent).toContain("Auto arbitration")
+    fireEvent.click(trigger)
     expect(
-      Array.from(select.querySelectorAll("option")).map((o) =>
-        o.textContent?.trim()
-      )
-    ).toContain("Auto arbitration")
+      await within(footer).findByRole("option", { name: "Auto arbitration" })
+    ).toBeInTheDocument()
     // Fetch footer carries no Search-only controls.
     expect(
       within(footer).queryByRole("spinbutton", { name: "Number of results" })
@@ -1616,7 +1631,7 @@ function renderWithBackend(
     return err(404, { detail: "unhandled test route" })
   })
   const view = render(
-    <FreeSearchProvider>
+    <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
       <SearchPlayground />
     </FreeSearchProvider>
   )
@@ -1979,7 +1994,7 @@ function renderWithBackend(
     return err(404, { detail: "unhandled test route" })
   })
   const view = render(
-    <FreeSearchProvider>
+    <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
       <SearchPlayground />
     </FreeSearchProvider>
   )
@@ -2406,7 +2421,7 @@ function renderWithBackend(
     return err(404, { detail: "unhandled test route" })
   })
   const view = render(
-    <FreeSearchProvider>
+    <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
       <SearchPlayground />
     </FreeSearchProvider>
   )
@@ -2928,7 +2943,7 @@ function renderWithBackend(
     return err(404, { detail: "unhandled test route" })
   })
   const view = render(
-    <FreeSearchProvider>
+    <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
       <SearchPlayground />
     </FreeSearchProvider>
   )
@@ -3421,11 +3436,9 @@ describe("PG-S4 AC-PG-S4-6: eligible-inherit else auto + markdown/4000ms contrac
     await readyForSearch()
 
     // Firecrawl is search+fetch: eligible in both modes. The catalog arrives
-    // asynchronously, so wait for its option before pinning it.
-    await screen.findByRole("option", { name: "Firecrawl" })
-    const searchSelect = screen.getByRole("combobox") as HTMLSelectElement
-    fireEvent.change(searchSelect, { target: { value: "firecrawl" } })
-    expect(searchSelect.value).toBe("firecrawl")
+    // asynchronously, so open the picker and wait for its row before pinning it.
+    const searchTrigger = await pinProvider("playground-search-provider", "Firecrawl")
+    expect(searchTrigger.textContent).toContain("Firecrawl")
 
     await searchAndWait()
     fireEvent.click(screen.getByTestId("fetch-result-tavily-0"))
@@ -3439,9 +3452,9 @@ describe("PG-S4 AC-PG-S4-6: eligible-inherit else auto + markdown/4000ms contrac
       routing: { mode: "require", providers: ["firecrawl"], allow_fallback: true },
     })
     // Provider selection survives the mode switch (still Firecrawl in Fetch).
-    expect(
-      screen.getByRole("combobox") as HTMLSelectElement
-    ).toHaveValue("firecrawl")
+    expect(screen.getByTestId("playground-fetch-provider").textContent).toContain(
+      "Firecrawl"
+    )
   })
 
   it("resets a fetch-ineligible provider (Brave search-only) to auto", async () => {
@@ -3449,11 +3462,9 @@ describe("PG-S4 AC-PG-S4-6: eligible-inherit else auto + markdown/4000ms contrac
     await readyForSearch()
 
     // Brave is search-only: fetch-ineligible. The catalog arrives
-    // asynchronously, so wait for its option before pinning it.
-    await screen.findByRole("option", { name: "Brave Search" })
-    const searchSelect = screen.getByRole("combobox") as HTMLSelectElement
-    fireEvent.change(searchSelect, { target: { value: "brave" } })
-    expect(searchSelect.value).toBe("brave")
+    // asynchronously, so open the picker and wait for its row before pinning it.
+    const searchTrigger = await pinProvider("playground-search-provider", "Brave Search")
+    expect(searchTrigger.textContent).toContain("Brave Search")
 
     await searchAndWait()
     fireEvent.click(screen.getByTestId("fetch-result-tavily-0"))
@@ -3467,8 +3478,8 @@ describe("PG-S4 AC-PG-S4-6: eligible-inherit else auto + markdown/4000ms contrac
       routing: { mode: "auto", providers: [], allow_fallback: true },
     })
     expect(
-      screen.getByRole("combobox") as HTMLSelectElement
-    ).toHaveValue("auto")
+      screen.getByTestId("playground-fetch-provider").textContent
+    ).toContain("Auto arbitration")
   })
 
   it("calls runFetch directly with markdown + 4000ms inside handleFetchResult", () => {
@@ -3849,7 +3860,7 @@ function renderWithBackend(
     return err(404, { detail: "unhandled test route" })
   })
   const view = render(
-    <FreeSearchProvider>
+    <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
       <SearchPlayground />
     </FreeSearchProvider>
   )
@@ -3953,13 +3964,14 @@ describe("PG-S5 AC-PG-S5-1: footer Results number input replaces Depth", () => {
     await readyForSearch()
 
     const footer = screen.getByTestId("search-composer-footer")
-    const select = within(footer).getByRole("combobox") as HTMLSelectElement
-    expect(select).toBeInTheDocument()
-    expect(select.value).toBe("auto")
-    const options = Array.from(select.querySelectorAll("option")).map((o) =>
-      o.textContent?.trim()
-    )
-    expect(options).toContain("Auto arbitration")
+    const trigger = within(footer).getByTestId("playground-search-provider")
+    expect(trigger).toBeInTheDocument()
+    expect(trigger).toHaveAccessibleName("Provider:")
+    expect(trigger.textContent).toContain("Auto arbitration")
+    fireEvent.click(trigger)
+    expect(
+      await within(footer).findByRole("option", { name: "Auto arbitration" })
+    ).toBeInTheDocument()
     expect(footer.textContent).toMatch(/Provider:/)
   })
 
@@ -4010,13 +4022,9 @@ describe("PG-S5 AC-PG-S5-2: /search limit + routing wiring", () => {
     const { stub } = renderWithBackend()
     await readyForSearch()
 
-    const select = within(
-      screen.getByTestId("search-composer-footer")
-    ).getByRole("combobox") as HTMLSelectElement
-    // The catalog arrives asynchronously — await the pinned option first.
-    await screen.findByRole("option", { name: "Tavily" })
-    fireEvent.change(select, { target: { value: "tavily" } })
-    expect(select.value).toBe("tavily")
+    // The catalog arrives asynchronously — open the picker and await the row.
+    const searchTrigger = await pinProvider("playground-search-provider", "Tavily")
+    expect(searchTrigger.textContent).toContain("Tavily")
     expect(resultsSpinInFooter() as HTMLInputElement).toHaveValue(6)
 
     await submitQueryViaClick("pinned default query")
@@ -4131,11 +4139,8 @@ describe("PG-S5 AC-PG-S5-2: /search limit + routing wiring", () => {
     })
 
     // Pinned case must be require, never prefer.
-    const select = within(
-      screen.getByTestId("search-composer-footer")
-    ).getByRole("combobox") as HTMLSelectElement
-    await screen.findByRole("option", { name: "Tavily" })
-    fireEvent.change(select, { target: { value: "tavily" } })
+    const pinnedTrigger = await pinProvider("playground-search-provider", "Tavily")
+    expect(pinnedTrigger.textContent).toContain("Tavily")
     await submitQueryViaClick("prefer guard pinned")
     await waitFor(() => {
       expect(stub.requestsTo("/search")).toHaveLength(2)
@@ -4412,7 +4417,7 @@ function seedStorage(state: Record<string, unknown>): void {
   })) {
     encoded[field] = JSON.stringify(value)
   }
-  window.localStorage.setItem(PLAYGROUND_PERSIST_KEY, JSON.stringify(encoded))
+  window.localStorage.setItem(playgroundPersistKey(ADMIN_ACCOUNT_ID), JSON.stringify(encoded))
 }
 
 function stubBackend(
@@ -4482,7 +4487,7 @@ describe("PlaygroundPage persistence", () => {
     })
     const stub = refuseNetwork()
     render(
-      <FreeSearchProvider>
+      <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
         <PlaygroundPage />
       </FreeSearchProvider>
     )
@@ -4493,9 +4498,15 @@ describe("PlaygroundPage persistence", () => {
     )
     expect(screen.getByRole("spinbutton", { name: "Number of results" })).toHaveValue(25)
     // The provider catalog arrives asynchronously; the persisted pin only
-    // displays once its option exists.
-    await screen.findByRole("option", { name: "Brave Search" })
-    expect(screen.getByRole("combobox")).toHaveValue("brave")
+    // displays once its entry exists. Picker rows exist only while open.
+    const trigger = screen.getByTestId("playground-search-provider")
+    await waitFor(() => {
+      expect(trigger.textContent).toContain("Brave Search")
+    })
+    fireEvent.click(trigger)
+    expect(
+      await screen.findByRole("option", { name: "Brave Search" })
+    ).toBeInTheDocument()
     expect(await screen.findByText("Seeded result title")).toBeInTheDocument()
 
     // Fetch tab: rehydrated URL draft and the persisted error banner.
@@ -4513,7 +4524,7 @@ describe("PlaygroundPage persistence", () => {
   it("keeps executed search and fetch state across a page remount with the same root store", async () => {
     const stub = stubBackend()
     const { rerender } = render(
-      <FreeSearchProvider>
+      <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
         <PlaygroundPage />
       </FreeSearchProvider>
     )
@@ -4526,13 +4537,13 @@ describe("PlaygroundPage persistence", () => {
 
     // Remount the page while the root provider (and its store) stays mounted.
     rerender(
-      <FreeSearchProvider>
+      <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
         <span data-testid="interstitial" />
       </FreeSearchProvider>
     )
     expect(await screen.findByTestId("interstitial")).toBeInTheDocument()
     rerender(
-      <FreeSearchProvider>
+      <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
         <PlaygroundPage />
       </FreeSearchProvider>
     )
@@ -4558,7 +4569,7 @@ describe("PlaygroundPage persistence", () => {
   it("reloads executed state in a recreated provider from localStorage without refetching", async () => {
     const liveStub = stubBackend()
     const first = render(
-      <FreeSearchProvider>
+      <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
         <PlaygroundPage />
       </FreeSearchProvider>
     )
@@ -4569,7 +4580,7 @@ describe("PlaygroundPage persistence", () => {
     // Wait for the bounded storage adapter to flush the completed run to disk.
     await waitFor(
       () => {
-        expect(window.localStorage.getItem(PLAYGROUND_PERSIST_KEY) ?? "").toContain(
+        expect(window.localStorage.getItem(playgroundPersistKey(ADMIN_ACCOUNT_ID)) ?? "").toContain(
           "reload probe"
         )
       },
@@ -4581,7 +4592,7 @@ describe("PlaygroundPage persistence", () => {
     // through PersistGate with no /search or /fetch request.
     const stub = refuseNetwork()
     render(
-      <FreeSearchProvider>
+      <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
         <PlaygroundPage />
       </FreeSearchProvider>
     )

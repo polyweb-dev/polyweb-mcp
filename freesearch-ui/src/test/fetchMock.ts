@@ -94,6 +94,52 @@ export function installFetchStub(handler: FetchHandler): FetchStub {
   }
 }
 
+/** Account routes answered by the auth stub. */
+export interface AuthStubConfig {
+  account: import("@/domains/auth/model/types").UserAccount
+  accessToken?: string
+  refreshStatus?: 200 | 401
+}
+
+function authAccessBody(config: AuthStubConfig): Record<string, unknown> {
+  return {
+    access_token: config.accessToken ?? "test-access-token-value",
+    token_type: "bearer",
+    expires_in: 900,
+    refresh_expires_in: 604800,
+  }
+}
+
+/**
+ * Answer the account routes with explicit auth responses.
+ *
+ * Login and cookie refresh return the browser access projection without a
+ * refresh credential. Cookie logout answers 204. `GET /users/me` returns the
+ * configured account. Every other request reaches the fallback handler, or a
+ * 404 when none is given.
+ */
+export function installAuthStub(config: AuthStubConfig, fallback?: FetchHandler): FetchStub {
+  return installFetchStub((req) => {
+    if (req.url === "/auth/jwt/login" && req.method === "POST") {
+      return ok(authAccessBody(config))
+    }
+    if (req.url === "/auth/jwt/refresh" && req.method === "POST") {
+      if (config.refreshStatus === 401) {
+        return err(401, { detail: "invalid refresh credential" })
+      }
+      return ok(authAccessBody(config))
+    }
+    if (req.url === "/auth/jwt/refresh" && req.method === "DELETE") {
+      return new Response(null, { status: 204 })
+    }
+    if (req.url === "/users/me" && req.method === "GET") {
+      return ok(config.account)
+    }
+    if (fallback !== undefined) return fallback(req)
+    return err(404, { detail: "unhandled test route" })
+  })
+}
+
 /** A manually-resolved promise used to assert pessimistic (pending) UI states. */
 export function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void

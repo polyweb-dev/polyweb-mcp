@@ -1,9 +1,11 @@
+import { useMemo } from "react"
 import type { ReactNode } from "react"
-import { Clock, Database, Gauge } from "lucide-react"
 import { useFreeSearch } from "@/context/useFreeSearch"
 import { isManualQuotaEligible } from "../model/quotaEligibility"
-import { KpiCard } from "./KpiCard"
-import { QuotaTable } from "./QuotaTable"
+import { manualEligibleProviders } from "../model/quotaRowModel"
+import { CRDPriceNote } from "./CRDPriceNote"
+import { Footnote } from "./Footnote"
+import { ProviderLimitsCards } from "./ProviderLimitsCards"
 import type { OAuthSlotArgs } from "./QuotaRow"
 import { UsageTotals } from "./UsageTotals"
 
@@ -17,30 +19,39 @@ export interface QuotaPageProps {
   renderOAuthActions?: (args: OAuthSlotArgs) => ReactNode
 }
 
-/** Usage page: recorded aggregates plus the per-provider quota grid. */
+/**
+ * Usage page: the credit-unit cards, the recorded aggregates, the provider
+ * actions, and one price note. The legacy native grid and its cache widgets
+ * left this page; the reusable dialog and row parts stay in the feature.
+ */
 export function QuotaPage({
   manualQuotaEligible = isManualQuotaEligible,
   renderOAuthActions,
-}: QuotaPageProps) {
-
+}: QuotaPageProps): ReactNode {
   const {
     providers,
-    usageTotals,
+    providerLimits,
+    crdUsageTotals,
     dashboardQuotas,
-    quotaAvailable,
     dashboardNotice,
     usageLoading,
     usageError,
+    refreshDashboard,
   } = useFreeSearch()
+
+  const manualEligible = useMemo(
+    () => manualEligibleProviders(providers, dashboardQuotas, manualQuotaEligible),
+    [providers, dashboardQuotas, manualQuotaEligible]
+  )
 
   return (
     <div className="space-y-8">
       <div className="flex flex-col gap-2 pb-2 border-b border-[var(--border-subtle)]">
         <h2 className="text-[var(--text-strong)]">Usage</h2>
-        <p className="text-[13px] text-[var(--muted)]">
-          Recorded provider usage and quota signals reported by the backend.
-        </p>
-        {dashboardNotice && <p className="text-[12px] text-[var(--muted)]">{dashboardNotice}</p>}
+        <Footnote>
+          Credit-unit capacity and recorded provider usage reported by the backend.
+        </Footnote>
+        {dashboardNotice && <Footnote>{dashboardNotice}</Footnote>}
       </div>
 
       {usageError && (
@@ -56,37 +67,20 @@ export function QuotaPage({
       {usageLoading && (
         <p className="text-[13px] text-[var(--muted)]" role="status">Loading usage telemetry...</p>
       )}
-      {!usageLoading && (
-        // GAP: 7 — the dashboard can have no authoritative quota records.
-        // GAP: 8 — cache telemetry is not part of the backend dashboard contract.
-        <p className="p-3 rounded border border-[var(--border-subtle)] bg-[var(--elevated)] text-[13px] text-[var(--muted)]">
-          {quotaAvailable
-            ? "Quota data available; cache telemetry unavailable."
-            : "Quota unavailable from the backend; cache telemetry unavailable."}
-        </p>
-      )}
 
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <KpiCard icon={<Gauge className="size-4 text-[var(--signal)] shrink-0" />} label="Recorded aggregates">
-          <span className="tnum">{usageTotals.length}</span> provider operations
-        </KpiCard>
-        <KpiCard icon={<Clock className="size-4 text-[var(--status-warning)] shrink-0" />} label="Quota signal">
-          {quotaAvailable ? "Available" : "No quota source"}
-        </KpiCard>
-        <KpiCard icon={<Database className="size-4 text-[var(--muted)] shrink-0" />} label="Cache telemetry">
-          No cache signal
-        </KpiCard>
-      </div>
-
-      <UsageTotals usageTotals={usageTotals} providers={providers} />
-
-      <QuotaTable
+      <ProviderLimitsCards
         providers={providers}
+        providerLimits={providerLimits}
+        crdUsageTotals={crdUsageTotals}
+        refreshDashboard={refreshDashboard}
+        manualEligible={manualEligible}
         dashboardQuotas={dashboardQuotas}
-        manualQuotaEligible={manualQuotaEligible}
         {...(renderOAuthActions !== undefined ? { renderOAuthActions } : {})}
       />
 
+      <UsageTotals crdUsageTotals={crdUsageTotals} providers={providers} />
+
+      <CRDPriceNote providers={providers} providerLimits={providerLimits} />
     </div>
   )
 }

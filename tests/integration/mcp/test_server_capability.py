@@ -14,10 +14,14 @@ capability-excluded routing never invokes the incapable adapter.
 
 import json
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import pytest
+import pytest_asyncio
+from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
+from pydantic import SecretStr
 
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.mcp.server import create_server
@@ -32,6 +36,8 @@ from freesearch.models.contracts import (
     SearchResult,
     UsageOperation,
 )
+from freesearch.persistence.storage import SQLiteRepository
+from tests.fixtures.auth import mcp_account_token
 
 
 class _CapabilityStub(ProviderAdapter):
@@ -99,11 +105,32 @@ def _payload(result: Any) -> dict[str, Any]:
     return result[1]
 
 
+@pytest_asyncio.fixture
+async def repository(tmp_path: Path) -> SQLiteRepository:
+    repo = await SQLiteRepository.open(tmp_path / "capability.db")
+    yield repo
+    await repo.close()
+
+
+async def _authed_server(
+    repository: SQLiteRepository, adapters: list[ProviderAdapter], prefix: str
+) -> FastMCP:
+    """Build one tool server with a real account and its explicit stdio credential."""
+
+    service, token, _email = await mcp_account_token(repository, prefix)
+    return create_server(
+        adapters,
+        repository=repository,
+        auth_service=service,
+        stdio_token=SecretStr(token.get_secret_value()),
+    )
+
+
 # --- (a) {"request": ...} schema works for both tools ---
 
 
-async def test_search_tool_accepts_request_schema() -> None:
-    server = create_server([_CapabilityStub("brave")])
+async def test_search_tool_accepts_request_schema(repository: SQLiteRepository) -> None:
+    server = await _authed_server(repository, [_CapabilityStub("brave")], "cap-search")
 
     payload = _payload(await server.call_tool("search", {"request": {"query": "python asyncio"}}))
 
@@ -111,8 +138,8 @@ async def test_search_tool_accepts_request_schema() -> None:
     assert payload["query"] == "python asyncio"
 
 
-async def test_fetch_tool_accepts_request_schema() -> None:
-    server = create_server([_CapabilityStub("youcom")])
+async def test_fetch_tool_accepts_request_schema(repository: SQLiteRepository) -> None:
+    server = await _authed_server(repository, [_CapabilityStub("youcom")], "cap-fetch")
 
     payload = _payload(
         await server.call_tool("fetch", {"request": {"url": "https://example.com/page"}})
@@ -134,10 +161,11 @@ async def test_fetch_tool_accepts_request_schema() -> None:
     ],
 )
 async def test_invalid_search_payload_rejected_without_adapter_call(
+    repository: SQLiteRepository,
     payload: dict[str, Any],
 ) -> None:
     stub = _CapabilityStub("brave")
-    server = create_server([stub])
+    server = await _authed_server(repository, [stub], "cap-bad-search")
 
     with pytest.raises(ToolError):
         await server.call_tool("search", payload)
@@ -153,10 +181,11 @@ async def test_invalid_search_payload_rejected_without_adapter_call(
     ],
 )
 async def test_invalid_fetch_payload_rejected_without_adapter_call(
+    repository: SQLiteRepository,
     payload: dict[str, Any],
 ) -> None:
     stub = _CapabilityStub("youcom")
-    server = create_server([stub])
+    server = await _authed_server(repository, [stub], "cap-bad-fetch")
 
     with pytest.raises(ToolError):
         await server.call_tool("fetch", payload)
@@ -167,9 +196,9 @@ async def test_invalid_fetch_payload_rejected_without_adapter_call(
 # --- (c) capability-excluded routing: incapable adapters never invoked ---
 
 
-async def test_search_excludes_fetch_only_adapter() -> None:
+async def test_search_excludes_fetch_only_adapter(repository: SQLiteRepository) -> None:
     stub = _CapabilityStub("fetchonly", search=False, fetch=True)
-    server = create_server([stub])
+    server = await _authed_server(repository, [stub], "cap-exclude-search")
 
     with pytest.raises(ToolError):
         await server.call_tool("search", {"request": {"query": "ok"}})
@@ -177,9 +206,9 @@ async def test_search_excludes_fetch_only_adapter() -> None:
     assert stub.calls == []
 
 
-async def test_fetch_excludes_search_only_adapter() -> None:
+async def test_fetch_excludes_search_only_adapter(repository: SQLiteRepository) -> None:
     stub = _CapabilityStub("searchonly", search=True, fetch=False)
-    server = create_server([stub])
+    server = await _authed_server(repository, [stub], "cap-exclude-fetch")
 
     with pytest.raises(ToolError):
         await server.call_tool("fetch", {"request": {"url": "https://example.com"}})
@@ -187,10 +216,12 @@ async def test_fetch_excludes_search_only_adapter() -> None:
     assert stub.calls == []
 
 
-async def test_split_capabilities_route_to_capable_adapter() -> None:
+async def test_split_capabilities_route_to_capable_adapter(
+    repository: SQLiteRepository,
+) -> None:
     search_only = _CapabilityStub("searchonly", search=True, fetch=False)
     fetch_only = _CapabilityStub("fetchonly", search=False, fetch=True)
-    server = create_server([search_only, fetch_only])
+    server = await _authed_server(repository, [search_only, fetch_only], "cap-split")
 
     search_payload = _payload(await server.call_tool("search", {"request": {"query": "hi"}}))
     fetch_payload = _payload(
@@ -206,8 +237,10 @@ async def test_split_capabilities_route_to_capable_adapter() -> None:
 # --- (d) outputs JSON-stable + response-contract round-trip ---
 
 
-async def test_search_output_is_json_stable_per_response_contract() -> None:
-    server = create_server([_CapabilityStub("brave")])
+async def test_search_output_is_json_stable_per_response_contract(
+    repository: SQLiteRepository,
+) -> None:
+    server = await _authed_server(repository, [_CapabilityStub("brave")], "cap-json-search")
 
     payload = _payload(await server.call_tool("search", {"request": {"query": "json check"}}))
 
@@ -220,8 +253,10 @@ async def test_search_output_is_json_stable_per_response_contract() -> None:
     assert round_tripped.model_dump(mode="json") == payload
 
 
-async def test_fetch_output_is_json_stable_per_response_contract() -> None:
-    server = create_server([_CapabilityStub("youcom")])
+async def test_fetch_output_is_json_stable_per_response_contract(
+    repository: SQLiteRepository,
+) -> None:
+    server = await _authed_server(repository, [_CapabilityStub("youcom")], "cap-json-fetch")
 
     payload = _payload(
         await server.call_tool("fetch", {"request": {"url": "https://example.com/document"}})
@@ -238,15 +273,69 @@ async def test_fetch_output_is_json_stable_per_response_contract() -> None:
 # --- (e) no-provider ToolError ---
 
 
-async def test_search_without_any_adapter_raises_no_provider() -> None:
-    server = create_server([])
+async def test_search_without_any_adapter_raises_no_provider(
+    repository: SQLiteRepository,
+) -> None:
+    server = await _authed_server(repository, [], "cap-empty-search")
 
     with pytest.raises(ToolError, match="no provider is configured"):
         await server.call_tool("search", {"request": {"query": "anything"}})
 
 
-async def test_fetch_without_any_adapter_raises_no_provider() -> None:
-    server = create_server([])
+async def test_fetch_without_any_adapter_raises_no_provider(
+    repository: SQLiteRepository,
+) -> None:
+    server = await _authed_server(repository, [], "cap-empty-fetch")
 
     with pytest.raises(ToolError, match="no provider is configured"):
         await server.call_tool("fetch", {"request": {"url": "https://example.com"}})
+
+
+# --- (f) access masks and capability remain independent gates ---
+
+
+async def test_capability_gate_blocks_without_call_even_when_masks_allow() -> None:
+    search_only = _CapabilityStub("searchonly", search=True, fetch=False)
+    server = create_server([search_only])
+
+    with pytest.raises(ToolError):
+        await server.call_tool("fetch", {"request": {"url": "https://example.com"}})
+
+    assert search_only.calls == []
+
+
+async def test_mask_gate_blocks_without_call_even_when_capability_allows(
+    tmp_path,  # type: ignore[no-untyped-def]
+) -> None:
+    from freesearch.persistence.storage import SQLiteRepository
+
+    repository = await SQLiteRepository.open(tmp_path / "capability-mask.db")
+    try:
+        await repository.set_runtime_setting(
+            "provider.exa", {"config": {"enable_mask": 0, "support_mask": 7, "priority": 100}}
+        )
+        stub = _CapabilityStub("exa", search=True, fetch=True)
+        server = create_server([stub], repository=repository)
+
+        with pytest.raises(ToolError, match="no eligible provider"):
+            await server.call_tool("search", {"request": {"query": "mask off"}})
+
+        assert stub.calls == []
+    finally:
+        await repository.close()
+
+
+async def test_unsupported_brave_fetch_never_calls_adapter(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    from freesearch.persistence.storage import SQLiteRepository
+
+    repository = await SQLiteRepository.open(tmp_path / "brave-fetch.db")
+    try:
+        stub = _CapabilityStub("brave", search=True, fetch=False)
+        server = create_server([stub], repository=repository)
+
+        with pytest.raises(ToolError):
+            await server.call_tool("fetch", {"request": {"url": "https://example.com"}})
+
+        assert stub.calls == []
+    finally:
+        await repository.close()

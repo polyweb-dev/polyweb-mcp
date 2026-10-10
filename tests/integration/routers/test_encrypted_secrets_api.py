@@ -38,12 +38,14 @@ from freesearch.models.contracts import (
     UsageEvent,
     UsageOperation,
 )
+from freesearch.models.users import UserRole
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
 from tests.encrypted_secrets_helpers import (
     SENTINEL_PROVIDER_KEYS,
     assert_no_sentinels,
 )
+from tests.fixtures.auth import raw_auth_headers, register_promote_login, temp_email
 from tests.integration.services.oauth.oauth_stubs import collect_sqlite_texts
 
 PASSPHRASE = "enc-api-acceptance-passphrase-9f31"
@@ -136,8 +138,8 @@ def passphrase_env(monkeypatch, tmp_path):  # type: ignore[no-untyped-def]
         get_settings.cache_clear()
 
 
-def _put_secret(client: TestClient, provider: str, key: str):  # type: ignore[no-untyped-def]
-    return client.put(f"/api/v1/providers/{provider}/secret", json={"key": key})
+def _put_secret(client: TestClient, provider: str, key: str, headers: dict[str, str]):  # type: ignore[no-untyped-def]
+    return client.put(f"/api/v1/providers/{provider}/secret", json={"key": key}, headers=headers)
 
 
 # --- AC-8: contracts ---------------------------------------------------------
@@ -158,13 +160,19 @@ async def test_put_secret_reports_encrypted_db_fingerprint_only(
     caplog: pytest.LogCaptureFixture,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    auth_secret: str,
 ) -> None:
+    # Use one Admin account for the write.
     monkeypatch.chdir(tmp_path)
     sentinel = SENTINEL_PROVIDER_KEYS["exa"]
     app = create_app([ControlAdapter("exa")], repository=repository)
 
     with caplog.at_level("INFO"), TestClient(app) as client:
-        response = _put_secret(client, "exa", sentinel)
+        pair = await register_promote_login(
+            client, repository, temp_email("enc-put"), UserRole.ADMIN
+        )
+        headers = raw_auth_headers(pair["access_token"])
+        response = _put_secret(client, "exa", sentinel, headers)
 
     assert response.status_code == 200
     body = response.json()
@@ -180,13 +188,18 @@ async def test_put_secret_reports_encrypted_db_fingerprint_only(
 
 @pytest.mark.asyncio
 async def test_unknown_provider_secret_routes_stay_404(
-    repository: SQLiteRepository, passphrase_env: None
+    repository: SQLiteRepository, passphrase_env: None, auth_secret: str
 ) -> None:
+    # Use one Admin account for both verbs. Admin also reads.
     app = create_app([], repository=repository)
 
     with TestClient(app) as client:
-        put = client.put("/api/v1/providers/ghost/secret", json={"key": "unused"})
-        delete = client.delete("/api/v1/providers/ghost/secret")
+        pair = await register_promote_login(
+            client, repository, temp_email("enc-ghost"), UserRole.ADMIN
+        )
+        headers = raw_auth_headers(pair["access_token"])
+        put = client.put("/api/v1/providers/ghost/secret", json={"key": "unused"}, headers=headers)
+        delete = client.delete("/api/v1/providers/ghost/secret", headers=headers)
 
     assert put.status_code == 404
     assert delete.status_code == 404
@@ -194,12 +207,17 @@ async def test_unknown_provider_secret_routes_stay_404(
 
 @pytest.mark.asyncio
 async def test_keenable_reports_keyless_public(
-    repository: SQLiteRepository, passphrase_env: None
+    repository: SQLiteRepository, passphrase_env: None, auth_secret: str
 ) -> None:
+    # Use one Developer account for the read.
     app = create_app([], repository=repository)
 
     with TestClient(app) as client:
-        response = client.get("/api/v1/providers/keenable")
+        pair = await register_promote_login(
+            client, repository, temp_email("enc-keen"), UserRole.DEVELOPER
+        )
+        headers = raw_auth_headers(pair["access_token"])
+        response = client.get("/api/v1/providers/keenable", headers=headers)
 
     assert response.status_code == 200
     assert response.json()["secret_presence"] == "keyless_public"
@@ -214,14 +232,20 @@ async def test_put_secret_persists_ciphertext_only_rows(
     passphrase_env: None,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    auth_secret: str,
 ) -> None:
+    # Use one Admin account for write and read. Admin also reads.
     monkeypatch.chdir(tmp_path)
     sentinel = SENTINEL_PROVIDER_KEYS["exa"]
     app = create_app([ControlAdapter("exa")], repository=repository)
 
     with TestClient(app) as client:
-        response = _put_secret(client, "exa", sentinel)
-        status = client.get("/api/v1/providers/exa")
+        pair = await register_promote_login(
+            client, repository, temp_email("enc-persist"), UserRole.ADMIN
+        )
+        headers = raw_auth_headers(pair["access_token"])
+        response = _put_secret(client, "exa", sentinel, headers)
+        status = client.get("/api/v1/providers/exa", headers=headers)
 
     assert response.status_code == 200
     assert response.json()["source"] == "encrypted_db"
@@ -251,7 +275,9 @@ async def test_put_key_makes_missing_adapter_testable(
     passphrase_env: None,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    auth_secret: str,
 ) -> None:
+    # Use one Admin account for write and probe.
     from freesearch.adapters import registry as registry_module
 
     replacement = ControlAdapter("exa")
@@ -261,8 +287,12 @@ async def test_put_key_makes_missing_adapter_testable(
     app = create_app(repository=repository)
 
     with TestClient(app) as client:
-        write = _put_secret(client, "exa", SENTINEL_PROVIDER_KEYS["exa"])
-        probe = client.post("/api/v1/providers/exa/test")
+        pair = await register_promote_login(
+            client, repository, temp_email("enc-demand"), UserRole.ADMIN
+        )
+        headers = raw_auth_headers(pair["access_token"])
+        write = _put_secret(client, "exa", SENTINEL_PROVIDER_KEYS["exa"], headers)
+        probe = client.post("/api/v1/providers/exa/test", headers=headers)
 
     assert write.status_code == 200
     assert write.json()["source"] == "encrypted_db"
@@ -280,15 +310,21 @@ async def test_delete_secret_is_idempotent_and_clears_encrypted_row(
     passphrase_env: None,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    auth_secret: str,
 ) -> None:
+    # Use one Admin account for all calls.
     monkeypatch.chdir(tmp_path)
     sentinel = SENTINEL_PROVIDER_KEYS["exa"]
     app = create_app([ControlAdapter("exa")], repository=repository)
 
     with TestClient(app) as client:
-        assert _put_secret(client, "exa", sentinel).status_code == 200
-        first = client.delete("/api/v1/providers/exa/secret")
-        second = client.delete("/api/v1/providers/exa/secret")
+        pair = await register_promote_login(
+            client, repository, temp_email("enc-del"), UserRole.ADMIN
+        )
+        headers = raw_auth_headers(pair["access_token"])
+        assert _put_secret(client, "exa", sentinel, headers).status_code == 200
+        first = client.delete("/api/v1/providers/exa/secret", headers=headers)
+        second = client.delete("/api/v1/providers/exa/secret", headers=headers)
 
     for response in (first, second):
         assert response.status_code == 200
@@ -303,8 +339,12 @@ async def test_delete_secret_is_idempotent_and_clears_encrypted_row(
 
 @pytest.mark.asyncio
 async def test_wrong_passphrase_degrades_reads_without_crash_or_leak(
-    passphrase_env: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    passphrase_env: None,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    auth_secret: str,
 ) -> None:
+    # Use one Admin account. The token works after reopen on the same file.
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv(PROVIDER_ENV_VARS[ProviderName.EXA], raising=False)
     sentinel = SENTINEL_PROVIDER_KEYS["exa"]
@@ -314,7 +354,11 @@ async def test_wrong_passphrase_degrades_reads_without_crash_or_leak(
     try:
         app = create_app([ControlAdapter("exa")], repository=first)
         with TestClient(app) as client:
-            assert _put_secret(client, "exa", sentinel).status_code == 200
+            pair = await register_promote_login(
+                client, first, temp_email("enc-wrong"), UserRole.ADMIN
+            )
+            headers = raw_auth_headers(pair["access_token"])
+            assert _put_secret(client, "exa", sentinel, headers).status_code == 200
     finally:
         await first.close()
 
@@ -324,8 +368,8 @@ async def test_wrong_passphrase_degrades_reads_without_crash_or_leak(
     try:
         app = create_app([ControlAdapter("exa")], repository=second)
         with TestClient(app) as client:
-            status = client.get("/api/v1/providers/exa")
-            probe = client.post("/api/v1/providers/exa/test")
+            status = client.get("/api/v1/providers/exa", headers=headers)
+            probe = client.post("/api/v1/providers/exa/test", headers=headers)
             bodies = status.text + probe.text
     finally:
         await second.close()

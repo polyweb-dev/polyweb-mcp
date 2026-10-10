@@ -5,6 +5,7 @@ import { describe, expect, it, afterEach, vi } from "vitest"
 import { render, screen, within, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { FreeSearchProvider } from "@/context/FreeSearchContext"
+import { ADMIN_ACCOUNT_ID, DEVELOPER_ACCOUNT_ID } from "@/test/authFixtures"
 import { SettingsView } from "./SettingsView"
 import { installFetchStub, ok, err, type FetchStub } from "@/test/fetchMock"
 import {
@@ -158,7 +159,25 @@ function renderSettings(): FetchStub {
     }
     if (req.url.startsWith("/dashboard")) return ok(dashboardFixture())
     if (req.method === "PATCH" && req.url.startsWith("/api/v1/providers/")) {
-      return ok({ ...allProvidersFixture()[0], ...((req.body as object) ?? {}) })
+      const backendId = req.url.split("/").at(-1) ?? "unknown"
+      const wire = allProvidersFixture().find((p) => p.provider_id === backendId)
+      const base = { ...(wire ?? allProvidersFixture()[0]) } as Record<string, unknown> & {
+        enable_mask: number
+        priority: number
+      }
+      const patch = ((req.body as Record<string, unknown>) ?? {}) as Record<string, unknown>
+      let enableMask = base.enable_mask
+      if (typeof patch.enable_mask === "number") enableMask = patch.enable_mask
+      else {
+        if (patch.enabled === true) enableMask |= 1
+        if (patch.enabled === false) enableMask &= ~1
+        if (patch.search_enabled === true) enableMask |= 2
+        if (patch.search_enabled === false) enableMask &= ~2
+        if (patch.fetch_enabled === true) enableMask |= 4
+        if (patch.fetch_enabled === false) enableMask &= ~4
+      }
+      const priority = typeof patch.priority === "number" ? patch.priority : base.priority
+      return ok({ ...base, enable_mask: enableMask, enabled: (enableMask & 1) !== 0, priority })
     }
     if (req.method === "POST" && req.url.endsWith("/test")) {
       return ok({
@@ -176,7 +195,7 @@ function renderSettings(): FetchStub {
     return err(404, { detail: "unhandled test route" })
   })
   render(
-    <FreeSearchProvider>
+    <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
       <SettingsView />
     </FreeSearchProvider>
   )
@@ -868,4 +887,66 @@ describe("G-5: P1-FINAL page merge (inverted — fleet merged, matrix retired)",
     expect(failoverSource).not.toMatch(/localhost:8001/)
   })
 })
+})
+
+describe("SettingsFailover Developer read-only (canReadControls, no edit)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
+
+  function renderDeveloperSettings(): FetchStub {
+    const stub = installFetchStub((req) => {
+      if (req.url === "/api/v1/providers" && req.method === "GET") {
+        return ok(allProvidersFixture())
+      }
+      if (req.url === "/api/v1/routing/config" && req.method === "GET") {
+        return ok(routingConfigFixture())
+      }
+      if (req.url.startsWith("/dashboard")) return ok(dashboardFixture())
+      return err(404, { detail: "unhandled test route" })
+    })
+    render(
+      <FreeSearchProvider accountId={DEVELOPER_ACCOUNT_ID} canReadControls canEditControls={false}>
+        <SettingsView />
+      </FreeSearchProvider>
+    )
+    return stub
+  }
+
+  async function openDeveloperFailover() {
+    await waitFor(() => {
+      expect(screen.getByText("Brave Search", { exact: true })).toBeInTheDocument()
+    })
+    await userEvent.setup().click(screen.getByRole("tab", { name: /^Failover$/ }))
+    await waitFor(() => {
+      expect(screen.getByText("Fallback chaining", { exact: true })).toBeInTheDocument()
+    })
+  }
+
+  it("shows the read-only policy panel with values, no switches, and sends no writes", async () => {
+    const stub = renderDeveloperSettings()
+    await openDeveloperFailover()
+
+    // Read-only markers present: four policy rows with the read-only note and stored values.
+    expect(screen.getAllByText(/Read-only for your role/)).toHaveLength(4)
+    for (const label of [
+      "Fallback chaining",
+      "Failover on rate limit (429)",
+      "Failover on timeout",
+      "Failover on server error (5xx)",
+    ]) {
+      expect(screen.getByText(label, { exact: true })).toBeInTheDocument()
+    }
+    expect(screen.getByText("Active", { exact: true })).toBeInTheDocument()
+    expect(screen.getAllByText("On", { exact: true })).toHaveLength(3)
+    expect(screen.getByText("Cascade depth", { exact: true })).toBeInTheDocument()
+    expect(screen.getByText("Up to 3 fallback hops", { exact: true })).toBeInTheDocument()
+    // Mutation affordances absent: every switch is gone.
+    expect(screen.queryByRole("switch")).not.toBeInTheDocument()
+    // Zero backend writes beyond the stubbed reads.
+    expect(
+      stub.requests.filter((r) => r.method === "PATCH" || r.method === "PUT" || r.method === "POST")
+    ).toHaveLength(0)
+  })
 })

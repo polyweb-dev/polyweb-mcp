@@ -7,6 +7,9 @@ import userEvent from "@testing-library/user-event"
 import { MemoryRouter } from "react-router"
 import App from "@/App"
 import { deferred, err, installFetchStub, ok } from "@/test/fetchMock"
+import { accessResponseFixture, adminAccountFixture, agentAccountFixture } from "@/test/authFixtures"
+import { installFakeChannel, installImmediateLocks, removeLocks } from "@/test/browserStubs"
+import type { UserAccount } from "@/domains/auth/model/types"
 import {
   allProvidersFixture,
   dashboardFixture,
@@ -174,8 +177,17 @@ function stubBackend(opts: {
   routingHandler?: () => Response
   searchHandler?: () => Response
   fetchHandler?: () => Response
+  account?: UserAccount
 } = {}) {
+  installImmediateLocks()
+  installFakeChannel()
   return installFetchStub((req) => {
+    if (req.url === "/auth/jwt/refresh" && req.method === "POST") {
+      return ok(accessResponseFixture())
+    }
+    if (req.url === "/users/me" && req.method === "GET") {
+      return ok(opts.account ?? adminAccountFixture())
+    }
     if (req.url === "/api/v1/providers" && req.method === "GET") {
       return ok(opts.providers ?? allProvidersFixture())
     }
@@ -232,11 +244,14 @@ function triggerEl(name: RegExp | string = /providers/i): HTMLElement {
 
 beforeEach(() => {
   window.localStorage.clear()
+  installImmediateLocks()
+  installFakeChannel()
 })
 
 afterEach(() => {
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
+  removeLocks()
 })
 
 describe("AC-R1-1: StatusBar module contract", () => {
@@ -675,7 +690,7 @@ describe("AC-R1-8: page-level clusters removed, views intact", () => {
     expect(playgroundSource).toContain('data-testid="fetch-layout"')
     expect(playgroundSource).toContain("eligibleProviders")
     expect(playgroundSource).toContain("Auto arbitration")
-    expect(playgroundSource).toContain("<select")
+    expect(playgroundSource).toContain("ProviderSelect")
     expect(playgroundSource).toContain("ComposerShell")
   })
 
@@ -726,6 +741,12 @@ describe("AC-R1-9: edge states (loading neutral, error muted, 0-of-N)", () => {
   it("loading is neutral: bar present with no Failover claim until config resolves", async () => {
     const gate = deferred<Response>()
     installFetchStub((req) => {
+      if (req.url === "/auth/jwt/refresh" && req.method === "POST") {
+        return ok(accessResponseFixture())
+      }
+      if (req.url === "/users/me" && req.method === "GET") {
+        return ok(adminAccountFixture())
+      }
       if (req.url === "/api/v1/providers" && req.method === "GET") {
         return ok(allProvidersFixture())
       }
@@ -778,7 +799,7 @@ describe("AC-R1-9: edge states (loading neutral, error muted, 0-of-N)", () => {
   })
 
   it('shows the exact "0 of 7 providers" edge when nothing is eligible', async () => {
-    const disabled = allProvidersFixture().map((p) => ({ ...p, enabled: false }))
+    const disabled = allProvidersFixture().map((p) => ({ ...p, enable_mask: 0, enabled: false }))
     stubBackend({ providers: disabled as WireProviderStatus[] })
     render(
       <MemoryRouter initialEntries={["/playground"]}>
@@ -859,7 +880,28 @@ describe("AC-R1-10 regressions: ComposerShell, layouts, fetching, shell", () => 
     expect(document.querySelector("header")).toBeNull()
     expect(
       within(screen.getByRole("navigation", { name: "Primary" })).getAllByRole("link")
-    ).toHaveLength(5)
+    ).toHaveLength(7)
+  })
+})
+
+describe("AC-R1-11: Agent without control reads", () => {
+  it("shows Signed in with no provider, failover, or routing disclosures", async () => {
+    stubBackend({ account: agentAccountFixture() })
+    render(
+      <MemoryRouter initialEntries={["/playground"]}>
+        <App />
+      </MemoryRouter>
+    )
+
+    const bar = await screen.findByTestId("status-bar")
+    await waitFor(() => {
+      expect(screen.getByText("Signed in", { exact: true })).toBeInTheDocument()
+    })
+    expect(bar.textContent).toContain("Signed in")
+    expect(screen.queryByText(/\d+ of \d+ providers/)).toBeNull()
+    expect(screen.queryByText(/Failover (active|inactive)/)).toBeNull()
+    expect(screen.queryByText("Loading routing status", { exact: true })).toBeNull()
+    expect(screen.queryByText("Routing status unavailable", { exact: true })).toBeNull()
   })
 })
 })

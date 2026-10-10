@@ -18,6 +18,7 @@ from behave import given, then, when  # type: ignore[import-untyped]
 from fastapi.testclient import TestClient
 
 from freesearch.adapters.base import ProviderAdapter
+from freesearch.mcp.server import create_server
 from freesearch.models.contracts import (
     CostEstimate,
     FetchedDocument,
@@ -32,8 +33,11 @@ from freesearch.models.contracts import (
     UsageEvent,
     UsageOperation,
 )
+from freesearch.models.provider_access import is_operation_enabled
+from freesearch.models.users import UserRole
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
+from tests.fixtures.auth import TEMP_PASSWORD, configure_bdd_secret, promote_account, temp_email
 
 
 class _MemorySecretStore:
@@ -67,9 +71,20 @@ class _ScenarioDirectory:
 class _ControlAdapter(ProviderAdapter):
     """Small deterministic adapter used by every control scenario."""
 
-    def __init__(self, name: str, *, fail: bool = False) -> None:
+    def __init__(
+        self,
+        name: str,
+        *,
+        fail: bool = False,
+        search_capable: bool = True,
+        fetch_capable: bool = True,
+    ) -> None:
         self._name = name
         self.fail = fail
+        self._search_capable = search_capable
+        self._fetch_capable = fetch_capable
+        self.search_calls = 0
+        self.fetch_calls = 0
         self._checked_at = datetime(2026, 1, 1, tzinfo=UTC)
 
     @property
@@ -78,9 +93,18 @@ class _ControlAdapter(ProviderAdapter):
 
     @property
     def capabilities(self) -> ProviderCapabilities:
-        return ProviderCapabilities(search=True, fetch=True, cost_estimate=True)
+        return ProviderCapabilities(
+            search=self._search_capable, fetch=self._fetch_capable, cost_estimate=True
+        )
+
+    def reset_counts(self) -> None:
+        """Reset deterministic call counters to zero."""
+
+        self.search_calls = 0
+        self.fetch_calls = 0
 
     async def search(self, request: SearchRequest) -> SearchResponse:
+        self.search_calls += 1
         if self.fail:
             raise RuntimeError("offline control adapter failure")
         return SearchResponse(
@@ -104,6 +128,7 @@ class _ControlAdapter(ProviderAdapter):
         )
 
     async def fetch(self, request: FetchRequest) -> FetchResponse:
+        self.fetch_calls += 1
         if self.fail:
             raise RuntimeError("offline control adapter failure")
         return FetchResponse(
@@ -171,34 +196,124 @@ def _client(context: Any, *, raise_server_exceptions: bool = True) -> Iterator[T
             os.chdir(previous_cwd)
 
 
+def _login_headers(context: Any, role: UserRole, prefix: str) -> dict[str, str]:
+    # Register one account, assign one role, and return one access header.
+    email = temp_email(prefix)
+    with _client(context) as client:
+        registered = client.post("/auth/register", json={"email": email, "password": TEMP_PASSWORD})
+        assert registered.status_code == 201
+        if role is not UserRole.AGENT:
+            context.loop.run_until_complete(promote_account(context.repository, email, role))
+        logged_in = client.post(
+            "/auth/jwt/login", data={"username": email, "password": TEMP_PASSWORD}
+        )
+        assert logged_in.status_code == 200
+        token = logged_in.json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}
+
+
+def _reset_counts(context: Any) -> None:
+    for adapter in getattr(context, "adapters", []):
+        reset = getattr(adapter, "reset_counts", None)
+        if callable(reset):
+            reset()
+
+
+def _adapter_by_name(context: Any, name: str) -> _ControlAdapter:
+    for adapter in context.adapters:
+        if adapter.name == name:
+            return adapter
+    raise AssertionError(f"unknown stub adapter {name!r}")
+
+
+def _patch_for_choice(choice: str) -> dict[str, Any]:
+    if choice == "both-on":
+        return {"enable_mask": 7}
+    if choice == "search-off":
+        return {"search_enabled": False}
+    if choice == "fetch-off":
+        return {"fetch_enabled": False}
+    if choice == "global-off":
+        return {"enabled": False}
+    if choice == "global-on":
+        return {"enabled": True}
+    raise AssertionError(f"unknown access choice {choice!r}")
+
+
+def _reopen_control_repository(context: Any) -> None:
+    context.loop.run_until_complete(context.repository.close())
+    context.repository = context.loop.run_until_complete(
+        SQLiteRepository.open(context.database_path)
+    )
+    _build_app(context)
+    if getattr(context, "server", None) is not None:
+        context.server = create_server(context.adapters, repository=context.repository)
+
+
 @given("an offline control API with stub adapters")
 def step_given_control_api(context: Any) -> None:
+    configure_bdd_secret(context)
     _open_repository(context)
     context.adapters = [_ControlAdapter("exa"), _ControlAdapter("brave")]
     _build_app(context)
+    # Admin owns mutations, Developer owns reads. One account per role is enough.
+    context.admin_headers = _login_headers(context, UserRole.ADMIN, "control-admin")
+    context.developer_headers = _login_headers(context, UserRole.DEVELOPER, "control-dev")
+
+
+@given("an offline control API with stub adapters and call counters")
+def step_given_control_api_counters(context: Any) -> None:
+    _open_repository(context)
+    context.adapters = [
+        _ControlAdapter("exa", search_capable=True, fetch_capable=True),
+        _ControlAdapter("brave", search_capable=True, fetch_capable=False),
+    ]
+    _reset_counts(context)
+    context.server = None
+    _build_app(context)
+
+
+@given("an offline control API with stub adapters and call counters and an MCP server")
+def step_given_control_api_counters_mcp(context: Any) -> None:
+    _open_repository(context)
+    context.adapters = [
+        _ControlAdapter("exa", search_capable=True, fetch_capable=True),
+        _ControlAdapter("brave", search_capable=True, fetch_capable=False),
+    ]
+    _reset_counts(context)
+    _build_app(context)
+    context.server = create_server(context.adapters, repository=context.repository)
 
 
 @given("an offline control API with an in-memory secret store")
 def step_given_control_api_secret_store(context: Any) -> None:
+    configure_bdd_secret(context)
     _open_repository(context)
     context.temp_directory = _ScenarioDirectory()
     context.control_directory = Path(context.temp_directory.name)
     context.adapters = [_ControlAdapter("exa"), _ControlAdapter("brave")]
     context.secret_store = _MemorySecretStore()
     _build_app(context)
+    # Secret writes need the Admin role.
+    context.admin_headers = _login_headers(context, UserRole.ADMIN, "control-admin")
 
 
 @given("an offline control API with a failing adapter")
 def step_given_failing_control_api(context: Any) -> None:
+    configure_bdd_secret(context)
     _open_repository(context)
     context.adapters = [_ControlAdapter("exa", fail=True), _ControlAdapter("brave")]
     _build_app(context)
+    # Search needs any role, stats and dashboard need the Reader role.
+    context.developer_headers = _login_headers(context, UserRole.DEVELOPER, "control-dev")
 
 
 @when("I list the control-plane providers")
 def step_when_list_control_providers(context: Any) -> None:
     with _client(context) as client:
-        context.providers_response = client.get("/api/v1/providers")
+        context.providers_response = client.get(
+            "/api/v1/providers", headers=context.developer_headers
+        )
 
 
 @then("the control-plane provider list should contain the eight canonical providers")
@@ -229,17 +344,13 @@ def step_then_control_defaults(context: Any) -> None:
 def step_when_disable_provider(context: Any, provider: str) -> None:
     with _client(context) as client:
         context.patch_response = client.patch(
-            f"/api/v1/providers/{provider}", json={"enabled": False}
+            f"/api/v1/providers/{provider}",
+            json={"enabled": False},
+            headers=context.admin_headers,
         )
-        context.provider_response = client.get(f"/api/v1/providers/{provider}")
-
-
-def _reopen_control_repository(context: Any) -> None:
-    context.loop.run_until_complete(context.repository.close())
-    context.repository = context.loop.run_until_complete(
-        SQLiteRepository.open(context.database_path)
-    )
-    _build_app(context)
+        context.provider_response = client.get(
+            f"/api/v1/providers/{provider}", headers=context.developer_headers
+        )
 
 
 @then('the control-plane GET for "{provider}" should report enabled false')
@@ -254,7 +365,7 @@ def step_then_provider_disabled(context: Any, provider: str) -> None:
 def step_then_provider_disabled_after_reopen(context: Any) -> None:
     _reopen_control_repository(context)
     with _client(context) as client:
-        response = client.get("/api/v1/providers/exa")
+        response = client.get("/api/v1/providers/exa", headers=context.developer_headers)
     assert response.status_code == 200
     assert response.json()["enabled"] is False
 
@@ -267,7 +378,9 @@ def step_when_write_secret(context: Any, provider: str) -> None:
     context.raw_key = "offline-control-secret"
     with _client(context) as client:
         context.secret_write_response = client.put(
-            f"/api/v1/providers/{provider}/secret", json={"key": context.raw_key}
+            f"/api/v1/providers/{provider}/secret",
+            json={"key": context.raw_key},
+            headers=context.admin_headers,
         )
 
 
@@ -283,7 +396,9 @@ def step_then_secret_configured(context: Any) -> None:
 @when('I delete the "{provider}" secret through the control API')
 def step_when_delete_secret(context: Any, provider: str) -> None:
     with _client(context) as client:
-        context.secret_delete_response = client.delete(f"/api/v1/providers/{provider}/secret")
+        context.secret_delete_response = client.delete(
+            f"/api/v1/providers/{provider}/secret", headers=context.admin_headers
+        )
 
 
 @then("the secret response should report missing and contain no raw key")
@@ -303,6 +418,7 @@ def step_when_update_routing(context: Any) -> None:
                 "cost_optimization_preset": "free_first",
                 "max_attempts": 2,
             },
+            headers=context.admin_headers,
         )
 
 
@@ -310,7 +426,7 @@ def step_when_update_routing(context: Any) -> None:
 def step_then_routing_round_trip(context: Any) -> None:
     assert context.routing_response.status_code == 200
     with _client(context) as client:
-        response = client.get("/api/v1/routing/config")
+        response = client.get("/api/v1/routing/config", headers=context.developer_headers)
     assert response.status_code == 200
     assert response.json() == {
         "fallback_policy": "first_only",
@@ -322,8 +438,10 @@ def step_then_routing_round_trip(context: Any) -> None:
 @when("I submit an offline control search")
 def step_when_control_search(context: Any) -> None:
     with _client(context) as client:
-        context.search_response = client.post("/search", json={"query": "control activity"})
-        context.dashboard_response = client.get("/dashboard")
+        context.search_response = client.post(
+            "/search", json={"query": "control activity"}, headers=context.developer_headers
+        )
+        context.dashboard_response = client.get("/dashboard", headers=context.developer_headers)
 
 
 @then("the dashboard recent activity should contain a non-negative latency and success status")
@@ -340,9 +458,11 @@ def step_then_dashboard_latency_status(context: Any) -> None:
 @when("I submit a failing offline control search")
 def step_when_failing_control_search(context: Any) -> None:
     with _client(context, raise_server_exceptions=False) as client:
-        context.failure_response = client.post("/search", json={"query": "control failure"})
-        context.stats_response = client.get("/stats")
-        context.dashboard_response = client.get("/dashboard")
+        context.failure_response = client.post(
+            "/search", json={"query": "control failure"}, headers=context.developer_headers
+        )
+        context.stats_response = client.get("/stats", headers=context.developer_headers)
+        context.dashboard_response = client.get("/dashboard", headers=context.developer_headers)
 
 
 @then("the control request should return HTTP 500")
@@ -364,3 +484,280 @@ def step_then_failure_telemetry(context: Any) -> None:
         entry["status"] == "degraded" and entry["provider"] == "exa"
         for entry in dashboard["latest_health"]
     )
+
+
+@when('I apply the "{choice}" access choice to "{provider}"')
+def step_when_apply_access_choice(context: Any, choice: str, provider: str) -> None:
+    with _client(context) as client:
+        response = client.patch(f"/api/v1/providers/{provider}", json=_patch_for_choice(choice))
+    assert response.status_code == 200, response.text
+    context.last_patch_response = response
+
+
+@then(
+    'the control-plane GET for "{provider}" should report enable mask '
+    "{enable_mask:d} and support mask {support_mask:d}"
+)
+def step_then_provider_masks(
+    context: Any, provider: str, enable_mask: int, support_mask: int
+) -> None:
+    with _client(context) as client:
+        response = client.get(f"/api/v1/providers/{provider}")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["provider_id"] == provider
+    assert body["enable_mask"] == enable_mask, body
+    assert body["support_mask"] == support_mask, body
+    assert body["enabled"] == bool(enable_mask & support_mask & 1), body
+
+
+def _store_search(context: Any, status: int, body: Any) -> None:
+    context.rest_search_status = status
+    context.rest_search_body = body
+
+
+def _store_fetch(context: Any, status: int, body: Any) -> None:
+    context.rest_fetch_status = status
+    context.rest_fetch_body = body
+
+
+def _store_fanout(context: Any, status: int, body: Any) -> None:
+    context.rest_fanout_status = status
+    context.rest_fanout_body = body
+
+
+@when("I submit offline search and fetch via REST")
+def step_when_rest_search_and_fetch(context: Any) -> None:
+    with _client(context) as client:
+        search = client.post("/search", json={"query": "offline mask probe"})
+        fetch = client.post("/fetch", json={"url": "https://example.com/doc"})
+    _store_search(context, search.status_code, search.json() if search.content else None)
+    _store_fetch(context, fetch.status_code, fetch.json() if fetch.content else None)
+
+
+@when("I submit offline search via REST")
+def step_when_rest_search_only(context: Any) -> None:
+    with _client(context) as client:
+        search = client.post("/search", json={"query": "offline mask probe"})
+    _store_search(context, search.status_code, search.json() if search.content else None)
+
+
+@when('I submit an offline fetch requiring provider "{provider}" via REST')
+def step_when_rest_fetch_require(context: Any, provider: str) -> None:
+    payload = {
+        "url": "https://example.com/doc",
+        "routing": {"mode": "require", "providers": [provider]},
+    }
+    with _client(context) as client:
+        fetch = client.post("/fetch", json=payload)
+    _store_fetch(context, fetch.status_code, fetch.json() if fetch.content else None)
+
+
+@when('I submit an offline search requiring provider "{provider}" via REST')
+def step_when_rest_search_require(context: Any, provider: str) -> None:
+    payload = {
+        "query": "offline mask probe",
+        "routing": {"mode": "require", "providers": [provider]},
+    }
+    with _client(context) as client:
+        search = client.post("/search", json=payload)
+    _store_search(context, search.status_code, search.json() if search.content else None)
+
+
+@when('I submit an offline search preferring provider "{provider}" via REST')
+def step_when_rest_search_prefer(context: Any, provider: str) -> None:
+    payload = {
+        "query": "offline mask probe",
+        "routing": {"mode": "prefer", "providers": [provider]},
+    }
+    with _client(context) as client:
+        search = client.post("/search", json=payload)
+    _store_search(context, search.status_code, search.json() if search.content else None)
+
+
+@when("I submit an offline auto search via REST")
+def step_when_rest_search_auto(context: Any) -> None:
+    with _client(context) as client:
+        search = client.post(
+            "/search", json={"query": "offline mask probe", "routing": {"mode": "auto"}}
+        )
+    _store_search(context, search.status_code, search.json() if search.content else None)
+
+
+@when("I submit an offline fanout search via REST")
+def step_when_rest_fanout(context: Any) -> None:
+    with _client(context) as client:
+        response = client.post("/search", json={"query": "offline mask probe", "fanout": True})
+    _store_fanout(context, response.status_code, response.json() if response.content else None)
+
+
+@when('I submit an offline fanout search restricted to providers "{allow_list}" via REST')
+def step_when_rest_fanout_restricted(context: Any, allow_list: str) -> None:
+    providers = [name.strip() for name in allow_list.split(",") if name.strip()]
+    payload = {
+        "query": "offline mask probe",
+        "fanout": True,
+        "routing": {"mode": "fanout", "providers": providers},
+    }
+    with _client(context) as client:
+        response = client.post("/search", json=payload)
+    _store_fanout(context, response.status_code, response.json() if response.content else None)
+
+
+@when("I reset the adapter call counters")
+def step_when_reset_counters(context: Any) -> None:
+    _reset_counts(context)
+
+
+@when("I call the MCP search tool")
+def step_when_mcp_search(context: Any) -> None:
+    assert getattr(context, "server", None) is not None, "MCP server is not configured"
+    try:
+        result = context.loop.run_until_complete(
+            context.server.call_tool("search", {"request": {"query": "offline mask probe"}})
+        )
+        context.mcp_search_status = 200
+        context.mcp_search_body = result[1]
+        context.mcp_search_error = None
+    except Exception as exc:
+        context.mcp_search_status = 503
+        context.mcp_search_body = None
+        context.mcp_search_error = str(exc)
+
+
+@when("I call the MCP fetch tool")
+def step_when_mcp_fetch(context: Any) -> None:
+    assert getattr(context, "server", None) is not None, "MCP server is not configured"
+    try:
+        result = context.loop.run_until_complete(
+            context.server.call_tool("fetch", {"request": {"url": "https://example.com/doc"}})
+        )
+        context.mcp_fetch_status = 200
+        context.mcp_fetch_body = result[1]
+        context.mcp_fetch_error = None
+    except Exception as exc:
+        context.mcp_fetch_status = 503
+        context.mcp_fetch_body = None
+        context.mcp_fetch_error = str(exc)
+
+
+@then('the REST search provider should be "{expected}"')
+def step_then_rest_search_provider(context: Any, expected: str) -> None:
+    assert getattr(context, "rest_search_status", None) == 200, (
+        context.rest_search_status,
+        context.rest_search_body,
+    )
+    assert context.rest_search_body["provider"] == expected, context.rest_search_body
+
+
+@then('the REST search should fail with {status:d} containing "{detail}"')
+def step_then_rest_search_error(context: Any, status: int, detail: str) -> None:
+    assert getattr(context, "rest_search_status", None) == status, (
+        context.rest_search_status,
+        context.rest_search_body,
+    )
+    body = context.rest_search_body
+    text = body.get("detail", body) if isinstance(body, dict) else str(body)
+    assert detail in str(text), text
+
+
+@then('the REST fetch outcome should be "{outcome}"')
+def step_then_rest_fetch_outcome(context: Any, outcome: str) -> None:
+    if outcome == "fail-503":
+        assert getattr(context, "rest_fetch_status", None) == 503, (
+            context.rest_fetch_status,
+            context.rest_fetch_body,
+        )
+        body = context.rest_fetch_body
+        text = body.get("detail", body) if isinstance(body, dict) else str(body)
+        assert "eligible" in str(text), text
+    elif outcome.startswith("succeed-"):
+        expected = outcome.removeprefix("succeed-")
+        assert getattr(context, "rest_fetch_status", None) == 200, (
+            context.rest_fetch_status,
+            context.rest_fetch_body,
+        )
+        assert context.rest_fetch_body["provider"] == expected, context.rest_fetch_body
+    else:
+        raise AssertionError(f"unknown fetch outcome {outcome!r}")
+
+
+@then(
+    "the adapter call counts should be exa search {exa_search:d} fetch {exa_fetch:d} "
+    "and brave search {brave_search:d} fetch {brave_fetch:d}"
+)
+def step_then_call_counts(
+    context: Any, exa_search: int, exa_fetch: int, brave_search: int, brave_fetch: int
+) -> None:
+    exa = _adapter_by_name(context, "exa")
+    brave = _adapter_by_name(context, "brave")
+    assert exa.search_calls == exa_search, (exa.search_calls, exa_search)
+    assert exa.fetch_calls == exa_fetch, (exa.fetch_calls, exa_fetch)
+    assert brave.search_calls == brave_search, (brave.search_calls, brave_search)
+    assert brave.fetch_calls == brave_fetch, (brave.fetch_calls, brave_fetch)
+
+
+@then('a fresh control-plane read for "{provider}" should still report enable mask {enable_mask:d}')
+def step_then_fresh_masks(context: Any, provider: str, enable_mask: int) -> None:
+    _reopen_control_repository(context)
+    with _client(context) as client:
+        response = client.get(f"/api/v1/providers/{provider}")
+    assert response.status_code == 200, response.text
+    assert response.json()["enable_mask"] == enable_mask, response.json()
+
+
+@then(
+    "the pure access predicate should allow search but block fetch "
+    "for enable {enable:d} support {support:d}"
+)
+def step_then_pure_brave(context: Any, enable: int, support: int) -> None:
+    assert is_operation_enabled(enable, support, "search") is True
+    assert is_operation_enabled(enable, support, "fetch") is False
+
+
+@then(
+    "the pure access predicate should block search and fetch "
+    "for enable {enable:d} support {support:d}"
+)
+def step_then_pure_blocked(context: Any, enable: int, support: int) -> None:
+    assert is_operation_enabled(enable, support, "search") is False
+    assert is_operation_enabled(enable, support, "fetch") is False
+
+
+@then('the fanout participating providers should be "{expected}"')
+def step_then_fanout_participants(context: Any, expected: str) -> None:
+    wanted = [name.strip() for name in expected.split(",") if name.strip()]
+    assert getattr(context, "rest_fanout_status", None) == 200, (
+        context.rest_fanout_status,
+        context.rest_fanout_body,
+    )
+    assert context.rest_fanout_body["participating_providers"] == wanted, context.rest_fanout_body
+
+
+@then('the fanout search should fail with {status:d} containing "{detail}"')
+def step_then_fanout_error(context: Any, status: int, detail: str) -> None:
+    assert getattr(context, "rest_fanout_status", None) == status, (
+        context.rest_fanout_status,
+        context.rest_fanout_body,
+    )
+    body = context.rest_fanout_body
+    text = body.get("detail", body) if isinstance(body, dict) else str(body)
+    assert detail in str(text), text
+
+
+@then('the MCP search provider should be "{expected}"')
+def step_then_mcp_search_provider(context: Any, expected: str) -> None:
+    assert getattr(context, "mcp_search_status", None) == 200, (
+        context.mcp_search_status,
+        context.mcp_search_error,
+    )
+    assert context.mcp_search_body["provider"] == expected, context.mcp_search_body
+
+
+@then('the MCP fetch provider should be "{expected}"')
+def step_then_mcp_fetch_provider(context: Any, expected: str) -> None:
+    assert getattr(context, "mcp_fetch_status", None) == 200, (
+        context.mcp_fetch_status,
+        context.mcp_fetch_error,
+    )
+    assert context.mcp_fetch_body["provider"] == expected, context.mcp_fetch_body

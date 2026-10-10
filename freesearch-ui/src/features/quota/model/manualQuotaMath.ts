@@ -31,6 +31,40 @@ export function parseDecimal(value: string): ScaledInt | null {
   return { int: BigInt(digits), scale }
 }
 
+function formatScaled(value: bigint, scale: number): string {
+  if (scale === 0) return value.toString()
+  const divisor = pow10(scale)
+  const fraction = (value % divisor).toString().padStart(scale, "0")
+  return value / divisor + "." + fraction
+}
+
+/**
+ * Exact product of two verbatim decimals: "5" x "0.001" gives "0.005".
+ *
+ * Example: multiplyDecimal("4500", "0.001") === "4.500".
+ */
+export function multiplyDecimal(left: string, right: string): string | null {
+  const first = parseDecimal(left)
+  const second = parseDecimal(right)
+  if (!first || !second) return null
+  return formatScaled(first.int * second.int, first.scale + second.scale)
+}
+
+/**
+ * Exact difference of two verbatim decimals, or null when a side is not a
+ * decimal or the result is negative.
+ *
+ * Example: subtractDecimal("5.00", "4.12") === "0.88".
+ */
+export function subtractDecimal(left: string, right: string): string | null {
+  const first = parseDecimal(left)
+  const second = parseDecimal(right)
+  if (!first || !second) return null
+  const scale = Math.max(first.scale, second.scale)
+  const result = first.int * pow10(scale - first.scale) - second.int * pow10(scale - second.scale)
+  return result < 0n ? null : formatScaled(result, scale)
+}
+
 export function isNonNegativeDecimal(value: string): boolean {
   return parseDecimal(value) !== null
 }
@@ -89,6 +123,9 @@ export interface ManualQuotaFields {
   used: string
 }
 
+/** `usage` asks for current usage; `balance` asks for the remaining balance. */
+export type ManualAmountMode = "usage" | "balance"
+
 export type ManualQuotaFieldErrors = Partial<Record<keyof ManualQuotaFields, string>>
 
 const REQUIRED = "Required."
@@ -101,8 +138,7 @@ function dateError(value: string): string | null {
     : null
 }
 
-/** Field-level validation; empty object means the form may save. */
-export function validateManualQuotaFields(fields: ManualQuotaFields): ManualQuotaFieldErrors {
+function periodErrors(fields: ManualQuotaFields): ManualQuotaFieldErrors {
   const errors: ManualQuotaFieldErrors = {}
   const startError = dateError(fields.billingStart)
   if (startError) errors.billingStart = startError
@@ -111,17 +147,44 @@ export function validateManualQuotaFields(fields: ManualQuotaFields): ManualQuot
   if (!startError && !endError && fields.billingEnd <= fields.billingStart) {
     errors.billingEnd = "Billing end must be after billing start."
   }
-  if (!fields.allowance.trim()) {
-    errors.allowance = REQUIRED
-  } else if (!isNonNegativeDecimal(fields.allowance)) {
-    errors.allowance = "Enter a non-negative amount (for example 5.00)."
-  } else if (!isPositiveDecimal(fields.allowance)) {
-    errors.allowance = "Allowance must be greater than zero."
+  return errors
+}
+
+function allowanceError(value: string): string | undefined {
+  if (!value.trim()) return REQUIRED
+  if (!isNonNegativeDecimal(value)) return "Enter a non-negative amount (for example 5.00)."
+  if (!isPositiveDecimal(value)) return "Allowance must be greater than zero."
+  return undefined
+}
+
+/**
+ * The second amount is current usage, or the remaining balance in balance mode.
+ * A balance above the allowance cannot encode a negative usage, so it fails.
+ */
+function amountError(
+  fields: ManualQuotaFields,
+  amountMode: ManualAmountMode
+): string | undefined {
+  if (!fields.used.trim()) return REQUIRED
+  if (!isNonNegativeDecimal(fields.used)) {
+    return "Enter a non-negative amount (for example 0.88)."
   }
-  if (!fields.used.trim()) {
-    errors.used = REQUIRED
-  } else if (!isNonNegativeDecimal(fields.used)) {
-    errors.used = "Enter a non-negative amount (for example 0.88)."
-  }
+  const balanceTooHigh =
+    amountMode === "balance" &&
+    isPositiveDecimal(fields.allowance) &&
+    subtractDecimal(fields.allowance, fields.used) === null
+  return balanceTooHigh ? "The remaining balance cannot exceed the allowance." : undefined
+}
+
+/** Field-level validation; empty object means the form may save. */
+export function validateManualQuotaFields(
+  fields: ManualQuotaFields,
+  amountMode: ManualAmountMode = "usage"
+): ManualQuotaFieldErrors {
+  const errors = periodErrors(fields)
+  const allowance = allowanceError(fields.allowance)
+  if (allowance) errors.allowance = allowance
+  const amount = amountError(fields, amountMode)
+  if (amount) errors.used = amount
   return errors
 }

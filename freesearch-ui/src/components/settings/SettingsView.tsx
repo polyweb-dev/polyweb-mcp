@@ -2,6 +2,7 @@ import React from "react"
 import { PillTabs } from "@/shared/ui/PillTabs"
 import { PillTabsList } from "@/shared/ui/PillTabsList"
 import { PillTabsPanel } from "@/shared/ui/PillTabsPanel"
+import { useFreeSearch } from "@/context/useFreeSearch"
 import { SettingsFailover } from "./SettingsFailover"
 import { SettingsKeyVault } from "./SettingsKeyVault"
 import { SettingsProviders } from "./SettingsProviders"
@@ -14,9 +15,16 @@ const SETTINGS_VIEW_OPTIONS = [
 
 /** Settings workbench for providers, credentials, and failover policy. */
 export const SettingsView: React.FC = () => {
+  const { canEditControls } = useFreeSearch()
+  // The key vault writes provider credentials, so a role without control-edit
+  // access gets no Keys tab and no key-vault mount.
+  const options = canEditControls
+    ? SETTINGS_VIEW_OPTIONS
+    : SETTINGS_VIEW_OPTIONS.filter((option) => option.value !== "keys")
+
   return (
     <PillTabs
-      options={SETTINGS_VIEW_OPTIONS}
+      options={options}
       defaultValue="providers"
       ariaLabel="Settings view"
       idPrefix="settings"
@@ -35,9 +43,11 @@ export const SettingsView: React.FC = () => {
       <PillTabsPanel value="providers" className="pt-5">
         <SettingsProviders />
       </PillTabsPanel>
-      <PillTabsPanel value="keys" className="pt-5">
-        <SettingsKeyVault />
-      </PillTabsPanel>
+      {canEditControls && (
+        <PillTabsPanel value="keys" className="pt-5">
+          <SettingsKeyVault />
+        </PillTabsPanel>
+      )}
       <PillTabsPanel value="failover" className="pt-5">
         <SettingsFailover />
       </PillTabsPanel>

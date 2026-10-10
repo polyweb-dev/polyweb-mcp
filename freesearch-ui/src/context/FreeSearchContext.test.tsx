@@ -4,6 +4,7 @@ import { renderHook, waitFor, act } from "@testing-library/react"
 import { FreeSearchProvider } from "./FreeSearchContext"
 import { useFreeSearch } from "./useFreeSearch"
 import { installFetchStub, ok, err, deferred, type FetchStub } from "@/test/fetchMock"
+import { ADMIN_ACCOUNT_ID, AGENT_ACCOUNT_ID } from "@/test/authFixtures"
 import {
   allProvidersFixture,
   routingConfigFixture,
@@ -29,7 +30,9 @@ import {
  */
 
 const wrapper = ({ children }: { children: React.ReactNode }) => (
-  <FreeSearchProvider>{children}</FreeSearchProvider>
+  <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
+    {children}
+  </FreeSearchProvider>
 )
 
 interface FakeBackend {
@@ -73,8 +76,34 @@ function installBackend(server: FakeBackend): FetchStub {
       const id = backendIdFromUrl(req.url)
       const entry = server.providers.find((p) => p.provider_id === id)
       if (!entry) return err(404, { detail: `unknown provider '${id}'` })
-      const patch = (req.body ?? {}) as Partial<WireProviderStatus>
-      Object.assign(entry, patch)
+      const patch = (req.body ?? {}) as {
+        enable_mask?: unknown
+        enabled?: unknown
+        search_enabled?: unknown
+        fetch_enabled?: unknown
+        priority?: unknown
+      }
+      if (patch.enable_mask !== undefined && typeof patch.enable_mask === "number") {
+        entry.enable_mask = patch.enable_mask
+      } else {
+        if (patch.enabled !== undefined && typeof patch.enabled === "boolean") {
+          entry.enable_mask = patch.enabled ? entry.enable_mask | 1 : entry.enable_mask & ~1
+        }
+        if (patch.search_enabled !== undefined && typeof patch.search_enabled === "boolean") {
+          entry.enable_mask = patch.search_enabled
+            ? entry.enable_mask | 2
+            : entry.enable_mask & ~2
+        }
+        if (patch.fetch_enabled !== undefined && typeof patch.fetch_enabled === "boolean") {
+          entry.enable_mask = patch.fetch_enabled
+            ? entry.enable_mask | 4
+            : entry.enable_mask & ~4
+        }
+      }
+      if (patch.priority !== undefined && typeof patch.priority === "number") {
+        entry.priority = patch.priority
+      }
+      entry.enabled = (entry.enable_mask & 1) !== 0
       return ok(entry)
     }
     if (req.method === "POST" && req.url.endsWith("/test")) {
@@ -253,7 +282,7 @@ describe("FreeSearchContext (live backend)", () => {
       result.current.providers.find((p) => p.id === "brave")?.globalEnabled
     ).toBe(true)
 
-    const updated = { ...server.providers[0], enabled: false }
+    const updated = { ...server.providers[0], enable_mask: 6, enabled: false }
     await act(async () => {
       gate.resolve(ok(updated))
       await togglePromise
@@ -270,50 +299,63 @@ describe("FreeSearchContext (live backend)", () => {
     })
   })
 
-  it("keeps per-operation toggles local-only and guards unsupported operations", async () => {
+  it("persists per-operation toggles via durable PATCH and keeps composed context behavior", async () => {
     const { stub, result } = await mountLoaded()
 
-    const callsBefore = stub.requests.length
-    act(() => {
-      result.current.toggleProviderSearch("keenable", false)
+    await act(async () => {
+      await result.current.toggleProviderSearch("keenable", false)
     })
     expect(
-      result.current.providers.find((p) => p.id === "keenable")?.searchEnabled
+      result.current.providers.find((p) => p.id === "keenable")?.searchEnabled,
     ).toBe(false)
-    expect(stub.requests.length).toBe(callsBefore)
+    expect(
+      result.current.providers.find((p) => p.id === "keenable")?.enableMask,
+    ).toBe(5)
+    expect(stub.requestsTo("/api/v1/providers/keenable").at(-1)?.body).toEqual({
+      search_enabled: false,
+    })
 
-    act(() => {
-      result.current.toggleProviderFetch("keenable", false)
+    await act(async () => {
+      await result.current.toggleProviderFetch("keenable", false)
     })
     expect(
-      result.current.providers.find((p) => p.id === "keenable")?.fetchEnabled
+      result.current.providers.find((p) => p.id === "keenable")?.fetchEnabled,
     ).toBe(false)
-    expect(stub.requests.length).toBe(callsBefore)
+    expect(stub.requestsTo("/api/v1/providers/keenable").at(-1)?.body).toEqual({
+      fetch_enabled: false,
+    })
 
-    // Brave is search-only: enabling fetch is a guarded no-op, still zero fetch
-    act(() => {
-      result.current.toggleProviderFetch("brave", true)
+    // Brave is search-only support (3): admin fetch ON still PATCHes and
+    // updates the raw choice, while effective access stays OFF elsewhere.
+    await act(async () => {
+      await result.current.toggleProviderFetch("brave", true)
     })
     expect(
-      result.current.providers.find((p) => p.id === "brave")?.fetchEnabled
-    ).toBe(false)
-    expect(stub.requests.length).toBe(callsBefore)
-
-    // Exa is fetch-capable: per-operation fetch toggle applies locally, still zero fetch
-    act(() => {
-      result.current.toggleProviderFetch("exa", false)
-    })
-    expect(
-      result.current.providers.find((p) => p.id === "exa")?.fetchEnabled
-    ).toBe(false)
-    expect(stub.requests.length).toBe(callsBefore)
-    act(() => {
-      result.current.toggleProviderFetch("exa", true)
-    })
-    expect(
-      result.current.providers.find((p) => p.id === "exa")?.fetchEnabled
+      result.current.providers.find((p) => p.id === "brave")?.fetchEnabled,
     ).toBe(true)
-    expect(stub.requests.length).toBe(callsBefore)
+    expect(stub.requestsTo("/api/v1/providers/brave").at(-1)?.body).toEqual({
+      fetch_enabled: true,
+    })
+
+    // Exa is fetch-capable: durable fetch toggle flips response state.
+    await act(async () => {
+      await result.current.toggleProviderFetch("exa", false)
+    })
+    expect(
+      result.current.providers.find((p) => p.id === "exa")?.fetchEnabled,
+    ).toBe(false)
+    expect(stub.requestsTo("/api/v1/providers/exa").at(-1)?.body).toEqual({
+      fetch_enabled: false,
+    })
+    await act(async () => {
+      await result.current.toggleProviderFetch("exa", true)
+    })
+    expect(
+      result.current.providers.find((p) => p.id === "exa")?.fetchEnabled,
+    ).toBe(true)
+    expect(stub.requestsTo("/api/v1/providers/exa").at(-1)?.body).toEqual({
+      fetch_enabled: true,
+    })
   })
 
   it("updateProviderPriority PATCHes {priority} and refreshes from the 200", async () => {
@@ -1286,5 +1328,154 @@ describe("FreeSearchContext Redux-backed runner lifecycle", () => {
     expect(result.current.fetchError).toBeNull()
     expect(result.current.isSearching).toBe(false)
     expect(result.current.isFetching).toBe(false)
+  })
+})
+
+/**
+ * Agent role without control reads: each control-read refresh returns before
+ * its request (empty catalog, local routing defaults, empty telemetry, clear
+ * busy flags), so startup makes no control request and the Agent receives no
+ * HTTP 403. Search/fetch stay available.
+ */
+describe("FreeSearchContext Agent without control reads", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  const agentWrapper = ({ children }: { children: React.ReactNode }) => (
+    <FreeSearchProvider
+      accountId={AGENT_ACCOUNT_ID}
+      canReadControls={false}
+      canEditControls={false}
+    >
+      {children}
+    </FreeSearchProvider>
+  )
+
+  function installAgentBackend(server: FakeBackend, statuses: number[]): FetchStub {
+    const record = (response: Response): Response => {
+      statuses.push(response.status)
+      return response
+    }
+    return installFetchStub((req) => {
+      if (req.url === "/api/v1/providers" && req.method === "GET") {
+        return record(ok(server.providers))
+      }
+      if (req.url === "/api/v1/routing/config" && req.method === "GET") {
+        return record(ok(server.routing))
+      }
+      if (req.url.startsWith("/dashboard") && req.method === "GET") {
+        return record(ok(server.dashboard))
+      }
+      if (req.url === "/search" && req.method === "POST") {
+        return record(ok(server.searchResponse))
+      }
+      if (req.url === "/fetch" && req.method === "POST") {
+        return record(ok(server.fetchResponse))
+      }
+      return record(err(404, { detail: `unhandled test route ${req.method} ${req.url}` }))
+    })
+  }
+
+  function controlReads(stub: FetchStub): number {
+    return stub.requests.filter(
+      (request) =>
+        request.method === "GET" &&
+        (request.url === "/api/v1/providers" ||
+          request.url === "/api/v1/routing/config" ||
+          request.url.startsWith("/dashboard"))
+    ).length
+  }
+
+  async function mountAgent(server?: FakeBackend) {
+    const backend = server ?? createServer()
+    const statuses: number[] = []
+    const stub = installAgentBackend(backend, statuses)
+    const utils = renderHook(() => useFreeSearch(), { wrapper: agentWrapper })
+    await waitFor(() => {
+      expect(utils.result.current.providersLoading).toBe(false)
+    })
+    return { stub, statuses, backend, ...utils }
+  }
+
+  it("starts with no control request, an empty catalog, and clear busy flags", async () => {
+    const { stub, statuses, result } = await mountAgent()
+
+    expect(
+      stub.requests.filter(
+        (request) => request.method === "GET" && request.url === "/api/v1/providers"
+      )
+    ).toHaveLength(0)
+    expect(
+      stub.requests.filter(
+        (request) => request.method === "GET" && request.url === "/api/v1/routing/config"
+      )
+    ).toHaveLength(0)
+    expect(
+      stub.requests.filter(
+        (request) => request.method === "GET" && request.url.startsWith("/dashboard")
+      )
+    ).toHaveLength(0)
+    expect(controlReads(stub)).toBe(0)
+    expect(result.current.providers).toEqual([])
+    expect(statuses.every((status) => status < 400)).toBe(true)
+    expect(result.current.providersLoading).toBe(false)
+    expect(result.current.routingLoading).toBe(false)
+    expect(result.current.usageLoading).toBe(false)
+    expect(result.current.providersError).toBeNull()
+    expect(result.current.routingError).toBeNull()
+    expect(result.current.usageError).toBeNull()
+    expect(result.current.canReadControls).toBe(false)
+  })
+
+  it("keeps runSearch available in Auto with an empty provider list", async () => {
+    const { stub, statuses, result } = await mountAgent()
+
+    let response!: unknown
+    await act(async () => {
+      response = await result.current.runSearch({
+        query: "agent query",
+        maxResults: 6,
+        timeoutMs: 5000,
+      })
+    })
+
+    const searches = stub.requestsTo("/search")
+    expect(searches).toHaveLength(1)
+    expect(searches[0].method).toBe("POST")
+    expect(searches[0].body).toMatchObject({
+      routing: { mode: "auto", providers: [] },
+    })
+    expect((response as { query: string }).query).toBe("live backend query")
+    expect(result.current.activeSearch?.results[0].title).toBe(
+      "Live backend result one"
+    )
+    expect(controlReads(stub)).toBe(0)
+    expect(statuses.every((status) => status < 400)).toBe(true)
+    expect(result.current.canReadControls).toBe(false)
+  })
+
+  it("keeps runFetch available with no control reads", async () => {
+    const { stub, statuses, result } = await mountAgent()
+
+    await act(async () => {
+      await result.current.runFetch({
+        url: "https://example.com/doc",
+        format: "markdown",
+        timeoutMs: 4000,
+      })
+    })
+
+    const fetches = stub.requestsTo("/fetch")
+    expect(fetches).toHaveLength(1)
+    expect(fetches[0].body).toEqual({
+      url: "https://example.com/doc",
+      max_chars: null,
+      routing: { mode: "auto", providers: [], allow_fallback: true },
+    })
+    expect(result.current.activeFetch?.document.title).toBe("Live document title")
+    expect(result.current.fetchError).toBeNull()
+    expect(controlReads(stub)).toBe(0)
+    expect(statuses.every((status) => status < 400)).toBe(true)
   })
 })

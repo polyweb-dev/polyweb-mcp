@@ -1,6 +1,7 @@
 import { useEffect } from "react"
 import type { Dispatch, FormEvent, SetStateAction } from "react"
 import { useFreeSearch } from "@/context/useFreeSearch"
+import { isProviderOperationEnabled } from "@/domains/providers"
 import type { ProviderConfig } from "@/domains/providers"
 import type { FetchResponse, SearchResponse, SearchResult } from "@/domains/execution"
 import { useAppDispatch, useAppSelector } from "@/store/hooks"
@@ -61,16 +62,17 @@ export interface PlaygroundController {
   handleFetchResult: (result: SearchResult) => Promise<void>
 }
 
+/**
+ * Picker eligibility: the shared effective-access rule plus the credential rule.
+ * The shared helper owns enable AND support with the global gate, so an admin
+ * choice for an unsupported tool can never enter the picker.
+ */
 function isEligibleForOperation(
   provider: ProviderConfig,
   operation: "search" | "fetch"
 ): boolean {
-  if (!provider.globalEnabled) return false
   const hasCredential = provider.hasKey || provider.capabilities.includes("keyless_tier")
-  if (!hasCredential) return false
-  return operation === "search"
-    ? provider.searchEnabled && provider.capabilities.includes("search")
-    : provider.fetchEnabled && provider.capabilities.includes("fetch")
+  return hasCredential && isProviderOperationEnabled(provider, operation)
 }
 
 /**

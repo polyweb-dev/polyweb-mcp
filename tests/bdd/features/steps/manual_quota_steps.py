@@ -10,8 +10,10 @@ from typing import Any
 from behave import given, then, when  # type: ignore[import-untyped]
 from fastapi.testclient import TestClient
 
+from freesearch.models.users import UserRole
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
+from tests.fixtures.auth import TEMP_PASSWORD, configure_bdd_secret, promote_account, temp_email
 
 
 def _open_manual_repository(context: Any) -> None:
@@ -36,9 +38,28 @@ def _as_decimal(value: Any) -> Decimal:
     return Decimal(str(value))
 
 
+def _login_admin(context: Any) -> dict[str, str]:
+    # Register one account, assign the Admin role, and return one access header.
+    email = temp_email("quota-admin")
+    with _client(context) as client:
+        registered = client.post("/auth/register", json={"email": email, "password": TEMP_PASSWORD})
+        assert registered.status_code == 201
+        context.loop.run_until_complete(promote_account(context.repository, email, UserRole.ADMIN))
+        logged_in = client.post(
+            "/auth/jwt/login", data={"username": email, "password": TEMP_PASSWORD}
+        )
+        assert logged_in.status_code == 200
+        headers = {"Authorization": f"Bearer {logged_in.json()['access_token']}"}
+    context.auth_headers = headers
+    return headers
+
+
 @given("an offline manual-quota API with stub adapters")
 def step_given_manual_quota_api(context: Any) -> None:
+    configure_bdd_secret(context)
     _open_manual_repository(context)
+    # Manual quota writes need the Admin role.
+    _login_admin(context)
 
 
 @when('I set the Brave manual quota to allowance "{allowance}" usage "{usage}" for August 2026')
@@ -52,6 +73,7 @@ def step_when_set_brave_quota(context: Any, allowance: str, usage: str) -> None:
                 "allowance": allowance,
                 "current_usage": usage,
             },
+            headers=context.auth_headers,
         )
         context.manual_body = context.manual_response.json()
 
@@ -77,6 +99,7 @@ def step_when_update_usage(context: Any, usage: str) -> None:
                 "allowance": "5.00",
                 "current_usage": usage,
             },
+            headers=context.auth_headers,
         )
         context.manual_body = context.manual_response.json()
 
@@ -90,8 +113,12 @@ def step_then_percent_adjusts(context: Any, percent: str) -> None:
 @when("I clear the Brave manual quota")
 def step_when_clear_quota(context: Any) -> None:
     with _client(context) as client:
-        context.clear_response = client.delete("/api/v1/providers/brave/manual-quota")
-        context.get_after_clear = client.get("/api/v1/providers/brave/manual-quota")
+        context.clear_response = client.delete(
+            "/api/v1/providers/brave/manual-quota", headers=context.auth_headers
+        )
+        context.get_after_clear = client.get(
+            "/api/v1/providers/brave/manual-quota", headers=context.auth_headers
+        )
 
 
 @then("the manual quota should be missing")

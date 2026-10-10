@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import jwt as pyjwt
 from behave import given, then, when  # type: ignore[import-untyped]
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
@@ -31,8 +32,15 @@ from freesearch.models.contracts import (
     SearchResult,
     UsageOperation,
 )
+from freesearch.models.users import UserRole
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
+from tests.fixtures.auth import (
+    TEMP_PASSWORD,
+    configure_bdd_secret,
+    promote_account,
+    temp_email,
+)
 
 _TRACE_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 _FAKE_API_KEY = "sk-test-obs-7f3a9c-not-a-real-secret"
@@ -54,6 +62,7 @@ _FETCH_TITLE = "Example Article"
 
 _LIST_ITEM_KEYS = {
     "trace_id",
+    "user_id",
     "operation",
     "started_at",
     "duration_ms",
@@ -134,6 +143,7 @@ def _reset_otel_state(context: Any) -> None:
 
 def _open_trace_repository(context: Any) -> None:
     """Open a fresh temp repository; ``environment.after_scenario`` cleans it up."""
+    configure_bdd_secret(context)
     _reset_otel_state(context)
     with tempfile.NamedTemporaryFile(
         prefix="freesearch-otel-",
@@ -145,6 +155,25 @@ def _open_trace_repository(context: Any) -> None:
     context.repository = context.loop.run_until_complete(
         SQLiteRepository.open(context.database_path)
     )
+
+
+def _register_agent(context: Any) -> dict[str, str]:
+    # Register one Reader account and return one access header.
+    # Search and fetch need any role, dashboard and stats need the Reader role.
+    email = temp_email("trace-dev")
+    with _client_for(context) as client:
+        registered = client.post("/auth/register", json={"email": email, "password": TEMP_PASSWORD})
+        assert registered.status_code == 201
+        context.loop.run_until_complete(
+            promote_account(context.repository, email, UserRole.DEVELOPER)
+        )
+        logged_in = client.post(
+            "/auth/jwt/login", data={"username": email, "password": TEMP_PASSWORD}
+        )
+        assert logged_in.status_code == 200
+        headers = {"Authorization": f"Bearer {logged_in.json()['access_token']}"}
+    context.otel_auth_headers = headers
+    return headers
 
 
 def _mock_search_client(context: Any) -> httpx.AsyncClient:
@@ -182,13 +211,19 @@ def _post_search(context: Any, query: str, limit: int, *, fanout: bool = False) 
     if fanout:
         payload["fanout"] = True
     with _client_for(context) as client:
-        context.otel_response = client.post("/search", json=payload)
+        # Traced search needs any authenticated role.
+        context.otel_response = client.post(
+            "/search", json=payload, headers=context.otel_auth_headers
+        )
     _capture_trace_header(context)
 
 
 def _post_fetch(context: Any, url: str) -> None:
     with _client_for(context) as client:
-        context.otel_response = client.post("/fetch", json={"url": url})
+        # Traced fetch needs any authenticated role.
+        context.otel_response = client.post(
+            "/fetch", json={"url": url}, headers=context.otel_auth_headers
+        )
     _capture_trace_header(context)
 
 
@@ -201,14 +236,15 @@ def _capture_trace_header(context: Any) -> None:
 
 def _get_json(context: Any, path: str, **params: Any) -> Any:
     with _client_for(context) as client:
-        response = client.get(path, params=params or None)
+        # Trace reads need the verified owner. Callers pass the right header.
+        response = client.get(path, params=params or None, headers=context.otel_auth_headers)
     assert response.status_code == 200, f"GET {path} -> {response.status_code}: {response.text}"
     return response.json()
 
 
 def _get_status(context: Any, path: str) -> Any:
     with _client_for(context) as client:
-        return client.get(path)
+        return client.get(path, headers=context.otel_auth_headers)
 
 
 def _trace_list(context: Any, **params: Any) -> Any:
@@ -287,6 +323,7 @@ def step_given_trace_repo_keenable_search(context: Any) -> None:
         [_keenable_adapter(_mock_search_client(context))],
         repository=context.repository,
     )
+    _register_agent(context)
 
 
 @given("an offline trace repository with a mock-transport Keenable fetch")
@@ -297,6 +334,7 @@ def step_given_trace_repo_keenable_fetch(context: Any) -> None:
         [_keenable_adapter(_mock_fetch_client(context))],
         repository=context.repository,
     )
+    _register_agent(context)
 
 
 @given("an offline trace repository with a failing search provider")
@@ -307,6 +345,7 @@ def step_given_trace_repo_failing_search(context: Any) -> None:
         [_TraceStubAdapter("exploding-search", fail=True)],
         repository=context.repository,
     )
+    _register_agent(context)
 
 
 @given("an offline trace repository with one failing and one succeeding fanout provider")
@@ -320,6 +359,7 @@ def step_given_trace_repo_fanout(context: Any) -> None:
         ],
         repository=context.repository,
     )
+    _register_agent(context)
 
 
 @when('I submit a traced search for "{query}" with limit {limit:d}')
@@ -659,3 +699,81 @@ def step_then_traced_fetch_failure(context: Any, code: int, error_type: str) -> 
     assert detail["error"] is not None
     assert detail["error"]["type"] == error_type
     assert detail["output"] is None
+
+
+def _account_uuid(headers: dict[str, str]) -> str:
+    """Read the account UUID of one BDD access header without verifying it."""
+    token = headers["Authorization"].removeprefix("Bearer ").strip()
+    return str(pyjwt.decode(token, options={"verify_signature": False})["sub"])
+
+
+@then("the trace detail should carry my account UUID")
+def step_then_detail_carries_owner(context: Any) -> None:
+    assert context.otel_trace_id is not None, "no trace id captured for this scenario"
+    detail = _trace_detail(context, context.otel_trace_id)
+    assert detail["user_id"] == _account_uuid(context.otel_auth_headers)
+
+
+@then("the trace list rows should carry my account UUID")
+def step_then_list_rows_carry_owner(context: Any) -> None:
+    owner = _account_uuid(context.otel_auth_headers)
+    body = _trace_list(context)
+    assert len(body["items"]) >= 1
+    assert all(item["user_id"] == owner for item in body["items"])
+
+
+@when("I register a second trace reader")
+def step_when_second_reader(context: Any) -> None:
+    email = temp_email("trace-second")
+    with _client_for(context) as client:
+        registered = client.post("/auth/register", json={"email": email, "password": TEMP_PASSWORD})
+        assert registered.status_code == 201
+        logged_in = client.post(
+            "/auth/jwt/login", data={"username": email, "password": TEMP_PASSWORD}
+        )
+        assert logged_in.status_code == 200
+        context.otel_second_headers = {
+            "Authorization": f"Bearer {logged_in.json()['access_token']}"
+        }
+
+
+@when('I submit a traced search for "{query}" with limit {limit:d} as the second reader')
+def step_when_second_search(context: Any, query: str, limit: int) -> None:
+    context.otel_first_trace_id = context.otel_trace_id
+    with _client_for(context) as client:
+        response = client.post(
+            "/search",
+            json={"query": query, "limit": limit},
+            headers=context.otel_second_headers,
+        )
+    assert response.status_code == 200
+    trace_id = response.headers.get("x-trace-id")
+    assert trace_id is not None
+    context.otel_second_trace_id = trace_id
+
+
+@then("each reader should list only its own trace")
+def step_then_each_reader_own_trace(context: Any) -> None:
+    first_owner = _account_uuid(context.otel_auth_headers)
+    second_owner = _account_uuid(context.otel_second_headers)
+    assert first_owner != second_owner
+    with _client_for(context) as client:
+        first = client.get("/api/v1/traces", headers=context.otel_auth_headers).json()["items"]
+        second = client.get("/api/v1/traces", headers=context.otel_second_headers).json()["items"]
+    assert [item["trace_id"] for item in first] == [context.otel_first_trace_id]
+    assert [item["trace_id"] for item in second] == [context.otel_second_trace_id]
+    assert all(item["user_id"] == first_owner for item in first)
+    assert all(item["user_id"] == second_owner for item in second)
+
+
+@then("a foreign trace read should return 404 like an absent trace")
+def step_then_foreign_read_matches_absent(context: Any) -> None:
+    with _client_for(context) as client:
+        foreign = client.get(
+            f"/api/v1/traces/{context.otel_first_trace_id}", headers=context.otel_second_headers
+        )
+        absent = client.get(f"/api/v1/traces/{'0' * 32}", headers=context.otel_auth_headers)
+    assert foreign.status_code == 404
+    assert absent.status_code == 404
+    assert set(foreign.json()) == {"detail"}
+    assert set(absent.json()) == {"detail"}

@@ -24,7 +24,7 @@ import type {
 } from "@/domains/execution"
 import type { ProviderConfig, ProviderHealthStatus } from "@/domains/providers"
 import { normalizeUnitKind } from "@/shared/api/units"
-import { toUiId } from "@/domains/providers"
+import { decodeProviderAccess, toUiId } from "@/domains/providers"
 
 export { toBackendId, toUiId } from "@/domains/providers"
 
@@ -157,8 +157,7 @@ export function mergeProviderStatus(
   catalogEntry: StaticProviderMeta,
   wire: BackendProviderStatus
 ): ProviderConfig {
-  const searchEnabled = wire.enabled && catalogEntry.capabilities.includes("search")
-  const fetchEnabled = wire.enabled && catalogEntry.capabilities.includes("fetch")
+  const access = decodeProviderAccess(wire.enable_mask, wire.support_mask)
   return {
     id: catalogEntry.id,
     name: catalogEntry.name,
@@ -166,9 +165,11 @@ export function mergeProviderStatus(
     baseUrl: catalogEntry.baseUrl,
     isCustom: false,
     capabilities: [...catalogEntry.capabilities],
-    globalEnabled: wire.enabled,
-    searchEnabled,
-    fetchEnabled,
+    enableMask: access.enableMask,
+    supportMask: access.supportMask,
+    globalEnabled: access.globalEnabled,
+    searchEnabled: access.searchEnabled,
+    fetchEnabled: access.fetchEnabled,
     priority: wire.priority,
     healthStatus:
       wire.circuit_breaker.state === "open"

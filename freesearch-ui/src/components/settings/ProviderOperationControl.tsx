@@ -12,6 +12,9 @@ interface OperationControlProps {
   supported: boolean
   enabled: boolean
   globallyDisabled: boolean
+  /** False for a role without control-edit access: show the value only. */
+  canEdit: boolean
+  pending: boolean
   onToggle: (enabled: boolean) => void
 }
 
@@ -21,6 +24,8 @@ export const OperationControl: React.FC<OperationControlProps> = ({
   supported,
   enabled,
   globallyDisabled,
+  canEdit,
+  pending,
   onToggle,
 }) => {
   if (!supported) {
@@ -43,12 +48,23 @@ export const OperationControl: React.FC<OperationControlProps> = ({
     )
   }
 
+  if (!canEdit) {
+    return (
+      <span
+        className="text-[12px] text-[var(--muted)]"
+        title="Read-only for your role"
+      >
+        {enabled ? "On" : "Off"}
+      </span>
+    )
+  }
+
   return (
-    <div title="Session-only — backend has global enable only">
+    <div>
       <Switch
         checked={enabled}
         onChange={onToggle}
-        disabled={globallyDisabled}
+        disabled={globallyDisabled || pending}
         ariaLabel={`${providerName} ${label.toLowerCase()} routing`}
       />
     </div>

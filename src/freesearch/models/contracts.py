@@ -17,6 +17,8 @@ from pydantic import (
     model_validator,
 )
 
+from freesearch.models.provider_access import ALL_BITS
+
 
 def parse_decimal(value: object, *, allow_negative: bool = False) -> Decimal:
     """Parse a finite, non-negative Decimal without passing through float."""
@@ -338,10 +340,16 @@ class CircuitBreakerStatusResponse(ContractModel):
 
 
 class ProviderStatusResponse(ContractModel):
-    """One canonical provider's control-plane status entry."""
+    """One canonical provider's control-plane status entry.
+
+    ``enable_mask`` and ``support_mask`` are the raw stored masks. ``enabled``
+    is the decoded effective global compatibility field.
+    """
 
     provider_id: str
     enabled: bool
+    enable_mask: int = Field(ge=0, le=ALL_BITS, strict=True)
+    support_mask: int = Field(ge=0, le=ALL_BITS, strict=True)
     priority: int
     health: HealthStatus | None = None
     circuit_breaker: CircuitBreakerState

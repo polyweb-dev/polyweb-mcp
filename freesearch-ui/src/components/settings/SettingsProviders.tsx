@@ -19,6 +19,7 @@ export const SettingsProviders: React.FC = () => {
   const {
     providers,
     providersError,
+    canEditControls,
     toggleProvider,
     toggleProviderSearch,
     toggleProviderFetch,
@@ -26,16 +27,20 @@ export const SettingsProviders: React.FC = () => {
     testProviderConnection,
   } = useFreeSearch()
   const [testingId, setTestingId] = useState<string | null>(null)
-  const [pendingGlobalId, setPendingGlobalId] = useState<string | null>(null)
+  const [pendingProviderIds, setPendingProviderIds] = useState<ReadonlySet<string>>(new Set())
   const [selectedTestId, setSelectedTestId] = useState<string | null>(null)
   const [testResults, setTestResults] = useState<Record<string, TestResult>>({})
 
-  const handleGlobalToggle = async (id: string, enabled: boolean) => {
-    setPendingGlobalId(id)
+  const handleFlagToggle = async (id: string, command: () => Promise<void>): Promise<void> => {
+    setPendingProviderIds((previous) => new Set(previous).add(id))
     try {
-      await toggleProvider(id, enabled)
+      await command()
     } finally {
-      setPendingGlobalId(null)
+      setPendingProviderIds((previous) => {
+        const next = new Set(previous)
+        next.delete(id)
+        return next
+      })
     }
   }
 
@@ -90,13 +95,14 @@ export const SettingsProviders: React.FC = () => {
                   rank={rankById.get(provider.id) ?? 0}
                   providerCount={providers.length}
                   testing={testingId === provider.id}
-                  globalPending={pendingGlobalId === provider.id}
+                  accessPending={pendingProviderIds.has(provider.id)}
                   canMoveUp={providers.length > 1 && provider.id !== firstPriorityId}
                   canMoveDown={providers.length > 1 && provider.id !== lastPriorityId}
+                  canEdit={canEditControls}
                   onMovePriority={(direction) => moveProviderPriority(provider.id, direction)}
-                  onToggleGlobal={(enabled) => void handleGlobalToggle(provider.id, enabled)}
-                  onToggleSearch={(enabled) => toggleProviderSearch(provider.id, enabled)}
-                  onToggleFetch={(enabled) => toggleProviderFetch(provider.id, enabled)}
+                  onToggleGlobal={(enabled) => void handleFlagToggle(provider.id, () => toggleProvider(provider.id, enabled))}
+                  onToggleSearch={(enabled) => void handleFlagToggle(provider.id, () => toggleProviderSearch(provider.id, enabled))}
+                  onToggleFetch={(enabled) => void handleFlagToggle(provider.id, () => toggleProviderFetch(provider.id, enabled))}
                   onOpenTest={() => setSelectedTestId(provider.id)}
                 />
               ))}
@@ -104,13 +110,15 @@ export const SettingsProviders: React.FC = () => {
           </Table>
         </div>
 
-        <ProviderTestModal
-          provider={selectedProvider}
-          testing={selectedProvider ? testingId === selectedProvider.id : false}
-          {...(selectedLastResult !== undefined ? { lastResult: selectedLastResult } : {})}
-          onClose={() => setSelectedTestId(null)}
-          onTest={(id) => void handleTest(id)}
-        />
+        {canEditControls && (
+          <ProviderTestModal
+            provider={selectedProvider}
+            testing={selectedProvider ? testingId === selectedProvider.id : false}
+            {...(selectedLastResult !== undefined ? { lastResult: selectedLastResult } : {})}
+            onClose={() => setSelectedTestId(null)}
+            onTest={(id) => void handleTest(id)}
+          />
+        )}
       </section>
     </TooltipProvider>
   )

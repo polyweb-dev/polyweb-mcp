@@ -13,6 +13,11 @@ from freesearch.models.contracts import (
     SearchRequest,
     SearchResponse,
 )
+from freesearch.models.provider_limits import (
+    AuthMode,
+    NativeUsageSnapshot,
+    UsageSyncRequest,
+)
 
 
 class ProviderAdapter(ABC):
@@ -58,6 +63,17 @@ class ProviderAdapter(ABC):
 
     async def quota(self) -> QuotaSnapshot | None:
         """Return quota information when a provider exposes it."""
+
+        return None
+
+    @property
+    def limit_auth_mode(self) -> AuthMode:
+        """Return the auth rail this adapter instance uses for limit records."""
+
+        return AuthMode.KEYED
+
+    async def usage_snapshot(self, request: UsageSyncRequest) -> NativeUsageSnapshot | None:
+        """Return a native usage observation, or None when the provider exposes none."""
 
         return None
 

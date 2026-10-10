@@ -20,11 +20,49 @@ from pydantic import (
     StrictBool,
     StrictInt,
     field_validator,
+    model_validator,
 )
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from freesearch.infrastructure.secrets import ProviderName
 from freesearch.models.contracts import QuotaSource, UsageOperation
+from freesearch.models.provider_access import (
+    ALL_BITS,
+    FETCH_BIT,
+    GLOBAL_BIT,
+    SEARCH_BIT,
+    is_operation_enabled,
+    support_mask_from_capabilities,
+)
+
+# System-owned tool support per canonical provider. The map is independent of
+# credentials and health. A changed adapter capability needs one change here.
+PROVIDER_SUPPORT_MASKS: dict[ProviderName, int] = {
+    ProviderName.BRAVE: support_mask_from_capabilities(search=True, fetch=False),
+    ProviderName.EXA: support_mask_from_capabilities(search=True, fetch=True),
+    ProviderName.FIRECRAWL: support_mask_from_capabilities(search=True, fetch=True),
+    ProviderName.KEENABLE: support_mask_from_capabilities(search=True, fetch=True),
+    ProviderName.PARALLEL: support_mask_from_capabilities(search=True, fetch=True),
+    ProviderName.TAVILY: support_mask_from_capabilities(search=True, fetch=True),
+    ProviderName.TINYFISH: support_mask_from_capabilities(search=True, fetch=True),
+    ProviderName.YOU: support_mask_from_capabilities(search=True, fetch=True),
+}
+
+
+class ProviderConfigError(ValueError):
+    """Raised when a stored provider record fails strict validation."""
+
+
+def system_support_mask(provider: ProviderName) -> int:
+    """Return the system support mask; an unknown provider supports all tools."""
+
+    return PROVIDER_SUPPORT_MASKS.get(provider, ALL_BITS)
+
+
+def _legacy_enable_mask(enabled: bool) -> int:
+    """Translate one legacy global choice into an enable mask for all bits."""
+
+    return ALL_BITS if enabled else 0
 
 
 def _check_non_negative(
@@ -57,6 +95,10 @@ class ProviderConfig(BaseModel):
     All values are non-secret. Free-tier figures are local estimates only and
     are exposed through :attr:`quota_source`, which always reports
     ``QuotaSource.ESTIMATED`` rather than a vendor-confirmed value.
+
+    ``enable_mask`` stores the administrator choice. ``support_mask`` stores the
+    system tool support. The ``enabled`` property decodes effective global
+    access from both masks.
     """
 
     model_config = ConfigDict(
@@ -66,7 +108,8 @@ class ProviderConfig(BaseModel):
         hide_input_in_errors=True,
     )
 
-    enabled: StrictBool = True
+    enable_mask: StrictInt = Field(default=ALL_BITS, ge=0, le=ALL_BITS)
+    support_mask: StrictInt = Field(default=ALL_BITS, ge=0, le=ALL_BITS)
     priority: StrictInt = Field(default=100, gt=0)
     free_tier_estimates: dict[UsageOperation, Decimal] = Field(
         default_factory=lambda: {operation: Decimal("0") for operation in UsageOperation}
@@ -75,6 +118,39 @@ class ProviderConfig(BaseModel):
     parallel_free_seed_usd: Decimal | None = Field(default=None, ge=0)
     exa_monthly_budget_usd: Decimal | None = Field(default=None, ge=0)
     exa_manual_starting_credits_usd: Decimal | None = Field(default=None, ge=0)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _decode_legacy_access(cls, data: Any) -> Any:
+        """Translate a legacy global Boolean into an enable mask.
+
+        A record that holds both the legacy value and a mask is ambiguous and
+        is not accepted. Direct configuration and stored records share this
+        decode, so an old global choice keeps its original meaning.
+        """
+
+        if not isinstance(data, dict) or "enabled" not in data:
+            return data
+        if "enable_mask" in data or "support_mask" in data:
+            raise ValueError("do not combine enabled with an access mask")
+        legacy = data["enabled"]
+        if not isinstance(legacy, bool):
+            raise ValueError("enabled must be a Boolean")
+        translated = dict(data)
+        translated.pop("enabled")
+        translated["enable_mask"] = _legacy_enable_mask(legacy)
+        return translated
+
+    @property
+    def enabled(self) -> bool:
+        """Effective global access decoded from both masks."""
+
+        return bool(self.enable_mask & self.support_mask & GLOBAL_BIT)
+
+    def allows(self, operation: UsageOperation) -> bool:
+        """Return effective access for ``operation`` from both masks."""
+
+        return is_operation_enabled(self.enable_mask, self.support_mask, operation.value)
 
     @field_validator("free_tier_estimates", mode="before")
     @classmethod
@@ -120,7 +196,12 @@ class ProviderConfig(BaseModel):
 
 
 class ProviderConfigUpdate(BaseModel):
-    """Partial override merged onto a provider's default record."""
+    """Partial override merged onto a provider's default record.
+
+    ``enable_mask`` is a complete replacement of the administrator choice.
+    ``enabled``, ``search_enabled``, and ``fetch_enabled`` each change one
+    enable bit. ``support_mask`` is system-owned and absent here.
+    """
 
     model_config = ConfigDict(
         extra="forbid",
@@ -129,12 +210,32 @@ class ProviderConfigUpdate(BaseModel):
     )
 
     enabled: StrictBool | None = None
+    enable_mask: StrictInt | None = Field(default=None, ge=0, le=ALL_BITS)
+    search_enabled: StrictBool | None = None
+    fetch_enabled: StrictBool | None = None
     priority: StrictInt | None = Field(default=None, gt=0)
     free_tier_estimates: dict[UsageOperation, Decimal] | None = None
     reset_schedule: str | None = Field(default=None, min_length=1)
     parallel_free_seed_usd: Decimal | None = Field(default=None, ge=0)
     exa_monthly_budget_usd: Decimal | None = Field(default=None, ge=0)
     exa_manual_starting_credits_usd: Decimal | None = Field(default=None, ge=0)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _check_access_choice(cls, data: Any) -> Any:
+        """Reject a null access field and a mixed mask and Boolean choice."""
+
+        if not isinstance(data, dict):
+            return data
+        access_fields = ("enabled", "enable_mask", "search_enabled", "fetch_enabled")
+        for name in access_fields:
+            if name in data and data[name] is None:
+                raise ValueError(f"{name} must not be null")
+        if "enable_mask" in data and any(
+            name in data for name in ("enabled", "search_enabled", "fetch_enabled")
+        ):
+            raise ValueError("do not combine enable_mask with an access Boolean")
+        return data
 
     @field_validator("free_tier_estimates", mode="before")
     @classmethod
@@ -179,7 +280,7 @@ class ProviderConfigUpdate(BaseModel):
 
         Free-tier estimate maps are merged operation-by-operation onto the
         base estimates so a partial override never drops the operations it
-        omits.
+        omits. Each access field changes only its own enable bit.
         """
 
         merged = base.model_dump()
@@ -193,8 +294,27 @@ class ProviderConfigUpdate(BaseModel):
         estimates = overrides.pop("free_tier_estimates", None)
         if estimates:
             merged["free_tier_estimates"].update(estimates)
+        for name in ("enable_mask", "enabled", "search_enabled", "fetch_enabled"):
+            overrides.pop(name, None)
+        merged["enable_mask"] = _merged_enable_mask(base.enable_mask, self)
         merged.update(overrides)
         return ProviderConfig.model_validate(merged)
+
+
+def _merged_enable_mask(base_mask: int, update: ProviderConfigUpdate) -> int:
+    """Return the enable mask after the explicit access fields of ``update``."""
+
+    fields = update.model_fields_set
+    if "enable_mask" in fields and update.enable_mask is not None:
+        return update.enable_mask
+    mask = base_mask
+    if "enabled" in fields:
+        mask = mask | GLOBAL_BIT if update.enabled else mask & ~GLOBAL_BIT
+    if "search_enabled" in fields:
+        mask = mask | SEARCH_BIT if update.search_enabled else mask & ~SEARCH_BIT
+    if "fetch_enabled" in fields:
+        mask = mask | FETCH_BIT if update.fetch_enabled else mask & ~FETCH_BIT
+    return mask
 
 
 class ProviderConfigSettings(BaseSettings):
@@ -225,9 +345,34 @@ class ProviderConfigSettings(BaseSettings):
     @field_validator("provider_config_overrides", mode="before")
     @classmethod
     def _decode_json_registry(cls, value: Any) -> Any:
-        """Decode the JSON string from the environment before validation."""
+        """Decode the JSON string from the environment before validation.
 
-        return json.loads(value) if isinstance(value, str) else value
+        A legacy global Boolean becomes an enable mask here, before the entry
+        enters the partial-update model.
+        """
+
+        if not isinstance(value, str):
+            return value
+        decoded = json.loads(value)
+        if not isinstance(decoded, dict):
+            return decoded
+        return {name: _translate_legacy_entry(entry) for name, entry in decoded.items()}
+
+
+def _translate_legacy_entry(entry: Any) -> Any:
+    """Translate one legacy registry entry into the mask schema."""
+
+    if not isinstance(entry, dict) or "enabled" not in entry:
+        return entry
+    if "enable_mask" in entry or "support_mask" in entry:
+        raise ValueError("do not combine enabled with an access mask")
+    legacy = entry["enabled"]
+    if not isinstance(legacy, bool):
+        raise ValueError("enabled must be a Boolean")
+    translated = dict(entry)
+    translated.pop("enabled")
+    translated["enable_mask"] = _legacy_enable_mask(legacy)
+    return translated
 
 
 @lru_cache(maxsize=1)
@@ -238,7 +383,9 @@ def _provider_registry() -> dict[ProviderName, ProviderConfig]:
     isolated copies returned by :func:`get_provider_configs`.
     """
 
-    registry: dict[ProviderName, ProviderConfig] = {name: ProviderConfig() for name in ProviderName}
+    registry: dict[ProviderName, ProviderConfig] = {
+        name: ProviderConfig(support_mask=system_support_mask(name)) for name in ProviderName
+    }
     for name, update in ProviderConfigSettings().provider_config_overrides.items():
         registry[name] = update.apply_to(registry[name])
     return registry

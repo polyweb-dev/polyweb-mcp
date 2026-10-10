@@ -1,13 +1,40 @@
 import React from "react"
 import { useFreeSearch } from "@/context/useFreeSearch"
 import { Switch } from "@/shared/ui/Switch"
+import { FailoverReadOnlyPanel } from "./FailoverReadOnlyPanel"
 
 /**
  * Failover policy: one master chaining switch over a vertical stack of
  * per-condition switches, plus the depth and timeout policy rows.
+ *
+ * A role without control-edit access sees the same values as read-only text,
+ * because every switch here writes the backend routing policy.
  */
 export const SettingsFailover: React.FC = () => {
-  const { fallbackConfig, updateFallbackConfig } = useFreeSearch()
+  const { fallbackConfig, updateFallbackConfig, canEditControls } = useFreeSearch()
+
+  if (!canEditControls) {
+    return (
+      <section className="space-y-4 w-full max-w-none">
+        <FailoverReadOnlyPanel config={fallbackConfig} />
+        <p className="text-[12px] text-[var(--muted)] mb-2">
+          Backend dispatch currently makes a single attempt per request; it does not retry
+          across providers. Per-condition switches are session-only — not enforced by the
+          backend.
+        </p>
+        <div className="rounded-lg border border-[var(--border-subtle)] px-4 divide-y divide-[var(--border-subtle)]">
+          <div className="flex items-center justify-between py-3 gap-4">
+            <span className="text-[13px] text-[var(--muted)]">Cascade depth</span>
+            <span className="text-[13px] text-[var(--text)] tnum">
+              {fallbackConfig.enabled
+                ? `Up to ${fallbackConfig.maxAttempts} fallback hops`
+                : "1 hop (single-shot)"}
+            </span>
+          </div>
+        </div>
+      </section>
+    )
+  }
 
   return (
     <section className="space-y-4 w-full max-w-none">

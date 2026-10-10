@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 
 from tests.integration.services.oauth.conftest import (
     VAULT_KEYS,
+    admin_auth_headers,
     build_app,
     connect_parallel,
     dashboard_parallel_quota,
@@ -41,24 +42,27 @@ def _open(repository: Any, secret_store: Any) -> TestClient:
 
 
 async def _drive_every_error_path(
-    client: TestClient, server: StubOAuthServer, repository: Any
+    client: TestClient,
+    server: StubOAuthServer,
+    repository: Any,
+    headers: dict[str, str],
 ) -> list[str]:
     bodies: list[str] = []
-    bodies.append(client.post("/api/v1/providers/parallel/oauth/device-code").text)
+    bodies.append(client.post("/api/v1/providers/parallel/oauth/device-code", headers=headers).text)
     server.poll_script = ["access_denied"]  # type: ignore[list-item]
-    bodies.append(client.get("/api/v1/providers/parallel/oauth/status").text)
-    bodies.append(client.delete("/api/v1/providers/parallel/oauth").text)
-    bodies.append(client.post("/api/v1/providers/parallel/oauth/device-code").text)
+    bodies.append(client.get("/api/v1/providers/parallel/oauth/status", headers=headers).text)
+    bodies.append(client.delete("/api/v1/providers/parallel/oauth", headers=headers).text)
+    bodies.append(client.post("/api/v1/providers/parallel/oauth/device-code", headers=headers).text)
     server.poll_script = ["expired_token"]  # type: ignore[list-item]
-    bodies.append(client.get("/api/v1/providers/parallel/oauth/status").text)
-    bodies.append(client.delete("/api/v1/providers/parallel/oauth").text)
-    bodies.append(client.post("/api/v1/providers/parallel/oauth/device-code").text)
+    bodies.append(client.get("/api/v1/providers/parallel/oauth/status", headers=headers).text)
+    bodies.append(client.delete("/api/v1/providers/parallel/oauth", headers=headers).text)
+    bodies.append(client.post("/api/v1/providers/parallel/oauth/device-code", headers=headers).text)
     server.refresh_reject = "invalid_grant"
     server.poll_script = ["authorization_pending", "success"]
-    await connect_parallel(client, server, repository)
-    bodies.append(client.post("/api/v1/providers/parallel/oauth/device-code").text)
+    await connect_parallel(client, server, repository, headers=headers)
+    bodies.append(client.post("/api/v1/providers/parallel/oauth/device-code", headers=headers).text)
     server.refresh_reject = "none"
-    bodies.append(client.get("/dashboard").text)
+    bodies.append(client.get("/dashboard", headers=headers).text)
     return bodies
 
 
@@ -66,13 +70,16 @@ async def test_no_token_material_in_logs_and_error_bodies(
     repository: Any,
     secret_store: Any,
     stub_server: StubOAuthServer,
+    auth_secret: str,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     client = _open(repository, secret_store)
     leak_hint = "leaked token material"
     try:
+        # Use one Admin account for all OAuth and dashboard reads.
+        headers = await admin_auth_headers(client, repository)
         with caplog.at_level(logging.DEBUG):
-            bodies = await _drive_every_error_path(client, stub_server, repository)
+            bodies = await _drive_every_error_path(client, stub_server, repository, headers)
         for index, body in enumerate(bodies):
             leaked = find_leaked_secrets(body)
             assert not leaked, f"response body #{index} {leak_hint}: {leaked!r}"
@@ -86,11 +93,13 @@ async def test_no_token_material_in_logs_and_error_bodies(
 
 
 async def test_tokens_in_vault_not_in_db(
-    repository: Any, secret_store: Any, stub_server: StubOAuthServer
+    repository: Any, secret_store: Any, stub_server: StubOAuthServer, auth_secret: str
 ) -> None:
     client = _open(repository, secret_store)
     try:
-        await connect_parallel(client, stub_server, repository)
+        # Use one Admin account for the OAuth flow.
+        headers = await admin_auth_headers(client, repository)
+        await connect_parallel(client, stub_server, repository, headers=headers)
         assert secret_store.values.get("parallel:oauth:access") == ACCESS_TOKEN_VALUE
         assert secret_store.values.get("parallel:oauth:refresh") is not None
         assert secret_store.values.get("parallel:oauth:client_secret") == CLIENT_SECRET_VALUE
@@ -110,13 +119,16 @@ async def test_tokens_in_vault_not_in_db(
 
 
 async def test_status_is_fingerprint_only(
-    repository: Any, secret_store: Any, stub_server: StubOAuthServer
+    repository: Any, secret_store: Any, stub_server: StubOAuthServer, auth_secret: str
 ) -> None:
     client = _open(repository, secret_store)
     try:
-        await connect_parallel(client, stub_server, repository)
+        # Use one Admin account for OAuth and status reads.
+        headers = await admin_auth_headers(client, repository)
+        await connect_parallel(client, stub_server, repository, headers=headers)
         probe = require_implemented(
-            client.get("/api/v1/providers/parallel/oauth/status"), "GET status"
+            client.get("/api/v1/providers/parallel/oauth/status", headers=headers),
+            "GET status",
         )
         assert probe.status_code == 200
         leaked = find_leaked_secrets(probe.text)
@@ -128,15 +140,17 @@ async def test_status_is_fingerprint_only(
 
 
 async def test_quota_payload_carries_no_tokens(
-    repository: Any, secret_store: Any, stub_server: StubOAuthServer
+    repository: Any, secret_store: Any, stub_server: StubOAuthServer, auth_secret: str
 ) -> None:
     client = _open(repository, secret_store)
     try:
-        await connect_parallel(client, stub_server, repository)
+        # Use one Admin account for OAuth and dashboard reads.
+        headers = await admin_auth_headers(client, repository)
+        await connect_parallel(client, stub_server, repository, headers=headers)
         await poll_balance(repository, stub_server, secret_store)
-        dashboard = client.get("/dashboard")
+        dashboard = client.get("/dashboard", headers=headers)
         assert dashboard.status_code == 200
-        entry = dashboard_parallel_quota(client)
+        entry = dashboard_parallel_quota(client, headers)
         assert entry is not None
         leaked = find_leaked_secrets(dashboard.text)
         assert not leaked, f"dashboard leaks {leaked!r}"

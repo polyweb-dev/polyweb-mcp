@@ -11,6 +11,8 @@ function quotaProvider(id: string): ProviderConfig {
     baseUrl: "https://api.test",
     isCustom: false,
     capabilities: ["search", "fetch"],
+    enableMask: 7,
+    supportMask: id === "brave" ? 3 : 7,
     globalEnabled: true,
     searchEnabled: true,
     fetchEnabled: true,
@@ -90,7 +92,7 @@ describe("manualBudgetMissing", () => {
   })
 
   it("never treats other providers as budget-missing", () => {
-    expect(manualBudgetMissing(quotaProvider("brave"), undefined, null)).toBe(false)
+    expect(manualBudgetMissing(quotaProvider("firecrawl"), undefined, null)).toBe(false)
     expect(manualBudgetMissing(quotaProvider("tavily"), snapshot("tavily"), null)).toBe(false)
   })
 })

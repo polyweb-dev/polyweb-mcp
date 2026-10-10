@@ -215,10 +215,8 @@ async def test_fetch_truncates_only_when_content_exceeds_max_chars(
     "payload",
     [
         {"unexpected": []},
-        {"results": [{"title": "Missing URL"}]},
         {"results": {"not": "a list"}},
         {"results": "nope"},
-        {"results": [{"url": "not-a-url"}]},
     ],
 )
 async def test_malformed_search_payloads_raise_normalized_invalid_response(payload: object) -> None:
@@ -234,6 +232,206 @@ async def test_malformed_search_payloads_raise_normalized_invalid_response(paylo
     assert raised.value.error.message == "malformed search response"
     assert not raised.value.error.retryable
     assert raised.value.error.status_code is None
+
+
+_KEYED_KEY = SecretStr("keenable-test-key")
+
+_GOOD_KEENABLE_ITEM = {
+    "title": "Example",
+    "url": "https://example.com/result",
+    "description": "Description",
+    "snippet": "A snippet.",
+    "published_at": "2026-01-15T10:30:00Z",
+    "acquired_at": "2026-01-16T08:12:34Z",
+}
+
+_BAD_URL_ITEM = {"title": "Bad address", "url": "not-a-url"}
+
+_MISSING_URL_ITEM = {"title": "No address here"}
+
+_EMPTY_URL_ITEM = {"title": "Empty address", "url": ""}
+
+_SECOND_GOOD_ITEM = {
+    "title": "Second",
+    "url": "https://example.com/second",
+    "description": "Second description",
+    "snippet": "Second snippet.",
+}
+
+_EXPECTED_RECORD = {
+    "code": "invalid_response",
+    "message": "malformed search result item",
+}
+
+
+def _search_adapter_for(payload: object, api_key: SecretStr | None = None) -> KeenableAdapter:
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    return KeenableAdapter(
+        httpx.AsyncClient(transport=httpx.MockTransport(handler)), api_key=api_key
+    )
+
+
+def _keenable_parse_errors(response: object) -> object:
+    usage = response.usage  # type: ignore[union-attr]
+    assert usage is not None
+    return usage.metadata.get("parse_errors")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("api_key", [None, _KEYED_KEY], ids=["keyless", "keyed"])
+@pytest.mark.parametrize(
+    ("items", "expected_urls", "expected_indices"),
+    [
+        (
+            [_GOOD_KEENABLE_ITEM, _BAD_URL_ITEM],
+            ["https://example.com/result"],
+            [1],
+        ),
+        (
+            [_MISSING_URL_ITEM, _GOOD_KEENABLE_ITEM],
+            ["https://example.com/result"],
+            [0],
+        ),
+        (
+            [_GOOD_KEENABLE_ITEM, _EMPTY_URL_ITEM, _SECOND_GOOD_ITEM],
+            ["https://example.com/result", "https://example.com/second"],
+            [1],
+        ),
+    ],
+)
+async def test_search_skips_invalid_items_and_records_errors(
+    api_key: SecretStr | None,
+    items: list[object],
+    expected_urls: list[str],
+    expected_indices: list[int],
+) -> None:
+    adapter = _search_adapter_for({"results": items}, api_key)
+
+    response = await adapter.search(SearchRequest(query="keenable", limit=10))
+
+    assert [str(item.url) for item in response.results] == expected_urls
+    assert response.query == "keenable"
+    assert response.provider == "keenable"
+    assert response.total_results == len(expected_urls)
+    assert response.usage is not None
+    assert response.usage.units == Decimal("1")
+    assert _keenable_parse_errors(response) == [
+        {"index": index, **_EXPECTED_RECORD} for index in expected_indices
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("api_key", [None, _KEYED_KEY], ids=["keyless", "keyed"])
+@pytest.mark.parametrize(
+    ("items", "expected_indices"),
+    [
+        ([{"title": "No address here"}], [0]),
+        ([{"title": "Bad", "url": "not-a-url"}], [0]),
+        ([{"title": "Empty", "url": ""}], [0]),
+    ],
+)
+async def test_search_all_invalid_items_returns_empty_success(
+    api_key: SecretStr | None, items: list[object], expected_indices: list[int]
+) -> None:
+    adapter = _search_adapter_for({"results": items}, api_key)
+
+    response = await adapter.search(SearchRequest(query="keenable", limit=10))
+
+    assert response.results == []
+    assert response.total_results == 0
+    assert response.query == "keenable"
+    assert response.provider == "keenable"
+    assert response.usage is not None
+    assert response.usage.units == Decimal("1")
+    assert _keenable_parse_errors(response) == [
+        {"index": index, **_EXPECTED_RECORD} for index in expected_indices
+    ]
+
+
+@pytest.mark.asyncio
+async def test_search_empty_list_has_no_parse_errors() -> None:
+    adapter = _search_adapter_for({"results": []})
+
+    response = await adapter.search(SearchRequest(query="keenable", limit=10))
+
+    assert response.results == []
+    assert response.total_results == 0
+    assert response.usage is not None
+    assert "parse_errors" not in response.usage.metadata
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("limit", "items", "expected_urls", "expected_indices"),
+    [
+        (
+            1,
+            [_BAD_URL_ITEM, _GOOD_KEENABLE_ITEM, _SECOND_GOOD_ITEM],
+            ["https://example.com/result"],
+            [0],
+        ),
+        (
+            2,
+            [_GOOD_KEENABLE_ITEM, _MISSING_URL_ITEM, _SECOND_GOOD_ITEM],
+            ["https://example.com/result", "https://example.com/second"],
+            [1],
+        ),
+    ],
+)
+async def test_search_limit_applies_after_invalid_item_filter(
+    limit: int, items: list[object], expected_urls: list[str], expected_indices: list[int]
+) -> None:
+    adapter = _search_adapter_for({"results": items})
+
+    response = await adapter.search(SearchRequest(query="keenable", limit=limit))
+
+    assert [str(item.url) for item in response.results] == expected_urls
+    assert response.total_results == len(expected_urls)
+    assert _keenable_parse_errors(response) == [
+        {"index": index, **_EXPECTED_RECORD} for index in expected_indices
+    ]
+
+
+@pytest.mark.asyncio
+async def test_search_invalid_tail_item_does_not_fail_response() -> None:
+    adapter = _search_adapter_for(
+        {"results": [_GOOD_KEENABLE_ITEM, _SECOND_GOOD_ITEM, _BAD_URL_ITEM]}
+    )
+
+    response = await adapter.search(SearchRequest(query="keenable", limit=1))
+
+    assert [str(item.url) for item in response.results] == ["https://example.com/result"]
+    assert response.total_results == 1
+    assert _keenable_parse_errors(response) == [{"index": 2, **_EXPECTED_RECORD}]
+
+
+@pytest.mark.asyncio
+async def test_search_parse_errors_do_not_expose_payload_or_key() -> None:
+    key_text = _KEYED_KEY.get_secret_value()
+    adapter = _search_adapter_for(
+        {
+            "results": [
+                _GOOD_KEENABLE_ITEM,
+                {
+                    "title": f"leak {key_text}",
+                    "snippet": key_text,
+                    "url": "not-a-url",
+                },
+            ]
+        },
+        _KEYED_KEY,
+    )
+
+    response = await adapter.search(SearchRequest(query="keenable", limit=10))
+
+    assert [str(item.url) for item in response.results] == ["https://example.com/result"]
+    errors = _keenable_parse_errors(response)
+    assert errors == [{"index": 1, **_EXPECTED_RECORD}]
+    assert key_text not in repr(errors)
+    for record in errors:
+        assert set(record.keys()) == {"index", "code", "message"}
 
 
 @pytest.mark.asyncio

@@ -1,0 +1,216 @@
+"""Whole-app guard contracts on real HTTP (P3, T2/T3/T10 parts).
+
+Every test uses an isolated database, stub adapters, and a generated signing
+secret with a cleared settings cache. Anonymous calls reach no provider and
+create no trace root. The two Q1 public exceptions stay open.
+"""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from decimal import Decimal
+from pathlib import Path
+
+import pytest
+import pytest_asyncio
+from fastapi.testclient import TestClient
+
+from freesearch.adapters.base import ProviderAdapter
+from freesearch.models.contracts import (
+    CostEstimate,
+    FetchedDocument,
+    FetchRequest,
+    FetchResponse,
+    ProviderCapabilities,
+    SearchRequest,
+    SearchResponse,
+    SearchResult,
+    UsageEvent,
+    UsageOperation,
+)
+from freesearch.persistence.storage import SQLiteRepository
+from freesearch.routers.api import create_app
+from tests.fixtures.auth import (
+    TEMP_PASSWORD,
+    raw_auth_headers,
+    register_and_login,
+    temp_email,
+)
+
+
+class _CountingAdapter(ProviderAdapter):
+    def __init__(self, name: str = "stubby") -> None:
+        self._name = name
+        self.search_calls = 0
+        self.fetch_calls = 0
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    @property
+    def capabilities(self) -> ProviderCapabilities:
+        return ProviderCapabilities(search=True, fetch=True, cost_estimate=True)
+
+    async def search(self, request: SearchRequest) -> SearchResponse:
+        self.search_calls += 1
+        return SearchResponse(
+            query=request.query,
+            provider=self.name,
+            results=[
+                SearchResult(
+                    title="stub result",
+                    url="https://example.com/stub",
+                    snippet="offline stub",
+                )
+            ],
+            usage=UsageEvent(
+                provider=self.name,
+                operation=UsageOperation.SEARCH,
+                units=Decimal("1"),
+                observed_at=datetime.now(UTC),
+            ),
+        )
+
+    async def fetch(self, request: FetchRequest) -> FetchResponse:
+        self.fetch_calls += 1
+        return FetchResponse(
+            provider=self.name,
+            document=FetchedDocument(
+                url=request.url,
+                content="stub content",
+                fetched_at=datetime.now(UTC),
+            ),
+        )
+
+    async def estimate_cost(self, request: SearchRequest | FetchRequest) -> CostEstimate:
+        operation = (
+            UsageOperation.SEARCH if isinstance(request, SearchRequest) else UsageOperation.FETCH
+        )
+        return CostEstimate(provider=self.name, operation=operation, units=Decimal("0"))
+
+
+@pytest_asyncio.fixture
+async def guard_client(tmp_path: Path, auth_secret: str) -> TestClient:
+    repository = await SQLiteRepository.open(tmp_path / "guard.db")
+    adapter = _CountingAdapter("stubby")
+    app = create_app([adapter], repository=repository)
+    app.state.counting_adapter = adapter
+    with TestClient(app) as client:
+        yield client
+    await repository.close()
+
+
+_ANONYMOUS_SURFACES: tuple[tuple[str, str, dict], ...] = (
+    ("POST", "/search", {"query": "anonymous probe"}),
+    ("POST", "/fetch", {"url": "https://example.com/page"}),
+    ("GET", "/stats", {}),
+    ("GET", "/dashboard", {}),
+    ("GET", "/api/v1/providers", {}),
+    ("GET", "/api/v1/providers/tavily", {}),
+    ("PATCH", "/api/v1/providers/tavily", {"enabled": False}),
+    ("GET", "/api/v1/providers/tavily/oauth/status", {}),
+    ("GET", "/api/v1/traces", {}),
+    ("GET", "/docs", {}),
+    ("GET", "/openapi.json", {}),
+    ("GET", "/no-such-route", {}),
+)
+
+
+def test_anonymous_calls_reach_no_protected_surface(guard_client: TestClient) -> None:
+    for method, path, payload in _ANONYMOUS_SURFACES:
+        if method == "POST":
+            response = guard_client.post(path, json=payload)
+        elif method == "PATCH":
+            response = guard_client.patch(path, json=payload)
+        else:
+            response = guard_client.get(path)
+        assert response.status_code == 401, path
+        assert response.headers["www-authenticate"] == "Bearer", path
+
+
+def test_rejected_requests_cause_no_provider_call(guard_client: TestClient) -> None:
+    assert guard_client.post("/search", json={"query": "quiet"}).status_code == 401
+    assert guard_client.post("/fetch", json={"url": "https://example.com/x"}).status_code == 401
+    adapter = guard_client.app.state.counting_adapter
+    assert adapter.search_calls == 0
+    assert adapter.fetch_calls == 0
+
+
+def test_rejected_requests_create_no_trace_root(guard_client: TestClient) -> None:
+    assert guard_client.post("/search", json={"query": "ghost"}).status_code == 401
+
+    pair = register_and_login(guard_client, temp_email("guard-trace"))
+    headers = raw_auth_headers(pair["access_token"])
+    items = guard_client.get("/api/v1/traces", headers=headers).json()["items"]
+    assert items == []
+
+    assert (
+        guard_client.post("/search", json={"query": "visible"}, headers=headers).status_code == 200
+    )
+    items = guard_client.get("/api/v1/traces", headers=headers).json()["items"]
+    assert len(items) == 1
+    assert items[0]["operation"] == "search"
+    assert items[0]["outcome"] == "success"
+
+
+def test_public_exceptions_need_no_credential(guard_client: TestClient) -> None:
+    email = temp_email("guard-public")
+    registered = guard_client.post(
+        "/auth/register", json={"email": email, "password": TEMP_PASSWORD}
+    )
+    assert registered.status_code == 201
+    assert registered.json()["role"] == "agent"
+
+    logged_in = guard_client.post(
+        "/auth/jwt/login", data={"username": email, "password": TEMP_PASSWORD}
+    )
+    assert logged_in.status_code == 200
+    assert logged_in.headers["cache-control"] == "no-store"
+
+
+def test_refresh_credential_fails_on_access_surfaces(guard_client: TestClient) -> None:
+    pair = register_and_login(guard_client, temp_email("guard-separate"))
+    refresh = raw_auth_headers(pair["refresh_token"])
+    access = raw_auth_headers(pair["access_token"])
+
+    assert guard_client.post("/search", json={"query": "x"}, headers=refresh).status_code == 401
+    assert guard_client.get("/users/me", headers=refresh).status_code == 401
+    assert guard_client.post("/auth/jwt/refresh", headers=access).status_code == 401
+
+    renewed = guard_client.post("/auth/jwt/refresh", headers=refresh)
+    assert renewed.status_code == 200
+    assert renewed.headers["cache-control"] == "no-store"
+
+
+@pytest.mark.asyncio
+async def test_guarded_docs_and_unknown_paths_need_a_token(
+    tmp_path: Path, auth_secret: str
+) -> None:
+    repository = await SQLiteRepository.open(tmp_path / "guard-docs.db")
+    try:
+        app = create_app([_CountingAdapter("stubby")], repository=repository)
+        with TestClient(app) as client:
+            assert client.get("/docs").status_code == 401
+            assert client.get("/openapi.json").status_code == 401
+            pair = register_and_login(client, temp_email("guard-docs"))
+            headers = raw_auth_headers(pair["access_token"])
+            assert client.get("/docs", headers=headers).status_code == 200
+            assert client.get("/openapi.json", headers=headers).status_code == 200
+            assert client.get("/no-such-route", headers=headers).status_code in (404, 405)
+    finally:
+        await repository.close()
+
+
+def test_openapi_publishes_bearer_scheme_without_operation_requirements(
+    guard_client: TestClient,
+) -> None:
+    pair = register_and_login(guard_client, temp_email("guard-scheme"))
+    headers = raw_auth_headers(pair["access_token"])
+    document = guard_client.get("/openapi.json", headers=headers).json()
+
+    schemes = document["components"]["securitySchemes"]
+    assert schemes["OAuth2PasswordBearer"]["flows"]["password"]["tokenUrl"] == "auth/jwt/login"
+    for path, operations in document["paths"].items():
+        for operation, contract in operations.items():
+            assert "security" not in contract, f"{operation} {path} carries a requirement"

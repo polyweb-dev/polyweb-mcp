@@ -1,17 +1,19 @@
+import { BALANCE_ENTRY } from "../model/quotaLabels"
+
 export interface ManualHeadlineProps {
   providerId: string
   providerName: string
   estimate: { percentText: string; rangeText: string; percent: number }
 }
 
-/** Manual-entry headline: estimated remaining bar from the saved window. */
+/** Saved-estimate headline: estimated remaining bar from the recorded balance entry. */
 export function ManualHeadline({ providerId, providerName, estimate }: ManualHeadlineProps) {
   return (
     <div className="flex flex-col-reverse gap-2" data-testid={"manual-quota-estimate-" + providerId}>
       <div
         className="w-full h-1.5 rounded-full bg-[var(--border-subtle)] overflow-hidden"
         role="progressbar"
-        aria-label={providerName + " estimated remaining from Manual Entry"}
+        aria-label={providerName + " estimated remaining from the " + BALANCE_ENTRY.toLowerCase()}
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={estimate.percent}

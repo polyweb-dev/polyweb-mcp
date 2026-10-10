@@ -11,7 +11,7 @@ from decimal import Decimal
 from typing import Any, NoReturn, cast
 
 import httpx
-from pydantic import SecretStr
+from pydantic import SecretStr, ValidationError
 
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.infrastructure.dates import parse_iso_datetime
@@ -43,6 +43,20 @@ _NAME = "tinyfish"
 _SEARCH_URL = "https://api.search.tinyfish.ai"
 _FETCH_URL = "https://api.fetch.tinyfish.ai"
 _API_KEY_HEADER = "X-API-Key"
+
+
+def _parse_error_record(index: int) -> dict[str, object]:
+    """Return the safe record for one rejected search result item.
+
+    The record holds no raw payload, URL, key, query, or validation text, so a
+    rejected item can never leak response content into usage metadata.
+    """
+
+    return {
+        "index": index,
+        "code": "invalid_response",
+        "message": "malformed search result item",
+    }
 
 
 class TinyfishAdapter(ProviderAdapter):
@@ -115,16 +129,30 @@ class TinyfishAdapter(ProviderAdapter):
             payload = response.json()
             if not isinstance(payload, dict) or not isinstance(payload.get("results"), list):
                 raise self._error("invalid_response", "malformed search response")
-            results = [self._normalize_result(item) for item in payload["results"]][: request.limit]
+            results: list[SearchResult] = []
+            parse_errors: list[dict[str, object]] = []
+            for index, item in enumerate(payload["results"]):
+                try:
+                    results.append(self._normalize_result(item))
+                except ValidationError:
+                    parse_errors.append(_parse_error_record(index))
+                except ProviderOperationError as exc:
+                    if exc.error.code != "invalid_response":
+                        raise
+                    parse_errors.append(_parse_error_record(index))
+            results = results[: request.limit]
             total_results = payload.get("total_results")
             if not isinstance(total_results, int) or total_results < 0:
                 total_results = len(results)
+            usage = self._usage_event(UsageOperation.SEARCH)
+            if parse_errors:
+                usage.metadata["parse_errors"] = parse_errors
             return SearchResponse(
                 query=request.query,
                 provider=self.name,
                 results=results,
                 total_results=total_results,
-                usage=self._usage_event(UsageOperation.SEARCH),
+                usage=usage,
             )
         except ProviderOperationError:
             raise

@@ -532,3 +532,150 @@ def test_exa_credits_env_override_round_trip(monkeypatch) -> None:
     assert get_provider_configs()[ProviderName.EXA].exa_manual_starting_credits_usd == Decimal(
         "5.00"
     )
+
+
+# Provider access masks: strict fields, one-bit partial updates, legacy
+# migration, frozen records, and support-map consistency.
+
+
+def test_default_masks_match_system_support_map() -> None:
+    from freesearch.configuration.provider_config import PROVIDER_SUPPORT_MASKS
+
+    registry = get_provider_configs()
+
+    assert PROVIDER_SUPPORT_MASKS[ProviderName.BRAVE] == 3
+    for name in set(ProviderName) - {ProviderName.BRAVE}:
+        assert PROVIDER_SUPPORT_MASKS[name] == 7
+    for name, record in registry.items():
+        assert record.enable_mask == 7
+        assert record.support_mask == PROVIDER_SUPPORT_MASKS[name]
+        assert record.enabled is True
+
+
+def test_support_map_matches_adapter_capabilities() -> None:
+    from freesearch.adapters import registry as adapter_registry
+    from freesearch.configuration.provider_config import PROVIDER_SUPPORT_MASKS
+    from freesearch.models.provider_access import support_mask_from_capabilities
+
+    for name, factory in adapter_registry._ADAPTERS.items():
+        try:
+            adapter = factory(None)
+        except Exception:
+            continue
+        expected = support_mask_from_capabilities(
+            search=adapter.capabilities.search, fetch=adapter.capabilities.fetch
+        )
+        assert PROVIDER_SUPPORT_MASKS[name] == expected
+
+
+@pytest.mark.parametrize("bad", [True, False, 1.5, "7", -1, 8, None])
+def test_strict_masks_reject_non_integer_or_out_of_range(bad: object) -> None:
+    with pytest.raises(ValidationError):
+        ProviderConfig(enable_mask=bad)  # type: ignore[arg-type]
+    with pytest.raises(ValidationError):
+        ProviderConfig(support_mask=bad)  # type: ignore[arg-type]
+    with pytest.raises(ValidationError):
+        ProviderConfigUpdate(enable_mask=bad)  # type: ignore[arg-type]
+
+
+def test_update_rejects_support_mask_and_mixed_access_choice() -> None:
+    with pytest.raises(ValidationError):
+        ProviderConfigUpdate(support_mask=7)  # type: ignore[call-arg]
+    with pytest.raises(ValidationError):
+        ProviderConfigUpdate(enable_mask=7, enabled=True)
+    with pytest.raises(ValidationError):
+        ProviderConfigUpdate(enable_mask=7, search_enabled=True)
+    with pytest.raises(ValidationError):
+        ProviderConfigUpdate(enable_mask=7, fetch_enabled=False)
+    with pytest.raises(ValidationError):
+        ProviderConfigUpdate(enabled=None)  # type: ignore[arg-type]
+    with pytest.raises(ValidationError):
+        ProviderConfigUpdate(search_enabled=None)  # type: ignore[arg-type]
+
+
+def test_global_toggle_preserves_tool_bits() -> None:
+    base = ProviderConfig(enable_mask=7, support_mask=7)
+
+    off = ProviderConfigUpdate(enabled=False).apply_to(base)
+    assert off.enable_mask == 6
+    assert off.enabled is False
+
+    restored = ProviderConfigUpdate(enabled=True).apply_to(off)
+    assert restored.enable_mask == 7
+    assert restored.enabled is True
+
+
+def test_search_toggle_changes_only_search_bit() -> None:
+    base = ProviderConfig(enable_mask=7, support_mask=7)
+
+    off = ProviderConfigUpdate(search_enabled=False).apply_to(base)
+    assert off.enable_mask == 5
+    assert off.enabled is True
+
+    on = ProviderConfigUpdate(search_enabled=True).apply_to(off)
+    assert on.enable_mask == 7
+
+
+def test_fetch_toggle_changes_only_fetch_bit() -> None:
+    base = ProviderConfig(enable_mask=7, support_mask=7)
+
+    off = ProviderConfigUpdate(fetch_enabled=False).apply_to(base)
+    assert off.enable_mask == 3
+
+    on = ProviderConfigUpdate(fetch_enabled=True).apply_to(off)
+    assert on.enable_mask == 7
+
+
+def test_enable_mask_replaces_all_bits() -> None:
+    base = ProviderConfig(enable_mask=7, support_mask=7)
+
+    replaced = ProviderConfigUpdate(enable_mask=3).apply_to(base)
+    assert replaced.enable_mask == 3
+    assert replaced.support_mask == 7
+
+
+def test_allows_decodes_effective_access_with_global_gate() -> None:
+    assert ProviderConfig(enable_mask=7, support_mask=7).allows(UsageOperation.SEARCH) is True
+    assert ProviderConfig(enable_mask=7, support_mask=7).allows(UsageOperation.FETCH) is True
+    assert ProviderConfig(enable_mask=6, support_mask=7).allows(UsageOperation.SEARCH) is False
+    assert ProviderConfig(enable_mask=6, support_mask=7).allows(UsageOperation.FETCH) is False
+    assert ProviderConfig(enable_mask=7, support_mask=3).allows(UsageOperation.SEARCH) is True
+    assert ProviderConfig(enable_mask=7, support_mask=3).allows(UsageOperation.FETCH) is False
+
+
+def test_legacy_enabled_decodes_into_all_bits() -> None:
+    assert ProviderConfig.model_validate({"enabled": True}).enable_mask == 7
+    assert ProviderConfig.model_validate({"enabled": False}).enable_mask == 0
+    with pytest.raises(ValidationError):
+        ProviderConfig.model_validate({"enabled": True, "enable_mask": 7})
+    with pytest.raises(ValidationError):
+        ProviderConfig.model_validate({"enabled": "yes"})
+
+
+def test_legacy_env_entry_migrates_to_enable_mask(monkeypatch) -> None:
+    monkeypatch.setenv(OVERRIDES_ENV, json.dumps({"exa": {"enabled": False}}))
+    get_provider_configs.cache_clear()
+
+    assert get_provider_configs()[ProviderName.EXA].enable_mask == 0
+    assert get_provider_configs()[ProviderName.EXA].enabled is False
+
+    monkeypatch.setenv(OVERRIDES_ENV, json.dumps({"exa": {"enabled": True}}))
+    get_provider_configs.cache_clear()
+
+    assert get_provider_configs()[ProviderName.EXA].enable_mask == 7
+
+
+def test_legacy_env_mixed_with_mask_is_rejected(monkeypatch) -> None:
+    monkeypatch.setenv(OVERRIDES_ENV, json.dumps({"exa": {"enabled": True, "enable_mask": 7}}))
+
+    with pytest.raises(ValidationError):
+        ProviderConfigSettings()
+
+
+def test_provider_config_records_are_frozen() -> None:
+    record = ProviderConfig()
+
+    with pytest.raises(ValidationError):
+        record.enable_mask = 0  # type: ignore[misc]
+    with pytest.raises(ValidationError):
+        record.support_mask = 0  # type: ignore[misc]

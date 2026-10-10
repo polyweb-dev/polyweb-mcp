@@ -7,6 +7,7 @@ import type { ProviderConfig } from "@/domains/providers"
 import { makeStore } from "@/store/store"
 import type { AppStore } from "@/store/store"
 import { AppStoreProvider } from "@/store/AppStoreProvider"
+import { ADMIN_ACCOUNT_ID } from "@/test/authFixtures"
 
 const mockProviders: ProviderConfig[] = [
   {
@@ -14,6 +15,8 @@ const mockProviders: ProviderConfig[] = [
     name: "Brave",
     capabilities: ["search"],
     priority: 1,
+    enableMask: 3,
+    supportMask: 3,
     globalEnabled: true,
     searchEnabled: true,
     fetchEnabled: false,
@@ -24,6 +27,8 @@ const mockProviders: ProviderConfig[] = [
     name: "Keenable",
     capabilities: ["search", "fetch", "keyless_tier"],
     priority: 2,
+    enableMask: 7,
+    supportMask: 7,
     globalEnabled: true,
     searchEnabled: true,
     fetchEnabled: true,
@@ -34,6 +39,8 @@ const mockProviders: ProviderConfig[] = [
     name: "Exa",
     capabilities: ["search", "fetch"],
     priority: 3,
+    enableMask: 7,
+    supportMask: 7,
     globalEnabled: true,
     searchEnabled: true,
     fetchEnabled: true,
@@ -69,7 +76,7 @@ describe("usePlaygroundController credential eligibility", () => {
   it("filters out providers without a key and without keyless_tier", () => {
     currentProviders = [...mockProviders]
     const { result } = renderHook(() => usePlaygroundController(), {
-      wrapper: isolatedWrapper(makeStore()),
+      wrapper: isolatedWrapper(makeStore(ADMIN_ACCOUNT_ID)),
     })
 
     const eligibleIds = result.current.eligibleProviders.map((p) => p.id)
@@ -82,7 +89,7 @@ describe("usePlaygroundController credential eligibility", () => {
     currentProviders = [
       ...mockProviders.map((p) => (p.id === "exa" ? { ...p, hasKey: true } : p)),
     ]
-    const store = makeStore()
+    const store = makeStore(ADMIN_ACCOUNT_ID)
     const { result, rerender } = renderHook(() => usePlaygroundController(), {
       wrapper: isolatedWrapper(store),
     })
@@ -105,7 +112,7 @@ describe("usePlaygroundController credential eligibility", () => {
 describe("usePlaygroundController Redux ownership (PLAN §4.1.4)", () => {
   it("dispatches draft and option setters into the store", () => {
     currentProviders = [...mockProviders]
-    const store = makeStore()
+    const store = makeStore(ADMIN_ACCOUNT_ID)
     const { result } = renderHook(() => usePlaygroundController(), {
       wrapper: isolatedWrapper(store),
     })
@@ -129,7 +136,7 @@ describe("usePlaygroundController Redux ownership (PLAN §4.1.4)", () => {
 
   it("keeps controller state across unmount/remount with the same store", () => {
     currentProviders = [...mockProviders]
-    const store = makeStore()
+    const store = makeStore(ADMIN_ACCOUNT_ID)
     const wrapper = isolatedWrapper(store)
     const first = renderHook(() => usePlaygroundController(), { wrapper })
 
@@ -150,7 +157,7 @@ describe("usePlaygroundController Redux ownership (PLAN §4.1.4)", () => {
   it("starts each isolated store from the initial drafts", () => {
     currentProviders = [...mockProviders]
     const { result } = renderHook(() => usePlaygroundController(), {
-      wrapper: isolatedWrapper(makeStore()),
+      wrapper: isolatedWrapper(makeStore(ADMIN_ACCOUNT_ID)),
     })
     expect(result.current.query).toBe("")
     expect(result.current.mode).toBe("search")
@@ -160,7 +167,7 @@ describe("usePlaygroundController Redux ownership (PLAN §4.1.4)", () => {
   it("maps all to auto when switching to Fetch, preserving current behavior", () => {
     currentProviders = [...mockProviders]
     const { result } = renderHook(() => usePlaygroundController(), {
-      wrapper: isolatedWrapper(makeStore()),
+      wrapper: isolatedWrapper(makeStore(ADMIN_ACCOUNT_ID)),
     })
 
     act(() => {
@@ -179,7 +186,7 @@ describe("usePlaygroundController Redux ownership (PLAN §4.1.4)", () => {
     currentProviders = [...mockProviders]
     const { result } = renderHook(() => usePlaygroundController(), {
       wrapper: ({ children }: { children: React.ReactNode }) =>
-        React.createElement(AppStoreProvider, { children }),
+        React.createElement(AppStoreProvider, { accountId: ADMIN_ACCOUNT_ID, children }),
     })
     // PersistGate rehydrates asynchronously; the controller appears after it.
     await vi.waitFor(() => {

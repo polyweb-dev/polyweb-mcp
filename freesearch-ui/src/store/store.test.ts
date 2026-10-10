@@ -2,7 +2,8 @@ import { describe, it, expect, afterEach, vi } from "vitest"
 import { persistStore } from "redux-persist"
 import { makeStore } from "./store"
 import { initialPlaygroundState, setQuery, setResultCount } from "./playgroundSlice"
-import { PLAYGROUND_PERSIST_KEY } from "./playgroundPersistence"
+import { playgroundPersistKey } from "./playgroundPersistence"
+import { ADMIN_ACCOUNT_ID, AGENT_ACCOUNT_ID } from "@/test/authFixtures"
 
 afterEach(() => {
   vi.restoreAllMocks()
@@ -11,7 +12,7 @@ afterEach(() => {
 
 describe("makeStore reducer map", () => {
   it("exposes exactly the persisted playground slice at the top level", () => {
-    const store = makeStore()
+    const store = makeStore(ADMIN_ACCOUNT_ID)
     expect(Object.keys(store.getState())).toEqual(["playground"])
     expect(store.getState().playground.query).toBe(initialPlaygroundState.query)
     expect(store.getState().playground.resultCount).toBe(initialPlaygroundState.resultCount)
@@ -19,8 +20,8 @@ describe("makeStore reducer map", () => {
   })
 
   it("builds an isolated instance per call — never a shared singleton", () => {
-    const first = makeStore()
-    const second = makeStore()
+    const first = makeStore(ADMIN_ACCOUNT_ID)
+    const second = makeStore(ADMIN_ACCOUNT_ID)
     expect(first).not.toBe(second)
     expect(first.dispatch).not.toBe(second.dispatch)
 
@@ -30,7 +31,7 @@ describe("makeStore reducer map", () => {
   })
 
   it("processes slice actions and leaves state untouched for unknown actions", () => {
-    const store = makeStore()
+    const store = makeStore(ADMIN_ACCOUNT_ID)
     store.dispatch(setQuery("hello"))
     store.dispatch(setResultCount(25))
     expect(store.getState().playground.query).toBe("hello")
@@ -46,7 +47,7 @@ describe("makeStore persist lifecycle", () => {
   it("processes the real persist lifecycle without serializability warnings", async () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {})
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
-    const store = makeStore()
+    const store = makeStore(ADMIN_ACCOUNT_ID)
 
     // Genuine PERSIST/REHYDRATE/FLUSH flow through the persistor: these actions
     // carry non-serializable metadata, and the store exempts exactly the
@@ -62,16 +63,34 @@ describe("makeStore persist lifecycle", () => {
 
   it("accepts serializable slice payloads without warnings", () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {})
-    const store = makeStore()
+    const store = makeStore(ADMIN_ACCOUNT_ID)
     store.dispatch(setQuery("clean draft"))
     expect(error).not.toHaveBeenCalled()
   })
 
   it("purges the namespaced key so test runs start from a clean slate", async () => {
-    window.localStorage.setItem(PLAYGROUND_PERSIST_KEY, '{"stale":true}')
-    const store = makeStore()
+    const accountKey = playgroundPersistKey(ADMIN_ACCOUNT_ID)
+    window.localStorage.setItem(accountKey, '{"stale":true}')
+    const store = makeStore(ADMIN_ACCOUNT_ID)
     const persistor = persistStore(store)
     await persistor.purge()
-    expect(window.localStorage.getItem(PLAYGROUND_PERSIST_KEY)).toBeNull()
+    expect(window.localStorage.getItem(accountKey)).toBeNull()
+  })
+
+  it("keeps isolated playground state for different account IDs with different persist keys", async () => {
+    const adminKey = playgroundPersistKey(ADMIN_ACCOUNT_ID)
+    const agentKey = playgroundPersistKey(AGENT_ACCOUNT_ID)
+    expect(adminKey).not.toBe(agentKey)
+
+    const adminStore = makeStore(ADMIN_ACCOUNT_ID)
+    const agentStore = makeStore(AGENT_ACCOUNT_ID)
+
+    adminStore.dispatch(setQuery("admin draft"))
+    expect(adminStore.getState().playground.query).toBe("admin draft")
+    expect(agentStore.getState().playground.query).toBe(initialPlaygroundState.query)
+
+    agentStore.dispatch(setQuery("agent draft"))
+    expect(agentStore.getState().playground.query).toBe("agent draft")
+    expect(adminStore.getState().playground.query).toBe("admin draft")
   })
 })

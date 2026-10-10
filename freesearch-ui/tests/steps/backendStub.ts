@@ -1,6 +1,5 @@
 import type { Page, Route } from "@playwright/test"
 import {
-  dashboardFixture as canonicalDashboardFixture,
   fetchResponseFixture as canonicalFetchFixture,
   searchResponseFixture as canonicalSearchFixture,
 } from "../../src/test/backendFixtures"
@@ -42,6 +41,8 @@ type SecretPresence = "configured" | "missing" | "keyless_public"
 interface StubProvider {
   provider_id: string
   enabled: boolean
+  enable_mask: number
+  support_mask: number
   priority: number
   health: "healthy"
   circuit_breaker: { state: "closed"; updated_at: string }
@@ -123,6 +124,480 @@ export function failStubbedOAuthBegin(provider: string): void {
  * SUT's post-transition dashboard refresh deterministically sees it.
  */
 let dashboardQuotaOverride: unknown[] | null = null
+
+// ---------------------------------------------------------------------------
+// UI7 credit-unit stub (provider-credits.feature @ui7).
+//
+// Mutable per-scenario dashboard credit state plus grant/history/sync
+// routes. All writes stay in memory; the live backend is never touched.
+// ---------------------------------------------------------------------------
+
+let stubbedProviderLimits: unknown[] | null = null
+let stubbedCrdTotals: unknown[] | null = null
+
+type StubbedHistoryValue = { events: unknown[]; nextCursor: string | null; error: string | null }
+const stubbedHistory: Record<string, StubbedHistoryValue> = {}
+const stubbedGrantRequests: Array<Record<string, unknown>> = []
+let stubbedGrantMode: "ok" | "conflict" = "ok"
+const stubbedSyncRequests: string[] = []
+
+/** Serve this provider_limits array from GET /dashboard. */
+export function setStubbedProviderLimits(limits: unknown[] | null): void {
+  stubbedProviderLimits = limits === null ? null : [...limits]
+}
+
+/** Serve this crd_usage_totals array from GET /dashboard. */
+export function setStubbedCrdTotals(totals: unknown[] | null): void {
+  stubbedCrdTotals = totals === null ? null : [...totals]
+}
+
+/** Serve one history page (or an error) for a backend provider id. */
+export function setStubbedHistory(
+  provider: string,
+  value: StubbedHistoryValue,
+): void {
+  stubbedHistory[provider] = { events: [...value.events], nextCursor: value.nextCursor, error: value.error }
+}
+
+/** Next grant PUT answers 409 (stale version) instead of 200. */
+export function setStubbedGrantMode(mode: "ok" | "conflict"): void {
+  stubbedGrantMode = mode
+}
+
+/** Grant PUT bodies seen in this scenario, in order. */
+export function stubbedGrantBodies(): Array<Record<string, unknown>> {
+  return [...stubbedGrantRequests]
+}
+
+/** Provider ids that received POST /limits/sync in this scenario. */
+export function stubbedSyncCalls(): string[] {
+  return [...stubbedSyncRequests]
+}
+
+function ui7ConversionProfile(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    reference_usd_per_crd: "0.001",
+    native_usd_per_unit: "1",
+    cost_basis: "priced_native_use",
+    price_version: "v2026-09",
+    source: "documented",
+    estimated: false,
+    ...overrides,
+  }
+}
+
+function ui7SearchRecord(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    provider: "brave",
+    operation: "search",
+    auth_mode: "keyed",
+    supported: true,
+    transport_available: true,
+    rate: null,
+    budget: null,
+    native_pool_id: "brave:keyed:usd",
+    conversion_profile: ui7ConversionProfile(),
+    plan_name: "Brave Search",
+    usage_url: "https://api-dashboard.search.brave.com/",
+    version: 1,
+    ...overrides,
+  }
+}
+
+function ui7FetchRecord(): Record<string, unknown> {
+  return {
+    provider: "brave",
+    operation: "fetch",
+    auth_mode: "keyed",
+    supported: false,
+    transport_available: false,
+    rate: null,
+    budget: null,
+    native_pool_id: null,
+    conversion_profile: ui7ConversionProfile({ native_usd_per_unit: null }),
+    plan_name: null,
+    usage_url: null,
+    version: 1,
+  }
+}
+
+/** Finite Brave card: USD 5 allowance, USD 4.500 left, 4500 CRD, 90%. */
+export function braveCreditLimits(): unknown[] {
+  return [
+    {
+      provider: "brave",
+      active_auth_mode: "keyed",
+      auths: [
+        {
+          auth_mode: "keyed",
+          transport_available: true,
+          search: ui7SearchRecord(),
+          fetch: ui7FetchRecord(),
+          free_tiers: [],
+          paid_tiers: [],
+          unknown_tiers: [],
+          tier_split_known: true,
+          aggregate_pool: {
+            pool_id: "brave:keyed:usd",
+            provider: "brave",
+            auth_mode: "keyed",
+            native_unit: "USD",
+            remaining: "4.500",
+            allowance: "5.000",
+            actual_spend_usd: null,
+            source: "vendor_headers",
+            confidence: "observed",
+            reset_at: "2026-10-01T00:00:00Z",
+            observed_at: FIXED_AT,
+            version: 1,
+            credential_generation: 1,
+            next_sync_at: null,
+            stale: false,
+            manual_anchor: false,
+          },
+          crd_views: [
+            {
+              state: "finite",
+              operation: "search",
+              remaining_crd: "4500",
+              local_remaining_crd: null,
+              request_cost_crd: "5",
+              shared_pool_id: "brave:keyed:usd",
+              possible_standard_calls: "900",
+              price_version: "v2026-09",
+              priced: true,
+            },
+            {
+              state: "unavailable",
+              operation: "fetch",
+              remaining_crd: null,
+              local_remaining_crd: null,
+              request_cost_crd: null,
+              shared_pool_id: null,
+              possible_standard_calls: null,
+              price_version: null,
+              priced: false,
+            },
+          ],
+          rate_progress: [
+            {
+              bucket_id: "brave:search:1h",
+              operation: "search",
+              window: "1h",
+              unit: "requests",
+              remaining: "950",
+              limit: "1000",
+              reset_at: "2026-09-06T11:00:00Z",
+              source: "vendor_headers",
+              confidence: "observed",
+              kind: "rate",
+              stale: false,
+              enforceable: true,
+            },
+          ],
+          grants: null,
+          detail: {
+            plan_name: "Brave Search",
+            native_unit: "USD",
+            native_balance: "4.500",
+            native_allowance: "5.000",
+            usd_per_call: "0.005",
+            actual_spend_usd: null,
+            reset_at: "2026-10-01T00:00:00Z",
+            reset_rule: "vendor_period",
+            usage_url: "https://api-dashboard.search.brave.com/",
+            source: "vendor_headers",
+            confidence: "observed",
+            last_sync_at: FIXED_AT,
+            stale: false,
+            price_version: "v2026-09",
+            crd_split_note: null,
+            rate_windows: [
+              {
+                bucket_id: "brave:search:1s",
+                limit: "50",
+                window: "1s",
+                scope: "org",
+                unit: "requests",
+                remaining: "50",
+                reset_at: null,
+                source: "vendor_headers",
+                confidence: "observed",
+              },
+            ],
+            tier_split_known: true,
+            aggregate_pool_id: "brave:keyed:usd",
+          },
+        },
+      ],
+      documented_keyless_operations: [],
+      version: 1,
+      generated_at: FIXED_AT,
+    },
+  ]
+}
+
+/** Brave card after one 5-CRD debit: 4495 CRD, USD 4.495, 89.9%. */
+export function braveCreditLimitsAfterDebit(): unknown[] {
+  const limits = braveCreditLimits() as Array<Record<string, unknown>>
+  const entry = limits[0] as Record<string, unknown>
+  const auths = entry.auths as Array<Record<string, unknown>>
+  const auth = auths[0] as Record<string, unknown>
+  auth.aggregate_pool = {
+    ...(auth.aggregate_pool as Record<string, unknown>),
+    remaining: "4.495",
+  }
+  const views = auth.crd_views as Array<Record<string, unknown>>
+  views[0] = { ...views[0], remaining_crd: "4495", possible_standard_calls: "899" }
+  const detail = auth.detail as Record<string, unknown>
+  auth.detail = { ...detail, native_balance: "4.495" }
+  return limits as unknown[]
+}
+
+/** Unknown card: no known balance, price, tier split, or reset. */
+export function unknownCreditLimits(): unknown[] {
+  return [
+    {
+      provider: "brave",
+      active_auth_mode: "keyed",
+      auths: [
+        {
+          auth_mode: "keyed",
+          transport_available: true,
+          search: ui7SearchRecord({
+            conversion_profile: ui7ConversionProfile({ native_usd_per_unit: null }),
+          }),
+          fetch: ui7FetchRecord(),
+          free_tiers: [],
+          paid_tiers: [],
+          unknown_tiers: [
+            {
+              pool_id: "brave:keyed:unknown",
+              tier: "unknown",
+              native_unit: "unknown",
+              native_remaining: null,
+              native_allowance: null,
+              remaining_crd: null,
+              allowance_crd: null,
+              reset_rule: "unknown",
+              reset_at: null,
+              funding_mode: "unknown",
+              source: "unknown",
+              confidence: "unknown",
+              transport_available: false,
+              label: null,
+            },
+          ],
+          tier_split_known: false,
+          aggregate_pool: null,
+          crd_views: [
+            {
+              state: "unknown",
+              operation: "search",
+              remaining_crd: null,
+              local_remaining_crd: null,
+              request_cost_crd: null,
+              shared_pool_id: null,
+              possible_standard_calls: null,
+              price_version: null,
+              priced: false,
+            },
+            {
+              state: "unavailable",
+              operation: "fetch",
+              remaining_crd: null,
+              local_remaining_crd: null,
+              request_cost_crd: null,
+              shared_pool_id: null,
+              possible_standard_calls: null,
+              price_version: null,
+              priced: false,
+            },
+          ],
+          rate_progress: [],
+          grants: null,
+          detail: {
+            plan_name: null,
+            native_unit: null,
+            native_balance: null,
+            native_allowance: null,
+            usd_per_call: null,
+            actual_spend_usd: null,
+            reset_at: null,
+            reset_rule: "unknown",
+            usage_url: null,
+            source: "unknown",
+            confidence: "unknown",
+            last_sync_at: null,
+            stale: false,
+            price_version: "",
+            crd_split_note: null,
+            rate_windows: [],
+            tier_split_known: false,
+            aggregate_pool_id: null,
+          },
+        },
+      ],
+      documented_keyless_operations: [],
+      version: 1,
+      generated_at: FIXED_AT,
+    },
+  ]
+}
+
+/** Fund-less Parallel card so the relocated OAuth control mounts (NUDGE-5). */
+export function parallelCardLimits(): unknown[] {
+  return [
+    {
+      provider: "parallel",
+      active_auth_mode: "keyed",
+      auths: [
+        {
+          auth_mode: "keyed",
+          transport_available: true,
+          search: ui7SearchRecord({
+            provider: "parallel",
+            native_pool_id: null,
+            conversion_profile: ui7ConversionProfile({ native_usd_per_unit: null }),
+            plan_name: null,
+            usage_url: null,
+          }),
+          fetch: ui7FetchRecord(),
+          free_tiers: [],
+          paid_tiers: [],
+          unknown_tiers: [],
+          tier_split_known: true,
+          aggregate_pool: null,
+          crd_views: [
+            {
+              state: "unknown",
+              operation: "search",
+              remaining_crd: null,
+              local_remaining_crd: null,
+              request_cost_crd: null,
+              shared_pool_id: null,
+              possible_standard_calls: null,
+              price_version: null,
+              priced: false,
+            },
+            {
+              state: "unavailable",
+              operation: "fetch",
+              remaining_crd: null,
+              local_remaining_crd: null,
+              request_cost_crd: null,
+              shared_pool_id: null,
+              possible_standard_calls: null,
+              price_version: null,
+              priced: false,
+            },
+          ],
+          rate_progress: [],
+          grants: null,
+          detail: {
+            plan_name: null,
+            native_unit: null,
+            native_balance: null,
+            native_allowance: null,
+            usd_per_call: null,
+            actual_spend_usd: null,
+            reset_at: null,
+            reset_rule: "unknown",
+            usage_url: null,
+            source: "unknown",
+            confidence: "unknown",
+            last_sync_at: null,
+            stale: false,
+            price_version: "",
+            crd_split_note: null,
+            rate_windows: [],
+            tier_split_known: true,
+            aggregate_pool_id: null,
+          },
+        },
+      ],
+      documented_keyless_operations: [],
+      version: 1,
+      generated_at: FIXED_AT,
+    },
+  ]
+}
+
+/** Brave funds plus a fund-less Parallel card for the OAuth pairing flow. */
+export function bravePlusParallelLimits(): unknown[] {
+  return [...braveCreditLimits(), ...parallelCardLimits()]
+}
+
+/** One history event with exact CRD balances plus a native fallback event. */
+export function ui7HistoryEvents(): unknown[] {
+  return [
+    {
+      event_id: "evt-2",
+      provider: "brave",
+      auth_mode: "keyed",
+      operation: "search",
+      pool_id: "brave:keyed:usd",
+      observed_at: "2026-09-06T10:04:00Z",
+      source: "local",
+      reason: "local_success",
+      old_native: "4.500",
+      new_native: "4.495",
+      old_crd: "4500",
+      new_crd: "4495",
+      crd_debit: "5",
+      native_debit: "0.005",
+      actual_usd: null,
+      confidence: "observed",
+      local_attempt_id: "attempt-2",
+      detail: { native_unit: "USD", actor: "" },
+    },
+    {
+      event_id: "evt-1",
+      provider: "brave",
+      auth_mode: "keyed",
+      operation: "search",
+      pool_id: "brave:keyed:usd",
+      observed_at: "2026-09-06T10:03:00Z",
+      source: "operator",
+      reason: "grant",
+      old_native: null,
+      new_native: null,
+      old_crd: null,
+      new_crd: null,
+      crd_debit: null,
+      native_debit: null,
+      actual_usd: null,
+      confidence: "authoritative",
+      local_attempt_id: null,
+      detail: { native_unit: "USD", actor: "", search_granted_crd: "100" },
+    },
+  ]
+}
+
+
+// ---------------------------------------------------------------------------
+// Provider PATCH failure/delay injection (provider-access-flags suite).
+//
+// Per-scenario maps cleared by installBackendStub. Failure forces the next
+// PATCH for one backend provider id to 500; delay holds the PATCH response
+// open so request-active (pending) controls stay observable. Neither map
+// touches production sources.
+// ---------------------------------------------------------------------------
+
+const stubbedProviderPatchFailures: Record<string, string> = {}
+const stubbedProviderPatchDelays: Record<string, number> = {}
+
+/** Fail the next PATCH for one backend provider id, or clear the failure. */
+export function failStubbedProviderPatch(provider: string, message: string | null): void {
+  if (message === null) delete stubbedProviderPatchFailures[provider]
+  else stubbedProviderPatchFailures[provider] = message
+}
+
+/** Delay the next PATCH for one backend provider id by ms, or clear it. */
+export function delayStubbedProviderPatch(provider: string, ms: number | null): void {
+  if (ms === null) delete stubbedProviderPatchDelays[provider]
+  else stubbedProviderPatchDelays[provider] = ms
+}
 
 // ---------------------------------------------------------------------------
 // Trace read API stub (Activity).
@@ -853,18 +1328,35 @@ const SECRET_PRESENCE: Record<string, SecretPresence> = {
 
 const PROVIDER_ORDER = ["brave", "keenable", "tavily", "exa", "firecrawl", "you", "parallel", "tinyfish"]
 
+const SUPPORT_MASKS: Record<string, number> = {
+  brave: 3,
+  keenable: 7,
+  tavily: 7,
+  exa: 7,
+  firecrawl: 7,
+  you: 7,
+  parallel: 7,
+  tinyfish: 7,
+}
+
 function initialProviders(): StubProvider[] {
-  return PROVIDER_ORDER.map((id, index) => ({
-    provider_id: id,
-    enabled: true,
-    priority: index + 1,
-    health: "healthy",
-    circuit_breaker: { state: "closed", updated_at: FIXED_AT },
-    latency_p95_ms: 110 + index * 10,
-    secret_presence: SECRET_PRESENCE[id] ?? "missing",
-    free_tier_estimates: { search: "0", fetch: "0", cost_estimate: "0" },
-    reset_schedule: null,
-  }))
+  return PROVIDER_ORDER.map((id, index) => {
+    const supportMask = SUPPORT_MASKS[id] ?? 7
+    const enableMask = 7
+    return {
+      provider_id: id,
+      enabled: (enableMask & supportMask & 1) !== 0,
+      enable_mask: enableMask,
+      support_mask: supportMask,
+      priority: index + 1,
+      health: "healthy",
+      circuit_breaker: { state: "closed", updated_at: FIXED_AT },
+      latency_p95_ms: 110 + index * 10,
+      secret_presence: SECRET_PRESENCE[id] ?? "missing",
+      free_tier_estimates: { search: "0", fetch: "0", cost_estimate: "0" },
+      reset_schedule: null,
+    }
+  })
 }
 
 function dashboardFixture(): Record<string, unknown> {
@@ -892,7 +1384,15 @@ function dashboardFixture(): Record<string, unknown> {
     latest_quota: [],
     latest_health: [{ provider: "brave", status: "healthy", checked_at: FIXED_AT }],
     generated_at: FIXED_AT,
+    provider_limits: stubbedProviderLimits ?? [],
+    crd_usage_totals: stubbedCrdTotals ?? [],
   }
+}
+
+function dashboardWithQuotaOverride(): Record<string, unknown> {
+  const base = dashboardFixture()
+  if (dashboardQuotaOverride !== null) base.latest_quota = [...dashboardQuotaOverride]
+  return base
 }
 
 function secretFixture(provider: string, presence: SecretPresence): Record<string, unknown> {
@@ -933,6 +1433,18 @@ export async function installBackendStub(page: Page): Promise<void> {
   // scenarios (e.g. Brave overlay into later quota rows).
   for (const key of Object.keys(stubbedManualQuotas)) delete stubbedManualQuotas[key]
   dashboardQuotaOverride = null
+  stubbedProviderLimits = null
+  stubbedCrdTotals = null
+  for (const key of Object.keys(stubbedHistory)) delete stubbedHistory[key]
+  stubbedGrantRequests.length = 0
+  stubbedGrantMode = "ok"
+  stubbedSyncRequests.length = 0
+  for (const key of Object.keys(stubbedProviderPatchFailures)) {
+    delete stubbedProviderPatchFailures[key]
+  }
+  for (const key of Object.keys(stubbedProviderPatchDelays)) {
+    delete stubbedProviderPatchDelays[key]
+  }
   stubbedTraceListRequests.length = 0
   stubbedTraceListFailure = null
   stubbedTraceDetailRequests.length = 0
@@ -1059,17 +1571,69 @@ export async function installBackendStub(page: Page): Promise<void> {
     return json(route, { provider: backendId, state: "closed", updated_at: FIXED_AT })
   })
 
-  // Provider PATCH (global enable / priority moves): in-memory update only.
-  await page.route("**/api/v1/providers/*", (route) => {
+  // Provider PATCH (masks + priority): in-memory update only. Models both
+  // masks with canonical seeds (Brave 7/3, others 7/7) and one-bit partial
+  // updates. Never accepts support_mask from admin: the field is ignored.
+  await page.route("**/api/v1/providers/*", async (route) => {
     if (route.request().method() !== "PATCH") return route.fallback()
     const backendId = new URL(route.request().url()).pathname.split("/").pop() ?? ""
+    const failure = stubbedProviderPatchFailures[backendId]
+    if (failure !== undefined) return json(route, { detail: failure }, 500)
+    const delayMs = stubbedProviderPatchDelays[backendId]
+    if (typeof delayMs === "number" && delayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs))
+    }
     const patch = readJsonBody(route)
     const current = providers.find((row) => row.provider_id === backendId)
     if (!current) return json(route, { detail: "Unknown provider" }, 404)
-    const next = {
+    let enableMask = current.enable_mask
+    const hasEnableMask = patch.enable_mask !== undefined
+    const hasBooleanAccess =
+      patch.enabled !== undefined ||
+      patch.search_enabled !== undefined ||
+      patch.fetch_enabled !== undefined
+    if (hasEnableMask && hasBooleanAccess) {
+      return json(route, { detail: "enable_mask cannot combine with boolean access fields" }, 422)
+    }
+    if (hasEnableMask) {
+      if (
+        typeof patch.enable_mask !== "number" ||
+        !Number.isInteger(patch.enable_mask) ||
+        patch.enable_mask < 0 ||
+        patch.enable_mask > 7
+      ) {
+        return json(route, { detail: "enable_mask must be an integer 0..7" }, 422)
+      }
+      enableMask = patch.enable_mask as number
+    } else {
+      if (patch.enabled !== undefined) {
+        if (typeof patch.enabled !== "boolean") {
+          return json(route, { detail: "enabled must be a boolean" }, 422)
+        }
+        enableMask =
+          (patch.enabled as boolean) ? enableMask | 1 : enableMask & ~1
+      }
+      if (patch.search_enabled !== undefined) {
+        if (typeof patch.search_enabled !== "boolean") {
+          return json(route, { detail: "search_enabled must be a boolean" }, 422)
+        }
+        enableMask =
+          (patch.search_enabled as boolean) ? enableMask | 2 : enableMask & ~2
+      }
+      if (patch.fetch_enabled !== undefined) {
+        if (typeof patch.fetch_enabled !== "boolean") {
+          return json(route, { detail: "fetch_enabled must be a boolean" }, 422)
+        }
+        enableMask =
+          (patch.fetch_enabled as boolean) ? enableMask | 4 : enableMask & ~4
+      }
+    }
+    const next: StubProvider = {
       ...current,
-      enabled: typeof patch.enabled === "boolean" ? patch.enabled : current.enabled,
-      priority: typeof patch.priority === "number" ? patch.priority : current.priority,
+      enable_mask: enableMask,
+      support_mask: current.support_mask,
+      enabled: (enableMask & current.support_mask & 1) !== 0,
+      priority: typeof patch.priority === "number" ? (patch.priority as number) : current.priority,
     }
     providers = providers.map((row) => (row.provider_id === backendId ? next : row))
     return json(route, next)
@@ -1102,7 +1666,47 @@ export async function installBackendStub(page: Page): Promise<void> {
   // in Slice 6), fulfilling a JS import with JSON and blanking the app.
   await page.route((url) => url.pathname === "/dashboard", (route) => {
     if (route.request().method() !== "GET") return route.fallback()
-    return json(route, dashboardFixture())
+    return json(route, dashboardWithQuotaOverride())
+  })
+
+  // UI7 grant route: PUT /api/v1/providers/{id}/crd-grants/{auth}.
+  await page.route("**/api/v1/providers/*/crd-grants/*", (route) => {
+    if (route.request().method() !== "PUT") return route.fallback()
+    const body = readJsonBody(route)
+    stubbedGrantRequests.push(body)
+    if (stubbedGrantMode === "conflict") {
+      return json(route, { detail: "stale version" }, 409)
+    }
+    return json(route, { ok: true })
+  })
+
+  // UI7 history route: GET /api/v1/providers/{id}/limits/history.
+  await page.route("**/api/v1/providers/*/limits/history*", (route) => {
+    if (route.request().method() !== "GET") return route.fallback()
+    const parts = new URL(route.request().url()).pathname.split("/")
+    const backendId = parts[parts.length - 3] || ""
+    const entry = stubbedHistory[backendId]
+    if (entry === undefined) return json(route, { events: [], next_cursor: null })
+    if (entry.error !== null) return json(route, { detail: entry.error }, 500)
+    return json(route, { events: entry.events, next_cursor: entry.nextCursor })
+  })
+
+  // UI7 sync route: POST /api/v1/providers/{id}/limits/sync.
+  await page.route("**/api/v1/providers/*/limits/sync", (route) => {
+    if (route.request().method() !== "POST") return route.fallback()
+    const parts = new URL(route.request().url()).pathname.split("/")
+    const backendId = parts[parts.length - 3] || ""
+    stubbedSyncRequests.push(backendId)
+    return json(route, {
+      provider: backendId,
+      status: "synced",
+      observed_at: FIXED_AT,
+      next_sync_at: null,
+      error_code: null,
+      stale: false,
+      changed: true,
+      reason: "stubbed sync",
+    })
   })
 
   // Deterministic search: echoes the pinned provider from routing.providers
@@ -1234,10 +1838,7 @@ export async function overrideDashboardLatestQuota(
   await page.unroute((url) => url.pathname === "/dashboard")
   await page.route((url) => url.pathname === "/dashboard", (route) => {
     if (route.request().method() !== "GET") return route.fallback()
-    return json(
-      route,
-      canonicalDashboardFixture({ latest_quota: (dashboardQuotaOverride ?? []) as never })
-    )
+    return json(route, dashboardWithQuotaOverride())
   })
 }
 

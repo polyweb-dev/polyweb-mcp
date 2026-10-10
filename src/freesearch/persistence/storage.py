@@ -1,16 +1,19 @@
 """Async SQLite persistence for provider-neutral operational data."""
 
 import asyncio
+import contextlib
 import json
 import math
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Self, cast, overload
+from typing import TYPE_CHECKING, Any, Self, cast, overload
+from uuid import UUID
 
-from sqlalchemy import URL, Index, Integer, Text, event, insert, select
+from sqlalchemy import CHAR, URL, Index, Integer, Text, event, func, insert, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Row
 from sqlalchemy.ext.asyncio import (
@@ -47,6 +50,9 @@ from freesearch.persistence.database_migrations import (
     absolute_database_path,
     upgrade_database,
 )
+
+if TYPE_CHECKING:
+    from freesearch.persistence.limit_repository import LimitRepository
 
 _DECIMAL_METADATA_TAG = "__freesearch_decimal__"
 
@@ -216,6 +222,9 @@ class TraceSpanRow(Base):
     span_id: Mapped[str] = mapped_column(Text, primary_key=True, nullable=True)
     trace_id: Mapped[str] = mapped_column(Text)
     parent_span_id: Mapped[str | None] = mapped_column(Text)
+    # Canonical account UUID of the trace root. Child rows and historical rows
+    # keep ``None``; the root row is the only ownership authority.
+    user_id: Mapped[str | None] = mapped_column(CHAR(36))
     name: Mapped[str] = mapped_column(Text)
     kind: Mapped[str] = mapped_column(Text)
     started_at: Mapped[str] = mapped_column(Text)
@@ -283,6 +292,7 @@ def _decode_metadata(value: object) -> object:
 
 _SUMMARY_COLUMNS = (
     TraceSpanRow.trace_id,
+    TraceSpanRow.user_id,
     TraceSpanRow.operation,
     TraceSpanRow.started_at,
     TraceSpanRow.duration_ms,
@@ -324,6 +334,7 @@ def _trace_summary(row: Any) -> TraceSummary:
 
     return TraceSummary(
         trace_id=str(row.trace_id),
+        user_id=row.user_id,
         operation=_trace_operation(row.operation),
         started_at=datetime.fromisoformat(str(row.started_at)),
         duration_ms=int(row.duration_ms),
@@ -440,7 +451,24 @@ def configure_sqlite_engine(engine: AsyncEngine) -> None:
         cursor.execute("PRAGMA cache_size = -64000;")
         cursor.execute("PRAGMA mmap_size = 268435456;")
         cursor.execute("PRAGMA temp_store = MEMORY;")
+        # Account session families depend on foreign-key cascades, and SQLite
+        # keeps foreign-key checks off by default on every new connection.
+        cursor.execute("PRAGMA foreign_keys = ON;")
         cursor.close()
+
+
+_SETTING_LISTENERS: list[Callable[[Any, str], None]] = []
+
+
+def register_setting_listener(listener: Callable[[Any, str], None]) -> None:
+    """Register a callback for runtime setting changes."""
+    _SETTING_LISTENERS.append(listener)
+
+
+def _notify_setting_changed(repo: Any, key: str) -> None:
+    for listener in _SETTING_LISTENERS:
+        with contextlib.suppress(Exception):
+            listener(repo, key)
 
 
 class SQLiteRepository:
@@ -466,6 +494,21 @@ class SQLiteRepository:
         self._session_factory = session_factory or async_sessionmaker(
             engine, expire_on_commit=False
         )
+        self._limits: LimitRepository | None = None
+
+    @property
+    def limits(self) -> "LimitRepository":
+        """Return the provider-limit repository bound to this session factory.
+
+        The import stays local so the limit row definitions can keep importing
+        ``Base`` from this module without an upward dependency cycle.
+        """
+
+        from freesearch.persistence.limit_repository import LimitRepository
+
+        if self._limits is None:
+            self._limits = LimitRepository(self._session_factory)
+        return self._limits
 
     @classmethod
     async def open(cls, database: str | Path) -> Self:
@@ -506,15 +549,34 @@ class SQLiteRepository:
             raise ValueError("SQLiteRepository requires a file-backed database")
         return Path(database)
 
+    @asynccontextmanager
+    async def session(self) -> AsyncIterator[AsyncSession]:
+        """Yield one short-lived session on this repository's own engine.
+
+        Account persistence reuses the operational engine instead of opening a
+        second database. The caller owns its commit boundary; the session is
+        always closed, and a failed block rolls back.
+        """
+
+        async with self._session_factory() as session:
+            try:
+                yield session
+            except BaseException:
+                await session.rollback()
+                raise
+
     async def list_trace_summaries(
         self,
         *,
+        user_id: UUID,
         limit: int = 50,
         operation: TraceOperation | None = None,
         outcome: TraceOutcome | None = None,
     ) -> list[TraceSummary]:
-        """Return root traces newest first, reading summary columns only.
+        """Return the account's own root traces newest first, summary columns only.
 
+        The owner predicate is applied before the order and the limit, so a
+        foreign or historical row can never displace an owned row in the window.
         The projection deliberately excludes ``input_text``, ``output_json``,
         and the raw attributes/events so the Activity list stays fast and never
         carries request content.
@@ -523,6 +585,7 @@ class SQLiteRepository:
         statement = (
             select(*_SUMMARY_COLUMNS)
             .where(TraceSpanRow.parent_span_id.is_(None))
+            .where(TraceSpanRow.user_id == str(user_id))
             .order_by(TraceSpanRow.started_at.desc(), TraceSpanRow.span_id.desc())
             .limit(min(max(limit, MIN_TRACE_LIMIT), MAX_TRACE_LIMIT))
         )
@@ -534,24 +597,31 @@ class SQLiteRepository:
             rows = (await session.execute(statement)).all()
         return [_trace_summary(row) for row in rows]
 
-    async def get_trace(self, trace_id: str) -> TraceDetail | None:
-        """Return one trace's summary, full content, and ordered spans.
+    async def get_trace(self, trace_id: str, *, user_id: UUID) -> TraceDetail | None:
+        """Return one owned trace's summary, full content, and ordered spans.
 
-        Spans are ordered by ``(started_at, span_id)`` so the timeline is
-        stable even when fanout children ran concurrently. ``None`` means no
-        root span is stored for ``trace_id``.
+        The root is found in SQL with both the trace id and the account UUID, so
+        an absent, foreign-owned, and historical unowned trace all give the same
+        ``None``. Child spans are read only after that owned-root check succeeds.
+        Spans are ordered by ``(started_at, span_id)`` so the timeline is stable
+        even when fanout children ran concurrently.
         """
 
-        statement = (
+        root_statement = select(TraceSpanRow).where(
+            TraceSpanRow.trace_id == trace_id,
+            TraceSpanRow.parent_span_id.is_(None),
+            TraceSpanRow.user_id == str(user_id),
+        )
+        span_statement = (
             select(TraceSpanRow)
             .where(TraceSpanRow.trace_id == trace_id)
             .order_by(TraceSpanRow.started_at, TraceSpanRow.span_id)
         )
         async with self._session_factory() as session:
-            rows = (await session.scalars(statement)).all()
-        root = next((row for row in rows if row.parent_span_id is None), None)
-        if root is None:
-            return None
+            root = (await session.scalars(root_statement)).first()
+            if root is None:
+                return None
+            rows = (await session.scalars(span_statement)).all()
         summary = _trace_summary(root)
         return TraceDetail(
             **summary.model_dump(),
@@ -692,6 +762,49 @@ class SQLiteRepository:
             row = await session.scalar(statement)
         return self._quota_from_row(row) if row is not None else None
 
+    async def latest_quota_batch(self, providers: Sequence[str]) -> dict[str, QuotaSnapshot]:
+        """Return the newest quota snapshot for each requested provider in one query."""
+
+        if not providers:
+            return {}
+        subq = (
+            select(
+                QuotaSnapshotRow.id,
+                QuotaSnapshotRow.provider,
+                QuotaSnapshotRow.source,
+                QuotaSnapshotRow.remaining,
+                QuotaSnapshotRow.limit_units,
+                QuotaSnapshotRow.reset_at,
+                QuotaSnapshotRow.observed_at,
+                QuotaSnapshotRow.unit_kind,
+                QuotaSnapshotRow.display_unit,
+                QuotaSnapshotRow.metadata_json,
+                func.row_number()
+                .over(
+                    partition_by=QuotaSnapshotRow.provider,
+                    order_by=(QuotaSnapshotRow.observed_at.desc(), QuotaSnapshotRow.id.desc()),
+                )
+                .label("rn"),
+            )
+            .where(QuotaSnapshotRow.provider.in_(providers))
+            .subquery()
+        )
+        statement = select(
+            subq.c.id,
+            subq.c.provider,
+            subq.c.source,
+            subq.c.remaining,
+            subq.c.limit_units,
+            subq.c.reset_at,
+            subq.c.observed_at,
+            subq.c.unit_kind,
+            subq.c.display_unit,
+            subq.c.metadata_json,
+        ).where(subq.c.rn == 1)
+        async with self._session_factory() as session:
+            rows = (await session.execute(statement)).all()
+        return {row.provider: self._quota_from_row(row) for row in rows}
+
     async def record_health(self, health: ProviderHealth) -> None:
         """Append a provider health observation."""
 
@@ -718,6 +831,39 @@ class SQLiteRepository:
             )
         return self._health_from_row(row) if row is not None else None
 
+    async def latest_health_batch(self, providers: Sequence[str]) -> dict[str, ProviderHealth]:
+        """Return the newest health observation for each requested provider in one query."""
+
+        if not providers:
+            return {}
+        subq = (
+            select(
+                ProviderHealthRow.id,
+                ProviderHealthRow.provider,
+                ProviderHealthRow.status,
+                ProviderHealthRow.checked_at,
+                ProviderHealthRow.message,
+                func.row_number()
+                .over(
+                    partition_by=ProviderHealthRow.provider,
+                    order_by=(ProviderHealthRow.checked_at.desc(), ProviderHealthRow.id.desc()),
+                )
+                .label("rn"),
+            )
+            .where(ProviderHealthRow.provider.in_(providers))
+            .subquery()
+        )
+        statement = select(
+            subq.c.id,
+            subq.c.provider,
+            subq.c.status,
+            subq.c.checked_at,
+            subq.c.message,
+        ).where(subq.c.rn == 1)
+        async with self._session_factory() as session:
+            rows = (await session.execute(statement)).all()
+        return {row.provider: self._health_from_row(row) for row in rows}
+
     async def get_runtime_setting(self, key: str) -> Any:
         """Return the JSON-decoded runtime setting stored under ``key``."""
 
@@ -737,6 +883,40 @@ class SQLiteRepository:
         async with self._session_factory() as session:
             await session.execute(statement)
             await session.commit()
+        _notify_setting_changed(self, key)
+
+    async def update_runtime_setting(self, key: str, update: Callable[[Any], Any]) -> Any:
+        """Read, change, and store one runtime setting in a single write transaction.
+
+        ``update`` is a synchronous pure callback. The helper reserves the
+        SQLite write lock with ``BEGIN IMMEDIATE``, reads the current payload
+        inside that transaction, and commits the new payload once. A callback,
+        encoding, or database error rolls the transaction back and keeps the
+        stored payload. The new payload is the return value.
+        """
+
+        async with self._engine.connect() as connection:
+            await connection.exec_driver_sql("BEGIN IMMEDIATE")
+            try:
+                row = await connection.execute(
+                    select(RuntimeSettingRow.value_json).where(RuntimeSettingRow.key == key)
+                )
+                current_json = row.scalar_one_or_none()
+                current = json.loads(current_json) if current_json is not None else None
+                value = update(current)
+                payload = json.dumps(value, separators=(",", ":"), allow_nan=False)
+                statement = sqlite_insert(RuntimeSettingRow).values(key=key, value_json=payload)
+                statement = statement.on_conflict_do_update(
+                    index_elements=[RuntimeSettingRow.key],
+                    set_={"value_json": statement.excluded.value_json},
+                )
+                await connection.execute(statement)
+                await connection.commit()
+            except BaseException:
+                await connection.rollback()
+                raise
+        _notify_setting_changed(self, key)
+        return value
 
     @staticmethod
     def _usage_from_row(row: UsageEventRow) -> UsageEvent:
@@ -758,7 +938,7 @@ class SQLiteRepository:
         )
 
     @staticmethod
-    def _quota_from_row(row: QuotaSnapshotRow) -> QuotaSnapshot:
+    def _quota_from_row(row: QuotaSnapshotRow | Row[Any]) -> QuotaSnapshot:
         try:
             kind = UnitKind(row.unit_kind) if row.unit_kind else None
         except ValueError:
@@ -780,7 +960,7 @@ class SQLiteRepository:
         )
 
     @staticmethod
-    def _health_from_row(row: ProviderHealthRow) -> ProviderHealth:
+    def _health_from_row(row: ProviderHealthRow | Row[Any]) -> ProviderHealth:
         return ProviderHealth(
             provider=row.provider,
             status=HealthStatus(row.status),

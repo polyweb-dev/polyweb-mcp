@@ -447,6 +447,73 @@ describe("mergeProviderStatus", () => {
 
     expect(merged.quota.used).toBeNull()
   })
+
+  it("treats backend masks as authority for raw admin choices", () => {
+    const merged = mergeProviderStatus(catalogEntry, providerStatus("tavily") as never)
+    expect(merged.enableMask).toBe(7)
+    expect(merged.supportMask).toBe(7)
+    expect(merged.globalEnabled).toBe(true)
+    expect(merged.searchEnabled).toBe(true)
+    expect(merged.fetchEnabled).toBe(true)
+
+    const braveEntry = {
+      id: "brave",
+      backendId: "brave",
+      name: "Brave Search",
+      description: "Search only.",
+      baseUrl: "https://api.search.brave.com/res/v1/web/search",
+      authHeaderName: "X-Subscription-Token",
+      capabilities: ["search"],
+    } as never
+    const brave = mergeProviderStatus(braveEntry, providerStatus("brave") as never)
+    expect(brave.enableMask).toBe(7)
+    expect(brave.supportMask).toBe(3)
+    // Raw fetch choice stays ON; support gates effective access elsewhere.
+    expect(brave.fetchEnabled).toBe(true)
+    expect(brave.globalEnabled).toBe(true)
+    expect(brave.searchEnabled).toBe(true)
+  })
+
+  it("preserves raw tool choices while global access stays OFF", () => {
+    const merged = mergeProviderStatus(
+      catalogEntry,
+      providerStatus("tavily", { enable_mask: 6 }) as never,
+    )
+    expect(merged.enableMask).toBe(6)
+    expect(merged.globalEnabled).toBe(false)
+    expect(merged.searchEnabled).toBe(true)
+    expect(merged.fetchEnabled).toBe(true)
+  })
+
+  it("preserves non-tool catalog labels while masks carry tool state", () => {
+    const merged = mergeProviderStatus(catalogEntry, providerStatus("tavily") as never)
+    expect(merged.capabilities).toEqual(["search", "fetch", "extract"])
+
+    const exaEntry = {
+      id: "exa",
+      backendId: "exa",
+      name: "Exa",
+      description: "Neural search.",
+      baseUrl: "https://api.exa.ai",
+      authHeaderName: "x-api-key",
+      capabilities: ["search", "fetch", "neural_search"],
+    } as never
+    const exa = mergeProviderStatus(exaEntry, providerStatus("exa") as never)
+    expect(exa.capabilities).toEqual(["search", "fetch", "neural_search"])
+    expect(exa.enableMask).toBe(7)
+    expect(exa.supportMask).toBe(7)
+  })
+
+  it("rejects malformed masks instead of defaulting ON", () => {
+    for (const bad of ["7", 1.5, -1, 8, null, undefined, true]) {
+      expect(() =>
+        mergeProviderStatus(catalogEntry, { ...providerStatus("tavily"), enable_mask: bad } as never),
+      ).toThrow()
+      expect(() =>
+        mergeProviderStatus(catalogEntry, { ...providerStatus("tavily"), support_mask: bad } as never),
+      ).toThrow()
+    }
+  })
 })
 
 describe("mapDashboardUsage", () => {
