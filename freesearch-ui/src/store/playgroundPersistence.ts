@@ -4,9 +4,18 @@ import type { FetchResponse, SearchResponse } from "@/domains/execution"
 import { initialPlaygroundState } from "./playgroundSlice"
 import type { ExecutionStatus, PlaygroundMode, PlaygroundState } from "./playgroundSlice"
 
-/** Exact localStorage key: `keyPrefix: ""` keeps redux-persist's `persist:` out of it. */
+/** Legacy unowned key. It is discarded, never migrated to an account. */
 export const PLAYGROUND_PERSIST_KEY = "freesearch:playground:v1"
 export const PLAYGROUND_PERSIST_VERSION = 1
+
+/**
+ * Account-scoped storage key. Account B can never rehydrate the drafts, the
+ * results, or the dialogs that account A stored, because rehydration reads one
+ * key only.
+ */
+export function playgroundPersistKey(accountId: string): string {
+  return `${PLAYGROUND_PERSIST_KEY}:${accountId}`
+}
 
 /**
  * Application cap, well below typical per-origin quotas. An oversized snapshot
@@ -212,10 +221,29 @@ export function createPlaygroundStorage(): PlaygroundStorage {
   }
 }
 
-/** Persistence policy for the playground slice: one key, one version, bounded writes. */
-export const playgroundPersistConfig: PersistConfig<PlaygroundState> = {
-  key: PLAYGROUND_PERSIST_KEY,
-  keyPrefix: "",
-  version: PLAYGROUND_PERSIST_VERSION,
-  storage: createPlaygroundStorage(),
+/**
+ * Discard the legacy unowned snapshot.
+ *
+ * The old key belongs to no account, so the client drops it instead of
+ * assigning those results to whoever signs in first.
+ */
+export function discardLegacyPlaygroundSnapshot(): void {
+  removeQuietly(readLocalStorage(), PLAYGROUND_PERSIST_KEY)
+}
+
+/**
+ * Persistence policy for one confirmed account: one account key, one version,
+ * and bounded writes. The legacy unowned snapshot is discarded here, before any
+ * rehydration, so the first mount after this change cannot restore it.
+ */
+export function createPlaygroundPersistConfig(
+  accountId: string
+): PersistConfig<PlaygroundState> {
+  discardLegacyPlaygroundSnapshot()
+  return {
+    key: playgroundPersistKey(accountId),
+    keyPrefix: "",
+    version: PLAYGROUND_PERSIST_VERSION,
+    storage: createPlaygroundStorage(),
+  }
 }

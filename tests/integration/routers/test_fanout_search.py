@@ -32,6 +32,7 @@ from freesearch.models.contracts import (
 )
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
+from tests.fixtures.auth import raw_auth_headers, register_and_login, temp_email
 
 
 @pytest.fixture
@@ -101,7 +102,9 @@ class FakeSearchAdapter(ProviderAdapter):
 
 async def test_fanout_search_runs_all_providers_in_parallel_and_fuses_results(
     repository: SQLiteRepository,
+    auth_secret: str,
 ) -> None:
+    # Use one Agent account for the search.
     # Provider 1 (Exa) returns exclusive hit at rank 1, and shared hit at rank 2
     exa_results = [
         SearchResult(
@@ -135,10 +138,13 @@ async def test_fanout_search_runs_all_providers_in_parallel_and_fuses_results(
     app = create_app([exa_adapter, brave_adapter], repository=repository)
 
     with TestClient(app) as client:
+        pair = register_and_login(client, temp_email("fanout-fuse"))
+        headers = raw_auth_headers(pair["access_token"])
         # Fanout search with fanout=True
         response = client.post(
             "/search",
             json={"query": "test query", "fanout": True, "limit": 10},
+            headers=headers,
         )
 
     assert response.status_code == 200
@@ -168,7 +174,9 @@ async def test_fanout_search_runs_all_providers_in_parallel_and_fuses_results(
 
 async def test_fanout_search_via_routing_mode_fanout(
     repository: SQLiteRepository,
+    auth_secret: str,
 ) -> None:
+    # Use one Agent account for the search.
     p1 = FakeSearchAdapter(
         "p1",
         [SearchResult(title="P1 Hit", url=AnyHttpUrl("https://example.com/p1"), snippet="P1")],
@@ -180,9 +188,12 @@ async def test_fanout_search_via_routing_mode_fanout(
     app = create_app([p1, p2], repository=repository)
 
     with TestClient(app) as client:
+        pair = register_and_login(client, temp_email("fanout-mode"))
+        headers = raw_auth_headers(pair["access_token"])
         response = client.post(
             "/search",
             json={"query": "query", "routing": {"mode": "fanout"}},
+            headers=headers,
         )
 
     assert response.status_code == 200
@@ -196,8 +207,10 @@ async def test_fanout_search_via_routing_mode_fanout(
 
 async def test_fanout_search_tolerates_individual_provider_failure(
     repository: SQLiteRepository,
+    auth_secret: str,
 ) -> None:
     """AC: When one provider raises an error, other results are still fused and returned."""
+    # Use one Agent account for the search.
     failing_adapter = FakeSearchAdapter("flaky_provider", fail=True)
     working_adapter = FakeSearchAdapter(
         "reliable_provider",
@@ -212,9 +225,12 @@ async def test_fanout_search_tolerates_individual_provider_failure(
     app = create_app([failing_adapter, working_adapter], repository=repository)
 
     with TestClient(app) as client:
+        pair = register_and_login(client, temp_email("fanout-tolerate"))
+        headers = raw_auth_headers(pair["access_token"])
         response = client.post(
             "/search",
             json={"query": "test query", "fanout": True},
+            headers=headers,
         )
 
     assert response.status_code == 200
@@ -227,16 +243,21 @@ async def test_fanout_search_tolerates_individual_provider_failure(
 
 async def test_fanout_search_when_all_providers_fail_returns_500(
     repository: SQLiteRepository,
+    auth_secret: str,
 ) -> None:
     """AC: When every provider raises, the first error surfaces as a 500."""
+    # Use one Agent account for the search.
     first = FakeSearchAdapter("flaky-a", fail=True)
     second = FakeSearchAdapter("flaky-b", fail=True)
     app = create_app([first, second], repository=repository)
 
     with TestClient(app) as client:
+        pair = register_and_login(client, temp_email("fanout-allfail"))
+        headers = raw_auth_headers(pair["access_token"])
         response = client.post(
             "/search",
             json={"query": "test query", "fanout": True},
+            headers=headers,
         )
 
     assert response.status_code == 500
@@ -247,14 +268,22 @@ async def test_fanout_search_when_all_providers_fail_returns_500(
 
 async def test_fanout_search_without_any_adapter_returns_503(
     repository: SQLiteRepository,
+    auth_secret: str,
 ) -> None:
     """AC: Fanout with no configured providers keeps the vault-hint 503."""
+    # Anonymous call fails first. Agent call shows the 503 shape.
     app = create_app([], repository=repository)
 
     with TestClient(app) as client:
+        assert (
+            client.post("/search", json={"query": "test query", "fanout": True}).status_code == 401
+        )
+        pair = register_and_login(client, temp_email("fanout-empty"))
+        headers = raw_auth_headers(pair["access_token"])
         response = client.post(
             "/search",
             json={"query": "test query", "fanout": True},
+            headers=headers,
         )
 
     assert response.status_code == 503
@@ -263,8 +292,10 @@ async def test_fanout_search_without_any_adapter_returns_503(
 
 async def test_fanout_search_honors_provider_allow_list(
     repository: SQLiteRepository,
+    auth_secret: str,
 ) -> None:
     """AC: routing.providers restricts fanout participation to the allow-list."""
+    # Use one Agent account for the search.
     p1 = FakeSearchAdapter(
         "p1",
         [SearchResult(title="P1", url=AnyHttpUrl("https://example.com/1"), snippet="1")],
@@ -276,6 +307,8 @@ async def test_fanout_search_honors_provider_allow_list(
     app = create_app([p1, p2], repository=repository)
 
     with TestClient(app) as client:
+        pair = register_and_login(client, temp_email("fanout-allow"))
+        headers = raw_auth_headers(pair["access_token"])
         response = client.post(
             "/search",
             json={
@@ -283,6 +316,7 @@ async def test_fanout_search_honors_provider_allow_list(
                 "fanout": True,
                 "routing": {"mode": "fanout", "providers": ["p1"]},
             },
+            headers=headers,
         )
 
     assert response.status_code == 200
@@ -295,8 +329,10 @@ async def test_fanout_search_honors_provider_allow_list(
 
 async def test_single_provider_require_does_not_fanout(
     repository: SQLiteRepository,
+    auth_secret: str,
 ) -> None:
     """When a caller explicitly chooses a provider with mode=require, only that provider runs."""
+    # Use one Agent account for the search.
     p1 = FakeSearchAdapter(
         "p1",
         [SearchResult(title="P1", url=AnyHttpUrl("https://example.com/1"), snippet="1")],
@@ -308,12 +344,15 @@ async def test_single_provider_require_does_not_fanout(
     app = create_app([p1, p2], repository=repository)
 
     with TestClient(app) as client:
+        pair = register_and_login(client, temp_email("fanout-require"))
+        headers = raw_auth_headers(pair["access_token"])
         response = client.post(
             "/search",
             json={
                 "query": "explicit provider query",
                 "routing": {"mode": "require", "providers": ["p2"]},
             },
+            headers=headers,
         )
 
     assert response.status_code == 200
@@ -325,10 +364,12 @@ async def test_single_provider_require_does_not_fanout(
 
 async def test_fanout_search_returns_waterfall_and_records_activity_telemetry(
     repository: SQLiteRepository,
+    auth_secret: str,
 ) -> None:
     """Fanout search returns structured per-provider waterfall trace and
     records aggregated usage.
     """
+    # Use one Agent account for the search.
     p1 = FakeSearchAdapter(
         "p1",
         [SearchResult(title="P1", url=AnyHttpUrl("https://example.com/1"), snippet="1")],
@@ -340,9 +381,12 @@ async def test_fanout_search_returns_waterfall_and_records_activity_telemetry(
     app = create_app([p1, p2], repository=repository)
 
     with TestClient(app) as client:
+        pair = register_and_login(client, temp_email("fanout-water"))
+        headers = raw_auth_headers(pair["access_token"])
         response = client.post(
             "/search",
             json={"query": "waterfall trace query", "fanout": True},
+            headers=headers,
         )
 
     assert response.status_code == 200
@@ -376,7 +420,9 @@ def _trace_id_of(response: object) -> str:
 
 async def test_fanout_trace_has_sibling_providers_and_partial_outcome(
     repository: SQLiteRepository,
+    auth_secret: str,
 ) -> None:
+    # Use one Agent account for search and trace reads.
     failing = FakeSearchAdapter("flaky_provider", fail=True)
     working = FakeSearchAdapter(
         "reliable_provider",
@@ -391,10 +437,14 @@ async def test_fanout_trace_has_sibling_providers_and_partial_outcome(
     app = create_app([failing, working], repository=repository)
 
     with TestClient(app) as client:
-        response = client.post("/search", json={"query": "partial query", "fanout": True})
+        pair = register_and_login(client, temp_email("fanout-partial"))
+        headers = raw_auth_headers(pair["access_token"])
+        response = client.post(
+            "/search", json={"query": "partial query", "fanout": True}, headers=headers
+        )
         assert response.status_code == 200
         trace_id = _trace_id_of(response)
-        detail = client.get(f"/api/v1/traces/{trace_id}").json()
+        detail = client.get(f"/api/v1/traces/{trace_id}", headers=headers).json()
 
     assert detail["outcome"] == "partial"
     assert detail["input"] == "partial query"
@@ -417,7 +467,9 @@ async def test_fanout_trace_has_sibling_providers_and_partial_outcome(
 
 async def test_fanout_success_trace_has_one_root_and_two_provider_children(
     repository: SQLiteRepository,
+    auth_secret: str,
 ) -> None:
+    # Use one Agent account for search and trace reads.
     p1 = FakeSearchAdapter(
         "p1",
         [SearchResult(title="P1", url=AnyHttpUrl("https://example.com/1"), snippet="1")],
@@ -429,11 +481,15 @@ async def test_fanout_success_trace_has_one_root_and_two_provider_children(
     app = create_app([p1, p2], repository=repository)
 
     with TestClient(app) as client:
-        response = client.post("/search", json={"query": "fanout query", "fanout": True})
+        pair = register_and_login(client, temp_email("fanout-ok"))
+        headers = raw_auth_headers(pair["access_token"])
+        response = client.post(
+            "/search", json={"query": "fanout query", "fanout": True}, headers=headers
+        )
         assert response.status_code == 200
         assert response.json()["provider"] == "aggregated"
         trace_id = _trace_id_of(response)
-        detail = client.get(f"/api/v1/traces/{trace_id}").json()
+        detail = client.get(f"/api/v1/traces/{trace_id}", headers=headers).json()
 
     assert detail["outcome"] == "success"
     assert detail["result_count"] == 2
@@ -444,16 +500,22 @@ async def test_fanout_success_trace_has_one_root_and_two_provider_children(
 
 async def test_fanout_all_fail_writes_error_trace_without_results(
     repository: SQLiteRepository,
+    auth_secret: str,
 ) -> None:
+    # Use one Agent account for search and trace reads.
     first = FakeSearchAdapter("flaky-a", fail=True)
     second = FakeSearchAdapter("flaky-b", fail=True)
     app = create_app([first, second], repository=repository)
 
     with TestClient(app) as client:
-        response = client.post("/search", json={"query": "doomed query", "fanout": True})
+        pair = register_and_login(client, temp_email("fanout-doom"))
+        headers = raw_auth_headers(pair["access_token"])
+        response = client.post(
+            "/search", json={"query": "doomed query", "fanout": True}, headers=headers
+        )
         assert response.status_code == 500
         trace_id = _trace_id_of(response)
-        detail = client.get(f"/api/v1/traces/{trace_id}").json()
+        detail = client.get(f"/api/v1/traces/{trace_id}", headers=headers).json()
 
     assert detail["outcome"] == "error"
     assert detail["output"] is None
@@ -461,3 +523,221 @@ async def test_fanout_all_fail_writes_error_trace_without_results(
     providers = [span for span in detail["spans"] if span["name"] == "freesearch.provider"]
     assert len(providers) == 2
     assert all(span["outcome"] == "error" for span in providers)
+
+
+async def test_fanout_excludes_search_off_provider_without_call(
+    repository: SQLiteRepository,
+) -> None:
+    off = FakeSearchAdapter(
+        "exa",
+        [SearchResult(title="Exa", url=AnyHttpUrl("https://example.com/exa"), snippet="e")],
+    )
+    on = FakeSearchAdapter(
+        "brave",
+        [SearchResult(title="Brave", url=AnyHttpUrl("https://example.com/brave"), snippet="b")],
+    )
+    await repository.set_runtime_setting(
+        "provider.exa", {"config": {"enable_mask": 5, "support_mask": 7, "priority": 100}}
+    )
+    app = create_app([off, on], repository=repository)
+
+    with TestClient(app) as client:
+        response = client.post("/search", json={"query": "fanout scope", "fanout": True})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["participating_providers"] == ["brave"]
+    assert off.search_calls == 0
+    assert on.search_calls == 1
+
+
+async def test_fanout_with_no_eligible_candidate_returns_503(
+    repository: SQLiteRepository,
+) -> None:
+    first = FakeSearchAdapter(
+        "exa",
+        [SearchResult(title="Exa", url=AnyHttpUrl("https://example.com/exa"), snippet="e")],
+    )
+    second = FakeSearchAdapter(
+        "brave",
+        [SearchResult(title="Brave", url=AnyHttpUrl("https://example.com/brave"), snippet="b")],
+    )
+    await repository.set_runtime_setting(
+        "provider.exa", {"config": {"enable_mask": 0, "support_mask": 7, "priority": 100}}
+    )
+    await repository.set_runtime_setting(
+        "provider.brave", {"config": {"enable_mask": 0, "support_mask": 3, "priority": 100}}
+    )
+    app = create_app([first, second], repository=repository)
+
+    with TestClient(app) as client:
+        response = client.post("/search", json={"query": "no candidate", "fanout": True})
+
+    assert response.status_code == 503
+    assert "no eligible provider" in response.json()["detail"]
+    assert first.search_calls == 0
+    assert second.search_calls == 0
+
+
+async def _reset_fanout_caches() -> None:
+    from freesearch.routers.control import clear_config_cache
+    from freesearch.services.monitoring import clear_quota_poll_cache
+
+    clear_config_cache()
+    clear_quota_poll_cache()
+
+
+async def test_pinned_fanout_reads_only_subset(repository: SQLiteRepository) -> None:
+    """M4: fanout with providers=[A,B] queries only the subset (batch name lists)."""
+    from freesearch.routers.control import clear_config_cache
+    from freesearch.services.monitoring import clear_quota_poll_cache
+
+    await _reset_fanout_caches()
+    try:
+        adapters = [
+            FakeSearchAdapter(
+                name,
+                [
+                    SearchResult(
+                        title=name, url=AnyHttpUrl(f"https://example.com/{name}"), snippet=name
+                    )
+                ],
+            )
+            for name in ("p1", "p2", "p3", "p4")
+        ]
+        app = create_app(adapters, repository=repository)
+        health_names: list[list[str]] = []
+        quota_names: list[list[str]] = []
+        orig_health = SQLiteRepository.latest_health_batch
+        orig_quota = SQLiteRepository.latest_quota_batch
+
+        async def _spy_health(self: SQLiteRepository, providers: list[str]) -> dict:  # type: ignore[no-untyped-def]
+            health_names.append(list(providers))
+            return await orig_health(self, providers)
+
+        async def _spy_quota(self: SQLiteRepository, providers: list[str]) -> dict:  # type: ignore[no-untyped-def]
+            quota_names.append(list(providers))
+            return await orig_quota(self, providers)
+
+        SQLiteRepository.latest_health_batch = _spy_health  # type: ignore[method-assign]
+        SQLiteRepository.latest_quota_batch = _spy_quota  # type: ignore[method-assign]
+        try:
+            with TestClient(app) as client:
+                response = client.post(
+                    "/search",
+                    json={
+                        "query": "pinned subset",
+                        "fanout": True,
+                        "routing": {"mode": "fanout", "providers": ["p1", "p2"]},
+                    },
+                )
+        finally:
+            SQLiteRepository.latest_health_batch = orig_health  # type: ignore[method-assign]
+            SQLiteRepository.latest_quota_batch = orig_quota  # type: ignore[method-assign]
+        assert response.status_code == 200
+        data = response.json()
+        assert data["participating_providers"] == ["p1", "p2"]
+        assert [a.search_calls for a in adapters] == [1, 1, 0, 0]
+        assert health_names, "expected at least one health batch"
+        assert quota_names, "expected at least one quota batch"
+        for seen in health_names:
+            assert set(seen) <= {"p1", "p2"}, f"health batch leaked: {seen}"
+        for seen in quota_names:
+            assert set(seen) <= {"p1", "p2"}, f"quota batch leaked: {seen}"
+        assert any(set(seen) == {"p1", "p2"} for seen in health_names)
+    finally:
+        clear_config_cache()
+        clear_quota_poll_cache()
+
+
+async def test_fanout_partial_failure_detailed_contract(
+    repository: SQLiteRepository,
+) -> None:
+    """E7: one failure preserves results, waterfall, RRF output, and partial trace."""
+    from freesearch.routers.control import clear_config_cache
+    from freesearch.services.monitoring import clear_quota_poll_cache
+
+    await _reset_fanout_caches()
+    try:
+        failing = FakeSearchAdapter("flaky_provider", fail=True)
+        working = FakeSearchAdapter(
+            "reliable_provider",
+            [
+                SearchResult(
+                    title="Reliable Hit",
+                    url=AnyHttpUrl("https://example.com/reliable"),
+                    snippet="Reliable content",
+                )
+            ],
+        )
+        app = create_app([failing, working], repository=repository)
+        with TestClient(app) as client:
+            response = client.post("/search", json={"query": "partial query", "fanout": True})
+            assert response.status_code == 200
+            data = response.json()
+            assert data["participating_providers"] == ["reliable_provider"]
+            assert len(data["results"]) == 1
+            assert data["results"][0]["title"] == "Reliable Hit"
+            assert len(data["waterfall"]) == 2
+            by_provider = {item["provider"]: item for item in data["waterfall"]}
+            assert set(by_provider) == {"flaky_provider", "reliable_provider"}
+            assert by_provider["reliable_provider"]["status"] == "success"
+            assert by_provider["reliable_provider"]["results_count"] == 1
+            assert by_provider["flaky_provider"]["status"] == "failed"
+            assert by_provider["flaky_provider"]["results_count"] == 0
+            assert by_provider["flaky_provider"]["error"] is not None
+            assert "simulated failure" in by_provider["flaky_provider"]["error"]
+            assert [item["provider"] for item in data["waterfall"]] == [
+                "flaky_provider",
+                "reliable_provider",
+            ]
+            trace_id = response.headers["x-trace-id"]
+            detail = client.get(f"/api/v1/traces/{trace_id}").json()
+        assert detail["outcome"] == "partial"
+        assert detail["output"]["kind"] == "search_results"
+        assert len(detail["output"]["results"]) == 1
+        spans = detail["spans"]
+        providers = [s for s in spans if s["name"] == "freesearch.provider"]
+        assert len(providers) == 2
+        failed = next(s for s in providers if s["error"] is not None)
+        assert failed["outcome"] == "error"
+        assert failed["error"]["type"] == "RuntimeError"
+        succeeded = next(s for s in providers if s["error"] is None)
+        assert succeeded["outcome"] == "success"
+        assert failing.search_calls == 1
+        assert working.search_calls == 1
+    finally:
+        clear_config_cache()
+        clear_quota_poll_cache()
+
+
+async def test_fanout_all_fail_first_error_deterministic(
+    repository: SQLiteRepository,
+) -> None:
+    """E7: all-fail gives REST 500 with the first candidate error in order."""
+    from freesearch.routers.control import clear_config_cache
+    from freesearch.services.monitoring import clear_quota_poll_cache
+
+    await _reset_fanout_caches()
+    try:
+        first = FakeSearchAdapter("flaky-a", fail=True)
+        second = FakeSearchAdapter("flaky-b", fail=True)
+        app = create_app([first, second], repository=repository)
+        with TestClient(app) as client:
+            response = client.post("/search", json={"query": "doomed query", "fanout": True})
+            assert response.status_code == 500
+            detail_text = response.json()["detail"]
+            assert "all search providers failed" in detail_text
+            assert "flaky-a" in detail_text
+            trace_id = response.headers.get("x-trace-id")
+            if trace_id is not None:
+                detail = client.get(f"/api/v1/traces/{trace_id}").json()
+                assert detail["outcome"] == "error"
+                providers = [s for s in detail["spans"] if s["name"] == "freesearch.provider"]
+                assert len(providers) == 2
+                assert all(s["outcome"] == "error" for s in providers)
+        assert first.search_calls == 1
+        assert second.search_calls == 1
+    finally:
+        clear_config_cache()
+        clear_quota_poll_cache()

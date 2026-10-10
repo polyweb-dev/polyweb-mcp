@@ -25,6 +25,9 @@ export interface FreeSearchContextType {
   providers: ProviderConfig[]
   providersLoading: boolean
   providersError: string | null
+  /** Role capability flags from the composition. */
+  canReadControls: boolean
+  canEditControls: boolean
   fallbackConfig: FallbackConfig
   routingLoading: boolean
   routingError: string | null
@@ -47,8 +50,8 @@ export interface FreeSearchContextType {
   dashboardNotice: string | null
   toasts: ToastNotification[]
   toggleProvider: (id: string, enabled: boolean) => Promise<void>
-  toggleProviderSearch: (id: string, enabled: boolean) => void
-  toggleProviderFetch: (id: string, enabled: boolean) => void
+  toggleProviderSearch: (id: string, enabled: boolean) => Promise<void>
+  toggleProviderFetch: (id: string, enabled: boolean) => Promise<void>
   updateProviderPriority: (id: string, newPriority: number) => Promise<boolean>
   moveProviderPriority: (id: string, direction: "up" | "down") => Promise<void>
   setCircuitBreaker: (id: string, status: CircuitBreakerStatus) => Promise<void>

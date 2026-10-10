@@ -62,6 +62,7 @@ export function StatusBar() {
     routingPreset,
     routingLoading,
     routingError,
+    canReadControls,
   } = useFreeSearch()
   const [openPopover, setOpenPopover] = useState<OpenPopover>(null)
   const anchorRef = useRef<HTMLDivElement>(null)
@@ -93,7 +94,11 @@ export function StatusBar() {
       data-testid="status-bar"
       className="sticky bottom-0 relative flex h-6 shrink-0 items-center justify-end border-t border-[var(--border-subtle)] bg-[var(--elevated)] px-2 text-[12px] text-[var(--muted)] tnum gap-1"
     >
-      <button
+      {!canReadControls && <span className="px-2">Signed in</span>}
+
+      {canReadControls && (
+        <>
+          <button
         ref={providerTriggerRef}
         type="button"
         aria-expanded={openPopover === "providers"}
@@ -143,18 +148,13 @@ export function StatusBar() {
       {routingError && <span className="px-2 text-[var(--status-danger)]">Routing status unavailable</span>}
 
       {openPopover === "providers" && (
-        <ProviderStatusPopover
-          providers={providers}
-          eligibleProviders={eligibleProviders}
-          providerCount={providerCount}
-        />
+        <ProviderStatusPopover providers={providers} eligibleProviders={eligibleProviders} providerCount={providerCount} />
       )}
 
       {openPopover === "failover" && showFailover && (
-        <FailoverStatusPopover
-          fallbackConfig={fallbackConfig}
-          failoverStatus={failoverStatus}
-        />
+        <FailoverStatusPopover fallbackConfig={fallbackConfig} failoverStatus={failoverStatus} />
+      )}
+        </>
       )}
     </div>
   )

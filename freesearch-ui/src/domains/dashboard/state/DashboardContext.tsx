@@ -17,8 +17,10 @@ import { DashboardContext } from "./context";
 export const DashboardProvider: React.FC<{
   showToast: ShowToast;
   catalogNameOf: (id: string) => string | undefined;
+  canReadControls: boolean;
+  canEditControls: boolean;
   children: React.ReactNode;
-}> = ({ showToast, catalogNameOf, children }) => {
+}> = ({ showToast, catalogNameOf, canReadControls, canEditControls, children }) => {
   const [usageEvents, setUsageEvents] = useState<UsageEvent[]>([]);
   const [usageLoading, setUsageLoading] = useState(true);
   const [usageError, setUsageError] = useState<string | null>(null);
@@ -33,6 +35,19 @@ export const DashboardProvider: React.FC<{
   const requestGeneration = React.useRef(0);
 
   const refreshDashboard = useCallback(async () => {
+    if (!canReadControls) {
+      // A role without control-read access keeps an empty telemetry state and a
+      // clear busy flag. This covers the startup read and the post-search read.
+      setUsageEvents([]);
+      setUsageTotals([]);
+      setDashboardQuotas([]);
+      setProviderLimits([]);
+      setCrdUsageTotals([]);
+      setDashboardNotice(null);
+      setUsageError(null);
+      setUsageLoading(false);
+      return;
+    }
     requestGeneration.current += 1;
     const generation = requestGeneration.current;
     setUsageLoading(true);
@@ -59,7 +74,7 @@ export const DashboardProvider: React.FC<{
     } finally {
       if (generation === requestGeneration.current) setUsageLoading(false);
     }
-  }, [showToast, catalogNameOf]);
+  }, [canReadControls, showToast, catalogNameOf]);
 
   const value = React.useMemo(
     () => ({
@@ -72,6 +87,8 @@ export const DashboardProvider: React.FC<{
       crdUsageTotals,
       quotaAvailable,
       dashboardNotice,
+      canReadControls,
+      canEditControls,
       refreshDashboard,
       prependUsageEvent: (event: UsageEvent) =>
         setUsageEvents((previous) => [event, ...previous]),
@@ -86,6 +103,8 @@ export const DashboardProvider: React.FC<{
       crdUsageTotals,
       quotaAvailable,
       dashboardNotice,
+      canReadControls,
+      canEditControls,
       refreshDashboard,
     ],
   );

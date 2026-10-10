@@ -3,6 +3,14 @@ export { PROVIDER_CATALOG, catalogNameOf, catalogEntryForId } from "./model/cata
 export type { StaticProviderMeta } from "./model/catalog";
 export { providerIdentity } from "./model/providerIdentity";
 export type { ProviderIdentity } from "./model/providerIdentity";
+export {
+  FETCH_BIT,
+  GLOBAL_BIT,
+  SEARCH_BIT,
+  decodeProviderAccess,
+  isProviderOperationEnabled,
+} from "./model/providerAccess";
+export type { ProviderAccessView } from "./model/providerAccess";
 export type {
   Capability,
   ProviderHealthStatus,

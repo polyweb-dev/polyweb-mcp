@@ -16,18 +16,20 @@ from contextlib import suppress
 from datetime import UTC, datetime
 from decimal import Decimal
 from hashlib import sha256
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 import httpx
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from pydantic import SecretStr, ValidationError
 
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.adapters.registry import adapter_factory
 from freesearch.configuration.provider_config import (
     ProviderConfig,
+    ProviderConfigError,
     ProviderConfigUpdate,
     get_provider_configs,
+    system_support_mask,
 )
 from freesearch.infrastructure.http import create_async_client
 from freesearch.infrastructure.logging import redact_secrets
@@ -50,7 +52,10 @@ from freesearch.models.contracts import (
     SecretStatusResponse,
     SetSecretRequest,
 )
-from freesearch.persistence.storage import SQLiteRepository
+from freesearch.models.provider_access import ALL_BITS, validate_mask
+from freesearch.models.users import UserPrincipal
+from freesearch.persistence.storage import SQLiteRepository, register_setting_listener
+from freesearch.routers.auth import require_admin, require_control_reader
 from freesearch.services.manual_quota import clear_manual_quota as clear_shared_manual_quota
 from freesearch.services.manual_quota import load_manual_quota as load_shared_manual_quota
 from freesearch.services.manual_quota import manual_quota_response
@@ -69,6 +74,14 @@ from freesearch.services.parallel_oauth import (
 
 SecretSource = Literal["encrypted_db", "none"]
 
+#: Role gates from the approved P1a matrix. ``require_admin`` guards every
+#: control mutation and every provider OAuth handler; ``require_control_reader``
+#: guards the sanitized reads. Both answer 401 before 403, and both run before
+#: any provider call or persistence write. Provider OAuth status follows its side
+#: effects, not its HTTP verb, so the GET requires Admin.
+_AdminPrincipal = Annotated[UserPrincipal, Depends(require_admin)]
+_ReaderPrincipal = Annotated[UserPrincipal, Depends(require_control_reader)]
+
 _ROUTING_KEY = "routing"
 
 _MANUAL_QUOTA_PREFIX = "manual_quota:"
@@ -83,7 +96,9 @@ def register_control_routes(app: FastAPI) -> None:
     """
 
     @app.get("/api/v1/providers", response_model=list[ProviderStatusResponse])
-    async def list_providers(request: Request) -> list[ProviderStatusResponse]:
+    async def list_providers(
+        _principal: _ReaderPrincipal, request: Request
+    ) -> list[ProviderStatusResponse]:
         """Enumerate every canonical provider with its current control state."""
 
         repository: SQLiteRepository | None = request.app.state.repository
@@ -102,7 +117,9 @@ def register_control_routes(app: FastAPI) -> None:
         return ordered
 
     @app.get("/api/v1/providers/{provider_id}", response_model=ProviderStatusResponse)
-    async def get_provider(provider_id: str, request: Request) -> ProviderStatusResponse:
+    async def get_provider(
+        _principal: _ReaderPrincipal, provider_id: str, request: Request
+    ) -> ProviderStatusResponse:
         """Return one canonical provider's control-plane status entry."""
 
         name = _require_provider(provider_id)
@@ -111,6 +128,7 @@ def register_control_routes(app: FastAPI) -> None:
 
     @app.patch("/api/v1/providers/{provider_id}", response_model=ProviderStatusResponse)
     async def patch_provider(
+        _principal: _AdminPrincipal,
         provider_id: str,
         request: Request,
         update: ProviderConfigUpdate | None = None,
@@ -118,18 +136,19 @@ def register_control_routes(app: FastAPI) -> None:
         """Merge a partial provider config update onto the effective record.
 
         The body is optional so an unknown provider identifier always surfaces
-        as 404 even when the caller sends no JSON body at all.
+        as 404 even when the caller sends no JSON body at all. The merge runs
+        inside one atomic read-modify-write transaction.
         """
 
         name = _require_provider(provider_id)
         repository: SQLiteRepository | None = request.app.state.repository
-        current = await effective_provider_config(repository, name)
-        merged = (update or ProviderConfigUpdate()).apply_to(current)
-        await persist_provider_config(repository, name, merged)
+        await patch_provider_config(repository, name, update or ProviderConfigUpdate())
         return await _provider_entry(repository, name, request.app.state.secret_store)
 
     @app.post("/api/v1/providers/{provider_id}/test", response_model=ProviderTestResponse)
-    async def test_provider(provider_id: str, request: Request) -> ProviderTestResponse:
+    async def test_provider(
+        _principal: _AdminPrincipal, provider_id: str, request: Request
+    ) -> ProviderTestResponse:
         """Run a timed health probe; UNKNOWN counts as ok with explanatory detail."""
 
         name = _require_provider(provider_id)
@@ -160,7 +179,7 @@ def register_control_routes(app: FastAPI) -> None:
         response_model=CircuitBreakerStatusResponse,
     )
     async def reset_circuit_breaker(
-        provider_id: str, request: Request
+        _principal: _AdminPrincipal, provider_id: str, request: Request
     ) -> CircuitBreakerStatusResponse:
         """Persist a closed breaker state and report it; idempotent."""
 
@@ -173,7 +192,10 @@ def register_control_routes(app: FastAPI) -> None:
 
     @app.put("/api/v1/providers/{provider_id}/secret", response_model=SecretStatusResponse)
     async def put_secret(
-        provider_id: str, body: SetSecretRequest, request: Request
+        _principal: _AdminPrincipal,
+        provider_id: str,
+        body: SetSecretRequest,
+        request: Request,
     ) -> SecretStatusResponse:
         """Store the key write-only in the encrypted vault and report its status."""
 
@@ -197,7 +219,9 @@ def register_control_routes(app: FastAPI) -> None:
         )
 
     @app.delete("/api/v1/providers/{provider_id}/secret", response_model=SecretStatusResponse)
-    async def delete_secret(provider_id: str, request: Request) -> SecretStatusResponse:
+    async def delete_secret(
+        _principal: _AdminPrincipal, provider_id: str, request: Request
+    ) -> SecretStatusResponse:
         """Remove the encrypted vault key idempotently and report its status."""
 
         name = _require_provider(provider_id)
@@ -229,14 +253,16 @@ def register_control_routes(app: FastAPI) -> None:
         )
 
     @app.get("/api/v1/routing/config", response_model=RoutingConfigResponse)
-    async def get_routing_config(request: Request) -> RoutingConfigResponse:
+    async def get_routing_config(
+        _principal: _ReaderPrincipal, request: Request
+    ) -> RoutingConfigResponse:
         """Return the persisted global routing defaults."""
 
         return await routing_policy(request.app.state.repository)
 
     @app.put("/api/v1/routing/config", response_model=RoutingConfigResponse)
     async def put_routing_config(
-        update: RoutingConfigUpdate, request: Request
+        _principal: _AdminPrincipal, update: RoutingConfigUpdate, request: Request
     ) -> RoutingConfigResponse:
         """Merge and persist a routing-policy update; omitted fields are kept."""
 
@@ -264,7 +290,9 @@ def _register_manual_quota_routes(app: FastAPI) -> None:
         "/api/v1/providers/{provider_id}/manual-quota",
         response_model=ManualQuotaResponse,
     )
-    async def get_manual_quota(provider_id: str, request: Request) -> ManualQuotaResponse:
+    async def get_manual_quota(
+        _principal: _ReaderPrincipal, provider_id: str, request: Request
+    ) -> ManualQuotaResponse:
         """Return the operator-entered billing anchor; never touches routing."""
 
         name = _require_provider(provider_id)
@@ -278,7 +306,10 @@ def _register_manual_quota_routes(app: FastAPI) -> None:
         response_model=ManualQuotaResponse,
     )
     async def put_manual_quota(
-        provider_id: str, update: ManualQuotaUpdate, request: Request
+        _principal: _AdminPrincipal,
+        provider_id: str,
+        update: ManualQuotaUpdate,
+        request: Request,
     ) -> ManualQuotaResponse:
         """Store the billing anchor and return the ESTIMATED capacity view."""
 
@@ -291,7 +322,9 @@ def _register_manual_quota_routes(app: FastAPI) -> None:
         return response
 
     @app.delete("/api/v1/providers/{provider_id}/manual-quota", status_code=204)
-    async def delete_manual_quota(provider_id: str, request: Request) -> None:
+    async def delete_manual_quota(
+        _principal: _AdminPrincipal, provider_id: str, request: Request
+    ) -> None:
         """Clear the billing anchor and any Exa manual-credit limit idempotently."""
 
         name = _require_provider(provider_id)
@@ -330,12 +363,14 @@ async def _notify_credential_change(request: Request, provider: ProviderName) ->
 async def _apply_exa_manual_credits(
     request: Request, provider: ProviderName, credits: Decimal | None
 ) -> None:
-    """Persist and apply Exa prepaid credits through the existing manual route."""
+    """Persist and apply Exa prepaid credits through the atomic partial seam."""
     if provider is not ProviderName.EXA:
         return
-    current = await effective_provider_config(request.app.state.repository, provider)
-    updated = ProviderConfigUpdate(exa_manual_starting_credits_usd=credits).apply_to(current)
-    await persist_provider_config(request.app.state.repository, provider, updated)
+    await patch_provider_config(
+        request.app.state.repository,
+        provider,
+        ProviderConfigUpdate(exa_manual_starting_credits_usd=credits),
+    )
     routes: list[ProviderAdapter] = request.app.state._routes
     adapter = next((route for route in routes if route.name == provider.value), None)
     setter = getattr(adapter, "set_manual_starting_credits", None)
@@ -370,7 +405,9 @@ def _register_oauth_routes(app: FastAPI) -> None:
         "/api/v1/providers/{provider_id}/oauth/device-code",
         response_model=DeviceCodeResponse,
     )
-    async def start_oauth_device_code(provider_id: str, request: Request) -> DeviceCodeResponse:
+    async def start_oauth_device_code(
+        _principal: _AdminPrincipal, provider_id: str, request: Request
+    ) -> DeviceCodeResponse:
         """Initiate a device flow; 409 while paired, never destructive on 409."""
 
         _require_oauth_provider(provider_id)
@@ -406,7 +443,9 @@ def _register_oauth_routes(app: FastAPI) -> None:
         "/api/v1/providers/{provider_id}/oauth/status",
         response_model=OAuthStatusResponse,
     )
-    async def oauth_status(provider_id: str, request: Request) -> OAuthStatusResponse:
+    async def oauth_status(
+        _principal: _AdminPrincipal, provider_id: str, request: Request
+    ) -> OAuthStatusResponse:
         """Report pairing status with one bounded token attempt unless terminal."""
 
         _require_oauth_provider(provider_id)
@@ -435,7 +474,7 @@ def _register_oauth_routes(app: FastAPI) -> None:
             ) from None
 
     @app.delete("/api/v1/providers/{provider_id}/oauth", status_code=204)
-    async def delete_oauth(provider_id: str, request: Request) -> None:
+    async def delete_oauth(_principal: _AdminPrincipal, provider_id: str, request: Request) -> None:
         """Revoke bearer material before deleting it; idempotent."""
 
         _require_oauth_provider(provider_id)
@@ -555,12 +594,15 @@ def _config_payload(payload: Any) -> dict[str, Any] | None:
     return config if isinstance(config, dict) else None
 
 
-async def _safe_runtime_setting(repository: SQLiteRepository | None, key: str) -> Any:
+async def _safe_runtime_setting(
+    repository: SQLiteRepository | None, key: str, *, strict: bool = False
+) -> Any:
     """Read a runtime setting, degrading repository failures to ``None``.
 
     Control reads are best-effort like monitoring reads: a repository that
     cannot serve runtime settings (or does not implement them) yields the
-    configuration defaults instead of failing the request.
+    configuration defaults instead of failing the request. Strict callers are
+    request paths, so they observe the repository error instead.
     """
 
     if repository is None:
@@ -568,42 +610,320 @@ async def _safe_runtime_setting(repository: SQLiteRepository | None, key: str) -
     try:
         return await repository.get_runtime_setting(key)
     except Exception:
+        if strict:
+            raise
         return None
 
 
+def _provider_base(provider: ProviderName) -> ProviderConfig:
+    """Return the base record with the system support mask applied."""
+
+    base = get_provider_configs()[provider]
+    return base.model_copy(update={"support_mask": system_support_mask(provider)})
+
+
+def _reconciled_config(provider: ProviderName, config: ProviderConfig) -> ProviderConfig:
+    """Return ``config`` with the system support mask applied."""
+
+    return config.model_copy(update={"support_mask": system_support_mask(provider)})
+
+
+def _decode_stored_access(payload: dict[str, Any]) -> dict[str, Any]:
+    """Decode a legacy stored global value into an enable mask."""
+
+    if "enabled" not in payload:
+        return dict(payload)
+    if "enable_mask" in payload or "support_mask" in payload:
+        raise ValueError("ambiguous stored provider access values")
+    legacy = payload["enabled"]
+    if not isinstance(legacy, bool):
+        raise ValueError("stored provider global value must be Boolean")
+    decoded = dict(payload)
+    decoded.pop("enabled")
+    decoded["enable_mask"] = ALL_BITS if legacy else 0
+    return decoded
+
+
+def _merge_stored_config(base: ProviderConfig, stored: dict[str, Any]) -> ProviderConfig:
+    """Merge stored fields onto ``base`` and validate the merged record.
+
+    The stored support mask is validated here, before system reconciliation.
+    """
+
+    merged = base.model_dump()
+    estimates = stored.get("free_tier_estimates")
+    if isinstance(estimates, dict):
+        merged["free_tier_estimates"].update(estimates)
+    for name, value in stored.items():
+        if name == "free_tier_estimates":
+            continue
+        merged[name] = value
+    return ProviderConfig.model_validate(merged)
+
+
+def _stored_access(provider: ProviderName, payload: dict[str, Any]) -> dict[str, Any]:
+    """Return the payload with decoded and validated access values.
+
+    A legacy global Boolean decodes into all enable bits. An ambiguous,
+    non-Boolean, or out-of-range access value raises :class:`ProviderConfigError`.
+    The caller then keeps the valid stored access choice through
+    :func:`_fallback_config`.
+    """
+
+    try:
+        decoded = _decode_stored_access(payload)
+        if "enable_mask" in decoded:
+            decoded["enable_mask"] = validate_mask(decoded["enable_mask"], field="enable_mask")
+        if "support_mask" in decoded:
+            decoded["support_mask"] = validate_mask(decoded["support_mask"], field="support_mask")
+    except ValueError as error:
+        raise ProviderConfigError(
+            f"invalid stored access value for provider {provider.value}"
+        ) from error
+    return decoded
+
+
+def _fallback_config(
+    provider: ProviderName, base: ProviderConfig, payload: dict[str, Any]
+) -> ProviderConfig:
+    """Return ``base`` with any valid stored access choice preserved.
+
+    An invalid non-access field keeps the current base fallback behavior. An
+    invalid access value falls back to the base masks.
+    """
+
+    enable = payload.get("enable_mask")
+    if enable is None and isinstance(payload.get("enabled"), bool):
+        enable = ALL_BITS if payload["enabled"] else 0
+    if enable is None:
+        return base
+    try:
+        validated = validate_mask(enable, field="enable_mask")
+    except ValueError:
+        return base
+    return _reconciled_config(provider, base.model_copy(update={"enable_mask": validated}))
+
+
+def _current_config(
+    provider: ProviderName, base: ProviderConfig, payload: dict[str, Any]
+) -> ProviderConfig:
+    """Return the current stored record for a read-modify-write callback.
+
+    A bad non-access field keeps the base value for that field. The valid
+    stored access choice survives, so a later write cannot reset the admin bits.
+    """
+
+    try:
+        stored = _stored_access(provider, payload)
+    except ProviderConfigError:
+        return _fallback_config(provider, base, payload)
+    try:
+        return _merge_stored_config(base, stored)
+    except (ValidationError, ValueError):
+        return _fallback_config(provider, base, stored)
+
+
+def _provider_payload(config: ProviderConfig) -> dict[str, Any]:
+    """Return the stored runtime-setting payload for one provider record."""
+
+    return {
+        "config": {
+            "enable_mask": config.enable_mask,
+            "support_mask": config.support_mask,
+            "priority": config.priority,
+            "free_tier_estimates": {
+                operation.value: str(units)
+                for operation, units in config.free_tier_estimates.items()
+            },
+            "reset_schedule": config.reset_schedule,
+            "parallel_free_seed_usd": _decimal_text(config.parallel_free_seed_usd),
+            "exa_monthly_budget_usd": _decimal_text(config.exa_monthly_budget_usd),
+            "exa_manual_starting_credits_usd": _decimal_text(
+                config.exa_manual_starting_credits_usd
+            ),
+        }
+    }
+
+
+def _decimal_text(value: Decimal | None) -> str | None:
+    """Return the stored text of an optional Decimal."""
+
+    return str(value) if value is not None else None
+
+
+_CONFIG_CACHE: dict[tuple[int, str], ProviderConfig] = {}
+_POLICY_CACHE: dict[int, RoutingConfigResponse] = {}
+
+
+def clear_config_cache(
+    repository: SQLiteRepository | None = None, provider: str | None = None
+) -> None:
+    """Clear cached provider and policy configurations."""
+
+    if repository is None:
+        if provider is None:
+            _CONFIG_CACHE.clear()
+            _POLICY_CACHE.clear()
+        else:
+            for key in [k for k in _CONFIG_CACHE if k[1] == provider]:
+                _CONFIG_CACHE.pop(key, None)
+    else:
+        repo_id = id(repository)
+        _POLICY_CACHE.pop(repo_id, None)
+        if provider is None:
+            for key in [k for k in _CONFIG_CACHE if k[0] == repo_id]:
+                _CONFIG_CACHE.pop(key, None)
+        else:
+            _CONFIG_CACHE.pop((repo_id, provider), None)
+
+
+def _on_setting_changed(repo: Any, key: str) -> None:
+    clear_config_cache(repo)
+
+
+register_setting_listener(_on_setting_changed)
+
+
 async def effective_provider_config(
-    repository: SQLiteRepository | None, provider: ProviderName
+    repository: SQLiteRepository | None, provider: ProviderName, *, strict: bool = False
 ) -> ProviderConfig:
     """Return defaults <- env JSON <- persisted configuration for ``provider``.
 
     The base record comes from :func:`get_provider_configs` (defaults merged
     with ``FREESEARCH_PROVIDER_CONFIG_OVERRIDES``); a persisted record wins
-    over it by applying the stored full config as a total update. A persisted
-    payload that fails strict validation (corrupt or outdated shape) is
-    self-healed: every read seam degrades to the base record instead of
-    failing the request, mirroring :func:`routing_policy` and
-    :func:`load_breaker`.
+    over it by applying the stored fields onto it. A stored legacy global
+    value decodes into all enable bits before the merge.
+
+    A payload with an invalid access value is self-healed on a non-strict read
+    and raises :class:`ProviderConfigError` on a strict read. A payload with an
+    invalid non-access field keeps the base value for that field and preserves
+    the valid stored access choice on both read modes.
+
+    The system support mask always wins. A stored record with a stale support
+    mask or a missing mask pair is written back through the atomic
+    runtime-setting helper. That write is best-effort, so a store error cannot
+    fail the read.
     """
 
-    base = get_provider_configs()[provider]
-    payload = _config_payload(await _safe_runtime_setting(repository, _provider_key(provider)))
+    base = _provider_base(provider)
+    payload = _config_payload(
+        await _safe_runtime_setting(repository, _provider_key(provider), strict=strict)
+    )
     if payload is None:
+        await _reconcile_provider_config(repository, provider)
         return base
-    with suppress(ValidationError):
-        return ProviderConfigUpdate.model_validate(payload).apply_to(base)
-    return base
+    try:
+        stored = _stored_access(provider, payload)
+    except ProviderConfigError:
+        if strict:
+            raise
+        return _fallback_config(provider, base, payload)
+    try:
+        config = _merge_stored_config(base, stored)
+    except (ValidationError, ValueError):
+        return _fallback_config(provider, base, stored)
+    if _needs_reconciliation(stored, system_support_mask(provider)):
+        await _reconcile_provider_config(repository, provider)
+    return _reconciled_config(provider, config)
+
+
+def _needs_reconciliation(stored: dict[str, Any], support_mask: int) -> bool:
+    """Return whether the stored record needs a support or mask write."""
+
+    if "enable_mask" not in stored or "support_mask" not in stored:
+        return True
+    return bool(stored["support_mask"] != support_mask)
+
+
+async def _reconcile_provider_config(
+    repository: SQLiteRepository | None, provider: ProviderName
+) -> None:
+    """Write the reconciled record for ``provider`` on a best-effort basis.
+
+    The write is a persistence side effect. The caller already holds the
+    reconciled in-memory record, so a store error (for example a held write
+    lock) must not fail a read request. The next read retries the write.
+    """
+
+    if repository is None:
+        return
+
+    def _merge(current_json: Any) -> Any:
+        current = _config_payload(current_json)
+        base = _provider_base(provider)
+        config = base if current is None else _current_config(provider, base, current)
+        return _provider_payload(_reconciled_config(provider, config))
+
+    with suppress(Exception):
+        await repository.update_runtime_setting(_provider_key(provider), _merge)
+        clear_config_cache(repository, provider.value)
+
+
+async def patch_provider_config(
+    repository: SQLiteRepository | None,
+    provider: ProviderName,
+    update: ProviderConfigUpdate,
+) -> ProviderConfig:
+    """Apply the explicit fields of ``update`` inside one atomic merge.
+
+    The callback decodes the newest stored record, applies only the explicit
+    update fields, sets the support mask from the system map, and removes the
+    old stored Boolean. A complete ``enable_mask`` replaces every enable bit.
+    A bad non-access field keeps the base value and preserves the valid stored
+    access choice.
+    """
+
+    base = _provider_base(provider)
+    if repository is None:
+        return _reconciled_config(provider, update.apply_to(base))
+    outcome: dict[str, ProviderConfig] = {}
+
+    def _merge(current_json: Any) -> Any:
+        current = _config_payload(current_json)
+        start = base if current is None else _current_config(provider, base, current)
+        config = _reconciled_config(provider, update.apply_to(start))
+        outcome["config"] = config
+        return _provider_payload(config)
+
+    await repository.update_runtime_setting(_provider_key(provider), _merge)
+    clear_config_cache(repository, provider.value)
+    return outcome["config"]
+
+
+async def initialize_provider_configs(repository: SQLiteRepository | None) -> None:
+    """Materialize a canonical configuration record for every provider.
+
+    REST and MCP call this before they accept requests. An injected repository
+    without a lifespan is covered by the canonical read path, which
+    initializes a missing record on demand. A ``None`` repository writes
+    nothing.
+    """
+
+    if repository is None:
+        return
+    for provider in ProviderName:
+        await _reconcile_provider_config(repository, provider)
 
 
 async def effective_config_for_name(
-    repository: SQLiteRepository | None, name: str
+    repository: SQLiteRepository | None, name: str, *, strict: bool = False
 ) -> ProviderConfig:
     """Canonical-name wrapper for request-path lookups; unknown names default."""
+
+    if repository is not None:
+        cache_key = (id(repository), name)
+        cached = _CONFIG_CACHE.get(cache_key)
+        if cached is not None:
+            return cached
 
     try:
         provider = ProviderName(name)
     except ValueError:
         return ProviderConfig()
-    return await effective_provider_config(repository, provider)
+    config = await effective_provider_config(repository, provider, strict=strict)
+    if repository is not None:
+        _CONFIG_CACHE[(id(repository), name)] = config
+    return config
 
 
 async def persist_provider_config(
@@ -613,43 +933,25 @@ async def persist_provider_config(
 
     if repository is None:
         return
-    payload = {
-        "config": {
-            "enabled": config.enabled,
-            "priority": config.priority,
-            "free_tier_estimates": {
-                operation.value: str(units)
-                for operation, units in config.free_tier_estimates.items()
-            },
-            "reset_schedule": config.reset_schedule,
-            "parallel_free_seed_usd": (
-                str(config.parallel_free_seed_usd)
-                if config.parallel_free_seed_usd is not None
-                else None
-            ),
-            "exa_monthly_budget_usd": (
-                str(config.exa_monthly_budget_usd)
-                if config.exa_monthly_budget_usd is not None
-                else None
-            ),
-            "exa_manual_starting_credits_usd": (
-                str(config.exa_manual_starting_credits_usd)
-                if config.exa_manual_starting_credits_usd is not None
-                else None
-            ),
-        }
-    }
-    await repository.set_runtime_setting(_provider_key(provider), payload)
+    await repository.set_runtime_setting(_provider_key(provider), _provider_payload(config))
+    clear_config_cache(repository, provider.value)
 
 
 async def routing_policy(repository: SQLiteRepository | None) -> RoutingConfigResponse:
     """Return the persisted routing policy or its defaults; corrupt data defaults."""
 
+    if repository is not None:
+        cached = _POLICY_CACHE.get(id(repository))
+        if cached is not None:
+            return cached
     payload = await _safe_runtime_setting(repository, _ROUTING_KEY)
+    policy = RoutingConfigResponse()
     if isinstance(payload, dict):
         with suppress(ValidationError):
-            return RoutingConfigResponse.model_validate(payload)
-    return RoutingConfigResponse()
+            policy = RoutingConfigResponse.model_validate(payload)
+    if repository is not None:
+        _POLICY_CACHE[id(repository)] = policy
+    return policy
 
 
 async def persist_routing_config(
@@ -664,6 +966,7 @@ async def persist_routing_config(
     if repository is None:
         return
     await repository.set_runtime_setting(_ROUTING_KEY, policy.model_dump(mode="json"))
+    _POLICY_CACHE.pop(id(repository), None)
 
 
 async def load_breaker(
@@ -777,6 +1080,8 @@ async def _provider_entry(
     return ProviderStatusResponse(
         provider_id=provider.value,
         enabled=config.enabled,
+        enable_mask=config.enable_mask,
+        support_mask=config.support_mask,
         priority=config.priority,
         health=reported_health,
         circuit_breaker=breaker,

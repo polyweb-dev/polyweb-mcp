@@ -9,16 +9,20 @@ End-to-end Behavior-Driven Development (BDD) using `playwright-bdd`, TypeScript,
 
 ## 1. Workflow & Commands
 
+Run each command from `freesearch-ui/`.
+
 **Workflow**: Write `.feature` ──> Implement step definitions in `tests/steps/*.ts` ──> `pnpm bddgen` ──> `pnpm test:e2e`
+
+Run `pnpm bddgen` before each direct `npx playwright test` command. The generated specs in `tests/features-gen/` must agree with the current `.feature` files.
 
 * **Inner Loop (Active Development)**: Run only the scenario under test:
   ```bash
-  npx playwright test --grep "@smoke"
+  pnpm bddgen && npx playwright test --grep "@smoke"
   ```
 * **Full Suite Execution**:
   ```bash
   pnpm test:e2e          # Runs bddgen and executes full test matrix
-  pnpm test:e2e:ui       # Interactive visual UI mode
+  pnpm test:e2e:headed   # Runs bddgen and executes the matrix in headed mode
   ```
 * **Debugging**:
   ```bash
@@ -28,13 +32,14 @@ End-to-end Behavior-Driven Development (BDD) using `playwright-bdd`, TypeScript,
 
 ---
 
-## 2. Directory Structure (`apps/web`)
+## 2. Directory Structure (`freesearch-ui`)
 
 ```
-apps/web/
+freesearch-ui/
 ├── playwright.config.ts          # defineBddConfig & webServer config
 └── tests/
     ├── features/                 # Declarative Gherkin (.feature) files
+    ├── features-gen/             # Generated specs from bddgen (never edit by hand)
     └── steps/                    # Step definitions & fixtures
         ├── fixtures.ts           # Extended Playwright test & createBdd export
         └── *.steps.ts            # Typed Given, When, Then definitions
@@ -93,10 +98,10 @@ Then("the composer textarea should contain {string}", async ({ page }, text: str
 
 | Symptom | Cause | Action |
 | :--- | :--- | :--- |
-| **"Missing step definition" error** | Gherkin text does not match step pattern or `bddgen` not regenerated | Run `pnpm bddgen` to regenerate `.features-gen/`; check parameter quotes `{string}` vs `{int}`. |
+| **"Missing step definition" error** | Gherkin text does not match step pattern or `bddgen` not regenerated | Run `pnpm bddgen` to regenerate `tests/features-gen/`; check parameter quotes `{string}` vs `{int}`. |
 | **Flaky or timing out element** | Using fixed `waitForTimeout` or missing auto-wait assertion | Use auto-waiting assertions: `await expect(locator).toBeVisible()` or semantic `page.getByRole(...)`. |
-| **Port 3000 busy / connection refused** | Existing dev server running or dev server exited | Check `playwright.config.ts` `webServer.reuseExistingServer: true`; verify `pnpm dev:web` is running. |
-| **Stale test runner artifacts** | Cached `.features-gen/` from deleted feature files | Delete `.features-gen/` directory and re-run `pnpm bddgen`. |
+| **Port busy or connection refused** | A dev server uses the port, or no dev server runs | Do the worktree port check and the server identity check in Section 5. |
+| **Stale test runner artifacts** | Cached `tests/features-gen/` specs from deleted feature files | Delete the `tests/features-gen/` directory and re-run `pnpm bddgen`. |
 
 ---
 
@@ -104,4 +109,6 @@ Then("the composer textarea should contain {string}", async ({ page }, text: str
 
 - **Declarative Scenarios**: Write user-intent focused scenarios (`When I submit valid credentials`), not low-level DOM keystrokes.
 - **Auto-Waiting Locators**: Rely on auto-waiting assertions (`await expect(locator).toBeVisible()`). Never use hardcoded sleeps (`page.waitForTimeout()`).
-- **Clean Git Artifacts**: Keep `.features-gen/`, `test-results/`, and `playwright-report/` in `.gitignore`.
+- **Worktree Port Check**: Read `VITE_PORT` from the local `.env` before you start a server. Confirm that the port belongs to your worktree.
+- **Server Identity Check**: Confirm the identity of each running server. Run e2e tests only against the server of your own worktree.
+- **Clean Git Artifacts**: Keep `tests/features-gen/`, `test-results/`, and `playwright-report/` in `.gitignore`.

@@ -7,6 +7,14 @@ import userEvent from "@testing-library/user-event"
 import { MemoryRouter, useLocation } from "react-router"
 import { Sidebar } from "./Sidebar"
 import type { TabId } from "./Sidebar"
+import { AuthContext } from "@/domains/auth/state/context"
+import { authenticatedContextValue } from "@/test/renderAuthenticated"
+import {
+  adminAccountFixture,
+  agentAccountFixture,
+  developerAccountFixture,
+} from "@/test/authFixtures"
+import type { UserAccount } from "@/domains/auth"
 
 /**
  * C4 URL routing — collapsible sidebar over router links (REWRITTEN, Red phase).
@@ -84,7 +92,30 @@ const EXPECTED_NAV: Array<{ label: string; id: TabId; href: string }> = [
   { label: "Usage", id: "quotas", href: "/usage" },
   { label: "Activity", id: "activity", href: "/activity" },
   { label: "Settings", id: "settings", href: "/settings" },
+  { label: "Account", id: "account", href: "/account" },
+  { label: "Admin", id: "adminUsers", href: "/admin/users" },
 ]
+
+const ADMIN_LINK_LABELS = [
+  "Playground",
+  "Routing",
+  "Usage",
+  "Activity",
+  "Settings",
+  "Account",
+  "Admin",
+]
+
+const DEVELOPER_LINK_LABELS = [
+  "Playground",
+  "Routing",
+  "Usage",
+  "Activity",
+  "Settings",
+  "Account",
+]
+
+const AGENT_LINK_LABELS = ["Playground", "Activity", "Account"]
 
 const STORAGE_KEY = "freesearch.sidebar.collapsed"
 
@@ -113,14 +144,25 @@ function stubMatchMedia(matches: boolean): void {
 
 function renderSidebar(
   props: Partial<React.ComponentProps<typeof Sidebar>> = {},
-  route = "/playground"
+  route = "/playground",
+  account: UserAccount = adminAccountFixture()
 ) {
   return render(
     <MemoryRouter initialEntries={[route]}>
-      <Sidebar {...props} />
+      <AuthContext.Provider value={authenticatedContextValue(account)}>
+        <Sidebar {...props} />
+      </AuthContext.Provider>
       <LocationProbe />
     </MemoryRouter>
   )
+}
+
+function renderSidebarAs(
+  account: UserAccount,
+  props: Partial<React.ComponentProps<typeof Sidebar>> = {},
+  route = "/playground"
+) {
+  return renderSidebar(props, route, account)
 }
 
 function asideEl(): HTMLElement {
@@ -152,6 +194,8 @@ describe("AC-SB-1: Sidebar module contract", () => {
       "quotas",
       "activity",
       "settings",
+      "account",
+      "adminUsers",
     ]) {
       expect(routesSource).toContain(`"${id}"`)
     }
@@ -160,7 +204,7 @@ describe("AC-SB-1: Sidebar module contract", () => {
     expect(sidebarSource).toMatch(/from\s+["']@\/app\/routes["']/)
   })
 
-  it("declares navItems with all five tab ids (P1-FINAL: no providers)", () => {
+  it("declares navItems with all seven tab ids (P1-FINAL: no providers; R-UI: Account + Admin in scope)", () => {
     expect(sidebarNavSource).toMatch(/navItems/)
     for (const { id } of EXPECTED_NAV) {
       expect(sidebarNavSource).toContain(`"${id}"`)
@@ -203,14 +247,14 @@ describe("AC-SB-1: Sidebar module contract", () => {
   it("renders a vector icon inside every nav link (asserted structurally, never by snapshot)", () => {
     renderSidebar()
     const links = within(primaryNav()).getAllByRole("link")
-    expect(links).toHaveLength(5)
+    expect(links).toHaveLength(7)
     for (const link of links) {
       expect(link.querySelector("svg")).not.toBeNull()
     }
   })
 })
 
-describe("AC-SB-2 (C4, P1-FINAL): landmark + five router links, URL changes on nav", () => {
+describe("AC-SB-2 (C4, P1-FINAL, R-UI): landmark + seven router links, URL changes on nav", () => {
   it("renders a sticky full-height aside landmark", () => {
     renderSidebar()
     const aside = asideEl()
@@ -228,13 +272,13 @@ describe("AC-SB-2 (C4, P1-FINAL): landmark + five router links, URL changes on n
     ).toHaveLength(1)
   })
 
-  it("renders exactly five nav links in order with exact accessible names", () => {
+  it("renders exactly seven nav links in order with exact accessible names", () => {
     renderSidebar()
     const links = within(primaryNav()).getAllByRole("link")
-    expect(links).toHaveLength(5)
+    expect(links).toHaveLength(7)
     expect(
       links.map((l) => l.getAttribute("aria-label") ?? l.textContent?.trim())
-    ).toEqual(["Playground", "Routing", "Usage", "Activity", "Settings"])
+    ).toEqual(["Playground", "Routing", "Usage", "Activity", "Settings", "Account", "Admin"])
     for (const link of links) {
       expect(link.tagName).toBe("A")
       expect(link.getAttribute("href")).toMatch(/^\//)
@@ -284,7 +328,7 @@ describe("AC-SB-2 (C4, P1-FINAL): landmark + five router links, URL changes on n
   it("primary nav contains links, not buttons (controls stay buttons)", () => {
     renderSidebar()
     const nav = primaryNav()
-    expect(within(nav).getAllByRole("link")).toHaveLength(5)
+    expect(within(nav).getAllByRole("link")).toHaveLength(7)
     expect(within(nav).queryByRole("button")).not.toBeInTheDocument()
     // Aside-level controls remain plain buttons outside the Primary nav.
     expect(
@@ -310,6 +354,8 @@ describe("AC-SB-2 (C4, P1-FINAL): landmark + five router links, URL changes on n
       "/usage",
       "/activity",
       "/settings",
+      "/account",
+      "/admin/users",
     ])
   })
 
@@ -333,7 +379,7 @@ describe("AC-SB-3: single active indicator tracks the router", () => {
         exact: true,
       })
     ).toHaveAttribute("aria-current", "page")
-    for (const label of ["Routing", "Usage", "Activity", "Settings"]) {
+    for (const label of ["Routing", "Usage", "Activity", "Settings", "Account", "Admin"]) {
       expect(
         within(primaryNav()).getByRole("link", { name: label, exact: true })
       ).not.toHaveAttribute("aria-current")
@@ -392,7 +438,7 @@ describe("AC-SB-4: keyboard focus ring + reduced-motion", () => {
   it("every nav link exposes a signal focus ring", () => {
     renderSidebar()
     const links = within(primaryNav()).getAllByRole("link")
-    expect(links).toHaveLength(5)
+    expect(links).toHaveLength(7)
     for (const link of links) {
       expect(link.className).toMatch(/focus-visible:/)
       expect(link.className.toLowerCase()).toMatch(/signal|ring/)
@@ -413,7 +459,7 @@ describe("AC-SB-4: keyboard focus ring + reduced-motion", () => {
   it("nav links stay keyboard-focusable", () => {
     renderSidebar()
     const links = within(primaryNav()).getAllByRole("link")
-    expect(links).toHaveLength(5)
+    expect(links).toHaveLength(7)
     for (const link of links) {
       expect(link.tagName).toBe("A")
       expect(link.hasAttribute("disabled")).toBe(false)
@@ -439,7 +485,7 @@ describe("AC-SB-5: collapsed w-16 icon rail", () => {
   it("collapsed links keep exact aria-label + title accessible names", () => {
     renderSidebar({ collapsed: true, onCollapsedChange: () => {} })
     const links = within(primaryNav()).getAllByRole("link")
-    expect(links).toHaveLength(5)
+    expect(links).toHaveLength(7)
     const seen: string[] = []
     for (const { label } of EXPECTED_NAV) {
       const link = within(primaryNav()).getByRole("link", {
@@ -456,6 +502,8 @@ describe("AC-SB-5: collapsed w-16 icon rail", () => {
       "Usage",
       "Activity",
       "Settings",
+      "Account",
+      "Admin",
     ])
   })
 
@@ -473,12 +521,15 @@ describe("AC-SB-6: collapse toggle — controlled + uncontrolled", () => {
   it("expanded sidebar offers 'Collapse sidebar' which reports true", async () => {
     const user = userEvent.setup()
     const onCollapsedChange = vi.fn()
+    const adminValue = authenticatedContextValue(adminAccountFixture())
     const { rerender } = render(
       <MemoryRouter initialEntries={["/playground"]}>
-        <Sidebar
-          collapsed={false}
-          onCollapsedChange={onCollapsedChange}
-        />
+        <AuthContext.Provider value={adminValue}>
+          <Sidebar
+            collapsed={false}
+            onCollapsedChange={onCollapsedChange}
+          />
+        </AuthContext.Provider>
       </MemoryRouter>
     )
     await user.click(
@@ -489,10 +540,12 @@ describe("AC-SB-6: collapse toggle — controlled + uncontrolled", () => {
     // Controlled: DOM follows the prop, not the click.
     rerender(
       <MemoryRouter initialEntries={["/playground"]}>
-        <Sidebar
-          collapsed={false}
-          onCollapsedChange={onCollapsedChange}
-        />
+        <AuthContext.Provider value={adminValue}>
+          <Sidebar
+            collapsed={false}
+            onCollapsedChange={onCollapsedChange}
+          />
+        </AuthContext.Provider>
       </MemoryRouter>
     )
     expect(asideEl().className).not.toMatch(/w-16/)
@@ -503,10 +556,14 @@ describe("AC-SB-6: collapse toggle — controlled + uncontrolled", () => {
     const onCollapsedChange = vi.fn()
     render(
       <MemoryRouter initialEntries={["/playground"]}>
-        <Sidebar
-          collapsed
-          onCollapsedChange={onCollapsedChange}
-        />
+        <AuthContext.Provider
+          value={authenticatedContextValue(adminAccountFixture())}
+        >
+          <Sidebar
+            collapsed
+            onCollapsedChange={onCollapsedChange}
+          />
+        </AuthContext.Provider>
       </MemoryRouter>
     )
     await user.click(
@@ -520,7 +577,11 @@ describe("AC-SB-6: collapse toggle — controlled + uncontrolled", () => {
     const user = userEvent.setup()
     render(
       <MemoryRouter initialEntries={["/playground"]}>
-        <Sidebar defaultCollapsed />
+        <AuthContext.Provider
+          value={authenticatedContextValue(adminAccountFixture())}
+        >
+          <Sidebar defaultCollapsed />
+        </AuthContext.Provider>
       </MemoryRouter>
     )
     expect(asideEl().className).toMatch(/w-16/)
@@ -648,7 +709,11 @@ describe("AC-SB-9: persistence in freesearch.sidebar.collapsed", () => {
     window.localStorage.setItem(STORAGE_KEY, "1")
     render(
       <MemoryRouter initialEntries={["/playground"]}>
-        <Sidebar />
+        <AuthContext.Provider
+          value={authenticatedContextValue(adminAccountFixture())}
+        >
+          <Sidebar />
+        </AuthContext.Provider>
       </MemoryRouter>
     )
     expect(asideEl().className).toMatch(/w-16/)
@@ -658,7 +723,11 @@ describe("AC-SB-9: persistence in freesearch.sidebar.collapsed", () => {
     window.localStorage.setItem(STORAGE_KEY, "0")
     render(
       <MemoryRouter initialEntries={["/playground"]}>
-        <Sidebar />
+        <AuthContext.Provider
+          value={authenticatedContextValue(adminAccountFixture())}
+        >
+          <Sidebar />
+        </AuthContext.Provider>
       </MemoryRouter>
     )
     expect(asideEl().className).not.toMatch(/w-16/)
@@ -669,7 +738,11 @@ describe("AC-SB-9: persistence in freesearch.sidebar.collapsed", () => {
     expect(() =>
       render(
         <MemoryRouter initialEntries={["/playground"]}>
-          <Sidebar />
+          <AuthContext.Provider
+            value={authenticatedContextValue(adminAccountFixture())}
+          >
+            <Sidebar />
+          </AuthContext.Provider>
         </MemoryRouter>
       )
     ).not.toThrow()
@@ -680,7 +753,11 @@ describe("AC-SB-9: persistence in freesearch.sidebar.collapsed", () => {
     const user = userEvent.setup()
     render(
       <MemoryRouter initialEntries={["/playground"]}>
-        <Sidebar />
+        <AuthContext.Provider
+          value={authenticatedContextValue(adminAccountFixture())}
+        >
+          <Sidebar />
+        </AuthContext.Provider>
       </MemoryRouter>
     )
     expect(window.localStorage.getItem(STORAGE_KEY)).toBeNull()
@@ -700,9 +777,13 @@ describe("AC-SB-9: persistence in freesearch.sidebar.collapsed", () => {
     window.localStorage.setItem(STORAGE_KEY, "banana")
     render(
       <MemoryRouter initialEntries={["/playground"]}>
-        <Sidebar
-          defaultCollapsed
-        />
+        <AuthContext.Provider
+          value={authenticatedContextValue(adminAccountFixture())}
+        >
+          <Sidebar
+            defaultCollapsed
+          />
+        </AuthContext.Provider>
       </MemoryRouter>
     )
     expect(asideEl().className).toMatch(/w-16/)
@@ -712,10 +793,14 @@ describe("AC-SB-9: persistence in freesearch.sidebar.collapsed", () => {
     window.localStorage.setItem(STORAGE_KEY, "1")
     render(
       <MemoryRouter initialEntries={["/playground"]}>
-        <Sidebar
-          collapsed={false}
-          onCollapsedChange={() => {}}
-        />
+        <AuthContext.Provider
+          value={authenticatedContextValue(adminAccountFixture())}
+        >
+          <Sidebar
+            collapsed={false}
+            onCollapsedChange={() => {}}
+          />
+        </AuthContext.Provider>
       </MemoryRouter>
     )
     expect(asideEl().className).not.toMatch(/w-16/)
@@ -728,7 +813,11 @@ describe("AC-SB-9: persistence in freesearch.sidebar.collapsed", () => {
     expect(() =>
       render(
         <MemoryRouter initialEntries={["/playground"]}>
-          <Sidebar />
+          <AuthContext.Provider
+            value={authenticatedContextValue(adminAccountFixture())}
+          >
+            <Sidebar />
+          </AuthContext.Provider>
         </MemoryRouter>
       )
     ).not.toThrow()
@@ -743,9 +832,13 @@ describe("AC-SB-9: persistence in freesearch.sidebar.collapsed", () => {
     })
     render(
       <MemoryRouter initialEntries={["/playground"]}>
-        <Sidebar
-          onCollapsedChange={onCollapsedChange}
-        />
+        <AuthContext.Provider
+          value={authenticatedContextValue(adminAccountFixture())}
+        >
+          <Sidebar
+            onCollapsedChange={onCollapsedChange}
+          />
+        </AuthContext.Provider>
       </MemoryRouter>
     )
     await user.click(
@@ -755,5 +848,218 @@ describe("AC-SB-9: persistence in freesearch.sidebar.collapsed", () => {
     expect(asideEl().className).toMatch(/w-16/)
     expect(onCollapsedChange).toHaveBeenCalledTimes(1)
     expect(onCollapsedChange).toHaveBeenCalledWith(true)
+  })
+})
+
+describe("AC5 (R-UI): nav filters by confirmed role via canAccessRoute", () => {
+  it("admin sees all seven links in order including Account and Admin", () => {
+    renderSidebarAs(adminAccountFixture())
+    const links = within(primaryNav()).getAllByRole("link")
+    expect(links).toHaveLength(7)
+    expect(
+      links.map((l) => l.getAttribute("aria-label") ?? l.textContent?.trim())
+    ).toEqual(ADMIN_LINK_LABELS)
+    expect(
+      within(primaryNav()).getByRole("link", { name: "Admin", exact: true })
+    ).toHaveAttribute("href", "/admin/users")
+  })
+
+  it("developer sees six links and no Admin link", () => {
+    renderSidebarAs(developerAccountFixture())
+    const links = within(primaryNav()).getAllByRole("link")
+    expect(links).toHaveLength(6)
+    expect(
+      links.map((l) => l.getAttribute("aria-label") ?? l.textContent?.trim())
+    ).toEqual(DEVELOPER_LINK_LABELS)
+    expect(
+      within(primaryNav()).queryByRole("link", { name: "Admin", exact: true })
+    ).not.toBeInTheDocument()
+  })
+
+  it("agent sees exactly Playground, Activity, Account and no Admin link", () => {
+    renderSidebarAs(agentAccountFixture())
+    const links = within(primaryNav()).getAllByRole("link")
+    expect(links).toHaveLength(3)
+    expect(
+      links.map((l) => l.getAttribute("aria-label") ?? l.textContent?.trim())
+    ).toEqual(AGENT_LINK_LABELS)
+    expect(
+      within(primaryNav()).queryByRole("link", { name: "Admin", exact: true })
+    ).not.toBeInTheDocument()
+    expect(
+      within(primaryNav()).queryByRole("link", { name: "Routing", exact: true })
+    ).not.toBeInTheDocument()
+  })
+})
+
+describe("SB-STRUCTURE: account row placement and header collapse", () => {
+  it("account trigger lives in the aside foot outside the Primary nav", () => {
+    renderSidebar()
+    const aside = asideEl()
+    expect(
+      within(aside).getByRole("button", { name: "Open user menu", exact: true })
+    ).toBeInTheDocument()
+    expect(
+      within(primaryNav()).queryByRole("button", {
+        name: "Open user menu",
+        exact: true,
+      })
+    ).not.toBeInTheDocument()
+  })
+
+  it("sidebar shows no direct Sign out button while the popup stays closed", () => {
+    renderSidebar()
+    expect(
+      within(asideEl()).queryByRole("button", { name: "Sign out", exact: true })
+    ).not.toBeInTheDocument()
+    expect(screen.queryByRole("dialog", { name: "User account" })).not.toBeInTheDocument()
+  })
+
+  it("navigation keeps scroll classes while the footer stays outside the nav", () => {
+    renderSidebar()
+    const nav = primaryNav()
+    expect(nav.className).toMatch(/flex-1/)
+    expect(nav.className).toMatch(/overflow-y-auto/)
+    expect(nav.className).toMatch(/min-h-0/)
+    const trigger = within(asideEl()).getByRole("button", {
+      name: "Open user menu",
+      exact: true,
+    })
+    expect(nav.contains(trigger)).toBe(false)
+  })
+
+  it("header collapse sits beside the brand with no separate bottom row", () => {
+    renderSidebar()
+    const aside = asideEl()
+    expect(
+      within(aside).getByRole("button", { name: "Collapse sidebar", exact: true })
+    ).toBeInTheDocument()
+    expect(screen.getByText("FreeSearch", { exact: true })).toBeInTheDocument()
+    const collapseControls = screen.getAllByRole("button", {
+      name: /^(Collapse|Expand) sidebar$/,
+    })
+    expect(collapseControls).toHaveLength(1)
+  })
+
+  it("collapse control is the first focus stop in the aside", () => {
+    renderSidebar()
+    const focusables = Array.from(
+      asideEl().querySelectorAll("a[href], button:not([disabled])")
+    )
+    expect(focusables.length).toBeGreaterThan(0)
+    expect(focusables[0]).toBe(
+      screen.getByRole("button", { name: "Collapse sidebar", exact: true })
+    )
+  })
+})
+
+describe("SB-POPOVER: portal bounds and nested Escape order", () => {
+  it("popup renders in a top-aligned portal outside the aside", async () => {
+    const user = userEvent.setup()
+    renderSidebar()
+    await user.click(
+      screen.getByRole("button", { name: "Open user menu", exact: true })
+    )
+    const dialog = await screen.findByRole("dialog", { name: "User account" })
+    expect(document.body.contains(dialog)).toBe(true)
+    expect(dialog.closest("aside")).toBeNull()
+    expect(document.querySelector(".z-60")).not.toBeNull()
+    expect(dialog.className).toMatch(/w-56/)
+    expect(
+      screen.getByRole("button", { name: "Sign out", exact: true })
+    ).toBeInTheDocument()
+  })
+
+  it("Escape closes the popup and returns focus to the trigger", async () => {
+    const user = userEvent.setup()
+    renderSidebar()
+    await user.click(
+      screen.getByRole("button", { name: "Open user menu", exact: true })
+    )
+    await screen.findByRole("dialog", { name: "User account" })
+
+    await user.keyboard("{Escape}")
+
+    expect(screen.queryByRole("dialog", { name: "User account" })).not.toBeInTheDocument()
+    expect(
+      screen.getByRole("button", { name: "Open user menu", exact: true })
+    ).toHaveFocus()
+  })
+
+  it("drawer Escape order closes the popup first, then the drawer", async () => {
+    const user = userEvent.setup()
+    renderSidebar()
+    const opener = screen.getByRole("button", {
+      name: "Open navigation",
+      exact: true,
+    })
+    await user.click(opener)
+    const drawer = screen.getByRole("dialog", { name: "Navigation" })
+    await user.click(
+      within(drawer).getByRole("button", { name: "Open user menu", exact: true })
+    )
+    await screen.findByRole("dialog", { name: "User account" })
+
+    await user.keyboard("{Escape}")
+
+    expect(screen.queryByRole("dialog", { name: "User account" })).not.toBeInTheDocument()
+    expect(screen.getByRole("dialog", { name: "Navigation" })).toBeInTheDocument()
+
+    await user.keyboard("{Escape}")
+
+    expect(screen.queryByTestId("sidebar-scrim")).not.toBeInTheDocument()
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
+    expect(document.activeElement).toBe(opener)
+  })
+})
+
+describe("SB4-BRAND: collapsed logo expansion contracts", () => {
+  it("collapsed rail exposes one logo expansion button with the accessible name", () => {
+    renderSidebar({ collapsed: true, onCollapsedChange: () => {} })
+
+    const buttons = screen.getAllByRole("button", {
+      name: "Expand sidebar",
+      exact: true,
+    })
+    expect(buttons).toHaveLength(1)
+    expect(buttons[0].querySelector("img")).not.toBeNull()
+    expect(buttons[0].querySelector("svg")).not.toBeNull()
+  })
+
+  it("logo expansion button carries the collapsed accessible attributes", () => {
+    renderSidebar({ collapsed: true, onCollapsedChange: () => {} })
+
+    const button = screen.getByRole("button", {
+      name: "Expand sidebar",
+      exact: true,
+    })
+    expect(button).toHaveAttribute("aria-expanded", "false")
+    expect(button).toHaveAttribute("aria-controls", "primary-sidebar")
+    expect(button).toHaveAttribute("title", "Expand sidebar")
+  })
+
+  it("logo button press reports expansion through onCollapsedChange", async () => {
+    const user = userEvent.setup()
+    const onCollapsedChange = vi.fn()
+    renderSidebar({ collapsed: true, onCollapsedChange })
+
+    await user.click(
+      screen.getByRole("button", { name: "Expand sidebar", exact: true })
+    )
+
+    expect(onCollapsedChange).toHaveBeenCalledTimes(1)
+    expect(onCollapsedChange).toHaveBeenCalledWith(false)
+  })
+
+  it("expanded rail keeps the static brand beside the collapse control", () => {
+    renderSidebar({ collapsed: false, onCollapsedChange: () => {} })
+
+    expect(screen.getByText("FreeSearch", { exact: true })).toBeInTheDocument()
+    expect(
+      screen.getByRole("button", { name: "Collapse sidebar", exact: true })
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "Expand sidebar", exact: true })
+    ).not.toBeInTheDocument()
   })
 })

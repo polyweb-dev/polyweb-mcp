@@ -10,6 +10,7 @@ from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 import pytest_asyncio
 
@@ -28,6 +29,10 @@ from freesearch.persistence.storage import SQLiteRepository
 
 _FIXTURES = Path(__file__).resolve().parents[2] / "fixtures" / "observability"
 
+#: Two fixed account UUIDs for owner-isolation checks.
+OWNER_A = UUID("11111111-1111-4111-8111-111111111111")
+OWNER_B = UUID("22222222-2222-4222-8222-222222222222")
+
 
 @pytest_asyncio.fixture
 async def repository(tmp_path: Path) -> AsyncIterator[SQLiteRepository]:
@@ -40,7 +45,7 @@ def _load_fixture(name: str) -> dict[str, Any]:
     return json.loads((_FIXTURES / name).read_text(encoding="utf-8"))
 
 
-def _records_from_fixture(document: dict[str, Any]) -> list[TraceSpanRecord]:
+def _records_from_fixture(document: dict[str, Any], owner: UUID) -> list[TraceSpanRecord]:
     trace_id = str(document["trace_id"])
     records: list[TraceSpanRecord] = []
     for span in document["spans"]:
@@ -79,6 +84,9 @@ def _records_from_fixture(document: dict[str, Any]) -> list[TraceSpanRecord]:
                 output_json=json.dumps(output) if is_root and output is not None else None,
                 result_count=document.get("result_count") if is_root else None,
                 events=events,
+                # Only the root carries the owner. Child rows keep a null
+                # owner because the owned root supplies authorization.
+                user_id=str(owner) if is_root else None,
             )
         )
     return records
@@ -87,6 +95,7 @@ def _records_from_fixture(document: dict[str, Any]) -> list[TraceSpanRecord]:
 def _synthetic_root(
     trace_id: str,
     started: datetime,
+    owner: UUID,
     *,
     operation: TraceOperation = TraceOperation.SEARCH,
     outcome: TraceOutcome = TraceOutcome.SUCCESS,
@@ -106,20 +115,24 @@ def _synthetic_root(
         input_text="synthetic",
         result_count=result_count,
         outcome=outcome,
+        user_id=str(owner),
     )
 
 
-async def _seed(repository: SQLiteRepository, *names: str) -> None:
+async def _seed(repository: SQLiteRepository, owner: UUID, *names: str) -> None:
     for name in names:
-        write_trace_spans(repository.database_path, _records_from_fixture(_load_fixture(name)))
+        write_trace_spans(
+            repository.database_path,
+            _records_from_fixture(_load_fixture(name), owner),
+        )
 
 
 async def test_success_fixture_round_trips_summary_and_detail(
     repository: SQLiteRepository,
 ) -> None:
-    await _seed(repository, "search_success.json")
+    await _seed(repository, OWNER_A, "search_success.json")
 
-    summaries = await repository.list_trace_summaries()
+    summaries = await repository.list_trace_summaries(user_id=OWNER_A)
     assert len(summaries) == 1
     summary = summaries[0]
     assert summary.trace_id == "e1c2d3a4b5c6d7e8f9012345678abcde"
@@ -130,7 +143,7 @@ async def test_success_fixture_round_trips_summary_and_detail(
     assert summary.duration_ms == 248
     assert summary.error is None
 
-    detail = await repository.get_trace(summary.trace_id)
+    detail = await repository.get_trace(summary.trace_id, user_id=OWNER_A)
     assert detail is not None
     assert detail.input == "distributed consensus algorithms"
     assert isinstance(detail.output, TraceSearchOutput)
@@ -153,9 +166,9 @@ async def test_success_fixture_round_trips_summary_and_detail(
 async def test_error_fixture_projects_error_without_output(
     repository: SQLiteRepository,
 ) -> None:
-    await _seed(repository, "provider_error.json")
+    await _seed(repository, OWNER_A, "provider_error.json")
 
-    summaries = await repository.list_trace_summaries()
+    summaries = await repository.list_trace_summaries(user_id=OWNER_A)
     assert len(summaries) == 1
     summary = summaries[0]
     assert summary.operation is TraceOperation.FETCH
@@ -165,7 +178,7 @@ async def test_error_fixture_projects_error_without_output(
     assert summary.error.type == "http_error"
     assert summary.error.message == "HTTP 502"
 
-    detail = await repository.get_trace(summary.trace_id)
+    detail = await repository.get_trace(summary.trace_id, user_id=OWNER_A)
     assert detail is not None
     assert detail.input == "https://docs.freesearch.dev/getting-started"
     assert detail.output is None
@@ -179,27 +192,31 @@ async def test_error_fixture_projects_error_without_output(
 async def test_list_is_newest_first_with_operation_and_outcome_filters(
     repository: SQLiteRepository,
 ) -> None:
-    await _seed(repository, "search_success.json", "provider_error.json")
+    await _seed(repository, OWNER_A, "search_success.json", "provider_error.json")
 
-    summaries = await repository.list_trace_summaries()
+    summaries = await repository.list_trace_summaries(user_id=OWNER_A)
     assert [item.trace_id for item in summaries] == [
         "0f1e2d3c4b5a69788796a5b4c3d2e1f0",
         "e1c2d3a4b5c6d7e8f9012345678abcde",
     ]
 
-    assert [item.operation for item in await repository.list_trace_summaries()] == [
+    assert [item.operation for item in await repository.list_trace_summaries(user_id=OWNER_A)] == [
         TraceOperation.FETCH,
         TraceOperation.SEARCH,
     ]
-    fetched = await repository.list_trace_summaries(operation=TraceOperation.FETCH)
+    fetched = await repository.list_trace_summaries(user_id=OWNER_A, operation=TraceOperation.FETCH)
     assert [item.trace_id for item in fetched] == ["0f1e2d3c4b5a69788796a5b4c3d2e1f0"]
-    searched = await repository.list_trace_summaries(operation=TraceOperation.SEARCH)
+    searched = await repository.list_trace_summaries(
+        user_id=OWNER_A, operation=TraceOperation.SEARCH
+    )
     assert [item.trace_id for item in searched] == ["e1c2d3a4b5c6d7e8f9012345678abcde"]
-    succeeded = await repository.list_trace_summaries(outcome=TraceOutcome.SUCCESS)
+    succeeded = await repository.list_trace_summaries(user_id=OWNER_A, outcome=TraceOutcome.SUCCESS)
     assert [item.trace_id for item in succeeded] == ["e1c2d3a4b5c6d7e8f9012345678abcde"]
-    errored = await repository.list_trace_summaries(outcome=TraceOutcome.ERROR)
+    errored = await repository.list_trace_summaries(user_id=OWNER_A, outcome=TraceOutcome.ERROR)
     assert [item.trace_id for item in errored] == ["0f1e2d3c4b5a69788796a5b4c3d2e1f0"]
-    assert await repository.list_trace_summaries(outcome=TraceOutcome.PARTIAL) == []
+    assert (
+        await repository.list_trace_summaries(user_id=OWNER_A, outcome=TraceOutcome.PARTIAL) == []
+    )
 
 
 async def test_list_limit_clamps_to_1_and_100(repository: SQLiteRepository) -> None:
@@ -208,24 +225,26 @@ async def test_list_limit_clamps_to_1_and_100(repository: SQLiteRepository) -> N
         started = datetime.fromtimestamp(base.timestamp() + index * 60, tz=UTC)
         write_trace_spans(
             repository.database_path,
-            [_synthetic_root(f"{index:032x}", started, result_count=index)],
+            [_synthetic_root(f"{index:032x}", started, OWNER_A, result_count=index)],
         )
 
-    assert len(await repository.list_trace_summaries(limit=0)) == 1
-    assert len(await repository.list_trace_summaries(limit=-5)) == 1
-    assert len(await repository.list_trace_summaries(limit=2)) == 2
-    assert len(await repository.list_trace_summaries(limit=5000)) == 5
+    assert len(await repository.list_trace_summaries(user_id=OWNER_A, limit=0)) == 1
+    assert len(await repository.list_trace_summaries(user_id=OWNER_A, limit=-5)) == 1
+    assert len(await repository.list_trace_summaries(user_id=OWNER_A, limit=2)) == 2
+    assert len(await repository.list_trace_summaries(user_id=OWNER_A, limit=5000)) == 5
 
 
 async def test_list_rows_are_summary_only(repository: SQLiteRepository) -> None:
-    await _seed(repository, "search_success.json", "provider_error.json")
+    await _seed(repository, OWNER_A, "search_success.json", "provider_error.json")
 
-    summaries = await repository.list_trace_summaries()
+    summaries = await repository.list_trace_summaries(user_id=OWNER_A)
 
     assert len(summaries) == 2
     for summary in summaries:
+        assert summary.user_id == str(OWNER_A)
         assert set(summary.model_dump(mode="json")) == {
             "trace_id",
+            "user_id",
             "operation",
             "started_at",
             "duration_ms",
@@ -253,6 +272,7 @@ async def test_detail_orders_concurrent_fanout_children_stably(
         provider="aggregated",
         input_text="fanout query",
         result_count=2,
+        user_id=str(OWNER_A),
     )
     children = [
         TraceSpanRecord(
@@ -281,9 +301,10 @@ async def test_detail_orders_concurrent_fanout_children_stably(
     # Insert out of order; the read must still return a stable timeline.
     write_trace_spans(repository.database_path, [children[0], root, children[2], children[1]])
 
-    detail = await repository.get_trace(trace_id)
+    detail = await repository.get_trace(trace_id, user_id=OWNER_A)
 
     assert detail is not None
+    assert detail.user_id == str(OWNER_A)
     assert detail.spans[0].span_id == "aa00000000000000"
     assert [span.span_id for span in detail.spans[1:]] == [
         "aa00000000000001",
@@ -307,9 +328,9 @@ async def test_detail_orders_concurrent_fanout_children_stably(
 async def test_get_trace_returns_none_for_unknown_id(
     repository: SQLiteRepository,
 ) -> None:
-    await _seed(repository, "search_success.json")
+    await _seed(repository, OWNER_A, "search_success.json")
 
-    assert await repository.get_trace("0" * 32) is None
+    assert await repository.get_trace("0" * 32, user_id=OWNER_A) is None
 
 
 async def test_fetch_detail_output_shape(repository: SQLiteRepository) -> None:
@@ -338,13 +359,112 @@ async def test_fetch_detail_output_shape(repository: SQLiteRepository) -> None:
                 input_text="https://docs.freesearch.dev/page",
                 output_json=output.model_dump_json(),
                 result_count=1,
+                user_id=str(OWNER_A),
             )
         ],
     )
 
-    detail = await repository.get_trace(trace_id)
+    detail = await repository.get_trace(trace_id, user_id=OWNER_A)
 
     assert detail is not None
     assert detail.operation is TraceOperation.FETCH
     assert isinstance(detail.output, TraceFetchOutput)
     assert detail.output.content == "hello world"
+
+
+async def test_each_account_lists_only_its_own_traces(
+    repository: SQLiteRepository,
+) -> None:
+    await _seed(repository, OWNER_A, "search_success.json")
+    await _seed(repository, OWNER_B, "provider_error.json")
+
+    owned_a = await repository.list_trace_summaries(user_id=OWNER_A)
+    owned_b = await repository.list_trace_summaries(user_id=OWNER_B)
+
+    assert [item.trace_id for item in owned_a] == ["e1c2d3a4b5c6d7e8f9012345678abcde"]
+    assert [item.trace_id for item in owned_b] == ["0f1e2d3c4b5a69788796a5b4c3d2e1f0"]
+    assert all(item.user_id == str(OWNER_A) for item in owned_a)
+    assert all(item.user_id == str(OWNER_B) for item in owned_b)
+
+
+async def test_owner_filters_stay_inside_the_owner_predicate(
+    repository: SQLiteRepository,
+) -> None:
+    await _seed(repository, OWNER_A, "search_success.json")
+    await _seed(repository, OWNER_B, "provider_error.json")
+
+    assert (
+        await repository.list_trace_summaries(user_id=OWNER_A, operation=TraceOperation.FETCH) == []
+    )
+    assert (
+        await repository.list_trace_summaries(user_id=OWNER_B, operation=TraceOperation.SEARCH)
+        == []
+    )
+    assert [
+        item.trace_id
+        for item in await repository.list_trace_summaries(
+            user_id=OWNER_A, outcome=TraceOutcome.SUCCESS
+        )
+    ] == ["e1c2d3a4b5c6d7e8f9012345678abcde"]
+
+
+async def test_foreign_unknown_and_unowned_detail_reads_return_none(
+    repository: SQLiteRepository,
+) -> None:
+    await _seed(repository, OWNER_A, "search_success.json")
+    write_trace_spans(
+        repository.database_path,
+        _records_from_fixture(_load_fixture("provider_error.json"), OWNER_B),
+    )
+    # One historical row keeps a null owner in the database.
+    legacy = TraceSpanRecord(
+        span_id="legacy-root",
+        trace_id="c" * 32,
+        name="POST /search",
+        kind=TraceSpanKind.SERVER,
+        started_at=datetime(2026, 9, 29, 12, 0, tzinfo=UTC),
+        ended_at=datetime(2026, 9, 29, 12, 0, tzinfo=UTC),
+        duration_ms=5,
+        operation=TraceOperation.SEARCH,
+        provider="keenable",
+    )
+    write_trace_spans(repository.database_path, [legacy])
+
+    assert await repository.get_trace("e1c2d3a4b5c6d7e8f9012345678abcde", user_id=OWNER_B) is None
+    assert await repository.get_trace("0f1e2d3c4b5a69788796a5b4c3d2e1f0", user_id=OWNER_A) is None
+    assert await repository.get_trace("0" * 32, user_id=OWNER_A) is None
+    assert await repository.get_trace("c" * 32, user_id=OWNER_A) is None
+    assert await repository.get_trace("c" * 32, user_id=OWNER_B) is None
+    assert [item.trace_id for item in await repository.list_trace_summaries(user_id=OWNER_A)] == [
+        "e1c2d3a4b5c6d7e8f9012345678abcde"
+    ]
+
+
+async def test_limit_applies_after_the_owner_predicate(
+    repository: SQLiteRepository,
+) -> None:
+    base = datetime(2026, 9, 29, 10, 0, tzinfo=UTC)
+    for tag, owner in (("a", OWNER_A), ("b", OWNER_B)):
+        for index in range(3):
+            started = datetime.fromtimestamp(base.timestamp() + index * 60, tz=UTC)
+            trace_id = f"{tag}{index:031x}"
+            write_trace_spans(
+                repository.database_path,
+                [
+                    TraceSpanRecord(
+                        span_id=f"{tag}{index:015x}",
+                        trace_id=trace_id,
+                        name="POST /search",
+                        kind=TraceSpanKind.SERVER,
+                        started_at=started,
+                        ended_at=started,
+                        duration_ms=5,
+                        operation=TraceOperation.SEARCH,
+                        provider="keenable",
+                        user_id=str(owner),
+                    )
+                ],
+            )
+
+    assert len(await repository.list_trace_summaries(user_id=OWNER_A, limit=2)) == 2
+    assert len(await repository.list_trace_summaries(user_id=OWNER_B, limit=5000)) == 3

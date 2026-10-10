@@ -9,7 +9,10 @@ import { PlaygroundPage as SearchPlayground } from "@/features/playground/ui/Pla
 import { RoutingEngine } from "@/components/routing/RoutingEngine"
 import { SettingsView } from "@/components/settings/SettingsView"
 import { tabsListVariants } from "@/shared/ui/tabs"
+import { AuthContext } from "@/domains/auth/state/context"
+import { authenticatedContextValue } from "@/test/renderAuthenticated"
 import { installFetchStub, ok, err } from "@/test/fetchMock"
+import { ADMIN_ACCOUNT_ID, adminAccountFixture } from "@/test/authFixtures"
 import { allProvidersFixture, routingConfigFixture, dashboardFixture, searchResponseFixture, fetchResponseFixture } from "@/test/backendFixtures"
 
 describe("PillTabs.c2r.test.tsx", () => {
@@ -52,7 +55,7 @@ function renderWithBackend(ui: React.ReactElement) {
     }
     return err(404, { detail: "unhandled test route" })
   })
-  return render(<FreeSearchProvider>{ui}</FreeSearchProvider>)
+  return render(<FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>{ui}</FreeSearchProvider>)
 }
 
 /** Nearest spread header row (`justify-between`: title left, pill right). */
@@ -371,7 +374,7 @@ describe("C2-REWORK AC-C2R-4: no filter/Header regression", () => {
   // filter-preservation case is RETIRED. Filter narrowing is covered by the
   // merged Settings registry suite (SettingsProviders.p1-final.test.tsx).
 
-  it("Header compatibility shim exposes five router links and zero tab roles", async () => {
+  it("Header compatibility shim exposes seven router links and zero tab roles", async () => {
     const user = userEvent.setup()
 
     function LocationProbe() {
@@ -380,18 +383,29 @@ describe("C2-REWORK AC-C2R-4: no filter/Header regression", () => {
 
     render(
       <MemoryRouter initialEntries={["/playground"]}>
-        <Header />
-        <LocationProbe />
+        <AuthContext.Provider value={authenticatedContextValue(adminAccountFixture())}>
+          <Header />
+          <LocationProbe />
+        </AuthContext.Provider>
       </MemoryRouter>
     )
 
     // P1-FINAL: standalone Providers page retired — five workspace links.
+    // R-UI: Account and Admin screens entered scope, so an Admin sees seven.
     const headerNav = screen.getByRole("navigation", { name: "Primary" })
-    expect(within(headerNav).getAllByRole("link")).toHaveLength(5)
+    expect(within(headerNav).getAllByRole("link")).toHaveLength(7)
     expect(
       within(headerNav).queryByRole("link", { name: "Providers", exact: true })
     ).not.toBeInTheDocument()
-    for (const label of ["Playground", "Routing", "Usage", "Activity", "Settings"]) {
+    for (const label of [
+      "Playground",
+      "Routing",
+      "Usage",
+      "Activity",
+      "Settings",
+      "Account",
+      "Admin",
+    ]) {
       expect(screen.getByRole("link", { name: label, exact: true })).toBeInTheDocument()
     }
     expect(screen.queryByRole("tab")).not.toBeInTheDocument()

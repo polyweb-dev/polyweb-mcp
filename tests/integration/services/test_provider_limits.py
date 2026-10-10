@@ -56,31 +56,39 @@ async def repository():
                 extra.unlink()
 
 
-def _record(provider="synth", operation=LimitOperation.SEARCH, cost="0.005",
-            windows=None, priced=True):
+def _record(
+    provider="synth", operation=LimitOperation.SEARCH, cost="0.005", windows=None, priced=True
+):
     return ProviderLimitRecord(
-        provider=provider, operation=operation, auth_mode=AuthMode.KEYED,
-        supported=True, transport_available=True,
+        provider=provider,
+        operation=operation,
+        auth_mode=AuthMode.KEYED,
+        supported=True,
+        transport_available=True,
         rate=RateBlock(windows=windows or [], published=bool(windows)),
         budget=BudgetBlock(
-            model=BudgetModel.USD, standard_native_cost=Decimal(cost),
-            usd_per_call=Decimal(cost), priced=priced,
+            model=BudgetModel.USD,
+            standard_native_cost=Decimal(cost),
+            usd_per_call=Decimal(cost),
+            priced=priced,
         ),
-        native_unit=UnitKind.USD, native_pool_id=f"{provider}:keyed:USD",
+        native_unit=UnitKind.USD,
+        native_pool_id=f"{provider}:keyed:USD",
         conversion_profile=CRDPriceProfile(),
     )
 
 
 def _service(repo, records, at=FIXED_AT):
-    return ProviderLimitsService(
-        repo.limits, records=records, tier_defaults={}, clock=lambda: at
-    )
+    return ProviderLimitsService(repo.limits, records=records, tier_defaults={}, clock=lambda: at)
 
 
 def _ctx(provider="synth", attempt="a-1", at=FIXED_AT):
     return LimitCallContext(
-        provider=provider, operation=LimitOperation.SEARCH,
-        auth_mode=AuthMode.KEYED, attempt_id=attempt, requested_at=at,
+        provider=provider,
+        operation=LimitOperation.SEARCH,
+        auth_mode=AuthMode.KEYED,
+        attempt_id=attempt,
+        requested_at=at,
     )
 
 
@@ -89,10 +97,14 @@ async def _seed(repo, record, remaining, allowance=None):
     await svc.initialize()
     await repo.limits.apply_snapshot(
         NativeUsageSnapshot(
-            pool_id=record.native_pool_id or "", provider=record.provider,
-            auth_mode=AuthMode.KEYED, native_unit=UnitKind.USD,
-            observed_at=FIXED_AT, remaining=Decimal(remaining),
-            allowance=Decimal(allowance or remaining), credential_generation=0,
+            pool_id=record.native_pool_id or "",
+            provider=record.provider,
+            auth_mode=AuthMode.KEYED,
+            native_unit=UnitKind.USD,
+            observed_at=FIXED_AT,
+            remaining=Decimal(remaining),
+            allowance=Decimal(allowance or remaining),
+            credential_generation=0,
         )
     )
     return svc
@@ -123,21 +135,20 @@ async def test_success_debits_exact_crd(repository) -> None:
 
     svc = await _seed(repository, _record(cost="0.005"), "5.000")
     admission = await svc.admit(_ctx(attempt="ok-1"))
-    await svc.record_success(
-        admission, SearchResponse(query="q", results=[], provider="synth")
-    )
+    await svc.record_success(admission, SearchResponse(query="q", results=[], provider="synth"))
     pool = await repository.limits.get_pool("synth:keyed:USD")
     assert pool is not None and pool.remaining == Decimal("4.995")
 
 
 async def test_concurrent_rate_never_overspends(repository) -> None:
     window = RateWindow(
-        bucket_id="s-hour", limit=Decimal("1"), window=RateWindowName.HOUR,
-        scope=RateScope.KEY, unit=RateUnit.REQUESTS,
+        bucket_id="s-hour",
+        limit=Decimal("1"),
+        window=RateWindowName.HOUR,
+        scope=RateScope.KEY,
+        unit=RateUnit.REQUESTS,
     )
-    svc = await _seed(
-        repository, _record(cost="0.0006", windows=[window]), "0.01"
-    )
+    svc = await _seed(repository, _record(cost="0.0006", windows=[window]), "0.01")
 
     async def admit(attempt):
         try:
@@ -158,8 +169,10 @@ async def test_concurrent_rate_never_overspends(repository) -> None:
 async def test_unknown_balance_stays_eligible_until_grant_zero(repository) -> None:
     record = _record()
     record.budget = BudgetBlock(
-        model=BudgetModel.USD, standard_native_cost=Decimal("0.005"),
-        usd_per_call=Decimal("0.005"), priced=False,
+        model=BudgetModel.USD,
+        standard_native_cost=Decimal("0.005"),
+        usd_per_call=Decimal("0.005"),
+        priced=False,
     )
     svc = _service(repository, [record])
     await svc.initialize()
@@ -168,8 +181,10 @@ async def test_unknown_balance_stays_eligible_until_grant_zero(repository) -> No
     await svc.save_grant(
         "synth",
         GrantPayload(
-            version=0, period_start=date(2026, 3, 1),
-            period_end=date(2026, 4, 1), search_crd=Decimal("0"),
+            version=0,
+            period_start=date(2026, 3, 1),
+            period_end=date(2026, 4, 1),
+            search_crd=Decimal("0"),
             fetch_crd=Decimal("0"),
         ),
         AuthMode.KEYED,
@@ -181,8 +196,10 @@ async def test_grant_and_history_audit(repository) -> None:
     saved = await svc.save_grant(
         "synth",
         GrantPayload(
-            version=0, period_start=date(2026, 3, 1),
-            period_end=date(2026, 4, 1), search_crd=Decimal("10"),
+            version=0,
+            period_start=date(2026, 3, 1),
+            period_end=date(2026, 4, 1),
+            search_crd=Decimal("10"),
             fetch_crd=Decimal("4"),
         ),
         AuthMode.KEYED,
@@ -212,14 +229,20 @@ async def test_manual_anchor_reuse(repository) -> None:
 async def test_credential_change_rejects_stale(repository) -> None:
     svc = await _seed(repository, _record(), "5.000")
     await svc.credential_changed("synth")
-    assert await repository.limits.apply_snapshot(
-        NativeUsageSnapshot(
-            pool_id="synth:keyed:USD", provider="synth",
-            auth_mode=AuthMode.KEYED, native_unit=UnitKind.USD,
-            observed_at=FIXED_AT, remaining=Decimal("9.000"),
-            credential_generation=0,
+    assert (
+        await repository.limits.apply_snapshot(
+            NativeUsageSnapshot(
+                pool_id="synth:keyed:USD",
+                provider="synth",
+                auth_mode=AuthMode.KEYED,
+                native_unit=UnitKind.USD,
+                observed_at=FIXED_AT,
+                remaining=Decimal("9.000"),
+                credential_generation=0,
+            )
         )
-    ) is False
+        is False
+    )
 
 
 async def test_manual_anchor_delete_clears_to_unknown(repository) -> None:

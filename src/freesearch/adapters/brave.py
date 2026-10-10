@@ -2,10 +2,10 @@
 
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from typing import Any
+from typing import Any, cast
 
 import httpx
-from pydantic import SecretStr
+from pydantic import SecretStr, ValidationError
 
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.infrastructure.resilience import (
@@ -76,6 +76,32 @@ BRAVE_EXHAUSTION_BODY_CODES = frozenset(
 def _string_has_exhaustion_code(value: str) -> bool:
     """Return True when raw text carries a known exhaustion marker."""
     return any(code in value for code in BRAVE_EXHAUSTION_BODY_CODES)
+
+
+def _malformed_item_error() -> ProviderOperationError:
+    """Return the item-level error for one rejected search result."""
+
+    return ProviderOperationError(
+        ProviderError(
+            provider=_NAME,
+            code="invalid_response",
+            message="malformed search result item",
+        )
+    )
+
+
+def _parse_error_record(index: int) -> dict[str, object]:
+    """Return the safe record for one rejected search result item.
+
+    The record holds no raw payload, URL, key, query, or validation text, so a
+    rejected item can never leak response content into usage metadata.
+    """
+
+    return {
+        "index": index,
+        "code": "invalid_response",
+        "message": "malformed search result item",
+    }
 
 
 def brave_spend_usd(success_count: int | Decimal) -> Decimal:
@@ -261,10 +287,23 @@ class BraveAdapter(ProviderAdapter):
         results = web["results"]
         if not isinstance(web, dict) or not isinstance(results, list):
             raise TypeError("missing web results")
-        normalized = [self._normalize_result(result) for result in results]
+        normalized: list[SearchResult] = []
+        parse_errors: list[dict[str, object]] = []
+        for index, result in enumerate(results):
+            try:
+                normalized.append(self._normalize_result(result))
+            except ValidationError:
+                parse_errors.append(_parse_error_record(index))
+            except ProviderOperationError as exc:
+                if exc.error.code != "invalid_response":
+                    raise
+                parse_errors.append(_parse_error_record(index))
+        normalized = normalized[: request.limit]
         # Count the just-completed request before projecting the snapshot so
         # the monthly ledger includes it (matches Keenable's usage-first order).
         usage = self._usage_event(response)
+        if parse_errors:
+            usage.metadata["parse_errors"] = parse_errors
         snapshot = self._quota_snapshot(response)
         self._last_quota = snapshot
         return SearchResponse(
@@ -315,14 +354,15 @@ class BraveAdapter(ProviderAdapter):
 
     @staticmethod
     def _normalize_result(result: Any) -> SearchResult:
-        if not isinstance(result, dict):
-            raise TypeError("result is not a mapping")
+        url = result.get("url") if isinstance(result, dict) else None
+        if not isinstance(url, str) or not url:
+            raise _malformed_item_error()
         metadata = {
             key: result[key] for key in ("language", "subtype") if isinstance(result.get(key), str)
         }
         return SearchResult(
             title=result.get("title") or "",
-            url=result["url"],
+            url=cast(Any, url),
             snippet=result.get("description") or "",
             published_at=result.get("page_age"),
             metadata=metadata,

@@ -80,18 +80,14 @@ async def test_unsafe_usage_url_is_422(repository) -> None:
 
 async def test_batch_fetch_rejected_422_without_vendor_call(repository) -> None:
     with TestClient(_client(repository)) as client:
-        response = client.post(
-            "/fetch", json={"url": "https://example.com/a", "url_count": 2}
-        )
+        response = client.post("/fetch", json={"url": "https://example.com/a", "url_count": 2})
     assert response.status_code == 422
     assert "exactly one URL" in response.text
 
 
 async def test_history_requires_valid_limit(repository) -> None:
     with TestClient(_client(repository)) as client:
-        response = client.get(
-            "/api/v1/providers/keenable/limits/history?auth_mode=keyed&limit=0"
-        )
+        response = client.get("/api/v1/providers/keenable/limits/history?auth_mode=keyed&limit=0")
     assert response.status_code == 422
 
 
@@ -118,17 +114,18 @@ async def test_held_lease_sync_returns_skipped_200(repository) -> None:
 
     app = _client(repository, adapters=[_StubAdapter("brave")])
     with TestClient(app) as client:
+        assert client.get("/api/v1/providers/brave/limits").status_code == 200
         assert (
-            client.get("/api/v1/providers/brave/limits").status_code == 200
-        )
-        assert await repository.limits.claim_sync(
-            SyncClaim(
-                provider="brave",
-                owner="tester-lease",
-                now=datetime.now(UTC),
-                lease_seconds=60,
+            await repository.limits.claim_sync(
+                SyncClaim(
+                    provider="brave",
+                    owner="tester-lease",
+                    now=datetime.now(UTC),
+                    lease_seconds=60,
+                )
             )
-        ) is True
+            is True
+        )
         response = client.post("/api/v1/providers/brave/limits/sync")
     assert response.status_code == 200
     assert response.json()["status"] == "skipped"

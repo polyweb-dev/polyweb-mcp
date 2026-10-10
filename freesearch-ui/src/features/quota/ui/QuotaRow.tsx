@@ -2,6 +2,7 @@ import { useMemo, useState } from "react"
 import type { ReactNode } from "react"
 import { ProviderLogo } from "@/components/common/ProviderLogo"
 import { TableCell, TableRow } from "@/shared/ui/table"
+import { useFreeSearch } from "@/context/useFreeSearch"
 import type { ProviderConfig } from "@/domains/providers"
 import type { DashboardQuota } from "@/domains/dashboard"
 import { isManualQuotaEligible } from "../model/quotaEligibility"
@@ -39,6 +40,7 @@ export function QuotaRow({
   isOAuthPaired: isOAuthPairedProp = false,
 }: QuotaRowProps) {
   const [oauthPaired, setOauthPaired] = useState(false)
+  const { canEditControls } = useFreeSearch()
   const { pairedSnapshot } = resolveQuotaRow(
     provider,
     latestQuota,
@@ -126,31 +128,35 @@ export function QuotaRow({
         />
       </TableCell>
       <TableCell className="whitespace-normal px-4 py-4 text-right">
-        <QuotaRowActions
-          provider={provider}
-          manualEligible={manualEligible}
-          manual={manual}
-          onOpenManual={() => setModalOpen(true)}
-          oauth={renderOAuthActions ? renderOAuthActions({
-            providerId: provider.id,
-            providerName: provider.name,
-            hasUsableEstimate,
-            pairedSnapshot,
-            onPairedChange: setOauthPaired,
-          }) : null}
-        />
-        {manualEligible && modalOpen && (
-          <ManualQuotaModal
-            open={modalOpen}
-            providerId={provider.id}
-            providerName={provider.name}
-            unitKind={unitKind}
-            displayUnit={displayUnit}
-            defaults={manualDefaults}
-            onClose={() => setModalOpen(false)}
-            onSave={save}
-            {...(manual ? { onDelete: remove } : {})}
-          />
+        {canEditControls && (
+          <>
+            <QuotaRowActions
+              provider={provider}
+              manualEligible={manualEligible}
+              manual={manual}
+              onOpenManual={() => setModalOpen(true)}
+              oauth={renderOAuthActions ? renderOAuthActions({
+                providerId: provider.id,
+                providerName: provider.name,
+                hasUsableEstimate,
+                pairedSnapshot,
+                onPairedChange: setOauthPaired,
+              }) : null}
+            />
+            {manualEligible && modalOpen && (
+              <ManualQuotaModal
+                open={modalOpen}
+                providerId={provider.id}
+                providerName={provider.name}
+                unitKind={unitKind}
+                displayUnit={displayUnit}
+                defaults={manualDefaults}
+                onClose={() => setModalOpen(false)}
+                onSave={save}
+                {...(manual ? { onDelete: remove } : {})}
+              />
+            )}
+          </>
         )}
       </TableCell>
     </TableRow>

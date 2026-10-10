@@ -11,6 +11,8 @@ export type BackendCircuitBreaker = {
 export interface BackendProviderStatus {
   provider_id: string
   enabled: boolean
+  enable_mask: number
+  support_mask: number
   priority: number
   health: BackendHealth | null
   circuit_breaker: BackendCircuitBreaker

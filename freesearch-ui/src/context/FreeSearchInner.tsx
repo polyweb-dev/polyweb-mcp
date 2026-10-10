@@ -7,12 +7,34 @@ import { catalogNameOf } from "@/domains/providers";
 import { ExecutionScope } from "./ExecutionScope";
 import { FreeSearchAdapter } from "./FreeSearchAdapter";
 
-export const FreeSearchInner: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+/**
+ * Domain composition of the workspace. Each control-read provider receives the
+ * role capability flags, so a role without control access makes no control
+ * request and keeps an empty safe state.
+ */
+export const FreeSearchInner: React.FC<{
+  canReadControls: boolean;
+  canEditControls: boolean;
+  children: React.ReactNode;
+}> = ({ canReadControls, canEditControls, children }) => {
   const { showToast } = useNotifications();
   return (
-    <ProvidersProvider showToast={showToast}>
-      <RoutingProvider showToast={showToast}>
-        <DashboardProvider showToast={showToast} catalogNameOf={catalogNameOf}>
+    <ProvidersProvider
+      showToast={showToast}
+      canReadControls={canReadControls}
+      canEditControls={canEditControls}
+    >
+      <RoutingProvider
+        showToast={showToast}
+        canReadControls={canReadControls}
+        canEditControls={canEditControls}
+      >
+        <DashboardProvider
+          showToast={showToast}
+          catalogNameOf={catalogNameOf}
+          canReadControls={canReadControls}
+          canEditControls={canEditControls}
+        >
           <ExecutionScope showToast={showToast}>
             <FreeSearchAdapter>{children}</FreeSearchAdapter>
           </ExecutionScope>

@@ -1,7 +1,7 @@
 """Create the provider limit catalog, pools, grants, audit, and rate tables.
 
 Revision ID: 0004_provider_limits
-Revises: 0003_open_telemetry_spans
+Revises: 0004_provider_access_masks
 Create Date: 2026-10-05
 
 Forward-only migration: the catalog holds one row per provider, operation, and
@@ -18,7 +18,7 @@ from alembic import op
 from sqlalchemy import inspect
 
 revision: str = "0004_provider_limits"
-down_revision: str | None = "0003_open_telemetry_spans"
+down_revision: str | None = "0004_provider_access_masks"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

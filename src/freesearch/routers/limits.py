@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 from typing import Annotated, cast
 from urllib.parse import urlsplit
 
-from fastapi import Body, FastAPI, HTTPException, Query, Request
+from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
 from freesearch.configuration.provider_limits import PROVIDER_IDS
@@ -30,7 +30,15 @@ from freesearch.models.provider_limits import (
     ProviderLimitsResponse,
     SyncResult,
 )
+from freesearch.models.users import UserPrincipal
+from freesearch.routers.auth import require_admin, require_control_reader
 from freesearch.services.provider_limits import ProviderLimitsService
+
+#: Role gates follow the control-plane matrix: Admin guards every mutation and
+#: the control reader guards the sanitized reads. Both answer 401 before 403,
+#: and both run before any persistence write or vendor I/O.
+_AdminPrincipal = Annotated[UserPrincipal, Depends(require_admin)]
+_ReaderPrincipal = Annotated[UserPrincipal, Depends(require_control_reader)]
 
 _CREDENTIAL_MARKER = "@"
 _SAFE_SCHEME = "https://"
@@ -40,7 +48,9 @@ def register_limit_routes(app: FastAPI) -> None:
     """Register the limit endpoints on ``app``."""
 
     @app.get("/api/v1/providers/{provider_id}/limits", response_model=ProviderLimitsResponse)
-    async def get_limits(provider_id: str, request: Request) -> ProviderLimitsResponse:
+    async def get_limits(
+        _principal: _ReaderPrincipal, provider_id: str, request: Request
+    ) -> ProviderLimitsResponse:
         """Return both auth modes, their views, tiers, and rate progress."""
 
         service = _service(request)
@@ -51,6 +61,7 @@ def register_limit_routes(app: FastAPI) -> None:
         response_model=ProviderLimitsResponse,
     )
     async def patch_limits(
+        _principal: _AdminPrincipal,
         provider_id: str,
         auth_mode: str,
         operation: str,
@@ -68,6 +79,7 @@ def register_limit_routes(app: FastAPI) -> None:
         response_model=ProviderLimitsResponse,
     )
     async def put_crd_grants(
+        _principal: _AdminPrincipal,
         provider_id: str,
         auth_mode: str,
         payload: CRDGrantPayload,
@@ -85,6 +97,7 @@ def register_limit_routes(app: FastAPI) -> None:
 
     @app.get("/api/v1/providers/{provider_id}/limits/history", response_model=LimitHistoryPage)
     async def get_limit_history(
+        _principal: _ReaderPrincipal,
         provider_id: str,
         request: Request,
         auth_mode: str | None = None,
@@ -103,7 +116,9 @@ def register_limit_routes(app: FastAPI) -> None:
         return await _guard(provider_id, lambda: service.history(query))
 
     @app.post("/api/v1/providers/{provider_id}/limits/sync", response_model=SyncResult)
-    async def sync_limits(provider_id: str, request: Request) -> SyncResult:
+    async def sync_limits(
+        _principal: _AdminPrincipal, provider_id: str, request: Request
+    ) -> SyncResult:
         """Run one bounded provider sync under the mandatory lease and cadence."""
 
         _require_provider(provider_id)

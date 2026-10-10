@@ -25,3 +25,5 @@ FEEDBACK/
 *.secret_key
 *.secret_salt
 .agents/communication/
+.archive/
+test_reports/

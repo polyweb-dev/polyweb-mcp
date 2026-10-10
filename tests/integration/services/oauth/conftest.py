@@ -28,6 +28,7 @@ from freesearch.models.contracts import (
     SearchResponse,
     UsageOperation,
 )
+from freesearch.models.users import UserRole
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
 from freesearch.services.parallel_oauth import (
@@ -39,6 +40,7 @@ from freesearch.services.parallel_oauth import (
     clear_oauth_poll_state,
     poll_oauth_balance_snapshot,
 )
+from tests.fixtures.auth import raw_auth_headers, register_promote_login, temp_email
 from tests.integration.services.oauth.oauth_stubs import (
     StubOAuthServer,
     install_http_stub,
@@ -195,16 +197,31 @@ async def expire_access_token(repository: Any) -> None:
         await repository.set_runtime_setting(METADATA_RUNTIME_KEY, payload)
 
 
+async def admin_auth_headers(client: TestClient, repository: Any) -> dict[str, str]:
+    """Register one Admin account and return its access headers."""
+
+    # Use one Admin account per test for all OAuth and dashboard reads.
+    pair = await register_promote_login(
+        client, repository, temp_email("oauth-admin"), UserRole.ADMIN
+    )
+    return raw_auth_headers(pair["access_token"])
+
+
 async def connect_parallel(
-    client: TestClient, server: StubOAuthServer, repository: Any, *, max_rounds: int = 8
+    client: TestClient,
+    server: StubOAuthServer,
+    repository: Any,
+    *,
+    max_rounds: int = 8,
+    headers: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Drive the stubbed device flow to ready, honouring the vendor interval."""
 
-    start = require_implemented(client.post(DEVICE_CODE_PATH), "POST device-code")
+    start = require_implemented(client.post(DEVICE_CODE_PATH, headers=headers), "POST device-code")
     assert start.status_code == 200, start.text[:500]
     last: dict[str, Any] = {}
     for _ in range(max_rounds):
-        probe = client.get(STATUS_PATH)
+        probe = client.get(STATUS_PATH, headers=headers)
         assert probe.status_code == 200, probe.text[:500]
         payload = probe.json()
         assert isinstance(payload, dict)
@@ -227,8 +244,10 @@ async def poll_balance(repository: Any, server: StubOAuthServer, secret_store: A
         )
 
 
-def dashboard_parallel_quota(client: TestClient) -> dict[str, Any] | None:
-    response = client.get("/dashboard")
+def dashboard_parallel_quota(
+    client: TestClient, headers: dict[str, str] | None = None
+) -> dict[str, Any] | None:
+    response = client.get("/dashboard", headers=headers)
     assert response.status_code == 200, response.text[:500]
     entries = response.json().get("latest_quota", [])
     for entry in entries:

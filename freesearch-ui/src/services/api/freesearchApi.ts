@@ -28,12 +28,17 @@ import type {
   LimitHistoryQuery,
   ProviderLimitPatch,
 } from "@/domains/dashboard"
-import { ApiError, parseDetail, toApiError } from "@/shared/api/http"
-
-const API_BASE = (import.meta.env.VITE_API_URL as string | undefined) ?? ""
+import { requestJson } from "@/shared/api/client"
+import { ApiError } from "@/shared/api/http"
 
 type RoutingConfigPatch = Partial<BackendRoutingConfig>
-type ProviderPatch = { enabled?: boolean; priority?: number }
+type ProviderPatch = {
+  enable_mask?: number
+  enabled?: boolean
+  search_enabled?: boolean
+  fetch_enabled?: boolean
+  priority?: number
+}
 
 /** Optional Activity list filters; omitted values ask for the backend default. */
 export type TraceListFilters = {
@@ -43,41 +48,12 @@ export type TraceListFilters = {
 }
 
 export class FreeSearchApiService {
-  private async request<T>(path: string, init?: RequestInit): Promise<T> {
-    const headers = new Headers(init?.headers)
-    if (init?.body !== undefined && !headers.has("Content-Type")) {
-      headers.set("Content-Type", "application/json")
-    }
-
-    try {
-      const response = await fetch(`${API_BASE}${path}`, {
-        ...init,
-        headers,
-      })
-      const body = await this.readBody(response)
-      if (!response.ok) {
-        const detail = parseDetail(body)
-        throw new ApiError(response.status, detail, body)
-      }
-      return body as T
-    } catch (error) {
-      throw toApiError(error)
-    }
-  }
-
-  private async readBody(response: Response): Promise<unknown> {
-    let text: string
-    try {
-      text = await response.text()
-    } catch {
-      return undefined
-    }
-    if (!text) return undefined
-    try {
-      return JSON.parse(text) as unknown
-    } catch {
-      return text
-    }
+  /**
+   * Every method of this service uses the one shared transport, so Bearer
+   * attachment, abort handling, and error normalization stay identical.
+   */
+  private request<T>(path: string, init?: RequestInit): Promise<T> {
+    return requestJson<T>(path, init)
   }
 
   listProviders(): Promise<BackendProviderStatus[]> {
@@ -97,7 +73,10 @@ export class FreeSearchApiService {
 
   patchProvider(backendId: string, patch: ProviderPatch): Promise<BackendProviderStatus> {
     const body: ProviderPatch = {}
+    if (patch.enable_mask !== undefined) body.enable_mask = patch.enable_mask
     if (patch.enabled !== undefined) body.enabled = patch.enabled
+    if (patch.search_enabled !== undefined) body.search_enabled = patch.search_enabled
+    if (patch.fetch_enabled !== undefined) body.fetch_enabled = patch.fetch_enabled
     if (patch.priority !== undefined) body.priority = patch.priority
     return this.request<BackendProviderStatus>(`/api/v1/providers/${backendId}`, {
       method: "PATCH",

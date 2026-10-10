@@ -238,9 +238,7 @@ def step_one_head(context: Any) -> None:
     with sqlite3.connect(context.database_path) as conn:
         tables = {
             row[0]
-            for row in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            ).fetchall()
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
         }
     for table in (
         "provider_limits",
@@ -275,15 +273,15 @@ def step_lease_race(context: Any) -> None:
     )
     context.claim_a = _run(
         context,
-        repo.claim_sync(
-            SyncClaim(provider=SYNTH, owner="owner-a", now=now, lease_seconds=60)
-        ),
+        repo.claim_sync(SyncClaim(provider=SYNTH, owner="owner-a", now=now, lease_seconds=60)),
     )
     context.claim_b = _run(
         context,
         repo.claim_sync(
             SyncClaim(
-                provider=SYNTH, owner="owner-b", now=now + timedelta(seconds=1),
+                provider=SYNTH,
+                owner="owner-b",
+                now=now + timedelta(seconds=1),
                 lease_seconds=60,
             )
         ),
@@ -334,8 +332,10 @@ def step_bad_payload(context: Any) -> None:
         context,
         repo.claim_sync(
             SyncClaim(
-                provider=SYNTH, owner="synthetic-sync",
-                now=FIXED_AT + timedelta(seconds=30), lease_seconds=60,
+                provider=SYNTH,
+                owner="synthetic-sync",
+                now=FIXED_AT + timedelta(seconds=30),
+                lease_seconds=60,
             )
         ),
     )
@@ -368,12 +368,8 @@ def step_stale(context: Any) -> None:
 @when("I project synthetic priced balances")
 def step_project(context: Any) -> None:
     profile = CRDPriceProfile()
-    context.usd_one = cu.native_to_crd(
-        _pool("p", remaining="0.001", unit=UnitKind.USD), profile
-    )
-    context.usd_two = cu.native_to_crd(
-        _pool("p", remaining="0.002", unit=UnitKind.USD), profile
-    )
+    context.usd_one = cu.native_to_crd(_pool("p", remaining="0.001", unit=UnitKind.USD), profile)
+    context.usd_two = cu.native_to_crd(_pool("p", remaining="0.002", unit=UnitKind.USD), profile)
 
 
 @then("USD 0.001 gives one CRD and USD 0.002 gives two")
@@ -448,8 +444,11 @@ def step_402(context: Any) -> None:
 def step_pool_10_06(context: Any) -> None:
     _open_repo(context)
     window = RateWindow(
-        bucket_id="synth-hour", limit=Decimal("1"), window=RateWindowName.HOUR,
-        scope=RateScope.KEY, unit=RateUnit.REQUESTS,
+        bucket_id="synth-hour",
+        limit=Decimal("1"),
+        window=RateWindowName.HOUR,
+        scope=RateScope.KEY,
+        unit=RateUnit.REQUESTS,
     )
     record = _usd_record(native_cost="0.0006", rate_windows=[window])
     context.service = _service(context, [record])
@@ -494,9 +493,7 @@ def step_race_result(context: Any) -> None:
     assert len(admissions) == 1
     assert len(denials) == 1
     assert denials[0].status_code in (402, 429)
-    pool = _run(
-        context, _limits_repo(context).get_pool(f"{SYNTH}:keyed:USD")
-    )
+    pool = _run(context, _limits_repo(context).get_pool(f"{SYNTH}:keyed:USD"))
     assert pool is not None and pool.remaining is not None and pool.remaining >= 0
 
 
@@ -535,14 +532,10 @@ def step_fail(context: Any) -> None:
         context,
         context.service.record_failure(
             context.admission,
-            ProviderError(
-                provider=SYNTH, code="timeout", message="synthetic timeout"
-            ),
+            ProviderError(provider=SYNTH, code="timeout", message="synthetic timeout"),
         ),
     )
-    context.after = _run(
-        context, _limits_repo(context).get_pool(f"{SYNTH}:keyed:USD")
-    )
+    context.after = _run(context, _limits_repo(context).get_pool(f"{SYNTH}:keyed:USD"))
     context.history = _run(
         context,
         context.service.history(LimitHistoryQuery(provider=SYNTH, limit=10)),
@@ -651,9 +644,7 @@ def step_route_fixtures(context: Any) -> None:
         async def fetch(self, request: FetchRequest) -> FetchResponse:
             raise NotImplementedError
 
-        async def estimate_cost(
-            self, request: SearchRequest | FetchRequest
-        ) -> CostEstimate:
+        async def estimate_cost(self, request: SearchRequest | FetchRequest) -> CostEstimate:
             raise NotImplementedError
 
     from freesearch.services.routing import select_route
@@ -695,10 +686,14 @@ def step_two_providers(context: Any) -> None:
         context,
         repo.apply_snapshot(
             NativeUsageSnapshot(
-                pool_id=rich.native_pool_id or "", provider=SYNTH,
-                auth_mode=AuthMode.KEYED, native_unit=UnitKind.USD,
-                observed_at=FIXED_AT, remaining=Decimal("5.000"),
-                allowance=Decimal("5.000"), credential_generation=0,
+                pool_id=rich.native_pool_id or "",
+                provider=SYNTH,
+                auth_mode=AuthMode.KEYED,
+                native_unit=UnitKind.USD,
+                observed_at=FIXED_AT,
+                remaining=Decimal("5.000"),
+                allowance=Decimal("5.000"),
+                credential_generation=0,
             )
         ),
     )
@@ -706,10 +701,14 @@ def step_two_providers(context: Any) -> None:
         context,
         repo.apply_snapshot(
             NativeUsageSnapshot(
-                pool_id=poor.native_pool_id or "", provider=SYNTH_B,
-                auth_mode=AuthMode.KEYED, native_unit=UnitKind.USD,
-                observed_at=FIXED_AT, remaining=Decimal("0"),
-                allowance=Decimal("5.000"), credential_generation=0,
+                pool_id=poor.native_pool_id or "",
+                provider=SYNTH_B,
+                auth_mode=AuthMode.KEYED,
+                native_unit=UnitKind.USD,
+                observed_at=FIXED_AT,
+                remaining=Decimal("0"),
+                allowance=Decimal("5.000"),
+                credential_generation=0,
             )
         ),
     )
@@ -870,9 +869,15 @@ def step_unknown(context: Any) -> None:
 def step_free_paid(context: Any) -> None:
     _open_repo(context)
     free = ProviderLimitRecord(
-        provider=SYNTH, operation=LimitOperation.SEARCH, auth_mode=AuthMode.KEYED,
-        supported=True, transport_available=True, rate=None, budget=None,
-        native_unit=None, native_pool_id=None,
+        provider=SYNTH,
+        operation=LimitOperation.SEARCH,
+        auth_mode=AuthMode.KEYED,
+        supported=True,
+        transport_available=True,
+        rate=None,
+        budget=None,
+        native_unit=None,
+        native_pool_id=None,
         conversion_profile=CRDPriceProfile(),
     )
     paid = _usd_record(provider=SYNTH_B, native_cost="0.005")
@@ -882,10 +887,14 @@ def step_free_paid(context: Any) -> None:
         context,
         _limits_repo(context).apply_snapshot(
             NativeUsageSnapshot(
-                pool_id=paid.native_pool_id or "", provider=SYNTH_B,
-                auth_mode=AuthMode.KEYED, native_unit=UnitKind.USD,
-                observed_at=FIXED_AT, remaining=Decimal("0"),
-                allowance=Decimal("5.000"), credential_generation=0,
+                pool_id=paid.native_pool_id or "",
+                provider=SYNTH_B,
+                auth_mode=AuthMode.KEYED,
+                native_unit=UnitKind.USD,
+                observed_at=FIXED_AT,
+                remaining=Decimal("0"),
+                allowance=Decimal("5.000"),
+                credential_generation=0,
             )
         ),
     )
@@ -893,11 +902,14 @@ def step_free_paid(context: Any) -> None:
         context,
         _limits_repo(context).apply_snapshot(
             NativeUsageSnapshot(
-                pool_id=paid.native_pool_id or "", provider=SYNTH_B,
-                auth_mode=AuthMode.KEYED, native_unit=UnitKind.USD,
+                pool_id=paid.native_pool_id or "",
+                provider=SYNTH_B,
+                auth_mode=AuthMode.KEYED,
+                native_unit=UnitKind.USD,
                 observed_at=FIXED_AT + timedelta(seconds=1),
                 remaining=Decimal("5.000"),
-                allowance=Decimal("5.000"), credential_generation=0,
+                allowance=Decimal("5.000"),
+                credential_generation=0,
             )
         ),
     )
@@ -905,9 +917,7 @@ def step_free_paid(context: Any) -> None:
 
 @when("I request one synthetic call on each rail")
 def step_both(context: Any) -> None:
-    context.free_adm = _run(
-        context, context.service.admit(_ctx(provider=SYNTH, attempt="free-1"))
-    )
+    context.free_adm = _run(context, context.service.admit(_ctx(provider=SYNTH, attempt="free-1")))
     context.paid_adm = _run(
         context, context.service.admit(_ctx(provider=SYNTH_B, attempt="paid-1"))
     )
@@ -948,9 +958,7 @@ def step_malformed(context: Any) -> None:
 
 @then("the synthetic rate state stays unknown without denial")
 def step_malformed_ok(context: Any) -> None:
-    assert context.bars == [] or all(
-        b.remaining is None and b.limit is None for b in context.bars
-    )
+    assert context.bars == [] or all(b.remaining is None and b.limit is None for b in context.bars)
 
 
 # --- B37 --------------------------------------------------------------------
@@ -960,8 +968,11 @@ def step_malformed_ok(context: Any) -> None:
 def step_funds_rate(context: Any) -> None:
     _open_repo(context)
     window = RateWindow(
-        bucket_id="synth-hour", limit=Decimal("1"), window=RateWindowName.HOUR,
-        scope=RateScope.KEY, unit=RateUnit.REQUESTS,
+        bucket_id="synth-hour",
+        limit=Decimal("1"),
+        window=RateWindowName.HOUR,
+        scope=RateScope.KEY,
+        unit=RateUnit.REQUESTS,
     )
     record = _usd_record(native_cost="0.005", rate_windows=[window])
     context.service = _service(context, [record])
@@ -970,10 +981,14 @@ def step_funds_rate(context: Any) -> None:
         context,
         _limits_repo(context).apply_snapshot(
             NativeUsageSnapshot(
-                pool_id=record.native_pool_id or "", provider=SYNTH,
-                auth_mode=AuthMode.KEYED, native_unit=UnitKind.USD,
-                observed_at=FIXED_AT, remaining=Decimal("5.000"),
-                allowance=Decimal("5.000"), credential_generation=0,
+                pool_id=record.native_pool_id or "",
+                provider=SYNTH,
+                auth_mode=AuthMode.KEYED,
+                native_unit=UnitKind.USD,
+                observed_at=FIXED_AT,
+                remaining=Decimal("5.000"),
+                allowance=Decimal("5.000"),
+                credential_generation=0,
             )
         ),
     )
@@ -981,10 +996,15 @@ def step_funds_rate(context: Any) -> None:
         context,
         context.service.rate_limits.observe(
             RateObservation(
-                bucket_id="synth-hour", provider=SYNTH, auth_mode=AuthMode.KEYED,
-                window=RateWindowName.HOUR, unit=RateUnit.REQUESTS,
-                limit=Decimal("1"), remaining=Decimal("1"),
-                observed_at=FIXED_AT, reset_at=FIXED_AT + timedelta(hours=1),
+                bucket_id="synth-hour",
+                provider=SYNTH,
+                auth_mode=AuthMode.KEYED,
+                window=RateWindowName.HOUR,
+                unit=RateUnit.REQUESTS,
+                limit=Decimal("1"),
+                remaining=Decimal("1"),
+                observed_at=FIXED_AT,
+                reset_at=FIXED_AT + timedelta(hours=1),
             )
         ),
     )
@@ -1008,8 +1028,11 @@ def step_429(context: Any) -> None:
 def step_exhausted(context: Any) -> None:
     _open_repo(context)
     window = RateWindow(
-        bucket_id="synth-hour", limit=Decimal("1"), window=RateWindowName.HOUR,
-        scope=RateScope.KEY, unit=RateUnit.REQUESTS,
+        bucket_id="synth-hour",
+        limit=Decimal("1"),
+        window=RateWindowName.HOUR,
+        scope=RateScope.KEY,
+        unit=RateUnit.REQUESTS,
     )
     record = _usd_record(native_cost="0.005", rate_windows=[window])
     record_b = _usd_record(provider=SYNTH_B, native_cost="0.005")
@@ -1020,10 +1043,14 @@ def step_exhausted(context: Any) -> None:
         context,
         _limits_repo(context).apply_snapshot(
             NativeUsageSnapshot(
-                pool_id=record.native_pool_id or "", provider=SYNTH,
-                auth_mode=AuthMode.KEYED, native_unit=UnitKind.USD,
-                observed_at=FIXED_AT, remaining=Decimal("3.000"),
-                allowance=Decimal("5.000"), credential_generation=0,
+                pool_id=record.native_pool_id or "",
+                provider=SYNTH,
+                auth_mode=AuthMode.KEYED,
+                native_unit=UnitKind.USD,
+                observed_at=FIXED_AT,
+                remaining=Decimal("3.000"),
+                allowance=Decimal("5.000"),
+                credential_generation=0,
             )
         ),
     )
@@ -1031,10 +1058,14 @@ def step_exhausted(context: Any) -> None:
         context,
         _limits_repo(context).apply_snapshot(
             NativeUsageSnapshot(
-                pool_id=record_b.native_pool_id or "", provider=SYNTH_B,
-                auth_mode=AuthMode.KEYED, native_unit=UnitKind.USD,
-                observed_at=FIXED_AT, remaining=Decimal("1.000"),
-                allowance=Decimal("5.000"), credential_generation=0,
+                pool_id=record_b.native_pool_id or "",
+                provider=SYNTH_B,
+                auth_mode=AuthMode.KEYED,
+                native_unit=UnitKind.USD,
+                observed_at=FIXED_AT,
+                remaining=Decimal("1.000"),
+                allowance=Decimal("5.000"),
+                credential_generation=0,
             )
         ),
     )
@@ -1053,18 +1084,19 @@ def step_refill(context: Any) -> None:
         context,
         repo.apply_snapshot(
             NativeUsageSnapshot(
-                pool_id=context.record.native_pool_id or "", provider=SYNTH,
-                auth_mode=AuthMode.KEYED, native_unit=UnitKind.USD,
+                pool_id=context.record.native_pool_id or "",
+                provider=SYNTH,
+                auth_mode=AuthMode.KEYED,
+                native_unit=UnitKind.USD,
                 observed_at=FIXED_AT + timedelta(hours=2),
                 remaining=Decimal("5.000"),
-                allowance=Decimal("5.000"), credential_generation=0,
+                allowance=Decimal("5.000"),
+                credential_generation=0,
             )
         ),
     )
     context.refilled = _run(context, repo.get_pool(context.record.native_pool_id or ""))
-    context.other = _run(
-        context, repo.get_pool(f"{SYNTH_B}:keyed:USD")
-    )
+    context.other = _run(context, repo.get_pool(f"{SYNTH_B}:keyed:USD"))
     context.renewed = _run(
         context,
         context.service.admit(_ctx(attempt="b38-r3", at=FIXED_AT + timedelta(hours=2))),
@@ -1088,12 +1120,16 @@ def step_shared(context: Any) -> None:
     _open_repo(context)
     pool_id = f"{SYNTH}:keyed:USD"
     search = _usd_record(
-        provider=SYNTH, operation=LimitOperation.SEARCH,
-        native_cost="0.005", pool_id=pool_id,
+        provider=SYNTH,
+        operation=LimitOperation.SEARCH,
+        native_cost="0.005",
+        pool_id=pool_id,
     )
     fetch = _usd_record(
-        provider=SYNTH, operation=LimitOperation.FETCH,
-        native_cost="0.001", pool_id=pool_id,
+        provider=SYNTH,
+        operation=LimitOperation.FETCH,
+        native_cost="0.001",
+        pool_id=pool_id,
     )
     context.records = [search, fetch]
     context.pool = _pool(pool_id, remaining="5.000", allowance="5.000")
@@ -1150,8 +1186,11 @@ def step_version_kept(context: Any) -> None:
 def step_both_denied(context: Any) -> None:
     _open_repo(context)
     window = RateWindow(
-        bucket_id="synth-hour", limit=Decimal("1"), window=RateWindowName.HOUR,
-        scope=RateScope.KEY, unit=RateUnit.REQUESTS,
+        bucket_id="synth-hour",
+        limit=Decimal("1"),
+        window=RateWindowName.HOUR,
+        scope=RateScope.KEY,
+        unit=RateUnit.REQUESTS,
     )
     record = _usd_record(native_cost="0.005", rate_windows=[window])
     context.service = _service(context, [record])
@@ -1160,10 +1199,14 @@ def step_both_denied(context: Any) -> None:
         context,
         _limits_repo(context).apply_snapshot(
             NativeUsageSnapshot(
-                pool_id=record.native_pool_id or "", provider=SYNTH,
-                auth_mode=AuthMode.KEYED, native_unit=UnitKind.USD,
-                observed_at=FIXED_AT, remaining=Decimal("0"),
-                allowance=Decimal("5.000"), credential_generation=0,
+                pool_id=record.native_pool_id or "",
+                provider=SYNTH,
+                auth_mode=AuthMode.KEYED,
+                native_unit=UnitKind.USD,
+                observed_at=FIXED_AT,
+                remaining=Decimal("0"),
+                allowance=Decimal("5.000"),
+                credential_generation=0,
             )
         ),
     )
@@ -1171,10 +1214,15 @@ def step_both_denied(context: Any) -> None:
         context,
         context.service.rate_limits.observe(
             RateObservation(
-                bucket_id="synth-hour", provider=SYNTH, auth_mode=AuthMode.KEYED,
-                window=RateWindowName.HOUR, unit=RateUnit.REQUESTS,
-                limit=Decimal("1"), remaining=Decimal("0"),
-                observed_at=FIXED_AT, reset_at=FIXED_AT + timedelta(hours=1),
+                bucket_id="synth-hour",
+                provider=SYNTH,
+                auth_mode=AuthMode.KEYED,
+                window=RateWindowName.HOUR,
+                unit=RateUnit.REQUESTS,
+                limit=Decimal("1"),
+                remaining=Decimal("0"),
+                observed_at=FIXED_AT,
+                reset_at=FIXED_AT + timedelta(hours=1),
             )
         ),
     )
@@ -1210,9 +1258,7 @@ def _brave_search_payload() -> dict[str, object]:
     }
 
 
-def _brave_adapter(
-    handler: Any, calls: list[Any] | None = None
-) -> tuple[Any, Any]:
+def _brave_adapter(handler: Any, calls: list[Any] | None = None) -> tuple[Any, Any]:
     import httpx
     from pydantic import SecretStr
 
@@ -1314,9 +1360,7 @@ def step_brave_snapshot(context: Any) -> None:
     context.snapshot = _run(
         context,
         context.brave_adapter.usage_snapshot(
-            UsageSyncRequest(
-                provider="brave", auth_mode=AuthMode.KEYED, observed_at=FIXED_AT
-            )
+            UsageSyncRequest(provider="brave", auth_mode=AuthMode.KEYED, observed_at=FIXED_AT)
         ),
     )
     assert context.snapshot is not None
@@ -1336,9 +1380,7 @@ def step_brave_pool(context: Any) -> None:
 @then("the Brave observation carries no hour bar and no day bar")
 def step_brave_no_bars(context: Any) -> None:
     assert context.snapshot.rate_observations, "burst headroom must be observed"
-    assert all(
-        obs.window is RateWindowName.SECOND for obs in context.snapshot.rate_observations
-    )
+    assert all(obs.window is RateWindowName.SECOND for obs in context.snapshot.rate_observations)
     bars = _run(context, context.service.rate_limits.progress("brave", FIXED_AT))
     assert bars == []
 
@@ -1405,9 +1447,7 @@ def step_brave_app(context: Any) -> None:
     snapshot = _run(
         context,
         context.brave_adapter.usage_snapshot(
-            UsageSyncRequest(
-                provider="brave", auth_mode=AuthMode.KEYED, observed_at=FIXED_AT
-            )
+            UsageSyncRequest(provider="brave", auth_mode=AuthMode.KEYED, observed_at=FIXED_AT)
         ),
     )
     assert snapshot is not None
@@ -1461,10 +1501,14 @@ def step_brave_zero_pool(context: Any) -> None:
         context,
         _limits_repo(context).apply_snapshot(
             NativeUsageSnapshot(
-                pool_id=_brave_pool_id(), provider="brave",
-                auth_mode=AuthMode.KEYED, native_unit=UnitKind.USD,
-                observed_at=FIXED_AT, remaining=Decimal("0"),
-                allowance=Decimal("5.000"), credential_generation=0,
+                pool_id=_brave_pool_id(),
+                provider="brave",
+                auth_mode=AuthMode.KEYED,
+                native_unit=UnitKind.USD,
+                observed_at=FIXED_AT,
+                remaining=Decimal("0"),
+                allowance=Decimal("5.000"),
+                credential_generation=0,
             )
         ),
     )
@@ -1481,10 +1525,14 @@ def step_brave_known_pool(context: Any) -> None:
         context,
         _limits_repo(context).apply_snapshot(
             NativeUsageSnapshot(
-                pool_id=_brave_pool_id(), provider="brave",
-                auth_mode=AuthMode.KEYED, native_unit=UnitKind.USD,
-                observed_at=FIXED_AT, remaining=Decimal("4.500"),
-                allowance=Decimal("5.000"), credential_generation=0,
+                pool_id=_brave_pool_id(),
+                provider="brave",
+                auth_mode=AuthMode.KEYED,
+                native_unit=UnitKind.USD,
+                observed_at=FIXED_AT,
+                remaining=Decimal("4.500"),
+                allowance=Decimal("5.000"),
+                credential_generation=0,
             )
         ),
     )
@@ -1593,9 +1641,7 @@ def step_brave_detail(context: Any) -> None:
     auth = view.auth(AuthMode.KEYED)
     assert auth is not None
     context.brave_detail = auth.detail
-    context.brave_record = next(
-        r for r in _brave_records() if r.operation is LimitOperation.SEARCH
-    )
+    context.brave_record = next(r for r in _brave_records() if r.operation is LimitOperation.SEARCH)
 
 
 @then("the Brave detail shows native USD plan reset rates source and link")
@@ -1610,8 +1656,7 @@ def step_brave_detail_fields(context: Any) -> None:
     assert context.brave_record.budget is not None
     assert context.brave_record.budget.allowance_period == "month"
     assert any(
-        w.window is RateWindowName.SECOND and w.limit == Decimal("50")
-        for w in detail.rate_windows
+        w.window is RateWindowName.SECOND and w.limit == Decimal("50") for w in detail.rate_windows
     )
 
 
@@ -1694,9 +1739,7 @@ def step_brave_two_successes(context: Any) -> None:
     from freesearch.models.contracts import SearchResponse
 
     for attempt in ("brave-t1", "brave-t2"):
-        admission = _run(
-            context, context.service.admit(_ctx(provider="brave", attempt=attempt))
-        )
+        admission = _run(context, context.service.admit(_ctx(provider="brave", attempt=attempt)))
         _run(
             context,
             context.service.record_success(
@@ -1723,10 +1766,14 @@ def step_brave_both_denied(context: Any) -> None:
         context,
         _limits_repo(context).apply_snapshot(
             NativeUsageSnapshot(
-                pool_id=_brave_pool_id(), provider="brave",
-                auth_mode=AuthMode.KEYED, native_unit=UnitKind.USD,
-                observed_at=FIXED_AT, remaining=Decimal("5.000"),
-                allowance=Decimal("5.000"), credential_generation=0,
+                pool_id=_brave_pool_id(),
+                provider="brave",
+                auth_mode=AuthMode.KEYED,
+                native_unit=UnitKind.USD,
+                observed_at=FIXED_AT,
+                remaining=Decimal("5.000"),
+                allowance=Decimal("5.000"),
+                credential_generation=0,
             )
         ),
     )
@@ -1736,10 +1783,14 @@ def step_brave_both_denied(context: Any) -> None:
         context,
         _limits_repo(context).apply_snapshot(
             NativeUsageSnapshot(
-                pool_id=_brave_pool_id(), provider="brave",
-                auth_mode=AuthMode.KEYED, native_unit=UnitKind.USD,
-                observed_at=FIXED_AT + timedelta(seconds=1), remaining=Decimal("0"),
-                allowance=Decimal("5.000"), credential_generation=0,
+                pool_id=_brave_pool_id(),
+                provider="brave",
+                auth_mode=AuthMode.KEYED,
+                native_unit=UnitKind.USD,
+                observed_at=FIXED_AT + timedelta(seconds=1),
+                remaining=Decimal("0"),
+                allowance=Decimal("5.000"),
+                credential_generation=0,
             )
         ),
     )

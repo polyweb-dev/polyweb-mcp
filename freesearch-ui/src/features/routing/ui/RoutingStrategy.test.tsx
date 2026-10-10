@@ -7,6 +7,7 @@ import userEvent from "@testing-library/user-event"
 import { FreeSearchProvider } from "@/context/FreeSearchContext"
 import { RoutingEngine } from "./RoutingEngine"
 import { installFetchStub, ok, err } from "@/test/fetchMock"
+import { ADMIN_ACCOUNT_ID, DEVELOPER_ACCOUNT_ID } from "@/test/authFixtures"
 import {
   allProvidersFixture,
   routingConfigFixture,
@@ -66,7 +67,7 @@ function renderRouting() {
     return err(404, { detail: "unhandled test route" })
   })
   const view = render(
-    <FreeSearchProvider>
+    <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
       <RoutingEngine />
     </FreeSearchProvider>
   )
@@ -197,4 +198,61 @@ describe("R-STRAT AC-R-STRAT-2: strategy cards and selection logic intact", () =
     expect(strategySource).toContain("balanced")
   })
 })
+})
+
+describe("RoutingStrategy Developer read-only (canReadControls, no edit)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  function renderDeveloperRouting() {
+    const stub = installFetchStub((req) => {
+      if (req.url === "/api/v1/providers" && req.method === "GET") {
+        return ok(allProvidersFixture())
+      }
+      if (req.url === "/api/v1/routing/config" && req.method === "GET") {
+        return ok(routingConfigFixture())
+      }
+      if (req.url.startsWith("/dashboard")) return ok(dashboardFixture())
+      return err(404, { detail: "unhandled test route" })
+    })
+    const view = render(
+      <FreeSearchProvider accountId={DEVELOPER_ACCOUNT_ID} canReadControls canEditControls={false}>
+        <RoutingEngine />
+      </FreeSearchProvider>
+    )
+    return { stub, ...view }
+  }
+
+  async function readyForDeveloperStrategy() {
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /^Strict priority/ })).toBeInTheDocument()
+    })
+  }
+
+  it("keeps strategy selection local-only: cost card flips aria-pressed with no backend write", async () => {
+    const user = userEvent.setup()
+    const { stub } = renderDeveloperRouting()
+    await readyForDeveloperStrategy()
+
+    // Read-only markers present: all four preset cards still render.
+    for (const name of [/^Strict priority/, /^Cost optimized/, /^Latency optimized/, /^Quality first/]) {
+      expect(screen.getByRole("button", { name })).toBeInTheDocument()
+    }
+    const strict = screen.getByRole("button", { name: /^Strict priority/ })
+    const cost = screen.getByRole("button", { name: /^Cost optimized/ })
+    expect(strict).toHaveAttribute("aria-pressed", "true")
+    expect(cost).toHaveAttribute("aria-pressed", "false")
+
+    // Local simulation control still works with no backend write.
+    await user.click(cost)
+    expect(cost).toHaveAttribute("aria-pressed", "true")
+    expect(strict).toHaveAttribute("aria-pressed", "false")
+    expect(
+      stub.requests.filter((r) => r.method === "PUT" && r.url === "/api/v1/routing/config")
+    ).toHaveLength(0)
+    expect(
+      stub.requests.filter((r) => r.method === "PATCH" || r.method === "PUT" || r.method === "POST")
+    ).toHaveLength(0)
+  })
 })

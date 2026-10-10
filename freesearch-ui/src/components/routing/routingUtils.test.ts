@@ -69,21 +69,49 @@ describe("getEligibleProviders", () => {
 
   it("gates disabled operation flags independently from capability support", () => {
     const providers = seedProviders().map((provider) => {
-      if (provider.id === "tavily") return { ...provider, searchEnabled: false }
-      if (provider.id === "keenable") return { ...provider, fetchEnabled: false }
+      // Tool OFF clears only its enable bit: tavily 7->5 (search OFF),
+      // keenable 7->3 (fetch OFF). Raw booleans stay consistent.
+      if (provider.id === "tavily")
+        return { ...provider, enableMask: 5, searchEnabled: false }
+      if (provider.id === "keenable")
+        return { ...provider, enableMask: 3, fetchEnabled: false }
       return provider
     })
 
     expect(idsFor(providers, "search", "priority")).not.toContain("tavily")
+    expect(idsFor(providers, "search", "priority")).toContain("keenable")
     expect(idsFor(providers, "fetch", "priority")).not.toContain("keenable")
+    expect(idsFor(providers, "fetch", "priority")).toContain("tavily")
   })
 
   it("excludes a provider when global routing is disabled", () => {
     const providers = seedProviders().map((provider) =>
-      provider.id === "brave" ? { ...provider, globalEnabled: false } : provider
+      // Global OFF preserves tool bits (7->6): raw search/fetch stay ON.
+      provider.id === "brave"
+        ? { ...provider, enableMask: 6, globalEnabled: false }
+        : provider,
     )
 
     expect(idsFor(providers, "search", "priority")).not.toContain("brave")
+    expect(idsFor(providers, "fetch", "priority")).not.toContain("brave")
+  })
+
+  it("blocks effective access when support stays OFF even with admin ON", () => {
+    const providers = seedProviders().map((provider) =>
+      provider.id === "exa" ? { ...provider, supportMask: 3 } : provider,
+    )
+
+    expect(idsFor(providers, "search", "priority")).toContain("exa")
+    expect(idsFor(providers, "fetch", "priority")).not.toContain("exa")
+  })
+
+  it("blocks both tools when support global stays OFF even with admin global ON", () => {
+    const providers = seedProviders().map((provider) =>
+      provider.id === "exa" ? { ...provider, supportMask: 6 } : provider,
+    )
+
+    expect(idsFor(providers, "search", "priority")).not.toContain("exa")
+    expect(idsFor(providers, "fetch", "priority")).not.toContain("exa")
   })
 
   it("excludes providers with missing keys unless they support keyless tier", () => {
@@ -157,6 +185,8 @@ function enabledParallelRow(): ProviderConfig {
   return {
     ...template,
     capabilities: ["search", "extract", "fetch"],
+    enableMask: 7,
+    supportMask: 7,
     globalEnabled: true,
     searchEnabled: true,
     fetchEnabled: true,

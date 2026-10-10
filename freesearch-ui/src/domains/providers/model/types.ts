@@ -47,6 +47,10 @@ export interface ProviderConfig {
   baseUrl: string;
   isCustom: boolean;
   capabilities: Capability[];
+  /** Admin choice mask (0..7): bit 0 global, bit 1 search, bit 2 fetch. */
+  enableMask: number;
+  /** System tool support mask (0..7): bit 0 global, bit 1 search, bit 2 fetch. */
+  supportMask: number;
   globalEnabled: boolean;
   searchEnabled: boolean;
   fetchEnabled: boolean;

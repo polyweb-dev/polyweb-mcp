@@ -3,6 +3,7 @@ import { describe, expect, it, afterEach, vi } from "vitest"
 import { render, screen, within, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { FreeSearchProvider } from "@/context/FreeSearchContext"
+import { ADMIN_ACCOUNT_ID, DEVELOPER_ACCOUNT_ID } from "@/test/authFixtures"
 import { ToastContainer } from "@/components/common/ToastContainer"
 import { SettingsView } from "./SettingsView"
 import { installFetchStub, ok, err, deferred, type FetchStub } from "@/test/fetchMock"
@@ -47,7 +48,25 @@ function renderSettings(): FetchStub {
     if (req.url.startsWith("/dashboard")) return ok(dashboardFixture())
     if (req.method === "PATCH" && req.url.startsWith("/api/v1/providers/")) {
       if (patchGate) return patchGate
-      return ok({ ...allProvidersFixture()[0], ...(req.body as object) })
+      const backendId = req.url.split("/").at(-1) ?? "unknown"
+      const wire = allProvidersFixture().find((p) => p.provider_id === backendId)
+      const base = { ...(wire ?? allProvidersFixture()[0]) } as Record<string, unknown> & {
+        enable_mask: number
+        priority: number
+      }
+      const patch = ((req.body as Record<string, unknown>) ?? {}) as Record<string, unknown>
+      let enableMask = base.enable_mask
+      if (typeof patch.enable_mask === "number") enableMask = patch.enable_mask
+      else {
+        if (patch.enabled === true) enableMask |= 1
+        if (patch.enabled === false) enableMask &= ~1
+        if (patch.search_enabled === true) enableMask |= 2
+        if (patch.search_enabled === false) enableMask &= ~2
+        if (patch.fetch_enabled === true) enableMask |= 4
+        if (patch.fetch_enabled === false) enableMask &= ~4
+      }
+      const priority = typeof patch.priority === "number" ? patch.priority : base.priority
+      return ok({ ...base, enable_mask: enableMask, enabled: (enableMask & 1) !== 0, priority })
     }
     if (req.url.endsWith("/secret") && req.method === "PUT") {
       const provider = req.url.split("/").at(-2) ?? "unknown"
@@ -86,7 +105,7 @@ function renderSettings(): FetchStub {
     return err(404, { detail: "unhandled test route" })
   })
   render(
-    <FreeSearchProvider>
+    <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
       <SettingsView />
       <ToastContainer />
     </FreeSearchProvider>
@@ -183,7 +202,7 @@ describe("SettingsView (live backend)", () => {
       ).toBeDisabled()
     })
 
-    gate.resolve(ok({ ...allProvidersFixture()[0], enabled: false }))
+    gate.resolve(ok({ ...allProvidersFixture()[0], enable_mask: 6, enabled: false }))
     await waitFor(() => {
       expect(
         screen.getByRole("switch", { name: "Brave Search global routing" })
@@ -194,7 +213,7 @@ describe("SettingsView (live backend)", () => {
     expect(patches[0].body).toEqual({ enabled: false })
   })
 
-  it("keeps operation segments local-only and capability-gated", async () => {
+  it("persists operation switches via durable PATCH and capability-gates unsupported tools", async () => {
     const user = userEvent.setup()
     const stub = renderSettings()
     await waitForProviders()
@@ -203,11 +222,16 @@ describe("SettingsView (live backend)", () => {
     const searchSwitch = within(row).getByRole("switch", { name: "Brave Search search routing" })
     expect(searchSwitch).toHaveAttribute("aria-checked", "true")
     await user.click(searchSwitch)
-    expect(searchSwitch).toHaveAttribute("aria-checked", "false")
-    // Local-only: no PATCH for per-operation flips
-    expect(
-      stub.requests.filter((r) => r.method === "PATCH")
-    ).toHaveLength(0)
+    await waitFor(() => {
+      expect(
+        within(findProviderRow("Brave Search")).getByRole("switch", {
+          name: "Brave Search search routing",
+        }),
+      ).toHaveAttribute("aria-checked", "false")
+    })
+    const searchPatches = stub.requestsTo("/api/v1/providers/brave")
+    expect(searchPatches).toHaveLength(1)
+    expect(searchPatches[0].body).toEqual({ search_enabled: false })
     // Brave is search-only: fetch shows the disabled switch
     const fetchSwitch = within(row).getByRole("switch", { name: "Brave Search fetch routing (not supported)" })
     expect(fetchSwitch).toBeDisabled()
@@ -359,5 +383,50 @@ describe("SettingsView (live backend)", () => {
     const text = card.textContent ?? ""
     expect(text).not.toContain("yc_l")
     expect(text).not.toContain("6789")
+  })
+})
+
+describe("SettingsView Developer read-only (canReadControls, no edit)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  function renderDeveloperSettings(): FetchStub {
+    const stub = installFetchStub((req) => {
+      if (req.url === "/api/v1/providers" && req.method === "GET") {
+        return ok(allProvidersFixture())
+      }
+      if (req.url === "/api/v1/routing/config" && req.method === "GET") {
+        return ok(routingConfigFixture())
+      }
+      if (req.url.startsWith("/dashboard")) return ok(dashboardFixture())
+      return err(404, { detail: "unhandled test route" })
+    })
+    render(
+      <FreeSearchProvider accountId={DEVELOPER_ACCOUNT_ID} canReadControls canEditControls={false}>
+        <SettingsView />
+        <ToastContainer />
+      </FreeSearchProvider>
+    )
+    return stub
+  }
+
+  it("hides the Keys tab so the key vault never mounts, keeps Providers/Failover, and sends no writes", async () => {
+    const stub = renderDeveloperSettings()
+    await waitForProviders()
+
+    // Read-only markers present: exactly Providers + Failover tabs.
+    expect(screen.getAllByRole("tab")).toHaveLength(2)
+    expect(screen.getByRole("tab", { name: /^Providers$/ })).toBeInTheDocument()
+    expect(screen.getByRole("tab", { name: /^Failover$/ })).toBeInTheDocument()
+    // Mutation affordances absent: no Keys tab, so the vault never mounts.
+    expect(screen.queryByRole("tab", { name: /^Keys$/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole("heading", { name: "Key vault" })).not.toBeInTheDocument()
+    expect(screen.queryByRole("textbox", { name: /API key/ })).not.toBeInTheDocument()
+    expect(document.body.querySelector('input[type="password"]')).toBeNull()
+    // Zero backend writes beyond the stubbed reads.
+    expect(
+      stub.requests.filter((r) => r.method === "PATCH" || r.method === "PUT" || r.method === "POST")
+    ).toHaveLength(0)
   })
 })

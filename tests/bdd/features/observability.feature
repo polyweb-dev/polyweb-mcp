@@ -47,3 +47,17 @@ Feature: OpenTelemetry trace observability for search and fetch
     And the fetch trace detail should show the required fetch span hierarchy with non-negative durations
     When I submit a traced fetch for "https://example.com/boom" against a failing provider
     Then the traced fetch should fail with status 500 and an error trace with error type "RuntimeError"
+
+  Scenario: Trace roots carry the exact account UUID
+    Given an offline trace repository with a mock-transport Keenable search
+    When I submit a traced search for "owned query" with limit 1
+    Then the trace detail should carry my account UUID
+    And the trace list rows should carry my account UUID
+
+  Scenario: Each account reads only its own traces
+    Given an offline trace repository with a mock-transport Keenable search
+    When I submit a traced search for "alice query" with limit 1
+    And I register a second trace reader
+    And I submit a traced search for "bob query" with limit 1 as the second reader
+    Then each reader should list only its own trace
+    And a foreign trace read should return 404 like an absent trace

@@ -11,6 +11,8 @@ function quotaProvider(id: string): ProviderConfig {
     baseUrl: "https://api.test",
     isCustom: false,
     capabilities: ["search", "fetch"],
+    enableMask: 7,
+    supportMask: id === "brave" ? 3 : 7,
     globalEnabled: true,
     searchEnabled: true,
     fetchEnabled: true,

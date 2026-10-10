@@ -9,7 +9,10 @@ const DEFAULT_BACKEND_URL = "http://127.0.0.1:8001"
 
 /**
  * Proxy entries for one backend origin. Provider-querying routes plus the
- * monitoring, control-plane, and trace read APIs all live on the API server.
+ * monitoring, control-plane, trace read, account, and role APIs all live on the
+ * API server. The account prefixes keep the browser on one origin, so the
+ * refresh cookie and the `X-FreeSearch-Client` marker reach the backend
+ * unchanged.
  */
 function proxyFor(backendUrl: string) {
   return {
@@ -18,6 +21,8 @@ function proxyFor(backendUrl: string) {
     "/stats": backendUrl,
     "/dashboard": backendUrl,
     "/api": backendUrl,
+    "/auth": backendUrl,
+    "/users": backendUrl,
   }
 }
 

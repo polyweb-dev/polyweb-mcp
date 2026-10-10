@@ -41,6 +41,7 @@ from freesearch.models.observability import (
     TraceAttribute,
     TraceSpanName,
 )
+from freesearch.models.users import UserPrincipal
 
 logger = logging.getLogger(__name__)
 
@@ -124,10 +125,10 @@ class _ResponseRecorder:
         if self._stack is not None:
             self._stack.close()
             self._stack = None
-        await _flush(self._runtime)
+        await flush_traces(self._runtime)
 
 
-async def _flush(runtime: ObservabilityRuntime) -> None:
+async def flush_traces(runtime: ObservabilityRuntime) -> None:
     """Force-flush the batch processor without blocking the event loop."""
 
     try:
@@ -183,11 +184,13 @@ class ProviderTraceMiddleware:
 
     @staticmethod
     def _request_attributes(scope: Scope) -> dict[str, object]:
-        """Root attributes: HTTP semantic conventions plus the schema version.
+        """Root attributes: HTTP semantic conventions, schema version, account.
 
         The operation is the traced route's first path segment, so a request
         failing routing before its handler runs still gets a filterable
-        Activity row.
+        Activity row. The account UUID comes from the verified principal that
+        the transport guard stored in ASGI state, so the root itself carries the
+        owner that every later read checks.
         """
 
         path = str(scope.get("path", ""))
@@ -198,7 +201,26 @@ class ProviderTraceMiddleware:
             TraceAttribute.HTTP_ROUTE: path,
             TraceAttribute.URL_PATH: path,
             TraceAttribute.OPERATION: operation or None,
+            TraceAttribute.USER_ID: principal_id(scope),
         }
 
 
-__all__ = ["FLUSH_TIMEOUT_MILLIS", "TRACE_HEADER", "ProviderTraceMiddleware"]
+def principal_id(scope: Scope) -> str | None:
+    """Return the verified account UUID of a guarded scope, else ``None``.
+
+    Only the principal the guard verified counts. A client header, a query
+    parameter, or a body value never reaches this state cell.
+    """
+
+    state = scope.get("state")
+    principal = state.get("user") if isinstance(state, dict) else None
+    return str(principal.id) if isinstance(principal, UserPrincipal) else None
+
+
+__all__ = [
+    "FLUSH_TIMEOUT_MILLIS",
+    "TRACE_HEADER",
+    "ProviderTraceMiddleware",
+    "flush_traces",
+    "principal_id",
+]

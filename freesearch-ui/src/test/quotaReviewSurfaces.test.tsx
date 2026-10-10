@@ -3,6 +3,7 @@ import { describe, it, expect, afterEach, vi } from "vitest"
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { FreeSearchProvider } from "@/context/FreeSearchContext"
+import { ADMIN_ACCOUNT_ID } from "@/test/authFixtures"
 import { ProviderRanks } from "@/components/routing/ProviderRanks"
 import { RouteSimulator } from "@/components/routing/RouteSimulator"
 import { SettingsView } from "@/components/settings/SettingsView"
@@ -43,7 +44,7 @@ function renderRanks(dashboard: WireDashboard) {
     return err(404, { detail: "unhandled test route" })
   })
   return render(
-    <FreeSearchProvider>
+    <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
       <ProviderRanks />
     </FreeSearchProvider>
   )
@@ -61,7 +62,7 @@ function renderSimulator(dashboard: WireDashboard) {
     return err(404, { detail: "unhandled test route" })
   })
   return render(
-    <FreeSearchProvider>
+    <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
       <RouteSimulator />
     </FreeSearchProvider>
   )
@@ -92,7 +93,7 @@ function renderSettings(dashboard: WireDashboard) {
     return err(404, { detail: "unhandled test route" })
   })
   return render(
-    <FreeSearchProvider>
+    <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
       <SettingsView />
     </FreeSearchProvider>
   )
@@ -122,7 +123,7 @@ function renderUsage(dashboard: WireDashboard) {
     return err(404, { detail: "unhandled test route" })
   })
   return render(
-    <FreeSearchProvider>
+    <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
       <QuotaAnalytics />
     </FreeSearchProvider>
   )

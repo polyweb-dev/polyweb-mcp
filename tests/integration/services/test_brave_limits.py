@@ -139,17 +139,23 @@ async def test_zero_funds_deny_with_non_retryable_402(repository: SQLiteReposito
     await service.initialize()
     await repository.limits.apply_snapshot(
         NativeUsageSnapshot(
-            pool_id="brave:keyed:usd", provider="brave",
-            auth_mode=AuthMode.KEYED, native_unit=UnitKind.USD,
-            observed_at=FIXED_AT, remaining=Decimal("0"),
-            allowance=Decimal("5.000"), credential_generation=0,
+            pool_id="brave:keyed:usd",
+            provider="brave",
+            auth_mode=AuthMode.KEYED,
+            native_unit=UnitKind.USD,
+            observed_at=FIXED_AT,
+            remaining=Decimal("0"),
+            allowance=Decimal("5.000"),
+            credential_generation=0,
         )
     )
     try:
         await service.admit(
             LimitCallContext(
-                provider="brave", operation=LimitOperation.SEARCH,
-                auth_mode=AuthMode.KEYED, attempt_id="brave-402",
+                provider="brave",
+                operation=LimitOperation.SEARCH,
+                auth_mode=AuthMode.KEYED,
+                attempt_id="brave-402",
                 requested_at=FIXED_AT,
             )
         )
@@ -187,8 +193,10 @@ async def test_grant_and_history_audit(repository: SQLiteRepository) -> None:
     saved = await service.save_grant(
         "brave",
         GrantPayload(
-            version=0, period_start=date(2026, 3, 1),
-            period_end=date(2026, 4, 1), search_crd=Decimal("10"),
+            version=0,
+            period_start=date(2026, 3, 1),
+            period_end=date(2026, 4, 1),
+            search_crd=Decimal("10"),
             fetch_crd=Decimal("0"),
         ),
         AuthMode.KEYED,
@@ -207,17 +215,23 @@ async def test_two_successes_debit_exact_ten(repository: SQLiteRepository) -> No
     await service.initialize()
     await repository.limits.apply_snapshot(
         NativeUsageSnapshot(
-            pool_id="brave:keyed:usd", provider="brave",
-            auth_mode=AuthMode.KEYED, native_unit=UnitKind.USD,
-            observed_at=FIXED_AT, remaining=Decimal("5.000"),
-            allowance=Decimal("5.000"), credential_generation=0,
+            pool_id="brave:keyed:usd",
+            provider="brave",
+            auth_mode=AuthMode.KEYED,
+            native_unit=UnitKind.USD,
+            observed_at=FIXED_AT,
+            remaining=Decimal("5.000"),
+            allowance=Decimal("5.000"),
+            credential_generation=0,
         )
     )
     for attempt in ("brave-s1", "brave-s2"):
         admission = await service.admit(
             LimitCallContext(
-                provider="brave", operation=LimitOperation.SEARCH,
-                auth_mode=AuthMode.KEYED, attempt_id=attempt,
+                provider="brave",
+                operation=LimitOperation.SEARCH,
+                auth_mode=AuthMode.KEYED,
+                attempt_id=attempt,
                 requested_at=FIXED_AT,
             )
         )
@@ -241,9 +255,7 @@ async def test_provider_view_search_finite_fetch_unavailable(
         await service.initialize()
         await adapter.search(SearchRequest(query="q", limit=2))
         snapshot = await adapter.usage_snapshot(
-            UsageSyncRequest(
-                provider="brave", auth_mode=AuthMode.KEYED, observed_at=FIXED_AT
-            )
+            UsageSyncRequest(provider="brave", auth_mode=AuthMode.KEYED, observed_at=FIXED_AT)
         )
         assert snapshot is not None
         await repository.limits.apply_snapshot(snapshot)

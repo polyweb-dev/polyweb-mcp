@@ -86,62 +86,103 @@ async def test_seed_is_idempotent_and_preserves_operator_edits(limits_repo) -> N
 async def test_lease_has_one_owner(limits_repo) -> None:
     await limits_repo.ensure_pool(_pool())
     now = FIXED_AT
-    assert await limits_repo.claim_sync(
-        SyncClaim(provider="synth", owner="a", now=now, lease_seconds=60)
-    ) is True
-    assert await limits_repo.claim_sync(
-        SyncClaim(
-            provider="synth", owner="b", now=now + timedelta(seconds=1),
-            lease_seconds=60,
+    assert (
+        await limits_repo.claim_sync(
+            SyncClaim(provider="synth", owner="a", now=now, lease_seconds=60)
         )
-    ) is False
+        is True
+    )
+    assert (
+        await limits_repo.claim_sync(
+            SyncClaim(
+                provider="synth",
+                owner="b",
+                now=now + timedelta(seconds=1),
+                lease_seconds=60,
+            )
+        )
+        is False
+    )
 
 
 async def test_stale_generation_rejected(limits_repo) -> None:
     await limits_repo.ensure_pool(_pool())
-    assert await limits_repo.apply_snapshot(
-        NativeUsageSnapshot(
-            pool_id="synth:keyed:USD", provider="synth", auth_mode=AuthMode.KEYED,
-            native_unit=UnitKind.USD, observed_at=FIXED_AT,
-            remaining=Decimal("5.000"), credential_generation=2,
+    assert (
+        await limits_repo.apply_snapshot(
+            NativeUsageSnapshot(
+                pool_id="synth:keyed:USD",
+                provider="synth",
+                auth_mode=AuthMode.KEYED,
+                native_unit=UnitKind.USD,
+                observed_at=FIXED_AT,
+                remaining=Decimal("5.000"),
+                credential_generation=2,
+            )
         )
-    ) is True
-    assert await limits_repo.apply_snapshot(
-        NativeUsageSnapshot(
-            pool_id="synth:keyed:USD", provider="synth", auth_mode=AuthMode.KEYED,
-            native_unit=UnitKind.USD, observed_at=FIXED_AT,
-            remaining=Decimal("9.000"), credential_generation=1,
+        is True
+    )
+    assert (
+        await limits_repo.apply_snapshot(
+            NativeUsageSnapshot(
+                pool_id="synth:keyed:USD",
+                provider="synth",
+                auth_mode=AuthMode.KEYED,
+                native_unit=UnitKind.USD,
+                observed_at=FIXED_AT,
+                remaining=Decimal("9.000"),
+                credential_generation=1,
+            )
         )
-    ) is False
+        is False
+    )
     pool = await limits_repo.get_pool("synth:keyed:USD")
     assert pool is not None and pool.remaining == Decimal("5.000")
 
 
 async def test_reserve_finalize_release_exactly_once(limits_repo) -> None:
     admission = LimitAdmission(
-        attempt_id="adm-1", provider="synth", operation=LimitOperation.SEARCH,
-        auth_mode=AuthMode.KEYED, pool_id="synth:keyed:USD",
-        reserved_crd=Decimal("0.6"), created_at=FIXED_AT,
+        attempt_id="adm-1",
+        provider="synth",
+        operation=LimitOperation.SEARCH,
+        auth_mode=AuthMode.KEYED,
+        pool_id="synth:keyed:USD",
+        reserved_crd=Decimal("0.6"),
+        created_at=FIXED_AT,
         expires_at=FIXED_AT + timedelta(minutes=5),
     )
     first = await limits_repo.reserve(admission)
     second = await limits_repo.reserve(admission)
     assert first.attempt_id == second.attempt_id == "adm-1"
-    assert await limits_repo.finalize(
-        LimitDebit(
-            attempt_id="adm-1", provider="synth", operation=LimitOperation.SEARCH,
-            auth_mode=AuthMode.KEYED, pool_id="synth:keyed:USD",
-            outcome="success", native_units=Decimal("0.0006"),
-            crd_debit=Decimal("0.6"), reason="local_success",
+    assert (
+        await limits_repo.finalize(
+            LimitDebit(
+                attempt_id="adm-1",
+                provider="synth",
+                operation=LimitOperation.SEARCH,
+                auth_mode=AuthMode.KEYED,
+                pool_id="synth:keyed:USD",
+                outcome="success",
+                native_units=Decimal("0.0006"),
+                crd_debit=Decimal("0.6"),
+                reason="local_success",
+            )
         )
-    ) is True
-    assert await limits_repo.finalize(
-        LimitDebit(
-            attempt_id="adm-1", provider="synth", operation=LimitOperation.SEARCH,
-            auth_mode=AuthMode.KEYED, outcome="success",
-            native_units=Decimal("0.0006"), crd_debit=Decimal("0.6"),
+        is True
+    )
+    assert (
+        await limits_repo.finalize(
+            LimitDebit(
+                attempt_id="adm-1",
+                provider="synth",
+                operation=LimitOperation.SEARCH,
+                auth_mode=AuthMode.KEYED,
+                outcome="success",
+                native_units=Decimal("0.0006"),
+                crd_debit=Decimal("0.6"),
+            )
         )
-    ) is False
+        is False
+    )
     assert await limits_repo.release("adm-1", "late") is False
 
 
@@ -149,9 +190,13 @@ async def test_failed_sync_preserves_balance_as_stale(limits_repo) -> None:
     await limits_repo.ensure_pool(_pool())
     await limits_repo.apply_snapshot(
         NativeUsageSnapshot(
-            pool_id="synth:keyed:USD", provider="synth", auth_mode=AuthMode.KEYED,
-            native_unit=UnitKind.USD, observed_at=FIXED_AT,
-            remaining=Decimal("5.000"), allowance=Decimal("5.000"),
+            pool_id="synth:keyed:USD",
+            provider="synth",
+            auth_mode=AuthMode.KEYED,
+            native_unit=UnitKind.USD,
+            observed_at=FIXED_AT,
+            remaining=Decimal("5.000"),
+            allowance=Decimal("5.000"),
             credential_generation=0,
         )
     )
@@ -160,8 +205,11 @@ async def test_failed_sync_preserves_balance_as_stale(limits_repo) -> None:
     )
     await limits_repo.complete_sync(
         SyncResult(
-            provider="synth", status="failed", observed_at=FIXED_AT,
-            error_code="usage_429", stale=True,
+            provider="synth",
+            status="failed",
+            observed_at=FIXED_AT,
+            error_code="usage_429",
+            stale=True,
         )
     )
     pool = await limits_repo.get_pool("synth:keyed:USD")
@@ -177,16 +225,20 @@ async def test_record_version_precondition(limits_repo) -> None:
     stored = (await limits_repo.list_records("synth"))[0]
     await limits_repo.update_record(
         LimitRecordUpdate(
-            provider="synth", operation=LimitOperation.SEARCH,
-            auth_mode=AuthMode.KEYED, version=stored.version,
+            provider="synth",
+            operation=LimitOperation.SEARCH,
+            auth_mode=AuthMode.KEYED,
+            version=stored.version,
             plan_name="Synthetic Plan v2",
         )
     )
     with pytest.raises(LimitVersionConflict):
         await limits_repo.update_record(
             LimitRecordUpdate(
-                provider="synth", operation=LimitOperation.SEARCH,
-                auth_mode=AuthMode.KEYED, version=stored.version,
+                provider="synth",
+                operation=LimitOperation.SEARCH,
+                auth_mode=AuthMode.KEYED,
+                version=stored.version,
                 plan_name="Stale write",
             )
         )
@@ -196,27 +248,30 @@ async def test_history_cursor_is_stable(limits_repo) -> None:
     await limits_repo.ensure_pool(_pool())
     await limits_repo.apply_snapshot(
         NativeUsageSnapshot(
-            pool_id="synth:keyed:USD", provider="synth", auth_mode=AuthMode.KEYED,
-            native_unit=UnitKind.USD, observed_at=FIXED_AT,
-            remaining=Decimal("5.000"), credential_generation=0,
+            pool_id="synth:keyed:USD",
+            provider="synth",
+            auth_mode=AuthMode.KEYED,
+            native_unit=UnitKind.USD,
+            observed_at=FIXED_AT,
+            remaining=Decimal("5.000"),
+            credential_generation=0,
         )
     )
-    first = await limits_repo.list_history(
-        LimitHistoryQuery(provider="synth", limit=1)
-    )
+    first = await limits_repo.list_history(LimitHistoryQuery(provider="synth", limit=1))
     assert len(first.events) == 1
     assert first.next_cursor is None or isinstance(first.next_cursor, str)
-    capped = await limits_repo.list_history(
-        LimitHistoryQuery(provider="synth", limit=100)
-    )
+    capped = await limits_repo.list_history(LimitHistoryQuery(provider="synth", limit=100))
     assert len(capped.events) <= 100
 
 
 async def test_manual_anchor_never_invents_balance(limits_repo) -> None:
     await limits_repo.ensure_pool(_pool())
     await limits_repo.record_manual_anchor(
-        _pool(), remaining=Decimal("5.000"), allowance=Decimal("5.000"),
-        reset_at=None, observed_at=FIXED_AT,
+        _pool(),
+        remaining=Decimal("5.000"),
+        allowance=Decimal("5.000"),
+        reset_at=None,
+        observed_at=FIXED_AT,
     )
     pool = await limits_repo.get_pool("synth:keyed:USD")
     assert pool is not None and pool.remaining == Decimal("5.000")
@@ -229,33 +284,47 @@ async def test_finalize_exact_payment_is_not_an_overspend(limits_repo) -> None:
     await limits_repo.ensure_pool(_pool())
     await limits_repo.apply_snapshot(
         NativeUsageSnapshot(
-            pool_id="synth:keyed:USD", provider="synth", auth_mode=AuthMode.KEYED,
-            native_unit=UnitKind.USD, observed_at=FIXED_AT,
-            remaining=Decimal("10"), allowance=Decimal("10"),
+            pool_id="synth:keyed:USD",
+            provider="synth",
+            auth_mode=AuthMode.KEYED,
+            native_unit=UnitKind.USD,
+            observed_at=FIXED_AT,
+            remaining=Decimal("10"),
+            allowance=Decimal("10"),
             credential_generation=0,
         )
     )
     await limits_repo.reserve(
         LimitAdmission(
-            attempt_id="exact-1", provider="synth", operation=LimitOperation.SEARCH,
-            auth_mode=AuthMode.KEYED, pool_id="synth:keyed:USD",
-            reserved_crd=Decimal("10000"), created_at=FIXED_AT,
+            attempt_id="exact-1",
+            provider="synth",
+            operation=LimitOperation.SEARCH,
+            auth_mode=AuthMode.KEYED,
+            pool_id="synth:keyed:USD",
+            reserved_crd=Decimal("10000"),
+            created_at=FIXED_AT,
             expires_at=FIXED_AT + timedelta(minutes=5),
         )
     )
-    assert await limits_repo.finalize(
-        LimitDebit(
-            attempt_id="exact-1", provider="synth", operation=LimitOperation.SEARCH,
-            auth_mode=AuthMode.KEYED, pool_id="synth:keyed:USD",
-            outcome="success", native_units=Decimal("10"),
-            crd_debit=Decimal("10000"), reason="local_success",
+    assert (
+        await limits_repo.finalize(
+            LimitDebit(
+                attempt_id="exact-1",
+                provider="synth",
+                operation=LimitOperation.SEARCH,
+                auth_mode=AuthMode.KEYED,
+                pool_id="synth:keyed:USD",
+                outcome="success",
+                native_units=Decimal("10"),
+                crd_debit=Decimal("10000"),
+                reason="local_success",
+            )
         )
-    ) is True
+        is True
+    )
     pool = await limits_repo.get_pool("synth:keyed:USD")
     assert pool is not None and pool.remaining == Decimal("0")
-    page = await limits_repo.list_history(
-        LimitHistoryQuery(provider="synth", limit=10)
-    )
+    page = await limits_repo.list_history(LimitHistoryQuery(provider="synth", limit=10))
     event = next(e for e in page.events if e.local_attempt_id == "exact-1")
     assert event.detail["clamped"] is False
     assert event.detail["overspend"] is None
@@ -266,33 +335,47 @@ async def test_finalize_real_overspend_stays_visible(limits_repo) -> None:
     await limits_repo.ensure_pool(_pool())
     await limits_repo.apply_snapshot(
         NativeUsageSnapshot(
-            pool_id="synth:keyed:USD", provider="synth", auth_mode=AuthMode.KEYED,
-            native_unit=UnitKind.USD, observed_at=FIXED_AT,
-            remaining=Decimal("10"), allowance=Decimal("10"),
+            pool_id="synth:keyed:USD",
+            provider="synth",
+            auth_mode=AuthMode.KEYED,
+            native_unit=UnitKind.USD,
+            observed_at=FIXED_AT,
+            remaining=Decimal("10"),
+            allowance=Decimal("10"),
             credential_generation=0,
         )
     )
     await limits_repo.reserve(
         LimitAdmission(
-            attempt_id="over-1", provider="synth", operation=LimitOperation.SEARCH,
-            auth_mode=AuthMode.KEYED, pool_id="synth:keyed:USD",
-            reserved_crd=Decimal("12000"), created_at=FIXED_AT,
+            attempt_id="over-1",
+            provider="synth",
+            operation=LimitOperation.SEARCH,
+            auth_mode=AuthMode.KEYED,
+            pool_id="synth:keyed:USD",
+            reserved_crd=Decimal("12000"),
+            created_at=FIXED_AT,
             expires_at=FIXED_AT + timedelta(minutes=5),
         )
     )
-    assert await limits_repo.finalize(
-        LimitDebit(
-            attempt_id="over-1", provider="synth", operation=LimitOperation.SEARCH,
-            auth_mode=AuthMode.KEYED, pool_id="synth:keyed:USD",
-            outcome="success", native_units=Decimal("12"),
-            crd_debit=Decimal("12000"), reason="local_success",
+    assert (
+        await limits_repo.finalize(
+            LimitDebit(
+                attempt_id="over-1",
+                provider="synth",
+                operation=LimitOperation.SEARCH,
+                auth_mode=AuthMode.KEYED,
+                pool_id="synth:keyed:USD",
+                outcome="success",
+                native_units=Decimal("12"),
+                crd_debit=Decimal("12000"),
+                reason="local_success",
+            )
         )
-    ) is True
+        is True
+    )
     pool = await limits_repo.get_pool("synth:keyed:USD")
     assert pool is not None and pool.remaining == Decimal("0")
-    page = await limits_repo.list_history(
-        LimitHistoryQuery(provider="synth", limit=10)
-    )
+    page = await limits_repo.list_history(LimitHistoryQuery(provider="synth", limit=10))
     event = next(e for e in page.events if e.local_attempt_id == "over-1")
     assert event.detail["clamped"] is True
     assert event.detail["overspend"] == "2"
@@ -302,20 +385,24 @@ async def test_manual_anchor_delete_restores_unknown(limits_repo) -> None:
     """D3 pin: delete of an anchor with 10 and 5 restores unknown, not zero."""
     await limits_repo.ensure_pool(_pool())
     await limits_repo.record_manual_anchor(
-        _pool(), remaining=Decimal("10"), allowance=Decimal("5"),
-        reset_at=None, observed_at=FIXED_AT,
+        _pool(),
+        remaining=Decimal("10"),
+        allowance=Decimal("5"),
+        reset_at=None,
+        observed_at=FIXED_AT,
     )
-    assert await limits_repo.clear_pool_values(
-        "synth:keyed:USD", observed_at=FIXED_AT + timedelta(seconds=1)
-    ) is True
+    assert (
+        await limits_repo.clear_pool_values(
+            "synth:keyed:USD", observed_at=FIXED_AT + timedelta(seconds=1)
+        )
+        is True
+    )
     pool = await limits_repo.get_pool("synth:keyed:USD")
     assert pool is not None
     assert pool.remaining is None
     assert pool.allowance is None
     assert pool.manual_anchor is False
-    page = await limits_repo.list_history(
-        LimitHistoryQuery(provider="synth", limit=10)
-    )
+    page = await limits_repo.list_history(LimitHistoryQuery(provider="synth", limit=10))
     event = next(e for e in page.events if e.reason == "reconcile")
     assert event.detail["cleared"] is True
     assert event.old_native == Decimal("10")

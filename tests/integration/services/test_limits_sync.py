@@ -51,11 +51,15 @@ async def repository():
 
 def _record(provider="synth"):
     return ProviderLimitRecord(
-        provider=provider, operation=LimitOperation.SEARCH,
-        auth_mode=AuthMode.KEYED, supported=True, transport_available=True,
+        provider=provider,
+        operation=LimitOperation.SEARCH,
+        auth_mode=AuthMode.KEYED,
+        supported=True,
+        transport_available=True,
         rate=RateBlock(windows=[], published=False),
         budget=BudgetBlock(model=BudgetModel.USD, standard_native_cost=Decimal("0.005")),
-        native_unit=UnitKind.USD, native_pool_id=f"{provider}:keyed:USD",
+        native_unit=UnitKind.USD,
+        native_pool_id=f"{provider}:keyed:USD",
         conversion_profile=CRDPriceProfile(),
     )
 
@@ -79,21 +83,29 @@ class _VendorAdapter:
     async def usage_snapshot(self, request: UsageSyncRequest):
         self.calls += 1
         return NativeUsageSnapshot(
-            pool_id="synth:keyed:USD", provider="synth",
-            auth_mode=AuthMode.KEYED, native_unit=UnitKind.USD,
-            observed_at=request.observed_at, remaining=self._remaining,
-            allowance=self._remaining, credential_generation=0,
+            pool_id="synth:keyed:USD",
+            provider="synth",
+            auth_mode=AuthMode.KEYED,
+            native_unit=UnitKind.USD,
+            observed_at=request.observed_at,
+            remaining=self._remaining,
+            allowance=self._remaining,
+            credential_generation=0,
         )
 
 
 async def test_null_snapshot_skips_without_balance_change(repository) -> None:
     svc = ProviderLimitsService(
-        repository.limits, records=[_record()], tier_defaults={},
+        repository.limits,
+        records=[_record()],
+        tier_defaults={},
         clock=lambda: FIXED_AT,
     )
     await svc.initialize()
     sync = LimitSyncService(
-        repository.limits, svc, lambda: [_NullAdapter()],
+        repository.limits,
+        svc,
+        lambda: [_NullAdapter()],
         clock=lambda: FIXED_AT,
     )
     result = await sync.sync_provider("synth", FIXED_AT)
@@ -102,13 +114,18 @@ async def test_null_snapshot_skips_without_balance_change(repository) -> None:
 
 async def test_single_tick_updates_balance(repository) -> None:
     svc = ProviderLimitsService(
-        repository.limits, records=[_record()], tier_defaults={},
+        repository.limits,
+        records=[_record()],
+        tier_defaults={},
         clock=lambda: FIXED_AT,
     )
     await svc.initialize()
     adapter = _VendorAdapter("5.000")
     sync = LimitSyncService(
-        repository.limits, svc, lambda: [adapter], clock=lambda: FIXED_AT,
+        repository.limits,
+        svc,
+        lambda: [adapter],
+        clock=lambda: FIXED_AT,
     )
     result = await sync.sync_provider("synth", FIXED_AT)
     assert result.status in ("synced", "skipped")
@@ -117,32 +134,47 @@ async def test_single_tick_updates_balance(repository) -> None:
 
 async def test_stale_generation_discarded(repository) -> None:
     svc = ProviderLimitsService(
-        repository.limits, records=[_record()], tier_defaults={},
+        repository.limits,
+        records=[_record()],
+        tier_defaults={},
         clock=lambda: FIXED_AT,
     )
     await svc.initialize()
     await svc.credential_changed("synth")
-    assert await repository.limits.apply_snapshot(
-        NativeUsageSnapshot(
-            pool_id="synth:keyed:USD", provider="synth",
-            auth_mode=AuthMode.KEYED, native_unit=UnitKind.USD,
-            observed_at=FIXED_AT, remaining=Decimal("9.000"),
-            credential_generation=0,
+    assert (
+        await repository.limits.apply_snapshot(
+            NativeUsageSnapshot(
+                pool_id="synth:keyed:USD",
+                provider="synth",
+                auth_mode=AuthMode.KEYED,
+                native_unit=UnitKind.USD,
+                observed_at=FIXED_AT,
+                remaining=Decimal("9.000"),
+                credential_generation=0,
+            )
         )
-    ) is False
+        is False
+    )
 
 
 async def test_rate_progress_hour_day_only(repository) -> None:
     svc = ProviderLimitsService(
-        repository.limits, records=[_record()], tier_defaults={},
+        repository.limits,
+        records=[_record()],
+        tier_defaults={},
         clock=lambda: FIXED_AT,
     )
     await svc.initialize()
     await svc.rate_limits.observe(
         RateObservation(
-            bucket_id="s", provider="synth", auth_mode=AuthMode.KEYED,
-            window=RateWindowName.HOUR, unit=RateUnit.REQUESTS,
-            limit=Decimal("10"), remaining=Decimal("7"), observed_at=FIXED_AT,
+            bucket_id="s",
+            provider="synth",
+            auth_mode=AuthMode.KEYED,
+            window=RateWindowName.HOUR,
+            unit=RateUnit.REQUESTS,
+            limit=Decimal("10"),
+            remaining=Decimal("7"),
+            observed_at=FIXED_AT,
         )
     )
     bars = await svc.rate_limits.progress("synth", FIXED_AT)

@@ -19,11 +19,14 @@ const INITIAL_FALLBACK_CONFIG: FallbackConfig = {
 const DEFAULT_COST_PRESET: BackendRoutingConfig["cost_optimization_preset"] = "balanced";
 
 import { RoutingContext } from "./context";
+import { useRoutingPolicy } from "./useRoutingPolicy";
 
 export const RoutingProvider: React.FC<{
   showToast: ShowToast;
+  canReadControls: boolean;
+  canEditControls: boolean;
   children: React.ReactNode;
-}> = ({ showToast, children }) => {
+}> = ({ showToast, canReadControls, canEditControls, children }) => {
   const [fallbackConfig, setFallbackConfig] = useState<FallbackConfig>(INITIAL_FALLBACK_CONFIG);
   const [routingLoading, setRoutingLoading] = useState(true);
   const [routingError, setRoutingError] = useState<string | null>(null);
@@ -33,6 +36,13 @@ export const RoutingProvider: React.FC<{
   >(DEFAULT_COST_PRESET);
 
   const refreshRouting = useCallback(async () => {
+    if (!canReadControls) {
+      // A role without control-read access keeps the local defaults and a clear
+      // busy flag. The client never manufactures a routing policy.
+      setRoutingError(null);
+      setRoutingLoading(false);
+      return;
+    }
     setRoutingLoading(true);
     setRoutingError(null);
     try {
@@ -46,59 +56,16 @@ export const RoutingProvider: React.FC<{
     } finally {
       setRoutingLoading(false);
     }
-  }, [showToast]);
+  }, [canReadControls, showToast]);
 
-  const updateFallbackConfig = useCallback(
-    async (partial: Partial<FallbackConfig>) => {
-      const hasBackendFields = partial.enabled !== undefined || partial.maxAttempts !== undefined;
-      setFallbackConfig((previous) => ({ ...previous, ...partial }));
-      if (!hasBackendFields) {
-        // GAP: 10 — backend does not expose per-condition or timeout-budget controls.
-        return;
-      }
-
-      const nextEnabled = partial.enabled ?? fallbackConfig.enabled;
-      const nextMaxAttempts = partial.maxAttempts ?? fallbackConfig.maxAttempts;
-      try {
-        const wire = await apiService.updateRoutingConfig({
-          fallback_policy: nextEnabled ? "chained" : "first_only",
-          cost_optimization_preset: costOptimizationPreset,
-          max_attempts: nextMaxAttempts,
-        });
-        const mapped = mapRoutingConfig(wire);
-        setFallbackConfig((previous) => ({ ...previous, ...mapped, ...partial }));
-        setCostOptimizationPreset(wire.cost_optimization_preset);
-      } catch (error) {
-        showToast(errorMessage(error, "Unable to update fallback configuration"), "error");
-        try {
-          const authoritative = await apiService.getRoutingConfig();
-          setFallbackConfig((previous) => ({ ...previous, ...mapRoutingConfig(authoritative) }));
-          setCostOptimizationPreset(authoritative.cost_optimization_preset);
-        } catch {
-          // Keep the error toast when the authoritative read is unavailable.
-        }
-      }
-    },
-    [costOptimizationPreset, fallbackConfig.enabled, fallbackConfig.maxAttempts, showToast],
-  );
-
-  const updateCostPreset = useCallback(
-    async (preset: BackendRoutingConfig["cost_optimization_preset"]): Promise<void> => {
-      try {
-        const wire = await apiService.updateRoutingConfig({
-          fallback_policy: fallbackConfig.enabled ? "chained" : "first_only",
-          cost_optimization_preset: preset,
-          max_attempts: fallbackConfig.maxAttempts,
-        });
-        setFallbackConfig((previous) => ({ ...previous, ...mapRoutingConfig(wire) }));
-        setCostOptimizationPreset(wire.cost_optimization_preset);
-      } catch (error) {
-        showToast(errorMessage(error, "Unable to update cost optimization"), "error");
-      }
-    },
-    [fallbackConfig.enabled, fallbackConfig.maxAttempts, showToast],
-  );
-
+  const { updateFallbackConfig, updateCostPreset } = useRoutingPolicy({
+    showToast,
+    canEditControls,
+    fallbackConfig,
+    costOptimizationPreset,
+    setFallbackConfig,
+    setCostOptimizationPreset,
+  });
   const value = React.useMemo(
     () => ({
       fallbackConfig,
@@ -106,6 +73,8 @@ export const RoutingProvider: React.FC<{
       routingError,
       routingPreset,
       costOptimizationPreset,
+      canReadControls,
+      canEditControls,
       setRoutingPreset,
       updateFallbackConfig,
       updateCostPreset,
@@ -117,6 +86,8 @@ export const RoutingProvider: React.FC<{
       routingError,
       routingPreset,
       costOptimizationPreset,
+      canReadControls,
+      canEditControls,
       updateFallbackConfig,
       updateCostPreset,
       refreshRouting,

@@ -19,6 +19,9 @@ export interface DashboardValue {
   crdUsageTotals: CRDUsageTotal[];
   quotaAvailable: boolean;
   dashboardNotice: string | null;
+  /** Role capability flags from the composition. */
+  canReadControls: boolean;
+  canEditControls: boolean;
   refreshDashboard: () => Promise<void>;
   prependUsageEvent: (event: UsageEvent) => void;
 }

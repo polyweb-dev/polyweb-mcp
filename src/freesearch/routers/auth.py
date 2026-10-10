@@ -1,0 +1,666 @@
+"""Auth HTTP surface: registration, credential pairs, refresh, and logout.
+
+Transport only: request parsing, the two public endpoints, the protected refresh
+route, and the current-account read. Policy lives in
+:mod:`freesearch.services.users`.
+
+Under Q1 the public endpoints are exactly ``POST /auth/register`` and
+``POST /auth/jwt/login``. ``POST /auth/jwt/refresh`` is authenticated by an
+opaque refresh credential in the Bearer header and by nothing else. The access
+JWT gates ``POST /auth/jwt/logout`` and ``GET /users/me``.
+
+``POST /api/v1/users`` requires the access JWT and the Admin role, and it creates
+one standalone account in the requested role. The account model is a provisioning
+model: an Admin creates accounts and holds no authority over an existing account,
+so the legacy lookup and role-change paths deny every authenticated caller.
+
+Two transports answer the same routes. A request with no browser evidence keeps
+the programmatic contract: one JSON credential pair and an opaque Bearer refresh
+credential. A request with browser evidence keeps the refresh credential in the
+strict cookie and receives no refresh value in JSON. Browser evidence exists only
+when API composition supplies the operator origin allowlist and the request
+passes every check in :mod:`freesearch.infrastructure.browser_auth`. A failed
+check returns HTTP 403 before any credential issue or rotation.
+
+Every credential response carries ``Cache-Control: no-store`` and never echoes a
+submitted password. A schema failure on an auth route returns one fixed safe
+message, so no raw input, hash, or token value can leak through a 422 body.
+"""
+
+from collections.abc import AsyncIterator
+from typing import Annotated, Any, Literal, NoReturn
+from uuid import UUID
+
+from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
+from fastapi.encoders import jsonable_encoder
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from fastapi.routing import APIRoute
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from fastapi_users import exceptions, schemas
+from fastapi_users.router.common import ErrorCode
+from fastapi_users.router.register import get_register_router
+from pydantic import BaseModel, ConfigDict, Field
+
+from freesearch.infrastructure.browser_auth import (
+    REFRESH_COOKIE_PATH,
+    browser_transport,
+    clear_refresh_cookie,
+    refresh_cookie_deletion_header,
+    refresh_credential_from_scope,
+    set_refresh_cookie,
+    validate_browser_request,
+)
+from freesearch.models.users import AuthTokens, UserAccount, UserPrincipal, UserRole
+from freesearch.services.users import (
+    AuthConfigurationError,
+    AuthService,
+    AuthStorageUnavailable,
+    LoginRateLimited,
+    UserManager,
+    has_role,
+)
+
+#: Auth routes whose validation failures must not echo submitted credentials.
+_AUTH_VALIDATION_PREFIXES = ("/auth/", "/users/me", "/api/v1/users")
+
+#: Roles allowed to mutate provider controls and to start provider OAuth flows.
+ADMIN_ROLES: frozenset[UserRole] = frozenset({UserRole.ADMIN})
+
+#: Roles allowed to read sanitized control views, statistics, and dashboard data.
+CONTROL_READ_ROLES: frozenset[UserRole] = frozenset({UserRole.ADMIN, UserRole.DEVELOPER})
+
+_SAFE_VALIDATION_DETAIL = "invalid authentication request"
+
+#: Fixed denial detail of the legacy account lookup and role-change routes.
+_ACCOUNT_MANAGEMENT_DENIED = "account management is not available before project association"
+
+_BEARER_PREFIX = "bearer "
+
+#: The token URL the OpenAPI Bearer scheme advertises, matching fastapi-users.
+_OPENAPI_TOKEN_URL = "auth/jwt/login"
+
+
+def _publish_bearer_scheme(app: FastAPI) -> None:
+    """Publish the Bearer token scheme in the OpenAPI document.
+
+    ``fastapi-users`` publishes this scheme through ``BearerTransport``. The
+    whole-application ASGI guard enforces the credential instead of a per-route
+    dependency, so the scheme stays documentation and no operation gains a
+    security requirement.
+    """
+
+    default_openapi = app.openapi
+
+    def openapi() -> dict[str, Any]:
+        schema = default_openapi()
+        scheme = OAuth2PasswordBearer(_OPENAPI_TOKEN_URL, auto_error=False)
+        components = schema.setdefault("components", {})
+        security_schemes = components.setdefault("securitySchemes", {})
+        security_schemes[scheme.scheme_name] = jsonable_encoder(
+            scheme.model, by_alias=True, exclude_none=True
+        )
+        return schema
+
+    app.openapi = openapi  # type: ignore[method-assign]
+
+
+class UserCreate(schemas.BaseUserCreate):
+    """Registration body: email, password, and the requested role.
+
+    ``extra="forbid"`` rejects client-supplied provider fields, privilege flags,
+    and any other field. The role is a validated role value, and it defaults to
+    Agent, so a caller that omits the field keeps the current contract. The
+    password is hidden from the model representation, and the accepted rule is
+    enforced by the user manager with a clear message.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    password: str = Field(repr=False)
+    role: UserRole = UserRole.AGENT
+
+
+class UserRead(schemas.BaseUser[UUID]):
+    """Account projection returned by registration and ``GET /users/me``."""
+
+    role: UserRole
+
+
+class TokenPairResponse(BaseModel):
+    """Credential pair plus both expiry intervals, in seconds."""
+
+    access_token: str = Field(repr=False)
+    refresh_token: str = Field(repr=False)
+    token_type: Literal["bearer"] = "bearer"
+    expires_in: int
+    refresh_expires_in: int
+
+
+class BrowserTokenResponse(BaseModel):
+    """Browser access projection: the refresh credential stays in its cookie.
+
+    The model has no ``refresh_token`` field, so the response body omits the key
+    instead of sending a null value. :class:`TokenPairResponse` stays the
+    programmatic contract.
+    """
+
+    access_token: str = Field(repr=False)
+    token_type: Literal["bearer"] = "bearer"
+    expires_in: int
+    refresh_expires_in: int
+
+
+def _browser_origins(request: Request) -> frozenset[str]:
+    """Return the browser origin allowlist of this application, if any.
+
+    Only API composition sets the value. An application without one keeps the
+    programmatic contract, so MCP and test compositions gain no cookie behavior.
+    """
+
+    origins = getattr(request.app.state, "auth_browser_origins", None)
+    return origins if isinstance(origins, frozenset) else frozenset()
+
+
+def _browser_mode(request: Request) -> bool:
+    """Return whether this request is a valid browser transport request."""
+
+    origins = _browser_origins(request)
+    if not origins or not browser_transport(request.scope):
+        return False
+    return validate_browser_request(request.scope, origins)
+
+
+def _forbidden() -> HTTPException:
+    """Return the browser evidence rejection, which carries no request content."""
+
+    return HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="browser request rejected",
+    )
+
+
+def _require_browser_transport(request: Request) -> bool:
+    """Return the browser transport mode, or reject an invalid browser request.
+
+    ``False`` means the request carries no browser evidence, so the handler must
+    answer the programmatic contract. An exception means the request does carry
+    browser evidence that failed a check, so no credential may leave the server.
+    """
+
+    origins = _browser_origins(request)
+    if not origins or not browser_transport(request.scope):
+        return False
+    if not validate_browser_request(request.scope, origins):
+        raise _forbidden()
+    return True
+
+
+def _auth_service(request: Request) -> AuthService:
+    """Return the composed auth service, or reject an unconfigured app."""
+
+    service = getattr(request.app.state, "auth_service", None)
+    if not isinstance(service, AuthService):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="account authentication is not configured",
+        )
+    return service
+
+
+def _storage_unavailable() -> HTTPException:
+    """Return the safe storage rejection of an account route."""
+
+    return HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="authentication is temporarily unavailable",
+    )
+
+
+def _account_management_denied() -> HTTPException:
+    """Return the fixed denial of a legacy account-management route."""
+
+    return HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail=_ACCOUNT_MANAGEMENT_DENIED,
+    )
+
+
+def _account_read(account: UserAccount) -> UserRead:
+    """Project one safe account contract onto the wire shape."""
+
+    return UserRead.model_validate(account)
+
+
+def peer_address(request: Request) -> str:
+    """Return the actual peer address of the request.
+
+    A forwarded header is deliberately ignored: no trusted-proxy policy exists
+    in this cycle, so a client cannot pick its own rate-limit bucket.
+    """
+
+    client = request.client
+    return client.host if client is not None else "unknown"
+
+
+def bearer_credential(request: Request) -> str | None:
+    """Return the single Bearer credential of the request, else ``None``.
+
+    Duplicate headers and other schemes are rejected as absent credentials.
+    """
+
+    values = request.headers.getlist("authorization")
+    if len(values) != 1:
+        return None
+    value = values[0]
+    if not value.lower().startswith(_BEARER_PREFIX):
+        return None
+    return value[len(_BEARER_PREFIX) :].strip() or None
+
+
+def static_principal(request: Request) -> UserPrincipal | None:
+    """Return the principal a transport guard already verified, else ``None``."""
+
+    principal = getattr(request.state, "user", None)
+    return principal if isinstance(principal, UserPrincipal) else None
+
+
+def _unauthenticated(detail: str, *, clear_cookie: bool = False) -> HTTPException:
+    """Return the generic HTTP 401, optionally expiring the refresh cookie.
+
+    ``clear_cookie`` is ``True`` only for an authorized-origin browser refresh
+    or browser logout request whose cookie failed verification: the browser must
+    not keep a credential the server rejected.
+    """
+
+    headers = {"WWW-Authenticate": "Bearer"}
+    if clear_cookie:
+        headers["Set-Cookie"] = refresh_cookie_deletion_header()
+    return HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail=detail,
+        headers=headers,
+    )
+
+
+async def _access_principal(request: Request) -> UserPrincipal:
+    """Return the current account, or reject with HTTP 401.
+
+    The whole-application guard already verified this request and stored the
+    principal in ASGI state, so that value wins. The header check stays as a
+    fallback for a composition that mounts these routes without the guard.
+    """
+
+    verified = static_principal(request)
+    if verified is not None:
+        return verified
+    token = bearer_credential(request)
+    if token is None:
+        raise _unauthenticated("not authenticated")
+    principal = await _auth_service(request).verify_token(token)
+    if principal is None:
+        raise _unauthenticated("not authenticated")
+    return principal
+
+
+def current_principal(request: Request) -> UserPrincipal:
+    """Return the verified principal of this request, or reject with HTTP 401.
+
+    Only the guard's verified principal counts. No role claim, cookie, query
+    parameter, or client header can replace it.
+    """
+
+    principal = static_principal(request)
+    if principal is None:
+        raise _unauthenticated("not authenticated")
+    return principal
+
+
+def _require_role(request: Request, allowed: frozenset[UserRole]) -> UserPrincipal:
+    """Return the principal only when its current database role is permitted.
+
+    A missing or invalid credential stays HTTP 401. A valid credential with an
+    insufficient role is HTTP 403, and the caller runs before any provider or
+    persistence side effect.
+    """
+
+    principal = current_principal(request)
+    if not has_role(principal, allowed):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="insufficient role")
+    return principal
+
+
+async def require_admin(request: Request) -> UserPrincipal:
+    """Require an active Admin account for a control mutation or OAuth handler."""
+
+    return _require_role(request, ADMIN_ROLES)
+
+
+async def require_control_reader(request: Request) -> UserPrincipal:
+    """Require an Admin or Developer account for a sanitized control read."""
+
+    return _require_role(request, CONTROL_READ_ROLES)
+
+
+async def get_user_manager(request: Request) -> AsyncIterator[UserManager]:
+    """Yield the library user manager bound to one request-scoped session."""
+
+    async with _auth_service(request).user_manager() as manager:
+        yield manager
+
+
+async def auth_validation_exception_handler(
+    request: Request, exc: RequestValidationError
+) -> JSONResponse:
+    """Replace auth request-validation bodies with one fixed safe message.
+
+    Non-auth routes keep the framework's detailed response, so this change cannot
+    weaken or alter any existing endpoint contract.
+    """
+
+    path = request.url.path
+    if any(path.startswith(prefix) for prefix in _AUTH_VALIDATION_PREFIXES):
+        # The literal status avoids a Starlette deprecation alias while keeping
+        # the documented FastAPI 422 contract.
+        return JSONResponse(
+            status_code=422,
+            content={"detail": _SAFE_VALIDATION_DETAIL},
+        )
+    return await request_validation_exception_handler(request, exc)
+
+
+def _token_response(
+    tokens: AuthTokens, response: Response, request: Request
+) -> TokenPairResponse | BrowserTokenResponse:
+    """Project internal credentials onto the wire shape, uncacheable.
+
+    A browser request receives the access projection and the refresh cookie. A
+    programmatic request keeps the JSON pair and receives no cookie.
+    """
+
+    response.headers["Cache-Control"] = "no-store"
+    access_token = tokens.access_token.get_secret_value()
+    if not _browser_mode(request):
+        return TokenPairResponse(
+            access_token=access_token,
+            refresh_token=tokens.refresh_token.get_secret_value(),
+            token_type=tokens.token_type,
+            expires_in=tokens.expires_in,
+            refresh_expires_in=tokens.refresh_expires_in,
+        )
+    set_refresh_cookie(
+        response,
+        tokens.refresh_token.get_secret_value(),
+        tokens.refresh_expires_in,
+    )
+    return BrowserTokenResponse(
+        access_token=access_token,
+        token_type=tokens.token_type,
+        expires_in=tokens.expires_in,
+        refresh_expires_in=tokens.refresh_expires_in,
+    )
+
+
+async def _rotate_refresh(service: AuthService, token: str) -> AuthTokens | None:
+    """Rotate one refresh credential, mapping transport failures to HTTP 503."""
+
+    try:
+        return await service.rotate_refresh_token(token)
+    except AuthStorageUnavailable as unavailable:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="authentication is temporarily unavailable",
+        ) from unavailable
+    except AuthConfigurationError as unconfigured:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="account authentication is not configured",
+        ) from unconfigured
+
+
+def _login_responses() -> dict[int | str, dict[str, object]]:
+    return {
+        status.HTTP_400_BAD_REQUEST: {"description": "Bad credentials or an inactive account."},
+        status.HTTP_429_TOO_MANY_REQUESTS: {"description": "Attempt limit reached."},
+    }
+
+
+def _library_register_route() -> APIRoute:
+    """Return the library's generated registration route.
+
+    The route carries the library's request schema, response schema, status code,
+    documented errors, and handler, so registration keeps the standard error
+    contract without a hand-written copy.
+    """
+
+    router = get_register_router(get_user_manager, UserRead, UserCreate)
+    for route in router.routes:
+        if isinstance(route, APIRoute):
+            return route
+    raise RuntimeError("the library registration router has no API route")
+
+
+def register_auth_routes(app: FastAPI) -> None:
+    """Register the account routes and the auth validation handler on ``app``."""
+
+    app.add_exception_handler(RequestValidationError, auth_validation_exception_handler)  # type: ignore[arg-type]
+    _publish_bearer_scheme(app)
+
+    # The library owns the registration logic and its error contract. Its route
+    # is registered directly on the application router rather than through
+    # ``include_router``, so every entry in ``app.routes`` stays a plain route
+    # with a ``path`` attribute, in line with the control-plane convention.
+    built = _library_register_route()
+    app.add_api_route(
+        f"/auth{built.path}",
+        built.endpoint,
+        response_model=built.response_model,
+        status_code=built.status_code,
+        name=built.name,
+        responses=built.responses,
+        methods=["POST"],
+        dependencies=built.dependencies,
+    )
+
+    @app.post(
+        "/auth/jwt/login",
+        response_model=TokenPairResponse | BrowserTokenResponse,
+        responses=_login_responses(),
+    )
+    async def login(
+        request: Request,
+        response: Response,
+        credentials: Annotated[OAuth2PasswordRequestForm, Depends()],
+    ) -> TokenPairResponse | BrowserTokenResponse:
+        """Authenticate a local account and issue one session family's credentials."""
+
+        # Reject failed browser evidence before any credential work.
+        _require_browser_transport(request)
+        service = _auth_service(request)
+        try:
+            tokens = await service.login(credentials, peer_address=peer_address(request))
+        except LoginRateLimited as limited:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="too many authentication attempts",
+                headers={"Retry-After": str(limited.retry_after)},
+            ) from limited
+        except AuthStorageUnavailable as unavailable:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="authentication is temporarily unavailable",
+            ) from unavailable
+        except AuthConfigurationError as unconfigured:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="account authentication is not configured",
+            ) from unconfigured
+        if tokens is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=ErrorCode.LOGIN_BAD_CREDENTIALS,
+            )
+        return _token_response(tokens, response, request)
+
+    @app.post(
+        "/auth/jwt/refresh",
+        response_model=TokenPairResponse | BrowserTokenResponse,
+    )
+    async def refresh(
+        request: Request, response: Response
+    ) -> TokenPairResponse | BrowserTokenResponse:
+        """Rotate one refresh credential into exactly one successor pair.
+
+        A browser request presents the strict cookie and receives a replacement
+        cookie plus the access projection. A programmatic request presents the
+        opaque Bearer credential and keeps the JSON pair.
+        """
+
+        browser = _require_browser_transport(request)
+        token = (
+            refresh_credential_from_scope(request.scope, _browser_origins(request))
+            if browser
+            else bearer_credential(request)
+        )
+        if token is None:
+            raise _unauthenticated("invalid refresh credential", clear_cookie=browser)
+        tokens = await _rotate_refresh(_auth_service(request), token)
+        if tokens is None:
+            raise _unauthenticated("invalid refresh credential", clear_cookie=browser)
+        return _token_response(tokens, response, request)
+
+    @app.delete(REFRESH_COOKIE_PATH, status_code=status.HTTP_204_NO_CONTENT)
+    async def cookie_logout(request: Request) -> Response:
+        """Revoke the browser session family and expire the refresh cookie.
+
+        The route applies the same Origin, marker, cookie, and live-family checks
+        as cookie refresh. It needs no valid access JWT, so a browser can log out
+        after its access token expired. The path stays inside the cookie path, so
+        no broader cookie scope is necessary.
+        """
+
+        if not _require_browser_transport(request):
+            raise _forbidden()
+        principal = current_principal(request)
+        await _auth_service(request).logout(principal)
+        response = Response(status_code=status.HTTP_204_NO_CONTENT)
+        response.headers["Cache-Control"] = "no-store"
+        clear_refresh_cookie(response)
+        return response
+
+    @app.post("/auth/jwt/logout", status_code=status.HTTP_204_NO_CONTENT)
+    async def logout(request: Request) -> Response:
+        """Revoke exactly the authenticated current session family."""
+
+        principal = await _access_principal(request)
+        await _auth_service(request).logout(principal)
+        response = Response(status_code=status.HTTP_204_NO_CONTENT)
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.get("/users/me", response_model=UserRead)
+    async def users_me(request: Request) -> UserRead:
+        """Return the authenticated account's own record, never its hash."""
+
+        principal = await _access_principal(request)
+        async with _auth_service(request).user_manager() as manager:
+            try:
+                account = await manager.get(principal.id)
+            except (exceptions.InvalidID, exceptions.UserNotExists) as missing:
+                raise _unauthenticated("not authenticated") from missing
+        return UserRead.model_validate(account)
+
+    _register_admin_account_routes(app)
+
+
+def _register_admin_account_routes(app: FastAPI) -> None:
+    """Register account provisioning and deny the legacy account routes.
+
+    ``POST /api/v1/users`` needs Bearer access and the Admin role. It reserves one
+    provisioning attempt, creates one standalone account in the requested role,
+    and returns the safe projection of that new account. The response holds no
+    credential and sets no cookie.
+
+    The legacy lookup and role-change paths stay registered as explicit
+    compatibility boundaries, and every authenticated caller receives HTTP 403.
+    This cycle grants an Admin the authority to create accounts, not to change an
+    existing account or another account's role.
+    """
+
+    @app.post("/api/v1/users", response_model=UserRead, status_code=status.HTTP_201_CREATED)
+    async def provision_user(body: UserCreate, request: Request) -> UserRead:
+        """Create one standalone account in the requested role for an Admin caller."""
+
+        await require_admin(request)
+        service = _auth_service(request)
+        try:
+            retry = await service.reserve_registration(peer_address=peer_address(request))
+        except AuthStorageUnavailable as unavailable:
+            raise _storage_unavailable() from unavailable
+        if retry is not None:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="too many registration attempts",
+                headers={"Retry-After": str(retry)},
+            )
+        try:
+            account = await service.provision_account(body)
+        except exceptions.UserAlreadyExists as exists:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=ErrorCode.REGISTER_USER_ALREADY_EXISTS,
+            ) from exists
+        except exceptions.InvalidPasswordException as invalid:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "code": ErrorCode.REGISTER_INVALID_PASSWORD,
+                    "reason": invalid.reason,
+                },
+            ) from invalid
+        except AuthStorageUnavailable as unavailable:
+            raise _storage_unavailable() from unavailable
+        return _account_read(account)
+
+    @app.get("/api/v1/users/{user_id}", response_model=None)
+    async def get_user(user_id: str, request: Request) -> NoReturn:
+        """Deny the legacy account lookup for every authenticated caller.
+
+        The caller is authenticated before the denial, so an absent or invalid
+        credential stays HTTP 401. No target account is read, and the body
+        carries no account data.
+        """
+
+        await _access_principal(request)
+        raise _account_management_denied()
+
+    @app.patch("/api/v1/users/{user_id}/role", response_model=None)
+    async def patch_user_role(user_id: str, request: Request) -> NoReturn:
+        """Deny the legacy role change for every authenticated caller.
+
+        No role body is parsed, no target account is read, and no session family
+        is revoked, so the denial cannot change an account or end a session.
+        """
+
+        await _access_principal(request)
+        raise _account_management_denied()
+
+
+__all__ = [
+    "ADMIN_ROLES",
+    "CONTROL_READ_ROLES",
+    "BrowserTokenResponse",
+    "TokenPairResponse",
+    "UserCreate",
+    "UserRead",
+    "auth_validation_exception_handler",
+    "bearer_credential",
+    "current_principal",
+    "get_user_manager",
+    "peer_address",
+    "register_auth_routes",
+    "require_admin",
+    "require_control_reader",
+    "static_principal",
+]

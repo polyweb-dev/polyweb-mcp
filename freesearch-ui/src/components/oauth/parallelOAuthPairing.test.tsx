@@ -15,6 +15,7 @@ import type {
 import { ApiError } from "@/shared/api/http"
 import { quotaDisplay } from "@/domains/dashboard"
 import { installFetchStub, ok, err, deferred } from "@/test/fetchMock"
+import { ADMIN_ACCOUNT_ID, DEVELOPER_ACCOUNT_ID } from "@/test/authFixtures"
 import {
   allProvidersFixture,
   routingConfigFixture,
@@ -230,7 +231,7 @@ function renderUsage(rows: WireDashboardQuota[]) {
     return err(404, { detail: `unhandled test route ${req.method} ${req.url}` })
   })
   return render(
-    <FreeSearchProvider>
+    <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
       <QuotaAnalytics />
     </FreeSearchProvider>
   )
@@ -464,7 +465,7 @@ describe("parallel OAuth pairing state machine", () => {
   it("pending poll -> ready auto-closes and refreshes the authoritative balance", async (ctx) => {
     const harness = installPairingStubs({ statusScript: ["pending", "pending", "ready"] })
     render(
-      <FreeSearchProvider>
+      <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
         <QuotaAnalytics />
       </FreeSearchProvider>
     )
@@ -491,7 +492,7 @@ describe("parallel OAuth pairing state machine", () => {
       statusScript: ["pending", "denied", "pending", "ready"],
     })
     render(
-      <FreeSearchProvider>
+      <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
         <QuotaAnalytics />
       </FreeSearchProvider>
     )
@@ -517,7 +518,7 @@ describe("parallel OAuth pairing state machine", () => {
   it("expired offers a retry that re-begins the flow", async (ctx) => {
     const harness = installPairingStubs({ statusScript: ["expired"] })
     render(
-      <FreeSearchProvider>
+      <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
         <QuotaAnalytics />
       </FreeSearchProvider>
     )
@@ -544,7 +545,7 @@ describe("parallel OAuth pairing state machine", () => {
       statusScript: ["pending", "ready"],
     })
     render(
-      <FreeSearchProvider>
+      <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
         <QuotaAnalytics />
       </FreeSearchProvider>
     )
@@ -574,7 +575,7 @@ describe("parallel OAuth pairing state machine", () => {
       ],
     })
     render(
-      <FreeSearchProvider>
+      <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
         <QuotaAnalytics />
       </FreeSearchProvider>
     )
@@ -606,7 +607,7 @@ describe("parallel OAuth pairing state machine", () => {
     const gate = deferred<Response>()
     const harness = installPairingStubs({ beginGate: gate })
     render(
-      <FreeSearchProvider>
+      <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
         <QuotaAnalytics />
       </FreeSearchProvider>
     )
@@ -641,7 +642,7 @@ describe("parallel OAuth pairing state machine", () => {
   it("unmount during polling stops all polls with no setState-after-unmount noise", async (ctx) => {
     const harness = installPairingStubs({ statusScript: ["pending"] })
     const view = render(
-      <FreeSearchProvider>
+      <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
         <QuotaAnalytics />
       </FreeSearchProvider>
     )
@@ -668,7 +669,7 @@ describe("parallel OAuth pairing state machine", () => {
   it("cancel during polling stops all polls and closes the dialog", async (ctx) => {
     const harness = installPairingStubs({ statusScript: ["pending"] })
     render(
-      <FreeSearchProvider>
+      <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
         <QuotaAnalytics />
       </FreeSearchProvider>
     )
@@ -691,7 +692,7 @@ describe("parallel OAuth pairing state machine", () => {
     })
     expect(harness).toBeDefined()
     render(
-      <FreeSearchProvider>
+      <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
         <QuotaAnalytics />
       </FreeSearchProvider>
     )
@@ -730,7 +731,7 @@ describe("parallel OAuth pairing state machine", () => {
     const user = userEvent.setup()
     installPairingStubs({ statusScript: ["pending"] })
     render(
-      <FreeSearchProvider>
+      <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
         <QuotaAnalytics />
       </FreeSearchProvider>
     )
@@ -792,7 +793,7 @@ describe("parallel OAuth pairing state machine", () => {
       statusScript: ["pending"],
     })
     render(
-      <FreeSearchProvider>
+      <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
         <QuotaAnalytics />
         <RefreshProbe />
       </FreeSearchProvider>
@@ -852,7 +853,7 @@ describe("parallel OAuth pairing state machine", () => {
       rowStatus: { kind: "status", status: "ready" },
     })
     render(
-      <FreeSearchProvider>
+      <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
         <QuotaAnalytics />
       </FreeSearchProvider>
     )
@@ -892,7 +893,7 @@ describe("parallel OAuth pairing state machine", () => {
       revokeError: { status: 500, body: { detail: "revoke exploded" } },
     })
     render(
-      <FreeSearchProvider>
+      <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
         <QuotaAnalytics />
       </FreeSearchProvider>
     )
@@ -924,7 +925,7 @@ describe("409 conflict + in-modal unpair (round 2)", () => {
     // Row-mount status load 404s; the paired snapshot is pairing evidence.
     installPairingStubs({ dashboardRows: [PAIRED_PARALLEL_ROW] })
     render(
-      <FreeSearchProvider>
+      <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
         <QuotaAnalytics />
       </FreeSearchProvider>
     )
@@ -951,7 +952,7 @@ describe("409 conflict + in-modal unpair (round 2)", () => {
       statusScript: ["pending"],
     })
     render(
-      <FreeSearchProvider>
+      <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
         <QuotaAnalytics />
       </FreeSearchProvider>
     )
@@ -1029,7 +1030,7 @@ describe("409 conflict + in-modal unpair (round 2)", () => {
       revokeError: { status: 500, body: { detail: "revoke exploded" } },
     })
     render(
-      <FreeSearchProvider>
+      <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
         <QuotaAnalytics />
       </FreeSearchProvider>
     )
@@ -1054,7 +1055,7 @@ describe("409 conflict + in-modal unpair (round 2)", () => {
       statusScript: ["pending"],
     })
     render(
-      <FreeSearchProvider>
+      <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
         <QuotaAnalytics />
       </FreeSearchProvider>
     )
@@ -1073,5 +1074,36 @@ describe("409 conflict + in-modal unpair (round 2)", () => {
     expect(screen.queryByRole("dialog")).toBeInTheDocument()
     expect(errSpy).not.toHaveBeenCalled()
   }, 20_000)
+})
+
+describe("parallel OAuth pairing (Developer read-only)", () => {
+  it("hides OAuth connect and disconnect controls while quota reads still render", async () => {
+    installFetchStub((req) => {
+      if (req.url === "/api/v1/providers" && req.method === "GET") {
+        return ok(allProvidersFixture())
+      }
+      if (req.url === "/api/v1/routing/config" && req.method === "GET") {
+        return ok(routingConfigFixture())
+      }
+      if (req.url.startsWith("/dashboard")) {
+        return ok(dashboardFixture({ latest_quota: [UNBUDGETED_PARALLEL_ROW] }))
+      }
+      if (req.url.endsWith("/manual-quota")) {
+        if (req.method === "GET") return err(404, { detail: "no manual quota" })
+        return err(500, { detail: "unexpected manual write" })
+      }
+      return err(404, { detail: `unhandled test route ${req.method} ${req.url}` })
+    })
+    render(
+      <FreeSearchProvider accountId={DEVELOPER_ACCOUNT_ID} canReadControls canEditControls={false}>
+        <QuotaAnalytics />
+      </FreeSearchProvider>
+    )
+    const row = await waitForParallelRow()
+    expect(row.textContent).toContain("Budget not configured")
+    expect(screen.queryByTestId(T.open)).toBeNull()
+    expect(screen.queryByTestId(T.disconnect)).toBeNull()
+    expect(screen.queryByTestId(T.confirmDisconnect)).toBeNull()
+  })
 })
 
