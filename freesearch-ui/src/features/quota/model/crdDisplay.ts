@@ -115,7 +115,7 @@ function stateText(state: CRDState): string {
 }
 
 /** Whole standard calls, floored; null when the count is absent. */
-function callsText(amount: string | null): string | null {
+export function callsText(amount: string | null): string | null {
   const value = amount === null ? null : scaled(amount)
   return value === null ? null : (value.int / 10n ** BigInt(value.scale)).toString()
 }

@@ -162,3 +162,148 @@ describe("balancePrefill", () => {
     expect(balancePrefill(auth({ aggregate_pool: null, detail: null }))).toBe(null)
   })
 })
+
+describe("providerInfo wholeRequests", () => {
+  function view(operation: "search" | "fetch", calls: string | null): Record<string, unknown> {
+    return {
+      state: "finite",
+      operation,
+      remaining_crd: "400000",
+      local_remaining_crd: null,
+      request_cost_crd: "4",
+      shared_pool_id: "keenable:keyed:request",
+      possible_standard_calls: calls,
+      price_version: "list_price",
+      priced: true,
+    }
+  }
+
+  function window(limit: string, unit: "requests" | "urls"): Record<string, unknown> {
+    return {
+      bucket_id: "keenable:keyed:requests",
+      limit,
+      window: "1s",
+      scope: "ip",
+      unit,
+      remaining: null,
+      reset_at: null,
+      source: "documented",
+      confidence: "observed",
+    }
+  }
+
+  it("floors integer standard calls with the opt-in flag", () => {
+    const base = auth({
+      search: record("keenable", { supported: true, transport_available: true }),
+      fetch: record("keenable", {
+        operation: "fetch",
+        supported: true,
+        transport_available: true,
+      }),
+      crd_views: [
+        view("search", "99995.00000000"),
+        view("fetch", "99995.00000000"),
+      ] as never,
+      detail: detail({ reset_rule: "vendor_period" }),
+    })
+    const whole = providerInfo(base, true)
+    expect(
+      whole.facts.filter((fact) => fact.label === "Searches left").map((fact) => fact.value),
+    ).toEqual(["99995"])
+    expect(
+      whole.facts.filter((fact) => fact.label === "Fetches left").map((fact) => fact.value),
+    ).toEqual(["99995"])
+  })
+
+  it("keeps decimal standard calls without the opt-in flag", () => {
+    const base = auth({
+      search: record("keenable", { supported: true, transport_available: true }),
+      crd_views: [view("search", "99995.00000000")] as never,
+      detail: detail({ reset_rule: "vendor_period" }),
+    })
+    const current = providerInfo(base)
+    expect(
+      current.facts.filter((fact) => fact.label === "Searches left").map((fact) => fact.value),
+    ).toEqual(["99995.00000000"])
+  })
+
+  it("floors request rate limits only with the opt-in flag", () => {
+    const base = auth({
+      detail: detail({
+        rate_windows: [window("1000.00000000", "requests")] as never,
+      }),
+    })
+    expect(providerInfo(base).facts.map((fact) => fact.value)).toContain("1000.00000000 req/sec")
+    expect(providerInfo(base, true).facts.map((fact) => fact.value)).toContain("1000 req/sec")
+  })
+
+  it("keeps URL rate limits verbatim with the opt-in flag", () => {
+    const base = auth({
+      detail: detail({ rate_windows: [window("10.5", "urls")] as never }),
+    })
+    expect(providerInfo(base, true).facts.map((fact) => fact.value)).toContain("10.5 urls/sec")
+  })
+
+  it("omits invalid counts instead of a fabricated zero", () => {
+    const base = auth({
+      search: record("keenable", { supported: true, transport_available: true }),
+      crd_views: [view("search", "lots")] as never,
+      detail: detail({
+        reset_rule: "vendor_period",
+        rate_windows: [window("lots", "requests")] as never,
+      }),
+    })
+    const info = providerInfo(base, true)
+    expect(info.facts.some((fact) => fact.value === "0")).toBe(false)
+    expect(info.facts.some((fact) => fact.label === "Searches left")).toBe(false)
+  })
+
+  it("preserves cost labels, USD notes, and monthly header notes", () => {
+    const profile = {
+      reference_usd_per_crd: "0.001",
+      native_usd_per_unit: "0.004",
+      cost_basis: "priced_native_use",
+      price_version: "list_price",
+      source: "list_price_assumed",
+      estimated: true,
+    }
+    const base = auth({
+      search: record("keenable", {
+        supported: true,
+        transport_available: true,
+        conversion_profile: profile,
+        budget: budget({ allowance_period: "month", free_allowance: "100000" }),
+      }),
+      fetch: record("keenable", {
+        operation: "fetch",
+        supported: true,
+        transport_available: true,
+        conversion_profile: profile,
+        budget: budget({ allowance_period: "month", free_allowance: "100000" }),
+      }),
+      crd_views: [
+        { ...view("search", "99995"), request_cost_crd: "4" },
+        { ...view("fetch", "99995"), request_cost_crd: "4" },
+      ] as never,
+      detail: detail({ reset_rule: "monthly_first" }),
+    })
+    const info = providerInfo(base, true)
+    expect(info.facts.map((fact) => fact.label)).toContain("Search CRD cost")
+    expect(info.facts.map((fact) => fact.label)).toContain("Fetch CRD cost")
+    expect(info.creditNote).toBe("Monthly Credits")
+    const searchCost = info.facts.find((fact) => fact.label === "Search CRD cost")
+    expect(searchCost?.note).toContain("$0.004")
+  })
+
+  it("keeps exact input strings unchanged", () => {
+    const base = auth({
+      search: record("keenable", { supported: true, transport_available: true }),
+      crd_views: [view("search", "99995.00000000")] as never,
+      detail: detail({ reset_rule: "vendor_period" }),
+    })
+    const first = providerInfo(base, true)
+    const second = providerInfo(base, true)
+    expect(first).toEqual(second)
+    expect(base.crd_views[0]).toMatchObject({ possible_standard_calls: "99995.00000000" })
+  })
+})

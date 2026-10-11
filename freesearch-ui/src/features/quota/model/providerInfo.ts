@@ -8,7 +8,7 @@
  */
 
 import type { CRDResetRule, LimitRateWindow, NativePool, ProviderAuthLimits } from "@/domains/dashboard"
-import { dollarText, formatCRDAmount } from "./crdDisplay"
+import { callsText, dollarText, formatCRDAmount } from "./crdDisplay"
 import { operationAvailable, usdFromCRD } from "./crdCardModel"
 import { operationLabel, type CreditMode } from "./quotaLabels"
 import { timestampOrNull } from "./timeText"
@@ -95,16 +95,31 @@ function rateWindowOf(windows: LimitRateWindow[]): LimitRateWindow | null {
   return null
 }
 
-function rateFact(windows: LimitRateWindow[]): ProviderInfoFact | null {
+/** The rate windows of one rail; a rail without vendor detail has none. */
+function rateWindowsOf(auth: ProviderAuthLimits): LimitRateWindow[] {
+  return auth.detail?.rate_windows ?? []
+}
+
+/**
+ * The tightest known rate limit of one rail.
+ *
+ * With whole requests, the limit text of a request unit floors through
+ * `callsText`, so a decimal request limit never shows as a whole extra
+ * request. URL units and the off path keep the verbatim limit. An invalid
+ * count or a limit that parses no whole count omits the row.
+ */
+function rateFact(windows: LimitRateWindow[], wholeRequests: boolean = false): ProviderInfoFact | null {
   const entry = rateWindowOf(windows)
   const limit = entry === null ? null : known(entry.limit)
   if (entry === null || limit === null) return null
+  const count = wholeRequests && entry.unit === "requests" ? callsText(limit) : limit
+  if (count === null) return null
   const unit = RATE_UNIT_SHORT[entry.unit] ?? entry.unit
   const window = WINDOW_SHORT[entry.window] ?? entry.window
   const scope = known(entry.scope)
   return {
     label: "Rate limit",
-    value: limit + " " + unit + "/" + window,
+    value: count + " " + unit + "/" + window,
     note: scope === null ? null : "(" + scope + ")",
   }
 }
@@ -124,9 +139,15 @@ function costFact(auth: ProviderAuthLimits, operation: (typeof OPERATIONS)[numbe
 }
 
 /** The whole standard calls left of one operation, with the reset period. */
-function countFact(auth: ProviderAuthLimits, operation: (typeof OPERATIONS)[number]): ProviderInfoFact | null {
+function countFact(
+  auth: ProviderAuthLimits,
+  operation: (typeof OPERATIONS)[number],
+  wholeRequests: boolean = false,
+): ProviderInfoFact | null {
   const view = auth.crd_views.find((entry) => entry.operation === operation)
-  const calls = known(view?.possible_standard_calls)
+  const raw = known(view?.possible_standard_calls)
+  if (raw === null) return null
+  const calls = wholeRequests ? callsText(raw) : raw
   if (calls === null) return null
   const period = COUNT_PERIOD[auth.detail?.reset_rule ?? UNKNOWN_TEXT]
   return { label: COUNT_LABEL[operation], value: calls, note: period === null ? null : "/ " + period }
@@ -233,17 +254,24 @@ function creditNoteOf(auth: ProviderAuthLimits): string | null {
   return [period, CREDIT_UNIT_WORD].join(" ")
 }
 
-/** Facts and usage link of one rail, in the shown order. */
-export function providerInfo(auth: ProviderAuthLimits): ProviderInfo {
+/**
+ * Facts and usage link of one rail, in the shown order.
+ *
+ * With whole requests, the standard call counts and the request-unit rate
+ * limits floor to whole numbers. The off path and every other fact keep the
+ * current values, so the price, the USD note, the source facts, and the reset
+ * metadata stay unchanged.
+ */
+export function providerInfo(auth: ProviderAuthLimits, wholeRequests: boolean = false): ProviderInfo {
   const facts: ProviderInfoFact[] = []
   for (const operation of OPERATIONS) {
     if (!operationAvailable(auth, operation)) continue
     const cost = costFact(auth, operation)
     if (cost !== null) facts.push(cost)
-    const count = countFact(auth, operation)
+    const count = countFact(auth, operation, wholeRequests)
     if (count !== null) facts.push(count)
   }
-  const rate = rateFact(auth.detail?.rate_windows ?? [])
+  const rate = rateFact(rateWindowsOf(auth), wholeRequests)
   if (rate !== null) facts.push(rate)
   const lastSync = timestampOrNull(auth.detail?.last_sync_at)
   if (lastSync !== null) facts.push({ label: "Last sync", value: lastSync, note: null })

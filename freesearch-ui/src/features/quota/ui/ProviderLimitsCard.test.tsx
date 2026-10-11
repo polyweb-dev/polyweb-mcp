@@ -731,6 +731,130 @@ function keenableKeylessLimits(): ProviderLimits {
   }
 }
 
+function keenableDecimalKeylessLimits(): ProviderLimits {
+  const auth = keenableKeylessAuth()
+  return {
+    provider: "keenable",
+    active_auth_mode: "keyless",
+    auths: [
+      {
+        ...auth,
+        rate_progress: [
+          {
+            bucket_id: "keenable:keyless:requests",
+            operation: "search",
+            window: "1h",
+            unit: "requests",
+            remaining: "990.00000000",
+            limit: "1000.00000000",
+            reset_at: null,
+            source: "documented_keyless",
+            confidence: "authoritative",
+            kind: "rate",
+            stale: false,
+            enforceable: true,
+          },
+          {
+            bucket_id: "keenable:keyless:requests",
+            operation: "fetch",
+            window: "1h",
+            unit: "requests",
+            remaining: "990.00000000",
+            limit: "1000.00000000",
+            reset_at: null,
+            source: "documented_keyless",
+            confidence: "authoritative",
+            kind: "rate",
+            stale: false,
+            enforceable: true,
+          },
+        ],
+      },
+    ],
+    documented_keyless_operations: ["search", "fetch"],
+    version: 1,
+    generated_at: "2026-03-10T12:00:00Z",
+  }
+}
+
+function keenableAuthoritativeKeylessLimits(): ProviderLimits {
+  const auth = keenableKeylessAuth()
+  return {
+    provider: "keenable",
+    active_auth_mode: "keyless",
+    auths: [
+      {
+        ...auth,
+        rate_progress: [
+          {
+            bucket_id: "keenable:keyless:requests",
+            operation: "search",
+            window: "1h",
+            unit: "requests",
+            remaining: "1000.00000000",
+            limit: "1000",
+            reset_at: null,
+            source: "documented_keyless",
+            confidence: "authoritative",
+            kind: "rate",
+            stale: false,
+            enforceable: true,
+          },
+          {
+            bucket_id: "keenable:keyless:requests",
+            operation: "fetch",
+            window: "1h",
+            unit: "requests",
+            remaining: "1000.00000000",
+            limit: "1000",
+            reset_at: null,
+            source: "documented_keyless",
+            confidence: "authoritative",
+            kind: "rate",
+            stale: false,
+            enforceable: true,
+          },
+        ],
+      },
+    ],
+    documented_keyless_operations: ["search", "fetch"],
+    version: 1,
+    generated_at: "2026-03-10T12:00:00Z",
+  }
+}
+
+function keenableAuthoritativeKeyedLimits(): ProviderLimits {
+  const auth = keenableKeyedAuth()
+  return {
+    provider: "keenable",
+    active_auth_mode: "keyed",
+    auths: [
+      {
+        ...auth,
+        rate_progress: [
+          {
+            bucket_id: "keenable:keyed:requests",
+            operation: "search",
+            window: "1h",
+            unit: "requests",
+            remaining: "500",
+            limit: "1000",
+            reset_at: null,
+            source: "documented",
+            confidence: "authoritative",
+            kind: "rate",
+            stale: false,
+            enforceable: true,
+          },
+        ],
+      },
+    ],
+    documented_keyless_operations: ["search", "fetch"],
+    version: 1,
+    generated_at: "2026-03-10T12:00:00Z",
+  }
+}
+
 function renderKeenableCard(limits: ProviderLimits): void {
   installFetchStub(() => {
     throw new Error("no backend in card test")
@@ -753,10 +877,18 @@ describe("ProviderLimitsCard Keenable", () => {
     const bar = screen.getByRole("progressbar", { name: "Keenable credit units remaining" })
     expect(bar.getAttribute("aria-valuemin")).toBe("0")
     expect(bar.getAttribute("aria-valuemax")).toBe("100")
+    expect(bar.getAttribute("aria-valuenow")).toBe("100")
+    expect(bar.querySelector("div")?.getAttribute("class")).toContain(
+      "bg-[var(--status-healthy)]",
+    )
     expectFraction("399980", "400000")
     expect(screen.queryByText("Free - unmetered")).toBeNull()
     const value = screen.getByText("399980").closest("span")?.parentElement
     expect(value?.textContent?.replace(/\s+/g, "")).toBe("399980/400000CRD")
+    expect(screen.getByText("100%")).not.toBeNull()
+    const percent = screen.getByText("100%")
+    expect(bar.getAttribute("class")).toContain("w-full")
+    expect((bar.compareDocumentPosition(percent) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0).toBe(true)
     vi.unstubAllGlobals()
   })
 
@@ -774,10 +906,113 @@ describe("ProviderLimitsCard Keenable", () => {
     )
     expect(screen.getByText("Free - unmetered")).not.toBeNull()
     expect(screen.queryByRole("progressbar", { name: "Keenable credit units remaining" })).toBeNull()
+    const struck = screen.getByText("Free - unmetered").closest("s")
+    expect(struck).not.toBeNull()
+    expect(screen.getByText("free", { exact: true })).not.toBeNull()
     const user = userEvent.setup()
     await user.click(screen.getByRole("button", { name: "Credit details for Keenable" }))
     expect(await screen.findByText("Search hourly rate")).not.toBeNull()
     expect(screen.getByText("990 of 1000 requests")).not.toBeNull()
+    vi.unstubAllGlobals()
+  })
+
+  it("keenable funds use the shared bar with one aggregate value", () => {
+    renderKeenableCard(keenableLimits())
+    const bars = screen.getAllByRole("progressbar", {
+      name: "Keenable credit units remaining",
+    })
+    expect(bars).toHaveLength(1)
+    expectFraction("399980", "400000")
+    expect(screen.getByText("100%")).not.toBeNull()
+    vi.unstubAllGlobals()
+  })
+
+  it("keenable hourly requests use whole counts on a separate bar line", async () => {
+    installFetchStub(() => ok({ events: [], next_cursor: null }))
+    render(
+      <ProviderLimitsCard
+        providerId="keenable"
+        providerName="Keenable"
+        limits={keenableDecimalKeylessLimits()}
+        crdUsageTotals={noUseTotals()}
+        refreshDashboard={() => Promise.resolve()}
+        manualEligible
+      />,
+    )
+    const user = userEvent.setup()
+    await user.click(screen.getByRole("button", { name: "Credit details for Keenable" }))
+    expect(await screen.findByText("Search hourly rate")).not.toBeNull()
+    expect(screen.getByText("Fetch hourly rate")).not.toBeNull()
+    expect(screen.getAllByText("990 of 1000 requests")).toHaveLength(2)
+    expect(screen.queryByText("990.00000000")).toBeNull()
+    const bar = screen.getByRole("progressbar", {
+      name: "Keenable search hourly requests remaining",
+    })
+    const label = screen.getByText("Search hourly rate")
+    expect(bar.getAttribute("class")).toContain("w-full")
+    expect((label.compareDocumentPosition(bar) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0).toBe(true)
+    vi.unstubAllGlobals()
+  })
+
+  it("keenable keyless credits keep the prior strike value next to free", () => {
+    renderKeenableCard(keenableKeylessLimits())
+    const struck = screen.getByText("Free - unmetered").closest("s")
+    expect(struck).not.toBeNull()
+    expect(struck?.textContent).toContain("Free - unmetered")
+    expect(screen.getByText("free", { exact: true })).not.toBeNull()
+    expect(
+      screen.queryByRole("progressbar", { name: "Keenable credit units remaining" }),
+    ).toBeNull()
+    expect(screen.queryByText("399980")).toBeNull()
+    vi.unstubAllGlobals()
+  })
+
+  it("keenable keyless details omit authoritative rate confidence", async () => {
+    installFetchStub(() => ok({ events: [], next_cursor: null }))
+    render(
+      <ProviderLimitsCard
+        providerId="keenable"
+        providerName="Keenable"
+        limits={keenableAuthoritativeKeylessLimits()}
+        crdUsageTotals={noUseTotals()}
+        refreshDashboard={() => Promise.resolve()}
+        manualEligible
+      />,
+    )
+    const user = userEvent.setup()
+    await user.click(screen.getByRole("button", { name: "Credit details for Keenable" }))
+    expect(await screen.findByText("Search hourly rate")).not.toBeNull()
+    expect(screen.queryByText("authoritative")).toBeNull()
+    vi.unstubAllGlobals()
+  })
+
+  it("keenable keyed details preserve authoritative rate confidence", async () => {
+    installFetchStub(() => ok({ events: [], next_cursor: null }))
+    render(
+      <ProviderLimitsCard
+        providerId="keenable"
+        providerName="Keenable"
+        limits={keenableAuthoritativeKeyedLimits()}
+        crdUsageTotals={noUseTotals()}
+        refreshDashboard={() => Promise.resolve()}
+        manualEligible
+      />,
+    )
+    const user = userEvent.setup()
+    await user.click(screen.getByRole("button", { name: "Credit details for Keenable" }))
+    expect(await screen.findByText("Search hourly rate")).not.toBeNull()
+    expect(screen.getByText("authoritative")).not.toBeNull()
+    vi.unstubAllGlobals()
+  })
+
+  it("keenable details preserve search and fetch CRD cost labels", async () => {
+    installFetchStub(() => ok({ events: [], next_cursor: null }))
+    renderKeenableCard(keenableLimits())
+    const user = userEvent.setup()
+    await user.click(screen.getByRole("button", { name: "Credit details for Keenable" }))
+    expect(await screen.findByText("Search CRD cost")).not.toBeNull()
+    expect(screen.getByText("Fetch CRD cost")).not.toBeNull()
+    expect(screen.getAllByText("4 CRD").length).toBeGreaterThanOrEqual(2)
     vi.unstubAllGlobals()
   })
 })

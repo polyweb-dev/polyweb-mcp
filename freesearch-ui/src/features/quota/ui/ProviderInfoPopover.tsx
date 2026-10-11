@@ -5,7 +5,9 @@ import type { ProviderAuthLimits } from "@/domains/dashboard"
 import { Button } from "@/shared/ui/button"
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/shared/ui/popover"
 import type { ProviderInfo, ProviderInfoFact } from "../model/providerInfo"
+import { operationAvailable } from "../model/crdCardModel"
 import { ProviderLimitsDetail } from "./ProviderLimitsDetail"
+import { ProviderRateBars } from "./ProviderRateBars"
 import { ProviderTierBars } from "./ProviderTierBars"
 
 export interface ProviderInfoPopoverProps {
@@ -58,16 +60,34 @@ function usageLink(providerName: string, usageUrl: string | null): ReactNode {
   )
 }
 
+const KEENABLE_PROVIDER = "keenable"
+
 /**
  * The remaining detail of one rail: the known tier facts and the vendor rows
  * that no other surface states. Each part carries its own top edge, so an
- * absent part leaves no empty divider. The rate bars sit in the card body.
+ * absent part leaves no empty divider. Only the shared-bar provider keeps its
+ * rate bars here; every other provider keeps them in the card body.
+ *
+ * The rate bars accept the shared bar only for the provider ID `keenable`, and
+ * they accept the authoritative suppression only for the keyless rail of that
+ * provider.
  */
-function vendorDetail(providerName: string, auth: ProviderAuthLimits): ReactNode {
+function vendorDetail(
+  providerId: string,
+  providerName: string,
+  auth: ProviderAuthLimits,
+): ReactNode {
+  const useSharedBar = providerId === KEENABLE_PROVIDER
+  const hideAuthoritative = useSharedBar && auth.auth_mode === "keyless"
   return (
     <>
       <ProviderTierBars providerName={providerName} freeTiers={auth.free_tiers}
         paidTiers={auth.paid_tiers} tierSplitKnown={auth.tier_split_known} />
+      {useSharedBar && (
+        <ProviderRateBars providerName={providerName} progress={auth.rate_progress}
+          fetchAvailable={operationAvailable(auth, "fetch")} useSharedBar={useSharedBar}
+          hideAuthoritative={hideAuthoritative} />
+      )}
       <ProviderLimitsDetail providerName={providerName} auth={auth} />
     </>
   )
@@ -122,7 +142,7 @@ export function ProviderInfoPopover({
             )}
           </div>
           {info.facts.map(infoRow)}
-          {vendorDetail(providerName, auth)}
+          {vendorDetail(providerId, providerName, auth)}
           {usageLink(providerName, info.usageUrl)}
         </PopoverContent>
       )}
