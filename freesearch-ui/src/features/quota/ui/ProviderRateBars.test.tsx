@@ -88,6 +88,70 @@ describe("ProviderRateBars", () => {
     expect(screen.getByText("7 of 20 URLs")).not.toBeNull()
   })
 
+  it("shows_integer_request_and_url_counts", () => {
+    const { unmount: unmountTinyfish } = render(
+      <ProviderRateBars
+        providerName="Tinyfish"
+        fetchAvailable
+        progress={[
+          makeProgress({
+            bucket_id: "tinyfish-fetch-daily",
+            operation: "fetch",
+            window: "1d",
+            unit: "urls",
+            remaining: "1000.000000000",
+            limit: "1000.000000000",
+          }),
+          makeProgress({
+            bucket_id: "tinyfish-search-hourly",
+            operation: "search",
+            window: "1h",
+            unit: "requests",
+            remaining: "498.000000000",
+            limit: "500",
+          }),
+        ]}
+      />,
+    )
+    expect(screen.getByText("1000 of 1000 URLs")).not.toBeNull()
+    expect(screen.getByText("498 of 500 requests")).not.toBeNull()
+    expect(screen.queryByText("1000.000000000 of 1000.000000000 URLs")).toBeNull()
+    expect(screen.queryByText("498.000000000 of 500 requests")).toBeNull()
+    expect(
+      screen
+        .getByRole("progressbar", { name: "Tinyfish fetch daily URLs remaining" })
+        .getAttribute("aria-valuenow"),
+    ).toBe("100")
+    expect(
+      screen
+        .getByRole("progressbar", { name: "Tinyfish search hourly requests remaining" })
+        .getAttribute("aria-valuenow"),
+    ).toBe("99.6")
+    unmountTinyfish()
+
+    const { unmount: unmountNull } = render(
+      <ProviderRateBars
+        providerName="Synth B"
+        fetchAvailable
+        progress={[makeProgress({ bucket_id: "synth-null", remaining: "7", limit: null })]}
+      />,
+    )
+    expect(screen.getByText("7 left requests")).not.toBeNull()
+    expect(screen.queryByRole("progressbar")).toBe(null)
+    unmountNull()
+
+    const { unmount: unmountZero } = render(
+      <ProviderRateBars
+        providerName="Synth C"
+        fetchAvailable
+        progress={[makeProgress({ bucket_id: "synth-zero", remaining: "5", limit: "0" })]}
+      />,
+    )
+    expect(screen.getByText("5 of 0 requests")).not.toBeNull()
+    expect(screen.queryByRole("progressbar")).toBe(null)
+    unmountZero()
+  })
+
   it("hides fetch rate rows without fetch support (UI7-04)", () => {
     const { container } = render(
       <ProviderRateBars

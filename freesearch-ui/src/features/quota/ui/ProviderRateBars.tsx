@@ -1,6 +1,6 @@
 import type { ReactNode } from "react"
 import type { CRDConfidence, RateBarView, RateProgressView } from "@/domains/dashboard"
-import { rateBarModel } from "../model/crdDisplay"
+import { formatQuotaCount, rateBarModel } from "../model/crdDisplay"
 import { timeText } from "../model/timeText"
 import { ConfidenceLabel } from "./ConfidenceLabel"
 
@@ -23,10 +23,12 @@ function confidenceCell(confidence: CRDConfidence): ReactNode {
 
 /** Known parts of one rate amount; an incomplete entry yields no row. */
 function rateText(bar: RateBarView): string | null {
-  if (bar.remaining === null && bar.limit === null) return null
-  if (bar.limit === null) return bar.remaining + " left"
-  if (bar.remaining === null) return "of " + bar.limit
-  return bar.remaining + " of " + bar.limit
+  const remaining = bar.remaining === null ? null : formatQuotaCount(bar.remaining)
+  const limit = bar.limit === null ? null : formatQuotaCount(bar.limit)
+  if (remaining === null && limit === null) return null
+  if (limit === null) return remaining + " left"
+  if (remaining === null) return "of " + limit
+  return remaining + " of " + limit
 }
 
 /**
