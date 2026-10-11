@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
-import { render, screen } from "@testing-library/react"
+import { render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import type { CRDUsageTotal, CRDView, LimitRecord, ProviderAuthLimits, ProviderLimits } from "@/domains/dashboard"
+import type { CRDUsageTotal, CRDView, LimitRecord, ProviderAuthLimits, ProviderLimits, RateProgressView } from "@/domains/dashboard"
 import { installFetchStub, ok } from "@/test/fetchMock"
 import { ProviderLimitsCard } from "./ProviderLimitsCard"
 
@@ -161,6 +161,148 @@ function renderBraveCard(): void {
       manualEligible
     />,
   )
+}
+
+function tinyfishRecord(operation: "search" | "fetch"): LimitRecord {
+  return {
+    provider: "tinyfish",
+    operation,
+    auth_mode: "keyed",
+    supported: true,
+    transport_available: true,
+    native_pool_id: null,
+    rate: null,
+    budget: null,
+    conversion_profile: {
+      reference_usd_per_crd: "0.001",
+      native_usd_per_unit: null,
+      cost_basis: "priced_native_use",
+      price_version: "v2026-09",
+      source: "documented",
+      estimated: false,
+    },
+    plan_name: "Tinyfish",
+    usage_url: null,
+    version: 1,
+  }
+}
+
+function tinyfishProgress(overrides: Partial<RateProgressView> = {}): RateProgressView {
+  return {
+    bucket_id: "tinyfish-synth",
+    operation: "search",
+    window: "1h",
+    unit: "requests",
+    remaining: "498.000000000",
+    limit: "500",
+    reset_at: null,
+    source: "synth-source",
+    confidence: "authoritative",
+    kind: "rate",
+    stale: false,
+    enforceable: false,
+    ...overrides,
+  }
+}
+
+function tinyfishAuth(): ProviderAuthLimits {
+  return {
+    auth_mode: "keyed",
+    transport_available: true,
+    search: tinyfishRecord("search"),
+    fetch: tinyfishRecord("fetch"),
+    free_tiers: [],
+    paid_tiers: [],
+    unknown_tiers: [],
+    tier_split_known: true,
+    aggregate_pool: null,
+    crd_views: [
+      {
+        state: "unmetered",
+        operation: "search",
+        remaining_crd: null,
+        local_remaining_crd: null,
+        request_cost_crd: null,
+        shared_pool_id: null,
+        possible_standard_calls: null,
+        price_version: null,
+        priced: false,
+      },
+      {
+        state: "unmetered",
+        operation: "fetch",
+        remaining_crd: null,
+        local_remaining_crd: null,
+        request_cost_crd: null,
+        shared_pool_id: null,
+        possible_standard_calls: null,
+        price_version: null,
+        priced: false,
+      },
+    ],
+    rate_progress: [
+      tinyfishProgress({
+        bucket_id: "tinyfish-search-hourly",
+        operation: "search",
+        window: "1h",
+        unit: "requests",
+        remaining: "498.000000000",
+        limit: "500",
+      }),
+      tinyfishProgress({
+        bucket_id: "tinyfish-fetch-daily",
+        operation: "fetch",
+        window: "1d",
+        unit: "urls",
+        remaining: "1000.000000000",
+        limit: "1000",
+      }),
+    ],
+    grants: null,
+    detail: {
+      plan_name: "Tinyfish",
+      native_unit: null,
+      native_balance: null,
+      native_allowance: null,
+      usd_per_call: null,
+      actual_spend_usd: null,
+      reset_at: null,
+      reset_rule: "unknown",
+      usage_url: "https://api.search.tinyfish.ai/",
+      source: "vendor_api",
+      confidence: "authoritative",
+      last_sync_at: null,
+      stale: false,
+      price_version: "v2026-09",
+      crd_split_note: null,
+      rate_windows: [
+        {
+          bucket_id: "tinyfish-search-1m",
+          limit: "30",
+          window: "1m",
+          scope: "key",
+          unit: "requests",
+          remaining: null,
+          reset_at: null,
+          source: "synth-source",
+          confidence: "authoritative",
+        },
+      ],
+      tier_split_known: true,
+      aggregate_pool_id: null,
+    },
+  }
+}
+
+function tinyfishLimits(): ProviderLimits {
+  return {
+    provider: "tinyfish",
+    active_auth_mode: "keyed",
+    auths: [tinyfishAuth()],
+    documented_keyless_operations: [],
+    version: 1,
+    generated_at: "2026-03-10T12:00:00Z",
+  }
 }
 
 /** CARD-3 fraction oracle: "4500 / 5000 CRD" renders as split spans, never one "4500 CRD" node. */
@@ -636,6 +778,73 @@ describe("ProviderLimitsCard Keenable", () => {
     await user.click(screen.getByRole("button", { name: "Credit details for Keenable" }))
     expect(await screen.findByText("Search hourly rate")).not.toBeNull()
     expect(screen.getByText("990 of 1000 requests")).not.toBeNull()
+    vi.unstubAllGlobals()
+  })
+})
+
+describe("ProviderLimitsCard Tinyfish", () => {
+  it("keeps_rate_bars_in_the_own_card_body", async () => {
+    installFetchStub(() => {
+      throw new Error("no backend in card test")
+    })
+    render(
+      <>
+        <ProviderLimitsCard
+          providerId="tinyfish"
+          providerName="Tinyfish"
+          limits={tinyfishLimits()}
+          crdUsageTotals={noUseTotals()}
+          refreshDashboard={() => Promise.resolve()}
+          manualEligible
+        />
+        <ProviderLimitsCard
+          providerId="brave"
+          providerName="Brave"
+          limits={braveLimits()}
+          crdUsageTotals={noUseTotals()}
+          refreshDashboard={() => Promise.resolve()}
+          manualEligible
+        />
+      </>,
+    )
+    const tinyfishCard = screen.getByRole("heading", { name: "Tinyfish" }).closest("article")
+    expect(tinyfishCard).not.toBeNull()
+    const braveCard = screen.getByRole("heading", { name: "Brave" }).closest("article")
+    expect(braveCard).not.toBeNull()
+    const tinyfish = within(tinyfishCard as HTMLElement)
+    const brave = within(braveCard as HTMLElement)
+
+    expect(tinyfish.getByText("Search hourly rate")).not.toBeNull()
+    expect(tinyfish.getByText("Fetch daily rate")).not.toBeNull()
+    expect(tinyfish.getByText("498 of 500 requests")).not.toBeNull()
+    expect(tinyfish.getByText("1000 of 1000 URLs")).not.toBeNull()
+    expect(tinyfish.getAllByRole("progressbar")).toHaveLength(2)
+    expect(
+      tinyfish
+        .getByRole("progressbar", { name: "Tinyfish search hourly requests remaining" })
+        .getAttribute("aria-valuenow"),
+    ).toBe("99.6")
+    expect(
+      tinyfish
+        .getByRole("progressbar", { name: "Tinyfish fetch daily URLs remaining" })
+        .getAttribute("aria-valuenow"),
+    ).toBe("100")
+    expect(brave.queryByText("Search hourly rate")).toBe(null)
+    expect(brave.queryByText("498 of 500 requests")).toBe(null)
+
+    const user = userEvent.setup()
+    const infoButton = tinyfish.getByRole("button", { name: "Credit details for Tinyfish" })
+    await user.click(infoButton)
+    expect(await screen.findByText("Quota Details")).not.toBeNull()
+    expect(tinyfish.getAllByRole("progressbar")).toHaveLength(2)
+    expect(screen.getAllByRole("progressbar")).toHaveLength(3)
+
+    await user.keyboard("{Escape}")
+    expect(screen.queryByText("Quota Details")).toBe(null)
+    expect(infoButton).toHaveFocus()
+    expect(tinyfish.getByText("498 of 500 requests")).not.toBeNull()
+    expect(tinyfish.getByText("1000 of 1000 URLs")).not.toBeNull()
+    expect(tinyfish.getAllByRole("progressbar")).toHaveLength(2)
     vi.unstubAllGlobals()
   })
 })

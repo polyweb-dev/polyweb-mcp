@@ -38,6 +38,7 @@ import { ManualQuotaModal } from "./ManualQuotaModal"
 import { ProviderCardActions, type CardModal } from "./ProviderCardActions"
 import { ProviderCreditSummary } from "./ProviderCreditSummary"
 import { ProviderInfoPopover } from "./ProviderInfoPopover"
+import { ProviderRateBars } from "./ProviderRateBars"
 import type { OAuthSlotArgs } from "./QuotaRow"
 
 export interface ProviderLimitsCardProps {
@@ -252,8 +253,8 @@ function oauthControl(
  * of its content. The card owns its one open modal, so a dialog of one provider
  * never moves another. The dashboard payload supplies the funds. The info
  * control states the call cost, the call count, the rate limit, the last sync
- * time, the usage page, the known tier facts, the known rate bars, and the
- * vendor detail.
+ * time, the usage page, the known tier facts, and the vendor detail. The card
+ * body holds the hourly and daily rate bars below the credit summary.
  */
 export function ProviderLimitsCard({
   providerId,
@@ -339,6 +340,9 @@ export function ProviderLimitsCard({
           />
         }
       />
+
+      <ProviderRateBars providerName={providerName} progress={auth.rate_progress}
+        fetchAvailable={fetchAvailable} />
 
       {oauth}
 

@@ -4,10 +4,8 @@ import { Info } from "lucide-react"
 import type { ProviderAuthLimits } from "@/domains/dashboard"
 import { Button } from "@/shared/ui/button"
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/shared/ui/popover"
-import { operationAvailable } from "../model/crdCardModel"
 import type { ProviderInfo, ProviderInfoFact } from "../model/providerInfo"
 import { ProviderLimitsDetail } from "./ProviderLimitsDetail"
-import { ProviderRateBars } from "./ProviderRateBars"
 import { ProviderTierBars } from "./ProviderTierBars"
 
 export interface ProviderInfoPopoverProps {
@@ -61,17 +59,15 @@ function usageLink(providerName: string, usageUrl: string | null): ReactNode {
 }
 
 /**
- * The remaining detail of one rail: the known tier facts, the known rate bars,
- * and the vendor rows that no other surface states. Each part carries its own
- * top edge, so an absent part leaves no empty divider.
+ * The remaining detail of one rail: the known tier facts and the vendor rows
+ * that no other surface states. Each part carries its own top edge, so an
+ * absent part leaves no empty divider. The rate bars sit in the card body.
  */
 function vendorDetail(providerName: string, auth: ProviderAuthLimits): ReactNode {
   return (
     <>
       <ProviderTierBars providerName={providerName} freeTiers={auth.free_tiers}
         paidTiers={auth.paid_tiers} tierSplitKnown={auth.tier_split_known} />
-      <ProviderRateBars providerName={providerName} progress={auth.rate_progress}
-        fetchAvailable={operationAvailable(auth, "fetch")} />
       <ProviderLimitsDetail providerName={providerName} auth={auth} />
     </>
   )
