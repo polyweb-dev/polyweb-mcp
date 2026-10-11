@@ -43,6 +43,13 @@ from freesearch.models.contracts import (
     UsageOperation,
 )
 from freesearch.models.observability import TraceAttribute, TraceSpanName
+from freesearch.models.provider_limits import (
+    AuthMode,
+    Confidence,
+    NativeUsageSnapshot,
+    UsageSyncRequest,
+    native_pool_id,
+)
 
 __all__ = ["KeenableAdapter"]
 
@@ -133,6 +140,12 @@ class KeenableAdapter(ProviderAdapter):
         return ProviderCapabilities(
             search=True, fetch=True, cost_estimate=True, quota=keyed == _KEYED
         )
+
+    @property
+    def limit_auth_mode(self) -> AuthMode:
+        """Return the rail of this instance: keyless without a key, else keyed."""
+
+        return AuthMode.KEYED if self._auth()[0] == _KEYED else AuthMode.KEYLESS
 
     def _auth(self) -> tuple[str, dict[str, str]]:
         """Resolve the API key lazily; absent or blank keys select keyless mode."""
@@ -449,6 +462,42 @@ class KeenableAdapter(ProviderAdapter):
         self._rollover_if_needed(datetime.now(UTC))
         return self._snapshot_sync()
 
+    async def usage_snapshot(self, request: UsageSyncRequest) -> NativeUsageSnapshot | None:
+        """Return the keyed monthly request ledger; keyless has no budget.
+
+        The keyed rail draws the shared monthly request allowance. The local
+        ledger holds the reported usage of that allowance. The ledger keeps the
+        free allowance and the paid SKU spend in separate counters. A key with
+        paid usage reports an unknown aggregate, not a fabricated balance. A
+        vendor 402 is a hard observation, so its reported remaining is zero.
+        Keyless access is unmetered, so it returns no snapshot.
+        """
+
+        auth_mode = self.limit_auth_mode
+        if auth_mode is not AuthMode.KEYED:
+            return None
+        self._rollover_if_needed(datetime.now(UTC))
+        quota = self._snapshot_sync()
+        if self._hard_exhausted:
+            confidence = Confidence.OBSERVED
+        elif self._paid_usage_seen:
+            confidence = Confidence.UNKNOWN
+        else:
+            confidence = Confidence.ESTIMATED
+        return NativeUsageSnapshot(
+            pool_id=native_pool_id(self.name, auth_mode, UnitKind.REQUEST),
+            provider=self.name,
+            auth_mode=auth_mode,
+            native_unit=UnitKind.REQUEST,
+            observed_at=request.observed_at,
+            source="local_ledger",
+            confidence=confidence,
+            remaining=quota.remaining,
+            allowance=quota.limit,
+            reset_at=quota.reset_at,
+            credential_generation=request.credential_generation,
+        )
+
     async def quota_after_success(self, response: object) -> QuotaSnapshot | None:
         mode, _headers = self._auth()
         if mode == _KEYLESS:
@@ -473,9 +522,12 @@ class KeenableAdapter(ProviderAdapter):
         mode, _headers = self._auth()
         if mode != _KEYED:
             return None
+        if not credits.is_finite() or credits < 0:
+            raise ValueError("usage credits must be finite and non-negative")
         self._rollover_if_needed(datetime.now(UTC))
-        if credits < 0:
-            raise ValueError("usage credits must be non-negative")
+        # A valid successful usage report proves the vendor still serves this
+        # key, so a previously recorded hard exhaustion no longer stands.
+        self._hard_exhausted = False
         if paid:
             self._paid_spend += credits
             self._paid_usage_seen = True
@@ -495,12 +547,14 @@ class KeenableAdapter(ProviderAdapter):
         self._hydrated_month = None
 
     def _snapshot_sync(self) -> QuotaSnapshot:
+        # A vendor 402 hard exhaustion outranks the paid unknown and the free
+        # projection: the reported remaining is a firm zero in every case.
         remaining = (
-            None
-            if self._paid_usage_seen
+            Decimal("0")
+            if self._hard_exhausted
             else (
-                Decimal("0")
-                if self._hard_exhausted
+                None
+                if self._paid_usage_seen
                 else max(Decimal("0"), self._allowance_limit - self._allowance_spend)
             )
         )
