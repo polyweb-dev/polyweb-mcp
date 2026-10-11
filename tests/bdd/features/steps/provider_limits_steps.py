@@ -1841,3 +1841,679 @@ def step_brave_both_reasons(context: Any) -> None:
         assert exc.refusal == "funds"
         assert exc.error.details.get("rate_denied") is True
         assert context.vendor_calls == []
+
+
+# --- Keenable K01-K07 --------------------------------------------------------
+
+
+def _keenable_search_payload(
+    credits: object = 1, *, paid: bool = False, sku: str = "search.pro"
+) -> dict[str, object]:
+    payload: dict[str, object] = {"results": [{"title": "k", "url": "https://example.com/k"}]}
+    payload["_meta"] = {"keenable/usage": {"credits": credits, "paid": paid, "sku": sku}}
+    return payload
+
+
+def _keenable_fetch_payload(
+    credits: object = 1, *, paid: bool = False, sku: str = "fetch"
+) -> dict[str, object]:
+    payload: dict[str, object] = {"content": "hello world", "title": "Doc"}
+    payload["_meta"] = {"keenable/usage": {"credits": credits, "paid": paid, "sku": sku}}
+    return payload
+
+
+def _keenable_adapter(handler: Any, calls: list[Any] | None = None) -> tuple[Any, Any]:
+    import httpx
+    from pydantic import SecretStr
+
+    from freesearch.adapters.keenable import KeenableAdapter
+
+    def counting(request: httpx.Request) -> httpx.Response:
+        if calls is not None:
+            calls.append(request)
+        return handler(request)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(counting), timeout=30.0)
+    return KeenableAdapter(client, api_key=SecretStr("keenable-test-secret")), client
+
+
+def _keenable_keyless_adapter(handler: Any, calls: list[Any] | None = None) -> tuple[Any, Any]:
+    import httpx
+
+    from freesearch.adapters.keenable import KeenableAdapter
+
+    def counting(request: httpx.Request) -> httpx.Response:
+        if calls is not None:
+            calls.append(request)
+        return handler(request)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(counting), timeout=30.0)
+    return KeenableAdapter(client), client
+
+
+def _keenable_records() -> list[ProviderLimitRecord]:
+    from freesearch.configuration.provider_limits import provider_limit_defaults
+
+    return [record for record in provider_limit_defaults() if record.provider == "keenable"]
+
+
+def _keenable_pool_id() -> str:
+    from freesearch.models.provider_limits import native_pool_id
+
+    return native_pool_id("keenable", AuthMode.KEYED, UnitKind.REQUEST)
+
+
+@given("the Keenable catalog records")
+def step_keenable_catalog(context: Any) -> None:
+    _open_repo(context)
+    context.keenable_records = _keenable_records()
+    context.service = _service(context, context.keenable_records)
+    context.vendor_calls = []
+
+
+@then("Keenable holds four records for keyed and keyless search and fetch")
+def step_keenable_four_records(context: Any) -> None:
+    assert len(context.keenable_records) == 4
+    keyed = [r for r in context.keenable_records if r.auth_mode is AuthMode.KEYED]
+    keyless = [r for r in context.keenable_records if r.auth_mode is AuthMode.KEYLESS]
+    assert len(keyed) == 2
+    assert len(keyless) == 2
+    assert {r.operation for r in keyed} == {LimitOperation.SEARCH, LimitOperation.FETCH}
+    assert {r.operation for r in keyless} == {LimitOperation.SEARCH, LimitOperation.FETCH}
+    for record in keyed:
+        assert record.native_pool_id == "keenable:keyed:request"
+        assert record.native_unit is UnitKind.REQUEST
+        assert record.budget is not None
+        assert record.budget.model is BudgetModel.REQUESTS
+
+
+@then("Keenable keyless records hold no budget")
+def step_keenable_keyless_no_budget(context: Any) -> None:
+    from freesearch.services import credit_units as local_cu
+
+    keyless = [r for r in context.keenable_records if r.auth_mode is AuthMode.KEYLESS]
+    assert len(keyless) == 2
+    for record in keyless:
+        assert record.budget is None
+        assert record.native_unit is None
+        assert record.native_pool_id is None
+        view = local_cu.crd_view(record, None)
+        assert view.state is CRDState.UNMETERED
+
+
+@when("I read the Keenable keyed pool contract")
+def step_keenable_keyed_contract(context: Any) -> None:
+    from freesearch.services import credit_units as local_cu
+
+    context.keenable_search = next(
+        r
+        for r in context.keenable_records
+        if r.auth_mode is AuthMode.KEYED and r.operation is LimitOperation.SEARCH
+    )
+    context.keenable_fetch = next(
+        r
+        for r in context.keenable_records
+        if r.auth_mode is AuthMode.KEYED and r.operation is LimitOperation.FETCH
+    )
+    context.keenable_cost = local_cu.request_cost_crd(context.keenable_search)
+
+
+@then(
+    "Keenable keyed search and fetch share pool keenable:keyed:request "
+    "with 10 per second and 100000 monthly"
+)
+def step_keenable_shared_pool(context: Any) -> None:
+    assert context.keenable_search.native_pool_id == "keenable:keyed:request"
+    assert context.keenable_fetch.native_pool_id == "keenable:keyed:request"
+    assert context.keenable_search.native_unit is UnitKind.REQUEST
+    assert context.keenable_fetch.native_unit is UnitKind.REQUEST
+    assert context.keenable_search.rate is not None
+    assert len(context.keenable_search.rate.windows) == 1
+    window = context.keenable_search.rate.windows[0]
+    assert window.limit == Decimal("10")
+    assert window.window is RateWindowName.SECOND
+    assert window.bucket_id == "keenable:keyed:requests"
+    assert context.keenable_fetch.rate is not None
+    assert context.keenable_fetch.rate.windows[0].bucket_id == "keenable:keyed:requests"
+    assert context.keenable_search.budget is not None
+    assert context.keenable_search.budget.free_allowance == Decimal("100000")
+    assert context.keenable_search.budget.allowance_period == "month"
+    assert context.keenable_search.budget.standard_native_cost == Decimal("1")
+    assert context.keenable_cost == Decimal("4")
+
+
+@when("I read the Keenable keyless rate contract")
+def step_keenable_keyless_contract(context: Any) -> None:
+    context.keenable_keyless_search = next(
+        r
+        for r in context.keenable_records
+        if r.auth_mode is AuthMode.KEYLESS and r.operation is LimitOperation.SEARCH
+    )
+    context.keenable_keyless_fetch = next(
+        r
+        for r in context.keenable_records
+        if r.auth_mode is AuthMode.KEYLESS and r.operation is LimitOperation.FETCH
+    )
+
+
+@then("Keenable keyless search and fetch share 10 per second and 1000 per hour with no budget")
+def step_keenable_keyless_shared(context: Any) -> None:
+    for record in (context.keenable_keyless_search, context.keenable_keyless_fetch):
+        assert record.budget is None
+        assert record.rate is not None
+        assert len(record.rate.windows) == 2
+        second = next(w for w in record.rate.windows if w.window is RateWindowName.SECOND)
+        hour = next(w for w in record.rate.windows if w.window is RateWindowName.HOUR)
+        assert second.limit == Decimal("10")
+        assert second.scope is RateScope.IP
+        assert second.bucket_id == "keenable:keyless:requests"
+        assert hour.limit == Decimal("1000")
+        assert hour.scope is RateScope.IP
+        assert hour.bucket_id == "keenable:keyless:requests"
+    assert (
+        context.keenable_keyless_search.rate.windows[0].bucket_id
+        == context.keenable_keyless_fetch.rate.windows[0].bucket_id
+    )
+
+
+def step_keenable_error(context: Any, status: int) -> None:
+    """Keenable error seam: record the vendor status for later assertions."""
+
+    context.keenable_error_status = status
+
+
+@given("a Keenable pool with full monthly funds")
+def step_keenable_full_pool(context: Any) -> None:
+    _open_repo(context)
+    context.service = _service(context, _keenable_records())
+    _run(context, context.service.initialize())
+    _run(
+        context,
+        _limits_repo(context).apply_snapshot(
+            NativeUsageSnapshot(
+                pool_id=_keenable_pool_id(),
+                provider="keenable",
+                auth_mode=AuthMode.KEYED,
+                native_unit=UnitKind.REQUEST,
+                observed_at=FIXED_AT,
+                remaining=Decimal("100000"),
+                allowance=Decimal("100000"),
+                credential_generation=0,
+            )
+        ),
+    )
+    context.vendor_calls = []
+
+
+@when("one Keenable search reports three credits and one fetch reports two credits")
+def step_keenable_shared_usage(context: Any) -> None:
+    from freesearch.models.contracts import (
+        FetchedDocument,
+        FetchResponse,
+        SearchResponse,
+        UsageEvent,
+        UsageOperation,
+    )
+
+    search_adm = _run(
+        context,
+        context.service.admit(
+            LimitCallContext(
+                provider="keenable",
+                operation=LimitOperation.SEARCH,
+                auth_mode=AuthMode.KEYED,
+                attempt_id="keenable-k04-search",
+                requested_at=FIXED_AT,
+            )
+        ),
+    )
+    _run(
+        context,
+        context.service.record_success(
+            search_adm,
+            SearchResponse(
+                query="q",
+                results=[],
+                provider="keenable",
+                usage=UsageEvent(
+                    provider="keenable",
+                    operation=UsageOperation.SEARCH,
+                    units=Decimal("3"),
+                    unit_kind=UnitKind.CREDIT,
+                    display_unit="credits",
+                    observed_at=FIXED_AT,
+                    metadata={"sku": "search.pro", "paid": False},
+                ),
+            ),
+        ),
+    )
+    fetch_adm = _run(
+        context,
+        context.service.admit(
+            LimitCallContext(
+                provider="keenable",
+                operation=LimitOperation.FETCH,
+                auth_mode=AuthMode.KEYED,
+                attempt_id="keenable-k04-fetch",
+                requested_at=FIXED_AT,
+            )
+        ),
+    )
+    _run(
+        context,
+        context.service.record_success(
+            fetch_adm,
+            FetchResponse(
+                provider="keenable",
+                document=FetchedDocument(
+                    url="https://example.com/k",
+                    content="hello",
+                    fetched_at=FIXED_AT,
+                ),
+                usage=UsageEvent(
+                    provider="keenable",
+                    operation=UsageOperation.FETCH,
+                    units=Decimal("2"),
+                    unit_kind=UnitKind.CREDIT,
+                    display_unit="credits",
+                    observed_at=FIXED_AT,
+                    metadata={"sku": "fetch", "paid": False},
+                ),
+            ),
+        ),
+    )
+    context.keenable_pool = _run(context, _limits_repo(context).get_pool(_keenable_pool_id()))
+    context.keenable_view = _run(context, context.service.provider_view("keenable"))
+
+
+@then("the Keenable pool holds remaining 99995 with 399980 CRDs in both views")
+def step_keenable_pool_99995(context: Any) -> None:
+    assert context.keenable_pool is not None
+    assert context.keenable_pool.remaining == Decimal("99995")
+    assert context.keenable_pool.allowance == Decimal("100000")
+    auth = context.keenable_view.auth(AuthMode.KEYED)
+    assert auth is not None
+    search_view = next(v for v in auth.crd_views if v.operation is LimitOperation.SEARCH)
+    fetch_view = next(v for v in auth.crd_views if v.operation is LimitOperation.FETCH)
+    assert search_view.shared_pool_id == "keenable:keyed:request"
+    assert fetch_view.shared_pool_id == "keenable:keyed:request"
+    assert search_view.state is CRDState.FINITE
+    assert fetch_view.state is CRDState.FINITE
+    assert search_view.remaining_crd == Decimal("399980")
+    assert fetch_view.remaining_crd == Decimal("399980")
+    assert search_view.request_cost_crd == Decimal("4")
+    assert fetch_view.request_cost_crd == Decimal("4")
+
+
+@then("the Keenable totals hold costs 12 and 8 CRDs with one native debit per success")
+def step_keenable_totals_12_8(context: Any) -> None:
+    totals = _run(context, _limits_repo(context).crd_usage_totals("keenable"))
+    by_op = {t.operation: t for t in totals}
+    assert set(by_op) == {LimitOperation.SEARCH, LimitOperation.FETCH}
+    assert by_op[LimitOperation.SEARCH].normalized_crd == Decimal("12")
+    assert by_op[LimitOperation.SEARCH].attempt_count == 1
+    assert by_op[LimitOperation.SEARCH].volume_count == 1
+    assert by_op[LimitOperation.FETCH].normalized_crd == Decimal("8")
+    assert by_op[LimitOperation.FETCH].attempt_count == 1
+    assert by_op[LimitOperation.FETCH].volume_count == 1
+
+
+@given("a Keenable adapter with paid usage of two credits")
+def step_keenable_paid_adapter(context: Any) -> None:
+    from freesearch.models.contracts import UsageEvent, UsageOperation, UsageStatus
+
+    _open_repo(context)
+    context.vendor_calls = []
+
+    def handler(request: Any) -> Any:
+        import httpx
+
+        return httpx.Response(200, json=_keenable_search_payload(2, paid=True))
+
+    adapter, client = _keenable_adapter(handler, context.vendor_calls)
+    context.keenable_adapter = adapter
+    context.keenable_client = client
+    from freesearch.models.contracts import SearchRequest
+
+    context.keenable_paid_response = _run(
+        context, adapter.search(SearchRequest(query="paid", limit=2))
+    )
+    assert context.keenable_paid_response.usage is not None
+    assert context.keenable_paid_response.usage.units == Decimal("2")
+    now = datetime.now(UTC)
+    _run(
+        context,
+        context.repository.record_usage(
+            UsageEvent(
+                provider="keenable",
+                operation=UsageOperation.SEARCH,
+                units=Decimal("2"),
+                unit_kind=UnitKind.CREDIT,
+                display_unit="credits",
+                observed_at=now,
+                status=UsageStatus.SUCCESS,
+                metadata={"paid": True, "sku": "search.pro"},
+            )
+        ),
+    )
+
+
+@when("Keenable answers 402 after paid usage")
+def step_keenable_snapshot(context: Any) -> None:
+    from freesearch.models.provider_limits import UsageSyncRequest
+
+    _run(context, context.keenable_adapter.quota_after_error(402))
+    now = datetime.now(UTC)
+    snapshot = _run(
+        context,
+        context.keenable_adapter.usage_snapshot(
+            UsageSyncRequest(
+                provider="keenable",
+                auth_mode=AuthMode.KEYED,
+                observed_at=now,
+                credential_generation=7,
+            )
+        ),
+    )
+    assert snapshot is not None
+    context.keenable_snapshot = snapshot
+    _run(context, _limits_repo(context).apply_snapshot(snapshot))
+    from freesearch.models.contracts import QuotaSnapshot, QuotaSource
+
+    _run(
+        context,
+        context.repository.record_quota(
+            QuotaSnapshot(
+                provider="keenable",
+                source=QuotaSource.OBSERVED,
+                remaining=Decimal("0"),
+                limit=Decimal("100000"),
+                observed_at=now,
+                unit_kind=UnitKind.CREDIT,
+                display_unit="credits",
+                metadata={"paid_spend": "2"},
+            )
+        ),
+    )
+
+
+@then("the Keenable snapshot holds remaining zero with separate free and paid spend")
+def step_keenable_paid_402_zero(context: Any) -> None:
+    from freesearch.adapters.keenable import KeenableAdapter
+
+    adapter = context.keenable_adapter
+    assert isinstance(adapter, KeenableAdapter)
+    assert adapter._paid_usage_seen is True
+    assert adapter._paid_spend == Decimal("2")
+    assert adapter._allowance_spend == Decimal("0")
+    assert adapter._hard_exhausted is True
+    snapshot = context.keenable_snapshot
+    assert snapshot.remaining == Decimal("0")
+    assert snapshot.allowance == Decimal("100000")
+    assert snapshot.confidence is Confidence.OBSERVED
+    assert snapshot.pool_id == "keenable:keyed:request"
+    assert snapshot.native_unit is UnitKind.REQUEST
+    assert snapshot.credential_generation == 7
+    quota = _run(context, adapter.quota())
+    assert quota is not None
+    assert quota.remaining == Decimal("0")
+
+
+@when("I rebuild the Keenable adapter from stored rows")
+def step_keenable_rebuild(context: Any) -> None:
+    import httpx
+    from pydantic import SecretStr
+
+    from freesearch.adapters.keenable import KeenableAdapter
+    from freesearch.models.provider_limits import UsageSyncRequest
+
+    client = httpx.AsyncClient(timeout=30.0)
+    context.keenable_rebuilt_client = client
+    rebuilt = KeenableAdapter(client, api_key=SecretStr("keenable-test-secret"))
+    _run(context, rebuilt.hydrate_quota(context.repository))
+    context.keenable_rebuilt = rebuilt
+    now = datetime.now(UTC)
+    context.keenable_rebuilt_snapshot = _run(
+        context,
+        rebuilt.usage_snapshot(
+            UsageSyncRequest(
+                provider="keenable",
+                auth_mode=AuthMode.KEYED,
+                observed_at=now,
+                credential_generation=7,
+            )
+        ),
+    )
+
+
+@then("the rebuilt Keenable snapshot still holds remaining zero")
+def step_keenable_rebuilt_zero(context: Any) -> None:
+    rebuilt = context.keenable_rebuilt
+    assert rebuilt._paid_usage_seen is True
+    assert rebuilt._paid_spend == Decimal("2")
+    assert rebuilt._hard_exhausted is True
+    snapshot = context.keenable_rebuilt_snapshot
+    assert snapshot is not None
+    assert snapshot.remaining == Decimal("0")
+    assert snapshot.confidence is Confidence.OBSERVED
+    _run(context, context.keenable_client.aclose())
+    context.keenable_client = None
+    _run(context, context.keenable_rebuilt_client.aclose())
+
+
+@given("a Keenable adapter with mock error answers")
+def step_keenable_error_adapter(context: Any) -> None:
+    _open_repo(context)
+    context.vendor_calls = []
+
+
+@when("Keenable answers 429 with rate pressure")
+def step_keenable_429(context: Any) -> None:
+    step_keenable_error(context, 429)
+    calls: list[Any] = []
+    context.vendor_calls = calls
+
+    def handler(request: Any) -> Any:
+        import httpx
+
+        return httpx.Response(429, json={"error": "HTTP 429"})
+
+    adapter, client = _keenable_adapter(handler, calls)
+    context.keenable_client = client
+    from freesearch.models.contracts import SearchRequest
+
+    try:
+        _run(context, adapter.search(SearchRequest(query="q", limit=2)))
+        context.keenable_error = None
+    except Exception as exc:
+        context.keenable_error = exc
+    context.keenable_adapter = adapter
+
+
+@then("the Keenable rate error stays retryable with no funds zero observation")
+def step_keenable_429_assert(context: Any) -> None:
+    assert context.keenable_error is not None
+    assert context.keenable_error.error.status_code == 429
+    assert context.keenable_error.error.retryable is True
+    quota = _run(context, context.keenable_adapter.quota())
+    assert quota is not None
+    assert quota.remaining == Decimal("100000")
+    assert quota.remaining != Decimal("0")
+    _run(context, context.keenable_client.aclose())
+    context.keenable_client = None
+
+
+@when("Keenable answers 402 with exhaustion")
+def step_keenable_402(context: Any) -> None:
+    step_keenable_error(context, 402)
+    calls: list[Any] = []
+    context.vendor_calls = calls
+
+    def handler(request: Any) -> Any:
+        import httpx
+
+        return httpx.Response(402, json={"error": "HTTP 402"})
+
+    adapter, client = _keenable_adapter(handler, calls)
+    context.keenable_client = client
+    from freesearch.models.contracts import SearchRequest
+
+    try:
+        _run(context, adapter.search(SearchRequest(query="q", limit=2)))
+        context.keenable_error = None
+    except Exception as exc:
+        context.keenable_error = exc
+    context.keenable_adapter = adapter
+    _run(context, adapter.quota_after_error(402))
+
+
+@then("the Keenable funds error stays non-retryable with remaining zero")
+def step_keenable_402_assert(context: Any) -> None:
+    assert context.keenable_error is not None
+    assert context.keenable_error.error.code == "quota_exhausted"
+    assert context.keenable_error.error.retryable is False
+    assert context.keenable_error.error.status_code == 402
+    quota = _run(context, context.keenable_adapter.quota())
+    assert quota is not None
+    assert quota.remaining == Decimal("0")
+    _run(context, context.keenable_client.aclose())
+    context.keenable_client = None
+
+
+@when("two Keenable keyed calls succeed with standard cost")
+def step_keenable_two_standard(context: Any) -> None:
+    from freesearch.models.contracts import (
+        FetchedDocument,
+        FetchResponse,
+        SearchResponse,
+    )
+
+    search_adm = _run(
+        context,
+        context.service.admit(
+            LimitCallContext(
+                provider="keenable",
+                operation=LimitOperation.SEARCH,
+                auth_mode=AuthMode.KEYED,
+                attempt_id="keenable-k07-search",
+                requested_at=FIXED_AT,
+            )
+        ),
+    )
+    _run(
+        context,
+        context.service.record_success(
+            search_adm, SearchResponse(query="q", results=[], provider="keenable")
+        ),
+    )
+    fetch_adm = _run(
+        context,
+        context.service.admit(
+            LimitCallContext(
+                provider="keenable",
+                operation=LimitOperation.FETCH,
+                auth_mode=AuthMode.KEYED,
+                attempt_id="keenable-k07-fetch",
+                requested_at=FIXED_AT,
+            )
+        ),
+    )
+    _run(
+        context,
+        context.service.record_success(
+            fetch_adm,
+            FetchResponse(
+                provider="keenable",
+                document=FetchedDocument(
+                    url="https://example.com/k",
+                    content="hello",
+                    fetched_at=FIXED_AT,
+                ),
+            ),
+        ),
+    )
+    context.keenable_view = _run(context, context.service.provider_view("keenable"))
+
+
+@then("the Keenable shared views hold one pool with 399992 CRDs each")
+def step_keenable_shared_views(context: Any) -> None:
+    from freesearch.services import credit_units as local_cu
+
+    pool = _run(context, _limits_repo(context).get_pool(_keenable_pool_id()))
+    assert pool is not None
+    assert pool.remaining == Decimal("99998")
+    auth = context.keenable_view.auth(AuthMode.KEYED)
+    assert auth is not None
+    search_view = next(v for v in auth.crd_views if v.operation is LimitOperation.SEARCH)
+    fetch_view = next(v for v in auth.crd_views if v.operation is LimitOperation.FETCH)
+    assert search_view.shared_pool_id == fetch_view.shared_pool_id == "keenable:keyed:request"
+    assert search_view.remaining_crd == Decimal("399992")
+    assert fetch_view.remaining_crd == Decimal("399992")
+    records = [r for r in _keenable_records() if r.auth_mode is AuthMode.KEYED]
+    funds_once = local_cu.shared_pool_funds(pool, records)
+    assert funds_once == Decimal("399992")
+
+
+@then("the Keenable totals count each attempt once with separate search and fetch rows")
+def step_keenable_totals_once(context: Any) -> None:
+    totals = _run(context, _limits_repo(context).crd_usage_totals("keenable"))
+    by_op = {t.operation: t for t in totals}
+    assert set(by_op) == {LimitOperation.SEARCH, LimitOperation.FETCH}
+    assert by_op[LimitOperation.SEARCH].attempt_count == 1
+    assert by_op[LimitOperation.FETCH].attempt_count == 1
+    assert by_op[LimitOperation.SEARCH].normalized_crd == Decimal("4")
+    assert by_op[LimitOperation.FETCH].normalized_crd == Decimal("4")
+
+
+@given("a Keenable keyless pool with exhausted shared windows")
+def step_keenable_keyless_exhausted(context: Any) -> None:
+    _open_repo(context)
+    context.service = _service(context, _keenable_records())
+    _run(context, context.service.initialize())
+    for index in range(10):
+        _run(
+            context,
+            context.service.admit(
+                LimitCallContext(
+                    provider="keenable",
+                    operation=LimitOperation.SEARCH,
+                    auth_mode=AuthMode.KEYLESS,
+                    attempt_id=f"keenable-keyless-{index}",
+                    requested_at=FIXED_AT,
+                )
+            ),
+        )
+    context.vendor_calls = []
+
+
+@when("I request one Keenable keyless search")
+def step_keenable_keyless_request(context: Any) -> None:
+    try:
+        context.keenable_keyless_admission = _run(
+            context,
+            context.service.admit(
+                LimitCallContext(
+                    provider="keenable",
+                    operation=LimitOperation.SEARCH,
+                    auth_mode=AuthMode.KEYLESS,
+                    attempt_id="keenable-keyless-denied",
+                    requested_at=FIXED_AT,
+                )
+            ),
+        )
+        context.keenable_keyless_denial = None
+    except LimitDeniedError as exc:
+        context.keenable_keyless_admission = None
+        context.keenable_keyless_denial = exc
+
+
+@then("the Keenable keyless gate denies with local 429 and zero vendor calls")
+def step_keenable_keyless_denied(context: Any) -> None:
+    assert context.keenable_keyless_admission is None
+    assert context.keenable_keyless_denial is not None
+    assert context.keenable_keyless_denial.status_code == 429
+    assert context.keenable_keyless_denial.refusal == "rate"
+    assert context.keenable_keyless_denial.error.details.get("origin") == "local"
+    assert context.vendor_calls == []
+    bars = _run(context, context.service.rate_limits.progress("keenable", FIXED_AT))
+    assert any(b.window == "1h" for b in bars)

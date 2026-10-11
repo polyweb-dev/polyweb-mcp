@@ -322,3 +322,320 @@ describe("ProviderLimitsCard Brave", () => {
     vi.unstubAllGlobals()
   })
 })
+
+/**
+ * Keenable card: one aggregate bar for the shared keyed pool, and an
+ * unmetered keyless rail with a separate shared hourly rate bar.
+ * Keeps the Brave fixture and cases above unchanged.
+ */
+
+function keenableKeyedSearchView(): CRDView {
+  return {
+    state: "finite",
+    operation: "search",
+    remaining_crd: "399980",
+    local_remaining_crd: null,
+    request_cost_crd: "4",
+    shared_pool_id: "keenable:keyed:request",
+    possible_standard_calls: "99995",
+    price_version: "list_price",
+    priced: true,
+  }
+}
+
+function keenableKeyedFetchView(): CRDView {
+  return {
+    state: "finite",
+    operation: "fetch",
+    remaining_crd: "399980",
+    local_remaining_crd: null,
+    request_cost_crd: "4",
+    shared_pool_id: "keenable:keyed:request",
+    possible_standard_calls: "99995",
+    price_version: "list_price",
+    priced: true,
+  }
+}
+
+function keenableKeyedSearchRecord(): LimitRecord {
+  return {
+    provider: "keenable",
+    operation: "search",
+    auth_mode: "keyed",
+    supported: true,
+    transport_available: true,
+    native_pool_id: "keenable:keyed:request",
+    rate: null,
+    budget: null,
+    conversion_profile: {
+      reference_usd_per_crd: "0.001",
+      native_usd_per_unit: "0.004",
+      cost_basis: "priced_native_use",
+      price_version: "list_price",
+      source: "list_price_assumed",
+      estimated: true,
+    },
+    plan_name: "Monthly free requests",
+    usage_url: "https://app.keenable.ai/console",
+    version: 1,
+  }
+}
+
+function keenableKeyedFetchRecord(): LimitRecord {
+  return {
+    provider: "keenable",
+    operation: "fetch",
+    auth_mode: "keyed",
+    supported: true,
+    transport_available: true,
+    native_pool_id: "keenable:keyed:request",
+    rate: null,
+    budget: null,
+    conversion_profile: {
+      reference_usd_per_crd: "0.001",
+      native_usd_per_unit: "0.004",
+      cost_basis: "priced_native_use",
+      price_version: "list_price",
+      source: "list_price_assumed",
+      estimated: true,
+    },
+    plan_name: "Monthly free requests",
+    usage_url: "https://app.keenable.ai/console",
+    version: 1,
+  }
+}
+
+function keenableKeyedAuth(): ProviderAuthLimits {
+  return {
+    auth_mode: "keyed",
+    transport_available: true,
+    search: keenableKeyedSearchRecord(),
+    fetch: keenableKeyedFetchRecord(),
+    free_tiers: [],
+    paid_tiers: [],
+    unknown_tiers: [],
+    tier_split_known: true,
+    aggregate_pool: {
+      pool_id: "keenable:keyed:request",
+      provider: "keenable",
+      auth_mode: "keyed",
+      native_unit: "REQUEST",
+      remaining: "99995",
+      allowance: "100000",
+      actual_spend_usd: null,
+      source: "local_ledger",
+      confidence: "estimated",
+      reset_at: "2026-11-01T00:00:00Z",
+      observed_at: "2026-03-10T12:00:00Z",
+      version: 1,
+      credential_generation: 7,
+      next_sync_at: null,
+      stale: false,
+      manual_anchor: false,
+    },
+    crd_views: [keenableKeyedSearchView(), keenableKeyedFetchView()],
+    rate_progress: [],
+    grants: null,
+    detail: null,
+  }
+}
+
+function keenableLimits(): ProviderLimits {
+  return {
+    provider: "keenable",
+    active_auth_mode: "keyed",
+    auths: [keenableKeyedAuth()],
+    documented_keyless_operations: ["search", "fetch"],
+    version: 1,
+    generated_at: "2026-03-10T12:00:00Z",
+  }
+}
+
+function keenableKeylessSearchView(): CRDView {
+  return {
+    state: "unmetered",
+    operation: "search",
+    remaining_crd: null,
+    local_remaining_crd: null,
+    request_cost_crd: null,
+    shared_pool_id: null,
+    possible_standard_calls: null,
+    price_version: null,
+    priced: false,
+  }
+}
+
+function keenableKeylessFetchView(): CRDView {
+  return {
+    state: "unmetered",
+    operation: "fetch",
+    remaining_crd: null,
+    local_remaining_crd: null,
+    request_cost_crd: null,
+    shared_pool_id: null,
+    possible_standard_calls: null,
+    price_version: null,
+    priced: false,
+  }
+}
+
+function keenableKeylessRecord(operation: "search" | "fetch"): LimitRecord {
+  return {
+    provider: "keenable",
+    operation,
+    auth_mode: "keyless",
+    supported: true,
+    transport_available: true,
+    native_pool_id: null,
+    rate: null,
+    budget: null,
+    conversion_profile: {
+      reference_usd_per_crd: "0.001",
+      native_usd_per_unit: "0",
+      cost_basis: "priced_native_use",
+      price_version: "",
+      source: "unbilled_keyless",
+      estimated: false,
+    },
+    plan_name: "Keyless public pool",
+    usage_url: null,
+    version: 1,
+  }
+}
+
+function keenableKeylessAuth(): ProviderAuthLimits {
+  return {
+    auth_mode: "keyless",
+    transport_available: true,
+    search: keenableKeylessRecord("search"),
+    fetch: keenableKeylessRecord("fetch"),
+    free_tiers: [],
+    paid_tiers: [],
+    unknown_tiers: [],
+    tier_split_known: true,
+    aggregate_pool: null,
+    crd_views: [keenableKeylessSearchView(), keenableKeylessFetchView()],
+    rate_progress: [
+      {
+        bucket_id: "keenable:keyless:requests",
+        operation: "search",
+        window: "1h",
+        unit: "requests",
+        remaining: "990",
+        limit: "1000",
+        reset_at: null,
+        source: "documented_keyless",
+        confidence: "observed",
+        kind: "rate",
+        stale: false,
+        enforceable: true,
+      },
+    ],
+    grants: null,
+    detail: {
+      plan_name: "Keyless public pool",
+      native_unit: null,
+      native_balance: null,
+      native_allowance: null,
+      usd_per_call: null,
+      actual_spend_usd: null,
+      reset_at: null,
+      reset_rule: "unknown",
+      usage_url: null,
+      source: "documented_keyless",
+      confidence: "observed",
+      last_sync_at: null,
+      stale: false,
+      price_version: "",
+      crd_split_note: null,
+      rate_windows: [
+        {
+          bucket_id: "keenable:keyless:requests",
+          limit: "10",
+          window: "1s",
+          scope: "ip",
+          unit: "requests",
+          remaining: null,
+          reset_at: null,
+          source: "documented_keyless",
+          confidence: "observed",
+        },
+        {
+          bucket_id: "keenable:keyless:requests",
+          limit: "1000",
+          window: "1h",
+          scope: "ip",
+          unit: "requests",
+          remaining: null,
+          reset_at: null,
+          source: "documented_keyless",
+          confidence: "observed",
+        },
+      ],
+      tier_split_known: true,
+      aggregate_pool_id: null,
+    },
+  }
+}
+
+function keenableKeylessLimits(): ProviderLimits {
+  return {
+    provider: "keenable",
+    active_auth_mode: "keyless",
+    auths: [keenableKeylessAuth()],
+    documented_keyless_operations: ["search", "fetch"],
+    version: 1,
+    generated_at: "2026-03-10T12:00:00Z",
+  }
+}
+
+function renderKeenableCard(limits: ProviderLimits): void {
+  installFetchStub(() => {
+    throw new Error("no backend in card test")
+  })
+  render(
+    <ProviderLimitsCard
+      providerId="keenable"
+      providerName="Keenable"
+      limits={limits}
+      crdUsageTotals={noUseTotals()}
+      refreshDashboard={() => Promise.resolve()}
+      manualEligible
+    />,
+  )
+}
+
+describe("ProviderLimitsCard Keenable", () => {
+  it("shows one aggregate bar for the shared keyed pool with a single funds fraction", () => {
+    renderKeenableCard(keenableLimits())
+    const bar = screen.getByRole("progressbar", { name: "Keenable credit units remaining" })
+    expect(bar.getAttribute("aria-valuemin")).toBe("0")
+    expect(bar.getAttribute("aria-valuemax")).toBe("100")
+    expectFraction("399980", "400000")
+    expect(screen.queryByText("Free - unmetered")).toBeNull()
+    const value = screen.getByText("399980").closest("span")?.parentElement
+    expect(value?.textContent?.replace(/\s+/g, "")).toBe("399980/400000CRD")
+    vi.unstubAllGlobals()
+  })
+
+  it("shows unmetered keyless funds with a separate shared hourly rate bar", async () => {
+    installFetchStub(() => ok({ events: [], next_cursor: null }))
+    render(
+      <ProviderLimitsCard
+        providerId="keenable"
+        providerName="Keenable"
+        limits={keenableKeylessLimits()}
+        crdUsageTotals={noUseTotals()}
+        refreshDashboard={() => Promise.resolve()}
+        manualEligible
+      />,
+    )
+    expect(screen.getByText("Free - unmetered")).not.toBeNull()
+    expect(screen.queryByRole("progressbar", { name: "Keenable credit units remaining" })).toBeNull()
+    const user = userEvent.setup()
+    await user.click(screen.getByRole("button", { name: "Credit details for Keenable" }))
+    expect(await screen.findByText("Search hourly rate")).not.toBeNull()
+    expect(screen.getByText("990 of 1000 requests")).not.toBeNull()
+    vi.unstubAllGlobals()
+  })
+})

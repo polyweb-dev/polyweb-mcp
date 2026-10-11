@@ -465,12 +465,12 @@ class KeenableAdapter(ProviderAdapter):
     async def usage_snapshot(self, request: UsageSyncRequest) -> NativeUsageSnapshot | None:
         """Return the keyed monthly request ledger; keyless has no budget.
 
-        The keyed rail draws the shared monthly request allowance. The existing
-        local ledger holds the reported usage of that allowance. The ledger
-        keeps the free allowance and the paid SKU spend in separate counters. A
-        key with paid usage therefore reports no free remaining, not a
-        fabricated zero. Keyless access is unmetered, so it returns no
-        snapshot.
+        The keyed rail draws the shared monthly request allowance. The local
+        ledger holds the reported usage of that allowance. The ledger keeps the
+        free allowance and the paid SKU spend in separate counters. A key with
+        paid usage reports an unknown aggregate, not a fabricated balance. A
+        vendor 402 is a hard observation, so its reported remaining is zero.
+        Keyless access is unmetered, so it returns no snapshot.
         """
 
         auth_mode = self.limit_auth_mode
@@ -478,6 +478,12 @@ class KeenableAdapter(ProviderAdapter):
             return None
         self._rollover_if_needed(datetime.now(UTC))
         quota = self._snapshot_sync()
+        if self._hard_exhausted:
+            confidence = Confidence.OBSERVED
+        elif self._paid_usage_seen:
+            confidence = Confidence.UNKNOWN
+        else:
+            confidence = Confidence.ESTIMATED
         return NativeUsageSnapshot(
             pool_id=native_pool_id(self.name, auth_mode, UnitKind.REQUEST),
             provider=self.name,
@@ -485,7 +491,7 @@ class KeenableAdapter(ProviderAdapter):
             native_unit=UnitKind.REQUEST,
             observed_at=request.observed_at,
             source="local_ledger",
-            confidence=Confidence.OBSERVED,
+            confidence=confidence,
             remaining=quota.remaining,
             allowance=quota.limit,
             reset_at=quota.reset_at,
@@ -516,9 +522,12 @@ class KeenableAdapter(ProviderAdapter):
         mode, _headers = self._auth()
         if mode != _KEYED:
             return None
+        if not credits.is_finite() or credits < 0:
+            raise ValueError("usage credits must be finite and non-negative")
         self._rollover_if_needed(datetime.now(UTC))
-        if credits < 0:
-            raise ValueError("usage credits must be non-negative")
+        # A valid successful usage report proves the vendor still serves this
+        # key, so a previously recorded hard exhaustion no longer stands.
+        self._hard_exhausted = False
         if paid:
             self._paid_spend += credits
             self._paid_usage_seen = True
@@ -538,12 +547,14 @@ class KeenableAdapter(ProviderAdapter):
         self._hydrated_month = None
 
     def _snapshot_sync(self) -> QuotaSnapshot:
+        # A vendor 402 hard exhaustion outranks the paid unknown and the free
+        # projection: the reported remaining is a firm zero in every case.
         remaining = (
-            None
-            if self._paid_usage_seen
+            Decimal("0")
+            if self._hard_exhausted
             else (
-                Decimal("0")
-                if self._hard_exhausted
+                None
+                if self._paid_usage_seen
                 else max(Decimal("0"), self._allowance_limit - self._allowance_spend)
             )
         )
