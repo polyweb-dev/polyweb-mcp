@@ -62,6 +62,12 @@ from freesearch.models.contracts import (
     UsageEvent,
     UsageOperation,
 )
+from freesearch.models.provider_limits import (
+    Confidence,
+    NativeUsageSnapshot,
+    UsageSyncRequest,
+    native_pool_id,
+)
 
 __all__ = ["TavilyAdapter"]
 
@@ -527,6 +533,88 @@ class TavilyAdapter(ProviderAdapter):
             # attempting a keyless request.
             raise self._error("configuration_error", "no Tavily API key configured")
         return await client.get(_USAGE_URL)
+
+    async def usage_snapshot(self, request: UsageSyncRequest) -> NativeUsageSnapshot | None:
+        """Return the account credit observation of the existing usage read.
+
+        The plan limit minus the plan usage gives the plan remaining. A tighter
+        per-key ceiling caps that remaining when the payload supplies both key
+        figures. PAYGO stays an access mode and never becomes stored credits.
+        An absent remaining stays absent.
+        """
+
+        response = await self._runner.run(self.name, lambda: self._quota_request())
+        try:
+            if response.is_error:
+                status = response.status_code
+                raise self._error(
+                    "http_error",
+                    f"HTTP {status}",
+                    retryable=status in RETRYABLE_STATUS_CODES,
+                    status=status,
+                ) from None
+            payload = response.json()
+            if not isinstance(payload, dict):
+                raise ValueError("usage payload is not a mapping")
+            body = cast(dict[str, Any], payload)
+            snapshot = self._quota_snapshot(body)
+            remaining = self._capped_remaining(body, snapshot.remaining)
+        except ProviderOperationError:
+            raise
+        except Exception:
+            # A structurally malformed payload must not escape as a raw
+            # AttributeError/KeyError/TypeError/JSONDecodeError after the
+            # call succeeded.
+            raise self._error("invalid_response", "malformed usage response") from None
+        auth_mode = self.limit_auth_mode
+        return NativeUsageSnapshot(
+            pool_id=native_pool_id(self.name, auth_mode, UnitKind.CREDIT),
+            provider=self.name,
+            auth_mode=auth_mode,
+            native_unit=UnitKind.CREDIT,
+            observed_at=request.observed_at,
+            source="vendor_api",
+            confidence=Confidence.AUTHORITATIVE if remaining is not None else Confidence.UNKNOWN,
+            remaining=remaining,
+            allowance=snapshot.limit,
+            reset_at=snapshot.reset_at,
+            credential_generation=request.credential_generation,
+        )
+
+    def _capped_remaining(
+        self,
+        payload: dict[str, Any],
+        plan_remaining: Decimal | None,
+    ) -> Decimal | None:
+        """Cap the plan remaining at the per-key ceiling when the payload has both.
+
+        A key figure that is absent or not a real finite non-negative number
+        supplies no ceiling, so the plan figure stays. That figure never
+        becomes zero through malformed data.
+        """
+
+        key = payload.get("key")
+        if not isinstance(key, dict):
+            return plan_remaining
+        limit = key.get("limit")
+        usage = key.get("usage")
+        if not self._is_quota_number(limit) or not self._is_quota_number(usage):
+            return plan_remaining
+        key_remaining = max(Decimal(0), Decimal(str(limit)) - Decimal(str(usage)))
+        if plan_remaining is None:
+            return key_remaining
+        return min(plan_remaining, key_remaining)
+
+    @staticmethod
+    def _is_quota_number(value: Any) -> bool:
+        """Return whether a payload value is a real, finite, non-negative number."""
+
+        return (
+            not isinstance(value, bool)
+            and isinstance(value, (int, float))
+            and isfinite(value)
+            and value >= 0
+        )
 
     async def estimate_cost(self, request: SearchRequest | FetchRequest) -> CostEstimate:
         if isinstance(request, SearchRequest):

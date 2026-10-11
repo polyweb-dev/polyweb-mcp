@@ -30,8 +30,10 @@ from freesearch.services.provider_limits import ProviderLimitsService
 logger = logging.getLogger(__name__)
 
 DEFAULT_SYNC_INTERVAL_SECONDS = 60
-
+TAVILY_MIN_SECONDS = 60
 MAX_BACKOFF_SECONDS = 600
+# Tavily's usage endpoint is capped at ten requests per ten minutes.
+_THROTTLED_PROVIDERS: dict[str, int] = {"tavily": TAVILY_MIN_SECONDS}
 
 
 def _sync_interval_seconds() -> int:
@@ -69,6 +71,7 @@ class LimitSyncService:
         self._owner = owner or f"sync-{os.getpid()}"
         self._enabled = enabled
         self._failures: dict[str, int] = {}
+        self._throttle_until: dict[str, datetime] = {}
 
     @property
     def interval_seconds(self) -> int:
@@ -103,11 +106,17 @@ class LimitSyncService:
         return results
 
     async def sync_provider(self, provider: str, now: datetime) -> SyncResult:
-        """Sync one provider under the database lease."""
+        """Sync one provider under the database lease.
+
+        The Tavily usage endpoint keeps its documented minimum interval, and
+        ``force`` cannot bypass it.
+        """
 
         if self._repository is None:
             return _skipped(provider, now, "no_repository")
-
+        throttle = self._throttle_until.get(provider)
+        if throttle is not None and now < throttle:
+            return _skipped(provider, now, "cadence")
         adapter = self._adapter_for(provider)
         if adapter is None:
             return _skipped(provider, now, "no_adapter")
@@ -210,6 +219,9 @@ class LimitSyncService:
                 reason=reason,
             )
         )
+        minimum = _THROTTLED_PROVIDERS.get(provider)
+        if minimum is not None:
+            self._throttle_until[provider] = now + timedelta(seconds=minimum)
 
     def _adapter_for(self, provider: str) -> ProviderAdapter | None:
         for adapter in self._adapters():

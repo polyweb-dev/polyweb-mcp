@@ -293,15 +293,96 @@ def _brave_records() -> list[ProviderLimitRecord]:
     ]
 
 
+def _tavily_records() -> list[ProviderLimitRecord]:
+    keyed_rate = _rate(
+        _request_window(
+            "tavily",
+            AuthMode.KEYED,
+            "search",
+            "100",
+            window=RateWindowName.MINUTE,
+            scope=RateScope.KEY,
+            source="documented_development_key",
+        )
+    )
+    credit_price = str(TAVILY_PAYGO_USD_PER_CREDIT)
+    search_budget = _budget(
+        BudgetModel.CREDITS,
+        free_allowance="1000",
+        allowance_unit="credits",
+        allowance_period="month",
+        cost_per_1k="8",
+        native_cost="1",
+        usd_per_call=credit_price,
+        on_exhausted=ExhaustAction.STOP,
+        usage_api="https://api.tavily.com/usage",
+    )
+    fetch_budget = _budget(
+        BudgetModel.CREDITS,
+        free_allowance="1000",
+        allowance_unit="credits",
+        allowance_period="month",
+        cost_per_1k="8",
+        native_cost="0.2",
+        usd_per_call="0.0016",
+        on_exhausted=ExhaustAction.STOP,
+        usage_api="https://api.tavily.com/usage",
+    )
+    keyed_profile = _profile(credit_price, source="paygo_reference", estimated=True)
+    records = [
+        _record(
+            "tavily",
+            LimitOperation.SEARCH,
+            AuthMode.KEYED,
+            rate=keyed_rate,
+            budget=search_budget,
+            pool_unit=UnitKind.CREDIT,
+            profile=keyed_profile,
+            plan_name="Free plan",
+            usage_url="https://app.tavily.com/home",
+        ),
+        _record(
+            "tavily",
+            LimitOperation.FETCH,
+            AuthMode.KEYED,
+            rate=keyed_rate,
+            budget=fetch_budget,
+            pool_unit=UnitKind.CREDIT,
+            profile=keyed_profile,
+            plan_name="Free plan",
+            usage_url="https://app.tavily.com/home",
+        ),
+    ]
+    keyless_budget = _budget(BudgetModel.NONE, allowance_unit="requests", priced=False)
+    for operation in (LimitOperation.SEARCH, LimitOperation.FETCH):
+        records.append(
+            _record(
+                "tavily",
+                operation,
+                AuthMode.KEYLESS,
+                transport_available=False,
+                rate=_unpublished_rate(),
+                budget=keyless_budget,
+                profile=_profile(None, source="keyless_unpublished"),
+                plan_name="Keyless access mode (unpublished rate limit)",
+            )
+        )
+    return records
+
+
 def provider_limit_defaults() -> tuple[ProviderLimitRecord, ...]:
     """Return the documented catalog in stable catalog order.
 
-    Slice C1 holds the two keyed Brave records. The other provider builders
-    arrive with slices C2 to C8.
+    Slice C1 holds the two keyed Brave records, and slice C6 adds the four keyed
+    and keyless Tavily records. The other provider builders arrive with their
+    own slices.
     """
 
     records: list[ProviderLimitRecord] = []
-    for builder in (_brave_records,):
+    for builder in (
+        _brave_records,
+        _tavily_records,
+    ):
         records.extend(builder())
     return tuple(records)
 
@@ -319,12 +400,15 @@ def documented_keyless_operations(provider: str) -> list[LimitOperation]:
 def provider_tier_defaults() -> dict[str, list[TierBalance]]:
     """Return declared free and paid subpools keyed by ``provider:auth_mode``.
 
-    Slice C1 holds the Brave keyed group. The other provider groups arrive with
-    slices C2 to C8. The declarations describe documented entitlement, reset
-    rules, and funding mode. A vendor observation supplies the numbers; without
-    one, a declared allowance still lets the UI show a denominator it can trust.
+    Slice C1 holds the Brave keyed group and slice C6 adds the Tavily keyed and
+    keyless groups. The other provider groups arrive with their own slices. The
+    declarations describe documented entitlement, reset rules, and funding
+    mode. A vendor observation supplies the numbers; without one, a declared
+    allowance still lets the UI show a denominator it can trust.
     """
 
+    request = UnitKind.REQUEST
+    credit = UnitKind.CREDIT
     usd = UnitKind.USD
     return {
         "brave:keyed": [
@@ -352,4 +436,37 @@ def provider_tier_defaults() -> dict[str, list[TierBalance]]:
                 label="Prepaid funds or confirmed metered card",
             ),
         ],
+        "tavily:keyed": [
+            _tier(
+                "tavily:keyed:free",
+                "free",
+                credit,
+                allowance="1000",
+                reset_rule=ResetRule.MONTHLY_FIRST,
+                source="documented_plan",
+                label="Free plan credits (resets on the first)",
+            ),
+            _tier(
+                "tavily:keyed:plan",
+                "paid",
+                credit,
+                reset_rule=ResetRule.MONTHLY_FIRST,
+                confidence=Confidence.UNKNOWN,
+                label="Paid plan allowance (plan dependent)",
+            ),
+            _tier(
+                "tavily:keyed:paygo",
+                "paid",
+                credit,
+                reset_rule=ResetRule.NEVER,
+                funding_mode=FundingMode.POSTPAID,
+                confidence=Confidence.UNKNOWN,
+                label="PAYGO access or an explicit spend cap (not stored credits)",
+            ),
+        ],
+        "tavily:keyless": _keyless_documented_tier(
+            "tavily",
+            native_unit=request,
+            label="Documented keyless search and extract (rate limit not published)",
+        ),
     }
