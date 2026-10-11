@@ -253,6 +253,68 @@ def _keyless_documented_tier(
     ]
 
 
+def _tinyfish_records() -> list[ProviderLimitRecord]:
+    search_rate = _rate(
+        _request_window(
+            "tinyfish",
+            AuthMode.KEYED,
+            "search",
+            "30",
+            window=RateWindowName.MINUTE,
+            scope=RateScope.KEY,
+        ),
+        _request_window(
+            "tinyfish",
+            AuthMode.KEYED,
+            "search",
+            "500",
+            window=RateWindowName.HOUR,
+            scope=RateScope.KEY,
+        ),
+    )
+    fetch_rate = _rate(
+        _request_window(
+            "tinyfish",
+            AuthMode.KEYED,
+            "fetch",
+            "150",
+            window=RateWindowName.MINUTE,
+            scope=RateScope.KEY,
+            unit=RateUnit.URLS,
+        ),
+        _request_window(
+            "tinyfish",
+            AuthMode.KEYED,
+            "fetch",
+            "1000",
+            window=RateWindowName.DAY,
+            scope=RateScope.KEY,
+            unit=RateUnit.URLS,
+        ),
+    )
+    free_profile = _profile("0", source="unbilled_free")
+    return [
+        _record(
+            "tinyfish",
+            LimitOperation.SEARCH,
+            AuthMode.KEYED,
+            rate=search_rate,
+            budget=None,
+            profile=free_profile,
+            plan_name="Free search within rate windows",
+        ),
+        _record(
+            "tinyfish",
+            LimitOperation.FETCH,
+            AuthMode.KEYED,
+            rate=fetch_rate,
+            budget=None,
+            profile=free_profile,
+            plan_name="Free fetch within rate windows",
+        ),
+    ]
+
+
 def _brave_records() -> list[ProviderLimitRecord]:
     search_rate = _rate(
         _request_window("brave", AuthMode.KEYED, "search", "50", scope=RateScope.ORG)
@@ -301,7 +363,10 @@ def provider_limit_defaults() -> tuple[ProviderLimitRecord, ...]:
     """
 
     records: list[ProviderLimitRecord] = []
-    for builder in (_brave_records,):
+    for builder in (
+        _tinyfish_records,
+        _brave_records,
+    ):
         records.extend(builder())
     return tuple(records)
 
@@ -326,7 +391,18 @@ def provider_tier_defaults() -> dict[str, list[TierBalance]]:
     """
 
     usd = UnitKind.USD
+    request = UnitKind.REQUEST
     return {
+        "tinyfish:keyed": [
+            _tier(
+                "tinyfish:keyed:unmetered",
+                "free",
+                request,
+                funding_mode=FundingMode.NO_BUDGET,
+                confidence=Confidence.OBSERVED,
+                label="Free - unmetered (search/fetch never draw the wallet)",
+            ),
+        ],
         "brave:keyed": [
             _tier(
                 "brave:keyed:free",
