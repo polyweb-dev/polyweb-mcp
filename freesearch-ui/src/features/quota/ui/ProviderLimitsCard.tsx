@@ -20,7 +20,7 @@ import {
   type CreditCardModel,
 } from "../model/crdCardModel"
 import type { ManualAmountMode } from "../model/manualQuotaMath"
-import { providerInfo, type BalancePrefill } from "../model/providerInfo"
+import { providerInfo, type BalancePrefill, type ProviderInfo } from "../model/providerInfo"
 import type { CreditMode } from "../model/quotaLabels"
 import type { QuotaRowEstimates } from "../model/quotaRowModel"
 import { pairedSnapshotOf } from "../model/quotaRowModel"
@@ -70,6 +70,9 @@ interface ManualUnit {
 
 const CARD = "space-y-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] p-4"
 const LABEL = "text-[12px] text-[var(--muted)]"
+
+/** The one provider that opts into the shared bar and the free strike. */
+const KEENABLE_PROVIDER = "keenable"
 
 function slug(providerId: string): string {
   return providerId.toLowerCase().replace(/[^a-z0-9]+/g, "-")
@@ -243,6 +246,11 @@ function oauthControl(
   return <div className="flex flex-wrap items-center justify-end gap-2">{control}</div>
 }
 
+/** The details control of one card, shown beside the credit fraction. */
+function infoPopover(info: ProviderInfo, providerId: string, providerName: string, auth: ProviderAuthLimits): ReactNode {
+  return <ProviderInfoPopover providerId={providerId} providerName={providerName} info={info} auth={auth} />
+}
+
 /**
  * One provider credit-unit card.
  *
@@ -289,7 +297,8 @@ export function ProviderLimitsCard({
   }
 
   const model = creditCardModel({ auth, usageTotals: crdUsageTotals })
-  const info = providerInfo(auth)
+  const keenableBar = providerId === KEENABLE_PROVIDER
+  const info = providerInfo(auth, keenableBar)
   const unit = manualUnit(auth)
   const titleId = "limits-title-" + slug(providerId)
   const fetchAvailable = operationAvailable(auth, "fetch")
@@ -320,6 +329,8 @@ export function ProviderLimitsCard({
       <ProviderCreditSummary
         providerName={providerName}
         model={model}
+        useSharedBar={keenableBar}
+        {...(keenableBar && auth.auth_mode === "keyless" ? { freeKeyless: true } : {})}
         actions={
           <ProviderCardActions
             providerId={providerId}
@@ -330,14 +341,7 @@ export function ProviderLimitsCard({
             onOpenModal={setModal}
           />
         }
-        info={
-          <ProviderInfoPopover
-            providerId={providerId}
-            providerName={providerName}
-            info={info}
-            auth={auth}
-          />
-        }
+        info={infoPopover(info, providerId, providerName, auth)}
       />
 
       {oauth}

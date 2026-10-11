@@ -1,14 +1,19 @@
 import type { ReactNode } from "react"
 import type { CRDConfidence, RateBarView, RateProgressView } from "@/domains/dashboard"
-import { rateBarModel } from "../model/crdDisplay"
+import { callsText, rateBarModel } from "../model/crdDisplay"
 import { timeText } from "../model/timeText"
 import { ConfidenceLabel } from "./ConfidenceLabel"
+import { RemainingBar } from "@/shared/ui/RemainingBar"
 
 export interface ProviderRateBarsProps {
   providerName: string
   progress: RateProgressView[]
   /** A rail without fetch support shows its fetch rate bars nowhere. */
   fetchAvailable: boolean
+  /** Draw each rate bar through the shared bar. */
+  useSharedBar?: boolean
+  /** Drop the authoritative confidence label of each rate row. */
+  hideAuthoritative?: boolean
 }
 
 const WINDOW_TEXT = { "1h": "hourly", "1d": "daily" } as const
@@ -21,12 +26,21 @@ function confidenceCell(confidence: CRDConfidence): ReactNode {
   return <ConfidenceLabel confidence={confidence} />
 }
 
-/** Known parts of one rate amount; an incomplete entry yields no row. */
-function rateText(bar: RateBarView): string | null {
-  if (bar.remaining === null && bar.limit === null) return null
-  if (bar.limit === null) return bar.remaining + " left"
-  if (bar.remaining === null) return "of " + bar.limit
-  return bar.remaining + " of " + bar.limit
+/**
+ * Known parts of one rate amount; an incomplete entry yields no row.
+ *
+ * With whole requests, the request-unit counts floor through `callsText`, so a
+ * decimal capacity never shows as a whole extra request. URL units and the
+ * off path keep their amounts verbatim.
+ */
+function rateText(bar: RateBarView, wholeRequests: boolean = false): string | null {
+  const whole = wholeRequests && bar.unit === "requests"
+  const remaining = whole && bar.remaining !== null ? callsText(bar.remaining) : bar.remaining
+  const limit = whole && bar.limit !== null ? callsText(bar.limit) : bar.limit
+  if (remaining === null && limit === null) return null
+  if (limit === null) return remaining + " left"
+  if (remaining === null) return "of " + limit
+  return remaining + " of " + limit
 }
 
 /**
@@ -37,17 +51,25 @@ function rateText(bar: RateBarView): string | null {
  * a known amount never creates a row. The bar carries a numeric
  * `aria-valuenow` only when the limit is known, so an unknown limit is never
  * drawn as empty capacity.
+ *
+ * With `useSharedBar`, each bar draws through the shared full-width bar in its
+ * own row, and the remaining and limit counts of a request unit floor to whole
+ * requests through `callsText`. URL units and the default path keep their
+ * verbatim amounts. With `hideAuthoritative`, only an authoritative confidence
+ * label drops, and a note row without a remaining note drops with it.
  */
 export function ProviderRateBars({
   providerName,
   progress,
   fetchAvailable,
+  useSharedBar = false,
+  hideAuthoritative = false,
 }: ProviderRateBarsProps): ReactNode {
   const bars = progress
     .filter((entry) => entry.window === "1h" || entry.window === "1d")
     .filter((entry) => entry.operation === "search" || fetchAvailable)
     .map((entry) => rateBarModel({ progress: entry }))
-    .map((bar) => ({ bar, text: rateText(bar) }))
+    .map((bar) => ({ bar, text: rateText(bar, useSharedBar) }))
     .filter((row): row is { bar: RateBarView; text: string } => row.text !== null)
   if (bars.length === 0) return null
 
@@ -56,6 +78,11 @@ export function ProviderRateBars({
       {bars.map(({ bar, text }) => {
         const windowText = WINDOW_TEXT[bar.window as "1h" | "1d"]
         const unitText = UNIT_TEXT[bar.unit]
+        const barName =
+          providerName + " " + bar.operation + " " + windowText + " " + unitText + " remaining"
+        const showConfidence = !(hideAuthoritative && bar.confidence === "authoritative")
+        const noteRow =
+          showConfidence || bar.kind === "free_daily_allowance" || bar.resetAt !== null
         return (
           <div key={bar.bucketId + "-" + bar.window} className="space-y-1">
             <div className="flex items-center justify-between gap-2 text-[12px]">
@@ -66,28 +93,34 @@ export function ProviderRateBars({
                 {text} {unitText}
               </span>
             </div>
-            {bar.percentRemaining !== null && (
-              <div
-                className="h-1.5 w-full overflow-hidden rounded-full bg-[var(--border-subtle)]"
-                role="progressbar"
-                aria-label={
-                  providerName + " " + bar.operation + " " + windowText + " " + unitText + " remaining"
-                }
-                aria-valuemin={0}
-                aria-valuemax={100}
-                aria-valuenow={bar.percentRemaining}
-              >
-                <div
-                  className="h-full rounded-full bg-[var(--status-warning)]"
-                  style={{ width: bar.percentRemaining + "%" }}
+            {bar.percentRemaining !== null &&
+              (useSharedBar ? (
+                <RemainingBar
+                  percentRemaining={bar.percentRemaining}
+                  label={barName}
                 />
+              ) : (
+                <div
+                  className="h-1.5 w-full overflow-hidden rounded-full bg-[var(--border-subtle)]"
+                  role="progressbar"
+                  aria-label={barName}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={bar.percentRemaining}
+                >
+                  <div
+                    className="h-full rounded-full bg-[var(--status-warning)]"
+                    style={{ width: bar.percentRemaining + "%" }}
+                  />
+                </div>
+              ))}
+            {noteRow && (
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-[var(--muted)]">
+                {showConfidence && confidenceCell(bar.confidence)}
+                {bar.kind === "free_daily_allowance" && <span>Free daily allowance</span>}
+                {bar.resetAt !== null && <span>Resets {timeText(bar.resetAt)}</span>}
               </div>
             )}
-            <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-[var(--muted)]">
-              {confidenceCell(bar.confidence)}
-              {bar.kind === "free_daily_allowance" && <span>Free daily allowance</span>}
-              {bar.resetAt !== null && <span>Resets {timeText(bar.resetAt)}</span>}
-            </div>
           </div>
         )
       })}
