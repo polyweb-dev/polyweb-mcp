@@ -38,6 +38,7 @@ import { ManualQuotaModal } from "./ManualQuotaModal"
 import { ProviderCardActions, type CardModal } from "./ProviderCardActions"
 import { ProviderCreditSummary } from "./ProviderCreditSummary"
 import { ProviderInfoPopover } from "./ProviderInfoPopover"
+import { ProviderRateBars } from "./ProviderRateBars"
 import type { OAuthSlotArgs } from "./QuotaRow"
 
 export interface ProviderLimitsCardProps {
@@ -251,6 +252,11 @@ function infoPopover(info: ProviderInfo, providerId: string, providerName: strin
   return <ProviderInfoPopover providerId={providerId} providerName={providerName} info={info} auth={auth} />
 }
 
+/** The card rate bars of one Keenable keyless rail: each bar below its own text line. */
+function keylessRateBars(providerName: string, progress: ProviderAuthLimits["rate_progress"], fetchAvailable: boolean): ReactNode {
+  return <ProviderRateBars providerName={providerName} progress={progress} fetchAvailable={fetchAvailable} useSharedBar hideAuthoritative />
+}
+
 /**
  * One provider credit-unit card.
  *
@@ -343,6 +349,8 @@ export function ProviderLimitsCard({
         }
         info={infoPopover(info, providerId, providerName, auth)}
       />
+
+      {keenableBar && auth.auth_mode === "keyless" && keylessRateBars(providerName, auth.rate_progress, fetchAvailable)}
 
       {oauth}
 
