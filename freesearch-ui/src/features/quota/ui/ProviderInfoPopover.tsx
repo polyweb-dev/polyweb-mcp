@@ -29,14 +29,35 @@ const TITLE = FACT + " font-semibold"
 const ICON = "size-[18px]"
 const DETAIL_EDGE = "border-t border-[var(--border-subtle)] pt-2"
 
-/** One row: the quiet label at the leading edge, the exact value at the trailing edge. */
-function infoRow(fact: ProviderInfoFact): ReactNode {
+/** The fact rows that the keyless rail of one provider shows as free. */
+const FREE_COST_LABELS = new Set(["Search CRD cost", "Fetch CRD cost"])
+
+/** One row: the quiet label at the leading edge, the exact value at the trailing edge.
+ *
+ * With a struck value, the value and its note sit inside a strike element and
+ * a free word sits beside them. The label stays outside the strike.
+ */
+function infoRow(fact: ProviderInfoFact, struck: boolean = false): ReactNode {
+  const value = <span className={VALUE}>{fact.value}</span>
+  const note = fact.note === null ? null : <span className={NOTE}>{fact.note}</span>
   return (
     <div key={fact.label} className={ROW}>
       <span className={LABEL}>{fact.label}</span>
       <span className="flex items-baseline gap-1.5">
-        <span className={VALUE}>{fact.value}</span>
-        {fact.note !== null && <span className={NOTE}>{fact.note}</span>}
+        {struck ? (
+          <>
+            <s>
+              {value}
+              {note}
+            </s>
+            <span className={VALUE}>free</span>
+          </>
+        ) : (
+          <>
+            {value}
+            {note}
+          </>
+        )}
       </span>
     </div>
   )
@@ -70,7 +91,9 @@ const KEENABLE_PROVIDER = "keenable"
  *
  * The rate bars accept the shared bar only for the provider ID `keenable`, and
  * they accept the authoritative suppression only for the keyless rail of that
- * provider.
+ * provider. For that keyless rail the rate bars live on the main card, so they
+ * leave the popover here. Every other provider keeps the default bars and
+ * labels.
  */
 function vendorDetail(
   providerId: string,
@@ -83,7 +106,7 @@ function vendorDetail(
     <>
       <ProviderTierBars providerName={providerName} freeTiers={auth.free_tiers}
         paidTiers={auth.paid_tiers} tierSplitKnown={auth.tier_split_known} />
-      {useSharedBar && (
+      {!(useSharedBar && hideAuthoritative) && (
         <ProviderRateBars providerName={providerName} progress={auth.rate_progress}
           fetchAvailable={operationAvailable(auth, "fetch")} useSharedBar={useSharedBar}
           hideAuthoritative={hideAuthoritative} />
@@ -102,6 +125,10 @@ function vendorDetail(
  * it; the Escape key closes the surface and returns the focus to the button.
  * The surface exists only while it is open, so a closed popover leaves no
  * element behind. An empty fact set yields no icon.
+ *
+ * For the keyless rail of `keenable`, the header credit note carries the word
+ * `free`, and the two CRD cost rows keep their labels while their value and
+ * note sit inside a strike with the word `free` beside them.
  */
 export function ProviderInfoPopover({
   providerId,
@@ -111,6 +138,7 @@ export function ProviderInfoPopover({
 }: ProviderInfoPopoverProps): ReactNode {
   const [open, setOpen] = useState(false)
   if (info.facts.length === 0 && info.usageUrl === null) return null
+  const freeKeyless = providerId === KEENABLE_PROVIDER && auth.auth_mode === "keyless"
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger
@@ -136,12 +164,23 @@ export function ProviderInfoPopover({
               Quota Details
             </PopoverTitle>
             {info.creditNote !== null && (
-              <span className={TITLE} style={{ color: "var(--muted)" }}>
-                {info.creditNote}
-              </span>
+              freeKeyless ? (
+                <span className="flex items-baseline gap-1.5">
+                  <span className={TITLE} style={{ color: "var(--muted)" }}>
+                    {info.creditNote}
+                  </span>
+                  <span className={TITLE} style={{ color: "var(--text-strong)" }}>
+                    free
+                  </span>
+                </span>
+              ) : (
+                <span className={TITLE} style={{ color: "var(--muted)" }}>
+                  {info.creditNote}
+                </span>
+              )
             )}
           </div>
-          {info.facts.map(infoRow)}
+          {info.facts.map((fact) => infoRow(fact, freeKeyless && FREE_COST_LABELS.has(fact.label)))}
           {vendorDetail(providerId, providerName, auth)}
           {usageLink(providerName, info.usageUrl)}
         </PopoverContent>

@@ -252,6 +252,11 @@ function infoPopover(info: ProviderInfo, providerId: string, providerName: strin
   return <ProviderInfoPopover providerId={providerId} providerName={providerName} info={info} auth={auth} />
 }
 
+/** The card rate bars of one Keenable keyless rail: each bar below its own text line. */
+function keylessRateBars(providerName: string, progress: ProviderAuthLimits["rate_progress"], fetchAvailable: boolean): ReactNode {
+  return <ProviderRateBars providerName={providerName} progress={progress} fetchAvailable={fetchAvailable} useSharedBar hideAuthoritative />
+}
+
 /**
  * One provider credit-unit card.
  *
@@ -262,8 +267,9 @@ function infoPopover(info: ProviderInfo, providerId: string, providerName: strin
  * never moves another. The dashboard payload supplies the funds. The info
  * control states the call cost, the call count, the rate limit, the last sync
  * time, the usage page, the known tier facts, and the vendor detail. The card
- * body holds the hourly and daily rate bars below the credit summary, except
- * for the shared-bar provider, whose rate bars sit in its details popover.
+ * body holds the hourly and daily rate bars below the credit summary; the
+ * keyless rail of the shared-bar provider holds its shared bars there too,
+ * while its popover leaves them out.
  */
 export function ProviderLimitsCard({
   providerId,
@@ -350,6 +356,7 @@ export function ProviderLimitsCard({
         <ProviderRateBars providerName={providerName} progress={auth.rate_progress}
           fetchAvailable={fetchAvailable} />
       )}
+      {keenableBar && auth.auth_mode === "keyless" && keylessRateBars(providerName, auth.rate_progress, fetchAvailable)}
 
       {oauth}
 

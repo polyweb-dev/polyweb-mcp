@@ -52,11 +52,12 @@ function rateText(bar: RateBarView, wholeRequests: boolean = false): string | nu
  * `aria-valuenow` only when the limit is known, so an unknown limit is never
  * drawn as empty capacity.
  *
- * With `useSharedBar`, each bar draws through the shared full-width bar in its
- * own row, and the remaining and limit counts of a request unit floor to whole
- * requests through `callsText`. URL units and the default path keep their
- * verbatim amounts. With `hideAuthoritative`, only an authoritative confidence
- * label drops, and a note row without a remaining note drops with it.
+ * With `useSharedBar`, each bar draws through the shared full-width bar on its
+ * own line below the text line with a clear gap, and the remaining and limit
+ * counts of a request unit floor to whole requests through `callsText`. URL
+ * units and the default path keep their verbatim amounts. With
+ * `hideAuthoritative`, only an authoritative confidence label drops, and a
+ * note row without a remaining note drops with it.
  */
 export function ProviderRateBars({
   providerName,
@@ -84,7 +85,7 @@ export function ProviderRateBars({
         const noteRow =
           showConfidence || bar.kind === "free_daily_allowance" || bar.resetAt !== null
         return (
-          <div key={bar.bucketId + "-" + bar.window} className="space-y-1">
+          <div key={bar.bucketId + "-" + bar.window + "-" + bar.operation} className="space-y-1">
             <div className="flex items-center justify-between gap-2 text-[12px]">
               <span className="text-[var(--text-strong)]">
                 {bar.operation === "search" ? "Search" : "Fetch"} {windowText} rate
@@ -95,10 +96,12 @@ export function ProviderRateBars({
             </div>
             {bar.percentRemaining !== null &&
               (useSharedBar ? (
-                <RemainingBar
-                  percentRemaining={bar.percentRemaining}
-                  label={barName}
-                />
+                <div className="pt-1">
+                  <RemainingBar
+                    percentRemaining={bar.percentRemaining}
+                    label={barName}
+                  />
+                </div>
               ) : (
                 <div
                   className="h-1.5 w-full overflow-hidden rounded-full bg-[var(--border-subtle)]"
