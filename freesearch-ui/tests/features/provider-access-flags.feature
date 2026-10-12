@@ -71,13 +71,9 @@ Feature: Provider access flags against the stubbed backend
     And the "Keenable" "fetch" access flag should be on
 
   @stub @access
-  Scenario: Disabled providers leave pickers and ranks
+  Scenario: Disabled providers leave pickers
     When I set the "Tavily" "fetch" access flag off
     Then the "Tavily" "fetch" access flag should be off
     When I select the "Playground" header tab
     And I open the playground tab "Fetch"
     Then the "Fetch" operation picker should exclude "Tavily"
-    When I select the "Routing" header tab
-    And I open the "Ranks" routing tab
-    And I choose the "Fetch" ranks operation
-    Then the "Fetch" ranks table should exclude "Tavily"

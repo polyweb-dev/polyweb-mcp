@@ -118,9 +118,9 @@ const SEED_PROVIDER_NAMES = [
 ] as const
 
 const EXPECTED_MERGED_HEADERS = [
+  "Priority",
   "Provider",
   "Endpoint",
-  "Health",
   "Test",
   "Search",
   "Fetch",
@@ -389,15 +389,10 @@ describe("P1F-3: endpoint/health ride in the merged row", () => {
     expect(tavilyEndpoint.textContent).toContain("api.tavily.com")
   })
 
-  it("shows a health dot + label per row", async () => {
+  it("does not render Health as a table column", async () => {
     renderSettings()
     await waitForProviders()
-    for (const name of SEED_PROVIDER_NAMES) {
-      const health = cellFor(name, "Health")
-      expect(health.textContent?.trim().length).toBeGreaterThan(0)
-      expect(health.textContent).toMatch(/healthy|degraded|offline|unavailable|unknown|open/i)
-    }
-    expect(cellFor("Brave Search", "Health").textContent).toMatch(/healthy/i)
+    expect(headerNames()).not.toContain("Health")
   })
 
   it("does not render Quota or p95 as registry columns (telemetry lives in the modal + Usage view)", async () => {
@@ -413,14 +408,18 @@ describe("P1F-3: endpoint/health ride in the merged row", () => {
     }
   })
 
-  it("keeps quota/p95 drill-down in the test modal (not in row cells)", async () => {
+  it("keeps only endpoint and capabilities in the test modal (no health, quota, or p95)", async () => {
     const user = userEvent.setup()
     renderSettings()
     await waitForProviders()
     await user.click(testIconFor("Brave Search"))
     const dialog = await screen.findByRole("dialog")
-    expect(dialog.textContent).toMatch(/\d+ms|—/)
-    expect(dialog.textContent).not.toContain("∞")
+    expect(dialog.textContent).toContain("Endpoint")
+    expect(dialog.textContent).toContain("Capabilities")
+    expect(dialog.textContent).toContain("Last result")
+    expect(dialog.textContent).not.toContain("Health")
+    expect(dialog.textContent).not.toContain("p95")
+    expect(dialog.textContent).not.toContain("Quota")
   })
 
   it("does not expose a Breaker column or Trip/Reset buttons", async () => {
@@ -434,9 +433,7 @@ describe("P1F-3: endpoint/health ride in the merged row", () => {
   it("keeps row cells left-aligned with no right-aligned drift", async () => {
     renderSettings()
     await waitForProviders()
-    const health = cellFor("Brave Search", "Health")
     const test = cellFor("Brave Search", "Test")
-    expect(health.className).not.toContain("text-right")
     expect(test.className).not.toContain("text-right")
   })
 })
@@ -481,11 +478,9 @@ describe("P1F-4: icon opens the ProviderTestModal (never fetches on open)", () =
     expect(stub.requestsTo("/api/v1/providers/brave/test")).toHaveLength(0)
     expect(dialog.textContent).toContain("Brave Search")
     expect(dialog.textContent).toContain("api.search.brave.com")
-    expect(dialog.textContent).toMatch(/healthy|degraded|offline|unknown/i)
-    expect(dialog.textContent).toMatch(/\d+ms|—/)
-    // RF2: null limits stay blank/emdash (infinity retired). Brave with no
-    // snapshot shows its honest unavailable message; Tavily renders the
-    // blank native form, so the em-dash blank is pinned on Tavily.
+    expect(dialog.textContent).not.toContain("Health")
+    expect(dialog.textContent).not.toContain("p95")
+    expect(dialog.textContent).not.toContain("Quota")
     expect(dialog.textContent).not.toContain("∞")
     await user.keyboard("{Escape}")
     await waitFor(() => {
@@ -493,7 +488,7 @@ describe("P1F-4: icon opens the ProviderTestModal (never fetches on open)", () =
     })
     await user.click(testIconFor("Tavily"))
     const tavilyDialog = await screen.findByRole("dialog")
-    expect(tavilyDialog.textContent).toContain("—/—")
+    expect(tavilyDialog.textContent).toContain("api.tavily.com")
     expect(tavilyDialog.textContent).not.toContain("∞")
 
   })
@@ -628,7 +623,7 @@ describe("P1F-6: Providers page retired — redirect + no providers nav", () => 
   })
 
   it("SettingsProviders carries the fleet merge markers", () => {
-    for (const marker of ["Endpoint", "Health", "Quota", "p95", "ProviderTestModal"]) {
+    for (const marker of ["Endpoint", "ProviderTestModal"]) {
       expect(settingsFeatureSource, `merged table must carry ${marker}`).toContain(marker)
     }
   })
@@ -796,9 +791,9 @@ const FETCH_UNSUPPORTED = ["Brave Search"] as const
 const FETCH_SUPPORTED = ["Keenable", "Tavily", "Exa", "Firecrawl", "You.com", "Parallel", "Tinyfish"] as const
 
 const EXPECTED_HEADERS = [
+  "Priority",
   "Provider",
   "Endpoint",
-  "Health",
   "Test",
   "Search",
   "Fetch",
@@ -1412,7 +1407,7 @@ describe("S-P1-6: P1-FINAL merge guards (inverted — page merged, RED)", () => 
   it("P1-FINAL page merge: ProviderMatrix retired, fleet telemetry merged into SettingsProviders", () => {
     // Standalone fleet page is gone: no Trip/Reset matrix, no fleet filter,
     // no stat cards in a separate page — the merged registry carries them.
-    for (const marker of ["Endpoint", "Health", "Quota", "p95", "ProviderTestModal"]) {
+    for (const marker of ["Endpoint", "ProviderTestModal"]) {
       expect(settingsFeatureSource, `merged registry must carry ${marker}`).toContain(marker)
     }
     expect(settingsFeatureSource).not.toMatch(/Total fleet/)
@@ -2085,7 +2080,7 @@ describe("S-P2-5: no restyle, no merge, freesearch-ui only (stays green)", () =>
   })
 
   it("P1-FINAL page merge: fleet telemetry merged into SettingsProviders (ProviderMatrix retired)", () => {
-    for (const marker of ["Endpoint", "Health", "Quota", "p95", "ProviderTestModal"]) {
+    for (const marker of ["Endpoint", "ProviderTestModal"]) {
       expect(settingsFeatureSource, `merged registry must carry ${marker}`).toContain(marker)
     }
   })
@@ -2189,9 +2184,9 @@ const SEED_PROVIDER_NAMES = [
 ] as const
 
 const EXPECTED_HEADERS = [
+  "Priority",
   "Provider",
   "Endpoint",
-  "Health",
   "Test",
   "Search",
   "Fetch",
@@ -2557,7 +2552,7 @@ describe("S-P3-3: no regression â€” S-P1 table, S-P2 ranks, tokens, merge",
   })
 
   it("P1-FINAL page merge: fleet telemetry merged into SettingsProviders (ProviderMatrix retired)", () => {
-    for (const marker of ["Endpoint", "Health", "Quota", "p95", "ProviderTestModal"]) {
+    for (const marker of ["Endpoint", "ProviderTestModal"]) {
       expect(settingsFeatureSource, `merged registry must carry ${marker}`).toContain(marker)
     }
   })
@@ -2675,9 +2670,9 @@ const SEED_PROVIDER_NAMES = [
 ] as const
 
 const EXPECTED_HEADERS = [
+  "Priority",
   "Provider",
   "Endpoint",
-  "Health",
   "Test",
   "Search",
   "Fetch",
@@ -3126,7 +3121,7 @@ describe("S-P4-5: no regression — S-P1 table, S-P2 ranks, S-P3 buttons, Settin
   })
 
   it("P1-FINAL page merge: fleet telemetry merged into SettingsProviders (ProviderMatrix retired)", () => {
-    for (const marker of ["Endpoint", "Health", "Quota", "p95", "ProviderTestModal"]) {
+    for (const marker of ["Endpoint", "ProviderTestModal"]) {
       expect(settingsFeatureSource, `merged registry must carry ${marker}`).toContain(marker)
     }
   })
@@ -3177,7 +3172,7 @@ describe("SettingsProviders Developer read-only (canReadControls, no edit)", () 
     const headers = Array.from(screen.getByRole("table").querySelectorAll("thead th")).map(
       (th) => th.textContent?.trim() ?? ""
     )
-    expect(headers).toEqual(["Provider", "Endpoint", "Health", "Test", "Search", "Fetch", "Global"])
+    expect(headers).toEqual(["Priority", "Provider", "Endpoint", "Test", "Search", "Fetch", "Global"])
     for (let rank = 1; rank <= 8; rank += 1) {
       expect(screen.getByText(`P${rank}`, { exact: true })).toBeInTheDocument()
     }

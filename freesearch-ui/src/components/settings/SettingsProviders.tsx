@@ -11,8 +11,56 @@ import {
 import { ProviderRegistryHeader } from "./ProviderRegistryHeader"
 import { ProviderRegistryRow } from "./ProviderRegistryRow"
 import { ProviderTestModal } from "./ProviderTestModal"
+import { ResiliencePolicy } from "./ResiliencePolicy"
+import { useProviderRegistryDnD } from "./useProviderRegistryDnD"
 
 type TestResult = Awaited<ReturnType<ReturnType<typeof useFreeSearch>["testProviderConnection"]>>
+
+function getPriorityMeta<T extends { id: string; priority: number }>(items: readonly T[]) {
+  const sorted = [...items].sort((a, b) => a.priority - b.priority)
+  return {
+    rankById: new Map(sorted.map((item, index) => [item.id, index + 1])),
+    firstId: sorted[0]?.id ?? null,
+    lastId: sorted.at(-1)?.id ?? null,
+  }
+}
+
+function useFlagToggle() {
+  const [pendingProviderIds, setPendingProviderIds] = useState<ReadonlySet<string>>(new Set())
+  const handleFlagToggle = async (id: string, command: () => Promise<void>): Promise<void> => {
+    setPendingProviderIds((prev) => new Set(prev).add(id))
+    try {
+      await command()
+    } finally {
+      setPendingProviderIds((prev) => {
+        const next = new Set(prev)
+        next.delete(id)
+        return next
+      })
+    }
+  }
+  return { pendingProviderIds, handleFlagToggle }
+}
+
+function useProviderTester(
+  testConnection: (id: string) => Promise<TestResult>,
+) {
+  const [testingId, setTestingId] = useState<string | null>(null)
+  const [selectedTestId, setSelectedTestId] = useState<string | null>(null)
+  const [testResults, setTestResults] = useState<Record<string, TestResult>>({})
+
+  const handleTest = async (id: string) => {
+    setTestingId(id)
+    try {
+      const result = await testConnection(id)
+      setTestResults((prev) => ({ ...prev, [id]: result }))
+    } finally {
+      setTestingId(null)
+    }
+  }
+
+  return { testingId, selectedTestId, setSelectedTestId, testResults, handleTest }
+}
 
 /** Registry controls and live fleet telemetry in one operational table. */
 export const SettingsProviders: React.FC = () => {
@@ -24,41 +72,23 @@ export const SettingsProviders: React.FC = () => {
     toggleProviderSearch,
     toggleProviderFetch,
     moveProviderPriority,
+    reorderProviderPriority,
     testProviderConnection,
   } = useFreeSearch()
-  const [testingId, setTestingId] = useState<string | null>(null)
-  const [pendingProviderIds, setPendingProviderIds] = useState<ReadonlySet<string>>(new Set())
-  const [selectedTestId, setSelectedTestId] = useState<string | null>(null)
-  const [testResults, setTestResults] = useState<Record<string, TestResult>>({})
+  const { pendingProviderIds, handleFlagToggle } = useFlagToggle()
+  const { testingId, selectedTestId, setSelectedTestId, testResults, handleTest } =
+    useProviderTester(testProviderConnection)
+  const {
+    draggingId,
+    dragOverId,
+    handleDragStart,
+    handleDragOver,
+    handleDrop,
+    handleDragEnd,
+  } = useProviderRegistryDnD(reorderProviderPriority)
 
-  const handleFlagToggle = async (id: string, command: () => Promise<void>): Promise<void> => {
-    setPendingProviderIds((previous) => new Set(previous).add(id))
-    try {
-      await command()
-    } finally {
-      setPendingProviderIds((previous) => {
-        const next = new Set(previous)
-        next.delete(id)
-        return next
-      })
-    }
-  }
-
-  const handleTest = async (id: string) => {
-    setTestingId(id)
-    try {
-      const result = await testProviderConnection(id)
-      setTestResults((previous) => ({ ...previous, [id]: result }))
-    } finally {
-      setTestingId(null)
-    }
-  }
-
-  const sortedByPriority = [...providers].sort((a, b) => a.priority - b.priority)
-  const rankById = new Map(sortedByPriority.map((provider, index) => [provider.id, index + 1]))
-  const firstPriorityId = sortedByPriority[0]?.id ?? null
-  const lastPriorityId = sortedByPriority.at(-1)?.id ?? null
-  const selectedProvider = providers.find((provider) => provider.id === selectedTestId) ?? null
+  const { rankById, firstId, lastId } = getPriorityMeta(providers)
+  const selectedProvider = providers.find((p) => p.id === selectedTestId) ?? null
   const selectedLastResult = selectedProvider ? testResults[selectedProvider.id] : undefined
 
   return (
@@ -96,9 +126,15 @@ export const SettingsProviders: React.FC = () => {
                   providerCount={providers.length}
                   testing={testingId === provider.id}
                   accessPending={pendingProviderIds.has(provider.id)}
-                  canMoveUp={providers.length > 1 && provider.id !== firstPriorityId}
-                  canMoveDown={providers.length > 1 && provider.id !== lastPriorityId}
+                  canMoveUp={providers.length > 1 && provider.id !== firstId}
+                  canMoveDown={providers.length > 1 && provider.id !== lastId}
                   canEdit={canEditControls}
+                  isDragging={draggingId === provider.id}
+                  isDragOver={dragOverId === provider.id}
+                  onDragStart={(e) => handleDragStart(provider.id, e)}
+                  onDragOver={(e) => handleDragOver(provider.id, e)}
+                  onDrop={(e) => void handleDrop(provider.id, e)}
+                  onDragEnd={handleDragEnd}
                   onMovePriority={(direction) => moveProviderPriority(provider.id, direction)}
                   onToggleGlobal={(enabled) => void handleFlagToggle(provider.id, () => toggleProvider(provider.id, enabled))}
                   onToggleSearch={(enabled) => void handleFlagToggle(provider.id, () => toggleProviderSearch(provider.id, enabled))}
@@ -109,6 +145,8 @@ export const SettingsProviders: React.FC = () => {
             </TableBody>
           </Table>
         </div>
+
+        <ResiliencePolicy />
 
         {canEditControls && (
           <ProviderTestModal
@@ -125,9 +163,9 @@ export const SettingsProviders: React.FC = () => {
 }
 
 const MERGED_HEADERS = [
+  "Priority",
   "Provider",
   "Endpoint",
-  "Health",
   "Test",
   "Search",
   "Fetch",

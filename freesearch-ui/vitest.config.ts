@@ -19,6 +19,7 @@ export default defineConfig({
     ],
     // worker_threads avoid subprocess pipes, which restricted sandboxes deny
     pool: "threads",
+    maxWorkers: 16,
   },
   resolve: {
     alias: {

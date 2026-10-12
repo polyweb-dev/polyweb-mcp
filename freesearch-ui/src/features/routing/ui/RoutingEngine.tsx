@@ -2,19 +2,15 @@ import { PillTabs } from "@/shared/ui/PillTabs"
 import { PillTabsList } from "@/shared/ui/PillTabsList"
 import { PillTabsPanel } from "@/shared/ui/PillTabsPanel"
 import { useFreeSearch } from "@/context/useFreeSearch"
-import { ProviderRanks } from "./ProviderRanks"
-import { ResiliencePolicy } from "./ResiliencePolicy"
 import { RouteSimulator } from "./RouteSimulator"
 import { RoutingStrategy } from "./RoutingStrategy"
 
 const ROUTING_VIEW_OPTIONS = [
   { value: "strategy", label: "Strategy" },
   { value: "simulator", label: "Simulator" },
-  { value: "ranks", label: "Ranks" },
-  { value: "resilience", label: "Resilience" },
 ] as const
 
-/** Routing workbench shell for arbitration and resilience controls. */
+/** Routing workbench shell for arbitration and simulation controls. */
 export function RoutingEngine() {
   const { routingError } = useFreeSearch()
 
@@ -30,7 +26,7 @@ export function RoutingEngine() {
         <div>
           <h2 className="text-[var(--text-strong)]">Routing</h2>
           <p className="mt-0.5 text-[13px] text-[var(--muted)]">
-            Dynamic provider arbitration, priority ranking, and resilience controls.
+            Dynamic provider arbitration and route simulation.
           </p>
         </div>
 
@@ -52,12 +48,6 @@ export function RoutingEngine() {
       </PillTabsPanel>
       <PillTabsPanel value="simulator" className="flex flex-1 flex-col pt-5">
         <RouteSimulator />
-      </PillTabsPanel>
-      <PillTabsPanel value="ranks" className="pt-5">
-        <ProviderRanks />
-      </PillTabsPanel>
-      <PillTabsPanel value="resilience" className="pt-5">
-        <ResiliencePolicy />
       </PillTabsPanel>
     </PillTabs>
   )

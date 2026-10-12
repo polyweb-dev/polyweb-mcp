@@ -26,7 +26,7 @@ export const ProvidersProvider: React.FC<{
       showToast,
       canReadControls,
     });
-  const { updateProviderPriority, moveProviderPriority } = useProviderPriority({
+  const { updateProviderPriority, moveProviderPriority, reorderProviderPriority } = useProviderPriority({
     providers,
     setProviders,
     refreshProviders,
@@ -52,6 +52,7 @@ export const ProvidersProvider: React.FC<{
       toggleProviderFetch,
       updateProviderPriority,
       moveProviderPriority,
+      reorderProviderPriority,
       setCircuitBreaker,
       testProviderConnection,
       saveProviderKey,
@@ -69,6 +70,7 @@ export const ProvidersProvider: React.FC<{
       toggleProviderFetch,
       updateProviderPriority,
       moveProviderPriority,
+      reorderProviderPriority,
       setCircuitBreaker,
       testProviderConnection,
       saveProviderKey,
