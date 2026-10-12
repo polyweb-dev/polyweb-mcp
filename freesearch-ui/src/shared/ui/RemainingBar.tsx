@@ -8,6 +8,10 @@ export interface RemainingBarProps {
   label: string
   /** The optional accessible value text, supplied by the caller. */
   valueText?: string
+  /** Trailing percentage text in the funds-bar style; absent shows no text. */
+  showPercent?: boolean
+  /** Hover popover text over the bar; absent shows no popover. */
+  hoverText?: string
 }
 
 /** The current rounded track of the funds and rate bars. */
@@ -33,23 +37,32 @@ export function remainingColor(percent: number): string {
   return "bg-[var(--status-danger)]"
 }
 
+/** One decimal digit at most, and no trailing ".0". */
+// eslint-disable-next-line react-refresh/only-export-components
+export function percentLabel(percent: number): string {
+  return (percent % 1 === 0 ? percent.toFixed(0) : percent.toFixed(1)) + "%"
+}
+
 /**
  * One full-width bar with its own line: percent-driven width, color, and value.
  *
  * A null or non-finite percentage yields no bar, so an unknown capacity never
  * renders as empty capacity. A finite percentage is clamped to zero through
  * 100, and the clamped value drives the width, the color, and `aria-valuenow`.
- * This component holds no text and no provider logic; the caller owns the
- * label, the value text, and everything around the bar.
+ * The optional percentage text and hover popover stay off unless the caller
+ * asks; otherwise this component holds no text and no provider logic, and the
+ * caller owns the label, the value text, and everything around the bar.
  */
 export function RemainingBar({
   percentRemaining,
   label,
   valueText,
+  showPercent = false,
+  hoverText,
 }: RemainingBarProps): ReactNode {
   if (percentRemaining === null || !Number.isFinite(percentRemaining)) return null
   const percent = Math.min(100, Math.max(0, percentRemaining))
-  return (
+  const bar = (
     <div
       className={TRACK}
       role="progressbar"
@@ -63,6 +76,27 @@ export function RemainingBar({
         className={"h-full rounded-full " + remainingColor(percent)}
         style={{ width: percent + "%" }}
       />
+    </div>
+  )
+  if (showPercent !== true && hoverText === undefined) return bar
+  return (
+    <div className="flex items-center gap-3">
+      <div className="group relative min-w-0 flex-1">
+        {bar}
+        {hoverText !== undefined && (
+          <span
+            role="tooltip"
+            className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1 hidden -translate-x-1/2 whitespace-nowrap rounded-md border border-[var(--border-subtle)] bg-[var(--elevated)] px-2 py-0.5 text-[11px] text-[var(--text-strong)] group-hover:block"
+          >
+            {hoverText}
+          </span>
+        )}
+      </div>
+      {showPercent === true && (
+        <span className="tnum shrink-0 text-[18px] leading-none font-semibold text-[var(--text-strong)]">
+          {percentLabel(percent)}
+        </span>
+      )}
     </div>
   )
 }

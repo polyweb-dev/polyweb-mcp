@@ -55,8 +55,8 @@ describe("ProviderRateBars", () => {
         ]}
       />,
     )
-    expect(screen.getByText("Search hourly rate")).not.toBeNull()
-    expect(screen.getByText("Fetch daily rate")).not.toBeNull()
+    expect(screen.getByText("Search")).not.toBeNull()
+    expect(screen.getByText("Fetch")).not.toBeNull()
     expect(screen.getAllByRole("progressbar")).toHaveLength(2)
   })
 
@@ -277,7 +277,8 @@ describe("ProviderRateBars shared bar", () => {
         ]}
       />,
     )
-    expect(screen.getByText("990 of 1000 requests")).not.toBeNull()
+    // The shared bar holds the title only; the counts sit in the hover popover.
+    expect(screen.getByText("990 of 1000 requests per hour")).not.toBeNull()
     expect(screen.queryByText("990.00000000")).toBeNull()
     const bar = screen.getByRole("progressbar", {
       name: "Keenable search hourly requests remaining",
@@ -306,7 +307,7 @@ describe("ProviderRateBars shared bar", () => {
         ]}
       />,
     )
-    expect(screen.getByText("7.5 of 20 URLs")).not.toBeNull()
+    expect(screen.getByText("7.5 of 20 URLs per day")).not.toBeNull()
   })
 
   it("shows limit-only text without a fabricated remaining amount", () => {
@@ -318,7 +319,9 @@ describe("ProviderRateBars shared bar", () => {
         progress={[makeProgress({ remaining: null, limit: "10" })]}
       />,
     )
-    expect(screen.getByText("of 10 requests")).not.toBeNull()
+    // An unknown remaining draws no bar and no hover counts, so the row holds the title only.
+    expect(screen.getByText("Search")).not.toBeNull()
+    expect(screen.queryByRole("progressbar")).toBeNull()
     expect(screen.queryByText("0 of 10 requests")).toBeNull()
   })
 
@@ -331,7 +334,8 @@ describe("ProviderRateBars shared bar", () => {
         progress={[makeProgress({ remaining: "7", limit: null })]}
       />,
     )
-    expect(screen.getByText("7 left requests")).not.toBeNull()
+    // An unknown limit draws no bar and no hover counts, so the row holds the title only.
+    expect(screen.getByText("Search")).not.toBeNull()
     expect(screen.queryByRole("progressbar")).toBeNull()
   })
 
@@ -344,7 +348,8 @@ describe("ProviderRateBars shared bar", () => {
         progress={[makeProgress({ remaining: "0", limit: "0" })]}
       />,
     )
-    expect(screen.getByText("0 of 0 requests")).not.toBeNull()
+    // A zero limit draws no bar and no hover counts, so the row holds the title only.
+    expect(screen.getByText("Search")).not.toBeNull()
     expect(screen.queryByRole("progressbar")).toBeNull()
   })
 

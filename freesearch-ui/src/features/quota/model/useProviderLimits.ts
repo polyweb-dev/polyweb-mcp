@@ -26,6 +26,7 @@ const STALE_VERSION_TEXT =
 export interface ProviderLimitsInput {
   providerId: string
   limits: ProviderLimits
+  hasKey?: boolean
   refreshDashboard: () => Promise<void>
   historyOpen: boolean
 }
@@ -38,6 +39,8 @@ export interface ProviderLimitsController {
   saveGrant: (payload: CRDGrantPayload) => Promise<boolean>
   syncing: boolean
   syncNote: string | null
+  /** The last refresh was skipped, so the card hides its refresh action. */
+  refreshSkipped: boolean
   syncNow: () => Promise<void>
   history: LimitAuditEvent[]
   historyLoading: boolean
@@ -55,6 +58,7 @@ interface SaveState {
 interface SyncState {
   syncing: boolean
   syncNote: string | null
+  skipped: boolean
 }
 
 interface HistoryState {
@@ -75,15 +79,34 @@ interface HistoryInput {
 
 type SyncBody = Partial<ProviderLimitsSyncResult>
 
-/** Read the sync reply defensively; a partial body still yields a safe note. */
+/** Whether a refresh reply reports a skip; anything else keeps the action. */
+function isSkippedSync(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false
+  const body = value as SyncBody
+  if (body.status !== "skipped") return false
+  // A held lease means another sync is already running for this provider, so
+  // the card keeps its refresh action instead of hiding it.
+  return body.reason !== "lease_held"
+}
+
+/** Read the refresh reply defensively; a partial body still yields a safe, informative note. */
 function syncText(value: unknown): string {
   const body = (typeof value === "object" && value !== null ? value : {}) as SyncBody
   const status = typeof body.status === "string" ? body.status : "failed"
+  // A held lease means another sync is already running for this provider, so
+  // the card reports success: the numbers update when that sync lands.
+  if (status === "skipped" && body.reason === "lease_held") return "Limits refreshed"
   const note = typeof body.reason === "string" && body.reason ? body.reason : null
   const code = typeof body.error_code === "string" && body.error_code ? body.error_code : null
   const detail = note ?? code
-  if (detail !== null) return "Sync " + status + ": " + detail
-  return "Sync " + status
+  if (status === "synced") {
+    return detail !== null ? "Limits refreshed: " + detail : "Limits refreshed"
+  }
+  if (status === "skipped") {
+    return detail !== null ? "Refresh skipped: " + detail : "Refresh skipped"
+  }
+  if (detail !== null) return "Refresh failed: " + detail
+  return "Refresh failed"
 }
 
 interface HistoryPage {
@@ -189,7 +212,7 @@ function useLimitHistory(input: HistoryInput): HistoryState {
 export function useProviderLimits(input: ProviderLimitsInput): ProviderLimitsController {
   const { providerId, limits, refreshDashboard, historyOpen } = input
   const backendId = toBackendId(providerId)
-  const authMode = activeAuth(limits)?.auth_mode ?? ""
+  const authMode = activeAuth(limits, input.hasKey)?.auth_mode ?? ""
   const snapshotKey = limits.generated_at + "-" + limits.version
   const [reloadKey, setReloadKey] = useState(0)
   const [save, setSave] = useState<SaveState>({
@@ -197,7 +220,7 @@ export function useProviderLimits(input: ProviderLimitsInput): ProviderLimitsCon
     saveError: null,
     staleVersion: false,
   })
-  const [sync, setSync] = useState<SyncState>({ syncing: false, syncNote: null })
+  const [sync, setSync] = useState<SyncState>({ syncing: false, syncNote: null, skipped: false })
 
   const reload = useCallback(async (): Promise<void> => {
     await refreshDashboard()
@@ -229,14 +252,15 @@ export function useProviderLimits(input: ProviderLimitsInput): ProviderLimitsCon
   )
 
   const syncNow = useCallback(async (): Promise<void> => {
-    setSync({ syncing: true, syncNote: null })
+    setSync({ syncing: true, syncNote: null, skipped: false })
     try {
-      const note = syncText(await apiService.syncProviderLimits(backendId))
+      const result = await apiService.syncProviderLimits(backendId)
+      const note = syncText(result)
       await refreshDashboard()
-      setSync({ syncing: false, syncNote: note })
+      setSync({ syncing: false, syncNote: note, skipped: isSkippedSync(result) })
       setReloadKey((previous) => previous + 1)
     } catch (failure) {
-      setSync({ syncing: false, syncNote: errorMessage(failure, "Unable to sync provider limits") })
+      setSync({ syncing: false, syncNote: errorMessage(failure, "Unable to refresh provider limits"), skipped: false })
     }
   }, [backendId, refreshDashboard])
 
@@ -250,6 +274,7 @@ export function useProviderLimits(input: ProviderLimitsInput): ProviderLimitsCon
     saveGrant,
     syncing: sync.syncing,
     syncNote: sync.syncNote,
+    refreshSkipped: sync.skipped,
     syncNow,
     ...history,
   }

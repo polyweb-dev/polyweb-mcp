@@ -369,7 +369,7 @@ describe("ProviderLimitsCard Brave", () => {
       />,
     )
     expect(
-      screen.getByRole("button", { name: "Sync limits for Brave" }),
+      screen.getByRole("button", { name: "Refresh limits for Brave" }),
     ).not.toBeNull()
     expect(stub.requestsTo(/limits/).length).toBeLessThan(2)
     vi.unstubAllGlobals()
@@ -445,14 +445,14 @@ describe("ProviderLimitsCard Brave", () => {
   it("places actions at the leading edge and the fraction at the trailing edge below the bar (CARD-3)", () => {
     renderBraveCard()
     const buttons = screen.getAllByRole("button").map((button) => button.textContent)
-    expect(buttons.slice(0, 4)).toEqual(["Sync", "Provider Balance", "Budget Limit", "History"])
+    expect(buttons.slice(0, 4)).toEqual(["Refresh Limits", "Provider Balance", "Budget Limit", "History"])
     const info = screen.getByRole("button", { name: "Credit details for Brave" })
     expect(info.getAttribute("data-testid")).toBe("credit-info-brave")
     const creditRow = screen.getByText("4500").closest("span")?.parentElement?.parentElement
     expect(creditRow?.className).toContain("justify-between")
     const children = Array.from(creditRow?.children ?? [])
     expect(children.length).toBe(2)
-    expect(children[0]?.textContent).toContain("Sync")
+    expect(children[0]?.textContent).toContain("Refresh Limits")
     expect(children[0]?.textContent).toContain("Provider Balance")
     expect(children[0]?.textContent).toContain("Budget Limit")
     expect(children[0]?.textContent).toContain("History")
@@ -904,15 +904,11 @@ describe("ProviderLimitsCard Keenable", () => {
         manualEligible
       />,
     )
-    expect(screen.getByText("Free - unmetered")).not.toBeNull()
+    expect(screen.getByText("Free", { exact: true })).not.toBeNull()
+    expect(screen.queryByText("Free - unmetered")).toBeNull()
     expect(screen.queryByRole("progressbar", { name: "Keenable credit units remaining" })).toBeNull()
-    const struck = screen.getByText("Free - unmetered").closest("s")
-    expect(struck).not.toBeNull()
-    expect(screen.getByText("free", { exact: true })).not.toBeNull()
-    const user = userEvent.setup()
-    await user.click(screen.getByRole("button", { name: "Credit details for Keenable" }))
-    expect(await screen.findByText("Search hourly rate")).not.toBeNull()
-    expect(screen.getByText("990 of 1000 requests")).not.toBeNull()
+    expect(screen.getByText("Search and Fetch Limits")).not.toBeNull()
+    expect(screen.getByText("990 of 1000 requests per hour")).not.toBeNull()
     vi.unstubAllGlobals()
   })
 
@@ -927,7 +923,7 @@ describe("ProviderLimitsCard Keenable", () => {
     vi.unstubAllGlobals()
   })
 
-  it("keenable hourly requests use whole counts on a separate bar line", async () => {
+  it("keenable hourly requests use whole counts on one shared bar line", () => {
     installFetchStub(() => ok({ events: [], next_cursor: null }))
     render(
       <ProviderLimitsCard
@@ -939,31 +935,54 @@ describe("ProviderLimitsCard Keenable", () => {
         manualEligible
       />,
     )
-    const user = userEvent.setup()
-    await user.click(screen.getByRole("button", { name: "Credit details for Keenable" }))
-    expect(await screen.findByText("Search hourly rate")).not.toBeNull()
-    expect(screen.getByText("Fetch hourly rate")).not.toBeNull()
-    expect(screen.getAllByText("990 of 1000 requests")).toHaveLength(2)
+    // One shared row covers both operations: the duplicate bucket and window
+    // collapses to the first entry, and decimal counts floor to whole calls.
+    expect(screen.getByText("Search and Fetch Limits")).not.toBeNull()
+    expect(screen.getByText("990 of 1000 requests per hour")).not.toBeNull()
     expect(screen.queryByText("990.00000000")).toBeNull()
     const bar = screen.getByRole("progressbar", {
-      name: "Keenable search hourly requests remaining",
+      name: "Keenable search and fetch limits remaining",
     })
-    const label = screen.getByText("Search hourly rate")
     expect(bar.getAttribute("class")).toContain("w-full")
-    expect((label.compareDocumentPosition(bar) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0).toBe(true)
     vi.unstubAllGlobals()
   })
 
-  it("keenable keyless credits keep the prior strike value next to free", () => {
-    renderKeenableCard(keenableKeylessLimits())
-    const struck = screen.getByText("Free - unmetered").closest("s")
-    expect(struck).not.toBeNull()
-    expect(struck?.textContent).toContain("Free - unmetered")
-    expect(screen.getByText("free", { exact: true })).not.toBeNull()
+  it("keenable keyless credits show Free with the strike value inside the details popover", async () => {
+    installFetchStub(() => {
+      throw new Error("no backend in card test")
+    })
+    const first = render(
+      <ProviderLimitsCard
+        providerId="keenable"
+        providerName="Keenable"
+        limits={keenableKeylessLimits()}
+        crdUsageTotals={noUseTotals()}
+        refreshDashboard={() => Promise.resolve()}
+        manualEligible
+      />,
+    )
+    expect(screen.getByText("Free", { exact: true })).not.toBeNull()
+    expect(screen.queryByText("Free - unmetered")).toBeNull()
     expect(
       screen.queryByRole("progressbar", { name: "Keenable credit units remaining" }),
     ).toBeNull()
     expect(screen.queryByText("399980")).toBeNull()
+    first.unmount()
+    render(
+      <ProviderLimitsCard
+        providerId="keenable"
+        providerName="Keenable"
+        limits={keenableLimits()}
+        crdUsageTotals={noUseTotals()}
+        refreshDashboard={() => Promise.resolve()}
+        manualEligible
+      />,
+    )
+    const user = userEvent.setup()
+    await user.click(screen.getByRole("button", { name: "Credit details for Keenable" }))
+    expect(await screen.findByText("Quota Details")).not.toBeNull()
+    expect(document.querySelector("s")).not.toBeNull()
+    expect(screen.getAllByText("Free").length).toBeGreaterThanOrEqual(1)
     vi.unstubAllGlobals()
   })
 
@@ -979,14 +998,12 @@ describe("ProviderLimitsCard Keenable", () => {
         manualEligible
       />,
     )
-    const user = userEvent.setup()
-    await user.click(screen.getByRole("button", { name: "Credit details for Keenable" }))
-    expect(await screen.findByText("Search hourly rate")).not.toBeNull()
+    expect(screen.getByText("Search and Fetch Limits")).not.toBeNull()
     expect(screen.queryByText("authoritative")).toBeNull()
     vi.unstubAllGlobals()
   })
 
-  it("keenable keyed details preserve authoritative rate confidence", async () => {
+  it("keenable keyed rate rows suppress authoritative confidence on the shared bar", () => {
     installFetchStub(() => ok({ events: [], next_cursor: null }))
     render(
       <ProviderLimitsCard
@@ -998,10 +1015,9 @@ describe("ProviderLimitsCard Keenable", () => {
         manualEligible
       />,
     )
-    const user = userEvent.setup()
-    await user.click(screen.getByRole("button", { name: "Credit details for Keenable" }))
-    expect(await screen.findByText("Search hourly rate")).not.toBeNull()
-    expect(screen.getByText("authoritative")).not.toBeNull()
+    expect(screen.getByText("Search and Fetch Limits")).not.toBeNull()
+    expect(screen.getByText("500 of 1000 requests per hour")).not.toBeNull()
+    expect(screen.queryByText("authoritative")).toBeNull()
     vi.unstubAllGlobals()
   })
 
@@ -1049,10 +1065,10 @@ describe("ProviderLimitsCard Tinyfish", () => {
     const tinyfish = within(tinyfishCard as HTMLElement)
     const brave = within(braveCard as HTMLElement)
 
-    expect(tinyfish.getByText("Search hourly rate")).not.toBeNull()
-    expect(tinyfish.getByText("Fetch daily rate")).not.toBeNull()
-    expect(tinyfish.getByText("498 of 500 requests")).not.toBeNull()
-    expect(tinyfish.getByText("1000 of 1000 URLs")).not.toBeNull()
+    expect(tinyfish.getByText("Search")).not.toBeNull()
+    expect(tinyfish.getByText("Fetch")).not.toBeNull()
+    expect(tinyfish.getByText("498 of 500 requests per hour")).not.toBeNull()
+    expect(tinyfish.getByText("1000 of 1000 URLs per day")).not.toBeNull()
     expect(tinyfish.getAllByRole("progressbar")).toHaveLength(2)
     expect(
       tinyfish
@@ -1072,13 +1088,14 @@ describe("ProviderLimitsCard Tinyfish", () => {
     await user.click(infoButton)
     expect(await screen.findByText("Quota Details")).not.toBeNull()
     expect(tinyfish.getAllByRole("progressbar")).toHaveLength(2)
+    // The Brave card holds its own funds bar, so the page holds three bars.
     expect(screen.getAllByRole("progressbar")).toHaveLength(3)
 
     await user.keyboard("{Escape}")
     expect(screen.queryByText("Quota Details")).toBe(null)
     expect(infoButton).toHaveFocus()
-    expect(tinyfish.getByText("498 of 500 requests")).not.toBeNull()
-    expect(tinyfish.getByText("1000 of 1000 URLs")).not.toBeNull()
+    expect(tinyfish.getByText("498 of 500 requests per hour")).not.toBeNull()
+    expect(tinyfish.getByText("1000 of 1000 URLs per day")).not.toBeNull()
     expect(tinyfish.getAllByRole("progressbar")).toHaveLength(2)
     vi.unstubAllGlobals()
   })

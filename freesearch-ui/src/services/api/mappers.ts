@@ -180,7 +180,7 @@ export function mergeProviderStatus(
     circuitBreaker: wire.circuit_breaker.state,
     consecutiveFailures: 0,
     latencyP95Ms: wire.latency_p95_ms,
-    hasKey: wire.secret_presence !== "missing",
+    hasKey: wire.secret_presence === "configured",
     // GAP: 12 — GET status has presence only; fingerprints arrive after secret writes.
     keyMasked: "—",
     keyVaultStatus: wire.secret_presence,

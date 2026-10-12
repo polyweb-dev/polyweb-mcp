@@ -109,9 +109,12 @@ export function operationAvailable(auth: ProviderAuthLimits, operation: CRDOpera
   return record !== null && record.supported && record.transport_available
 }
 
-/** The active auth rail of one payload, with the current fallback to the first. */
-export function activeAuth(limits: ProviderLimits): ProviderAuthLimits | undefined {
-  return limits.auths.find((entry) => entry.auth_mode === limits.active_auth_mode) ?? limits.auths[0]
+/** Select the runtime credential rail when known, else the catalog's active rail. */
+export function activeAuth(limits: ProviderLimits, hasKey?: boolean): ProviderAuthLimits | undefined {
+  const mode = hasKey === undefined ? limits.active_auth_mode : hasKey ? "keyed" : "keyless"
+  return limits.auths.find((entry) => entry.auth_mode === mode)
+    ?? limits.auths.find((entry) => entry.auth_mode === limits.active_auth_mode)
+    ?? limits.auths[0]
 }
 
 /** The profile of the first runnable rail, else the first reported rail. */
@@ -332,10 +335,6 @@ export function creditCardModel(input: CreditCardInput): CreditCardModel {
   return modelOf(input, funds, profile)
 }
 
-function providerNameOf(providers: ProviderConfig[], providerId: string): string {
-  return providers.find((provider) => provider.id === providerId)?.name ?? providerId
-}
-
 /**
  * Footer price rows: one row per supported operation of the reported payload.
  * The USD call value comes from `request_cost_crd` and its profile reference,
@@ -344,7 +343,8 @@ function providerNameOf(providers: ProviderConfig[], providerId: string): string
 export function priceNoteRows(input: PriceNoteInput): PriceNoteRow[] {
   const rows: PriceNoteRow[] = []
   for (const limits of input.providerLimits) {
-    const auth = activeAuth(limits)
+    const provider = input.providers.find((entry) => entry.id === limits.provider)
+    const auth = activeAuth(limits, provider?.hasKey)
     if (auth === undefined) continue
     for (const operation of OPERATIONS) {
       if (!operationAvailable(auth, operation)) continue
@@ -356,7 +356,7 @@ export function priceNoteRows(input: PriceNoteInput): PriceNoteRow[] {
       const version = record.conversion_profile.price_version
       rows.push({
         provider: limits.provider,
-        providerName: providerNameOf(input.providers, limits.provider),
+        providerName: provider === undefined ? limits.provider : provider.name,
         operation,
         usdPerCall,
         crdPerCall: formatCRDAmount(view.request_cost_crd),

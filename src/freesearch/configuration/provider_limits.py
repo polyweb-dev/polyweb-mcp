@@ -301,7 +301,7 @@ def _tinyfish_records() -> list[ProviderLimitRecord]:
             rate=search_rate,
             budget=None,
             profile=free_profile,
-            plan_name="Free search within rate windows",
+            plan_name="Free within rate limits",
         ),
         _record(
             "tinyfish",
@@ -310,7 +310,7 @@ def _tinyfish_records() -> list[ProviderLimitRecord]:
             rate=fetch_rate,
             budget=None,
             profile=free_profile,
-            plan_name="Free fetch within rate windows",
+            plan_name="Free within rate limits",
         ),
     ]
 

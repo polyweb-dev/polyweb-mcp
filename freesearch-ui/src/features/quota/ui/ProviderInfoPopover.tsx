@@ -5,9 +5,7 @@ import type { ProviderAuthLimits } from "@/domains/dashboard"
 import { Button } from "@/shared/ui/button"
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/shared/ui/popover"
 import type { ProviderInfo, ProviderInfoFact } from "../model/providerInfo"
-import { operationAvailable } from "../model/crdCardModel"
 import { ProviderLimitsDetail } from "./ProviderLimitsDetail"
-import { ProviderRateBars } from "./ProviderRateBars"
 import { ProviderTierBars } from "./ProviderTierBars"
 
 export interface ProviderInfoPopoverProps {
@@ -50,7 +48,7 @@ function infoRow(fact: ProviderInfoFact, struck: boolean = false): ReactNode {
               {value}
               {note}
             </s>
-            <span className={VALUE}>free</span>
+            <span className="text-[12px] font-semibold text-[var(--signal)]">Free</span>
           </>
         ) : (
           <>
@@ -86,31 +84,16 @@ const KEENABLE_PROVIDER = "keenable"
 /**
  * The remaining detail of one rail: the known tier facts and the vendor rows
  * that no other surface states. Each part carries its own top edge, so an
- * absent part leaves no empty divider. Only the shared-bar provider keeps its
- * rate bars here; every other provider keeps them in the card body.
- *
- * The rate bars accept the shared bar only for the provider ID `keenable`, and
- * they accept the authoritative suppression only for the keyless rail of that
- * provider. For that keyless rail the rate bars live on the main card, so they
- * leave the popover here. Every other provider keeps the default bars and
- * labels.
+ * absent part leaves no empty divider.
  */
 function vendorDetail(
-  providerId: string,
   providerName: string,
   auth: ProviderAuthLimits,
 ): ReactNode {
-  const useSharedBar = providerId === KEENABLE_PROVIDER
-  const hideAuthoritative = useSharedBar && auth.auth_mode === "keyless"
   return (
     <>
       <ProviderTierBars providerName={providerName} freeTiers={auth.free_tiers}
         paidTiers={auth.paid_tiers} tierSplitKnown={auth.tier_split_known} />
-      {!(useSharedBar && hideAuthoritative) && (
-        <ProviderRateBars providerName={providerName} progress={auth.rate_progress}
-          fetchAvailable={operationAvailable(auth, "fetch")} useSharedBar={useSharedBar}
-          hideAuthoritative={hideAuthoritative} />
-      )}
       <ProviderLimitsDetail providerName={providerName} auth={auth} />
     </>
   )
@@ -138,7 +121,7 @@ export function ProviderInfoPopover({
 }: ProviderInfoPopoverProps): ReactNode {
   const [open, setOpen] = useState(false)
   if (info.facts.length === 0 && info.usageUrl === null) return null
-  const freeKeyless = providerId === KEENABLE_PROVIDER && auth.auth_mode === "keyless"
+  const isFree = providerId === KEENABLE_PROVIDER
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger
@@ -164,13 +147,13 @@ export function ProviderInfoPopover({
               Quota Details
             </PopoverTitle>
             {info.creditNote !== null && (
-              freeKeyless ? (
+              isFree ? (
                 <span className="flex items-baseline gap-1.5">
                   <span className={TITLE} style={{ color: "var(--muted)" }}>
                     {info.creditNote}
                   </span>
-                  <span className={TITLE} style={{ color: "var(--text-strong)" }}>
-                    free
+                  <span className={TITLE} style={{ color: "var(--signal)" }}>
+                    Free
                   </span>
                 </span>
               ) : (
@@ -180,8 +163,8 @@ export function ProviderInfoPopover({
               )
             )}
           </div>
-          {info.facts.map((fact) => infoRow(fact, freeKeyless && FREE_COST_LABELS.has(fact.label)))}
-          {vendorDetail(providerId, providerName, auth)}
+          {info.facts.map((fact) => infoRow(fact, isFree && FREE_COST_LABELS.has(fact.label)))}
+          {vendorDetail(providerName, auth)}
           {usageLink(providerName, info.usageUrl)}
         </PopoverContent>
       )}

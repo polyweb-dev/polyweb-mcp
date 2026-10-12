@@ -49,6 +49,8 @@ export interface ProviderLimitsCardProps {
   crdUsageTotals: CRDUsageTotal[]
   refreshDashboard: () => Promise<void>
   manualEligible: boolean
+  /** Current credential presence, independent of the catalog's active rail. */
+  hasKey?: boolean
   /** The selectable providers of the balance dialog; the own provider is the default. */
   providers?: ProviderConfig[]
   /** The observed balance per provider, which starts a new entry as an estimate. */
@@ -69,11 +71,13 @@ interface ManualUnit {
   amountMode: ManualAmountMode
 }
 
-const CARD = "space-y-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] p-4"
-const LABEL = "text-[12px] text-[var(--muted)]"
+const CARD = "flex h-full flex-col justify-between gap-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] p-4"
 
-/** The one provider that opts into the shared bar and the free strike. */
+/** The one provider that opts into the shared bar. */
 const KEENABLE_PROVIDER = "keenable"
+
+/** The one provider whose rate bars share the card-body bar with short titles. */
+const TINYFISH_PROVIDER = "tinyfish"
 
 function slug(providerId: string): string {
   return providerId.toLowerCase().replace(/[^a-z0-9]+/g, "-")
@@ -252,11 +256,6 @@ function infoPopover(info: ProviderInfo, providerId: string, providerName: strin
   return <ProviderInfoPopover providerId={providerId} providerName={providerName} info={info} auth={auth} />
 }
 
-/** The card rate bars of one Keenable keyless rail: each bar below its own text line. */
-function keylessRateBars(providerName: string, progress: ProviderAuthLimits["rate_progress"], fetchAvailable: boolean): ReactNode {
-  return <ProviderRateBars providerName={providerName} progress={progress} fetchAvailable={fetchAvailable} useSharedBar hideAuthoritative />
-}
-
 /**
  * One provider credit-unit card.
  *
@@ -278,6 +277,7 @@ export function ProviderLimitsCard({
   crdUsageTotals,
   refreshDashboard,
   manualEligible,
+  hasKey,
   providers,
   observed,
   latestQuota,
@@ -293,19 +293,24 @@ export function ProviderLimitsCard({
     limits,
     refreshDashboard,
     historyOpen: modal === "history",
+    ...(hasKey !== undefined ? { hasKey } : {}),
   })
   const manualState = useManualQuota(providerId, manualEligible)
   const manualDefaults = useMemo(
     () => manualDefaultsOf(manualState.manual),
     [manualState.manual]
   )
-  const auth = activeAuth(limits)
+  const auth = activeAuth(limits, hasKey)
   if (auth === undefined) {
     return <article className={CARD}>{providerName}: no limit data reported by the backend.</article>
   }
 
   const model = creditCardModel({ auth, usageTotals: crdUsageTotals })
   const keenableBar = providerId === KEENABLE_PROVIDER
+  const tinyfishBar = providerId === TINYFISH_PROVIDER
+  const keenableKeyless = keenableBar && auth.auth_mode === "keyless"
+  // The public keyless rail has no usage endpoint to refresh.
+  const refreshSkipped = controller.refreshSkipped || keenableKeyless
   const info = providerInfo(auth, keenableBar)
   const unit = manualUnit(auth)
   const titleId = "limits-title-" + slug(providerId)
@@ -318,27 +323,39 @@ export function ProviderLimitsCard({
 
   return (
     <article aria-labelledby={titleId} className={CARD}>
-      <div className="flex min-w-0 items-center gap-3">
-        <ProviderLogo providerId={providerId} name={providerName} className="size-9 rounded-full" />
-        <div className="min-w-0">
-          <h4 id={titleId} className="truncate text-[15px] font-semibold text-[var(--text-strong)]">
-            {providerName}
-          </h4>
-          {info.statement !== null && (
-            <p className="truncate text-[12px] text-[var(--muted)]">{info.statement}</p>
-          )}
+      <div className="flex min-w-0 items-start justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <ProviderLogo providerId={providerId} name={providerName} className="size-9 rounded-full" />
+          <div className="min-w-0">
+            <h4 id={titleId} className="truncate text-[15px] font-semibold text-[var(--text-strong)]">
+              {providerName}
+            </h4>
+            {info.statement !== null && (
+              <p className="truncate text-[12px] text-[var(--muted)]">{info.statement}</p>
+            )}
+          </div>
         </div>
+        {controller.syncNote !== null && (
+          <p role="status" className="shrink-0 pt-0.5 text-right text-[11px] text-[var(--muted)]">
+            {controller.syncNote}
+          </p>
+        )}
       </div>
-
-      {controller.syncNote !== null && (
-        <p role="status" className={LABEL}>{controller.syncNote}</p>
-      )}
 
       <ProviderCreditSummary
         providerName={providerName}
         model={model}
         useSharedBar={keenableBar}
-        {...(keenableBar && auth.auth_mode === "keyless" ? { freeKeyless: true } : {})}
+        rateBars={
+          <ProviderRateBars
+            providerName={providerName}
+            progress={auth.rate_progress}
+            fetchAvailable={fetchAvailable}
+            useSharedBar={keenableBar || tinyfishBar}
+            hideAuthoritative={keenableBar || tinyfishBar}
+            {...(keenableBar ? { sharedTitle: "Search and Fetch Limits" } : {})}
+          />
+        }
         actions={
           <ProviderCardActions
             providerId={providerId}
@@ -346,17 +363,12 @@ export function ProviderLimitsCard({
             manualEligible={manualEligible}
             syncing={controller.syncing}
             onSync={() => void controller.syncNow()}
+            refreshSkipped={refreshSkipped}
             onOpenModal={setModal}
           />
         }
         info={infoPopover(info, providerId, providerName, auth)}
       />
-
-      {!keenableBar && (
-        <ProviderRateBars providerName={providerName} progress={auth.rate_progress}
-          fetchAvailable={fetchAvailable} />
-      )}
-      {keenableBar && auth.auth_mode === "keyless" && keylessRateBars(providerName, auth.rate_progress, fetchAvailable)}
 
       {oauth}
 

@@ -14,10 +14,21 @@ export interface ProviderRateBarsProps {
   useSharedBar?: boolean
   /** Drop the authoritative confidence label of each rate row. */
   hideAuthoritative?: boolean
+  /** One shared title for every row, instead of one title per operation. */
+  sharedTitle?: string
 }
 
 const WINDOW_TEXT = { "1h": "hourly", "1d": "daily" } as const
+const WINDOW_NOUN = { "1h": "hour", "1d": "day" } as const
 const UNIT_TEXT = { requests: "requests", urls: "URLs" } as const
+
+/** Search rows render before fetch rows; anything else keeps payload order. */
+function compareOperation(a: RateProgressView, b: RateProgressView): number {
+  if (a.operation === b.operation) return 0
+  if (a.operation === "search") return -1
+  if (b.operation === "search") return 1
+  return 0
+}
 
 function confidenceCell(confidence: CRDConfidence): ReactNode {
   if (confidence === "unknown") {
@@ -48,16 +59,19 @@ function rateText(bar: RateBarView, wholeRequests: boolean = false): string | nu
  *
  * Only `1h` and `1d` progress entries become bars; second and minute windows
  * stay detail text. An entry of an unsupported operation and an entry without
- * a known amount never creates a row. The bar carries a numeric
- * `aria-valuenow` only when the limit is known, so an unknown limit is never
- * drawn as empty capacity.
+ * a known amount never creates a row. Search rows render before fetch rows.
+ * The bar carries a numeric `aria-valuenow` only when the limit is known, so
+ * an unknown limit is never drawn as empty capacity.
  *
  * With `useSharedBar`, each bar draws through the shared full-width bar on its
  * own line below the text line with a clear gap, and the remaining and limit
  * counts of a request unit floor to whole requests through `callsText`. URL
- * units and the default path keep their verbatim amounts. With
+ * units and the default path keep integer counts through `formatQuotaCount`.
+ * Each shared row carries its percentage at the right of the bar and its full
+ * counts in the hover popover, so the title line holds the title only. With
  * `hideAuthoritative`, only an authoritative confidence label drops, and a
- * note row without a remaining note drops with it.
+ * note row without a remaining note drops with it. With `sharedTitle`, every
+ * row shares one title instead of one title per operation.
  */
 export function ProviderRateBars({
   providerName,
@@ -65,43 +79,58 @@ export function ProviderRateBars({
   fetchAvailable,
   useSharedBar = false,
   hideAuthoritative = false,
+  sharedTitle,
 }: ProviderRateBarsProps): ReactNode {
-  const bars = progress
+  const seenBuckets = new Set<string>()
+  const bars = [...progress]
+    .sort(compareOperation)
     .filter((entry) => entry.window === "1h" || entry.window === "1d")
     .filter((entry) => entry.operation === "search" || fetchAvailable)
+    .filter((entry) => {
+      if (!useSharedBar) return true
+      const key = entry.bucket_id + "-" + entry.window
+      if (seenBuckets.has(key)) return false
+      seenBuckets.add(key)
+      return true
+    })
     .map((entry) => rateBarModel({ progress: entry }))
     .map((bar) => ({ bar, text: rateText(bar, useSharedBar) }))
     .filter((row): row is { bar: RateBarView; text: string } => row.text !== null)
   if (bars.length === 0) return null
 
   return (
-    <div className="space-y-2 border-t border-[var(--border-subtle)] pt-3">
+    <div className="space-y-2">
       {bars.map(({ bar, text }) => {
         const windowText = WINDOW_TEXT[bar.window as "1h" | "1d"]
         const unitText = UNIT_TEXT[bar.unit]
-        const barName =
-          providerName + " " + bar.operation + " " + windowText + " " + unitText + " remaining"
-        const showConfidence = !(hideAuthoritative && bar.confidence === "authoritative")
+        const barName = sharedTitle === undefined
+          ? providerName + " " + bar.operation + " " + windowText + " " + unitText + " remaining"
+          : providerName + " search and fetch limits remaining"
+        const showConfidence = !((hideAuthoritative || useSharedBar) && bar.confidence === "authoritative")
         const noteRow =
           showConfidence || bar.kind === "free_daily_allowance" || bar.resetAt !== null
+        const labelText = sharedTitle ?? (bar.operation === "search" ? "Search" : "Fetch")
+        const hoverText = text + " " + unitText + " per " + WINDOW_NOUN[bar.window as "1h" | "1d"]
         return (
-          <div key={bar.bucketId + "-" + bar.window + "-" + bar.operation} className="space-y-1">
+          <div key={bar.bucketId + "-" + bar.window + "-" + bar.operation} className="space-y-0.5">
             <div className="flex items-center justify-between gap-2 text-[12px]">
               <span className="text-[var(--text-strong)]">
-                {bar.operation === "search" ? "Search" : "Fetch"} {windowText} rate
+                {labelText}
               </span>
-              <span className="tnum text-[var(--text)]">
-                {text} {unitText}
-              </span>
+              {!useSharedBar && (
+                <span className="tnum text-[var(--text)]">
+                  {text} {unitText}
+                </span>
+              )}
             </div>
             {bar.percentRemaining !== null &&
               (useSharedBar ? (
-                <div className="pt-1">
-                  <RemainingBar
-                    percentRemaining={bar.percentRemaining}
-                    label={barName}
-                  />
-                </div>
+                <RemainingBar
+                  percentRemaining={bar.percentRemaining}
+                  label={barName}
+                  showPercent
+                  hoverText={hoverText}
+                />
               ) : (
                 <div
                   className="h-1.5 w-full overflow-hidden rounded-full bg-[var(--border-subtle)]"
