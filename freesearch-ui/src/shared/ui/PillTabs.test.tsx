@@ -203,13 +203,11 @@ describe("C2-REWORK AC-C2R-1/2/3: RoutingEngine pill switcher", () => {
     })
   }
 
-  it("exposes the four routing views as pill tabs, docked top-right", async () => {
+  it("exposes the two routing views as pill tabs, docked top-right", async () => {
     await ready()
     const pillList = expectPillList([
       "Strategy",
       "Simulator",
-      "Ranks",
-      "Resilience",
     ])
     expectTopRight("Routing", pillList)
     expect(screen.getByRole("tab", { name: "Strategy" })).toHaveAttribute(

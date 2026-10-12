@@ -54,6 +54,7 @@ export interface FreeSearchContextType {
   toggleProviderFetch: (id: string, enabled: boolean) => Promise<void>
   updateProviderPriority: (id: string, newPriority: number) => Promise<boolean>
   moveProviderPriority: (id: string, direction: "up" | "down") => Promise<void>
+  reorderProviderPriority: (sourceId: string, targetId: string) => Promise<void>
   setCircuitBreaker: (id: string, status: CircuitBreakerStatus) => Promise<void>
   testProviderConnection: (id: string) => Promise<{
     success: boolean

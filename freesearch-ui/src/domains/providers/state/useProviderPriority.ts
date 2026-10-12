@@ -44,16 +44,17 @@ export function useProviderPriority({ providers, setProviders, refreshProviders,
     [setProviders, showToast],
   );
 
-  const moveProviderPriority = useCallback(
-    async (id: string, direction: "up" | "down") => {
-      if (priorityMoveInFlight.current) return;
+  const reorderProviderPriority = useCallback(
+    async (sourceId: string, targetId: string) => {
+      if (priorityMoveInFlight.current || sourceId === targetId) return;
 
       const sorted = [...providers].sort((a, b) => a.priority - b.priority);
-      const index = sorted.findIndex((provider) => provider.id === id);
-      const targetIndex = direction === "up" ? index - 1 : index + 1;
-      if (index < 0 || targetIndex < 0 || targetIndex >= sorted.length) return;
+      const sourceIndex = sorted.findIndex((provider) => provider.id === sourceId);
+      const targetIndex = sorted.findIndex((provider) => provider.id === targetId);
+      if (sourceIndex < 0 || targetIndex < 0) return;
 
-      const patches = priorityPatchesForMove(sorted, index, targetIndex);
+      const patches = priorityPatchesForMove(sorted, sourceIndex, targetIndex);
+      if (patches.length === 0) return;
       const completed: ProviderPriorityPatch[] = [];
       priorityMoveInFlight.current = true;
 
@@ -77,5 +78,17 @@ export function useProviderPriority({ providers, setProviders, refreshProviders,
     [providers, setProviders, refreshProviders, showToast],
   );
 
-  return { updateProviderPriority, moveProviderPriority };
+  const moveProviderPriority = useCallback(
+    async (id: string, direction: "up" | "down") => {
+      const sorted = [...providers].sort((a, b) => a.priority - b.priority);
+      const index = sorted.findIndex((provider) => provider.id === id);
+      const targetIndex = direction === "up" ? index - 1 : index + 1;
+      const target = sorted[targetIndex];
+      if (!target) return;
+      await reorderProviderPriority(id, target.id);
+    },
+    [providers, reorderProviderPriority],
+  );
+
+  return { updateProviderPriority, moveProviderPriority, reorderProviderPriority };
 }

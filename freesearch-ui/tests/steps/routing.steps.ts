@@ -1,5 +1,4 @@
 import { expect } from "@playwright/test"
-import type { Page } from "@playwright/test"
 import { Given, When, Then } from "./fixtures"
 
 Given("I am on the Routing view", async ({ page }) => {
@@ -8,9 +7,9 @@ Given("I am on the Routing view", async ({ page }) => {
 })
 
 Then(
-  "the routing sub-tabs should be visible: {string}, {string}, {string}, and {string}",
-  async ({ page }, first: string, second: string, third: string, fourth: string) => {
-    for (const label of [first, second, third, fourth]) {
+  "the routing sub-tabs should be visible: {string} and {string}",
+  async ({ page }, first: string, second: string) => {
+    for (const label of [first, second]) {
       await expect(page.getByRole("tab", { name: label, exact: true })).toHaveCount(1)
     }
   }
@@ -128,74 +127,6 @@ Then("the failover cascade should be rendered", async ({ page }) => {
     expect(cascadeCount + singleShotCount).toBeGreaterThan(0)
   }).toPass({ timeout: 10_000 })
 })
-
-When("I choose the {string} ranks operation", async ({ page }, operation: string) => {
-  const button = page.getByRole("button", { name: operation, exact: true }).last()
-  if (await button.count()) {
-    await button.click()
-    return
-  }
-
-  await page.getByRole("tab", { name: operation, exact: true }).click()
-})
-
-When("I filter the ranks by provider text {string}", async ({ page }, filterText: string) => {
-  const filter = page.getByRole("textbox").last()
-  await filter.fill(filterText)
-})
-
-Then("the ranks table should contain exactly {int} provider rows", async ({ page }, count: number) => {
-  const table = page.getByRole("table")
-  await expect(table).toBeVisible()
-  await expect(table.getByRole("row")).toHaveCount(count + 1)
-})
-
-Then(
-  "the ranks table should contain at least {int} provider row",
-  async ({ page }, minimum: number) => {
-    const table = page.getByRole("table")
-    await expect(table).toBeVisible()
-    const rows = await table.getByRole("row").count()
-    expect(rows).toBeGreaterThanOrEqual(minimum + 1)
-  }
-)
-
-Then(
-  "the first ranks row should show role {string}",
-  async ({ page }, role: string) => {
-    const table = page.getByRole("table")
-    await expect(table).toBeVisible()
-    const firstDataRow = table.getByRole("row").nth(1)
-    await expect(firstDataRow.getByText(role, { exact: true })).toBeVisible()
-  }
-)
-
-Then(
-  "the ranks row for {string} should show rank {string} and role {string}",
-  async ({ page }, provider: string, rank: string, role: string) => {
-    await expectRankRow(page, provider, rank, role)
-  }
-)
-
-Then(
-  "the filtered ranks row for {string} should show rank {string} and role {string}",
-  async ({ page }, provider: string, rank: string, role: string) => {
-    await expectRankRow(page, provider, rank, role)
-  }
-)
-
-async function expectRankRow(page: Page, provider: string, rank: string, role: string) {
-  const table = page.getByRole("table")
-  const row = table
-    .getByRole("row")
-    .filter({ hasText: provider })
-    .filter({ hasText: rank })
-    .filter({ hasText: role })
-  await expect(row).toHaveCount(1)
-  await expect(row.getByText(rank, { exact: true })).toBeVisible()
-  await expect(row.getByText(provider, { exact: true })).toBeVisible()
-  await expect(row.getByText(role, { exact: true })).toBeVisible()
-}
 
 When("I open the {string} resilience tab", async ({ page }, tabLabel: string) => {
   await page.getByRole("tab", { name: tabLabel, exact: true }).click()

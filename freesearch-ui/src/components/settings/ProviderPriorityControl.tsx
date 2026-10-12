@@ -1,5 +1,5 @@
 import React from "react"
-import { ArrowDown, ArrowUp } from "lucide-react"
+import { ArrowDown, ArrowUp, GripVertical } from "lucide-react"
 import type { ProviderConfig } from "@/domains/providers"
 
 export const PriorityIndicator: React.FC<{
@@ -14,7 +14,7 @@ export const PriorityIndicator: React.FC<{
 }> = ({ provider, rank, providerCount, canMoveUp, canMoveDown, canEdit, onMovePriority }) => {
   if (!canEdit) {
     return (
-      <div className="flex min-w-6 shrink-0 flex-col items-center gap-0.5">
+      <div className="flex min-w-6 shrink-0 items-center gap-1.5">
         <span
           className="text-[12px] leading-none text-[var(--muted)] tnum"
           title={`Dispatch order ${rank} of ${providerCount}`}
@@ -26,7 +26,15 @@ export const PriorityIndicator: React.FC<{
   }
 
   return (
-    <div className="flex min-w-6 shrink-0 flex-col items-center gap-0.5">
+    <div className="flex items-center gap-2">
+      <span
+        title="Drag row to reorder priority"
+        aria-hidden="true"
+        className="cursor-grab active:cursor-grabbing text-[var(--muted)] hover:text-[var(--text-strong)] transition-colors p-0.5"
+      >
+        <GripVertical className="size-3.5" />
+      </span>
+      <div className="flex min-w-6 shrink-0 flex-col items-center gap-0.5">
       <button
         type="button"
         aria-label={`Move ${provider.name} priority up`}
@@ -48,6 +56,7 @@ export const PriorityIndicator: React.FC<{
       >
         <ArrowDown className="size-3" />
       </button>
+    </div>
     </div>
   )
 }

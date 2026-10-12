@@ -32,15 +32,22 @@ export interface ProviderPriorityPatch {
 
 export function priorityPatchesForMove(
   sorted: ProviderConfig[],
-  index: number,
+  sourceIndex: number,
   targetIndex: number,
 ): ProviderPriorityPatch[] {
+  if (
+    sourceIndex < 0 ||
+    sourceIndex >= sorted.length ||
+    targetIndex < 0 ||
+    targetIndex >= sorted.length ||
+    sourceIndex === targetIndex
+  ) {
+    return [];
+  }
   const reordered = [...sorted];
-  const moving = reordered[index];
-  const target = reordered[targetIndex];
-  if (moving === undefined || target === undefined) return [];
-  reordered[index] = target;
-  reordered[targetIndex] = moving;
+  const [moving] = reordered.splice(sourceIndex, 1);
+  if (!moving) return [];
+  reordered.splice(targetIndex, 0, moving);
   return reordered
     .map((provider, rankIndex) => {
       const priority = rankIndex + 1;
