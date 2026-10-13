@@ -18,8 +18,12 @@ export interface ProviderCreditSummaryProps {
   actions?: ReactNode
   /** The info control that sits beside the credit fraction. */
   info?: ReactNode
+  /** Optional explanatory notes rendered before the credit actions. */
+  bodyNotes?: ReactNode
   /** Draw the funds bar of a finite rail through the shared bar. */
   useSharedBar?: boolean
+  /** Optional control row rendered before a native credit progress bar. */
+  fundsControl?: ReactNode
   /** Rate progress bars rendered above the action row. */
   rateBars?: ReactNode
 }
@@ -30,7 +34,7 @@ const TOTAL = "tnum text-[18px] font-semibold text-[var(--muted)]"
 const UNIT = "text-[18px] font-semibold text-[var(--muted)]"
 const CRD_SUFFIX = " CRD"
 const CREDIT_ROW = "flex w-full flex-wrap items-center justify-between gap-3"
-const CREDIT_VALUE = "inline-flex h-8 items-center gap-1.5 leading-none"
+const CREDIT_VALUE = "ml-auto inline-flex h-8 shrink-0 items-center gap-1.5 leading-none"
 /** The quiet state text of one native Credits rail. */
 const VALUE = "text-[13px] text-[var(--muted)]"
 
@@ -116,15 +120,13 @@ function fundsBar(input: FundsBarInput): ReactNode {
  *
  * The fraction carries the native Credit values, so the accessible name and
  * the value text state the Credits amount itself. The percentages come from
- * the exact native strings through the shared helper. With the shared flag,
- * the percentage text sits below the bar in its own line; without it, the
- * bar keeps the percentage at its right.
+ * the exact native strings through the shared helper. The bar keeps one
+ * titled line with the percentage at its right through showPercent.
  */
 function nativeFundsBar(
   providerName: string,
   credits: TavilyCreditsDisplay,
   percent: number,
-  useSharedBar: boolean,
 ): ReactNode {
   if (credits.remaining === null) return null
   const valueNumber = formatCreditValue(credits.remaining)
@@ -133,27 +135,18 @@ function nativeFundsBar(
   const valueText =
     valueNumber +
     (credits.allowance === null
-      ? " Credits left"
-      : " of " + formatCreditValue(credits.allowance) + " Credits left")
-  if (useSharedBar) {
-    return (
-      <>
-        <RemainingBar percentRemaining={percent} label={label} valueText={valueText} />
-        <div className="flex justify-end">
-          <span className="tnum text-[18px] font-semibold text-[var(--text-strong)]">
-            {percentLabel(percent)}
-          </span>
-        </div>
-      </>
-    )
-  }
+      ? " Tavily Credits left"
+      : " of " + formatCreditValue(credits.allowance) + " Tavily Credits left")
   return (
-    <RemainingBar
-      percentRemaining={percent}
-      label={label}
-      valueText={valueText}
-      showPercent
-    />
+    <div className="space-y-0.5">
+      <div className="text-[12px] text-[var(--text-strong)]">Credits</div>
+      <RemainingBar
+        percentRemaining={percent}
+        label={label}
+        valueText={valueText}
+        showPercent
+      />
+    </div>
   )
 }
 
@@ -171,7 +164,7 @@ function nativeCreditValue(credits: TavilyCreditsDisplay): ReactNode {
     return (
       <>
         <span className={TOTAL}>{"/ " + total}</span>
-        <span className={UNIT}>{credits.unit}</span>
+        <span className={UNIT}>Tavily Credits</span>
       </>
     )
   }
@@ -179,7 +172,7 @@ function nativeCreditValue(credits: TavilyCreditsDisplay): ReactNode {
     <>
       <span className={AMOUNT}>{formatCreditValue(credits.remaining)}</span>
       {total !== null && <span className={TOTAL}>{"/ " + total}</span>}
-      <span className={UNIT}>{credits.unit}</span>
+      <span className={UNIT}>Tavily Credits</span>
     </>
   )
 }
@@ -214,14 +207,17 @@ function nativeFootnotes(credits: TavilyCreditsDisplay): ReactNode[] {
 function nativeSummary(
   input: ProviderCreditSummaryProps & { credits: TavilyCreditsDisplay },
 ): ReactNode {
-  const { providerName, credits, actions, info, useSharedBar = false, rateBars } = input
+  const { providerName, credits, actions, info, bodyNotes, fundsControl, rateBars } = input
   const percent = percentRemaining(credits.remaining, credits.allowance)
   return (
     <div className="flex flex-1 flex-col justify-between gap-3">
       <div className="space-y-2">
-        {percent !== null && nativeFundsBar(providerName, credits, percent, useSharedBar)}
+        {fundsControl}
+        {percent !== null && nativeFundsBar(providerName, credits, percent)}
         {rateBars}
       </div>
+      {bodyNotes}
+      {nativeFootnotes(credits)}
       <div className={`${CREDIT_ROW} mt-auto`}>
         {actions}
         <span className={CREDIT_VALUE}>
@@ -229,7 +225,6 @@ function nativeSummary(
           {info}
         </span>
       </div>
-      {nativeFootnotes(credits)}
     </div>
   )
 }
@@ -266,11 +261,13 @@ export function ProviderCreditSummary({
   credits,
   actions,
   info,
+  bodyNotes,
   useSharedBar = false,
+  fundsControl,
   rateBars,
 }: ProviderCreditSummaryProps): ReactNode {
   if (credits !== undefined) {
-    return nativeSummary({ providerName, model, credits, actions, info, useSharedBar, rateBars })
+    return nativeSummary({ providerName, model, credits, actions, info, bodyNotes, fundsControl, rateBars })
   }
   const percent = model.state === "finite" ? model.percentRemaining : null
   const label = percent === null ? null : percentLabel(percent)
@@ -281,6 +278,10 @@ export function ProviderCreditSummary({
         {fundsBar({ providerName, model, percent, label, useSharedBar })}
         {rateBars}
       </div>
+      {model.state === "finite" && model.allowanceCRD === null && (
+        <Footnote>No allowance is reported, so this card shows no percentage.</Footnote>
+      )}
+      {bodyNotes}
       <div className={`${CREDIT_ROW} mt-auto`}>
         {actions}
         <span className={CREDIT_VALUE}>
@@ -288,9 +289,6 @@ export function ProviderCreditSummary({
           {info}
         </span>
       </div>
-      {model.state === "finite" && model.allowanceCRD === null && (
-        <Footnote>No allowance is reported, so this card shows no percentage.</Footnote>
-      )}
     </div>
   )
 }

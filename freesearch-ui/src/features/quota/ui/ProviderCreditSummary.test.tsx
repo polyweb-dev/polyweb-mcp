@@ -112,3 +112,104 @@ describe("ProviderCreditSummary CRD default", () => {
     expect(screen.getByRole("progressbar", { name: "Brave credit units remaining" })).not.toBeNull()
   })
 })
+
+describe("ProviderCreditSummary native bar contract (FIX)", () => {
+  it("renders the Credits title with one shared bar and inline percent", () => {
+    const { container } = render(
+      <ProviderCreditSummary providerName="Tavily" model={crdModel()} credits={credits()} />,
+    )
+    expect(screen.getByText("Credits")).not.toBeNull()
+    const bars = screen.getAllByRole("progressbar", { name: "Tavily native Credits remaining" })
+    expect(bars).toHaveLength(1)
+    expect(screen.getByText("99.9%")).not.toBeNull()
+    // The percent shares the track row through the shared showPercent path.
+    expect(bars[0].closest("div.flex")?.textContent).toContain("99.9%")
+    expect(bars[0].getAttribute("aria-valuetext")).toBe("999 of 1000 Tavily Credits left")
+    expect(container.textContent).not.toContain("CRD")
+  })
+
+  it("renders bodyNotes reset content above the action row", () => {
+    render(
+      <ProviderCreditSummary
+        providerName="Tavily"
+        model={crdModel()}
+        credits={credits()}
+        bodyNotes={<span data-testid="reset-note">Resets Oct 1</span>}
+        actions={<button type="button">Card action</button>}
+      />,
+    )
+    const note = screen.getByTestId("reset-note")
+    expect(note.textContent).toBe("Resets Oct 1")
+    const action = screen.getByRole("button", { name: "Card action" })
+    expect((note.compareDocumentPosition(action) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0).toBe(true)
+  })
+
+  it("renders the rateBars slot above the action row", () => {
+    render(
+      <ProviderCreditSummary
+        providerName="Tavily"
+        model={crdModel()}
+        credits={credits()}
+        rateBars={<span data-testid="rate-slot">rate content</span>}
+        actions={<button type="button">Card action</button>}
+      />,
+    )
+    const slot = screen.getByTestId("rate-slot")
+    expect(slot.textContent).toBe("rate content")
+    const action = screen.getByRole("button", { name: "Card action" })
+    expect((slot.compareDocumentPosition(action) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0).toBe(true)
+  })
+
+  it("shows known zero as an empty bar with zero percent", () => {
+    render(
+      <ProviderCreditSummary
+        providerName="Tavily"
+        model={crdModel()}
+        credits={credits({ remaining: "0", allowance: "1000", state: "finite" })}
+      />,
+    )
+    const bar = screen.getByRole("progressbar", { name: "Tavily native Credits remaining" })
+    expect(bar.getAttribute("aria-valuenow")).toBe("0")
+    expect(screen.getByText("0%")).not.toBeNull()
+    expect(screen.getByText("0")).not.toBeNull()
+  })
+
+  it("hides the bar for unknown capacity with no invented percent", () => {
+    const { container } = render(
+      <ProviderCreditSummary
+        providerName="Tavily"
+        model={crdModel()}
+        credits={credits({ remaining: null, allowance: null, state: "unknown" })}
+        fundsControl={<button type="button">Tier control</button>}
+      />,
+    )
+    expect(screen.queryByRole("progressbar")).toBeNull()
+    expect(container.textContent).not.toContain("%")
+    expect(screen.queryByText("Free")).toBeNull()
+    expect(screen.getByRole("button", { name: "Tier control" })).not.toBeNull()
+  })
+
+  it("hides the bar for zero allowance while keeping native amounts", () => {
+    render(
+      <ProviderCreditSummary
+        providerName="Tavily"
+        model={crdModel()}
+        credits={credits({ remaining: "999", allowance: "0" })}
+      />,
+    )
+    expect(screen.getByText("999")).not.toBeNull()
+    expect(screen.queryByRole("progressbar")).toBeNull()
+  })
+
+  it("hides the bar for PAYGO without capacity while keeping the PAYGO footnote", () => {
+    render(
+      <ProviderCreditSummary
+        providerName="Tavily"
+        model={crdModel()}
+        credits={credits({ remaining: null, allowance: null, state: "paygo", paygo: true })}
+      />,
+    )
+    expect(screen.queryByRole("progressbar")).toBeNull()
+    expect(screen.getByText(/Free Credits are spent/)).not.toBeNull()
+  })
+})

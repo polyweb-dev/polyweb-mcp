@@ -11,6 +11,7 @@ import {
   displayAdapterOf,
   formatCreditAmount,
   formatCreditValue,
+  formatTavilyPopoverAmount,
   minuteHeadroomOf,
   profileOf,
   tavilyCRDToCredits,
@@ -460,5 +461,46 @@ describe("formatCreditValue", () => {
     expect(formatCreditAmount("1")).toBe("1 Credit")
     expect(formatCreditAmount("2")).toBe("2 Credits")
     expect(formatCreditAmount("abc")).toBe("Unknown Credits")
+  })
+})
+
+describe("formatTavilyPopoverAmount", () => {
+  it("floors nonnegative native amounts to whole units", () => {
+    expect(formatTavilyPopoverAmount("1", "native")).toBe("1")
+    expect(formatTavilyPopoverAmount("1.9", "native")).toBe("1")
+    expect(formatTavilyPopoverAmount("0.2", "native")).toBe("0")
+    expect(formatTavilyPopoverAmount("999.9", "native")).toBe("999")
+  })
+
+  it("trims long zero decimals on native, CRD, and USD text", () => {
+    expect(formatTavilyPopoverAmount("100.000000000", "native")).toBe("100")
+    expect(formatTavilyPopoverAmount("8.000000000", "crd")).toBe("8")
+    expect(formatTavilyPopoverAmount("0.008000000", "usd")).toBe("0.008")
+  })
+
+  it("keeps significant CRD and USD fractions", () => {
+    expect(formatTavilyPopoverAmount("1.600000000", "crd")).toBe("1.6")
+    expect(formatTavilyPopoverAmount("0.001600000", "usd")).toBe("0.0016")
+    expect(formatTavilyPopoverAmount("8", "crd")).toBe("8")
+    expect(formatTavilyPopoverAmount("0.008", "usd")).toBe("0.008")
+  })
+
+  it("keeps large exact decimals without float conversion", () => {
+    expect(formatTavilyPopoverAmount("123456789.987654321", "crd")).toBe("123456789.987654321")
+    expect(formatTavilyPopoverAmount("1000.000000000", "native")).toBe("1000")
+  })
+
+  it("yields null for malformed, absent, and unknown values", () => {
+    expect(formatTavilyPopoverAmount("abc", "native")).toBeNull()
+    expect(formatTavilyPopoverAmount("", "crd")).toBeNull()
+    expect(formatTavilyPopoverAmount("unknown", "usd")).toBeNull()
+    expect(formatTavilyPopoverAmount("n/a", "native")).toBeNull()
+    expect(formatTavilyPopoverAmount("lots", "crd")).toBeNull()
+  })
+
+  it("yields null for negative values instead of an invented zero", () => {
+    expect(formatTavilyPopoverAmount("-1", "native")).toBeNull()
+    expect(formatTavilyPopoverAmount("-0.5", "crd")).toBeNull()
+    expect(formatTavilyPopoverAmount("-0.008", "usd")).toBeNull()
   })
 })

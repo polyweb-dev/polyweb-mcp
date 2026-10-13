@@ -6,6 +6,7 @@ import { manualEligibleProviders } from "../model/quotaRowModel"
 import { CRDPriceNote } from "./CRDPriceNote"
 import { Footnote } from "./Footnote"
 import { ProviderLimitsCards } from "./ProviderLimitsCards"
+import type { RateTierSlotArgs } from "./ProviderLimitsCard"
 import type { OAuthSlotArgs } from "./QuotaRow"
 import { UsageTotals } from "./UsageTotals"
 
@@ -17,6 +18,12 @@ export interface QuotaPageProps {
    * imports the OAuth feature directly.
    */
   renderOAuthActions?: (args: OAuthSlotArgs) => ReactNode
+  /**
+   * Tavily tier control per provider. Supplied by composition (the quota
+   * overlay stays in app composition) so the quota feature never imports the
+   * Settings feature directly.
+   */
+  renderRateTier?: (args: RateTierSlotArgs) => ReactNode
 }
 
 /**
@@ -27,6 +34,7 @@ export interface QuotaPageProps {
 export function QuotaPage({
   manualQuotaEligible = isManualQuotaEligible,
   renderOAuthActions,
+  renderRateTier,
 }: QuotaPageProps): ReactNode {
   const {
     providers,
@@ -76,6 +84,7 @@ export function QuotaPage({
         manualEligible={manualEligible}
         dashboardQuotas={dashboardQuotas}
         {...(renderOAuthActions !== undefined ? { renderOAuthActions } : {})}
+        {...(renderRateTier !== undefined ? { renderRateTier } : {})}
       />
 
       <UsageTotals crdUsageTotals={crdUsageTotals} providers={providers} providerLimits={providerLimits} />

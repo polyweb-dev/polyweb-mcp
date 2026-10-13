@@ -451,6 +451,110 @@ async def test_pinned_second_call_after_402_denies_locally(
     assert _FailingSDK.calls == 1
 
 
+async def test_env_switch_dev_to_prod_preserves_pool_caps_terminal_and_bucket(
+    repository: SQLiteRepository,
+) -> None:
+    """Dev-to-prod keeps the native pool, local grant cap, terminal state, bucket."""
+    from datetime import date
+
+    from freesearch.models.provider_limits import CRDGrantPayload as GrantPayload
+
+    service = _service(repository)
+    await service.initialize()
+    await service.apply_tavily_config(ProviderConfig(), auth_mode=AuthMode.KEYED)
+    await repository.limits.apply_snapshot(_snapshot(Decimal("0"), source="vendor_402"))
+    await service.save_grant(
+        "tavily",
+        GrantPayload(
+            version=0,
+            period_start=date(2026, 3, 1),
+            period_end=date(2026, 4, 1),
+            search_crd=Decimal("10"),
+            fetch_crd=Decimal("4"),
+        ),
+        AuthMode.KEYED,
+    )
+    before_pool = await repository.limits.get_pool(TAVILY_POOL)
+    assert before_pool is not None
+    before_grants = await repository.limits.grants("tavily", AuthMode.KEYED, now=FIXED_AT)
+    assert before_grants is not None
+
+    await service.apply_tavily_config(
+        ProviderConfig(tavily_key_environment="prod"), auth_mode=AuthMode.KEYED
+    )
+
+    pool = await repository.limits.get_pool(TAVILY_POOL)
+    assert pool is not None
+    assert pool.remaining == Decimal("0")
+    assert pool.source == "vendor_402"
+    assert pool.allowance == before_pool.allowance
+    after_grants = await repository.limits.grants("tavily", AuthMode.KEYED, now=FIXED_AT)
+    assert after_grants is not None
+    assert after_grants.remaining(LimitOperation.SEARCH) == before_grants.remaining(
+        LimitOperation.SEARCH
+    )
+    assert after_grants.remaining(LimitOperation.FETCH) == before_grants.remaining(
+        LimitOperation.FETCH
+    )
+    keyed = [r for r in service.records if r.provider == "tavily" and r.auth_mode is AuthMode.KEYED]
+    assert len(keyed) == 2
+    buckets = set()
+    for record in keyed:
+        assert record.rate is not None
+        assert record.rate.windows[0].limit == Decimal("1000")
+        buckets.add(record.rate.windows[0].bucket_id)
+    assert buckets == {"tavily:keyed:search:requests"}
+
+
+async def test_env_switch_prod_to_dev_preserves_pool_caps_terminal_and_bucket(
+    repository: SQLiteRepository,
+) -> None:
+    """Prod-to-dev keeps the native pool, local grant cap, terminal state, bucket."""
+    from datetime import date
+
+    from freesearch.models.provider_limits import CRDGrantPayload as GrantPayload
+
+    service = _service(repository)
+    await service.initialize()
+    await service.apply_tavily_config(
+        ProviderConfig(tavily_key_environment="prod"), auth_mode=AuthMode.KEYED
+    )
+    await repository.limits.apply_snapshot(_snapshot(Decimal("0"), source="vendor_402"))
+    await service.save_grant(
+        "tavily",
+        GrantPayload(
+            version=0,
+            period_start=date(2026, 3, 1),
+            period_end=date(2026, 4, 1),
+            search_crd=Decimal("10"),
+            fetch_crd=Decimal("4"),
+        ),
+        AuthMode.KEYED,
+    )
+    before_grants = await repository.limits.grants("tavily", AuthMode.KEYED, now=FIXED_AT)
+    assert before_grants is not None
+
+    await service.apply_tavily_config(ProviderConfig(), auth_mode=AuthMode.KEYED)
+
+    pool = await repository.limits.get_pool(TAVILY_POOL)
+    assert pool is not None
+    assert pool.remaining == Decimal("0")
+    assert pool.source == "vendor_402"
+    after_grants = await repository.limits.grants("tavily", AuthMode.KEYED, now=FIXED_AT)
+    assert after_grants is not None
+    assert after_grants.remaining(LimitOperation.SEARCH) == before_grants.remaining(
+        LimitOperation.SEARCH
+    )
+    keyed = [r for r in service.records if r.provider == "tavily" and r.auth_mode is AuthMode.KEYED]
+    assert len(keyed) == 2
+    buckets = set()
+    for record in keyed:
+        assert record.rate is not None
+        assert record.rate.windows[0].limit == Decimal("100")
+        buckets.add(record.rate.windows[0].bucket_id)
+    assert buckets == {"tavily:keyed:search:requests"}
+
+
 async def test_spent_key_with_funded_plan_denies_key_cap(
     repository: SQLiteRepository,
 ) -> None:

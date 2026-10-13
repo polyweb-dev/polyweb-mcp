@@ -1,12 +1,15 @@
 import type { ReactNode } from "react"
-import type { TierBalance, TierBarView } from "@/domains/dashboard"
-import { formatCRDAmount, tierBarModel } from "../model/crdDisplay"
+import type { CRDConversionProfile, TierBalance, TierBarView } from "@/domains/dashboard"
+import { formatCRDAmount, sumAmounts, tierBarModel } from "../model/crdDisplay"
+import { formatTavilyPopoverAmount, tavilyCRDToCredits } from "../model/tavilyCredits"
+import type { TavilyDisplayAdapter } from "../model/tavilyCredits"
 
 export interface ProviderTierBarsProps {
   providerName: string
   freeTiers: TierBalance[]
   paidTiers: TierBalance[]
   tierSplitKnown: boolean
+  nativeDisplay?: TavilyDisplayAdapter
 }
 
 /** Known tier amounts only; an unknown tier yields no row at all. */
@@ -16,6 +19,67 @@ function barAmount(bar: TierBarView): string | null {
   if (bar.remainingCRD === null) return null
   if (bar.allowanceCRD === null) return formatCRDAmount(bar.remainingCRD)
   return formatCRDAmount(bar.remainingCRD) + " of " + formatCRDAmount(bar.allowanceCRD)
+}
+
+/** A CREDIT-kind unit text of any casing. */
+function isCreditUnit(value: string | null | undefined): boolean {
+  return (value ?? "").trim().toUpperCase() === "CREDIT"
+}
+
+/** Known text only: an absent, empty, or unknown value yields null. */
+function knownAmount(value: string | null | undefined): string | null {
+  if (value === null || value === undefined) return null
+  const text = value.trim()
+  if (text === "" || text.toLowerCase() === "unknown" || text === "n/a") return null
+  return text
+}
+
+/** Exact Tavily Credits of one tier balance: native fields first, else converted CRD-only values. */
+function nativeCreditsOf(
+  balance: TierBalance,
+  field: "remaining" | "allowance",
+  profile: CRDConversionProfile | null,
+): string | null {
+  if (isCreditUnit(balance.native_unit)) {
+    const raw = field === "remaining" ? balance.native_remaining : balance.native_allowance
+    const native = knownAmount(raw)
+    if (native !== null) return native
+  }
+  const crdRaw = field === "remaining" ? balance.remaining_crd : balance.allowance_crd
+  const crd = knownAmount(crdRaw)
+  if (crd === null || profile === null) return null
+  return tavilyCRDToCredits(crd, profile)
+}
+
+/** Whole Tavily Credits word of one floored integer amount. */
+function tavilyWord(amount: string): string {
+  return amount === "1" ? "1 Tavily Credit" : amount + " Tavily Credits"
+}
+
+/** Native Tavily tier amount with integer display; unknown stays null for the generic fallback. */
+function nativeTierAmount(balances: TierBalance[], profile: CRDConversionProfile | null): string | null {
+  if (balances.length === 0) return null
+  const remainings: string[] = []
+  for (const balance of balances) {
+    const exact = nativeCreditsOf(balance, "remaining", profile)
+    if (exact === null) return null
+    remainings.push(exact)
+  }
+  const remainingExact = sumAmounts(remainings)
+  const remainingFloored = remainingExact === null ? null : formatTavilyPopoverAmount(remainingExact, "native")
+  if (remainingFloored === null) return null
+  const remainingWord = tavilyWord(remainingFloored)
+  const allowances: string[] = []
+  for (const balance of balances) {
+    const exact = nativeCreditsOf(balance, "allowance", profile)
+    if (exact === null) return remainingWord
+    allowances.push(exact)
+  }
+  if (allowances.length !== balances.length) return remainingWord
+  const allowanceExact = sumAmounts(allowances)
+  const allowanceFloored = allowanceExact === null ? null : formatTavilyPopoverAmount(allowanceExact, "native")
+  if (allowanceFloored === null) return remainingWord
+  return remainingWord + " of " + tavilyWord(allowanceFloored)
 }
 
 /** Reset notes of the known facts only; an unknown rule stays absent. */
@@ -35,6 +99,7 @@ export function ProviderTierBars({
   freeTiers,
   paidTiers,
   tierSplitKnown,
+  nativeDisplay,
 }: ProviderTierBarsProps): ReactNode {
   const bars: TierBarView[] = []
   if (freeTiers.length > 0 || !tierSplitKnown) {
@@ -44,7 +109,14 @@ export function ProviderTierBars({
     bars.push(tierBarModel({ tier: "paid", balances: paidTiers, tierSplitKnown }))
   }
   const rows = bars
-    .map((bar) => ({ bar, amount: barAmount(bar) }))
+    .map((bar) => {
+      if (nativeDisplay !== undefined && bar.state !== "unmetered" && bar.state !== "postpaid") {
+        const balances = bar.tier === "free" ? freeTiers : paidTiers
+        const native = nativeTierAmount(balances, nativeDisplay.profile)
+        if (native !== null) return { bar, amount: native }
+      }
+      return { bar, amount: barAmount(bar) }
+    })
     .filter((row): row is { bar: TierBarView; amount: string } => row.amount !== null)
   if (rows.length === 0) return null
 

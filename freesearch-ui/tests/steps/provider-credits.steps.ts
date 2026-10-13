@@ -7,6 +7,8 @@ import {
   setStubbedCrdTotals,
   setStubbedHistory,
   setStubbedProviderLimits,
+  setStubbedProviderPatchReadbackRaw,
+  setStubbedSecretPresence,
   stubbedGrantBodies,
   tavilyCreditLimits,
   tavilyCreditLimitsAfterAdvanced,
@@ -134,6 +136,124 @@ function freeLimits(): unknown[] {
   return [{ ...entry, auths }] as unknown[]
 }
 
+function cloneLimits(limits: unknown[]): Array<Record<string, unknown>> {
+  return JSON.parse(JSON.stringify(limits)) as Array<Record<string, unknown>>
+}
+
+function keyedAuth(entry: Record<string, unknown>): Record<string, unknown> {
+  const auths = entry.auths as Array<Record<string, unknown>>
+  return auths[0] as Record<string, unknown>
+}
+
+function setMinuteRate(limits: unknown[], remaining: string, limit: string): unknown[] {
+  const entries = cloneLimits(limits)
+  const auth = keyedAuth(entries[0] as Record<string, unknown>)
+  const detail = auth.detail as Record<string, unknown>
+  const windows = detail.rate_windows as Array<Record<string, unknown>>
+  const minute = windows.find((entry) => entry.window === "1m")
+  if (minute !== undefined) {
+    minute.remaining = remaining
+    minute.limit = limit
+  } else {
+    windows.push({
+      bucket_id: "tavily:keyed:search:requests",
+      limit,
+      window: "1m",
+      scope: "key",
+      unit: "requests",
+      remaining,
+      reset_at: null,
+      source: "vendor_headers",
+      confidence: "observed",
+    })
+  }
+  return entries
+}
+
+function tavilyDevConsumedLimits(): unknown[] {
+  return setMinuteRate(tavilyCreditLimits(), "90", "100")
+}
+
+function tavilyProdConsumedLimits(): unknown[] {
+  return setMinuteRate(tavilyProdCreditLimits(), "900", "1000")
+}
+
+function tavilyExhaustedWithRateLimits(): unknown[] {
+  return setMinuteRate(tavilyFreeExhaustedLimits(), "0", "100")
+}
+
+function tavilyLongZeroDecimalLimits(): unknown[] {
+  const entries = cloneLimits(tavilyCreditLimits())
+  const auth = keyedAuth(entries[0] as Record<string, unknown>)
+  const views = auth.crd_views as Array<Record<string, unknown>>
+  views[0] = { ...views[0], request_cost_crd: "8.000000000" }
+  views[1] = { ...views[1], request_cost_crd: "1.600000000" }
+  const search = auth.search as Record<string, unknown>
+  const fetch = auth.fetch as Record<string, unknown>
+  auth.search = {
+    ...search,
+    budget: { ...((search.budget ?? {}) as Record<string, unknown>), standard_native_cost: "1.000000000" },
+  }
+  auth.fetch = {
+    ...fetch,
+    budget: { ...((fetch.budget ?? {}) as Record<string, unknown>), standard_native_cost: "0.200000000" },
+  }
+  return entries
+}
+
+function tavilyStaleLimits(): unknown[] {
+  const entries = cloneLimits(tavilyCreditLimits())
+  const auth = keyedAuth(entries[0] as Record<string, unknown>)
+  auth.aggregate_pool = { ...(auth.aggregate_pool as Record<string, unknown>), stale: true }
+  const detail = auth.detail as Record<string, unknown>
+  auth.detail = { ...detail, stale: true }
+  return entries
+}
+
+function tavilyUnknownLimits(): unknown[] {
+  const entries = cloneLimits(tavilyCreditLimits())
+  const auth = keyedAuth(entries[0] as Record<string, unknown>)
+  auth.aggregate_pool = null
+  auth.free_tiers = []
+  auth.paid_tiers = []
+  auth.crd_views = [
+    {
+      state: "unknown",
+      operation: "search",
+      remaining_crd: null,
+      local_remaining_crd: null,
+      request_cost_crd: null,
+      shared_pool_id: null,
+      possible_standard_calls: null,
+      price_version: null,
+      priced: false,
+    },
+    {
+      state: "unknown",
+      operation: "fetch",
+      remaining_crd: null,
+      local_remaining_crd: null,
+      request_cost_crd: null,
+      shared_pool_id: null,
+      possible_standard_calls: null,
+      price_version: null,
+      priced: false,
+    },
+  ]
+  const detail = auth.detail as Record<string, unknown>
+  auth.detail = {
+    ...detail,
+    native_balance: null,
+    native_allowance: null,
+    reset_at: null,
+    reset_rule: "unknown",
+    last_sync_at: null,
+    rate_windows: [],
+    retry_after_seconds: null,
+  }
+  return entries
+}
+
 Given("the stubbed provider limits show {string}", async ({}, kind: string) => {
   if (kind === "Brave finite credits") setStubbedProviderLimits(braveCreditLimits())
   else if (kind === "Brave finite credits after debit") setStubbedProviderLimits(braveCreditLimitsAfterDebit())
@@ -146,6 +266,12 @@ Given("the stubbed provider limits show {string}", async ({}, kind: string) => {
   else if (kind === "Tavily finite credits after advanced") setStubbedProviderLimits(tavilyCreditLimitsAfterAdvanced())
   else if (kind === "Tavily keyless credits") setStubbedProviderLimits(tavilyKeylessLimits())
   else if (kind === "Tavily free exhausted") setStubbedProviderLimits(tavilyFreeExhaustedLimits())
+  else if (kind === "Tavily exhausted with consumed rate") setStubbedProviderLimits(tavilyExhaustedWithRateLimits())
+  else if (kind === "Tavily dev consumed rate") setStubbedProviderLimits(tavilyDevConsumedLimits())
+  else if (kind === "Tavily prod consumed rate") setStubbedProviderLimits(tavilyProdConsumedLimits())
+  else if (kind === "Tavily long zero decimals") setStubbedProviderLimits(tavilyLongZeroDecimalLimits())
+  else if (kind === "Tavily stale credits") setStubbedProviderLimits(tavilyStaleLimits())
+  else if (kind === "Tavily unknown credits") setStubbedProviderLimits(tavilyUnknownLimits())
   else if (kind === "Tavily paygo overage") setStubbedProviderLimits(tavilyPaygoLimits())
   else if (kind === "Tavily grant credits") setStubbedProviderLimits(tavilyGrantLimits())
   else if (kind === "Tavily prod credits") setStubbedProviderLimits(tavilyProdCreditLimits())
@@ -348,15 +474,62 @@ Then("the Tavily card subtitle should contain {string}", async ({ page }, text: 
 })
 
 Then("the Tavily card should show one credit bar", async ({ page }) => {
-  await expect(
-    tavilyCard(page).getByRole("progressbar", { name: tavilyBarName() }),
-  ).toHaveCount(1)
+  const card = tavilyCard(page)
+  await expect(card.getByRole("progressbar", { name: tavilyBarName() })).toHaveCount(1)
+  await expect(card.getByRole("progressbar")).toHaveCount(1)
 })
 
 Then("the Tavily card should show no credit bar", async ({ page }) => {
-  await expect(
-    tavilyCard(page).getByRole("progressbar", { name: tavilyBarName() }),
-  ).toHaveCount(0)
+  const card = tavilyCard(page)
+  await expect(card.getByRole("progressbar", { name: tavilyBarName() })).toHaveCount(0)
+  await expect(card.getByRole("progressbar")).toHaveCount(0)
+})
+
+Then("the Tavily card should show the {string} bar title", async ({ page }, title: string) => {
+  const card = tavilyCard(page)
+  await expect(card.getByText(title, { exact: true }).first()).toBeVisible()
+})
+
+Then("the Tavily credit percent should be vertically centered on its track", async ({ page }) => {
+  const card = tavilyCard(page)
+  const bar = card.getByRole("progressbar", { name: tavilyBarName() })
+  await expect(bar).toBeVisible()
+  const percent = card.getByText(/^\d+(\.\d)?%$/).first()
+  await expect(percent).toBeVisible()
+  const barBox = await bar.boundingBox()
+  const percentBox = await percent.boundingBox()
+  if (barBox === null || percentBox === null) throw new Error("Missing bar geometry")
+  const barCenter = barBox.y + barBox.height / 2
+  const percentCenter = percentBox.y + percentBox.height / 2
+  expect(Math.abs(barCenter - percentCenter)).toBeLessThanOrEqual(2)
+})
+
+Then("the Tavily card should show no minute bar", async ({ page }) => {
+  const card = tavilyCard(page)
+  await expect(card.getByRole("progressbar", { name: /search and extract limits remaining/i })).toHaveCount(0)
+  await expect(card).not.toContainText("Minute headroom")
+  await expect(card).not.toContainText("requests/minute")
+})
+
+Then("the Tavily card outside the popover should not show {string}", async ({ page }, text: string) => {
+  await expect(tavilyCard(page)).not.toContainText(text)
+})
+
+Then("the credit details should show rows in order {string}", async ({ page }, order: string) => {
+  const labels = order.split(",").map((entry) => entry.trim()).filter((entry) => entry !== "")
+  const popover = page.locator('[data-slot="popover-content"]')
+  await expect(popover).toBeVisible()
+  const text = ((await popover.textContent()) ?? "").replace(/\s+/g, " ")
+  let cursor = -1
+  for (const label of labels) {
+    const index = text.indexOf(label, cursor + 1)
+    expect(index).toBeGreaterThan(cursor)
+    cursor = index
+  }
+})
+
+Then("the credit details should eventually show {string}", async ({ page }, text: string) => {
+  await expect(page.locator('[data-slot="popover-content"]')).toContainText(text, { timeout: 10_000 })
 })
 
 Then("the credit details should not show {string}", async ({ page }, text: string) => {
@@ -394,4 +567,96 @@ Then("the playground search error should show {string}", async ({ page }, text: 
 
 Then("the search telemetry should show {string}", async ({ page }, text: string) => {
   await expect(page.getByText(text, { exact: true }).first()).toBeVisible({ timeout: 10_000 })
+})
+
+function tavilyCardTierSelect(page: import("@playwright/test").Page) {
+  return tavilyCard(page).getByRole("combobox", { name: "Tavily rate tier (key environment)", exact: true })
+}
+
+When("I choose the Tavily card rate tier {string}", async ({ page }, env: string) => {
+  const select = tavilyCardTierSelect(page)
+  await expect(select).toBeVisible()
+  await expect(select).toBeEnabled()
+  await select.selectOption(env)
+})
+
+When("I choose the Tavily card rate tier {string} without waiting", async ({ page }, env: string) => {
+  const select = tavilyCardTierSelect(page)
+  await expect(select).toBeVisible()
+  await expect(select).toBeEnabled()
+  await select.selectOption(env)
+})
+
+When("I replace the Tavily credential while the PATCH is pending", async ({ page }) => {
+  void page
+  setStubbedSecretPresence("tavily", "missing")
+})
+
+Then("the Tavily card rate tier should be disabled while pending", async ({ page }) => {
+  await expect(tavilyCardTierSelect(page)).toBeDisabled()
+})
+
+Then("the Tavily card rate tier should show {string}", async ({ page }, env: string) => {
+  const select = tavilyCardTierSelect(page)
+  await expect(select).toBeVisible()
+  await expect(select).toHaveValue(env)
+  await expect(tavilyCard(page)).not.toContainText("1000 requests/min")
+  await expect(tavilyCard(page)).not.toContainText("100 requests/min")
+})
+
+Then("the Tavily card read-only rate text should show {string}", async ({ page }, text: string) => {
+  const card = tavilyCard(page)
+  await expect(card.getByText(text, { exact: true })).toBeVisible()
+  await expect(tavilyCardTierSelect(page)).toHaveCount(0)
+})
+
+Then("the Tavily card keyless rate text should show {string}", async ({ page }, text: string) => {
+  const card = tavilyCard(page)
+  await expect(card.getByText(text, { exact: true })).toBeVisible()
+  await expect(tavilyCardTierSelect(page)).toHaveCount(0)
+})
+
+When("I focus the Tavily credit details control with the keyboard", async ({ page }) => {
+  const control = tavilyCard(page).getByRole("button", { name: /Credit details for Tavily/i })
+  await expect(control).toBeVisible()
+  for (let stop = 0; stop < 30; stop += 1) {
+    const focused = await control.evaluate((node) => node === document.activeElement)
+    if (focused) return
+    await page.keyboard.press("Tab")
+  }
+  await control.focus()
+  await expect(control).toBeFocused()
+})
+
+When("I activate the focused Tavily credit details control", async ({ page }) => {
+  await page.keyboard.press("Enter")
+  await expect(page.getByText("Quota Details")).toBeVisible()
+})
+
+Then("the Tavily details control regains focus", async ({ page }) => {
+  await expect(tavilyCard(page).getByRole("button", { name: /Credit details for Tavily/i })).toBeFocused()
+})
+
+Then("the Tavily details popover should stay within the viewport", async ({ page }) => {
+  const popover = page.locator('[data-slot="popover-content"]')
+  await expect(popover).toBeVisible()
+  const geometry = await popover.evaluate((node) => {
+    const rect = node.getBoundingClientRect()
+    return {
+      left: rect.left,
+      right: rect.right,
+      top: rect.top,
+      bottom: rect.bottom,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+    }
+  })
+  expect(geometry.left).toBeGreaterThanOrEqual(0)
+  expect(geometry.top).toBeGreaterThanOrEqual(0)
+  expect(geometry.right).toBeLessThanOrEqual(geometry.viewportWidth)
+  expect(geometry.bottom).toBeLessThanOrEqual(geometry.viewportHeight)
+})
+
+Given("the Tavily provider PATCH readback will be missing", async () => {
+  setStubbedProviderPatchReadbackRaw(undefined)
 })

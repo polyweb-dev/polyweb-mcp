@@ -10,24 +10,58 @@ export interface TavilyRateTierSelectProps {
   canEdit: boolean
   /** Post-save refresh of the provider status and the cached dashboard. */
   onUpdated: () => Promise<void>
+  /** Card use only: short labels without numeric rate text. Settings keeps false. */
+  compact?: boolean
+  /** Confirmed dev/prod readback, called before the post-save refresh. */
+  onConfirmed?: (environment: "dev" | "prod") => void
 }
 
 type KeyEnvironment = "dev" | "prod"
 
 const RATE_TIER_LABELS: Record<KeyEnvironment, string> = {
-  dev: "Development — 100 requests/min",
-  prod: "Production — 1000 requests/min",
+  dev: "Development — 100 requests per minute",
+  prod: "Production — 1000 requests per minute",
 }
+
+/** Card-only short labels without numeric rate counts. */
+const COMPACT_TIER_LABELS: Record<KeyEnvironment, string> = {
+  dev: "Development",
+  prod: "Production",
+}
+
+/** Compact keyless text without a numeric rate. */
+const COMPACT_KEYLESS_TEXT = "Keyless access"
 
 /** The dropdown declares the stored key environment, never a vendor-plan upgrade. */
 const RATE_TIER_HINT =
   "Declares the current key environment of the stored Tavily key, not a vendor-plan upgrade."
 
 /** Same native select tokens as the other settings inputs (compact cell size). */
-const SELECT_CLASS =
-  "rounded border border-[var(--border-subtle)] bg-[var(--surface)] px-2 py-1 text-[12px] text-[var(--text)] outline-none focus-visible:border-[var(--signal)] disabled:opacity-60"
+const SELECT_BASE =
+  "rounded border border-[var(--border-subtle)] bg-[var(--surface)] px-2 py-1 text-[12px] outline-none focus-visible:border-[var(--signal)] disabled:opacity-60"
+const SELECT_CLASS = SELECT_BASE + " text-[var(--text)]"
+const COMPACT_SELECT_CLASS = SELECT_BASE + " text-[var(--text-strong)]"
+const LABEL_CLASS = "mb-1 block text-[12px] text-[var(--muted)]"
+const COMPACT_LABEL_CLASS = "mb-1 block text-[12px] text-[var(--text-strong)]"
 
 const READONLY_CLASS = "text-[12px] text-[var(--muted)]"
+
+/** The card uses a compact field with the strong label color of the Credits title. */
+function tierControlPresentation(compact: boolean) {
+  return compact
+    ? {
+        wrapper: "w-fit min-w-0",
+        label: COMPACT_LABEL_CLASS,
+        select: COMPACT_SELECT_CLASS,
+        title: "Rate tier",
+      }
+    : {
+        wrapper: "min-w-[200px]",
+        label: LABEL_CLASS,
+        select: SELECT_CLASS,
+        title: "Rate tier (key environment)",
+      }
+}
 
 function isKeyEnvironment(value: string): value is KeyEnvironment {
   return value === "dev" || value === "prod"
@@ -55,8 +89,30 @@ function confirmedEnvironment(
   return { confirmed: unknown ? null : stored, confirmationUnknown: unknown }
 }
 
-function rateTierText(confirmed: KeyEnvironment | null): string {
-  return confirmed === null ? "Unknown" : RATE_TIER_LABELS[confirmed]
+function rateTierText(confirmed: KeyEnvironment | null, compact: boolean): string {
+  if (confirmed === null) return "Unknown"
+  return compact ? COMPACT_TIER_LABELS[confirmed] : RATE_TIER_LABELS[confirmed]
+}
+
+/** Read-only states share one small render path outside the editable field. */
+function readOnlyTierControl(
+  provider: ProviderConfig,
+  canEdit: boolean,
+  confirmed: KeyEnvironment | null,
+  compact: boolean,
+): React.ReactNode | null {
+  if (provider.keyVaultStatus !== "configured") {
+    const keylessText = compact ? COMPACT_KEYLESS_TEXT : "Keyless — numeric rate unknown"
+    return <span className={READONLY_CLASS} title={keylessText}>{keylessText}</span>
+  }
+  if (!canEdit) {
+    return (
+      <span className={READONLY_CLASS} title="Read-only for your role">
+        {rateTierText(confirmed, compact)}
+      </span>
+    )
+  }
+  return null
 }
 
 /**
@@ -69,37 +125,47 @@ export const TavilyRateTierSelect: React.FC<TavilyRateTierSelectProps> = ({
   provider,
   canEdit,
   onUpdated,
+  compact = false,
+  onConfirmed,
 }) => {
   const [saving, setSaving] = useState(false)
   const [saveResult, setSaveResult] = useState<SaveResult | null>(null)
   const [error, setError] = useState<string | null>(null)
-  // Obsolete-response guard: a request that settles after unmount never
-  // writes state and never triggers the post-save refresh.
+  const presentation = tierControlPresentation(compact)
+  // Obsolete-response guard: a request that settles after unmount or after a
+  // credential replacement never writes state and never triggers the refresh.
   const mountedRef = useRef(true)
+  const identityRef = useRef(provider.id + "|" + provider.keyVaultStatus)
   useEffect(() => {
     mountedRef.current = true
     return () => {
       mountedRef.current = false
     }
   }, [])
+  useEffect(() => {
+    identityRef.current = provider.id + "|" + provider.keyVaultStatus
+  }, [provider.id, provider.keyVaultStatus])
 
   const stored = provider.tavilyKeyEnvironment ?? null
   const { confirmed, confirmationUnknown } = confirmedEnvironment(stored, saveResult)
 
   const save = async (next: KeyEnvironment) => {
+    const saveIdentity = identityRef.current
+    const storedAtCall = stored
     setSaving(true)
     setError(null)
     try {
       const wire = await apiService.patchProvider(toBackendId(provider.id), {
         tavily_key_environment: next,
       })
-      if (!mountedRef.current) return
+      if (!mountedRef.current || identityRef.current !== saveIdentity) return
       const readback = wire.tavily_key_environment
-      setSaveResult(
-        readback === "dev" || readback === "prod"
-          ? { kind: "confirmed", env: readback }
-          : { kind: "unconfirmed", storedAtSave: stored },
-      )
+      if (readback === "dev" || readback === "prod") {
+        setSaveResult({ kind: "confirmed", env: readback })
+        onConfirmed?.(readback)
+      } else {
+        setSaveResult({ kind: "unconfirmed", storedAtSave: storedAtCall })
+      }
       try {
         await onUpdated()
       } catch {
@@ -107,7 +173,7 @@ export const TavilyRateTierSelect: React.FC<TavilyRateTierSelectProps> = ({
         // current provider/dashboard error surfaces, never as a save failure.
       }
     } catch (patchError) {
-      if (!mountedRef.current) return
+      if (!mountedRef.current || identityRef.current !== saveIdentity) return
       setError(errorMessage(patchError, "Unable to save the Tavily rate tier"))
     } finally {
       if (mountedRef.current) setSaving(false)
@@ -121,24 +187,12 @@ export const TavilyRateTierSelect: React.FC<TavilyRateTierSelectProps> = ({
     void save(next)
   }
 
-  if (provider.keyVaultStatus !== "configured") {
-    return (
-      <span className={READONLY_CLASS} title="Keyless — numeric rate unknown">
-        Keyless — numeric rate unknown
-      </span>
-    )
-  }
-  if (!canEdit) {
-    return (
-      <span className={READONLY_CLASS} title="Read-only for your role">
-        {rateTierText(confirmed)}
-      </span>
-    )
-  }
+  const readOnlyControl = readOnlyTierControl(provider, canEdit, confirmed, compact)
+  if (readOnlyControl !== null) return readOnlyControl
   return (
-    <div className="min-w-[200px]" title={RATE_TIER_HINT}>
-      <label htmlFor="tavily-rate-tier" className="mb-1 block text-[12px] text-[var(--muted)]">
-        Rate tier (key environment)
+    <div className={presentation.wrapper} title={RATE_TIER_HINT}>
+      <label htmlFor="tavily-rate-tier" className={presentation.label}>
+        {presentation.title}
       </label>
       <select
         id="tavily-rate-tier"
@@ -146,10 +200,10 @@ export const TavilyRateTierSelect: React.FC<TavilyRateTierSelectProps> = ({
         value={confirmed ?? "unknown"}
         onChange={handleSelect}
         disabled={saving || confirmed === null}
-        className={SELECT_CLASS}
+        className={presentation.select}
       >
-        <option value="dev">{RATE_TIER_LABELS.dev}</option>
-        <option value="prod">{RATE_TIER_LABELS.prod}</option>
+        <option value="dev">{compact ? COMPACT_TIER_LABELS.dev : RATE_TIER_LABELS.dev}</option>
+        <option value="prod">{compact ? COMPACT_TIER_LABELS.prod : RATE_TIER_LABELS.prod}</option>
         {confirmed === null && <option value="unknown">Unknown</option>}
       </select>
       {confirmationUnknown && (

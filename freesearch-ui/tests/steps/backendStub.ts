@@ -50,6 +50,8 @@ interface StubProvider {
   secret_presence: SecretPresence
   free_tier_estimates: Record<string, string>
   reset_schedule: null
+  /** Confirmed Tavily key environment readback; null for every other provider. */
+  tavily_key_environment?: "dev" | "prod" | null
 }
 
 interface StubRouting {
@@ -1051,6 +1053,306 @@ export function tavilyUseTotals(): unknown[] {
   ]
 }
 
+// ---------------------------------------------------------------------------
+// FIX card/popover + routing fixtures (PLAN 10.5/10.6, FIX-Q1/FIX-Q2).
+//
+// All helpers below are additive: every existing export keeps its name and
+// signature. These fixtures feed both provider-credits (card + popover) and
+// routing (tier slot) scenarios. Minute windows live only in
+// `detail.rate_windows` (popover-only rate rows); `rate_progress` stays empty
+// in every fixture below, so the card renders no rate bars. Literal ceilings:
+// dev 100, prod 1000 requests per minute. Funds and rate headroom are
+// independent: consumed fixtures spend the minute window only, exhausted
+// fixtures spend both, and the unknown-headroom fixture serves no minute row
+// until the dashboard confirms the new ceiling.
+// ---------------------------------------------------------------------------
+
+/** Literal Development minute ceiling served in every dev minute window. */
+export const TAVILY_DEV_MINUTE_LIMIT = "100"
+
+/** Literal Production minute ceiling served in every prod minute window. */
+export const TAVILY_PROD_MINUTE_LIMIT = "1000"
+
+/** Free subscription account-plan name served as `detail.plan_name`. */
+export const TAVILY_ACCOUNT_PLAN_FREE = "Free plan"
+
+/**
+ * Paid subscription account-plan name (Bootstrap). It identifies the
+ * subscription only, never the key environment: a Bootstrap rail can serve
+ * either the dev or the prod ceiling, so steps must not infer dev/prod from
+ * it. The vendor usage payload carries this name as `account.current_plan`
+ * with no rate-tier field (see tavilyVendorUsageWithoutTier).
+ */
+export const TAVILY_ACCOUNT_PLAN_BOOTSTRAP = "Bootstrap"
+
+/** Long zero-decimal native input: displays as `100`, never rounded up. */
+export const TAVILY_LONG_DECIMAL_NATIVE = "100.000000000"
+
+/** Long zero-decimal extract CRD input: displays as `1.6 CRD`. */
+export const TAVILY_LONG_DECIMAL_CRD = "1.600000000"
+
+/** Long zero-decimal search USD input: displays as `[USD 0.008]`. */
+export const TAVILY_LONG_DECIMAL_USD_SEARCH = "0.008000000"
+
+/** Long zero-decimal extract USD input: displays as `[USD 0.0016]`. */
+export const TAVILY_LONG_DECIMAL_USD_EXTRACT = "0.001600000"
+
+/** Vendor usage fields that must never appear on the usage payload. */
+export const TAVILY_VENDOR_ABSENT_TIER_FIELDS = ["key_environment", "rate_tier", "rate_limit_tier"] as const
+
+function withTavilyMinuteWindow(limits: unknown[], remaining: string, limit: string): unknown[] {
+  const entries = limits as Array<Record<string, unknown>>
+  const auths = (entries[0] as Record<string, unknown>).auths as Array<Record<string, unknown>>
+  const keyed = auths[0] as Record<string, unknown>
+  const detail = keyed.detail as Record<string, unknown>
+  keyed.detail = { ...detail, rate_windows: [tavilyMinuteWindow(remaining, limit)] }
+  return limits
+}
+
+function withTavilyStale(limits: unknown[]): unknown[] {
+  const entries = limits as Array<Record<string, unknown>>
+  const auths = (entries[0] as Record<string, unknown>).auths as Array<Record<string, unknown>>
+  const keyed = auths[0] as Record<string, unknown>
+  keyed.aggregate_pool = { ...(keyed.aggregate_pool as Record<string, unknown>), stale: true }
+  const detail = keyed.detail as Record<string, unknown>
+  keyed.detail = { ...detail, stale: true }
+  return limits
+}
+
+function withTavilyPlanName(limits: unknown[], plan: string): unknown[] {
+  const entries = limits as Array<Record<string, unknown>>
+  const auths = (entries[0] as Record<string, unknown>).auths as Array<Record<string, unknown>>
+  const keyed = auths[0] as Record<string, unknown>
+  keyed.search = { ...(keyed.search as Record<string, unknown>), plan_name: plan }
+  keyed.fetch = { ...(keyed.fetch as Record<string, unknown>), plan_name: plan }
+  const detail = keyed.detail as Record<string, unknown>
+  keyed.detail = { ...detail, plan_name: plan }
+  return limits
+}
+
+/** Consumed Development rail: full 1000/1000 funds, minute headroom 90/100. */
+export function tavilyConsumedDevLimits(): unknown[] {
+  return withTavilyMinuteWindow(tavilyCreditLimits(), "90", TAVILY_DEV_MINUTE_LIMIT)
+}
+
+/** Consumed Production rail: full 1000/1000 funds, minute headroom 900/1000. */
+export function tavilyConsumedProdLimits(): unknown[] {
+  return withTavilyMinuteWindow(tavilyCreditLimits(), "900", TAVILY_PROD_MINUTE_LIMIT)
+}
+
+/** Exhausted Development rail: zero funds with a 0/100 minute row. */
+export function tavilyExhaustedRateLimits(): unknown[] {
+  return withTavilyMinuteWindow(withTavilyBalance(tavilyCreditLimits(), "0", "0"), "0", TAVILY_DEV_MINUTE_LIMIT)
+}
+
+/**
+ * Unconfirmed Production headroom: full funds with no minute row yet. Pair
+ * with a prod status readback (setTavilyStatusReadbackProd): the popover then
+ * shows `unknown/1000 requests per minute` until the dashboard serves a prod
+ * window. A stale dev window (tavilyCreditLimits with prod readback) yields
+ * the same unknown row through the ceiling mismatch.
+ */
+export function tavilyUnknownProdHeadroomLimits(): unknown[] {
+  const entries = tavilyCreditLimits() as Array<Record<string, unknown>>
+  const auths = (entries[0] as Record<string, unknown>).auths as Array<Record<string, unknown>>
+  const keyed = auths[0] as Record<string, unknown>
+  const detail = keyed.detail as Record<string, unknown>
+  keyed.detail = { ...detail, rate_windows: [] }
+  return entries as unknown[]
+}
+
+/** Stale Development rail: dev 100/100 window with stale pool and detail flags. */
+export function tavilyStaleDevLimits(): unknown[] {
+  return withTavilyStale(tavilyCreditLimits())
+}
+
+/** Bootstrap subscription on the dev ceiling: the plan name never implies prod. */
+export function tavilyBootstrapDevLimits(): unknown[] {
+  return withTavilyPlanName(tavilyCreditLimits(), TAVILY_ACCOUNT_PLAN_BOOTSTRAP)
+}
+
+/** Bootstrap subscription on the prod ceiling (Retry-After stays null). */
+export function tavilyBootstrapProdLimits(): unknown[] {
+  const limits = withTavilyMinuteWindow(tavilyCreditLimits(), TAVILY_PROD_MINUTE_LIMIT, TAVILY_PROD_MINUTE_LIMIT)
+  return withTavilyPlanName(limits, TAVILY_ACCOUNT_PLAN_BOOTSTRAP)
+}
+
+/**
+ * Fractional native rail: 999.6/1000 funds floor to 999 visible Credits with
+ * exact amounts kept for the percent math. The 1.6 CRD extract cost and the
+ * 0.008/0.0016 USD prices come from the base budgets unchanged (FIX-Q1).
+ */
+export function tavilyFractionalNativeLimits(): unknown[] {
+  const entries = tavilyCreditLimits() as Array<Record<string, unknown>>
+  const auths = (entries[0] as Record<string, unknown>).auths as Array<Record<string, unknown>>
+  const keyed = auths[0] as Record<string, unknown>
+  keyed.aggregate_pool = { ...(keyed.aggregate_pool as Record<string, unknown>), remaining: "999.6" }
+  const views = keyed.crd_views as Array<Record<string, unknown>>
+  views[0] = { ...views[0], remaining_crd: "7996.8", possible_standard_calls: "999.6" }
+  views[1] = { ...views[1], remaining_crd: "7996.8" }
+  const detail = keyed.detail as Record<string, unknown>
+  keyed.detail = { ...detail, native_balance: "999.6" }
+  const tiers = keyed.free_tiers as Array<Record<string, unknown>>
+  keyed.free_tiers = tiers.map((tier) => ({ ...tier, native_remaining: "999.6", remaining_crd: "7996.8" }))
+  return entries as unknown[]
+}
+
+/**
+ * Long zero-decimal rail: `100.000000000` funds and windows display as 100,
+ * `1.600000000` CRD as `1.6 CRD`, `0.008000000` USD as `[USD 0.008]`, and
+ * `0.001600000` USD as `[USD 0.0016]` (FIX-Q1: trim, never integer-convert).
+ */
+export function tavilyLongDecimalLimits(): unknown[] {
+  const entries = tavilyCreditLimits() as Array<Record<string, unknown>>
+  const auths = (entries[0] as Record<string, unknown>).auths as Array<Record<string, unknown>>
+  const keyed = auths[0] as Record<string, unknown>
+  keyed.search = {
+    ...(keyed.search as Record<string, unknown>),
+    budget: {
+      ...((keyed.search as Record<string, unknown>).budget as Record<string, unknown>),
+      usd_per_call: TAVILY_LONG_DECIMAL_USD_SEARCH,
+    },
+  }
+  keyed.fetch = {
+    ...(keyed.fetch as Record<string, unknown>),
+    budget: {
+      ...((keyed.fetch as Record<string, unknown>).budget as Record<string, unknown>),
+      usd_per_call: TAVILY_LONG_DECIMAL_USD_EXTRACT,
+    },
+  }
+  keyed.aggregate_pool = {
+    ...(keyed.aggregate_pool as Record<string, unknown>),
+    remaining: TAVILY_LONG_DECIMAL_NATIVE,
+    allowance: TAVILY_LONG_DECIMAL_NATIVE,
+  }
+  const views = keyed.crd_views as Array<Record<string, unknown>>
+  views[0] = {
+    ...views[0],
+    remaining_crd: "800.000000000",
+    request_cost_crd: "8.000000000",
+    possible_standard_calls: TAVILY_LONG_DECIMAL_NATIVE,
+  }
+  views[1] = { ...views[1], remaining_crd: "800.000000000", request_cost_crd: TAVILY_LONG_DECIMAL_CRD }
+  const detail = keyed.detail as Record<string, unknown>
+  keyed.detail = {
+    ...detail,
+    native_balance: TAVILY_LONG_DECIMAL_NATIVE,
+    native_allowance: TAVILY_LONG_DECIMAL_NATIVE,
+    rate_windows: [tavilyMinuteWindow(TAVILY_LONG_DECIMAL_NATIVE, TAVILY_LONG_DECIMAL_NATIVE)],
+  }
+  const tiers = keyed.free_tiers as Array<Record<string, unknown>>
+  keyed.free_tiers = tiers.map((tier) => ({
+    ...tier,
+    native_remaining: TAVILY_LONG_DECIMAL_NATIVE,
+    native_allowance: TAVILY_LONG_DECIMAL_NATIVE,
+    remaining_crd: "800.000000000",
+    allowance_crd: "800.000000000",
+  }))
+  return entries as unknown[]
+}
+
+/** Keyless unknown rail: no numeric rate and no dev/prod denominator. */
+export function tavilyKeylessUnknownLimits(): unknown[] {
+  return tavilyKeylessLimits()
+}
+
+/**
+ * Documentary vendor usage payload. It carries `account.current_plan`, key
+ * usage, key caps, and credit totals only: no rate-tier field exists, so the
+ * application must use the manual dev/prod status readback instead. Steps can
+ * assert that none of TAVILY_VENDOR_ABSENT_TIER_FIELDS is a key of the result.
+ */
+export function tavilyVendorUsageWithoutTier(plan: string = TAVILY_ACCOUNT_PLAN_BOOTSTRAP): Record<string, unknown> {
+  return {
+    account: { current_plan: plan },
+    key_usage: { used_credits: "10", credit_limit: "1000" },
+    key_caps: { max_credits: "1000" },
+    credits_total: "1000",
+  }
+}
+
+/** Valid status readback: the application reports a dev key environment. */
+export function setTavilyStatusReadbackDev(): void {
+  setStubbedTavilyKeyEnvironment("dev")
+}
+
+/** Valid status readback: the application reports a prod key environment. */
+export function setTavilyStatusReadbackProd(): void {
+  setStubbedTavilyKeyEnvironment("prod")
+}
+
+/** Missing application readback: the tier control locks to Unknown. */
+export function setTavilyStatusReadbackMissing(): void {
+  setStubbedTavilyKeyEnvironment(null)
+}
+
+/** Invalid application readback: the tier control locks to Unknown. */
+export function setTavilyStatusReadbackInvalid(): void {
+  setStubbedTavilyKeyEnvironmentRaw("researcher")
+}
+
+/** Current stubbed status readback, including raw invalid values. */
+export function stubbedTavilyStatusReadback(): unknown {
+  return stubbedTavilyKeyEnvironment
+}
+
+let stubbedDashboardGetDelayMs: number | null = null
+
+/**
+ * Delay the next GET /dashboard reads by ms (or clear the delay). A delayed
+ * dashboard refresh must not undo a confirmed ceiling or invent headroom: the
+ * popover keeps `unknown/<ceiling>` until current dashboard data confirms it.
+ */
+export function delayStubbedDashboardGet(ms: number | null): void {
+  stubbedDashboardGetDelayMs = ms
+}
+
+/** Hold the Tavily dashboard refresh open for ms (delayed-refresh proof). */
+export function holdTavilyDashboardRefresh(ms: number): void {
+  delayStubbedDashboardGet(ms)
+}
+
+/** Release a held Tavily dashboard refresh. */
+export function clearTavilyDashboardHold(): void {
+  delayStubbedDashboardGet(null)
+}
+
+/** Serve these limits while holding the dashboard refresh open for ms. */
+export function deferTavilyDashboardLimits(limits: unknown[], ms: number): void {
+  setStubbedProviderLimits(limits)
+  delayStubbedDashboardGet(ms)
+}
+
+/** Reject the Tavily rate-tier PATCH with a 500 and this message. */
+export function rejectTavilyRateTierPatch(message: string): void {
+  failStubbedProviderPatch("tavily", message)
+}
+
+/** Clear the Tavily rate-tier PATCH rejection. */
+export function clearTavilyRateTierPatchFailure(): void {
+  failStubbedProviderPatch("tavily", null)
+}
+
+/** Fail the dashboard refresh (provider-credits + routing proof). */
+export function failTavilyDashboardRefresh(message: string): void {
+  failStubbedDashboardGet(message)
+}
+
+/** Clear the dashboard refresh failure. */
+export function clearTavilyDashboardFailure(): void {
+  failStubbedDashboardGet(null)
+}
+
+/** Fail the provider status refresh (readback-unavailable proof). */
+export function failTavilyStatusRefresh(message: string): void {
+  failStubbedProvidersGet(message)
+}
+
+/** Clear the provider status refresh failure. */
+export function clearTavilyStatusFailure(): void {
+  failStubbedProvidersGet(null)
+}
+
 
 // ---------------------------------------------------------------------------
 // Provider PATCH failure/delay injection (provider-access-flags suite).
@@ -1064,6 +1366,62 @@ export function tavilyUseTotals(): unknown[] {
 const stubbedProviderPatchFailures: Record<string, string> = {}
 const stubbedProviderPatchDelays: Record<string, number> = {}
 
+/** Tavily rate-tier dropdown additions: PATCH body log plus refresh/test/usage tracking. */
+interface StubbedProviderPatch {
+  backendId: string
+  body: Record<string, unknown>
+}
+const stubbedProviderPatches: StubbedProviderPatch[] = []
+const stubbedTestRequests: string[] = []
+const stubbedUsageRequests: string[] = []
+let stubbedProvidersGetFailure: string | null = null
+let stubbedDashboardGetFailure: string | null = null
+
+/** PATCH bodies seen in this scenario, in order, with the backend provider id. */
+export function stubbedProviderPatchBodies(): StubbedProviderPatch[] {
+  return [...stubbedProviderPatches]
+}
+
+/** Provider ids that received POST .../test in this scenario. */
+export function stubbedTestCalls(): string[] {
+  return [...stubbedTestRequests]
+}
+
+/** URLs that hit a vendor-usage shaped endpoint in this scenario. */
+export function stubbedUsageCalls(): string[] {
+  return [...stubbedUsageRequests]
+}
+
+/** Set the confirmed Tavily key environment served by GET /api/v1/providers. */
+export function setStubbedTavilyKeyEnvironment(
+  env: "dev" | "prod" | null | undefined,
+): void {
+  stubbedTavilyKeyEnvironment = (env === undefined ? null : env) as typeof stubbedTavilyKeyEnvironment
+}
+
+/** Serve a raw (possibly invalid) Tavily key environment value for absent-state proof. */
+export function setStubbedTavilyKeyEnvironmentRaw(value: unknown): void {
+  stubbedTavilyKeyEnvironment = value as typeof stubbedTavilyKeyEnvironment
+}
+
+/** Override the secret presence served for one backend provider id. */
+export function setStubbedSecretPresence(provider: string, presence: SecretPresence): void {
+  stubbedSecretPresence[provider] = presence
+}
+
+/** Fail the next GET /api/v1/providers reads, or clear the failure. */
+export function failStubbedProvidersGet(message: string | null): void {
+  stubbedProvidersGetFailure = message
+}
+
+/** Fail the next GET /dashboard reads, or clear the failure. */
+export function failStubbedDashboardGet(message: string | null): void {
+  stubbedDashboardGetFailure = message
+}
+
+let stubbedTavilyKeyEnvironment: "dev" | "prod" | null = "dev"
+const stubbedSecretPresence: Record<string, SecretPresence> = {}
+
 /** Fail the next PATCH for one backend provider id, or clear the failure. */
 export function failStubbedProviderPatch(provider: string, message: string | null): void {
   if (message === null) delete stubbedProviderPatchFailures[provider]
@@ -1074,6 +1432,19 @@ export function failStubbedProviderPatch(provider: string, message: string | nul
 export function delayStubbedProviderPatch(provider: string, ms: number | null): void {
   if (ms === null) delete stubbedProviderPatchDelays[provider]
   else stubbedProviderPatchDelays[provider] = ms
+}
+
+let stubbedTavilyPatchReadback: { armed: boolean; value: unknown } = { armed: false, value: undefined }
+
+/**
+ * Serve the next Tavily PATCH 200 with this raw readback instead of the
+ * stored key environment. `undefined` omits the field (missing readback);
+ * any other non dev/prod value is invalid. The stored environment stays at
+ * its pre-save value, so the app treats the save as unconfirmed. One-shot:
+ * the next Tavily PATCH consumes it. Cleared per scenario.
+ */
+export function setStubbedProviderPatchReadbackRaw(value: unknown): void {
+  stubbedTavilyPatchReadback = { armed: true, value }
 }
 
 // ---------------------------------------------------------------------------
@@ -1829,9 +2200,10 @@ function initialProviders(): StubProvider[] {
       health: "healthy",
       circuit_breaker: { state: "closed", updated_at: FIXED_AT },
       latency_p95_ms: 110 + index * 10,
-      secret_presence: SECRET_PRESENCE[id] ?? "missing",
+      secret_presence: stubbedSecretPresence[id] ?? SECRET_PRESENCE[id] ?? "missing",
       free_tier_estimates: { search: "0", fetch: "0", cost_estimate: "0" },
       reset_schedule: null,
+      tavily_key_environment: id === "tavily" ? stubbedTavilyKeyEnvironment : null,
     }
   })
 }
@@ -1928,6 +2300,15 @@ export async function installBackendStub(page: Page): Promise<void> {
   for (const key of Object.keys(stubbedTraceDetailFailures)) {
     delete stubbedTraceDetailFailures[key]
   }
+  stubbedProviderPatches.length = 0
+  stubbedTestRequests.length = 0
+  stubbedUsageRequests.length = 0
+  stubbedProvidersGetFailure = null
+  stubbedDashboardGetFailure = null
+  stubbedDashboardGetDelayMs = null
+  stubbedTavilyPatchReadback = { armed: false, value: undefined }
+  stubbedTavilyKeyEnvironment = "dev"
+  for (const key of Object.keys(stubbedSecretPresence)) delete stubbedSecretPresence[key]
   let providers = initialProviders()
   let routing: StubRouting = {
     fallback_policy: "chained",
@@ -2031,6 +2412,7 @@ export async function installBackendStub(page: Page): Promise<void> {
     if (route.request().method() !== "POST") return route.fallback()
     const segments = new URL(route.request().url()).pathname.split("/")
     const backendId = segments[segments.length - 2] ?? "brave"
+    stubbedTestRequests.push(backendId)
     return json(route, {
       provider: backendId,
       ok: true,
@@ -2039,6 +2421,11 @@ export async function installBackendStub(page: Page): Promise<void> {
       checked_at: FIXED_AT,
       detail: null,
     })
+  })
+
+  await page.route("**/api/v1/providers/*/usage", (route) => {
+    stubbedUsageRequests.push(new URL(route.request().url()).pathname)
+    return json(route, { detail: "usage reads are not part of the rate-tier contract" }, 404)
   })
 
   await page.route("**/api/v1/providers/*/circuit-breaker/reset", (route) => {
@@ -2105,20 +2492,60 @@ export async function installBackendStub(page: Page): Promise<void> {
           (patch.fetch_enabled as boolean) ? enableMask | 4 : enableMask & ~4
       }
     }
+    if (patch.tavily_key_environment !== undefined) {
+      if (backendId !== "tavily") {
+        return json(route, { detail: "tavily_key_environment applies to Tavily only" }, 422)
+      }
+      if (patch.tavily_key_environment !== "dev" && patch.tavily_key_environment !== "prod") {
+        return json(route, { detail: "tavily_key_environment must be dev or prod" }, 422)
+      }
+    }
     const next: StubProvider = {
       ...current,
       enable_mask: enableMask,
       support_mask: current.support_mask,
       enabled: (enableMask & current.support_mask & 1) !== 0,
       priority: typeof patch.priority === "number" ? (patch.priority as number) : current.priority,
+      tavily_key_environment:
+        patch.tavily_key_environment === "dev" || patch.tavily_key_environment === "prod"
+          ? (patch.tavily_key_environment as "dev" | "prod")
+          : current.tavily_key_environment,
     }
+    const tavilyRawReadback = backendId === "tavily" && stubbedTavilyPatchReadback.armed
+      ? stubbedTavilyPatchReadback.value
+      : undefined
+    const tavilyReadbackOverridden = backendId === "tavily" && stubbedTavilyPatchReadback.armed
+    if (tavilyReadbackOverridden) stubbedTavilyPatchReadback = { armed: false, value: undefined }
+    if (!tavilyReadbackOverridden && next.provider_id === "tavily" && (next.tavily_key_environment === "dev" || next.tavily_key_environment === "prod")) {
+      stubbedTavilyKeyEnvironment = next.tavily_key_environment
+    }
+    stubbedProviderPatches.push({ backendId, body: { ...patch } })
     providers = providers.map((row) => (row.provider_id === backendId ? next : row))
+    if (tavilyReadbackOverridden) {
+      if (tavilyRawReadback === undefined) {
+        const { tavily_key_environment: _dropped, ...withoutReadback } = next
+        void _dropped
+        return json(route, withoutReadback)
+      }
+      return json(route, { ...next, tavily_key_environment: tavilyRawReadback })
+    }
     return json(route, next)
   })
 
   await page.route("**/api/v1/providers", (route) => {
     if (route.request().method() !== "GET") return route.fallback()
-    return json(route, providers)
+    if (stubbedProvidersGetFailure !== null) {
+      return json(route, { detail: stubbedProvidersGetFailure }, 500)
+    }
+    return json(route, providers.map((row) => ({
+      ...row,
+      ...(stubbedSecretPresence[row.provider_id] !== undefined
+        ? { secret_presence: stubbedSecretPresence[row.provider_id] }
+        : {}),
+      ...(row.provider_id === "tavily"
+        ? { tavily_key_environment: stubbedTavilyKeyEnvironment }
+        : {}),
+    })))
   })
 
   // Routing config: PUT updates the in-memory variable; later GETs see it.
@@ -2141,8 +2568,15 @@ export async function installBackendStub(page: Page): Promise<void> {
   // Pathname-exact dashboard matcher: the legacy "**/dashboard*" glob also
   // matched the Vite module URL /src/app/selectors/dashboardOverlay.ts (new
   // in Slice 6), fulfilling a JS import with JSON and blanking the app.
-  await page.route((url) => url.pathname === "/dashboard", (route) => {
+  await page.route((url) => url.pathname === "/dashboard", async (route) => {
     if (route.request().method() !== "GET") return route.fallback()
+    if (stubbedDashboardGetFailure !== null) {
+      return json(route, { detail: stubbedDashboardGetFailure }, 500)
+    }
+    const dashboardDelayMs: number | null = stubbedDashboardGetDelayMs
+    if (dashboardDelayMs !== null && dashboardDelayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, dashboardDelayMs))
+    }
     return json(route, dashboardWithQuotaOverride())
   })
 
@@ -2319,8 +2753,12 @@ export async function overrideDashboardLatestQuota(
   // matched the Vite module URL /src/app/selectors/dashboardOverlay.ts,
   // fulfilling a JS import with JSON and blanking the app.
   await page.unroute((url) => url.pathname === "/dashboard")
-  await page.route((url) => url.pathname === "/dashboard", (route) => {
+  await page.route((url) => url.pathname === "/dashboard", async (route) => {
     if (route.request().method() !== "GET") return route.fallback()
+    const overrideDelayMs: number | null = stubbedDashboardGetDelayMs
+    if (overrideDelayMs !== null && overrideDelayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, overrideDelayMs))
+    }
     return json(route, dashboardWithQuotaOverride())
   })
 }

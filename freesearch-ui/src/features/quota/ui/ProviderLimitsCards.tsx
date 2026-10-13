@@ -5,7 +5,7 @@ import { activeAuth } from "../model/crdCardModel"
 import { balancePrefill, type BalancePrefill } from "../model/providerInfo"
 import { Footnote } from "./Footnote"
 import type { OAuthSlotArgs } from "./QuotaRow"
-import { ProviderLimitsCard } from "./ProviderLimitsCard"
+import { ProviderLimitsCard, type RateTierSlotArgs } from "./ProviderLimitsCard"
 
 export interface ProviderLimitsCardsProps {
   providers: ProviderConfig[]
@@ -23,6 +23,12 @@ export interface ProviderLimitsCardsProps {
    * OAuth feature directly.
    */
   renderOAuthActions?: (args: OAuthSlotArgs) => ReactNode
+  /**
+   * Tavily tier control per provider. Supplied by composition (the quota
+   * overlay stays in app composition), so the quota feature never imports the
+   * Settings feature directly.
+   */
+  renderRateTier?: (args: RateTierSlotArgs) => ReactNode
 }
 
 /** Credit-unit use rows of one provider; a card receives its own rows only. */
@@ -75,6 +81,7 @@ export function ProviderLimitsCards({
   manualEligible,
   dashboardQuotas,
   renderOAuthActions,
+  renderRateTier,
 }: ProviderLimitsCardsProps): ReactNode {
   const entries = providers
     .map((provider) => ({
@@ -122,6 +129,7 @@ export function ProviderLimitsCards({
                 ? { latestQuota: quotaOf(entry.provider.id) }
                 : {})}
               {...(renderOAuthActions !== undefined ? { renderOAuthActions } : {})}
+              {...(renderRateTier !== undefined ? { renderRateTier } : {})}
             />
           ))}
         </div>

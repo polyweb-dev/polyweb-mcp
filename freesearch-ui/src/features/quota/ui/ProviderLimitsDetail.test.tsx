@@ -283,8 +283,8 @@ describe("ProviderLimitsDetail", () => {
     )
     expect(screen.getByText("Search budget limit")).not.toBeNull()
     expect(screen.getByText("Extract budget limit")).not.toBeNull()
-    expect(screen.getByText("1 Credit set, 0 Credits used")).not.toBeNull()
-    expect(screen.getByText("2 Credits set, 0 Credits used")).not.toBeNull()
+    expect(screen.getByText("1 Tavily Credit set, 0 Tavily Credits used")).not.toBeNull()
+    expect(screen.getByText("2 Tavily Credits set, 0 Tavily Credits used")).not.toBeNull()
     expect(screen.queryByText("8 CRD")).toBeNull()
   })
 
@@ -306,5 +306,98 @@ describe("ProviderLimitsDetail", () => {
     render(<ProviderLimitsDetail providerName="Tavily" auth={auth} />)
     expect(screen.getByText("Fetch budget limit")).not.toBeNull()
     expect(screen.queryByText("Extract budget limit")).toBeNull()
+  })
+})
+
+/**
+ * Tavily native vendor detail: integer Credits caps, trimmed USD spend,
+ * Extract vocab, unknown facts stay absent, generic output unchanged.
+ */
+
+function tavilyProfile() {
+  return {
+    reference_usd_per_crd: "0.001",
+    native_usd_per_unit: "0.008",
+    cost_basis: "paygo_reference",
+    price_version: "paygo-reference",
+    source: "documented",
+    estimated: true,
+  }
+}
+
+function tavilyGrants(searchGranted: string, fetchGranted: string) {
+  return {
+    provider: "tavily",
+    auth_mode: "keyed",
+    period_start: "2026-09-01",
+    period_end: "2026-09-30",
+    version: 3,
+    search_granted_crd: searchGranted,
+    search_consumed_crd: "0",
+    search_reserved_crd: "0",
+    fetch_granted_crd: fetchGranted,
+    fetch_consumed_crd: "0",
+    fetch_reserved_crd: "0",
+  }
+}
+
+describe("ProviderLimitsDetail nativeDisplay", () => {
+  it("floors fractional grant caps to whole Tavily Credits", () => {
+    const auth = withGrants(withFetchSupport(authFixture()), tavilyGrants("9.9", "17.9"))
+    render(
+      <ProviderLimitsDetail
+        providerName="Tavily"
+        auth={auth}
+        nativeDisplay={{ credits: {} as never, profile: tavilyProfile() } as never}
+      />,
+    )
+    expect(screen.getByText("1 Tavily Credit set, 0 Tavily Credits used")).not.toBeNull()
+    expect(screen.getByText("2 Tavily Credits set, 0 Tavily Credits used")).not.toBeNull()
+  })
+
+  it("trims USD spend zeros for the native rail", () => {
+    const auth = withSpend(authFixture(), "1.230000000")
+    render(
+      <ProviderLimitsDetail
+        providerName="Tavily"
+        auth={auth}
+        nativeDisplay={{ credits: {} as never, profile: tavilyProfile() } as never}
+      />,
+    )
+    expect(screen.getByText("1.23")).not.toBeNull()
+  })
+
+  it("keeps exact USD spend for other providers", () => {
+    render(<ProviderLimitsDetail providerName="Brave" auth={withSpend(authFixture(), "1.230000000")} />)
+    expect(screen.getByText("1.230000000")).not.toBeNull()
+  })
+
+  it("names the Tavily fetch cap Extract with native input and Fetch without it", () => {
+    const grants = tavilyGrants("8", "16")
+    const native = withGrants(withFetchSupport(authFixture()), grants)
+    const { unmount } = render(
+      <ProviderLimitsDetail
+        providerName="Tavily"
+        auth={native}
+        nativeDisplay={{ credits: {} as never, profile: tavilyProfile() } as never}
+      />,
+    )
+    expect(screen.getByText("Extract budget limit")).not.toBeNull()
+    unmount()
+    render(<ProviderLimitsDetail providerName="Tavily" auth={withGrants(withFetchSupport(authFixture()), grants)} />)
+    expect(screen.getByText("Fetch budget limit")).not.toBeNull()
+  })
+
+  it("shows no grant rows without stored grants", () => {
+    const auth = authFixture()
+    render(
+      <ProviderLimitsDetail
+        providerName="Tavily"
+        auth={auth}
+        nativeDisplay={{ credits: {} as never, profile: tavilyProfile() } as never}
+      />,
+    )
+    expect(screen.queryByText("Search budget limit")).toBe(null)
+    expect(screen.queryByText("Extract budget limit")).toBe(null)
   })
 })

@@ -737,3 +737,53 @@ def test_tavily_values_persist_through_json_registry(monkeypatch) -> None:
     record = get_provider_configs()[ProviderName.TAVILY]
     assert record.tavily_key_environment == "prod"
     assert record.tavily_paygo_enabled is True
+
+
+def test_tavily_env_only_update_preserves_unrelated_configuration() -> None:
+    """A PATCH-shaped env-only update keeps every unrelated field (readback need)."""
+
+    base = ProviderConfig(
+        enable_mask=6,
+        priority=7,
+        reset_schedule="monthly",
+        free_tier_estimates={
+            UsageOperation.SEARCH: Decimal("2"),
+            UsageOperation.FETCH: Decimal("3"),
+            UsageOperation.COST_ESTIMATE: Decimal("1"),
+        },
+        exa_monthly_budget_usd=Decimal("10.00"),
+        tavily_key_environment="dev",
+        tavily_paygo_enabled=True,
+    )
+
+    updated = ProviderConfigUpdate(tavily_key_environment="prod").apply_to(base)
+
+    assert updated.tavily_key_environment == "prod"
+    assert updated.tavily_paygo_enabled is True
+    assert updated.enable_mask == 6
+    assert updated.priority == 7
+    assert updated.reset_schedule == "monthly"
+    assert updated.free_tier_estimates[UsageOperation.SEARCH] == Decimal("2")
+    assert updated.free_tier_estimates[UsageOperation.FETCH] == Decimal("3")
+    assert updated.free_tier_estimates[UsageOperation.COST_ESTIMATE] == Decimal("1")
+    assert updated.exa_monthly_budget_usd == Decimal("10.00")
+
+
+def test_tavily_empty_update_preserves_env_and_unrelated_configuration() -> None:
+    """An empty PATCH-shaped update never resets the stored env or other fields."""
+
+    base = ProviderConfig(
+        enable_mask=6,
+        priority=7,
+        reset_schedule="monthly",
+        tavily_key_environment="prod",
+        tavily_paygo_enabled=True,
+    )
+
+    updated = ProviderConfigUpdate().apply_to(base)
+
+    assert updated.tavily_key_environment == "prod"
+    assert updated.tavily_paygo_enabled is True
+    assert updated.enable_mask == 6
+    assert updated.priority == 7
+    assert updated.reset_schedule == "monthly"

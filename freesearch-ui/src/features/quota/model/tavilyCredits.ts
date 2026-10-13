@@ -19,6 +19,7 @@ import type {
   TierBalance,
 } from "@/domains/dashboard"
 import { operationAvailable } from "./crdCardModel"
+import { callsText } from "./crdDisplay"
 import { parseDecimal, subtractDecimal } from "./manualQuotaMath"
 
 /** One balance state of a Tavily native rail; the unit stays `Credits` in all of them. */
@@ -338,6 +339,26 @@ export function minuteHeadroomOf(windows: LimitRateWindow[]): string | null {
   if (remaining === null) return null
   const limit = known(minute.limit)
   return limit === null ? remaining : remaining + "/" + limit
+}
+
+/**
+ * Popover-only visible amount of one exact decimal string.
+ *
+ * The native kind floors a nonnegative amount to whole units through the
+ * exact decimal parser and the shared callsText rule, without binary float.
+ * A malformed, negative, absent, or unknown value yields null, never zero.
+ * The crd and usd kinds keep significant fractions and trim redundant
+ * trailing zeros ("1.600000000" reads "1.6", "0.008000000" reads "0.008"),
+ * without integer conversion and without a monetary subunit.
+ */
+export function formatTavilyPopoverAmount(amount: string, kind: "native" | "crd" | "usd"): string | null {
+  const text = amount.trim()
+  if (text === "" || text.toLowerCase() === "unknown" || text.toLowerCase() === "n/a") return null
+  if (parseDecimal(text) === null) return null
+  if (kind === "native") return callsText(text)
+  if (!text.includes(".")) return text
+  const trimmed = text.replace(/0+$/, "").replace(/\.$/, "")
+  return trimmed === "" ? "0" : trimmed
 }
 
 /** The applicable CRD price profile of one rail: the runnable operation first. */

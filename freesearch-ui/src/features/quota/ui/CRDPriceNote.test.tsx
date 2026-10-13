@@ -2,11 +2,7 @@ import { describe, expect, it } from "vitest"
 import { render, screen } from "@testing-library/react"
 import { CRDPriceNote } from "./CRDPriceNote"
 
-/**
- * UI7 footer: one price note with 1 CRD = USD 0.001, Brave search at
- * 0.005 USD and 5 CRD, known version listed once, no unsupported or
- * unknown price row. Covers UI7-06.
- */
+/** UI7 price note: per-operation provider costs, with free tiers marked inline. */
 
 function profile(overrides: Record<string, unknown> = {}) {
   return {
@@ -104,33 +100,32 @@ describe("CRDPriceNote", () => {
     expect(headers.map((entry) => entry.textContent)).toEqual([
       "Provider",
       "Operation",
-      "USD per call",
-      "CRD per call",
+      "USD per operation",
+      "CRD per operation",
     ])
     expect(screen.getByText(/Price profile: v2026-09/)).not.toBeNull()
   })
 
-  it("closes the table on all sides with a colored left border on each row (final-polish 1)", () => {
+  it("frames the table with rounded edges and keeps the colored operation border", () => {
     render(
       <CRDPriceNote
         providers={[{ id: "brave", name: "Brave" }] as never}
         providerLimits={[braveLimits()] as never}
       />,
     )
+    const frame = screen.getByRole("table").closest(".rounded-lg")
+    expect(frame?.className).toContain("overflow-hidden")
+    expect(frame?.className).toContain("border-[var(--border-subtle)]")
     const rows = screen.getAllByRole("row")
     expect(rows.length).toBeGreaterThan(1)
     const headerClass = rows[0].className
-    expect(headerClass).toContain("border-t")
-    expect(headerClass).toContain("border-l")
-    expect(headerClass).toContain("border-r")
+    expect(headerClass).toContain("border-[var(--border-subtle)]")
     for (const row of rows.slice(1)) {
-      expect(row.className).toContain("border-l-2!")
-      expect(row.className).toContain("border-r!")
-      expect(row.className).toContain("border-b!")
+      expect(row.className).not.toContain("border-r!")
+      const firstCell = row.querySelector("td")
+      expect(firstCell?.style.boxShadow).toContain("inset 2px 0 0")
+      expect(firstCell?.style.boxShadow).toContain("var(--accent-cyan)")
     }
-    const lastClass = rows[rows.length - 1].className
-    expect(lastClass).toContain("border-l-2!")
-    expect(lastClass).toContain("border-b!")
   })
 
   it("shows one muted sentence for an empty catalog (UI7-06)", () => {
@@ -139,7 +134,7 @@ describe("CRDPriceNote", () => {
     expect(screen.queryByRole("table")).toBe(null)
   })
 
-  it("excludes Tavily USD rows from the always-visible table while keeping Brave", () => {
+  it("includes Tavily prices and labels free reference and zero-cost rows", () => {
     const tavilySearch = {
       provider: "tavily",
       operation: "search",
@@ -192,13 +187,37 @@ describe("CRDPriceNote", () => {
     }
     render(
       <CRDPriceNote
-        providers={[{ id: "brave", name: "Brave" }, { id: "tavily", name: "Tavily" }] as never}
+        providers={[
+          { id: "brave", name: "Brave" },
+          { id: "tavily", name: "Tavily", hasKey: true, capabilities: ["search"] },
+          {
+            id: "keenable",
+            name: "Keenable",
+            hasKey: false,
+            keyVaultStatus: "keyless_public",
+            capabilities: ["search", "fetch"],
+          },
+          { id: "tinyfish", name: "Tinyfish", hasKey: true, capabilities: ["search", "fetch"] },
+          { id: "firecrawl", name: "Firecrawl", hasKey: true, capabilities: ["search", "fetch"] },
+        ] as never}
         providerLimits={[braveLimits(), tavilyLimits] as never}
       />,
     )
     expect(screen.getByText("0.005 USD")).not.toBeNull()
     expect(screen.getByText("5 CRD")).not.toBeNull()
-    expect(screen.queryByText("Tavily")).toBeNull()
-    expect(screen.queryByText("8 CRD")).toBeNull()
+    expect(screen.getByText("Tavily")).not.toBeNull()
+    expect(screen.getByText("0.008 USD")).not.toBeNull()
+    expect(screen.getByText("8 CRD")).not.toBeNull()
+    expect(screen.getAllByText("Plan-dependent", { exact: true })).toHaveLength(2)
+    expect(screen.getAllByText("—", { exact: true })).toHaveLength(2)
+
+    for (const referenceCost of ["0.004 USD (estimated)", "4 CRD"]) {
+      const struckPrices = screen.getAllByText(referenceCost, { exact: true })
+      expect(struckPrices.length).toBeGreaterThan(0)
+      for (const price of struckPrices) {
+        expect(price.closest("s")).not.toBeNull()
+      }
+    }
+    expect(screen.getAllByText("Free", { exact: true })).toHaveLength(8)
   })
 })

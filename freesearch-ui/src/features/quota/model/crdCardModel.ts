@@ -19,10 +19,12 @@ import type {
   ProviderAuthLimits,
   ProviderLimits,
 } from "@/domains/dashboard"
-import type { ProviderConfig } from "@/domains/providers"
 import { formatCRDAmount, percentRemaining, sumAmounts } from "./crdDisplay"
 import { multiplyDecimal, parseDecimal } from "./manualQuotaMath"
+import { buildPriceNoteRows, type PriceNoteInput, type PriceNoteRow } from "./priceNoteRows"
 import { sourceLabel, BALANCE_ENTRY } from "./quotaLabels"
+
+export type { PriceNoteInput, PriceNoteRow } from "./priceNoteRows"
 
 const OPERATIONS: readonly CRDOperation[] = ["search", "fetch"]
 const USD_UNIT = "USD"
@@ -54,23 +56,6 @@ export interface CreditCardModel {
   pricedUseUSD: string | null
   provenanceNote: string | null
   poolIds: string[]
-}
-
-/** Input of the page price note. */
-export interface PriceNoteInput {
-  providers: ProviderConfig[]
-  providerLimits: ProviderLimits[]
-}
-
-/** One supported operation price of one provider. */
-export interface PriceNoteRow {
-  provider: string
-  providerName: string
-  operation: CRDOperation
-  usdPerCall: string
-  crdPerCall: string
-  priceVersion: string | null
-  estimated: boolean
 }
 
 interface Funds {
@@ -335,35 +320,7 @@ export function creditCardModel(input: CreditCardInput): CreditCardModel {
   return modelOf(input, funds, profile)
 }
 
-/**
- * Footer price rows: one row per supported operation of the reported payload.
- * The USD call value comes from `request_cost_crd` and its profile reference,
- * so an unknown or unsupported operation never becomes a price row.
- */
+/** Footer price rows from runtime limits and documented provider references. */
 export function priceNoteRows(input: PriceNoteInput): PriceNoteRow[] {
-  const rows: PriceNoteRow[] = []
-  for (const limits of input.providerLimits) {
-    const provider = input.providers.find((entry) => entry.id === limits.provider)
-    const auth = activeAuth(limits, provider?.hasKey)
-    if (auth === undefined) continue
-    for (const operation of OPERATIONS) {
-      if (!operationAvailable(auth, operation)) continue
-      const record = recordFor(auth, operation)
-      const view = auth.crd_views.find((entry) => entry.operation === operation)
-      if (record === null || view === undefined || view.request_cost_crd === null) continue
-      const usdPerCall = usdFromCRD(view.request_cost_crd, record.conversion_profile)
-      if (usdPerCall === null) continue
-      const version = record.conversion_profile.price_version
-      rows.push({
-        provider: limits.provider,
-        providerName: provider === undefined ? limits.provider : provider.name,
-        operation,
-        usdPerCall,
-        crdPerCall: formatCRDAmount(view.request_cost_crd),
-        priceVersion: version === "" ? null : version,
-        estimated: record.conversion_profile.estimated,
-      })
-    }
-  }
-  return rows
+  return buildPriceNoteRows(input, { activeAuth, usdFromCRD, formatCRDAmount })
 }
