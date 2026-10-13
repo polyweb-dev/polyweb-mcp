@@ -3,6 +3,7 @@ import { useFreeSearch } from "@/context/useFreeSearch"
 
 const MIN_DEPTH = 1
 const MAX_DEPTH = 5
+
 /**
  * Resilience policy rows: persisted max-attempts depth and backend timeout disclosure.
  */
@@ -18,8 +19,8 @@ export function ResiliencePolicy() {
     : "1 hop (single-shot)"
 
   return (
-    <section className="space-y-4 w-full max-w-none">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--elevated)] px-4 py-3">
+    <div className="w-full max-w-none overflow-hidden rounded-lg border border-[var(--border-subtle)]">
+      <div className="flex flex-col gap-2 border-b border-[var(--border-subtle)] bg-[var(--elevated)] px-4 py-2.5 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-2.5">
           <h3 className="text-[13px] font-semibold text-[var(--text-strong)]">
             Resilience policy
@@ -33,7 +34,7 @@ export function ResiliencePolicy() {
         </p>
       </div>
 
-      <div className="rounded-lg border border-[var(--border-subtle)] px-4 divide-y divide-[var(--border-subtle)]">
+      <div className="px-4 divide-y divide-[var(--border-subtle)]">
         <div className="flex items-center justify-between py-3 gap-4">
           <div className="flex flex-col gap-0.5">
             <span className="text-[13px] text-[var(--muted)]">Cascade depth</span>
@@ -78,8 +79,7 @@ export function ResiliencePolicy() {
           {/* GAP: 10 — the backend does not expose a per-hop timeout budget. */}
           <span className="text-[13px] text-[var(--muted)]">Timeout budget not exposed by backend</span>
         </div>
-
       </div>
-    </section>
+    </div>
   )
 }

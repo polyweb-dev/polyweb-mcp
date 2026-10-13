@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
-import { render, screen } from "@testing-library/react"
+import { render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import type { CRDUsageTotal, CRDView, LimitRecord, ProviderAuthLimits, ProviderLimits } from "@/domains/dashboard"
+import type { CRDUsageTotal, CRDView, LimitRecord, ProviderAuthLimits, ProviderLimits, RateProgressView } from "@/domains/dashboard"
 import { installFetchStub, ok } from "@/test/fetchMock"
 import { ProviderLimitsCard } from "./ProviderLimitsCard"
 
@@ -163,6 +163,148 @@ function renderBraveCard(): void {
   )
 }
 
+function tinyfishRecord(operation: "search" | "fetch"): LimitRecord {
+  return {
+    provider: "tinyfish",
+    operation,
+    auth_mode: "keyed",
+    supported: true,
+    transport_available: true,
+    native_pool_id: null,
+    rate: null,
+    budget: null,
+    conversion_profile: {
+      reference_usd_per_crd: "0.001",
+      native_usd_per_unit: null,
+      cost_basis: "priced_native_use",
+      price_version: "v2026-09",
+      source: "documented",
+      estimated: false,
+    },
+    plan_name: "Tinyfish",
+    usage_url: null,
+    version: 1,
+  }
+}
+
+function tinyfishProgress(overrides: Partial<RateProgressView> = {}): RateProgressView {
+  return {
+    bucket_id: "tinyfish-synth",
+    operation: "search",
+    window: "1h",
+    unit: "requests",
+    remaining: "498.000000000",
+    limit: "500",
+    reset_at: null,
+    source: "synth-source",
+    confidence: "authoritative",
+    kind: "rate",
+    stale: false,
+    enforceable: false,
+    ...overrides,
+  }
+}
+
+function tinyfishAuth(): ProviderAuthLimits {
+  return {
+    auth_mode: "keyed",
+    transport_available: true,
+    search: tinyfishRecord("search"),
+    fetch: tinyfishRecord("fetch"),
+    free_tiers: [],
+    paid_tiers: [],
+    unknown_tiers: [],
+    tier_split_known: true,
+    aggregate_pool: null,
+    crd_views: [
+      {
+        state: "unmetered",
+        operation: "search",
+        remaining_crd: null,
+        local_remaining_crd: null,
+        request_cost_crd: null,
+        shared_pool_id: null,
+        possible_standard_calls: null,
+        price_version: null,
+        priced: false,
+      },
+      {
+        state: "unmetered",
+        operation: "fetch",
+        remaining_crd: null,
+        local_remaining_crd: null,
+        request_cost_crd: null,
+        shared_pool_id: null,
+        possible_standard_calls: null,
+        price_version: null,
+        priced: false,
+      },
+    ],
+    rate_progress: [
+      tinyfishProgress({
+        bucket_id: "tinyfish-search-hourly",
+        operation: "search",
+        window: "1h",
+        unit: "requests",
+        remaining: "498.000000000",
+        limit: "500",
+      }),
+      tinyfishProgress({
+        bucket_id: "tinyfish-fetch-daily",
+        operation: "fetch",
+        window: "1d",
+        unit: "urls",
+        remaining: "1000.000000000",
+        limit: "1000",
+      }),
+    ],
+    grants: null,
+    detail: {
+      plan_name: "Tinyfish",
+      native_unit: null,
+      native_balance: null,
+      native_allowance: null,
+      usd_per_call: null,
+      actual_spend_usd: null,
+      reset_at: null,
+      reset_rule: "unknown",
+      usage_url: "https://api.search.tinyfish.ai/",
+      source: "vendor_api",
+      confidence: "authoritative",
+      last_sync_at: null,
+      stale: false,
+      price_version: "v2026-09",
+      crd_split_note: null,
+      rate_windows: [
+        {
+          bucket_id: "tinyfish-search-1m",
+          limit: "30",
+          window: "1m",
+          scope: "key",
+          unit: "requests",
+          remaining: null,
+          reset_at: null,
+          source: "synth-source",
+          confidence: "authoritative",
+        },
+      ],
+      tier_split_known: true,
+      aggregate_pool_id: null,
+    },
+  }
+}
+
+function tinyfishLimits(): ProviderLimits {
+  return {
+    provider: "tinyfish",
+    active_auth_mode: "keyed",
+    auths: [tinyfishAuth()],
+    documented_keyless_operations: [],
+    version: 1,
+    generated_at: "2026-03-10T12:00:00Z",
+  }
+}
+
 /** CARD-3 fraction oracle: "4500 / 5000 CRD" renders as split spans, never one "4500 CRD" node. */
 function expectFraction(remaining: string, total: string): void {
   expect(screen.getByText(remaining)).not.toBeNull()
@@ -227,7 +369,7 @@ describe("ProviderLimitsCard Brave", () => {
       />,
     )
     expect(
-      screen.getByRole("button", { name: "Sync limits for Brave" }),
+      screen.getByRole("button", { name: "Refresh limits for Brave" }),
     ).not.toBeNull()
     expect(stub.requestsTo(/limits/).length).toBeLessThan(2)
     vi.unstubAllGlobals()
@@ -303,14 +445,14 @@ describe("ProviderLimitsCard Brave", () => {
   it("places actions at the leading edge and the fraction at the trailing edge below the bar (CARD-3)", () => {
     renderBraveCard()
     const buttons = screen.getAllByRole("button").map((button) => button.textContent)
-    expect(buttons.slice(0, 4)).toEqual(["Sync", "Provider Balance", "Budget Limit", "History"])
+    expect(buttons.slice(0, 4)).toEqual(["Refresh Limits", "Provider Balance", "Budget Limit", "History"])
     const info = screen.getByRole("button", { name: "Credit details for Brave" })
     expect(info.getAttribute("data-testid")).toBe("credit-info-brave")
     const creditRow = screen.getByText("4500").closest("span")?.parentElement?.parentElement
     expect(creditRow?.className).toContain("justify-between")
     const children = Array.from(creditRow?.children ?? [])
     expect(children.length).toBe(2)
-    expect(children[0]?.textContent).toContain("Sync")
+    expect(children[0]?.textContent).toContain("Refresh Limits")
     expect(children[0]?.textContent).toContain("Provider Balance")
     expect(children[0]?.textContent).toContain("Budget Limit")
     expect(children[0]?.textContent).toContain("History")
@@ -518,6 +660,642 @@ describe("ProviderLimitsCard Tavily native", () => {
     await user.click(screen.getByRole("button", { name: "Credit details for Tavily" }))
     expect(await screen.findByText("Quota Details")).not.toBeNull()
     expect(screen.getByText("0.008")).not.toBeNull()
+    vi.unstubAllGlobals()
+  })
+})
+
+/**
+ * Keenable card: one aggregate bar for the shared keyed pool, and an
+ * unmetered keyless rail with a separate shared hourly rate bar.
+ * Keeps the Brave fixture and cases above unchanged.
+ */
+
+function keenableKeyedSearchView(): CRDView {
+  return {
+    state: "finite",
+    operation: "search",
+    remaining_crd: "399980",
+    local_remaining_crd: null,
+    request_cost_crd: "4",
+    shared_pool_id: "keenable:keyed:request",
+    possible_standard_calls: "99995",
+    price_version: "list_price",
+    priced: true,
+  }
+}
+
+function keenableKeyedFetchView(): CRDView {
+  return {
+    state: "finite",
+    operation: "fetch",
+    remaining_crd: "399980",
+    local_remaining_crd: null,
+    request_cost_crd: "4",
+    shared_pool_id: "keenable:keyed:request",
+    possible_standard_calls: "99995",
+    price_version: "list_price",
+    priced: true,
+  }
+}
+
+function keenableKeyedSearchRecord(): LimitRecord {
+  return {
+    provider: "keenable",
+    operation: "search",
+    auth_mode: "keyed",
+    supported: true,
+    transport_available: true,
+    native_pool_id: "keenable:keyed:request",
+    rate: null,
+    budget: null,
+    conversion_profile: {
+      reference_usd_per_crd: "0.001",
+      native_usd_per_unit: "0.004",
+      cost_basis: "priced_native_use",
+      price_version: "list_price",
+      source: "list_price_assumed",
+      estimated: true,
+    },
+    plan_name: "Monthly free requests",
+    usage_url: "https://app.keenable.ai/console",
+    version: 1,
+  }
+}
+
+function keenableKeyedFetchRecord(): LimitRecord {
+  return {
+    provider: "keenable",
+    operation: "fetch",
+    auth_mode: "keyed",
+    supported: true,
+    transport_available: true,
+    native_pool_id: "keenable:keyed:request",
+    rate: null,
+    budget: null,
+    conversion_profile: {
+      reference_usd_per_crd: "0.001",
+      native_usd_per_unit: "0.004",
+      cost_basis: "priced_native_use",
+      price_version: "list_price",
+      source: "list_price_assumed",
+      estimated: true,
+    },
+    plan_name: "Monthly free requests",
+    usage_url: "https://app.keenable.ai/console",
+    version: 1,
+  }
+}
+
+function keenableKeyedAuth(): ProviderAuthLimits {
+  return {
+    auth_mode: "keyed",
+    transport_available: true,
+    search: keenableKeyedSearchRecord(),
+    fetch: keenableKeyedFetchRecord(),
+    free_tiers: [],
+    paid_tiers: [],
+    unknown_tiers: [],
+    tier_split_known: true,
+    aggregate_pool: {
+      pool_id: "keenable:keyed:request",
+      provider: "keenable",
+      auth_mode: "keyed",
+      native_unit: "REQUEST",
+      remaining: "99995",
+      allowance: "100000",
+      actual_spend_usd: null,
+      source: "local_ledger",
+      confidence: "estimated",
+      reset_at: "2026-11-01T00:00:00Z",
+      observed_at: "2026-03-10T12:00:00Z",
+      version: 1,
+      credential_generation: 7,
+      next_sync_at: null,
+      stale: false,
+      manual_anchor: false,
+    },
+    crd_views: [keenableKeyedSearchView(), keenableKeyedFetchView()],
+    rate_progress: [],
+    grants: null,
+    detail: null,
+  }
+}
+
+function keenableLimits(): ProviderLimits {
+  return {
+    provider: "keenable",
+    active_auth_mode: "keyed",
+    auths: [keenableKeyedAuth()],
+    documented_keyless_operations: ["search", "fetch"],
+    version: 1,
+    generated_at: "2026-03-10T12:00:00Z",
+  }
+}
+
+function keenableKeylessSearchView(): CRDView {
+  return {
+    state: "unmetered",
+    operation: "search",
+    remaining_crd: null,
+    local_remaining_crd: null,
+    request_cost_crd: null,
+    shared_pool_id: null,
+    possible_standard_calls: null,
+    price_version: null,
+    priced: false,
+  }
+}
+
+function keenableKeylessFetchView(): CRDView {
+  return {
+    state: "unmetered",
+    operation: "fetch",
+    remaining_crd: null,
+    local_remaining_crd: null,
+    request_cost_crd: null,
+    shared_pool_id: null,
+    possible_standard_calls: null,
+    price_version: null,
+    priced: false,
+  }
+}
+
+function keenableKeylessRecord(operation: "search" | "fetch"): LimitRecord {
+  return {
+    provider: "keenable",
+    operation,
+    auth_mode: "keyless",
+    supported: true,
+    transport_available: true,
+    native_pool_id: null,
+    rate: null,
+    budget: null,
+    conversion_profile: {
+      reference_usd_per_crd: "0.001",
+      native_usd_per_unit: "0",
+      cost_basis: "priced_native_use",
+      price_version: "",
+      source: "unbilled_keyless",
+      estimated: false,
+    },
+    plan_name: "Keyless public pool",
+    usage_url: null,
+    version: 1,
+  }
+}
+
+function keenableKeylessAuth(): ProviderAuthLimits {
+  return {
+    auth_mode: "keyless",
+    transport_available: true,
+    search: keenableKeylessRecord("search"),
+    fetch: keenableKeylessRecord("fetch"),
+    free_tiers: [],
+    paid_tiers: [],
+    unknown_tiers: [],
+    tier_split_known: true,
+    aggregate_pool: null,
+    crd_views: [keenableKeylessSearchView(), keenableKeylessFetchView()],
+    rate_progress: [
+      {
+        bucket_id: "keenable:keyless:requests",
+        operation: "search",
+        window: "1h",
+        unit: "requests",
+        remaining: "990",
+        limit: "1000",
+        reset_at: null,
+        source: "documented_keyless",
+        confidence: "observed",
+        kind: "rate",
+        stale: false,
+        enforceable: true,
+      },
+    ],
+    grants: null,
+    detail: {
+      plan_name: "Keyless public pool",
+      native_unit: null,
+      native_balance: null,
+      native_allowance: null,
+      usd_per_call: null,
+      actual_spend_usd: null,
+      reset_at: null,
+      reset_rule: "unknown",
+      usage_url: null,
+      source: "documented_keyless",
+      confidence: "observed",
+      last_sync_at: null,
+      stale: false,
+      price_version: "",
+      crd_split_note: null,
+      rate_windows: [
+        {
+          bucket_id: "keenable:keyless:requests",
+          limit: "10",
+          window: "1s",
+          scope: "ip",
+          unit: "requests",
+          remaining: null,
+          reset_at: null,
+          source: "documented_keyless",
+          confidence: "observed",
+        },
+        {
+          bucket_id: "keenable:keyless:requests",
+          limit: "1000",
+          window: "1h",
+          scope: "ip",
+          unit: "requests",
+          remaining: null,
+          reset_at: null,
+          source: "documented_keyless",
+          confidence: "observed",
+        },
+      ],
+      tier_split_known: true,
+      aggregate_pool_id: null,
+    },
+  }
+}
+
+function keenableKeylessLimits(): ProviderLimits {
+  return {
+    provider: "keenable",
+    active_auth_mode: "keyless",
+    auths: [keenableKeylessAuth()],
+    documented_keyless_operations: ["search", "fetch"],
+    version: 1,
+    generated_at: "2026-03-10T12:00:00Z",
+  }
+}
+
+function keenableDecimalKeylessLimits(): ProviderLimits {
+  const auth = keenableKeylessAuth()
+  return {
+    provider: "keenable",
+    active_auth_mode: "keyless",
+    auths: [
+      {
+        ...auth,
+        rate_progress: [
+          {
+            bucket_id: "keenable:keyless:requests",
+            operation: "search",
+            window: "1h",
+            unit: "requests",
+            remaining: "990.00000000",
+            limit: "1000.00000000",
+            reset_at: null,
+            source: "documented_keyless",
+            confidence: "authoritative",
+            kind: "rate",
+            stale: false,
+            enforceable: true,
+          },
+          {
+            bucket_id: "keenable:keyless:requests",
+            operation: "fetch",
+            window: "1h",
+            unit: "requests",
+            remaining: "990.00000000",
+            limit: "1000.00000000",
+            reset_at: null,
+            source: "documented_keyless",
+            confidence: "authoritative",
+            kind: "rate",
+            stale: false,
+            enforceable: true,
+          },
+        ],
+      },
+    ],
+    documented_keyless_operations: ["search", "fetch"],
+    version: 1,
+    generated_at: "2026-03-10T12:00:00Z",
+  }
+}
+
+function keenableAuthoritativeKeylessLimits(): ProviderLimits {
+  const auth = keenableKeylessAuth()
+  return {
+    provider: "keenable",
+    active_auth_mode: "keyless",
+    auths: [
+      {
+        ...auth,
+        rate_progress: [
+          {
+            bucket_id: "keenable:keyless:requests",
+            operation: "search",
+            window: "1h",
+            unit: "requests",
+            remaining: "1000.00000000",
+            limit: "1000",
+            reset_at: null,
+            source: "documented_keyless",
+            confidence: "authoritative",
+            kind: "rate",
+            stale: false,
+            enforceable: true,
+          },
+          {
+            bucket_id: "keenable:keyless:requests",
+            operation: "fetch",
+            window: "1h",
+            unit: "requests",
+            remaining: "1000.00000000",
+            limit: "1000",
+            reset_at: null,
+            source: "documented_keyless",
+            confidence: "authoritative",
+            kind: "rate",
+            stale: false,
+            enforceable: true,
+          },
+        ],
+      },
+    ],
+    documented_keyless_operations: ["search", "fetch"],
+    version: 1,
+    generated_at: "2026-03-10T12:00:00Z",
+  }
+}
+
+function keenableAuthoritativeKeyedLimits(): ProviderLimits {
+  const auth = keenableKeyedAuth()
+  return {
+    provider: "keenable",
+    active_auth_mode: "keyed",
+    auths: [
+      {
+        ...auth,
+        rate_progress: [
+          {
+            bucket_id: "keenable:keyed:requests",
+            operation: "search",
+            window: "1h",
+            unit: "requests",
+            remaining: "500",
+            limit: "1000",
+            reset_at: null,
+            source: "documented",
+            confidence: "authoritative",
+            kind: "rate",
+            stale: false,
+            enforceable: true,
+          },
+        ],
+      },
+    ],
+    documented_keyless_operations: ["search", "fetch"],
+    version: 1,
+    generated_at: "2026-03-10T12:00:00Z",
+  }
+}
+
+function renderKeenableCard(limits: ProviderLimits): void {
+  installFetchStub(() => {
+    throw new Error("no backend in card test")
+  })
+  render(
+    <ProviderLimitsCard
+      providerId="keenable"
+      providerName="Keenable"
+      limits={limits}
+      crdUsageTotals={noUseTotals()}
+      refreshDashboard={() => Promise.resolve()}
+      manualEligible
+    />,
+  )
+}
+
+describe("ProviderLimitsCard Keenable", () => {
+  it("shows one aggregate bar for the shared keyed pool with a single funds fraction", () => {
+    renderKeenableCard(keenableLimits())
+    const bar = screen.getByRole("progressbar", { name: "Keenable credit units remaining" })
+    expect(bar.getAttribute("aria-valuemin")).toBe("0")
+    expect(bar.getAttribute("aria-valuemax")).toBe("100")
+    expect(bar.getAttribute("aria-valuenow")).toBe("100")
+    expect(bar.querySelector("div")?.getAttribute("class")).toContain(
+      "bg-[var(--status-healthy)]",
+    )
+    expectFraction("399980", "400000")
+    expect(screen.queryByText("Free - unmetered")).toBeNull()
+    const value = screen.getByText("399980").closest("span")?.parentElement
+    expect(value?.textContent?.replace(/\s+/g, "")).toBe("399980/400000CRD")
+    expect(screen.getByText("100%")).not.toBeNull()
+    const percent = screen.getByText("100%")
+    expect(bar.getAttribute("class")).toContain("w-full")
+    expect((bar.compareDocumentPosition(percent) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0).toBe(true)
+    vi.unstubAllGlobals()
+  })
+
+  it("shows unmetered keyless funds with a separate shared hourly rate bar", async () => {
+    installFetchStub(() => ok({ events: [], next_cursor: null }))
+    render(
+      <ProviderLimitsCard
+        providerId="keenable"
+        providerName="Keenable"
+        limits={keenableKeylessLimits()}
+        crdUsageTotals={noUseTotals()}
+        refreshDashboard={() => Promise.resolve()}
+        manualEligible
+      />,
+    )
+    expect(screen.getByText("Free", { exact: true })).not.toBeNull()
+    expect(screen.queryByText("Free - unmetered")).toBeNull()
+    expect(screen.queryByRole("progressbar", { name: "Keenable credit units remaining" })).toBeNull()
+    expect(screen.getByText("Search and Fetch Limits")).not.toBeNull()
+    expect(screen.getByText("990 of 1000 requests per hour")).not.toBeNull()
+    vi.unstubAllGlobals()
+  })
+
+  it("keenable funds use the shared bar with one aggregate value", () => {
+    renderKeenableCard(keenableLimits())
+    const bars = screen.getAllByRole("progressbar", {
+      name: "Keenable credit units remaining",
+    })
+    expect(bars).toHaveLength(1)
+    expectFraction("399980", "400000")
+    expect(screen.getByText("100%")).not.toBeNull()
+    vi.unstubAllGlobals()
+  })
+
+  it("keenable hourly requests use whole counts on one shared bar line", () => {
+    installFetchStub(() => ok({ events: [], next_cursor: null }))
+    render(
+      <ProviderLimitsCard
+        providerId="keenable"
+        providerName="Keenable"
+        limits={keenableDecimalKeylessLimits()}
+        crdUsageTotals={noUseTotals()}
+        refreshDashboard={() => Promise.resolve()}
+        manualEligible
+      />,
+    )
+    // One shared row covers both operations: the duplicate bucket and window
+    // collapses to the first entry, and decimal counts floor to whole calls.
+    expect(screen.getByText("Search and Fetch Limits")).not.toBeNull()
+    expect(screen.getByText("990 of 1000 requests per hour")).not.toBeNull()
+    expect(screen.queryByText("990.00000000")).toBeNull()
+    const bar = screen.getByRole("progressbar", {
+      name: "Keenable search and fetch limits remaining",
+    })
+    expect(bar.getAttribute("class")).toContain("w-full")
+    vi.unstubAllGlobals()
+  })
+
+  it("keenable keyless credits show Free with the strike value inside the details popover", async () => {
+    installFetchStub(() => {
+      throw new Error("no backend in card test")
+    })
+    const first = render(
+      <ProviderLimitsCard
+        providerId="keenable"
+        providerName="Keenable"
+        limits={keenableKeylessLimits()}
+        crdUsageTotals={noUseTotals()}
+        refreshDashboard={() => Promise.resolve()}
+        manualEligible
+      />,
+    )
+    expect(screen.getByText("Free", { exact: true })).not.toBeNull()
+    expect(screen.queryByText("Free - unmetered")).toBeNull()
+    expect(
+      screen.queryByRole("progressbar", { name: "Keenable credit units remaining" }),
+    ).toBeNull()
+    expect(screen.queryByText("399980")).toBeNull()
+    first.unmount()
+    render(
+      <ProviderLimitsCard
+        providerId="keenable"
+        providerName="Keenable"
+        limits={keenableLimits()}
+        crdUsageTotals={noUseTotals()}
+        refreshDashboard={() => Promise.resolve()}
+        manualEligible
+      />,
+    )
+    const user = userEvent.setup()
+    await user.click(screen.getByRole("button", { name: "Credit details for Keenable" }))
+    expect(await screen.findByText("Quota Details")).not.toBeNull()
+    expect(document.querySelector("s")).not.toBeNull()
+    expect(screen.getAllByText("Free").length).toBeGreaterThanOrEqual(1)
+    vi.unstubAllGlobals()
+  })
+
+  it("keenable keyless details omit authoritative rate confidence", async () => {
+    installFetchStub(() => ok({ events: [], next_cursor: null }))
+    render(
+      <ProviderLimitsCard
+        providerId="keenable"
+        providerName="Keenable"
+        limits={keenableAuthoritativeKeylessLimits()}
+        crdUsageTotals={noUseTotals()}
+        refreshDashboard={() => Promise.resolve()}
+        manualEligible
+      />,
+    )
+    expect(screen.getByText("Search and Fetch Limits")).not.toBeNull()
+    expect(screen.queryByText("authoritative")).toBeNull()
+    vi.unstubAllGlobals()
+  })
+
+  it("keenable keyed rate rows suppress authoritative confidence on the shared bar", () => {
+    installFetchStub(() => ok({ events: [], next_cursor: null }))
+    render(
+      <ProviderLimitsCard
+        providerId="keenable"
+        providerName="Keenable"
+        limits={keenableAuthoritativeKeyedLimits()}
+        crdUsageTotals={noUseTotals()}
+        refreshDashboard={() => Promise.resolve()}
+        manualEligible
+      />,
+    )
+    expect(screen.getByText("Search and Fetch Limits")).not.toBeNull()
+    expect(screen.getByText("500 of 1000 requests per hour")).not.toBeNull()
+    expect(screen.queryByText("authoritative")).toBeNull()
+    vi.unstubAllGlobals()
+  })
+
+  it("keenable details preserve search and fetch CRD cost labels", async () => {
+    installFetchStub(() => ok({ events: [], next_cursor: null }))
+    renderKeenableCard(keenableLimits())
+    const user = userEvent.setup()
+    await user.click(screen.getByRole("button", { name: "Credit details for Keenable" }))
+    expect(await screen.findByText("Search CRD cost")).not.toBeNull()
+    expect(screen.getByText("Fetch CRD cost")).not.toBeNull()
+    expect(screen.getAllByText("4 CRD").length).toBeGreaterThanOrEqual(2)
+    vi.unstubAllGlobals()
+  })
+})
+
+describe("ProviderLimitsCard Tinyfish", () => {
+  it("keeps_rate_bars_in_the_own_card_body", async () => {
+    installFetchStub(() => {
+      throw new Error("no backend in card test")
+    })
+    render(
+      <>
+        <ProviderLimitsCard
+          providerId="tinyfish"
+          providerName="Tinyfish"
+          limits={tinyfishLimits()}
+          crdUsageTotals={noUseTotals()}
+          refreshDashboard={() => Promise.resolve()}
+          manualEligible
+        />
+        <ProviderLimitsCard
+          providerId="brave"
+          providerName="Brave"
+          limits={braveLimits()}
+          crdUsageTotals={noUseTotals()}
+          refreshDashboard={() => Promise.resolve()}
+          manualEligible
+        />
+      </>,
+    )
+    const tinyfishCard = screen.getByRole("heading", { name: "Tinyfish" }).closest("article")
+    expect(tinyfishCard).not.toBeNull()
+    const braveCard = screen.getByRole("heading", { name: "Brave" }).closest("article")
+    expect(braveCard).not.toBeNull()
+    const tinyfish = within(tinyfishCard as HTMLElement)
+    const brave = within(braveCard as HTMLElement)
+
+    expect(tinyfish.getByText("Search")).not.toBeNull()
+    expect(tinyfish.getByText("Fetch")).not.toBeNull()
+    expect(tinyfish.getByText("498 of 500 requests per hour")).not.toBeNull()
+    expect(tinyfish.getByText("1000 of 1000 URLs per day")).not.toBeNull()
+    expect(tinyfish.getAllByRole("progressbar")).toHaveLength(2)
+    expect(
+      tinyfish
+        .getByRole("progressbar", { name: "Tinyfish search hourly requests remaining" })
+        .getAttribute("aria-valuenow"),
+    ).toBe("99.6")
+    expect(
+      tinyfish
+        .getByRole("progressbar", { name: "Tinyfish fetch daily URLs remaining" })
+        .getAttribute("aria-valuenow"),
+    ).toBe("100")
+    expect(brave.queryByText("Search hourly rate")).toBe(null)
+    expect(brave.queryByText("498 of 500 requests")).toBe(null)
+
+    const user = userEvent.setup()
+    const infoButton = tinyfish.getByRole("button", { name: "Credit details for Tinyfish" })
+    await user.click(infoButton)
+    expect(await screen.findByText("Quota Details")).not.toBeNull()
+    expect(tinyfish.getAllByRole("progressbar")).toHaveLength(2)
+    // The Brave card holds its own funds bar, so the page holds three bars.
+    expect(screen.getAllByRole("progressbar")).toHaveLength(3)
+
+    await user.keyboard("{Escape}")
+    expect(screen.queryByText("Quota Details")).toBe(null)
+    expect(infoButton).toHaveFocus()
+    expect(tinyfish.getByText("498 of 500 requests per hour")).not.toBeNull()
+    expect(tinyfish.getByText("1000 of 1000 URLs per day")).not.toBeNull()
+    expect(tinyfish.getAllByRole("progressbar")).toHaveLength(2)
     vi.unstubAllGlobals()
   })
 })

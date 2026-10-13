@@ -8,7 +8,7 @@
  */
 
 import type { CRDResetRule, LimitRateWindow, NativePool, ProviderAuthLimits } from "@/domains/dashboard"
-import { dollarText, formatCRDAmount } from "./crdDisplay"
+import { callsText, dollarText, formatCRDAmount } from "./crdDisplay"
 import { operationAvailable, usdFromCRD } from "./crdCardModel"
 import { multiplyDecimal } from "./manualQuotaMath"
 import { minuteHeadroomOf } from "./tavilyCredits"
@@ -106,16 +106,24 @@ function rateWindowOf(windows: LimitRateWindow[]): LimitRateWindow | null {
   return null
 }
 
-function rateFact(windows: LimitRateWindow[]): ProviderInfoFact | null {
+function rateFact(
+  windows: LimitRateWindow[],
+  wholeRequests: boolean = false,
+): ProviderInfoFact | null {
   const entry = rateWindowOf(windows)
   const limit = entry === null ? null : known(entry.limit)
   if (entry === null || limit === null) return null
+  // With whole requests, the request-unit limit text floors through callsText,
+  // so a decimal request limit never becomes a whole extra request. URL units
+  // and the off path keep the verbatim limit.
+  const count = wholeRequests && entry.unit === "requests" ? callsText(limit) : limit
+  if (count === null) return null
   const unit = RATE_UNIT_SHORT[entry.unit] ?? entry.unit
   const window = WINDOW_SHORT[entry.window] ?? entry.window
   const scope = known(entry.scope)
   return {
     label: "Rate limit",
-    value: limit + " " + unit + "/" + window,
+    value: count + " " + unit + "/" + window,
     note: scope === null ? null : "(" + scope + ")",
   }
 }
@@ -198,9 +206,12 @@ function countFact(
   auth: ProviderAuthLimits,
   operation: (typeof OPERATIONS)[number],
   providerId: string | undefined,
+  wholeRequests: boolean = false,
 ): ProviderInfoFact | null {
   const view = auth.crd_views.find((entry) => entry.operation === operation)
-  const calls = known(view?.possible_standard_calls)
+  const raw = known(view?.possible_standard_calls)
+  if (raw === null) return null
+  const calls = wholeRequests ? callsText(raw) : raw
   if (calls === null) return null
   const period = COUNT_PERIOD[auth.detail?.reset_rule ?? UNKNOWN_TEXT]
   return {
@@ -331,6 +342,7 @@ function appendOperationFacts(
   auth: ProviderAuthLimits,
   operation: (typeof OPERATIONS)[number],
   providerId: string | undefined,
+  wholeRequests: boolean = false,
 ): void {
   if (!operationAvailable(auth, operation)) return
   if (providerId === TAVILY_ID) {
@@ -339,17 +351,21 @@ function appendOperationFacts(
   }
   const cost = costFact(auth, operation, providerId)
   if (cost !== null) facts.push(cost)
-  const count = countFact(auth, operation, providerId)
+  const count = countFact(auth, operation, providerId, wholeRequests)
   if (count !== null) facts.push(count)
 }
 
 /** Facts and usage link of one rail, in the shown order. */
-export function providerInfo(auth: ProviderAuthLimits, providerId?: string): ProviderInfo {
+export function providerInfo(
+  auth: ProviderAuthLimits,
+  providerId?: string,
+  wholeRequests: boolean = false,
+): ProviderInfo {
   const facts: ProviderInfoFact[] = []
   for (const operation of OPERATIONS) {
-    appendOperationFacts(facts, auth, operation, providerId)
+    appendOperationFacts(facts, auth, operation, providerId, wholeRequests)
   }
-  const rate = rateFact(auth.detail?.rate_windows ?? [])
+  const rate = rateFact(auth.detail?.rate_windows ?? [], wholeRequests)
   if (rate !== null) facts.push(rate)
   if (providerId === TAVILY_ID) facts.push(...tavilyRateFacts(auth))
   const lastSync = timestampOrNull(auth.detail?.last_sync_at)

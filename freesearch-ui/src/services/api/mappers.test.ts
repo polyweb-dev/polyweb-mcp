@@ -361,7 +361,7 @@ describe("mergeProviderStatus", () => {
     expect(merged.keyMasked).toBe("—")
   })
 
-  it("renders null p95 latency (never NaN) and marks keyless tiers as keyed", () => {
+  it("renders null p95 latency (never NaN) and marks keyless tiers as keyless without a key", () => {
     const keenableEntry = {
       id: "keenable",
       backendId: "keenable",
@@ -377,7 +377,7 @@ describe("mergeProviderStatus", () => {
     )
 
     expect(merged.latencyP95Ms).toBeNull()
-    expect(merged.hasKey).toBe(true)
+    expect(merged.hasKey).toBe(false)
     expect(merged.keyVaultStatus).toBe("keyless_public")
   })
 

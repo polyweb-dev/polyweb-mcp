@@ -62,13 +62,13 @@ describe("RoutingEngine (live backend)", () => {
     vi.unstubAllGlobals()
   })
 
-  it("renders the four routing sub-tabs", async () => {
+  it("renders the two routing sub-tabs", async () => {
     renderRouting()
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: /^Routing$/ })).toBeInTheDocument()
     })
-    expect(screen.getAllByRole("tab")).toHaveLength(4)
-    for (const label of ["Strategy", "Simulator", "Ranks", "Resilience"]) {
+    expect(screen.getAllByRole("tab")).toHaveLength(2)
+    for (const label of ["Strategy", "Simulator"]) {
       expect(screen.getByRole("tab", { name: new RegExp(`^${label}$`) })).toBeInTheDocument()
     }
   })
@@ -119,81 +119,6 @@ describe("RoutingEngine (live backend)", () => {
 
     expect(screen.getByText(/no eligible providers/i)).toBeInTheDocument()
     expect(screen.queryByText("Client Ingress", { exact: true })).not.toBeInTheDocument()
-  })
-
-  it("filters the ranks table by operation", async () => {
-    const user = userEvent.setup()
-    renderRouting()
-    await waitFor(() => {
-      expect(screen.getByRole("tab", { name: /^Ranks$/ })).toBeInTheDocument()
-    })
-    await user.click(screen.getByRole("tab", { name: /^Ranks$/ }))
-
-    const table = screen.getByRole("table")
-    // 8 search-capable providers + header row (all backend rows enabled)
-    expect(within(table).getAllByRole("row")).toHaveLength(9)
-
-    await user.click(screen.getByRole("button", { name: /^Fetch$/ }))
-    // 7 fetch-capable (keenable, tavily, exa, firecrawl, youcom, parallel, tinyfish) + header
-    expect(within(table).getAllByRole("row")).toHaveLength(8)
-    expect(within(table).getByRole("row", { name: /Tinyfish/ })).toBeInTheDocument()
-    // S1: Parallel is fetch-capable via plain includes("fetch"); Brave stays fetch-incapable.
-    expect(
-      within(table).getByRole("row", { name: /Parallel/ })
-    ).toBeInTheDocument()
-    expect(
-      within(table).queryByRole("row", { name: /Brave Search/ })
-    ).not.toBeInTheDocument()
-
-    await user.click(screen.getByRole("button", { name: /^Search$/ }))
-    expect(within(table).getAllByRole("row")).toHaveLength(9)
-    const filter = screen.getByRole("textbox")
-    await user.clear(filter)
-    await user.type(filter, "Keenable")
-    expect(within(table).getAllByRole("row")).toHaveLength(2)
-  })
-
-  it("preserves true rank and role when provider ranks are filtered", async () => {
-    const user = userEvent.setup()
-    renderRouting()
-    await waitFor(() => {
-      expect(screen.getByRole("tab", { name: /^Ranks$/ })).toBeInTheDocument()
-    })
-    await user.click(screen.getByRole("tab", { name: /^Ranks$/ }))
-
-    const table = screen.getByRole("table")
-    expect(
-      within(table).getByRole("row", { name: /#1.*Brave Search.*Primary/ })
-    ).toBeInTheDocument()
-    expect(
-      within(table).getByRole("row", { name: /#2.*Keenable.*Fallback/ })
-    ).toBeInTheDocument()
-
-    const filter = screen.getByRole("textbox")
-    await user.clear(filter)
-    await user.type(filter, "Keenable")
-
-    expect(
-      within(table).getByRole("row", { name: /#2.*Keenable.*Fallback/ })
-    ).toBeInTheDocument()
-    expect(
-      within(table).queryByRole("row", { name: /#1.*Keenable.*Primary/ })
-    ).not.toBeInTheDocument()
-  })
-
-  it("renders resilience depth with NO invented timeout budget", async () => {
-    const user = userEvent.setup()
-    renderRouting()
-    await waitFor(() => {
-      expect(screen.getByRole("tab", { name: /^Resilience$/ })).toBeInTheDocument()
-    })
-    await user.click(screen.getByRole("tab", { name: /^Resilience$/ }))
-
-    expect(screen.getByText("Cascade depth", { exact: true })).toBeInTheDocument()
-    // The honest backend has no per-hop timeout to display: invented copy is gone.
-    expect(screen.queryByText("3,000 ms", { exact: true })).not.toBeInTheDocument()
-    // The auto-bypass row was deleted: no such claim may render.
-    expect(screen.queryByText("Circuit breaker auto-bypass")).toBeNull()
   })
 
   it("PUTs free_first once when the cost-optimized card is selected", async () => {

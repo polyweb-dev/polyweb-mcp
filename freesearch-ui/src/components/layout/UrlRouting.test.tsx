@@ -295,7 +295,7 @@ describe("C4-6: PillTabs switching leaves the URL unchanged", () => {
     const user = userEvent.setup()
     await renderAt("/routing")
     await expectView("Routing", "Routing", "/routing")
-    for (const tab of ["Simulator", "Ranks", "Resilience"]) {
+    for (const tab of ["Simulator"]) {
       await user.click(screen.getByRole("tab", { name: tab, exact: true }))
       expect(testPath()).toBe("/routing")
     }
@@ -358,7 +358,7 @@ describe("C4-7: no regression — shell, providers, views", () => {
       within(routingPills as HTMLElement)
         .getAllByRole("tab")
         .map((t) => t.textContent)
-    ).toEqual(["Strategy", "Simulator", "Ranks", "Resilience"])
+    ).toEqual(["Strategy", "Simulator"])
 
     await followLink("Settings")
     await expectView("Settings", "Settings", "/settings")

@@ -368,6 +368,9 @@ class ProviderStatusResponse(ContractModel):
     secret_presence: SecretPresence
     free_tier_estimates: dict[UsageOperation, Decimal] = Field(default_factory=dict)
     reset_schedule: str | None = None
+    # The confirmed, non-secret Tavily key environment, or null for every
+    # other provider and when no configuration declares one.
+    tavily_key_environment: Literal["dev", "prod"] | None = None
 
 
 class ProviderTestResponse(ContractModel):

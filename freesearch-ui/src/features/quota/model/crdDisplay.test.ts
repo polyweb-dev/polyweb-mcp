@@ -6,6 +6,7 @@ import type {
   TierBalance,
 } from "@/domains/dashboard"
 import {
+  callsText,
   dollarText,
   formatCRDAmount,
   formatCRD,
@@ -14,6 +15,7 @@ import {
   resetRuleText,
   tierBarModel,
 } from "./crdDisplay"
+import * as crdDisplayModule from "./crdDisplay"
 
 /**
  * S0 generic CRD display: one-decimal ROUND_HALF_UP text, exact model amounts,
@@ -401,5 +403,53 @@ describe("dollarText", () => {
 
   it("trims surrounding whitespace before the dollar form", () => {
     expect(dollarText("  4.500  ")).toBe("$4.5")
+  })
+})
+
+describe("formatQuotaCount", () => {
+  it("formats_integer_quota_counts_without_decimal_zeros", () => {
+    const formatQuotaCount = (
+      crdDisplayModule as unknown as { formatQuotaCount?: (amount: string) => string }
+    ).formatQuotaCount
+    expect(typeof formatQuotaCount).toBe("function")
+    const format = formatQuotaCount as (amount: string) => string
+    expect(format("1000.000000000")).toBe("1000")
+    expect(format("498.000000000")).toBe("498")
+    expect(format("1000")).toBe("1000")
+    expect(format("500")).toBe("500")
+    expect(format("0")).toBe("0")
+    expect(format("0.000000000")).toBe("0")
+    expect(format("5")).toBe("5")
+    expect(format("9007199254740993")).toBe("9007199254740993")
+    expect(format("9007199254740993.000000000")).toBe("9007199254740993")
+    expect(format("498.5")).toBe("498.5")
+    expect(format("99.6")).toBe("99.6")
+    expect(format("5.25")).toBe("5.25")
+    expect(format("nonsense")).toBe("nonsense")
+  })
+})
+
+describe("callsText", () => {
+  it("floors decimal request text to whole counts", () => {
+    expect(callsText("1000.00000000")).toBe("1000")
+    expect(callsText("999.9")).toBe("999")
+  })
+
+  it("keeps zero exact without a fabricated count", () => {
+    expect(callsText("0")).toBe("0")
+    expect(callsText("0.00000000")).toBe("0")
+  })
+
+  it("returns null for null, negative, and malformed amounts", () => {
+    expect(callsText(null)).toBe(null)
+    expect(callsText("-1")).toBe(null)
+    expect(callsText("lots")).toBe(null)
+    expect(callsText("")).toBe(null)
+    expect(callsText("49, 900")).toBe(null)
+  })
+
+  it("keeps a whole count above MAX_SAFE_INTEGER without precision loss", () => {
+    expect(callsText("9007199254740993")).toBe("9007199254740993")
+    expect(callsText("9007199254740993.9")).toBe("9007199254740993")
   })
 })

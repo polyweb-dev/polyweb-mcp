@@ -17,6 +17,8 @@ export interface ProviderCardActionsProps {
   manualEligible: boolean
   syncing: boolean
   onSync: () => void
+  /** The last refresh was skipped, so the refresh action stays off the card. */
+  refreshSkipped?: boolean
   onOpenModal: (modal: CardModal) => void
   /** The detail disclosure left the card. The info control owns the detail now. */
   expanded?: boolean
@@ -75,7 +77,8 @@ function dialogAction(input: DialogAction, providerName: string): ReactNode {
  * Each dialog action carries its one-sentence meaning as a hover tooltip and as
  * accessible text, so a screen reader states the difference between a provider
  * balance and a budget limit. The card holds no detail disclosure, because the
- * info control of the card owns the detail.
+ * info control of the card owns the detail. A skipped refresh hides the sync
+ * action, because there is nothing to refresh.
  */
 export function ProviderCardActions(input: ProviderCardActionsProps): ReactNode {
   const { providerId, providerName, manualEligible, syncing } = input
@@ -96,10 +99,12 @@ export function ProviderCardActions(input: ProviderCardActionsProps): ReactNode 
   })
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <Button type="button" variant="outline" size="lg" className={ACTION}
-        disabled={syncing} aria-label={"Sync limits for " + providerName} onClick={input.onSync}>
-        {syncing ? "Syncing…" : "Sync"}
-      </Button>
+      {input.refreshSkipped !== true && (
+        <Button type="button" variant="outline" size="lg" className={ACTION}
+          disabled={syncing} aria-label={"Refresh limits for " + providerName} onClick={input.onSync}>
+          {syncing ? "Refreshing…" : "Refresh Limits"}
+        </Button>
+      )}
       <TooltipProvider delay={TOOLTIP_DELAY}>
         {actions.map((action) => dialogAction(action, providerName))}
       </TooltipProvider>

@@ -87,6 +87,11 @@ export function formatCRDAmount(amount: string): string {
   return `${exact ? "" : "≈"}${numberText} CRD`
 }
 
+/** Integer count form of one exact nonnegative decimal count: "498.000000000" becomes "498", and every other input stays verbatim. */
+export function formatQuotaCount(amount: string): string {
+  return amount.replace(/^(\d+)\.0+$/, "$1")
+}
+
 /** Dollar form of one exact USD amount for display: "4.500" becomes "$4.5", and "5.000" becomes "$5". */
 export function dollarText(amount: string): string {
   const text = amount.trim()
@@ -110,7 +115,7 @@ function stateText(state: CRDState): string {
 }
 
 /** Whole standard calls, floored; null when the count is absent. */
-function callsText(amount: string | null): string | null {
+export function callsText(amount: string | null): string | null {
   const value = amount === null ? null : scaled(amount)
   return value === null ? null : (value.int / 10n ** BigInt(value.scale)).toString()
 }

@@ -1106,6 +1106,11 @@ async def _provider_entry(
         secret_presence=_secret_presence(provider, key),
         free_tier_estimates=config.free_tier_estimates,
         reset_schedule=config.reset_schedule,
+        # The confirmed stored environment readback rides only on Tavily;
+        # every other provider keeps the null default.
+        tavily_key_environment=(
+            config.tavily_key_environment if provider is ProviderName.TAVILY else None
+        ),
     )
 
 

@@ -768,9 +768,9 @@ describe("G-1: Providers P1-FINAL merged table (inverted — 7 cols, min-w-960)"
     expect(
       Array.from(table.querySelectorAll("thead th")).map((th) => th.textContent?.trim() ?? "")
     ).toEqual([
+      "Priority",
       "Provider",
       "Endpoint",
-      "Health",
       "Test",
       "Search",
       "Fetch",
@@ -875,7 +875,7 @@ describe("G-5: P1-FINAL page merge (inverted — fleet merged, matrix retired)",
     expect(settingsViewSource).toContain("SettingsProviders")
     expect(settingsViewSource).toContain("SettingsKeyVault")
     expect(settingsViewSource).toContain("SettingsFailover")
-    for (const marker of ["Endpoint", "Health", "Quota", "p95", "ProviderTestModal"]) {
+    for (const marker of ["Endpoint", "ProviderTestModal"]) {
       expect(settingsFeatureSource, `merged registry must carry ${marker}`).toContain(marker)
     }
   })

@@ -4,7 +4,7 @@ import { Button } from "@/shared/ui/button"
 import type { ProviderConfig } from "@/domains/providers"
 import { useFreeSearch } from "@/context/useFreeSearch"
 import { ModalDetail } from "./ProviderTestModalDetail"
-import { formatLatency, formatQuota, stripProtocol } from "./providerDisplay"
+import { stripProtocol } from "./providerDisplay"
 
 type TestResult = Awaited<ReturnType<ReturnType<typeof useFreeSearch>["testProviderConnection"]>>
 
@@ -27,9 +27,6 @@ export const ProviderTestModal: React.FC<{
         <dl className="grid grid-cols-[110px_minmax(0,1fr)] gap-x-4 gap-y-2 text-[13px]">
           <ModalDetail label="Endpoint" value={stripProtocol(provider.baseUrl)} mono />
           <ModalDetail label="Capabilities" value={provider.capabilities.join(", ")} />
-          <ModalDetail label="Health" value={provider.circuitBreaker === "open" ? "open" : provider.healthStatus} />
-          <ModalDetail label="p95" value={formatLatency(provider.latencyP95Ms)} />
-          <ModalDetail label="Quota" value={formatQuota(provider)} />
           <ModalDetail
             label="Last result"
             value={lastResult ? `${lastResult.success ? "healthy" : lastResult.message} · ${lastResult.latencyMs}ms` : "Not tested"}

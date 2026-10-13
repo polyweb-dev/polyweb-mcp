@@ -1643,14 +1643,28 @@ def _debit_crd(record: ProviderLimitRecord, native_units: Decimal | None) -> Dec
 def _reported_native(
     response: SearchResponse | FetchResponse, record: ProviderLimitRecord
 ) -> Decimal | None:
-    """Return a vendor-reported native charge for one response, when present."""
+    """Return a vendor-reported native charge for one response, when present.
+
+    The Keenable keyed catalog pool counts native units as requests, while the
+    adapter reports the actual debit as credits. This narrow compatibility rule
+    accepts Keenable keyed credit usage on that request pool. Every other
+    provider keeps the exact-unit rule, and the keyless rail stays outside the
+    native funds debit.
+    """
 
     usage = response.usage
     if usage is None or record.native_unit is None:
         return None
-    if usage.unit_kind is not record.native_unit:
-        return None
-    return usage.units
+    if usage.unit_kind is record.native_unit:
+        return usage.units
+    if (
+        record.provider == "keenable"
+        and record.auth_mode is AuthMode.KEYED
+        and record.native_unit is UnitKind.REQUEST
+        and usage.unit_kind is UnitKind.CREDIT
+    ):
+        return usage.units
+    return None
 
 
 def _reported_usd(response: SearchResponse | FetchResponse) -> Decimal | None:

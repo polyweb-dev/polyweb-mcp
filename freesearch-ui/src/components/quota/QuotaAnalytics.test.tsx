@@ -184,11 +184,11 @@ describe("QuotaAnalytics shell (UI7)", () => {
     expect(card.querySelector('[data-testid="provider-logo-brave"]')).not.toBeNull()
     expect(screen.getByText("Observed from the vendor API")).toBeInTheDocument()
     const buttons = Array.from(card.querySelectorAll("button")).map((button) => button.textContent)
-    expect(buttons.slice(0, 4)).toEqual(["Sync", "Provider Balance", "Budget Limit", "History"])
+    expect(buttons.slice(0, 4)).toEqual(["Refresh Limits", "Provider Balance", "Budget Limit", "History"])
     const creditRow = screen.getByText("4500").closest("span")?.parentElement?.parentElement
     const children = Array.from(creditRow?.children ?? [])
     expect(children.length).toBe(2)
-    expect(children[0]?.textContent).toContain("Sync")
+    expect(children[0]?.textContent).toContain("Refresh Limits")
     expect(children[1]?.textContent?.replace(/\s+/g, "")).toContain("4500/5000CRD")
     const bar = screen.getByRole("progressbar", { name: "Brave Search credit units remaining" })
     expect((bar.compareDocumentPosition(creditRow as Node) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0).toBe(true)

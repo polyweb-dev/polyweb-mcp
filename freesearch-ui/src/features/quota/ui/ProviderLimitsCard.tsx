@@ -20,7 +20,8 @@ import {
   type CreditCardModel,
 } from "../model/crdCardModel"
 import type { ManualAmountMode } from "../model/manualQuotaMath"
-import { providerInfo, type BalancePrefill } from "../model/providerInfo"
+import { displayAdapterOf, profileOf, type TavilyDisplayAdapter } from "../model/tavilyCredits"
+import { providerInfo, type BalancePrefill, type ProviderInfo } from "../model/providerInfo"
 import type { CreditMode } from "../model/quotaLabels"
 import type { QuotaRowEstimates } from "../model/quotaRowModel"
 import { pairedSnapshotOf } from "../model/quotaRowModel"
@@ -32,13 +33,13 @@ import {
   type ManualQuotaOverlay,
 } from "../model/useManualQuota"
 import { useProviderLimits, type ProviderLimitsController } from "../model/useProviderLimits"
-import { displayAdapterOf, profileOf, type TavilyDisplayAdapter } from "../model/tavilyCredits"
 import { CRDGrantForm } from "./CRDGrantForm"
 import { LimitHistoryModal } from "./LimitHistoryModal"
 import { ManualQuotaModal } from "./ManualQuotaModal"
 import { ProviderCardActions, type CardModal } from "./ProviderCardActions"
 import { ProviderCreditSummary } from "./ProviderCreditSummary"
 import { ProviderInfoPopover } from "./ProviderInfoPopover"
+import { ProviderRateBars } from "./ProviderRateBars"
 import type { OAuthSlotArgs } from "./QuotaRow"
 
 export interface ProviderLimitsCardProps {
@@ -49,6 +50,8 @@ export interface ProviderLimitsCardProps {
   crdUsageTotals: CRDUsageTotal[]
   refreshDashboard: () => Promise<void>
   manualEligible: boolean
+  /** Current credential presence, independent of the catalog's active rail. */
+  hasKey?: boolean
   /** The selectable providers of the balance dialog; the own provider is the default. */
   providers?: ProviderConfig[]
   /** The observed balance per provider, which starts a new entry as an estimate. */
@@ -69,8 +72,13 @@ interface ManualUnit {
   amountMode: ManualAmountMode
 }
 
-const CARD = "space-y-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] p-4"
-const LABEL = "text-[12px] text-[var(--muted)]"
+const CARD = "flex h-full flex-col justify-between gap-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] p-4"
+
+/** The one provider that opts into the shared bar. */
+const KEENABLE_PROVIDER = "keenable"
+
+/** The one provider whose rate bars share the card-body bar with short titles. */
+const TINYFISH_PROVIDER = "tinyfish"
 
 function slug(providerId: string): string {
   return providerId.toLowerCase().replace(/[^a-z0-9]+/g, "-")
@@ -85,8 +93,7 @@ function grantKey(auth: ProviderAuthLimits): string {
 
 /**
  * The native unit of the manual anchor. A USD pool accepts the vendor USD
- * balance; any other unit keeps the current usage entry. The Tavily Credits
- * pool carries its vendor unit name, so the entry never shows a raw CREDIT key.
+ * balance; any other unit keeps the current usage entry.
  */
 function manualUnit(auth: ProviderAuthLimits, providerId: string): ManualUnit {
   const nativeUnit = auth.aggregate_pool?.native_unit ?? null
@@ -142,8 +149,6 @@ interface CardModalInput {
   auth: ProviderAuthLimits
   fetchAvailable: boolean
   creditMode: CreditMode | null
-  /** The native display inputs of one Tavily rail; null on every other card. */
-  nativeDisplay: TavilyDisplayAdapter | null
   providers?: ProviderConfig[]
   observed?: Record<string, BalancePrefill>
   refreshDashboard: () => Promise<void>
@@ -207,7 +212,6 @@ function cardModals(input: CardModalInput): ReactNode {
           saving={controller.saving}
           saveError={controller.saveError}
           staleVersion={controller.staleVersion}
-          {...(input.nativeDisplay !== null ? { nativeDisplay: input.nativeDisplay } : {})}
           onSave={controller.saveGrant}
           onClose={close}
           onReload={() => void controller.reload()}
@@ -253,6 +257,25 @@ function oauthControl(
   return <div className="flex flex-wrap items-center justify-end gap-2">{control}</div>
 }
 
+/** The details control of one card, shown beside the credit fraction. */
+function infoPopover(
+  info: ProviderInfo,
+  providerId: string,
+  providerName: string,
+  auth: ProviderAuthLimits,
+  nativeDisplay: TavilyDisplayAdapter | null = null,
+): ReactNode {
+  return (
+    <ProviderInfoPopover
+      providerId={providerId}
+      providerName={providerName}
+      info={info}
+      auth={auth}
+      {...(nativeDisplay !== null ? { nativeDisplay } : {})}
+    />
+  )
+}
+
 /**
  * One provider credit-unit card.
  *
@@ -262,8 +285,10 @@ function oauthControl(
  * of its content. The card owns its one open modal, so a dialog of one provider
  * never moves another. The dashboard payload supplies the funds. The info
  * control states the call cost, the call count, the rate limit, the last sync
- * time, the usage page, the known tier facts, the known rate bars, and the
- * vendor detail.
+ * time, the usage page, the known tier facts, and the vendor detail. The card
+ * body holds the hourly and daily rate bars below the credit summary; the
+ * keyless rail of the shared-bar provider holds its shared bars there too,
+ * while its popover leaves them out.
  */
 export function ProviderLimitsCard({
   providerId,
@@ -272,6 +297,7 @@ export function ProviderLimitsCard({
   crdUsageTotals,
   refreshDashboard,
   manualEligible,
+  hasKey,
   providers,
   observed,
   latestQuota,
@@ -287,22 +313,29 @@ export function ProviderLimitsCard({
     limits,
     refreshDashboard,
     historyOpen: modal === "history",
+    ...(hasKey !== undefined ? { hasKey } : {}),
   })
   const manualState = useManualQuota(providerId, manualEligible)
   const manualDefaults = useMemo(
     () => manualDefaultsOf(manualState.manual),
     [manualState.manual]
   )
-  const auth = activeAuth(limits)
+  const auth = activeAuth(limits, hasKey)
   if (auth === undefined) {
     return <article className={CARD}>{providerName}: no limit data reported by the backend.</article>
   }
 
   const model = creditCardModel({ auth, usageTotals: crdUsageTotals })
-  const info = providerInfo(auth, providerId)
+  const keenableBar = providerId === KEENABLE_PROVIDER
+  const tinyfishBar = providerId === TINYFISH_PROVIDER
+  const keenableKeyless = keenableBar && auth.auth_mode === "keyless"
+  // The public keyless rail has no usage endpoint to refresh.
+  const refreshSkipped = controller.refreshSkipped || keenableKeyless
+  // The whole-request floor applies to the release request rails (Keenable);
+  // every other rail keeps the verbatim values, and Tavily reads its native
+  // Credits facts through the optional display adapter.
+  const info = providerInfo(auth, providerId, keenableBar)
   const unit = manualUnit(auth, providerId)
-  // The optional native display of the card: the Tavily rail shows Credits and
-  // its conversion context, and every other rail keeps the CRD defaults.
   const nativeDisplay = displayAdapterOf(providerId, auth)
   const titleId = "limits-title-" + slug(providerId)
   const fetchAvailable = operationAvailable(auth, "fetch")
@@ -314,24 +347,43 @@ export function ProviderLimitsCard({
 
   return (
     <article aria-labelledby={titleId} className={CARD}>
-      <div className="flex min-w-0 items-center gap-3">
-        <ProviderLogo providerId={providerId} name={providerName} className="size-9 rounded-full" />
-        <div className="min-w-0">
-          <h4 id={titleId} className="truncate text-[15px] font-semibold text-[var(--text-strong)]">
-            {providerName}
-          </h4>
-          {info.statement !== null && (
-            <p className="truncate text-[12px] text-[var(--muted)]">{info.statement}</p>
-          )}
+      <div className="flex min-w-0 items-start justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <ProviderLogo providerId={providerId} name={providerName} className="size-9 rounded-full" />
+          <div className="min-w-0">
+            <h4 id={titleId} className="truncate text-[15px] font-semibold text-[var(--text-strong)]">
+              {providerName}
+            </h4>
+            {info.statement !== null && (
+              <p className="truncate text-[12px] text-[var(--muted)]">{info.statement}</p>
+            )}
+          </div>
         </div>
+        {controller.syncNote !== null && (
+          <p role="status" className="shrink-0 pt-0.5 text-right text-[11px] text-[var(--muted)]">
+            {controller.syncNote}
+          </p>
+        )}
       </div>
 
-      {controller.syncNote !== null && (
-        <p role="status" className={LABEL}>{controller.syncNote}</p>
-      )}
-
-      <ProviderCreditSummary providerName={providerName} model={model}
+      <ProviderCreditSummary
+        providerName={providerName}
+        model={model}
         {...(nativeDisplay !== null ? { credits: nativeDisplay.credits } : {})}
+        useSharedBar={keenableBar || nativeDisplay !== null}
+        rateBars={
+          <ProviderRateBars
+            providerName={providerName}
+            progress={auth.rate_progress}
+            fetchAvailable={fetchAvailable}
+            useSharedBar={keenableBar || tinyfishBar || nativeDisplay !== null}
+            hideAuthoritative={keenableBar || tinyfishBar}
+            {...(keenableBar ? { sharedTitle: "Search and Fetch Limits" } : {})}
+            {...(nativeDisplay !== null
+              ? { minuteWindows: auth.detail?.rate_windows ?? [], sharedTitle: "Search and Extract Limits" }
+              : {})}
+          />
+        }
         actions={
           <ProviderCardActions
             providerId={providerId}
@@ -339,15 +391,11 @@ export function ProviderLimitsCard({
             manualEligible={manualEligible}
             syncing={controller.syncing}
             onSync={() => void controller.syncNow()}
+            refreshSkipped={refreshSkipped}
             onOpenModal={setModal}
           />
         }
-        info={
-          <ProviderInfoPopover providerId={providerId} providerName={providerName}
-            info={info} auth={auth}
-            {...(nativeDisplay !== null ? { nativeDisplay } : {})}
-          />
-        }
+        info={infoPopover(info, providerId, providerName, auth, nativeDisplay)}
       />
 
       {oauth}
@@ -364,7 +412,6 @@ export function ProviderLimitsCard({
         auth,
         fetchAvailable,
         creditMode: info.creditMode,
-        nativeDisplay,
         ...(providers !== undefined ? { providers } : {}),
         ...(observed !== undefined ? { observed } : {}),
         refreshDashboard,

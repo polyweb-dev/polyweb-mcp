@@ -36,7 +36,7 @@ function observedByProvider(
 ): Record<string, BalancePrefill> {
   const map: Record<string, BalancePrefill> = {}
   for (const entry of entries) {
-    const auth = activeAuth(entry.limits)
+    const auth = activeAuth(entry.limits, entry.provider.hasKey)
     if (auth === undefined) continue
     const prefill = balancePrefill(auth)
     if (prefill !== null) map[entry.provider.id] = prefill
@@ -99,6 +99,7 @@ export function ProviderLimitsCards({
               crdUsageTotals={usageFor(crdUsageTotals, entry.provider.id)}
               refreshDashboard={refreshDashboard}
               manualEligible={manualEligible.has(entry.provider.id)}
+              hasKey={entry.provider.hasKey}
               providers={selectable}
               observed={observed}
               {...(quotaOf(entry.provider.id) !== undefined

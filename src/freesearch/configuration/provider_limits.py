@@ -262,6 +262,136 @@ def _keyless_documented_tier(
     ]
 
 
+def _tinyfish_records() -> list[ProviderLimitRecord]:
+    search_rate = _rate(
+        _request_window(
+            "tinyfish",
+            AuthMode.KEYED,
+            "search",
+            "30",
+            window=RateWindowName.MINUTE,
+            scope=RateScope.KEY,
+        ),
+        _request_window(
+            "tinyfish",
+            AuthMode.KEYED,
+            "search",
+            "500",
+            window=RateWindowName.HOUR,
+            scope=RateScope.KEY,
+        ),
+    )
+    fetch_rate = _rate(
+        _request_window(
+            "tinyfish",
+            AuthMode.KEYED,
+            "fetch",
+            "150",
+            window=RateWindowName.MINUTE,
+            scope=RateScope.KEY,
+            unit=RateUnit.URLS,
+        ),
+        _request_window(
+            "tinyfish",
+            AuthMode.KEYED,
+            "fetch",
+            "1000",
+            window=RateWindowName.DAY,
+            scope=RateScope.KEY,
+            unit=RateUnit.URLS,
+        ),
+    )
+    free_profile = _profile("0", source="unbilled_free")
+    return [
+        _record(
+            "tinyfish",
+            LimitOperation.SEARCH,
+            AuthMode.KEYED,
+            rate=search_rate,
+            budget=None,
+            profile=free_profile,
+            plan_name="Free within rate limits",
+        ),
+        _record(
+            "tinyfish",
+            LimitOperation.FETCH,
+            AuthMode.KEYED,
+            rate=fetch_rate,
+            budget=None,
+            profile=free_profile,
+            plan_name="Free within rate limits",
+        ),
+    ]
+
+
+def _keenable_records() -> list[ProviderLimitRecord]:
+    keyed_pool = UnitKind.REQUEST
+    shared = "keenable:keyed:requests"
+    keyed_rate = _rate(_request_window("keenable", AuthMode.KEYED, "search", "10", bucket=shared))
+    keyed_budget = _budget(
+        BudgetModel.REQUESTS,
+        free_allowance="100000",
+        allowance_unit="requests",
+        allowance_period="month",
+        cost_per_1k="4",
+        native_cost="1",
+        usd_per_call=str(KEENABLE_LIST_USD_PER_REQUEST),
+        usage_api=None,
+    )
+    keyed_profile = _profile(
+        str(KEENABLE_LIST_USD_PER_REQUEST), source="list_price_assumed", estimated=True
+    )
+    keyless_shared = "keenable:keyless:requests"
+    keyless_rate = _rate(
+        _request_window(
+            "keenable",
+            AuthMode.KEYLESS,
+            "search",
+            "10",
+            scope=RateScope.IP,
+            source="documented_keyless",
+            bucket=keyless_shared,
+        ),
+        _request_window(
+            "keenable",
+            AuthMode.KEYLESS,
+            "search",
+            "1000",
+            window=RateWindowName.HOUR,
+            scope=RateScope.IP,
+            source="documented_keyless",
+            bucket=keyless_shared,
+        ),
+    )
+    records: list[ProviderLimitRecord] = []
+    for operation in (LimitOperation.SEARCH, LimitOperation.FETCH):
+        records.append(
+            _record(
+                "keenable",
+                operation,
+                AuthMode.KEYED,
+                rate=keyed_rate,
+                budget=keyed_budget,
+                pool_unit=keyed_pool,
+                profile=keyed_profile,
+                plan_name="Monthly free requests",
+                usage_url="https://app.keenable.ai/console",
+            )
+        )
+        records.append(
+            _record(
+                "keenable",
+                operation,
+                AuthMode.KEYLESS,
+                rate=keyless_rate,
+                budget=None,
+                profile=_profile("0", source="unbilled_keyless"),
+                plan_name="Keyless public pool",
+            )
+        )
+    return records
+
+
 def _brave_records() -> list[ProviderLimitRecord]:
     search_rate = _rate(
         _request_window("brave", AuthMode.KEYED, "search", "50", scope=RateScope.ORG)
@@ -401,6 +531,8 @@ def provider_limit_defaults() -> tuple[ProviderLimitRecord, ...]:
 
     records: list[ProviderLimitRecord] = []
     for builder in (
+        _tinyfish_records,
+        _keenable_records,
         _brave_records,
         _tavily_records,
     ):
@@ -430,8 +562,48 @@ def provider_tier_defaults() -> dict[str, list[TierBalance]]:
 
     request = UnitKind.REQUEST
     credit = UnitKind.CREDIT
+    request = UnitKind.REQUEST
     usd = UnitKind.USD
     return {
+        "tinyfish:keyed": [
+            _tier(
+                "tinyfish:keyed:unmetered",
+                "free",
+                request,
+                funding_mode=FundingMode.NO_BUDGET,
+                confidence=Confidence.OBSERVED,
+                label="Free - unmetered (search/fetch never draw the wallet)",
+            ),
+        ],
+        "keenable:keyed": [
+            _tier(
+                "keenable:keyed:free",
+                "free",
+                request,
+                allowance="100000",
+                reset_rule=ResetRule.VENDOR_PERIOD,
+                source="documented_plan",
+                label="100000 monthly requests, shared search/fetch",
+            ),
+            _tier(
+                "keenable:keyed:purchased",
+                "paid",
+                request,
+                funding_mode=FundingMode.PREPAID,
+                confidence=Confidence.UNKNOWN,
+                label="Purchased credits (expiry unknown)",
+            ),
+        ],
+        "keenable:keyless": [
+            _tier(
+                "keenable:keyless:unmetered",
+                "free",
+                request,
+                funding_mode=FundingMode.NO_BUDGET,
+                confidence=Confidence.OBSERVED,
+                label="Free - unmetered (rate windows only)",
+            ),
+        ],
         "brave:keyed": [
             _tier(
                 "brave:keyed:free",

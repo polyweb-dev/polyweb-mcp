@@ -307,7 +307,7 @@ describe("AC-SB-8e: PillTabs gold standard untouched", () => {
       within(pillList as HTMLElement)
         .getAllByRole("tab")
         .map((t) => t.textContent)
-    ).toEqual(["Strategy", "Simulator", "Ranks", "Resilience"])
+    ).toEqual(["Strategy", "Simulator"])
   })
 
   it("Settings view still exposes Providers/Keys/Failover pill tabs", async () => {

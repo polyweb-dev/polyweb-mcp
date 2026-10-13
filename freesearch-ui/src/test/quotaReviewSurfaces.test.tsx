@@ -4,7 +4,6 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import userEvent from "@testing-library/user-event"
 import { FreeSearchProvider } from "@/context/FreeSearchContext"
 import { ADMIN_ACCOUNT_ID } from "@/test/authFixtures"
-import { ProviderRanks } from "@/components/routing/ProviderRanks"
 import { RouteSimulator } from "@/components/routing/RouteSimulator"
 import { SettingsView } from "@/components/settings/SettingsView"
 import { QuotaAnalytics } from "@/components/quota/QuotaAnalytics"
@@ -31,24 +30,6 @@ import {
  * steering from balances, display_unit passthrough on usage totals,
  * single-snapshot-per-provider changes.
  */
-
-function renderRanks(dashboard: WireDashboard) {
-  installFetchStub((req) => {
-    if (req.url === "/api/v1/providers" && req.method === "GET") {
-      return ok(allProvidersFixture())
-    }
-    if (req.url === "/api/v1/routing/config" && req.method === "GET") {
-      return ok(routingConfigFixture())
-    }
-    if (req.url.startsWith("/dashboard")) return ok(dashboard)
-    return err(404, { detail: "unhandled test route" })
-  })
-  return render(
-    <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
-      <ProviderRanks />
-    </FreeSearchProvider>
-  )
-}
 
 function renderSimulator(dashboard: WireDashboard) {
   installFetchStub((req) => {
@@ -97,12 +78,6 @@ function renderSettings(dashboard: WireDashboard) {
       <SettingsView />
     </FreeSearchProvider>
   )
-}
-
-async function waitForRanks() {
-  await waitFor(() => {
-    expect(screen.getAllByText("Brave Search", { exact: true }).length).toBeGreaterThanOrEqual(1)
-  })
 }
 
 async function waitForSettings() {
@@ -275,18 +250,9 @@ function renderUsageWithProviders(
   )
 }
 
-describe("RF2: null limits render as — on ranks / simulator / settings", () => {
+describe("RF2: null limits render as — on simulator / settings", () => {
   afterEach(() => {
     vi.unstubAllGlobals()
-  })
-
-  it("ranks table shows — for null limits, never ∞", async () => {
-    renderRanks(dashboardFixture())
-    await waitForRanks()
-
-    const body = document.body.textContent ?? ""
-    expect(body).not.toContain("∞")
-    expect(body).toContain("—")
   })
 
   it("simulator pipeline shows — for null limits, never ∞", async () => {
@@ -330,29 +296,11 @@ describe("RF2: null limits render as — on ranks / simulator / settings", () =>
     const body = document.body.textContent ?? ""
     expect(body).not.toContain("∞")
   })
-
-  it("RF1 verbatim: canonical Tavily limit '100000.10' survives on the ranks surface", async () => {
-    renderRanks(dashboardFixture({ latest_quota: canonicalQuotasFixture() }))
-    await waitForRanks()
-
-    const body = document.body.textContent ?? ""
-    expect(body).toContain("100000.10")
-    expect(body).not.toContain("100000.1 ")
-  })
 })
 
 describe("RF3: normalized-percentage guidance and native tooltip units", () => {
   afterEach(() => {
     vi.unstubAllGlobals()
-  })
-
-  it("ranks table explains that percentages are comparable and native units stay detailed", async () => {
-    renderRanks(dashboardFixture())
-    await waitForRanks()
-
-    expect(document.body.textContent).toMatch(
-      /remaining percentages are comparable; details keep each provider's native unit/i
-    )
   })
 
   it("simulator explains that percentages are comparable and native units stay detailed", async () => {
@@ -391,16 +339,6 @@ describe("RF3: normalized-percentage guidance and native tooltip units", () => {
     for (const el of titled) {
       expect(el.getAttribute("title")).toMatch(/units|credits|requests|USD|legacy/i)
     }
-  })
-
-  it("does not infer routing state from balances (no exhausted/hard/soft pills)", async () => {
-    renderRanks(dashboardFixture({ latest_quota: canonicalQuotasFixture() }))
-    await waitForRanks()
-
-    const body = (document.body.textContent ?? "").toLowerCase()
-    expect(body).not.toContain("exhausted")
-    expect(body).not.toContain("hard limit")
-    expect(body).not.toMatch(/soft\s+limit/)
   })
 })
 
