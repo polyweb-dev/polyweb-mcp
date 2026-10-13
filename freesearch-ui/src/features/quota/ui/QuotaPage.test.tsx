@@ -13,7 +13,11 @@ vi.mock("../model/useManualQuota", () => ({
 }))
 
 vi.mock("@/context/useFreeSearch", () => ({
-  useFreeSearch: () => ({
+  useFreeSearch: () => mockFreeSearchState.current,
+}))
+
+const mockFreeSearchState = vi.hoisted(() => ({
+  current: {
     providers: [{ id: "brave", name: "Brave" }],
     providerLimits: [],
     crdUsageTotals: [],
@@ -22,7 +26,7 @@ vi.mock("@/context/useFreeSearch", () => ({
     usageLoading: false,
     usageError: null,
     refreshDashboard: () => Promise.resolve(),
-  }),
+  },
 }))
 
 vi.mock("../model/quotaRowModel", async (importOriginal) => {
@@ -80,5 +84,82 @@ describe("QuotaPage", () => {
     )
     expect(screen.queryByText("Provider quota view")).toBe(null)
     vi.unstubAllGlobals()
+  })
+
+  it("supplies native usage totals to the Tavily block", () => {
+    const previous = mockFreeSearchState.current
+    const profile = {
+      reference_usd_per_crd: "0.001",
+      native_usd_per_unit: "0.008",
+      cost_basis: "paygo_reference",
+      price_version: "paygo-reference",
+      source: "documented",
+      estimated: true,
+    }
+    const search = {
+      provider: "tavily",
+      operation: "search",
+      auth_mode: "keyed",
+      supported: true,
+      transport_available: true,
+      native_pool_id: "tavily:keyed:credits",
+      rate: null,
+      budget: null,
+      conversion_profile: profile,
+      plan_name: "Tavily",
+      usage_url: null,
+      version: 2,
+    }
+    mockFreeSearchState.current = {
+      providers: [
+        { id: "brave", name: "Brave" },
+        { id: "tavily", name: "Tavily" },
+      ],
+      providerLimits: [
+        {
+          provider: "tavily",
+          active_auth_mode: "keyed",
+          auths: [
+            {
+              auth_mode: "keyed",
+              transport_available: true,
+              search,
+              fetch: { ...search, operation: "fetch" },
+              free_tiers: [],
+              paid_tiers: [],
+              unknown_tiers: [],
+              tier_split_known: true,
+              aggregate_pool: null,
+              crd_views: [],
+              rate_progress: [],
+              grants: null,
+              detail: null,
+            },
+          ],
+          documented_keyless_operations: [],
+          version: 2,
+          generated_at: "2026-09-06T10:05:00Z",
+        },
+      ],
+      crdUsageTotals: [
+        { provider: "tavily", operation: "search", normalized_crd: "8", attempt_count: 1, volume_count: 1 },
+      ],
+      dashboardQuotas: [],
+      dashboardNotice: null,
+      usageLoading: false,
+      usageError: null,
+      refreshDashboard: () => Promise.resolve(),
+    } as never
+    try {
+      installFetchStub(() => {
+        throw new Error("no backend on page test")
+      })
+      render(<QuotaPage />)
+      expect(screen.getByText("Tavily native Credits use")).not.toBeNull()
+      expect(screen.getByText("1 Credit")).not.toBeNull()
+    } finally {
+      mockFreeSearchState.current = previous
+      vi.unstubAllGlobals()
+    }
   })
 })

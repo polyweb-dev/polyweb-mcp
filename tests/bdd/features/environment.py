@@ -242,6 +242,27 @@ def after_scenario(context: Any, scenario: Any) -> None:
     youcom_adapter = getattr(context, "youcom_adapter", None)
     if youcom_adapter is not None and callable(getattr(youcom_adapter, "aclose", None)):
         context.loop.run_until_complete(youcom_adapter.aclose())
+    for tavily_adapter_attr in (
+        "tavily_keyless_adapter",
+        "tavily_keyed_adapter",
+        "tavily_cost_adapter",
+        "tavily_stub_adapter",
+        "tavily_held_adapter",
+        "tavily_rest_adapter",
+        "tavily_mcp_adapter",
+        "tavily_fanout_adapter",
+        "tavily_retry_adapter",
+        "tavily_variant_adapter",
+        "tavily_sched_adapter",
+    ):
+        tavily_adapter = getattr(context, tavily_adapter_attr, None)
+        if tavily_adapter is not None and callable(getattr(tavily_adapter, "aclose", None)):
+            with suppress(Exception):
+                context.loop.run_until_complete(tavily_adapter.aclose())
+    for tavily_client in getattr(context, "tavily_caller_clients", None) or []:
+        if callable(getattr(tavily_client, "aclose", None)):
+            with suppress(Exception):
+                context.loop.run_until_complete(tavily_client.aclose())
     if getattr(context, "http_client", None) is not None:
         context.loop.run_until_complete(context.http_client.aclose())
     if getattr(context, "loop", None) is not None:

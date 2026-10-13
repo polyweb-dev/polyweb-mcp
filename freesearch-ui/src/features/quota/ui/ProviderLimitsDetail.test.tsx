@@ -250,4 +250,61 @@ describe("ProviderLimitsDetail", () => {
     )
     expect(container.firstChild).toBe(null)
   })
+
+  it("shows Tavily local caps in Credits through the conversion context", () => {
+    const grants = {
+      provider: "tavily",
+      auth_mode: "keyed",
+      period_start: "2026-09-01",
+      period_end: "2026-09-30",
+      version: 3,
+      search_granted_crd: "8",
+      search_consumed_crd: "0",
+      search_reserved_crd: "0",
+      fetch_granted_crd: "16",
+      fetch_consumed_crd: "0",
+      fetch_reserved_crd: "0",
+    }
+    const profile = {
+      reference_usd_per_crd: "0.001",
+      native_usd_per_unit: "0.008",
+      cost_basis: "paygo_reference",
+      price_version: "paygo-reference",
+      source: "documented",
+      estimated: true,
+    }
+    const auth = withGrants(withFetchSupport(authFixture()), grants)
+    render(
+      <ProviderLimitsDetail
+        providerName="Tavily"
+        auth={auth}
+        nativeDisplay={{ credits: {} as never, profile } as never}
+      />,
+    )
+    expect(screen.getByText("Search budget limit")).not.toBeNull()
+    expect(screen.getByText("Extract budget limit")).not.toBeNull()
+    expect(screen.getByText("1 Credit set, 0 Credits used")).not.toBeNull()
+    expect(screen.getByText("2 Credits set, 0 Credits used")).not.toBeNull()
+    expect(screen.queryByText("8 CRD")).toBeNull()
+  })
+
+  it("keeps CRD caps without a conversion profile", () => {
+    const grants = {
+      provider: "tavily",
+      auth_mode: "keyed",
+      period_start: "2026-09-01",
+      period_end: "2026-09-30",
+      version: 3,
+      search_granted_crd: "8",
+      search_consumed_crd: "0",
+      search_reserved_crd: "0",
+      fetch_granted_crd: "16",
+      fetch_consumed_crd: "0",
+      fetch_reserved_crd: "0",
+    }
+    const auth = withGrants(withFetchSupport(authFixture()), grants)
+    render(<ProviderLimitsDetail providerName="Tavily" auth={auth} />)
+    expect(screen.getByText("Fetch budget limit")).not.toBeNull()
+    expect(screen.queryByText("Extract budget limit")).toBeNull()
+  })
 })

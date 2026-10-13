@@ -257,6 +257,28 @@ async def _apply_parallel_seed(
             continue
 
 
+async def _apply_tavily_config(
+    routes: Sequence[ProviderAdapter],
+    repository: SQLiteRepository | None,
+    limits: "ProviderLimitsService | None",
+) -> None:
+    """Project the effective Tavily rail and PAYGO choice into the limit service.
+
+    The calls run after the limits service exists, so a generation without a
+    repository, a limit service, or a Tavily adapter stays a no-op.
+    """
+
+    if repository is None or limits is None:
+        return
+    adapter = next((route for route in routes if route.name == ProviderName.TAVILY.value), None)
+    if adapter is None:
+        return
+    from freesearch.routers.control import effective_config_for_name
+
+    config = await effective_config_for_name(repository, ProviderName.TAVILY.value)
+    await limits.apply_tavily_config(config, auth_mode=adapter.limit_auth_mode)
+
+
 def _encrypted_store(repository: SQLiteRepository) -> EncryptedDbSecretStore:
     """Build the local encrypted store used by OAuth balance polling."""
 
@@ -283,13 +305,14 @@ async def _build_generation(
     """Create one owned generation (client, adapters, repository) and publish it.
 
     Adapters resolve their keys from the encrypted vault via the control-plane
-    helpers; providers without a vault key are skipped (Keenable's keyless
-    public tier excepted).
+    helpers; providers without a vault key are skipped (Keenable's and
+    Tavily's keyless public tiers excepted).
     """
 
     from freesearch.routers.control import (
         _build_with_resolved_secret,
         _resolve_secret,
+        effective_config_for_name,
         initialize_provider_configs,
     )
 
@@ -309,20 +332,31 @@ async def _build_generation(
             # server restart.
             for provider in ProviderName:
                 key, _source = await _resolve_secret(provider, store)
-                if key is None and provider is not ProviderName.KEENABLE:
+                if key is None and provider not in (
+                    ProviderName.KEENABLE,
+                    ProviderName.TAVILY,
+                ):
                     continue
                 factory = adapter_factory(provider.value)
                 if factory is None:
                     logger.warning("no adapter factory for provider %s", provider.value)
                     continue
                 try:
-                    owned_routes.append(_build_with_resolved_secret(factory, client, key))
+                    if provider is ProviderName.TAVILY:
+                        config = await effective_config_for_name(repository, provider.value)
+                        owned_routes.append(
+                            _build_with_resolved_secret(factory, client, key, config=config)
+                        )
+                    else:
+                        owned_routes.append(_build_with_resolved_secret(factory, client, key))
                 except Exception:
                     continue
         else:
             owned_routes = build_adapters(client)
         await _apply_parallel_seed(owned_routes, repository)
         await _start_limits_generation(state, owned_routes)
+        with suppress(Exception):
+            await _apply_tavily_config(owned_routes, repository, state["limits"])
         # The trace runtime belongs to this generation, so it is built only after
         # the repository that owns the trace table is open and migrated.
         state["observability"] = build_observability(
@@ -447,7 +481,20 @@ async def _mcp_fanout_search(
     secret_store: AsyncSecretStore | None = None,
     limits: "ProviderLimitsService | None" = None,
 ) -> dict[str, Any]:
-    """Execute concurrent fanout search across active adapters for MCP."""
+    """Execute concurrent fanout search across active adapters for MCP.
+
+    Mirrors the REST fanout transport: a terminal Tavily out-of-Credits 402
+    propagates even when another provider succeeds, after the pending fanout
+    tasks are cancelled and awaited. FastMCP surfaces the original error text
+    unchanged.
+    """
+
+    from freesearch.routers.api import (
+        _fanout_failure_outcome,
+        _fanout_outcomes,
+        _terminal_tavily_402,
+    )
+
     if request.routing.providers:
         required_names = set(request.routing.providers)
         active = [a for a in active if a.name in required_names]
@@ -465,26 +512,38 @@ async def _mcp_fanout_search(
     ) -> tuple[str, SearchResponse | None, int, str, int, str | None]:
         call_start = time.perf_counter()
         try:
-            res = await tracked_call(
-                repository,
-                candidate_adapter,
-                lambda target: target.search(request),
-                operation=UsageOperation.SEARCH,
-                request=request,
-                limits=limits,
-            )
-            elapsed = int((time.perf_counter() - call_start) * 1000)
-            return (candidate_adapter.name, res, elapsed, "success", len(res.results), None)
-        except Exception as exc:
-            elapsed = int((time.perf_counter() - call_start) * 1000)
-            status = "failed"
-            status_code = getattr(getattr(exc, "error", None), "status_code", None)
-            if status_code == 429:
-                status = "rate_limited"
-            return (candidate_adapter.name, None, elapsed, status, 0, str(exc))
+            try:
+                res = await tracked_call(
+                    repository,
+                    candidate_adapter,
+                    lambda target: target.search(request),
+                    operation=UsageOperation.SEARCH,
+                    request=request,
+                    limits=limits,
+                )
+                elapsed = int((time.perf_counter() - call_start) * 1000)
+                return (candidate_adapter.name, res, elapsed, "success", len(res.results), None)
+            except Exception as exc:
+                elapsed = int((time.perf_counter() - call_start) * 1000)
+                if _terminal_tavily_402(exc) is not None:
+                    # The terminal out-of-Credits error is the transport: it
+                    # re-raises out of the fanout and FastMCP carries the
+                    # original message to the tool caller.
+                    raise
+                return _fanout_failure_outcome(candidate_adapter.name, exc, elapsed)
+        except Exception as mc_exc:
+            # Mirror of the guarded fanout invariant in routers/api.py: only
+            # the terminal Tavily 402 escapes _call; any machinery failure in
+            # the wrapper bookkeeping above converts to the handled outcome
+            # tuple instead of a raised task error. MCP keeps its own tuple
+            # shape and surface (no OpenTelemetry span in scope here).
+            if _terminal_tavily_402(mc_exc) is not None:
+                raise
+            mc_elapsed = int((time.perf_counter() - call_start) * 1000)
+            return _fanout_failure_outcome(candidate_adapter.name, mc_exc, mc_elapsed)
 
-    tasks = [_call(c.adapter) for c in candidates]
-    outcomes = await asyncio.gather(*tasks)
+    tasks = [asyncio.ensure_future(_call(c.adapter)) for c in candidates]
+    outcomes = await _fanout_outcomes(tasks)
     successful_results: list[tuple[str, SearchResponse]] = []
     errors: list[str] = []
     waterfall: list[ProviderTraceItem] = []

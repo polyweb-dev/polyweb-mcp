@@ -1676,3 +1676,106 @@ async def test_rest_lifespan_clears_config_cache(repository: SQLiteRepository) -
         from freesearch.services.monitoring import clear_quota_poll_cache as _clear_q
 
         _clear_q()
+
+
+# --- Tavily control plane: PATCH persist, rebuild triggers (PLAN 4.1) --------
+
+
+@pytest.mark.asyncio
+async def test_tavily_patch_persists_key_environment_and_paygo(
+    repository: SQLiteRepository, auth_secret: str, vault_env: None
+) -> None:
+    """PATCH stores the non-secret Tavily values through the persisted path."""
+    from freesearch.routers.control import effective_config_for_name
+
+    app = create_app([], repository=repository)
+    with TestClient(app) as client:
+        pair = await register_promote_login(
+            client, repository, temp_email("control-tavily-patch"), UserRole.ADMIN
+        )
+        headers = raw_auth_headers(pair["access_token"])
+        response = client.patch(
+            "/api/v1/providers/tavily",
+            json={"tavily_key_environment": "prod", "tavily_paygo_enabled": True},
+            headers=headers,
+        )
+        assert response.status_code == 200, response.text
+
+    config = await effective_config_for_name(repository, "tavily")
+    assert config.tavily_key_environment == "prod"
+    assert config.tavily_paygo_enabled is True
+
+
+@pytest.mark.asyncio
+async def test_tavily_patch_survives_repository_reopen(
+    tmp_path: Path, auth_secret: str, vault_env: None
+) -> None:
+    """The Tavily values travel the persisted JSON path across a reopen."""
+    from freesearch.routers.control import effective_config_for_name
+
+    db_path = tmp_path / "control-tavily.db"
+    first = await SQLiteRepository.open(db_path)
+    try:
+        app = create_app([], repository=first)
+        with TestClient(app) as client:
+            pair = await register_promote_login(
+                client, first, temp_email("control-tavily-reopen"), UserRole.ADMIN
+            )
+            headers = raw_auth_headers(pair["access_token"])
+            response = client.patch(
+                "/api/v1/providers/tavily",
+                json={"tavily_key_environment": "prod"},
+                headers=headers,
+            )
+            assert response.status_code == 200, response.text
+    finally:
+        await first.close()
+
+    second = await SQLiteRepository.open(db_path)
+    try:
+        config = await effective_config_for_name(second, "tavily")
+    finally:
+        await second.close()
+    assert config.tavily_key_environment == "prod"
+
+
+@pytest.mark.asyncio
+async def test_tavily_keyless_secret_presence_and_rebuild(
+    repository: SQLiteRepository, auth_secret: str, vault_env: None
+) -> None:
+    """Missing Tavily key reports keyless_public; PUT rebuilds the adapter."""
+    import httpx
+
+    from freesearch.adapters.tavily import TavilyAdapter
+    from freesearch.configuration.provider_config import ProviderConfig
+    from freesearch.models.provider_limits import AuthMode
+    from freesearch.routers.control import _build_with_resolved_secret
+
+    app = create_app([], repository=repository)
+    with TestClient(app) as client:
+        pair = await register_promote_login(
+            client, repository, temp_email("control-tavily-rebuild"), UserRole.ADMIN
+        )
+        headers = raw_auth_headers(pair["access_token"])
+        listing = client.get("/api/v1/providers", headers=headers)
+        assert listing.status_code == 200
+        tavily = next(item for item in listing.json() if item["provider_id"] == "tavily")
+        assert tavily["secret_presence"] == "keyless_public"
+
+    caller = httpx.AsyncClient(timeout=30.0)
+    try:
+        keyless = _build_with_resolved_secret(
+            TavilyAdapter, caller, None, config=ProviderConfig()
+        )
+        assert isinstance(keyless, TavilyAdapter)
+        assert keyless.limit_auth_mode is AuthMode.KEYLESS
+        keyed = _build_with_resolved_secret(
+            TavilyAdapter,
+            caller,
+            "tvly-rebuild-1",
+            config=ProviderConfig(tavily_key_environment="prod"),
+        )
+        assert keyed.limit_auth_mode is AuthMode.KEYED
+        assert keyed.key_environment == "prod"
+    finally:
+        await caller.aclose()

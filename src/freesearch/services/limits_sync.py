@@ -30,7 +30,11 @@ from freesearch.services.provider_limits import ProviderLimitsService
 logger = logging.getLogger(__name__)
 
 DEFAULT_SYNC_INTERVAL_SECONDS = 60
+# The default claim lease stays valid beyond a 30-second outer usage timeout.
+DEFAULT_LEASE_SECONDS = 30
 TAVILY_MIN_SECONDS = 60
+# Tavily's lease also stays valid beyond the 30-second outer usage timeout.
+TAVILY_LEASE_SECONDS = 90
 MAX_BACKOFF_SECONDS = 600
 # Tavily's usage endpoint is capped at ten requests per ten minutes.
 _THROTTLED_PROVIDERS: dict[str, int] = {"tavily": TAVILY_MIN_SECONDS}
@@ -109,7 +113,10 @@ class LimitSyncService:
         """Sync one provider under the database lease.
 
         The Tavily usage endpoint keeps its documented minimum interval, and
-        ``force`` cannot bypass it.
+        ``force`` cannot bypass it. For Tavily the repository enforces that
+        durable cadence inside the atomic claim anchored on the canonical
+        keyed Credits pool row, so a held claim reports ``False`` and this
+        service treats it as ``lease_held``.
         """
 
         if self._repository is None:
@@ -120,11 +127,17 @@ class LimitSyncService:
         adapter = self._adapter_for(provider)
         if adapter is None:
             return _skipped(provider, now, "no_adapter")
+        # The claim lease must outlive the 30-second outer usage timeout the
+        # adapter applies to its usage request, so throttled providers keep a
+        # lease floor higher than the request timeout.
+        lease_floor = (
+            TAVILY_LEASE_SECONDS if provider in _THROTTLED_PROVIDERS else DEFAULT_LEASE_SECONDS
+        )
         claim = SyncClaim(
             provider=provider,
             owner=self._owner,
             now=now,
-            lease_seconds=max(30, self._interval),
+            lease_seconds=max(lease_floor, self._interval),
             credential_generation=await self._credential_generation(provider),
         )
         if not await self._repository.claim_sync(claim):
@@ -134,7 +147,13 @@ class LimitSyncService:
     async def _sync_claimed(
         self, provider: str, adapter: ProviderAdapter, now: datetime
     ) -> SyncResult:
-        """Read one provider's usage and store it, keeping failures independent."""
+        """Read one provider's usage and store it, keeping failures independent.
+
+        One usage attempt per scheduled poll: this service never retries a
+        failed, timed-out, or ``None`` usage request inside the same poll; the
+        next attempt waits for the recorded cadence - for Tavily the later of
+        the 60-second vendor cadence and Retry-After.
+        """
 
         request = UsageSyncRequest(
             provider=provider,
@@ -181,12 +200,23 @@ class LimitSyncService:
         )
 
     async def _record_failure(self, provider: str, now: datetime, error: Exception) -> SyncResult:
-        """Record one failed sync with a safe error code and bounded backoff."""
+        """Record one failed sync with a safe error code and bounded backoff.
+
+        No immediate usage retry follows a 429 or a transport error: for
+        Tavily the next poll waits the later of the 60-second vendor cadence
+        and the parsed Retry-After delay after ``now``, and a Retry-After
+        larger than 600 seconds caps at 600 for the ``next_sync_at``
+        computation.
+        """
 
         failures = self._failures.get(provider, 0) + 1
         self._failures[provider] = failures
-        delay = _backoff_seconds(failures, _retry_after(error))
-        await self._complete(provider, "failed", now, error_code=_error_code(error))
+        delay = _cadence_delay(
+            provider, self._interval, _backoff_seconds(failures, _retry_after(error))
+        )
+        await self._complete(
+            provider, "failed", now, error_code=_error_code(error), backoff_seconds=delay
+        )
         logger.warning("limit sync failed for a provider")
         return SyncResult(
             provider=provider,
@@ -205,23 +235,32 @@ class LimitSyncService:
         *,
         error_code: str | None = None,
         reason: str | None = None,
+        backoff_seconds: int | None = None,
     ) -> None:
+        """Stamp the lease release, error state, and next attempt instant.
+
+        The stored ``next_sync_at`` never schedules an immediate usage retry
+        after a failure: for Tavily it never undercuts the vendor's 60-second
+        minimum cadence, even when ``interval_seconds`` is configured lower,
+        and it honours the failure delay passed in ``backoff_seconds``.
+        """
+
         if self._repository is None:
             return
+        delay = _cadence_delay(provider, self._interval, backoff_seconds)
         await self._repository.complete_sync(
             SyncResult(
                 provider=provider,
                 status=status,  # type: ignore[arg-type]
                 observed_at=now,
-                next_sync_at=now + timedelta(seconds=self._interval),
+                next_sync_at=now + timedelta(seconds=delay),
                 error_code=error_code,
                 stale=status == "failed",
                 reason=reason,
             )
         )
-        minimum = _THROTTLED_PROVIDERS.get(provider)
-        if minimum is not None:
-            self._throttle_until[provider] = now + timedelta(seconds=minimum)
+        if provider in _THROTTLED_PROVIDERS:
+            self._throttle_until[provider] = now + timedelta(seconds=delay)
 
     def _adapter_for(self, provider: str) -> ProviderAdapter | None:
         for adapter in self._adapters():
@@ -245,21 +284,56 @@ def _adapter_auth_mode(adapter: ProviderAdapter) -> AuthMode:
     return mode if isinstance(mode, AuthMode) else AuthMode.KEYED
 
 
-def _backoff_seconds(failures: int, retry_after: int | None) -> int:
-    """Return the bounded delay before the next attempt."""
+def _cadence_delay(provider: str, interval: int, backoff: int | None) -> int:
+    """Return the next-poll delay in seconds for one provider.
+
+    Throttled providers wait at least the later of their vendor cadence and
+    the configured interval, plus any failure backoff they are given. The
+    resulting delay is bounded by ``MAX_BACKOFF_SECONDS``: a Retry-After
+    delay larger than 600 seconds caps at 600 for the ``next_sync_at``
+    computation, while non-throttled providers keep their plain interval.
+    """
+
+    minimum = _THROTTLED_PROVIDERS.get(provider)
+    if minimum is None:
+        return interval
+    delay = max(interval, minimum)
+    if backoff is not None:
+        delay = max(delay, backoff)
+    return min(delay, MAX_BACKOFF_SECONDS)
+
+
+def _backoff_seconds(failures: int, retry_after: float | None) -> int:
+    """Return the bounded delay before the next attempt.
+
+    A parsed Retry-After delay wins over exponential growth, and a delay
+    larger than 600 seconds caps at 600.
+    """
 
     if retry_after is not None:
-        return max(1, min(MAX_BACKOFF_SECONDS, retry_after))
+        return int(max(1, min(MAX_BACKOFF_SECONDS, retry_after)))
     return min(MAX_BACKOFF_SECONDS, 60 * (1 << min(failures - 1, 4)))
 
 
-def _retry_after(error: Exception) -> int | None:
+def _retry_after(error: Exception) -> float | None:
+    """Return the vendor Retry-After delay in seconds when it is a real number.
+
+    ``details["retry_after_seconds"]`` wins over the legacy
+    ``details["retry_after"]`` key. Only a real (non-bool) int or float
+    greater than or equal to zero is accepted; anything else yields ``None``.
+    """
+
     details = getattr(getattr(error, "error", None), "details", None)
     if not isinstance(details, dict):
         return None
-    value = details.get("retry_after")
-    if isinstance(value, int):
-        return value
+    for key in ("retry_after_seconds", "retry_after"):
+        value = details.get(key)
+        if isinstance(value, bool):
+            continue
+        if not isinstance(value, (int, float)):
+            continue
+        if value >= 0:
+            return value
     return None
 
 

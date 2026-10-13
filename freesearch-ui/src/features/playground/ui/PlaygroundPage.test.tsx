@@ -211,7 +211,7 @@ describe("SearchPlayground (live backend)", () => {
     })
   })
 
-  it("labels telemetry in Units, never Cost/credits", async () => {
+  it("labels telemetry in Credits, never Cost", async () => {
     renderWithBackend()
     await waitFor(() => {
       expect(screen.getByPlaceholderText(/Search across all providers/i)).toBeInTheDocument()
@@ -222,8 +222,8 @@ describe("SearchPlayground (live backend)", () => {
     await waitFor(() => {
       expect(screen.getByText("Live backend result one")).toBeInTheDocument()
     })
-    expect(screen.getByText(/Units/i)).toBeInTheDocument()
-    expect(document.body.textContent).not.toMatch(/Cost|credits/i)
+    expect(screen.getByText(/Credits/i)).toBeInTheDocument()
+    expect(document.body.textContent).not.toMatch(/Cost/i)
   })
 
   it("renders fetch content length as UTF-8 bytes, not JS chars", async () => {

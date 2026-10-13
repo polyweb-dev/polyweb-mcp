@@ -138,4 +138,67 @@ describe("CRDPriceNote", () => {
     expect(screen.getByText("No provider price is reported in the current catalog.")).not.toBeNull()
     expect(screen.queryByRole("table")).toBe(null)
   })
+
+  it("excludes Tavily USD rows from the always-visible table while keeping Brave", () => {
+    const tavilySearch = {
+      provider: "tavily",
+      operation: "search",
+      auth_mode: "keyed",
+      supported: true,
+      transport_available: true,
+      native_pool_id: "tavily:keyed:credits",
+      rate: null,
+      budget: null,
+      conversion_profile: profile(),
+      plan_name: "Tavily",
+      usage_url: null,
+      version: 2,
+    }
+    const tavilyLimits = {
+      provider: "tavily",
+      active_auth_mode: "keyed",
+      auths: [
+        {
+          auth_mode: "keyed",
+          transport_available: true,
+          search: tavilySearch,
+          fetch: null,
+          free_tiers: [],
+          paid_tiers: [],
+          unknown_tiers: [],
+          tier_split_known: true,
+          aggregate_pool: null,
+          crd_views: [
+            {
+              state: "finite",
+              operation: "search",
+              remaining_crd: "7992",
+              local_remaining_crd: null,
+              request_cost_crd: "8",
+              shared_pool_id: "tavily:keyed:credits",
+              possible_standard_calls: "999",
+              price_version: "paygo-reference",
+              priced: true,
+            },
+          ],
+          rate_progress: [],
+          grants: null,
+          detail: null,
+        },
+      ],
+      documented_keyless_operations: [],
+      version: 2,
+      generated_at: "2026-09-06T10:05:00Z",
+    }
+    render(
+      <CRDPriceNote
+        providers={[{ id: "brave", name: "Brave" }, { id: "tavily", name: "Tavily" }] as never}
+        providerLimits={[braveLimits(), tavilyLimits] as never}
+      />,
+    )
+    expect(screen.getByText("0.005 USD")).not.toBeNull()
+    expect(screen.getByText("5 CRD")).not.toBeNull()
+    expect(screen.queryByText("Tavily")).toBeNull()
+    expect(screen.queryByText("8 CRD")).toBeNull()
+  })
 })

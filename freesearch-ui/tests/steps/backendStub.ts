@@ -574,6 +574,483 @@ export function ui7HistoryEvents(): unknown[] {
   ]
 }
 
+// ---------------------------------------------------------------------------
+// Tavily native Credits stub (provider-credits.feature U7-T*, quota-display).
+//
+// Native CREDIT pool with the documented free allowance (1000 Credits,
+// monthly reset on day 1) and the PAYGO reference profile (USD 0.008 per
+// Credit, 8 CRD per Credit). Search bills 1 Credit per basic call (2 per
+// advanced); extract bills 0.2 Credits per good URL (1 Credit per 5 URLs,
+// 2 per 5 advanced). The shared minute bucket is dev 100 RPM, prod 1000 RPM.
+// ---------------------------------------------------------------------------
+
+/** Safe vendor-402 message the stub serves for the out-of-Credits probe. */
+export const TAVILY_402_MESSAGE = "Tavily is out of Credits. Wait until reset or upgrade."
+
+/** Playground query that deterministically triggers the stubbed Tavily 402. */
+export const TAVILY_402_QUERY = "tavily out of credits probe"
+
+/** Fetch URL that deterministically triggers the stubbed Tavily 402. */
+export const TAVILY_402_URL = "https://tavily-402.example.com/article"
+
+function tavilyConversionProfile(): Record<string, unknown> {
+  return {
+    reference_usd_per_crd: "0.001",
+    native_usd_per_unit: "0.008",
+    cost_basis: "paygo_reference",
+    price_version: "paygo-reference",
+    source: "documented",
+    estimated: true,
+  }
+}
+
+function tavilySearchRecord(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    provider: "tavily",
+    operation: "search",
+    auth_mode: "keyed",
+    supported: true,
+    transport_available: true,
+    rate: null,
+    budget: {
+      model: "credits",
+      free_allowance: "1000",
+      allowance_unit: "Credits",
+      allowance_period: "month",
+      cost_per_1k: "8",
+      standard_native_cost: "1",
+      usd_per_call: "0.008",
+      on_exhausted: "stop",
+      usage_api: "https://api.tavily.com/usage",
+      priced: true,
+    },
+    native_pool_id: "tavily:keyed:credits",
+    conversion_profile: tavilyConversionProfile(),
+    plan_name: "Free plan",
+    usage_url: "https://app.tavily.com/home",
+    version: 2,
+    ...overrides,
+  }
+}
+
+function tavilyFetchRecord(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    provider: "tavily",
+    operation: "fetch",
+    auth_mode: "keyed",
+    supported: true,
+    transport_available: true,
+    rate: null,
+    budget: {
+      model: "credits",
+      free_allowance: "1000",
+      allowance_unit: "Credits",
+      allowance_period: "month",
+      cost_per_1k: "8",
+      standard_native_cost: "0.2",
+      usd_per_call: "0.0016",
+      on_exhausted: "stop",
+      usage_api: "https://api.tavily.com/usage",
+      priced: true,
+    },
+    native_pool_id: "tavily:keyed:credits",
+    conversion_profile: tavilyConversionProfile(),
+    plan_name: "Free plan",
+    usage_url: "https://app.tavily.com/home",
+    version: 2,
+    ...overrides,
+  }
+}
+
+/** Shared minute rate window of the keyed rail (dev 100, prod 1000 RPM). */
+function tavilyMinuteWindow(remaining: string, limit: string): Record<string, unknown> {
+  return {
+    bucket_id: "tavily:keyed:search:requests",
+    limit,
+    window: "1m",
+    scope: "key",
+    unit: "requests",
+    remaining,
+    reset_at: null,
+    source: "vendor_headers",
+    confidence: "observed",
+  }
+}
+
+function tavilyFreeTier(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    pool_id: "tavily:keyed:free",
+    tier: "free",
+    native_unit: "CREDIT",
+    native_remaining: "1000",
+    native_allowance: "1000",
+    remaining_crd: "8000",
+    allowance_crd: "8000",
+    reset_rule: "monthly_first",
+    reset_at: "2026-10-01T00:00:00Z",
+    funding_mode: "recurring",
+    source: "documented_plan",
+    confidence: "observed",
+    transport_available: true,
+    label: "Free plan credits (resets on the first)",
+    ...overrides,
+  }
+}
+
+function tavilyPaygoTier(): Record<string, unknown> {
+  return {
+    pool_id: "tavily:keyed:paygo",
+    tier: "paid",
+    native_unit: "CREDIT",
+    native_remaining: null,
+    native_allowance: null,
+    remaining_crd: null,
+    allowance_crd: null,
+    reset_rule: "never",
+    reset_at: null,
+    funding_mode: "postpaid",
+    source: "vendor_api",
+    confidence: "observed",
+    transport_available: true,
+    label: "PAYGO access or an explicit spend cap (not stored credits)",
+  }
+}
+
+function tavilyPool(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    pool_id: "tavily:keyed:credits",
+    provider: "tavily",
+    auth_mode: "keyed",
+    native_unit: "CREDIT",
+    remaining: "1000",
+    allowance: "1000",
+    actual_spend_usd: null,
+    source: "vendor_api",
+    confidence: "observed",
+    reset_at: "2026-10-01T00:00:00Z",
+    observed_at: FIXED_AT,
+    version: 2,
+    credential_generation: 1,
+    next_sync_at: null,
+    stale: false,
+    manual_anchor: false,
+    ...overrides,
+  }
+}
+
+function tavilySearchView(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    state: "finite",
+    operation: "search",
+    remaining_crd: "8000",
+    local_remaining_crd: null,
+    request_cost_crd: "8",
+    shared_pool_id: "tavily:keyed:credits",
+    possible_standard_calls: "1000",
+    price_version: "paygo-reference",
+    priced: true,
+    ...overrides,
+  }
+}
+
+function tavilyFetchView(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    state: "finite",
+    operation: "fetch",
+    remaining_crd: "8000",
+    local_remaining_crd: null,
+    request_cost_crd: "1.6",
+    shared_pool_id: "tavily:keyed:credits",
+    possible_standard_calls: "5000",
+    price_version: "paygo-reference",
+    priced: true,
+    ...overrides,
+  }
+}
+
+function tavilyDetail(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    plan_name: "Free plan",
+    native_unit: "CREDIT",
+    native_balance: "1000",
+    native_allowance: "1000",
+    usd_per_call: null,
+    actual_spend_usd: null,
+    reset_at: "2026-10-01T00:00:00Z",
+    reset_rule: "monthly_first",
+    usage_url: "https://app.tavily.com/home",
+    source: "vendor_api",
+    confidence: "observed",
+    last_sync_at: FIXED_AT,
+    stale: false,
+    price_version: "paygo-reference",
+    crd_split_note: null,
+    rate_windows: [tavilyMinuteWindow("100", "100")],
+    retry_after_seconds: null,
+    tier_split_known: true,
+    aggregate_pool_id: "tavily:keyed:credits",
+    ...overrides,
+  }
+}
+
+/** Finite Tavily card: 1000 / 1000 native Credits with the dev minute window. */
+export function tavilyCreditLimits(): unknown[] {
+  return [
+    {
+      provider: "tavily",
+      active_auth_mode: "keyed",
+      auths: [
+        {
+          auth_mode: "keyed",
+          transport_available: true,
+          search: tavilySearchRecord(),
+          fetch: tavilyFetchRecord(),
+          free_tiers: [tavilyFreeTier()],
+          paid_tiers: [],
+          unknown_tiers: [],
+          tier_split_known: true,
+          aggregate_pool: tavilyPool(),
+          crd_views: [tavilySearchView(), tavilyFetchView()],
+          rate_progress: [],
+          grants: null,
+          detail: tavilyDetail(),
+        },
+      ],
+      documented_keyless_operations: ["search", "fetch"],
+      version: 2,
+      generated_at: FIXED_AT,
+    },
+  ]
+}
+
+function withTavilyBalance(limits: unknown[], remaining: string, calls: string): unknown[] {
+  const entries = limits as Array<Record<string, unknown>>
+  const entry = entries[0] as Record<string, unknown>
+  const auths = entry.auths as Array<Record<string, unknown>>
+  const auth = auths[0] as Record<string, unknown>
+  auth.aggregate_pool = { ...(auth.aggregate_pool as Record<string, unknown>), remaining }
+  const views = auth.crd_views as Array<Record<string, unknown>>
+  const remainingCrd = String(Number(remaining) * 8)
+  views[0] = { ...views[0], remaining_crd: remainingCrd, possible_standard_calls: calls }
+  views[1] = { ...views[1], remaining_crd: remainingCrd }
+  const detail = auth.detail as Record<string, unknown>
+  auth.detail = { ...detail, native_balance: remaining }
+  const tiers = auth.free_tiers as Array<Record<string, unknown>>
+  auth.free_tiers = tiers.map((tier) => ({ ...tier, native_remaining: remaining, remaining_crd: remainingCrd }))
+  return limits
+}
+
+/** Tavily card after one basic search debit: 999 / 1000 Credits. */
+export function tavilyCreditLimitsAfterBasic(): unknown[] {
+  return withTavilyBalance(tavilyCreditLimits(), "999", "999")
+}
+
+/** Tavily card after one advanced search debit: 998 / 1000 Credits. */
+export function tavilyCreditLimitsAfterAdvanced(): unknown[] {
+  return withTavilyBalance(tavilyCreditLimits(), "998", "499")
+}
+
+/** Keyless Tavily rail: no reported quota, no numeric minute headroom. */
+export function tavilyKeylessLimits(): unknown[] {
+  const keylessProfile = {
+    reference_usd_per_crd: "0.001",
+    native_usd_per_unit: null,
+    cost_basis: "keyless_unpublished",
+    price_version: "",
+    source: "keyless_unpublished",
+    estimated: false,
+  }
+  const unknownView = (operation: string): Record<string, unknown> => ({
+    state: "unknown",
+    operation,
+    remaining_crd: null,
+    local_remaining_crd: null,
+    request_cost_crd: null,
+    shared_pool_id: null,
+    possible_standard_calls: null,
+    price_version: null,
+    priced: false,
+  })
+  return [
+    {
+      provider: "tavily",
+      active_auth_mode: "keyless",
+      auths: [
+        {
+          auth_mode: "keyless",
+          transport_available: true,
+          search: tavilySearchRecord({
+            auth_mode: "keyless",
+            supported: true,
+            transport_available: true,
+            rate: null,
+            budget: null,
+            native_pool_id: null,
+            conversion_profile: keylessProfile,
+            plan_name: "Keyless access mode (rate limit not published)",
+            usage_url: null,
+          }),
+          fetch: tavilyFetchRecord({
+            auth_mode: "keyless",
+            supported: true,
+            transport_available: true,
+            rate: null,
+            budget: null,
+            native_pool_id: null,
+            conversion_profile: keylessProfile,
+            plan_name: "Keyless access mode (rate limit not published)",
+            usage_url: null,
+          }),
+          free_tiers: [],
+          paid_tiers: [],
+          unknown_tiers: [],
+          tier_split_known: true,
+          aggregate_pool: null,
+          crd_views: [unknownView("search"), unknownView("fetch")],
+          rate_progress: [],
+          grants: null,
+          detail: tavilyDetail({
+            plan_name: "Keyless access mode (rate limit not published)",
+            native_unit: null,
+            native_balance: null,
+            native_allowance: null,
+            reset_at: null,
+            reset_rule: "unknown",
+            usage_url: "https://app.tavily.com/home",
+            source: "unknown",
+            confidence: "unknown",
+            last_sync_at: null,
+            rate_windows: [],
+          }),
+        },
+      ],
+      documented_keyless_operations: ["search", "fetch"],
+      version: 2,
+      generated_at: FIXED_AT,
+    },
+  ]
+}
+
+/** Free Tavily rail with zero Credits left and no PAYGO access. */
+export function tavilyFreeExhaustedLimits(): unknown[] {
+  return withTavilyBalance(tavilyCreditLimits(), "0", "0")
+}
+
+/** Paid Tavily rail at zero plan Credits with observed PAYGO access. */
+export function tavilyPaygoLimits(): unknown[] {
+  const limits = withTavilyBalance(tavilyCreditLimits(), "0", "0") as Array<Record<string, unknown>>
+  const auth = (limits[0] as Record<string, unknown>).auths as Array<Record<string, unknown>>
+  const keyed = auth[0] as Record<string, unknown>
+  keyed.paid_tiers = [tavilyPaygoTier()]
+  return limits as unknown[]
+}
+
+/** Finite Tavily rail with a stored operator grant (800 + 1600 CRD). */
+export function tavilyGrantLimits(): unknown[] {
+  const limits = tavilyCreditLimits() as Array<Record<string, unknown>>
+  const auth = (limits[0] as Record<string, unknown>).auths as Array<Record<string, unknown>>
+  const keyed = auth[0] as Record<string, unknown>
+  keyed.grants = {
+    provider: "tavily",
+    auth_mode: "keyed",
+    period_start: "2026-09-01",
+    period_end: "2026-09-30",
+    version: 1,
+    search_granted_crd: "800",
+    search_consumed_crd: "0",
+    search_reserved_crd: "0",
+    fetch_granted_crd: "1600",
+    fetch_consumed_crd: "0",
+    fetch_reserved_crd: "0",
+  }
+  return limits as unknown[]
+}
+
+/** Prod Tavily rail: 1000 RPM minute headroom with an active Retry-After delay. */
+export function tavilyProdCreditLimits(): unknown[] {
+  const limits = tavilyCreditLimits() as Array<Record<string, unknown>>
+  const auth = (limits[0] as Record<string, unknown>).auths as Array<Record<string, unknown>>
+  const keyed = auth[0] as Record<string, unknown>
+  const detail = keyed.detail as Record<string, unknown>
+  keyed.detail = {
+    ...detail,
+    rate_windows: [tavilyMinuteWindow("1000", "1000")],
+    retry_after_seconds: 45,
+  }
+  return limits as unknown[]
+}
+
+/** Brave finite card plus the finite Tavily card for the unchanged-Brave proof. */
+export function bravePlusTavilyLimits(): unknown[] {
+  return [...braveCreditLimits(), ...tavilyCreditLimits()]
+}
+
+/** Two Tavily balance events with native Credits sides plus a grant event. */
+export function tavilyHistoryEvents(): unknown[] {
+  return [
+    {
+      event_id: "evt-t2",
+      provider: "tavily",
+      auth_mode: "keyed",
+      operation: "search",
+      pool_id: "tavily:keyed:credits",
+      observed_at: "2026-09-06T10:04:00Z",
+      source: "local",
+      reason: "local_success",
+      old_native: "1000",
+      new_native: "999",
+      old_crd: "8000",
+      new_crd: "7992",
+      crd_debit: "8",
+      native_debit: "1",
+      actual_usd: null,
+      confidence: "observed",
+      local_attempt_id: "attempt-t2",
+      detail: { native_unit: "CREDIT", actor: "" },
+    },
+    {
+      event_id: "evt-t1",
+      provider: "tavily",
+      auth_mode: "keyed",
+      operation: "search",
+      pool_id: "tavily:keyed:credits",
+      observed_at: "2026-09-06T10:03:00Z",
+      source: "operator",
+      reason: "grant",
+      old_native: null,
+      new_native: null,
+      old_crd: null,
+      new_crd: null,
+      crd_debit: null,
+      native_debit: null,
+      actual_usd: null,
+      confidence: "authoritative",
+      local_attempt_id: null,
+      detail: { native_unit: "CREDIT", actor: "", search_granted_crd: "800" },
+    },
+  ]
+}
+
+/** Recorded Tavily search + extract use (8 CRD basic search, 1.6 CRD extract). */
+export function tavilyUseTotals(): unknown[] {
+  return [
+    {
+      provider: "tavily",
+      operation: "search",
+      normalized_crd: "8",
+      attempt_count: 1,
+      volume_count: 1,
+    },
+    {
+      provider: "tavily",
+      operation: "fetch",
+      normalized_crd: "1.6",
+      attempt_count: 1,
+      volume_count: 5,
+    },
+  ]
+}
+
 
 // ---------------------------------------------------------------------------
 // Provider PATCH failure/delay injection (provider-access-flags suite).
@@ -1718,6 +2195,9 @@ export async function installBackendStub(page: Page): Promise<void> {
     const providers = Array.isArray(routing.providers) ? routing.providers : []
     const pinned = typeof providers[0] === "string" ? (providers[0] as string) : "brave"
     const query = typeof body.query === "string" ? (body.query as string) : "stubbed query"
+    if (query === TAVILY_402_QUERY) {
+      return json(route, { detail: TAVILY_402_MESSAGE, provider: "tavily" }, 402)
+    }
     if (query === "doomed query") {
       return json(route, { detail: "stubbed provider unavailable" }, 503)
     }
@@ -1736,6 +2216,9 @@ export async function installBackendStub(page: Page): Promise<void> {
     const providers = Array.isArray(routing.providers) ? routing.providers : []
     const pinned = typeof providers[0] === "string" ? (providers[0] as string) : "keenable"
     const url = typeof body.url === "string" ? (body.url as string) : "https://example.com"
+    if (url === TAVILY_402_URL) {
+      return json(route, { detail: TAVILY_402_MESSAGE, provider: "tavily" }, 402)
+    }
     const base = canonicalFetchFixture() as {
       provider: string
       document: Record<string, unknown>

@@ -32,6 +32,7 @@ import {
   type ManualQuotaOverlay,
 } from "../model/useManualQuota"
 import { useProviderLimits, type ProviderLimitsController } from "../model/useProviderLimits"
+import { displayAdapterOf, profileOf, type TavilyDisplayAdapter } from "../model/tavilyCredits"
 import { CRDGrantForm } from "./CRDGrantForm"
 import { LimitHistoryModal } from "./LimitHistoryModal"
 import { ManualQuotaModal } from "./ManualQuotaModal"
@@ -84,15 +85,17 @@ function grantKey(auth: ProviderAuthLimits): string {
 
 /**
  * The native unit of the manual anchor. A USD pool accepts the vendor USD
- * balance; any other unit keeps the current usage entry.
+ * balance; any other unit keeps the current usage entry. The Tavily Credits
+ * pool carries its vendor unit name, so the entry never shows a raw CREDIT key.
  */
-function manualUnit(auth: ProviderAuthLimits): ManualUnit {
+function manualUnit(auth: ProviderAuthLimits, providerId: string): ManualUnit {
   const nativeUnit = auth.aggregate_pool?.native_unit ?? null
   if (nativeUnit === "USD") {
     return { unitKind: "USD", displayUnit: "USD", amountMode: "balance" }
   }
   if (nativeUnit === "REQUEST" || nativeUnit === "CREDIT" || nativeUnit === "FREE") {
-    return { unitKind: nativeUnit, displayUnit: nativeUnit, amountMode: "usage" }
+    const displayUnit = providerId === "tavily" && nativeUnit === "CREDIT" ? "Credits" : nativeUnit
+    return { unitKind: nativeUnit, displayUnit, amountMode: "usage" }
   }
   return { unitKind: null, displayUnit: null, amountMode: "usage" }
 }
@@ -139,6 +142,8 @@ interface CardModalInput {
   auth: ProviderAuthLimits
   fetchAvailable: boolean
   creditMode: CreditMode | null
+  /** The native display inputs of one Tavily rail; null on every other card. */
+  nativeDisplay: TavilyDisplayAdapter | null
   providers?: ProviderConfig[]
   observed?: Record<string, BalancePrefill>
   refreshDashboard: () => Promise<void>
@@ -202,6 +207,7 @@ function cardModals(input: CardModalInput): ReactNode {
           saving={controller.saving}
           saveError={controller.saveError}
           staleVersion={controller.staleVersion}
+          {...(input.nativeDisplay !== null ? { nativeDisplay: input.nativeDisplay } : {})}
           onSave={controller.saveGrant}
           onClose={close}
           onReload={() => void controller.reload()}
@@ -210,6 +216,9 @@ function cardModals(input: CardModalInput): ReactNode {
     )
   }
   if (modal === "history") {
+    // The history view converts a CRD-only Tavily amount with the live rail
+    // profile, the same auth every other dialog of this card reads.
+    const profile = profileOf(auth)
     return (
       <LimitHistoryModal
         open
@@ -219,6 +228,7 @@ function cardModals(input: CardModalInput): ReactNode {
         error={controller.historyError}
         hasMore={controller.hasMoreHistory}
         onLoadMore={controller.loadMoreHistory}
+        {...(profile !== null ? { profile } : {})}
         onClose={close}
       />
     )
@@ -289,8 +299,11 @@ export function ProviderLimitsCard({
   }
 
   const model = creditCardModel({ auth, usageTotals: crdUsageTotals })
-  const info = providerInfo(auth)
-  const unit = manualUnit(auth)
+  const info = providerInfo(auth, providerId)
+  const unit = manualUnit(auth, providerId)
+  // The optional native display of the card: the Tavily rail shows Credits and
+  // its conversion context, and every other rail keeps the CRD defaults.
+  const nativeDisplay = displayAdapterOf(providerId, auth)
   const titleId = "limits-title-" + slug(providerId)
   const fetchAvailable = operationAvailable(auth, "fetch")
   const estimates = cardEstimates(providerId, latestQuota, model, manualState.estimate)
@@ -317,9 +330,8 @@ export function ProviderLimitsCard({
         <p role="status" className={LABEL}>{controller.syncNote}</p>
       )}
 
-      <ProviderCreditSummary
-        providerName={providerName}
-        model={model}
+      <ProviderCreditSummary providerName={providerName} model={model}
+        {...(nativeDisplay !== null ? { credits: nativeDisplay.credits } : {})}
         actions={
           <ProviderCardActions
             providerId={providerId}
@@ -331,11 +343,9 @@ export function ProviderLimitsCard({
           />
         }
         info={
-          <ProviderInfoPopover
-            providerId={providerId}
-            providerName={providerName}
-            info={info}
-            auth={auth}
+          <ProviderInfoPopover providerId={providerId} providerName={providerName}
+            info={info} auth={auth}
+            {...(nativeDisplay !== null ? { nativeDisplay } : {})}
           />
         }
       />
@@ -354,6 +364,7 @@ export function ProviderLimitsCard({
         auth,
         fetchAvailable,
         creditMode: info.creditMode,
+        nativeDisplay,
         ...(providers !== undefined ? { providers } : {}),
         ...(observed !== undefined ? { observed } : {}),
         refreshDashboard,

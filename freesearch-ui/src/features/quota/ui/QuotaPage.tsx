@@ -78,7 +78,7 @@ export function QuotaPage({
         {...(renderOAuthActions !== undefined ? { renderOAuthActions } : {})}
       />
 
-      <UsageTotals crdUsageTotals={crdUsageTotals} providers={providers} />
+      <UsageTotals crdUsageTotals={crdUsageTotals} providers={providers} providerLimits={providerLimits} />
 
       <CRDPriceNote providers={providers} providerLimits={providerLimits} />
     </div>

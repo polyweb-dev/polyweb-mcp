@@ -18,6 +18,7 @@ from pydantic import (
 )
 
 from freesearch.models.provider_access import ALL_BITS
+from freesearch.models.tavily import TavilyExtractParams, TavilySearchParams
 
 
 def parse_decimal(value: object, *, allow_negative: bool = False) -> Decimal:
@@ -72,6 +73,7 @@ class SearchRequest(ContractModel):
     language: str | None = Field(default=None, min_length=2, max_length=16)
     country_code: str | None = Field(default=None, min_length=2, max_length=2)
     domains: tuple[str, ...] = ()
+    tavily: TavilySearchParams | None = None
     routing: RoutingPreference = Field(default_factory=RoutingPreference)
     fanout: bool = False
 
@@ -118,6 +120,7 @@ class FetchRequest(ContractModel):
     json_extract: bool = False
     enhanced: bool = False
     zero_data_retention: bool = False
+    tavily: TavilyExtractParams | None = None
     routing: RoutingPreference = Field(default_factory=RoutingPreference)
 
 
@@ -257,6 +260,14 @@ def is_soft_quota_zero(provider: str, snapshot: QuotaSnapshot) -> bool:
         # This is only this process's view of a shared IP/pool rate limit. A
         # local count reaching zero cannot prove the vendor pool is exhausted;
         # let the provider's 429 response remain the authoritative pressure.
+        return True
+    if (
+        provider == "tavily"
+        and snapshot.remaining == Decimal("0")
+        and snapshot.metadata.get("paygo_confirmed") is True
+    ):
+        # Confirmed PAYGO access keeps metered calls running past the free
+        # balance, so a zero free-plan balance is not hard exhaustion here.
         return True
     return (
         provider in ("parallel", "exa")

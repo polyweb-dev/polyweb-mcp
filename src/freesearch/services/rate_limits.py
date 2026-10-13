@@ -10,11 +10,14 @@ unenforceable and never becomes a zero limit. Local counts extend a fresh vendor
 observation instead of replacing it, so one attempt is never counted twice.
 """
 
+import logging
 from collections.abc import Callable, Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from freesearch.models.provider_limits import (
+    AuthMode,
+    Confidence,
     LimitCallContext,
     LimitOperation,
     ProviderLimitRecord,
@@ -27,6 +30,8 @@ from freesearch.models.provider_limits import (
     RateWindowName,
 )
 from freesearch.persistence.limit_repository import LimitRepository
+
+logger = logging.getLogger(__name__)
 
 _WINDOW_SECONDS: dict[RateWindowName, int] = {
     RateWindowName.SECOND: 1,
@@ -115,6 +120,74 @@ class RateLimitService:
             return
         await self._repository.observe_rate(observation)
 
+    async def window_details(
+        self, provider: str, auth_mode: AuthMode, now: datetime
+    ) -> list[RateWindow]:
+        """Return the rail's catalog windows with live measured capacity.
+
+        Each window's remaining value follows the same durable observation
+        plus attempt arithmetic as admission, so the detail view and the
+        request gate cannot disagree. Without a repository the catalog
+        windows are returned unchanged, and minute windows are the measured
+        ones this method exists for.
+        """
+
+        catalog = [
+            window
+            for record in self._records
+            if (
+                record.provider == provider
+                and record.auth_mode is auth_mode
+                and record.rate is not None
+            )
+            for window in record.rate.windows
+        ]
+        windows = _unique_windows(catalog)
+        if self._repository is None:
+            return windows
+        measured: list[RateWindow] = []
+        for window in windows:
+            measured.append(await self._window_detail(provider, window, now))
+        return measured
+
+    async def record_vendor_cooldown(
+        self, provider: str, auth_mode: AuthMode, retry_after_seconds: int, attempted_at: datetime
+    ) -> None:
+        """Record one vendor 429 cooldown as rate state, never as budget state.
+
+        The rail's documented minute bucket is resolved from the catalog, so
+        every operation's ``Retry-After`` delay lands on the shared bucket. A
+        repository that is absent, or a rail whose records declare no numeric
+        minute bucket, records nothing, and a storage failure never breaks
+        the caller.
+        """
+
+        if self._repository is None or retry_after_seconds < 0:
+            return
+        resolved = self._minute_bucket(provider, auth_mode)
+        if resolved is None:
+            return
+        bucket_id, window = resolved
+        try:
+            await self._repository.observe_rate(
+                RateObservation(
+                    bucket_id=bucket_id,
+                    provider=provider,
+                    auth_mode=auth_mode,
+                    window=window.window,
+                    unit=window.unit,
+                    limit=window.limit,
+                    remaining=window.remaining,
+                    reset_at=attempted_at + timedelta(seconds=retry_after_seconds),
+                    observed_at=attempted_at,
+                    operation=self._operation_for(provider, bucket_id),
+                    source="vendor_retry_after",
+                    confidence=Confidence.OBSERVED,
+                )
+            )
+        except Exception:
+            logger.warning("vendor rate cooldown could not be recorded")
+
     async def progress(self, provider: str, now: datetime | None = None) -> list[RateProgressView]:
         """Return hour and day bars, including documented local-only windows.
 
@@ -195,8 +268,28 @@ class RateLimitService:
     ) -> tuple[Decimal | None, Decimal | None, datetime | None, datetime | None]:
         """Return limit, remaining, observation instant, and reset of one window."""
 
+        limit, remaining, reset_at, observation = await self._window_capacity(
+            provider, window, now
+        )
+        return (
+            limit,
+            remaining,
+            observation.observed_at if observation is not None else None,
+            reset_at,
+        )
+
+    async def _window_capacity(
+        self, provider: str, window: RateWindow, now: datetime
+    ) -> tuple[Decimal | None, Decimal | None, datetime | None, RateObservation | None]:
+        """Return limit, remaining, reset, and the durable observation of one window.
+
+        Local counts extend a fresh vendor observation instead of replacing
+        it, so one attempt is never counted twice, and the same math serves
+        admission, the detail windows, and the cooldown state.
+        """
+
         if self._repository is None:
-            return (window.limit, None, None, window.reset_at)
+            return (window.limit, None, window.reset_at, None)
         observation = await self._latest_observation(provider, window)
         used = await self._repository.count_attempts(
             window.bucket_id,
@@ -208,19 +301,45 @@ class RateLimitService:
             return (
                 observation.limit if observation.limit is not None else window.limit,
                 _floored(observation.remaining - used),
-                observation.observed_at,
                 observation.reset_at,
+                observation,
             )
         if observation is not None and observation.limit is not None:
             return (
                 observation.limit,
                 _floored(observation.limit - used),
-                observation.observed_at,
                 observation.reset_at,
+                observation,
             )
         if window.limit is None:
-            return (None, None, None, window.reset_at)
-        return (window.limit, _floored(window.limit - used), None, window.reset_at)
+            return (None, None, window.reset_at, observation)
+        return (window.limit, _floored(window.limit - used), window.reset_at, observation)
+
+    async def _window_detail(self, provider: str, window: RateWindow, now: datetime) -> RateWindow:
+        """Return one catalog window with its measured headroom and reset.
+
+        The reset instant is the vendor observation's where one exists and the
+        window boundary otherwise. A window with no vendor observation is a
+        local attempt count; one with an observation keeps the observation's
+        own provenance.
+        """
+
+        _, remaining, reset_at, observation = await self._window_capacity(provider, window, now)
+        reset = (
+            reset_at
+            if reset_at is not None
+            else now + timedelta(seconds=_WINDOW_SECONDS[window.window])
+        )
+        return window.model_copy(
+            update={
+                "remaining": remaining,
+                "reset_at": reset,
+                "source": observation.source if observation is not None else "local_attempts",
+                "confidence": (
+                    observation.confidence if observation is not None else Confidence.ESTIMATED
+                ),
+            }
+        )
 
     async def _latest_observation(
         self, provider: str, window: RateWindow
@@ -235,6 +354,26 @@ class RateLimitService:
         if not matching:
             return None
         return max(matching, key=lambda observation: observation.observed_at)
+
+    def _minute_bucket(self, provider: str, auth_mode: AuthMode) -> tuple[str, RateWindow] | None:
+        """Return the rail's documented minute bucket and window, when one exists."""
+
+        for record in self._records:
+            if record.provider != provider or record.auth_mode is not auth_mode:
+                continue
+            if record.rate is None:
+                continue
+            window = next(
+                (
+                    item
+                    for item in record.rate.windows
+                    if item.window is RateWindowName.MINUTE
+                ),
+                None,
+            )
+            if window is not None:
+                return (window.bucket_id, window)
+        return None
 
     async def _local_remaining(self, view: RateProgressView, now: datetime) -> Decimal | None:
         if self._repository is None or view.limit is None:

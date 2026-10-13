@@ -401,3 +401,57 @@ describe("decodeCRDUsageTotals", () => {
     expect(decodeCRDUsageTotals({ crd_usage_totals: "bogus" })).toEqual([])
   })
 })
+
+describe("decodeDetail retry_after_seconds", () => {
+  function detailWithRetry(value: unknown) {
+    const result = decodeProviderLimits([
+      synthProvider("synth-a", {
+        auths: [
+          synthAuth({
+            detail: {
+              plan_name: null,
+              native_unit: null,
+              native_balance: null,
+              native_allowance: null,
+              usd_per_call: null,
+              actual_spend_usd: null,
+              reset_at: null,
+              reset_rule: "unknown",
+              usage_url: null,
+              source: "synth-source",
+              confidence: "unknown",
+              last_sync_at: null,
+              stale: false,
+              price_version: "1",
+              crd_split_note: null,
+              rate_windows: [],
+              retry_after_seconds: value,
+              tier_split_known: true,
+              aggregate_pool_id: null,
+            },
+          }),
+        ],
+      }),
+    ])
+    return result[0].auths[0].detail?.retry_after_seconds ?? null
+  }
+
+  it("maps negative delays to null", () => {
+    expect(detailWithRetry(-5)).toBeNull()
+    expect(detailWithRetry("-3")).toBeNull()
+  })
+
+  it("keeps zero as zero", () => {
+    expect(detailWithRetry(0)).toBe(0)
+    expect(detailWithRetry("0")).toBe(0)
+  })
+
+  it("keeps a finite positive delay and drops unknown input", () => {
+    expect(detailWithRetry(12)).toBe(12)
+    expect(detailWithRetry("45")).toBe(45)
+    expect(detailWithRetry(null)).toBeNull()
+    expect(detailWithRetry(undefined)).toBeNull()
+    expect(detailWithRetry("bogus")).toBeNull()
+    expect(detailWithRetry(Number.NaN)).toBeNull()
+  })
+})

@@ -8,6 +8,8 @@ export interface StaticProviderMeta {
   baseUrl: string;
   authHeaderName: string;
   capabilities: Capability[];
+  /** Optional hint that the provider documents a keyless public access tier. */
+  keyless_tier?: boolean;
 }
 
 export const PROVIDER_CATALOG: StaticProviderMeta[] = [
@@ -37,6 +39,7 @@ export const PROVIDER_CATALOG: StaticProviderMeta[] = [
     baseUrl: "https://api.tavily.com",
     authHeaderName: "Authorization",
     capabilities: ["search", "fetch", "extract"],
+    keyless_tier: true,
   },
   {
     id: "exa",

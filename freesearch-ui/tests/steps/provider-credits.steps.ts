@@ -3,9 +3,21 @@ import { Given, When, Then } from "./fixtures"
 import {
   braveCreditLimits,
   braveCreditLimitsAfterDebit,
+  bravePlusTavilyLimits,
   setStubbedCrdTotals,
   setStubbedHistory,
   setStubbedProviderLimits,
+  stubbedGrantBodies,
+  tavilyCreditLimits,
+  tavilyCreditLimitsAfterAdvanced,
+  tavilyCreditLimitsAfterBasic,
+  tavilyFreeExhaustedLimits,
+  tavilyGrantLimits,
+  tavilyHistoryEvents,
+  tavilyKeylessLimits,
+  tavilyPaygoLimits,
+  tavilyProdCreditLimits,
+  tavilyUseTotals,
   ui7HistoryEvents,
   unknownCreditLimits,
 } from "./backendStub"
@@ -129,6 +141,15 @@ Given("the stubbed provider limits show {string}", async ({}, kind: string) => {
   else if (kind === "Brave funds without allowance") setStubbedProviderLimits(fundsWithoutAllowance())
   else if (kind === "Brave free credits") setStubbedProviderLimits(freeLimits())
   else if (kind === "Brave manual balance") setStubbedProviderLimits(manualAnchorLimits())
+  else if (kind === "Tavily finite credits") setStubbedProviderLimits(tavilyCreditLimits())
+  else if (kind === "Tavily finite credits after basic") setStubbedProviderLimits(tavilyCreditLimitsAfterBasic())
+  else if (kind === "Tavily finite credits after advanced") setStubbedProviderLimits(tavilyCreditLimitsAfterAdvanced())
+  else if (kind === "Tavily keyless credits") setStubbedProviderLimits(tavilyKeylessLimits())
+  else if (kind === "Tavily free exhausted") setStubbedProviderLimits(tavilyFreeExhaustedLimits())
+  else if (kind === "Tavily paygo overage") setStubbedProviderLimits(tavilyPaygoLimits())
+  else if (kind === "Tavily grant credits") setStubbedProviderLimits(tavilyGrantLimits())
+  else if (kind === "Tavily prod credits") setStubbedProviderLimits(tavilyProdCreditLimits())
+  else if (kind === "Brave and Tavily finite credits") setStubbedProviderLimits(bravePlusTavilyLimits())
   else throw new Error(`Unknown provider limits kind: ${kind}`)
 })
 
@@ -136,12 +157,18 @@ Given("the stubbed credit totals show {string}", async ({}, kind: string) => {
   if (kind === "Brave no use") setStubbedCrdTotals(braveNoUse())
   else if (kind === "Brave one search use") setStubbedCrdTotals(braveOneSearchUse())
   else if (kind === "Brave fractional use") setStubbedCrdTotals(braveFractionalUse())
+  else if (kind === "Tavily no use") setStubbedCrdTotals([])
+  else if (kind === "Tavily search and extract use") setStubbedCrdTotals(tavilyUseTotals())
   else throw new Error(`Unknown credit totals kind: ${kind}`)
 })
 
 Given("the stubbed credit history shows {string}", async ({}, kind: string) => {
   if (kind === "Brave credit history") {
     setStubbedHistory("brave", { events: ui7HistoryEvents(), nextCursor: null, error: null })
+    return
+  }
+  if (kind === "Tavily credit history") {
+    setStubbedHistory("tavily", { events: tavilyHistoryEvents(), nextCursor: null, error: null })
     return
   }
   throw new Error(`Unknown credit history kind: ${kind}`)
@@ -263,4 +290,108 @@ Then("the grant form should have no fetch field", async ({ page }) => {
 
 Then("the history modal should show {string}", async ({ page }, text: string) => {
   await expect(page.getByRole("dialog")).toContainText(text)
+})
+
+/**
+ * Tavily native Credits (provider-credits.feature U7-T*, quota-display Q-T*).
+ *
+ * Mirrors the Brave structure with Tavily fields: the native bar carries the
+ * aria label "Tavily native Credits remaining", the fraction reads in Credits,
+ * and USD stays inside the info disclosure. Brave steps above are untouched.
+ */
+
+/** Catalog display name of the Tavily native bar. */
+function tavilyBarName(): string {
+  return "Tavily native Credits remaining"
+}
+
+function tavilyCard(page: import("@playwright/test").Page) {
+  return page.locator("article", { hasText: "Tavily" }).first()
+}
+
+Then("the Tavily credit bar should show {string} percent", async ({ page }, value: string) => {
+  const bar = page.getByRole("progressbar", { name: tavilyBarName() })
+  await expect(bar).toBeVisible()
+  await expect(bar).toHaveAttribute("aria-valuenow", value)
+  await expect(page.locator("main")).toContainText(value + "%")
+})
+
+Then("the Tavily card should show {string}", async ({ page }, value: string) => {
+  const card = tavilyCard(page)
+  const fraction = value.match(/(\d[\d.]*)\s*\/\s*(\d[\d.]*)\s*Credits/)
+  if (fraction !== null) {
+    const remaining = fraction[1] as string
+    const total = fraction[2] as string
+    await expect(card.getByText(remaining, { exact: true })).toBeVisible()
+    await expect(card.getByText(`/ ${total}`, { exact: true })).toBeVisible()
+    await expect(card.getByText("Credits", { exact: true }).first()).toBeVisible()
+    const normalized = ((await card.textContent()) ?? "").replace(/\s+/g, "")
+    expect(normalized).toContain(remaining + "/" + total + "Credits")
+    return
+  }
+  await expect(card).toContainText(value)
+})
+
+Then("the Tavily card should show {string} with no total", async ({ page }, remaining: string) => {
+  const card = tavilyCard(page)
+  await expect(card.getByText(remaining, { exact: true })).toBeVisible()
+  await expect(card.getByText("Credits", { exact: true }).first()).toBeVisible()
+  await expect(card.getByText(/^\/ \d/)).toHaveCount(0)
+})
+
+Then("the Tavily card should show the {string} action", async ({ page }, label: string) => {
+  await expect(tavilyCard(page).getByRole("button", { name: new RegExp(label, "i") })).toBeVisible()
+})
+
+Then("the Tavily card subtitle should contain {string}", async ({ page }, text: string) => {
+  await expect(tavilyCard(page)).toContainText(text)
+})
+
+Then("the Tavily card should show one credit bar", async ({ page }) => {
+  await expect(
+    tavilyCard(page).getByRole("progressbar", { name: tavilyBarName() }),
+  ).toHaveCount(1)
+})
+
+Then("the Tavily card should show no credit bar", async ({ page }) => {
+  await expect(
+    tavilyCard(page).getByRole("progressbar", { name: tavilyBarName() }),
+  ).toHaveCount(0)
+})
+
+Then("the credit details should not show {string}", async ({ page }, text: string) => {
+  await expect(page.locator("body")).not.toContainText(text)
+})
+
+When("I open the Tavily credit grant", async ({ page }) => {
+  await page.getByRole("button", { name: /Budget Limit for Tavily/i }).click()
+  await expect(page.getByText("Search Credits")).toBeVisible()
+})
+
+Then("the {string} grant field should show {string}", async ({ page }, label: string, value: string) => {
+  await expect(page.getByLabel(label)).toHaveValue(value)
+})
+
+When("I type {string} into the {string} grant field", async ({ page }, value: string, label: string) => {
+  await page.getByLabel(label).fill(value)
+})
+
+When("I save the credit grant", async ({ page }) => {
+  await page.getByRole("button", { name: /Save budget limit/i }).click()
+})
+
+Then("the submitted grant should carry {string} {string}", async ({}, field: string, value: string) => {
+  await expect.poll(() => {
+    const bodies = stubbedGrantBodies()
+    const last = bodies[bodies.length - 1] as Record<string, unknown> | undefined
+    return last === undefined ? "" : String(last[field] ?? "")
+  }).toBe(value)
+})
+
+Then("the playground search error should show {string}", async ({ page }, text: string) => {
+  await expect(page.locator("main")).toContainText(text, { timeout: 10_000 })
+})
+
+Then("the search telemetry should show {string}", async ({ page }, text: string) => {
+  await expect(page.getByText(text, { exact: true }).first()).toBeVisible({ timeout: 10_000 })
 })

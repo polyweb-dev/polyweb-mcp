@@ -69,9 +69,12 @@ function priceRow(row: PriceNoteRow): ReactNode {
  * its operation by border and text tone as well as by the operation column. An
  * empty catalog shows one muted sentence instead of a table. Every note of this
  * block sits in the one footnote below it, including the known price versions.
+ * The Tavily USD rows stay outside this always-visible table: Tavily states its
+ * USD costs only inside the info disclosure, and every other provider keeps its
+ * rows, Brave included.
  */
 export function CRDPriceNote(props: CRDPriceNoteProps): ReactNode {
-  const rows = priceNoteRows(props)
+  const rows = priceNoteRows(props).filter((row) => row.provider !== "tavily")
   const versions: string[] = []
   for (const row of rows) {
     if (row.priceVersion !== null && !versions.includes(row.priceVersion)) {

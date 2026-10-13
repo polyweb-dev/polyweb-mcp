@@ -25,6 +25,11 @@ from freesearch.models.provider_limits import (
     NativePool,
     ProviderLimitRecord,
 )
+from freesearch.models.tavily import (
+    tavily_extract_credits,
+    tavily_extract_depth,
+    tavily_search_depth,
+)
 
 ZERO: Final[Decimal] = Decimal("0")
 _ONE: Final[Decimal] = Decimal("1")
@@ -85,8 +90,9 @@ def request_native_cost(
     """Return the exact native cost one request is expected to consume.
 
     The standard cost comes from the record's budget block. A Tavily advanced
-    search doubles that cost. The other provider add-ons arrive with their own
-    slices.
+    search doubles that cost, and a Tavily advanced extract costs
+    per-URL ``0.4`` Credits through the same depth rule the adapter applies.
+    The other provider add-ons arrive with their own slices.
     """
 
     if record.budget is None or record.native_unit is None:
@@ -94,15 +100,30 @@ def request_native_cost(
     cost = record.budget.standard_native_cost
     if request is None:
         return cost
-    if record.provider == "tavily" and _is_advanced_search(request):
-        cost *= _ADVANCED_DEPTH_FACTOR
+    if record.provider == "tavily":
+        if isinstance(request, FetchRequest):
+            return tavily_extract_credits(
+                successful_urls=1, depth=tavily_extract_depth(request.tavily)
+            )
+        depth = _tavily_search_depth(request)
+        if depth is None:
+            # A conflict between an explicit depth and a basic or advanced
+            # mode stays unpriced, so the funds gate takes the safe 422
+            # configuration path instead of an invented reservation.
+            return None
+        if depth == "advanced":
+            cost *= _ADVANCED_DEPTH_FACTOR
+        return cost
     return cost
 
 
-def _is_advanced_search(request: SearchRequest | FetchRequest) -> bool:
-    """Return whether a search request asks for the advanced depth."""
+def _tavily_search_depth(request: SearchRequest) -> str | None:
+    """Return the resolved Tavily search depth, or ``None`` on a conflict."""
 
-    return isinstance(request, SearchRequest) and request.mode == "advanced"
+    try:
+        return tavily_search_depth(request.mode, request.tavily)
+    except ValueError:
+        return None
 
 
 def request_cost_crd(

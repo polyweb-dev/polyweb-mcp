@@ -316,6 +316,11 @@ async def test_put_then_on_demand_test_constructs_genuine_adapter(
         probe = client.post(f"/api/v1/providers/{provider.value}/test", headers=headers)
         search = None
         if provider is ProviderName.KEENABLE and probe.status_code == 200:
+            # Isolate the proof: keyless Tavily would otherwise shadow routing.
+            disable_tavily = client.patch(
+                "/api/v1/providers/tavily", json={"enabled": False}, headers=headers
+            )
+            assert disable_tavily.status_code == 200, disable_tavily.text
             # A bare 200 also passes silently keyless: prove keyed use on the wire.
             search = client.post(
                 "/search", json={"query": "keenable keyed proof", "limit": 3}, headers=headers
@@ -375,6 +380,12 @@ async def test_restart_routes_search_through_encrypted_key(
                 # Isolate the proof: keyless Keenable would otherwise shadow routing.
                 disable = client.patch(
                     "/api/v1/providers/keenable", json={"enabled": False}, headers=headers
+                )
+                assert disable.status_code == 200, disable.text
+            if provider is not ProviderName.TAVILY:
+                # Isolate the proof: keyless Tavily would otherwise shadow routing.
+                disable = client.patch(
+                    "/api/v1/providers/tavily", json={"enabled": False}, headers=headers
                 )
                 assert disable.status_code == 200, disable.text
     finally:
@@ -437,6 +448,12 @@ async def test_env_key_is_ignored_vault_key_reaches_wire(
                 "/api/v1/providers/keenable", json={"enabled": False}, headers=headers
             )
             assert disable.status_code == 200, disable.text
+        if provider is not ProviderName.TAVILY:
+            # Isolate the proof: keyless Tavily would otherwise shadow routing.
+            disable = client.patch(
+                "/api/v1/providers/tavily", json={"enabled": False}, headers=headers
+            )
+            assert disable.status_code == 200, disable.text
         search = client.post(
             "/search", json={"query": "env ignored proof", "limit": 3}, headers=headers
         )
@@ -452,3 +469,180 @@ async def test_env_key_is_ignored_vault_key_reaches_wire(
             f"{provider.value} leaked the ignored env key onto the wire: {request.url}"
         )
     assert_no_sentinels(search.text, (vault_sentinel, env_decoy), f"{provider.value} search")
+
+
+# --- Tavily terminal 402 transport (PLAN 4.2/AC6) -----------------------------
+
+
+def _tavily_402_error():  # type: ignore[no-untyped-def]
+    from freesearch.infrastructure.resilience import ProviderOperationError
+    from freesearch.models.contracts import ProviderError
+
+    return ProviderOperationError(
+        ProviderError(
+            provider="tavily",
+            code="quota_exhausted",
+            message="Tavily is out of Credits. Wait until reset or upgrade.",
+            retryable=False,
+            status_code=402,
+        )
+    )
+
+
+def test_tavily_402_rest_transport_shape() -> None:
+    """The REST transport renders {"detail": msg, "provider": "tavily"} at 402."""
+    from freesearch.routers.api import _provider_operation_error_response
+
+    response = _provider_operation_error_response(_tavily_402_error())
+    assert response.status_code == 402
+    import json
+
+    body = json.loads(response.body.decode())
+    assert body == {
+        "detail": "Tavily is out of Credits. Wait until reset or upgrade.",
+        "provider": "tavily",
+    }
+
+
+def test_tavily_402_non_terminal_reraises() -> None:
+    """Every non-terminal error re-raises instead of becoming a 402."""
+    import pytest
+
+    from freesearch.infrastructure.resilience import ProviderOperationError
+    from freesearch.models.contracts import ProviderError
+    from freesearch.routers.api import _provider_operation_error_response
+
+    other = ProviderOperationError(
+        ProviderError(
+            provider="tavily",
+            code="rate_limited",
+            message="usage limit exceeded",
+            retryable=True,
+            status_code=429,
+        )
+    )
+    with pytest.raises(ProviderOperationError):
+        _provider_operation_error_response(other)
+
+
+@pytest.mark.asyncio
+async def test_tavily_402_fanout_cancels_and_raises() -> None:
+    """A held other task is cancelled; the terminal 402 propagates."""
+    import asyncio
+
+    import pytest
+
+    from freesearch.infrastructure.resilience import ProviderOperationError
+    from freesearch.routers.api import _fanout_outcomes
+
+    async def _held() -> tuple:
+        await asyncio.sleep(30)
+        return ("other", None, 0, "success", 0, None)
+
+    async def _terminal() -> tuple:
+        raise _tavily_402_error()
+
+    tasks = [asyncio.ensure_future(_held()), asyncio.ensure_future(_terminal())]
+    with pytest.raises(ProviderOperationError) as excinfo:
+        await _fanout_outcomes(tasks)
+    assert excinfo.value.error.code == "quota_exhausted"
+    assert all(task.done() for task in tasks)
+
+
+@pytest.mark.asyncio
+async def test_tavily_402_single_attempt_zero_debit(
+    repository,
+) -> None:
+    """One vendor attempt, zero debit: the 402 path writes the terminal pool zero."""
+    from datetime import UTC, datetime
+    from decimal import Decimal
+
+    import httpx
+    from pydantic import SecretStr
+
+    from freesearch.configuration.provider_limits import provider_limit_defaults
+    from freesearch.infrastructure.resilience import ProviderOperationError
+    from freesearch.models.contracts import SearchRequest, UnitKind, UsageOperation
+    from freesearch.models.provider_limits import (
+        AuthMode,
+        LimitCallContext,
+        LimitDeniedError,
+        LimitOperation,
+        NativeUsageSnapshot,
+    )
+    from freesearch.services.monitoring import tracked_call
+    from freesearch.services.provider_limits import ProviderLimitsService
+
+    class _FailingSDK:
+        calls = 0
+
+        async def search(self, **kwargs: object) -> object:
+            type(self).calls += 1
+            # A vendor 402 surfaces as the SDK HTTP status the adapter
+            # normalizes to terminal quota_exhausted (PLAN 4.2).
+            raise httpx.HTTPStatusError(
+                "vendor 402",
+                request=httpx.Request("POST", "https://api.tavily.com/search"),
+                response=httpx.Response(402),
+            )
+
+        async def extract(self, **kwargs: object) -> object:
+            raise NotImplementedError
+
+    fixed_at = datetime(2026, 3, 10, 12, 0, 0, tzinfo=UTC)
+    service = ProviderLimitsService(
+        repository.limits,
+        records=[r for r in provider_limit_defaults() if r.provider == "tavily"],
+        tier_defaults=None,
+        clock=lambda: fixed_at,
+    )
+    await service.initialize()
+    await repository.limits.apply_snapshot(
+        NativeUsageSnapshot(
+            pool_id="tavily:keyed:credit",
+            provider="tavily",
+            auth_mode=AuthMode.KEYED,
+            native_unit=UnitKind.CREDIT,
+            observed_at=fixed_at,
+            remaining=Decimal("1000"),
+            allowance=Decimal("1000"),
+            credential_generation=0,
+        )
+    )
+    client = httpx.AsyncClient(timeout=30.0)
+    adapter = TavilyAdapter(client, sdk_client=_FailingSDK(), api_key=SecretStr("tvly-402-1"))  # type: ignore[arg-type]
+    try:
+        with pytest.raises(ProviderOperationError) as excinfo:
+            await tracked_call(
+                repository,
+                adapter,
+                lambda running: running.search(SearchRequest(query="q", limit=1)),
+                operation=UsageOperation.SEARCH,
+                request=SearchRequest(query="q", limit=1),
+                limits=service,
+            )
+    finally:
+        await adapter.aclose()
+        await client.aclose()
+
+    assert _FailingSDK.calls == 1
+    assert excinfo.value.error.code == "quota_exhausted"
+    pool = await repository.limits.get_pool("tavily:keyed:credit")
+    assert pool is not None and pool.remaining == Decimal("0")
+    assert pool.source == "vendor_402"
+    totals = await repository.limits.crd_usage_totals("tavily")
+    assert all(t.normalized_crd == Decimal("0") for t in totals)
+    try:
+        await service.admit(
+            LimitCallContext(
+                provider="tavily",
+                operation=LimitOperation.SEARCH,
+                auth_mode=AuthMode.KEYED,
+                attempt_id="tavily-402-second",
+                requested_at=fixed_at,
+            )
+        )
+        raise AssertionError("second pinned admission must deny")
+    except LimitDeniedError as denied:
+        assert "credits_exhausted" in denied.reasons
+    assert _FailingSDK.calls == 1

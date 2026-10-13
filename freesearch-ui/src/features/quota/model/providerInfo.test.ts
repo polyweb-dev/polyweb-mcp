@@ -162,3 +162,119 @@ describe("balancePrefill", () => {
     expect(balancePrefill(auth({ aggregate_pool: null, detail: null }))).toBe(null)
   })
 })
+
+describe("providerInfo Tavily native", () => {
+  function tavilyProfile() {
+    return {
+      reference_usd_per_crd: "0.001",
+      native_usd_per_unit: "0.008",
+      cost_basis: "paygo_reference",
+      price_version: "paygo-reference",
+      source: "documented",
+      estimated: true,
+    }
+  }
+
+  function tavilyAuth(overrides: Partial<ProviderAuthLimits> = {}): ProviderAuthLimits {
+    return auth({
+      search: record("tavily", {
+        operation: "search",
+        supported: true,
+        transport_available: true,
+        budget: budget({ standard_native_cost: "1" }),
+        conversion_profile: tavilyProfile(),
+      }),
+      fetch: record("tavily", {
+        operation: "fetch",
+        supported: true,
+        transport_available: true,
+        budget: budget({ standard_native_cost: "0.2" }),
+        conversion_profile: tavilyProfile(),
+      }),
+      crd_views: [
+        {
+          state: "finite",
+          operation: "search",
+          remaining_crd: "7992",
+          local_remaining_crd: null,
+          request_cost_crd: "8",
+          shared_pool_id: "tavily:keyed:credits",
+          possible_standard_calls: "999",
+          price_version: "paygo-reference",
+          priced: true,
+        },
+        {
+          state: "finite",
+          operation: "fetch",
+          remaining_crd: "7992",
+          local_remaining_crd: null,
+          request_cost_crd: "8",
+          shared_pool_id: "tavily:keyed:credits",
+          possible_standard_calls: "999",
+          price_version: "paygo-reference",
+          priced: true,
+        },
+      ] as never,
+      detail: detail({
+        rate_windows: [
+          {
+            bucket_id: "tavily:keyed:search:requests",
+            limit: "100",
+            window: "1m",
+            scope: "key",
+            unit: "requests",
+            remaining: "95",
+            reset_at: null,
+            source: "local",
+            confidence: "observed",
+          },
+        ] as never,
+        retry_after_seconds: 12,
+      }),
+      ...overrides,
+    })
+  }
+
+  it("states 1 and 2 Credits search costs", () => {
+    const info = providerInfo(tavilyAuth(), "tavily")
+    const search = info.facts.find((fact) => fact.label === "Search cost")
+    expect(search?.value).toBe("1 Credit")
+    expect(search?.note).toBe("(advanced: 2 Credits)")
+  })
+
+  it("states 1 to 2 Credits per five URLs extract costs with the Extract label", () => {
+    const info = providerInfo(tavilyAuth(), "tavily")
+    const extract = info.facts.find((fact) => fact.label === "Extract cost")
+    expect(extract?.value).toContain("per 5 URLs")
+    expect(extract?.note).toContain("advanced:")
+    expect(info.facts.some((fact) => fact.label === "Fetch cost")).toBe(false)
+    expect(info.facts.some((fact) => fact.label === "Fetch CRD cost")).toBe(false)
+    expect(info.facts.some((fact) => fact.label === "Extract CRD cost")).toBe(true)
+  })
+
+  it("shares one minute headroom and states the Retry-After delay", () => {
+    const info = providerInfo(tavilyAuth(), "tavily")
+    const headroom = info.facts.find((fact) => fact.label === "Minute headroom")
+    expect(headroom?.value).toBe("95/100")
+    expect(headroom?.note).toBe("(shared search and extract)")
+    const retry = info.facts.find((fact) => fact.label === "Retry-After")
+    expect(retry?.value).toBe("12 s")
+  })
+
+  it("keeps USD inside the disclosure cost note while native rows carry no USD", () => {
+    const info = providerInfo(tavilyAuth(), "tavily")
+    const native = info.facts.find((fact) => fact.label === "Search cost")
+    expect(native?.value).not.toContain("$")
+    expect(native?.note).not.toContain("$")
+    const crd = info.facts.find((fact) => fact.label === "Search CRD cost")
+    expect(crd?.note).toContain("$")
+  })
+
+  it("shows keyless numeric headroom as unknown with no minute row", () => {
+    const info = providerInfo(
+      tavilyAuth({ auth_mode: "keyless", detail: detail({ rate_windows: [] }) }),
+      "tavily",
+    )
+    expect(info.facts.some((fact) => fact.label === "Minute headroom")).toBe(false)
+  })
+})

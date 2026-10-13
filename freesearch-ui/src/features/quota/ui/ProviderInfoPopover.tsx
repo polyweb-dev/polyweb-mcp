@@ -6,6 +6,7 @@ import { Button } from "@/shared/ui/button"
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/shared/ui/popover"
 import { operationAvailable } from "../model/crdCardModel"
 import type { ProviderInfo, ProviderInfoFact } from "../model/providerInfo"
+import type { TavilyDisplayAdapter } from "../model/tavilyCredits"
 import { ProviderLimitsDetail } from "./ProviderLimitsDetail"
 import { ProviderRateBars } from "./ProviderRateBars"
 import { ProviderTierBars } from "./ProviderTierBars"
@@ -15,6 +16,12 @@ export interface ProviderInfoPopoverProps {
   providerName: string
   info: ProviderInfo
   auth: ProviderAuthLimits
+  /**
+   * The native display inputs of one Tavily rail. They stay inside this
+   * disclosure: Tavily USD rows and Credits local caps appear here only, so a
+   * closed popover shows no vendor USD outside it.
+   */
+  nativeDisplay?: TavilyDisplayAdapter
 }
 
 const ROW = "flex w-full items-center justify-between gap-3"
@@ -63,16 +70,25 @@ function usageLink(providerName: string, usageUrl: string | null): ReactNode {
 /**
  * The remaining detail of one rail: the known tier facts, the known rate bars,
  * and the vendor rows that no other surface states. Each part carries its own
- * top edge, so an absent part leaves no empty divider.
+ * top edge, so an absent part leaves no empty divider. The native display of a
+ * Tavily rail stays inside the disclosure with the vendor detail.
  */
-function vendorDetail(providerName: string, auth: ProviderAuthLimits): ReactNode {
+function vendorDetail(
+  providerName: string,
+  auth: ProviderAuthLimits,
+  nativeDisplay: TavilyDisplayAdapter | undefined,
+): ReactNode {
   return (
     <>
       <ProviderTierBars providerName={providerName} freeTiers={auth.free_tiers}
         paidTiers={auth.paid_tiers} tierSplitKnown={auth.tier_split_known} />
       <ProviderRateBars providerName={providerName} progress={auth.rate_progress}
         fetchAvailable={operationAvailable(auth, "fetch")} />
-      <ProviderLimitsDetail providerName={providerName} auth={auth} />
+      <ProviderLimitsDetail
+        providerName={providerName}
+        auth={auth}
+        {...(nativeDisplay !== undefined ? { nativeDisplay } : {})}
+      />
     </>
   )
 }
@@ -92,6 +108,7 @@ export function ProviderInfoPopover({
   providerName,
   info,
   auth,
+  nativeDisplay,
 }: ProviderInfoPopoverProps): ReactNode {
   const [open, setOpen] = useState(false)
   if (info.facts.length === 0 && info.usageUrl === null) return null
@@ -126,7 +143,7 @@ export function ProviderInfoPopover({
             )}
           </div>
           {info.facts.map(infoRow)}
-          {vendorDetail(providerName, auth)}
+          {vendorDetail(providerName, auth, nativeDisplay)}
           {usageLink(providerName, info.usageUrl)}
         </PopoverContent>
       )}

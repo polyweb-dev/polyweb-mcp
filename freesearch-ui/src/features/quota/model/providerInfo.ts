@@ -10,6 +10,8 @@
 import type { CRDResetRule, LimitRateWindow, NativePool, ProviderAuthLimits } from "@/domains/dashboard"
 import { dollarText, formatCRDAmount } from "./crdDisplay"
 import { operationAvailable, usdFromCRD } from "./crdCardModel"
+import { multiplyDecimal } from "./manualQuotaMath"
+import { minuteHeadroomOf } from "./tavilyCredits"
 import { operationLabel, type CreditMode } from "./quotaLabels"
 import { timestampOrNull } from "./timeText"
 
@@ -64,8 +66,17 @@ const COUNT_PERIOD: Record<CRDResetRule, string | null> = {
   unknown: null,
 }
 
-/** The count row name of one operation. */
+/** The count row name of one operation, with the Tavily extract view name. */
 const COUNT_LABEL: Record<string, string> = { search: "Searches left", fetch: "Fetches left" }
+
+/** The provider id whose wire fetch operation reads as Extract. */
+const TAVILY_ID = "tavily"
+
+/** The shown operation name: Tavily names its wire fetch operation Extract. */
+function operationViewName(providerId: string | undefined, operation: string): string {
+  if (providerId === TAVILY_ID && operation === "fetch") return "Extract"
+  return operationLabel(operation)
+}
 
 /** Rate windows from tight to loose. Only the tightest known limit becomes a row. */
 const RATE_WINDOW_ORDER = ["1s", "1m", "1h", "1d"]
@@ -110,26 +121,93 @@ function rateFact(windows: LimitRateWindow[]): ProviderInfoFact | null {
 }
 
 /** The CRD call cost of one available operation, with its USD value. */
-function costFact(auth: ProviderAuthLimits, operation: (typeof OPERATIONS)[number]): ProviderInfoFact | null {
+function costFact(
+  auth: ProviderAuthLimits,
+  operation: (typeof OPERATIONS)[number],
+  providerId: string | undefined,
+): ProviderInfoFact | null {
   const record = operation === "search" ? auth.search : auth.fetch
   const view = auth.crd_views.find((entry) => entry.operation === operation)
   const cost = known(view?.request_cost_crd)
   if (record === null || cost === null) return null
   const usd = usdFromCRD(cost, record.conversion_profile)
   return {
-    label: operationLabel(operation) + " CRD cost",
+    label: operationViewName(providerId, operation) + " CRD cost",
     value: formatCRDAmount(cost),
     note: usd === null ? null : "(≈ " + dollarText(usd) + ")",
   }
 }
 
+/**
+ * Whole-number form of one decimal text: a fractional part made only of zeros
+ * loses the dot and those zeros ("1.0" reads "1", "2.00" reads "2"), and any
+ * other text stays verbatim ("0.5", "1.5", and an empty string stay unchanged;
+ * null yields null, so the singular credit test stays safe).
+ */
+function trimTrailingZeros(amount: string | null | undefined): string | null {
+  const text = known(amount)
+  if (text === null) return null
+  return text.replace(/\.0+$/, "")
+}
+
+/** The credit word of one native amount: "1" reads singular, any other plural. */
+function creditWord(amount: string | null): string {
+  if (amount === null) return ""
+  return amount === "1" ? "1 Credit" : amount + " Credits"
+}
+
+/** The URL batch of one Tavily extract price. */
+const EXTRACT_BATCH_URLS = "5"
+
+/**
+ * The native Credits cost of one Tavily operation.
+ *
+ * Search bills 1 Credit per basic call and 2 per advanced call; extract bills
+ * 1 or 2 Credits per five successful URLs. The amounts come from the payload
+ * budget, so an absent budget yields no row and no USD appears outside the
+ * disclosure.
+ */
+function nativeCostFact(
+  auth: ProviderAuthLimits,
+  operation: (typeof OPERATIONS)[number],
+): ProviderInfoFact | null {
+  const record = operation === "search" ? auth.search : auth.fetch
+  const nativeCost = known(record?.budget?.standard_native_cost)
+  if (nativeCost === null) return null
+  const advanced = trimTrailingZeros(multiplyDecimal(nativeCost, "2"))
+  if (advanced === null) return null
+  if (operation === "search") {
+    return {
+      label: "Search cost",
+      value: creditWord(nativeCost),
+      note: "(advanced: " + creditWord(advanced) + ")",
+    }
+  }
+  const batch = trimTrailingZeros(multiplyDecimal(nativeCost, EXTRACT_BATCH_URLS))
+  const advancedBatch = batch === null ? null : trimTrailingZeros(multiplyDecimal(batch, "2"))
+  if (batch === null || advancedBatch === null) return null
+  return {
+    label: "Extract cost",
+    value: creditWord(batch) + " per " + EXTRACT_BATCH_URLS + " URLs",
+    note: "(advanced: " + creditWord(advancedBatch) + ")",
+  }
+}
+
 /** The whole standard calls left of one operation, with the reset period. */
-function countFact(auth: ProviderAuthLimits, operation: (typeof OPERATIONS)[number]): ProviderInfoFact | null {
+function countFact(
+  auth: ProviderAuthLimits,
+  operation: (typeof OPERATIONS)[number],
+  providerId: string | undefined,
+): ProviderInfoFact | null {
   const view = auth.crd_views.find((entry) => entry.operation === operation)
   const calls = known(view?.possible_standard_calls)
   if (calls === null) return null
   const period = COUNT_PERIOD[auth.detail?.reset_rule ?? UNKNOWN_TEXT]
-  return { label: COUNT_LABEL[operation], value: calls, note: period === null ? null : "/ " + period }
+  return {
+    label: operation === "search" ? COUNT_LABEL[operation] : operationViewName(providerId, operation) + "s left",
+    value: calls,
+    note: period === null ? null : "/ " + period,
+  }
 }
 
 /** The card subtitle: the detail plan name, else the search record plan name. */
@@ -233,18 +311,47 @@ function creditNoteOf(auth: ProviderAuthLimits): string | null {
   return [period, CREDIT_UNIT_WORD].join(" ")
 }
 
+/** The shared minute headroom and the active Retry-After of one Tavily rail. */
+function tavilyRateFacts(auth: ProviderAuthLimits): ProviderInfoFact[] {
+  const facts: ProviderInfoFact[] = []
+  const headroom = minuteHeadroomOf(auth.detail === null ? [] : auth.detail.rate_windows)
+  if (headroom !== null) {
+    facts.push({ label: "Minute headroom", value: headroom, note: "(shared search and extract)" })
+  }
+  const delay = auth.detail?.retry_after_seconds
+  if (typeof delay === "number" && Number.isFinite(delay)) {
+    facts.push({ label: "Retry-After", value: delay + " s", note: null })
+  }
+  return facts
+}
+
+/** One operation section: the cost and count facts of one available rail. */
+function appendOperationFacts(
+  facts: ProviderInfoFact[],
+  auth: ProviderAuthLimits,
+  operation: (typeof OPERATIONS)[number],
+  providerId: string | undefined,
+): void {
+  if (!operationAvailable(auth, operation)) return
+  if (providerId === TAVILY_ID) {
+    const native = nativeCostFact(auth, operation)
+    if (native !== null) facts.push(native)
+  }
+  const cost = costFact(auth, operation, providerId)
+  if (cost !== null) facts.push(cost)
+  const count = countFact(auth, operation, providerId)
+  if (count !== null) facts.push(count)
+}
+
 /** Facts and usage link of one rail, in the shown order. */
-export function providerInfo(auth: ProviderAuthLimits): ProviderInfo {
+export function providerInfo(auth: ProviderAuthLimits, providerId?: string): ProviderInfo {
   const facts: ProviderInfoFact[] = []
   for (const operation of OPERATIONS) {
-    if (!operationAvailable(auth, operation)) continue
-    const cost = costFact(auth, operation)
-    if (cost !== null) facts.push(cost)
-    const count = countFact(auth, operation)
-    if (count !== null) facts.push(count)
+    appendOperationFacts(facts, auth, operation, providerId)
   }
   const rate = rateFact(auth.detail?.rate_windows ?? [])
   if (rate !== null) facts.push(rate)
+  if (providerId === TAVILY_ID) facts.push(...tavilyRateFacts(auth))
   const lastSync = timestampOrNull(auth.detail?.last_sync_at)
   if (lastSync !== null) facts.push({ label: "Last sync", value: lastSync, note: null })
   return {

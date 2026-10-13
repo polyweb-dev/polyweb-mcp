@@ -1,17 +1,25 @@
 import type { ReactNode } from "react"
 import type {
+  CRDConversionProfile,
   CRDGrantsSummary,
   ProviderAuthLimits,
   ProviderLimitDetail,
 } from "@/domains/dashboard"
 import { formatCRDAmount, resetRuleText } from "../model/crdDisplay"
 import { operationAvailable } from "../model/crdCardModel"
+import type { TavilyDisplayAdapter } from "../model/tavilyCredits"
+import { tavilyCRDToCredits, formatCreditAmount } from "../model/tavilyCredits"
 import { SPEND_CAP } from "../model/quotaLabels"
 import { dateText } from "../model/timeText"
 
 export interface ProviderLimitsDetailProps {
   providerName: string
   auth: ProviderAuthLimits
+  /**
+   * The native display inputs of one Tavily rail: with a price profile, the
+   * local grant caps state themselves in Credits. Other providers keep CRD.
+   */
+  nativeDisplay?: TavilyDisplayAdapter
 }
 
 /** Value family of one row: the credit-unit block comes first and the USD block goes last. */
@@ -64,8 +72,30 @@ function grantText(granted: string, consumed: string): string {
   return formatCRDAmount(granted) + " set, " + formatCRDAmount(consumed) + " used"
 }
 
+/**
+ * The grant text of one rail: with a native price profile the CRD amounts
+ * convert into Credits at the display boundary, and a failed conversion keeps
+ * the stored CRD text. The wire values stay untouched.
+ */
+function grantTextNative(
+  granted: string,
+  consumed: string,
+  profile: CRDConversionProfile | null,
+): string {
+  if (profile === null) return grantText(granted, consumed)
+  const grantedCredits = tavilyCRDToCredits(granted, profile)
+  const usedCredits = tavilyCRDToCredits(consumed, profile)
+  if (grantedCredits === null || usedCredits === null) return grantText(granted, consumed)
+  return formatCreditAmount(grantedCredits) + " set, " + formatCreditAmount(usedCredits) + " used"
+}
+
 /** Spend cap facts of the supported operations only. */
-function grantRows(grants: CRDGrantsSummary | null, auth: ProviderAuthLimits): DetailRow[] {
+function grantRows(
+  grants: CRDGrantsSummary | null,
+  auth: ProviderAuthLimits,
+  profile: CRDConversionProfile | null,
+  native: boolean,
+): DetailRow[] {
   const rows: DetailRow[] = []
   if (grants === null) return rows
   const start = known(grants.period_start)
@@ -73,10 +103,11 @@ function grantRows(grants: CRDGrantsSummary | null, auth: ProviderAuthLimits): D
   const period = start === null || end === null ? null : dateText(start) + " to " + dateText(end)
   push(rows, "plain", SPEND_CAP + " period", period)
   if (operationAvailable(auth, "search")) {
-    push(rows, "crd", "Search " + SPEND_CAP.toLowerCase(), grantText(grants.search_granted_crd, grants.search_consumed_crd))
+    push(rows, "crd", "Search " + SPEND_CAP.toLowerCase(), grantTextNative(grants.search_granted_crd, grants.search_consumed_crd, profile))
   }
   if (operationAvailable(auth, "fetch")) {
-    push(rows, "crd", "Fetch " + SPEND_CAP.toLowerCase(), grantText(grants.fetch_granted_crd, grants.fetch_consumed_crd))
+    const operation = native ? "Extract" : "Fetch"
+    push(rows, "crd", operation + " " + SPEND_CAP.toLowerCase(), grantTextNative(grants.fetch_granted_crd, grants.fetch_consumed_crd, profile))
   }
   return rows
 }
@@ -95,9 +126,11 @@ function groupRows(rows: DetailRow[]): DetailRow[] {
  * yields no block at all, so the info control holds no empty divider.
  */
 export function ProviderLimitsDetail(props: ProviderLimitsDetailProps): ReactNode {
-  const { providerName, auth } = props
+  const { providerName, auth, nativeDisplay } = props
+  const profile = nativeDisplay?.profile ?? null
+  const native = nativeDisplay !== undefined
   const detail = auth.detail
-  const rows = groupRows([...detailRows(detail), ...grantRows(auth.grants, auth)])
+  const rows = groupRows([...detailRows(detail), ...grantRows(auth.grants, auth, profile, native)])
   const splitNote = detail === null ? null : known(detail.crd_split_note)
   if (rows.length === 0 && splitNote === null) return null
 

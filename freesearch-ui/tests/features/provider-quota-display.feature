@@ -65,3 +65,27 @@ Feature: Provider quota display stays honest
     And the usage view should not show "Unknown"
     And the usage view should not show "n/a"
     And the usage view should not show "∞"
+
+  @stub @quota @tavily
+  Scenario: Tavily native Credits render with Credits labels
+    Given the stubbed provider limits show "Tavily finite credits"
+    And the stubbed credit totals show "Tavily search and extract use"
+    When I navigate directly to "/usage"
+    Then I should see the "Usage" heading
+    And the Tavily credit bar should show "100" percent
+    And the Tavily card should show "1000 / 1000 Credits"
+    And the usage view should show "Tavily native Credits use"
+    And the usage view should show "1 Credit"
+    When I navigate directly to "/"
+    And I pin the playground provider to "Tavily"
+    And I submit the playground search query "stubbed query"
+    Then the search telemetry should show "Credits"
+
+  @stub @quota @tavily
+  Scenario: Tavily out-of-Credits 402 reaches the user at once
+    Given the stubbed provider limits show "Tavily finite credits"
+    And the stubbed credit totals show "Tavily no use"
+    When I navigate directly to "/"
+    And I pin the playground provider to "Tavily"
+    And I submit the playground search query "tavily out of credits probe"
+    Then the playground search error should show "Tavily is out of Credits. Wait until reset or upgrade."

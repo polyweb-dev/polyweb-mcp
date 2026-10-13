@@ -11,6 +11,7 @@ storage layer.
 """
 
 import asyncio
+import contextlib
 import inspect
 import logging
 import math
@@ -27,6 +28,7 @@ from pydantic import AwareDatetime, Field, model_serializer
 
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.adapters.brave import COST_USD_PER_REQUEST, FREE_CREDITS_USD, brave_spend_usd
+from freesearch.infrastructure.resilience import ProviderOperationError
 from freesearch.infrastructure.secrets import AsyncSecretStore, ProviderName
 from freesearch.models.contracts import (
     ContractModel,
@@ -416,7 +418,9 @@ async def tracked_call[ResponseT: (SearchResponse, FetchResponse)](
     When ``limits`` is supplied, a durable funds and rate admission runs after
     the unchanged route selection and before the vendor call. A local denial is
     raised before any vendor I/O, so it consumes no rate capacity and never
-    counts as a provider health failure.
+    counts as a provider health failure. A vendor 429 additionally records a
+    rate-state cooldown carrying the vendor Retry-After delay; a local
+    denial never records one.
     """
 
     started_at = time.perf_counter()
@@ -424,6 +428,11 @@ async def tracked_call[ResponseT: (SearchResponse, FetchResponse)](
     try:
         response = await call(adapter)
     except LimitDeniedError:
+        raise
+    except asyncio.CancelledError:
+        if limits is not None and admission is not None:
+            with contextlib.suppress(Exception):
+                await asyncio.shield(_release_cancelled_admission(limits, admission))
         raise
     except Exception as exc:
         await _finalize_failure(limits, admission, exc, request=request)
@@ -434,10 +443,17 @@ async def tracked_call[ResponseT: (SearchResponse, FetchResponse)](
             latency_ms=_measured_latency_ms(adapter.name, _elapsed_ms(started_at)),
         )
         await record_failure_telemetry(repository, provider=adapter.name)
+        await _record_vendor_cooldown(limits, adapter, exc)
         status = getattr(getattr(exc, "error", None), "status_code", None)
         await _record_adapter_quota(
             repository, adapter, "quota_after_error", status, operation=operation
         )
+        # A terminal vendor 402 must gate the next pinned call at the pool
+        # layer too: mirror the zero into the native Credits pool before the
+        # error propagates, so the funds precheck denies it without vendor I/O.
+        if _terminal_tavily_402(exc) and limits is not None:
+            with contextlib.suppress(Exception):
+                await limits.record_terminal_402(adapter.name, _adapter_auth_mode(adapter))
         raise
     if limits is not None and admission is not None:
         await limits.record_success(admission, response, request=request)
@@ -522,6 +538,54 @@ async def _finalize_failure(
     )
 
 
+def _terminal_tavily_402(exc: BaseException) -> bool:
+    """Return whether one failure is the terminal Tavily out-of-Credits 402.
+
+    The shape mirrors ``_terminal_tavily_402`` in ``routers/api.py#L876``: a
+    ``ProviderOperationError`` whose stored error names ``provider="tavily"``,
+    ``code="quota_exhausted"``, and ``status_code=402``. The monitoring layer
+    must not import from the router, so the predicate is repeated here.
+    """
+
+    if not isinstance(exc, ProviderOperationError):
+        return False
+    error = exc.error
+    return (
+        error.provider == "tavily"
+        and error.code == "quota_exhausted"
+        and error.status_code == 402
+    )
+
+
+async def _release_cancelled_admission(
+    limits: "ProviderLimitsService",
+    admission: Any,
+) -> None:
+    """Release one cancelled attempt's reservation with reason ``cancelled``.
+
+    A cancelled fanout sibling never reaches the ``except Exception``
+    finalizer (``CancelledError`` is a ``BaseException``), so its admission
+    would stay ``reserved`` until the 300-second attempt lease expires and
+    then keep counting in the Tavily funds recheck. This helper releases it
+    at once so no phantom reservation survives the cancel.
+
+    Conservative tradeoff: a cancel that lands after the vendor call already
+    completed may release a reservation the vendor charged. That understates
+    committed funds only; the next usage poll restores vendor truth. The
+    caller shields this release so a second cancel cannot interrupt it.
+    """
+
+    await limits.record_failure(
+        admission,
+        ProviderError(
+            provider=admission.provider,
+            code="cancelled",
+            message="provider call cancelled by fanout",
+            retryable=False,
+        ),
+    )
+
+
 def _charged_native(details: dict[str, Any]) -> Decimal | None:
     """Return a confirmed native charge reported by an adapter failure."""
 
@@ -534,6 +598,61 @@ def _charged_native(details: dict[str, Any]) -> Decimal | None:
         return None
 
 
+def _vendor_retry_after_seconds(details: dict[str, Any]) -> int | None:
+    """Return a real, finite, nonnegative integer Retry-After delay.
+
+    Bools are rejected even though ``bool`` subclasses ``int``; any other
+    shape yields ``None``.
+    """
+
+    value = details.get("retry_after_seconds")
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+async def _record_vendor_cooldown(
+    limits: "ProviderLimitsService | None",
+    adapter: ProviderAdapter,
+    error: Exception,
+) -> None:
+    """Record a vendor 429 as rate-state cooldown; additive and never raising.
+
+    Only a vendor response carries the normalized 429 with its Retry-After
+    seconds: the local denial raised before the vendor call exits in
+    :func:`_admit_call` and never reaches the failure path of
+    :func:`tracked_call`. The rate-service write stays defensive - a missing
+    service or method, or a failed write, is skipped without touching the
+    recorded failure.
+    """
+
+    if limits is None:
+        return
+    provider_error = getattr(error, "error", None)
+    if not isinstance(provider_error, ProviderError) or provider_error.status_code != 429:
+        return
+    retry_after = _vendor_retry_after_seconds(provider_error.details)
+    if retry_after is None:
+        return
+    record = getattr(getattr(limits, "rate_limits", None), "record_vendor_cooldown", None)
+    if not callable(record):
+        return
+    with contextlib.suppress(Exception):
+        await record(
+            provider=adapter.name,
+            auth_mode=_adapter_auth_mode(adapter),
+            retry_after_seconds=retry_after,
+            attempted_at=datetime.now(UTC),
+        )
+
+
+# Cache-only quota contract: a ``quota()`` read in this module must never
+# issue vendor I/O in the request path. Tavily spends its documented usage
+# endpoint budget only through the scheduler-driven ``usage_snapshot``
+# (services/limits_sync.py); every read below is a cached snapshot or an
+# unknown state, and the ``quota_after_success``/``quota_after_error``
+# projections are local recomputes over cached state that never poll the
+# vendor.
 async def refresh_quotas(
     repository: SQLiteRepository | None,
     adapters: Sequence[ProviderAdapter],
@@ -632,73 +751,127 @@ def normalize_degenerate_quota(snapshot: QuotaSnapshot) -> QuotaSnapshot:
     return snapshot.model_copy()
 
 
-async def effective_quota(
-    repository: SQLiteRepository | None, provider: str
-) -> QuotaSnapshot | None:
-    """Return the routable quota view, expiring Parallel's soft zero on success."""
+def _free_zero_due(provider: str, snapshot: QuotaSnapshot, now: datetime) -> bool:
+    """Return True when Tavily's terminal free zero has passed its reset instant.
 
-    if repository is None:
-        return None
-    snapshot = await repository.latest_quota(provider)
-    if snapshot is None:
-        return None
-    snapshot = normalize_degenerate_quota(snapshot)
-    if snapshot.remaining != Decimal("0") or not is_soft_quota_zero(provider, snapshot):
-        return snapshot
+    The stored exhaustion mark (``vendor_402`` or the generic ``exhaustion``
+    flag) identifies the terminal zero; the monthly reset instant is the only
+    trigger, so no vendor read is needed to expire it.
+    """
+
+    if provider != "tavily" or snapshot.remaining != Decimal("0") or snapshot.reset_at is None:
+        return False
+    metadata = snapshot.metadata
+    exhausted = metadata.get("vendor_402") is True or metadata.get("exhaustion") is True
+    return exhausted and now >= snapshot.reset_at
+
+
+async def _expire_free_zero(
+    repository: SQLiteRepository, snapshot: QuotaSnapshot, now: datetime
+) -> QuotaSnapshot:
+    """Persist and return the snapshot that expires Tavily's free zero.
+
+    The cleared view keeps every metadata mark plus ``free_zero_expired`` and
+    reports an unknown remaining balance; a failed write keeps the stored zero.
+    """
+
+    cleared = snapshot.model_copy(
+        update={
+            "remaining": None,
+            "observed_at": now,
+            "metadata": {**snapshot.metadata, "free_zero_expired": True},
+        }
+    )
     try:
-        events = await repository.list_usage(provider=provider)
+        await repository.record_quota(cleared)
     except Exception:
         return snapshot
+    return cleared
+
+
+async def _expire_soft_zero(
+    repository: SQLiteRepository, provider: str, snapshot: QuotaSnapshot
+) -> QuotaSnapshot:
+    """Persist and return the snapshot that clears a proven-soft zero.
+
+    The shared clear path behind :func:`effective_quota` and
+    :func:`effective_quotas_batch`: a later successful usage event proves the
+    balance, so the zero is marked non-soft and the unknown state is stored.
+    Persistence failures raise; callers keep their stored snapshot.
+    """
+
+    events = await repository.list_usage(provider=provider)
     successful = [
         event
         for event in events
         if event.status is UsageStatus.SUCCESS and event.observed_at > snapshot.observed_at
     ]
-    if successful:
-        cleared = snapshot.model_copy(
-            update={
-                "remaining": None,
-                "observed_at": max(event.observed_at for event in successful),
-                "metadata": {**snapshot.metadata, "soft_zero": False},
-            }
-        )
-        await repository.record_quota(cleared)
-        return cleared
-    return snapshot
+    if not successful:
+        return snapshot
+    cleared = snapshot.model_copy(
+        update={
+            "remaining": None,
+            "observed_at": max(event.observed_at for event in successful),
+            "metadata": {**snapshot.metadata, "soft_zero": False},
+        }
+    )
+    await repository.record_quota(cleared)
+    return cleared
+
+
+async def effective_quota(
+    repository: SQLiteRepository | None,
+    provider: str,
+    *,
+    now: datetime | None = None,
+) -> QuotaSnapshot | None:
+    """Return the routable quota view with stale zero states expired locally.
+
+    No vendor read happens on this path: Parallel's soft zero clears once a
+    later successful event proves balance, and Tavily's terminal free zero
+    expires at its monthly reset instant.
+    """
+
+    if repository is None:
+        return None
+    observed_at = now or datetime.now(UTC)
+    snapshot = await repository.latest_quota(provider)
+    if snapshot is None:
+        return None
+    snapshot = normalize_degenerate_quota(snapshot)
+    if snapshot.remaining != Decimal("0"):
+        return snapshot
+    if _free_zero_due(provider, snapshot, observed_at):
+        return await _expire_free_zero(repository, snapshot, observed_at)
+    if not is_soft_quota_zero(provider, snapshot):
+        return snapshot
+    try:
+        return await _expire_soft_zero(repository, provider, snapshot)
+    except Exception:
+        return snapshot
 
 
 async def effective_quotas_batch(
-    repository: SQLiteRepository | None, providers: Sequence[str]
+    repository: SQLiteRepository | None,
+    providers: Sequence[str],
+    *,
+    now: datetime | None = None,
 ) -> dict[str, QuotaSnapshot]:
     """Return the routable quota view for each requested provider in one batch."""
 
     if repository is None or not providers:
         return {}
+    observed_at = now or datetime.now(UTC)
     raw_snapshots = await repository.latest_quota_batch(providers)
     quotas: dict[str, QuotaSnapshot] = {}
     for provider, snapshot in raw_snapshots.items():
         snapshot = normalize_degenerate_quota(snapshot)
-        if snapshot.remaining == Decimal("0") and is_soft_quota_zero(provider, snapshot):
-            try:
-                events = await repository.list_usage(provider=provider)
-                successful = [
-                    event
-                    for event in events
-                    if event.status is UsageStatus.SUCCESS
-                    and event.observed_at > snapshot.observed_at
-                ]
-                if successful:
-                    cleared = snapshot.model_copy(
-                        update={
-                            "remaining": None,
-                            "observed_at": max(event.observed_at for event in successful),
-                            "metadata": {**snapshot.metadata, "soft_zero": False},
-                        }
-                    )
-                    await repository.record_quota(cleared)
-                    snapshot = cleared
-            except Exception:
-                pass
+        if snapshot.remaining == Decimal("0"):
+            if _free_zero_due(provider, snapshot, observed_at):
+                snapshot = await _expire_free_zero(repository, snapshot, observed_at)
+            elif is_soft_quota_zero(provider, snapshot):
+                with contextlib.suppress(Exception):
+                    snapshot = await _expire_soft_zero(repository, provider, snapshot)
         quotas[provider] = snapshot
     return quotas
 

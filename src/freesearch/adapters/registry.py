@@ -99,6 +99,16 @@ def build_adapters(client: httpx.AsyncClient | None = None) -> list[ProviderAdap
                         manual_starting_credits=record.exa_manual_starting_credits_usd,
                     )
                 )
+            elif name is ProviderName.TAVILY:
+                # Keyless public search and extract run without a vault key;
+                # the explicit non-secret configuration values ride along.
+                adapters.append(
+                    TavilyAdapter(
+                        http_client,
+                        key_environment=record.tavily_key_environment,
+                        paygo_enabled=record.tavily_paygo_enabled,
+                    )
+                )
             else:
                 adapters.append(adapter_cls(http_client))
         except Exception:
