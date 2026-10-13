@@ -313,8 +313,10 @@ export function ProviderLimitsCard({
   const keenableBar = providerId === KEENABLE_PROVIDER
   const tinyfishBar = providerId === TINYFISH_PROVIDER
   const keenableKeyless = keenableBar && auth.auth_mode === "keyless"
-  // The public keyless rail has no usage endpoint to refresh.
-  const refreshSkipped = controller.refreshSkipped || keenableKeyless
+  // The keyless Tavily rail has no usage endpoint to refresh, like the keyless
+  // Keenable rail. The hide decision reads the current rail, never a prior skip.
+  const tavilyKeyless = providerId === "tavily" && auth.auth_mode === "keyless"
+  const refreshSkipped = controller.refreshSkipped || keenableKeyless || tavilyKeyless
   // The whole-request floor applies to the release request rails (Keenable);
   // every other rail keeps the verbatim values, and Tavily reads its native
   // Credits facts through the optional display adapter.
