@@ -21,7 +21,7 @@ import {
 } from "../model/crdCardModel"
 import type { ManualAmountMode } from "../model/manualQuotaMath"
 import { displayAdapterOf, profileOf, type TavilyDisplayAdapter } from "../model/tavilyCredits"
-import { providerInfo, type BalancePrefill, type ProviderInfo } from "../model/providerInfo"
+import { providerInfo, type BalancePrefill } from "../model/providerInfo"
 import type { CreditMode } from "../model/quotaLabels"
 import type { QuotaRowEstimates } from "../model/quotaRowModel"
 import { pairedSnapshotOf } from "../model/quotaRowModel"
@@ -149,6 +149,8 @@ interface CardModalInput {
   auth: ProviderAuthLimits
   fetchAvailable: boolean
   creditMode: CreditMode | null
+  /** The native display inputs of one Tavily rail; null on every other card. */
+  nativeDisplay: TavilyDisplayAdapter | null
   providers?: ProviderConfig[]
   observed?: Record<string, BalancePrefill>
   refreshDashboard: () => Promise<void>
@@ -212,6 +214,7 @@ function cardModals(input: CardModalInput): ReactNode {
           saving={controller.saving}
           saveError={controller.saveError}
           staleVersion={controller.staleVersion}
+          {...(input.nativeDisplay !== null ? { nativeDisplay: input.nativeDisplay } : {})}
           onSave={controller.saveGrant}
           onClose={close}
           onReload={() => void controller.reload()}
@@ -255,25 +258,6 @@ function oauthControl(
   const control = renderOAuthActions(args)
   if (control === null || control === undefined) return null
   return <div className="flex flex-wrap items-center justify-end gap-2">{control}</div>
-}
-
-/** The details control of one card, shown beside the credit fraction. */
-function infoPopover(
-  info: ProviderInfo,
-  providerId: string,
-  providerName: string,
-  auth: ProviderAuthLimits,
-  nativeDisplay: TavilyDisplayAdapter | null = null,
-): ReactNode {
-  return (
-    <ProviderInfoPopover
-      providerId={providerId}
-      providerName={providerName}
-      info={info}
-      auth={auth}
-      {...(nativeDisplay !== null ? { nativeDisplay } : {})}
-    />
-  )
 }
 
 /**
@@ -395,7 +379,12 @@ export function ProviderLimitsCard({
             onOpenModal={setModal}
           />
         }
-        info={infoPopover(info, providerId, providerName, auth, nativeDisplay)}
+        info={
+          <ProviderInfoPopover providerId={providerId} providerName={providerName}
+            info={info} auth={auth}
+            {...(nativeDisplay !== null ? { nativeDisplay } : {})}
+          />
+        }
       />
 
       {oauth}
@@ -412,8 +401,9 @@ export function ProviderLimitsCard({
         auth,
         fetchAvailable,
         creditMode: info.creditMode,
-        ...(providers !== undefined ? { providers } : {}),
-        ...(observed !== undefined ? { observed } : {}),
+        nativeDisplay,
+        providers,
+        observed,
         refreshDashboard,
         onClose: () => setModal(null),
       })}

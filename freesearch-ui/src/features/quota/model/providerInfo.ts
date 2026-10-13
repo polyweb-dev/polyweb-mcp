@@ -215,7 +215,7 @@ function countFact(
   if (calls === null) return null
   const period = COUNT_PERIOD[auth.detail?.reset_rule ?? UNKNOWN_TEXT]
   return {
-    label: operation === "search" ? COUNT_LABEL[operation] : operationViewName(providerId, operation) + "s left",
+    label: COUNT_LABEL[operation] ?? (operationViewName(providerId, operation) + "s left"),
     value: calls,
     note: period === null ? null : "/ " + period,
   }

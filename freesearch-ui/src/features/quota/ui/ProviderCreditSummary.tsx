@@ -116,26 +116,43 @@ function fundsBar(input: FundsBarInput): ReactNode {
  *
  * The fraction carries the native Credit values, so the accessible name and
  * the value text state the Credits amount itself. The percentages come from
- * the exact native strings through the shared helper.
+ * the exact native strings through the shared helper. With the shared flag,
+ * the percentage text sits below the bar in its own line; without it, the
+ * bar keeps the percentage at its right.
  */
 function nativeFundsBar(
   providerName: string,
   credits: TavilyCreditsDisplay,
   percent: number,
+  useSharedBar: boolean,
 ): ReactNode {
   if (credits.remaining === null) return null
   const valueNumber = formatCreditValue(credits.remaining)
   if (valueNumber === null) return null
+  const label = providerName + " native Credits remaining"
+  const valueText =
+    valueNumber +
+    (credits.allowance === null
+      ? " Credits left"
+      : " of " + formatCreditValue(credits.allowance) + " Credits left")
+  if (useSharedBar) {
+    return (
+      <>
+        <RemainingBar percentRemaining={percent} label={label} valueText={valueText} />
+        <div className="flex justify-end">
+          <span className="tnum text-[18px] font-semibold text-[var(--text-strong)]">
+            {percentLabel(percent)}
+          </span>
+        </div>
+      </>
+    )
+  }
   return (
     <RemainingBar
       percentRemaining={percent}
-      label={providerName + " native Credits remaining"}
-      valueText={
-        valueNumber +
-        (credits.allowance === null
-          ? " Credits left"
-          : " of " + formatCreditValue(credits.allowance) + " Credits left")
-      }
+      label={label}
+      valueText={valueText}
+      showPercent
     />
   )
 }
@@ -195,19 +212,14 @@ function nativeFootnotes(credits: TavilyCreditsDisplay): ReactNode[] {
 
 /** The whole summary of one rail with native display facts. */
 function nativeSummary(
-  providerName: string,
-  credits: TavilyCreditsDisplay,
-  actions: ReactNode | undefined,
-  info: ReactNode | undefined,
-  useSharedBar: boolean,
-  rateBars: ReactNode,
+  input: ProviderCreditSummaryProps & { credits: TavilyCreditsDisplay },
 ): ReactNode {
+  const { providerName, credits, actions, info, useSharedBar = false, rateBars } = input
   const percent = percentRemaining(credits.remaining, credits.allowance)
   return (
     <div className="flex flex-1 flex-col justify-between gap-3">
       <div className="space-y-2">
-        {percent !== null &&
-          (useSharedBar ? nativeFundsBar(providerName, credits, percent) : null)}
+        {percent !== null && nativeFundsBar(providerName, credits, percent, useSharedBar)}
         {rateBars}
       </div>
       <div className={`${CREDIT_ROW} mt-auto`}>
@@ -258,7 +270,7 @@ export function ProviderCreditSummary({
   rateBars,
 }: ProviderCreditSummaryProps): ReactNode {
   if (credits !== undefined) {
-    return nativeSummary(providerName, credits, actions, info, useSharedBar, rateBars)
+    return nativeSummary({ providerName, model, credits, actions, info, useSharedBar, rateBars })
   }
   const percent = model.state === "finite" ? model.percentRemaining : null
   const label = percent === null ? null : percentLabel(percent)
