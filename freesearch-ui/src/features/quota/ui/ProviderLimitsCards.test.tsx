@@ -185,3 +185,132 @@ describe("ProviderLimitsCards", () => {
     expect(screen.queryByRole("progressbar")).toBe(null)
   })
 })
+
+/**
+ * FIX list: ProviderLimitsCards forwards the Tavily-only renderRateTier slot
+ * to the card while credential/auth selection and OAuth composition stay
+ * intact.
+ */
+
+describe("ProviderLimitsCards rate-tier slot (FIX)", () => {
+  function tavilyEntry() {
+    const profile = {
+      reference_usd_per_crd: "0.001",
+      native_usd_per_unit: "0.008",
+      cost_basis: "paygo_reference",
+      price_version: "paygo-reference",
+      source: "documented",
+      estimated: true,
+    }
+    const record = (operation: string, nativeCost: string) => ({
+      provider: "tavily",
+      operation,
+      auth_mode: "keyed",
+      supported: true,
+      transport_available: true,
+      native_pool_id: "tavily:keyed:credits",
+      rate: null,
+      budget: {
+        model: "credits",
+        free_allowance: "1000",
+        allowance_unit: "Credits",
+        allowance_period: "monthly",
+        cost_per_1k: null,
+        standard_native_cost: nativeCost,
+        usd_per_call: "0.008",
+        on_exhausted: "402",
+        usage_api: "/usage",
+        priced: true,
+      },
+      conversion_profile: profile,
+      plan_name: "Tavily",
+      usage_url: null,
+      version: 2,
+    })
+    return {
+      provider: "tavily",
+      active_auth_mode: "keyed",
+      auths: [
+        {
+          auth_mode: "keyed",
+          transport_available: true,
+          search: record("search", "1"),
+          fetch: record("fetch", "0.2"),
+          free_tiers: [],
+          paid_tiers: [],
+          unknown_tiers: [],
+          tier_split_known: true,
+          aggregate_pool: {
+            pool_id: "tavily:keyed:credits",
+            provider: "tavily",
+            auth_mode: "keyed",
+            native_unit: "CREDIT",
+            remaining: "999",
+            allowance: "1000",
+            actual_spend_usd: null,
+            source: "vendor_api",
+            confidence: "observed",
+            reset_at: "2026-10-01T00:00:00Z",
+            observed_at: "2026-09-06T10:05:00Z",
+            version: 2,
+            credential_generation: 1,
+            next_sync_at: null,
+            stale: false,
+            manual_anchor: false,
+          },
+          crd_views: [
+            {
+              state: "finite",
+              operation: "search",
+              remaining_crd: "7992",
+              local_remaining_crd: null,
+              request_cost_crd: "8",
+              shared_pool_id: "tavily:keyed:credits",
+              possible_standard_calls: "999",
+              price_version: "paygo-reference",
+              priced: true,
+            },
+          ],
+          rate_progress: [],
+          grants: null,
+          detail: null,
+        },
+      ],
+      documented_keyless_operations: [],
+      version: 2,
+      generated_at: "2026-09-06T10:05:00Z",
+    }
+  }
+
+  it("renders the tier slot inside the Tavily card only with OAuth intact", () => {
+    const calls: string[] = []
+    let confirmedKind = "missing"
+    render(
+      <ProviderLimitsCards
+        providers={[{ id: "tavily", name: "Tavily" }, { id: "brave", name: "Brave" }] as never}
+        providerLimits={[tavilyEntry(), braveEntry()] as never}
+        crdUsageTotals={[]}
+        refreshDashboard={() => Promise.resolve()}
+        manualEligible={new Set<string>()}
+        renderOAuthActions={({ providerId }) => (
+          <button type="button" data-testid={"oauth-" + providerId}>
+            Connect
+          </button>
+        )}
+        renderRateTier={(args) => {
+          calls.push(args.providerId)
+          confirmedKind = typeof args.onConfirmed
+          return <span data-testid="tier-slot">Tier</span>
+        }}
+      />,
+    )
+    expect(calls).toEqual(["tavily"])
+    expect(confirmedKind).toBe("function")
+    const tavilyArticle = screen.getByRole("heading", { name: "Tavily" }).closest("article") as HTMLElement
+    expect(tavilyArticle.querySelector('[data-testid="tier-slot"]')).not.toBeNull()
+    const braveArticle = screen.getByRole("heading", { name: "Brave" }).closest("article") as HTMLElement
+    expect(braveArticle.querySelector('[data-testid="tier-slot"]')).toBeNull()
+    expect(screen.getByTestId("oauth-tavily")).not.toBeNull()
+    expect(screen.getByTestId("oauth-brave")).not.toBeNull()
+  })
+})

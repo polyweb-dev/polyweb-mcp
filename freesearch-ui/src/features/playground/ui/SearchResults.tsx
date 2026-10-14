@@ -47,6 +47,9 @@ export function SearchResults({ controller, result: activeSearch }: SearchResult
     handleFetchResult,
   } = controller
   const resolvedIdentity = providerIdentity(activeSearch.selectedProviderId)
+  // Tavily reports its native usage in vendor Credits; every other provider
+  // keeps the generic Units label.
+  const usageLabel = activeSearch.selectedProviderId === "tavily" ? "Credits" : "Units"
   return (
     <div className="space-y-6 pt-2">
       {/* Telemetry bar */}
@@ -57,7 +60,7 @@ export function SearchResults({ controller, result: activeSearch }: SearchResult
             <span className="font-medium text-[var(--text-strong)]">{activeSearch.executionTimeMs}ms</span>
           </div>
           <div className="flex items-center gap-2">
-            <span>Units</span>
+            <span>{usageLabel}</span>
             <span className="font-medium text-[var(--text-strong)]">{activeSearch.costEstimateCredits}</span>
           </div>
           <div className="flex items-center gap-2">

@@ -58,10 +58,10 @@ function rateText(bar: RateBarView, wholeRequests: boolean = false): string | nu
  * Hourly and daily rate capacity of one provider card.
  *
  * Only `1h` and `1d` progress entries become bars; second and minute windows
- * stay detail text. An entry of an unsupported operation and an entry without
- * a known amount never creates a row. Search rows render before fetch rows.
- * The bar carries a numeric `aria-valuenow` only when the limit is known, so
- * an unknown limit is never drawn as empty capacity.
+ * stay out. An entry of an unsupported operation and an entry without a
+ * known amount never creates a row. Search rows render before fetch rows. The
+ * bar carries a numeric `aria-valuenow` only when the limit is known, so an
+ * unknown limit is never drawn as empty capacity.
  *
  * With `useSharedBar`, each bar draws through the shared full-width bar on its
  * own line below the text line with a clear gap, and the remaining and limit

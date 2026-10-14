@@ -208,6 +208,55 @@ describe("FreeSearchApiService (live HTTP)", () => {
     expect("extra" in (stub.requests[0].body as object)).toBe(false)
   })
 
+  it("patchProvider() sends the whitelisted tavily_key_environment field", async () => {
+    const updated = { ...allProvidersFixture()[2], tavily_key_environment: "prod" }
+    const stub = installFetchStub(() => ok(updated))
+
+    const result = await service.patchProvider("tavily", { tavily_key_environment: "prod" } as never)
+
+    expect(stub.requests[0].url).toBe("/api/v1/providers/tavily")
+    expect(stub.requests[0].method).toBe("PATCH")
+    expect(stub.requests[0].body).toEqual({ tavily_key_environment: "prod" })
+    expect(JSON.parse(stub.requests[0].bodyText!)).toEqual({ tavily_key_environment: "prod" })
+    expect(result).toEqual(updated)
+  })
+
+  it("patchProvider() PATCHes the exact Tavily path with a dev-only partial body", async () => {
+    const updated = { ...allProvidersFixture()[2], tavily_key_environment: "dev" }
+    const stub = installFetchStub(() => ok(updated))
+
+    await service.patchProvider("tavily", { tavily_key_environment: "dev" } as never)
+
+    expect(stub.requests).toHaveLength(1)
+    expect(stub.requests[0].url).toBe("/api/v1/providers/tavily")
+    expect(stub.requests[0].method).toBe("PATCH")
+    expect(Object.keys(stub.requests[0].body as object)).toEqual(["tavily_key_environment"])
+  })
+
+  it("patchProvider() omits unset fields so stored values survive a tier change", async () => {
+    const stub = installFetchStub(() => ok(allProvidersFixture()[2]))
+
+    await service.patchProvider("tavily", { tavily_key_environment: "prod" } as never)
+
+    const body = stub.requests[0].body as Record<string, unknown>
+    expect(body).toEqual({ tavily_key_environment: "prod" })
+    for (const preserved of ["enable_mask", "enabled", "search_enabled", "fetch_enabled", "priority"]) {
+      expect(preserved in body).toBe(false)
+    }
+  })
+
+  it("patchProvider() keeps access and priority patches free of the tier field", async () => {
+    const accessStub = installFetchStub(() => ok(allProvidersFixture()[0]))
+    await service.patchProvider("brave", { enabled: false } as never)
+    expect(accessStub.requests[0].body).toEqual({ enabled: false })
+    vi.unstubAllGlobals()
+
+    const priorityStub = installFetchStub(() => ok(allProvidersFixture()[3]))
+    await service.patchProvider("exa", { priority: 2 } as never)
+    expect(priorityStub.requests[0].body).toEqual({ priority: 2 })
+    vi.unstubAllGlobals()
+  })
+
   it("testProvider() POSTs relative /api/v1/providers/{id}/test", async () => {
     const wire = providerTestFixture()
     const stub = installFetchStub(() => ok(wire))

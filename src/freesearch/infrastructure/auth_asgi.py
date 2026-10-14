@@ -6,9 +6,10 @@ module never imports the service layer.
 
 Policy (PLAN P3):
 
-* ``POST /auth/register`` and ``POST /auth/jwt/login`` are the only public
-  exceptions (Q1). Every other path — including documentation, unknown paths, and
-  the MCP HTTP application's metadata routes — requires a credential.
+* ``POST /auth/register``, ``POST /auth/jwt/login``, and documentation routes
+  (``GET /docs``, ``GET /redoc``, ``GET /openapi.json``) are public exceptions.
+  Every other path — including unknown paths and the MCP HTTP application's
+  metadata routes — requires a credential.
 * ``POST /auth/jwt/refresh`` is validated by the refresh-credential callback when
   one is injected. Every other protected surface uses the access verifier, so the
   refresh credential is rejected everywhere except that one route.
@@ -59,7 +60,13 @@ RegistrationLimit = Callable[[str], Awaitable[int | None]]
 
 #: The exact public exceptions from Q1.
 PUBLIC_ROUTES: frozenset[tuple[str, str]] = frozenset(
-    {("POST", "/auth/register"), ("POST", "/auth/jwt/login")}
+    {
+        ("POST", "/auth/register"),
+        ("POST", "/auth/jwt/login"),
+        ("GET", "/docs"),
+        ("GET", "/redoc"),
+        ("GET", "/openapi.json"),
+    }
 )
 
 #: The one route whose credential is an opaque refresh token.

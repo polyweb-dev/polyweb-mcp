@@ -5,6 +5,7 @@ import type { ProviderAuthLimits } from "@/domains/dashboard"
 import { Button } from "@/shared/ui/button"
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/shared/ui/popover"
 import type { ProviderInfo, ProviderInfoFact } from "../model/providerInfo"
+import type { TavilyDisplayAdapter } from "../model/tavilyCredits"
 import { ProviderLimitsDetail } from "./ProviderLimitsDetail"
 import { ProviderTierBars } from "./ProviderTierBars"
 
@@ -13,15 +14,21 @@ export interface ProviderInfoPopoverProps {
   providerName: string
   info: ProviderInfo
   auth: ProviderAuthLimits
+  /**
+   * The native display inputs of one Tavily rail. They stay inside this
+   * disclosure: Tavily USD rows and Credits local caps appear here only, so a
+   * closed popover shows no vendor USD outside it.
+   */
+  nativeDisplay?: TavilyDisplayAdapter
 }
 
-const ROW = "flex w-full items-center justify-between gap-3"
-const HEAD = "flex w-full items-center justify-between gap-3 border-b border-[var(--border-subtle)] pb-2"
+const ROW = "grid w-full grid-cols-[fit-content(45%)_minmax(0,1fr)] items-baseline gap-x-3"
+const HEAD = "grid w-full grid-cols-[minmax(0,1fr)_auto] items-baseline gap-3 border-b border-[var(--border-subtle)] pb-2"
 /** The header note and every fact row keep the one size of the body text. */
 const FACT = "text-[12px]"
-const LABEL = FACT + " text-[var(--muted)]"
-const VALUE = FACT + " tnum text-[var(--text-strong)]"
-const NOTE = FACT + " text-[var(--muted)]"
+const LABEL = FACT + " min-w-0 break-words text-[var(--muted)]"
+const VALUE = FACT + " tnum min-w-0 break-words text-[var(--text-strong)]"
+const NOTE = FACT + " min-w-0 break-words text-[var(--muted)]"
 const TITLE = FACT + " font-semibold"
 /** The icon matches the shown size of the credit fraction. */
 const ICON = "size-[18px]"
@@ -41,10 +48,10 @@ function infoRow(fact: ProviderInfoFact, struck: boolean = false): ReactNode {
   return (
     <div key={fact.label} className={ROW}>
       <span className={LABEL}>{fact.label}</span>
-      <span className="flex items-baseline gap-1.5">
+      <span className="flex min-w-0 flex-wrap items-baseline justify-end gap-x-1.5 text-right">
         {struck ? (
           <>
-            <s>
+            <s className="min-w-0">
               {value}
               {note}
             </s>
@@ -84,17 +91,26 @@ const KEENABLE_PROVIDER = "keenable"
 /**
  * The remaining detail of one rail: the known tier facts and the vendor rows
  * that no other surface states. Each part carries its own top edge, so an
- * absent part leaves no empty divider.
+ * absent part leaves no empty divider. The native display of a Tavily rail
+ * stays inside the disclosure with the vendor detail. The rate bars moved to
+ * the card body, so this disclosure states no second copy of them.
  */
 function vendorDetail(
   providerName: string,
   auth: ProviderAuthLimits,
+  nativeDisplay: TavilyDisplayAdapter | undefined,
 ): ReactNode {
   return (
     <>
       <ProviderTierBars providerName={providerName} freeTiers={auth.free_tiers}
-        paidTiers={auth.paid_tiers} tierSplitKnown={auth.tier_split_known} />
-      <ProviderLimitsDetail providerName={providerName} auth={auth} />
+        paidTiers={auth.paid_tiers} tierSplitKnown={auth.tier_split_known}
+        {...(nativeDisplay !== undefined ? { nativeDisplay } : {})} />
+      <ProviderLimitsDetail
+        providerName={providerName}
+        auth={auth}
+        layout="popover"
+        {...(nativeDisplay !== undefined ? { nativeDisplay } : {})}
+      />
     </>
   )
 }
@@ -118,6 +134,7 @@ export function ProviderInfoPopover({
   providerName,
   info,
   auth,
+  nativeDisplay,
 }: ProviderInfoPopoverProps): ReactNode {
   const [open, setOpen] = useState(false)
   if (info.facts.length === 0 && info.usageUrl === null) return null
@@ -139,7 +156,9 @@ export function ProviderInfoPopover({
         <Info aria-hidden="true" className={ICON} />
       </PopoverTrigger>
       {open && (
-        <PopoverContent className="w-96 space-y-2">
+        <PopoverContent
+          className="w-[min(26rem,calc(100vw-2rem))] max-w-[calc(100vw-2rem)] max-h-[calc(100vh-2rem)] space-y-2 overflow-y-auto"
+        >
           <div className={HEAD}>
             <PopoverTitle
               render={<span className={TITLE} style={{ color: "var(--text-strong)" }} />}
@@ -149,7 +168,7 @@ export function ProviderInfoPopover({
             {info.creditNote !== null && (
               isFree ? (
                 <span className="flex items-baseline gap-1.5">
-                  <span className={TITLE} style={{ color: "var(--muted)" }}>
+                  <span className={TITLE + " min-w-0 text-right"} style={{ color: "var(--muted)" }}>
                     {info.creditNote}
                   </span>
                   <span className={TITLE} style={{ color: "var(--signal)" }}>
@@ -157,14 +176,14 @@ export function ProviderInfoPopover({
                   </span>
                 </span>
               ) : (
-                <span className={TITLE} style={{ color: "var(--muted)" }}>
+                <span className={TITLE + " min-w-0 text-right"} style={{ color: "var(--muted)" }}>
                   {info.creditNote}
                 </span>
               )
             )}
           </div>
           {info.facts.map((fact) => infoRow(fact, isFree && FREE_COST_LABELS.has(fact.label)))}
-          {vendorDetail(providerName, auth)}
+          {vendorDetail(providerName, auth, nativeDisplay)}
           {usageLink(providerName, info.usageUrl)}
         </PopoverContent>
       )}

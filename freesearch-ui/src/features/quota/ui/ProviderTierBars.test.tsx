@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { render, screen, within } from "@testing-library/react"
-import type { TierBalance } from "@/domains/dashboard"
+import type { CRDConversionProfile, TierBalance } from "@/domains/dashboard"
+import type { TavilyDisplayAdapter } from "../model/tavilyCredits"
 import { ProviderTierBars } from "./ProviderTierBars"
 
 /**
@@ -159,5 +160,158 @@ describe("ProviderTierBars", () => {
     expect(barGroup).not.toBe(null)
     expect(within(barGroup as HTMLElement).getByText("5 CRD of 10 CRD")).not.toBeNull()
     expect(screen.queryByText("Paid tier")).toBe(null)
+  })
+})
+
+/**
+ * Tavily native tier rows: native fields first, valid conversion fallback,
+ * unknown facts stay absent, generic formatting unchanged without the input.
+ */
+
+function tavilyProfile(): CRDConversionProfile {
+  return {
+    reference_usd_per_crd: "0.001",
+    native_usd_per_unit: "0.008",
+    cost_basis: "paygo_reference",
+    price_version: "paygo-reference",
+    source: "documented",
+    estimated: true,
+  }
+}
+
+function nativeAdapter(profile: CRDConversionProfile | null): TavilyDisplayAdapter {
+  return {
+    credits: {
+      remaining: "999",
+      allowance: "1000",
+      unit: "Credits",
+      state: "finite",
+      source: "vendor_api",
+      stale: false,
+      localCap: null,
+      paygo: false,
+      resetAt: null,
+      rateHeadroom: null,
+      retryAfterSeconds: null,
+    },
+    profile,
+  }
+}
+
+function tavilyTier(overrides: Partial<TierBalance> = {}): TierBalance {
+  return makeTier({
+    pool_id: "tavily:keyed:free",
+    tier: "free",
+    native_unit: "CREDIT",
+    native_remaining: "600",
+    native_allowance: "1000",
+    remaining_crd: "4800",
+    allowance_crd: "8000",
+    ...overrides,
+  })
+}
+
+describe("ProviderTierBars nativeDisplay", () => {
+  it("shows native integer Tavily Credits first", () => {
+    render(
+      <ProviderTierBars
+        providerName="Tavily"
+        freeTiers={[tavilyTier()]}
+        paidTiers={[]}
+        tierSplitKnown
+        nativeDisplay={nativeAdapter(tavilyProfile())}
+      />,
+    )
+    expect(screen.getByText("600 Tavily Credits of 1000 Tavily Credits")).not.toBeNull()
+    expect(screen.queryByText("4800 CRD")).toBe(null)
+  })
+
+  it("uses the singular Tavily Credit word for one unit", () => {
+    render(
+      <ProviderTierBars
+        providerName="Tavily"
+        freeTiers={[tavilyTier({ native_remaining: "1", native_allowance: "1" })]}
+        paidTiers={[]}
+        tierSplitKnown
+        nativeDisplay={nativeAdapter(tavilyProfile())}
+      />,
+    )
+    expect(screen.getByText("1 Tavily Credit of 1 Tavily Credit")).not.toBeNull()
+  })
+
+  it("floors fractional native tier amounts to whole units", () => {
+    render(
+      <ProviderTierBars
+        providerName="Tavily"
+        freeTiers={[tavilyTier({ native_remaining: "999.9", native_allowance: "1000.9" })]}
+        paidTiers={[]}
+        tierSplitKnown
+        nativeDisplay={nativeAdapter(tavilyProfile())}
+      />,
+    )
+    expect(screen.getByText("999 Tavily Credits of 1000 Tavily Credits")).not.toBeNull()
+  })
+
+  it("converts CRD-only tier values through a valid profile", () => {
+    render(
+      <ProviderTierBars
+        providerName="Tavily"
+        freeTiers={[
+          tavilyTier({
+            native_unit: "USD",
+            native_remaining: null,
+            native_allowance: null,
+            remaining_crd: "8",
+            allowance_crd: "16",
+          }),
+        ]}
+        paidTiers={[]}
+        tierSplitKnown
+        nativeDisplay={nativeAdapter(tavilyProfile())}
+      />,
+    )
+    expect(screen.getByText("1 Tavily Credit of 2 Tavily Credits")).not.toBeNull()
+  })
+
+  it("keeps generic CRD formatting without a valid conversion profile", () => {
+    render(
+      <ProviderTierBars
+        providerName="Tavily"
+        freeTiers={[
+          tavilyTier({
+            native_unit: "USD",
+            native_remaining: null,
+            native_allowance: null,
+            remaining_crd: "5",
+            allowance_crd: "10",
+          }),
+        ]}
+        paidTiers={[]}
+        tierSplitKnown
+        nativeDisplay={nativeAdapter(null)}
+      />,
+    )
+    expect(screen.getByText("5 CRD of 10 CRD")).not.toBeNull()
+    expect(screen.queryByText(/Tavily Credit/)).toBe(null)
+  })
+
+  it("renders no native row for unknown facts without an invented zero", () => {
+    const { container } = render(
+      <ProviderTierBars
+        providerName="Tavily"
+        freeTiers={[
+          tavilyTier({
+            native_remaining: null,
+            native_allowance: null,
+            remaining_crd: null,
+            allowance_crd: null,
+          }),
+        ]}
+        paidTiers={[]}
+        tierSplitKnown
+        nativeDisplay={nativeAdapter(tavilyProfile())}
+      />,
+    )
+    expect(container.textContent).toBe("")
   })
 })

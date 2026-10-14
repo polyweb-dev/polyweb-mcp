@@ -696,6 +696,8 @@ class ProviderLimitDetail(ContractModel):
     price_version: str = CRD_PRICE_VERSION
     crd_split_note: str | None = None
     rate_windows: list[RateWindow] = Field(default_factory=list)
+    # Remaining seconds of a vendor 429 cooldown exposed as rate state.
+    retry_after_seconds: int | None = Field(default=None, ge=0)
     tier_split_known: bool = True
     aggregate_pool_id: str | None = None
 

@@ -185,6 +185,12 @@ export function mergeProviderStatus(
     keyMasked: "—",
     keyVaultStatus: wire.secret_presence,
     authHeaderName: catalogEntry.authHeaderName,
+    // Confirmed readback only: any raw value outside dev/prod narrows to null
+    // so no inferred or unknown environment ever reaches the UI.
+    tavilyKeyEnvironment:
+      wire.tavily_key_environment === "dev" || wire.tavily_key_environment === "prod"
+        ? wire.tavily_key_environment
+        : null,
     quota: {
       used: null,
       limit: null,

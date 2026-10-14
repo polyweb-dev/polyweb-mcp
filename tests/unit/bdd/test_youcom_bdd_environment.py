@@ -249,13 +249,16 @@ def test_tavily_scenario_without_harness_key_skips_before_fail_closed_constructi
 
 
 def test_production_tavily_adapter_still_fails_closed_without_api_key() -> None:
-    """The explicit-constructor seam keeps Tavily fail-closed: a keyless
-    construction raises a ``configuration_error`` instead of running keyless."""
-    client = httpx.AsyncClient()
-    try:
-        with pytest.raises(ProviderOperationError) as excinfo:
-            TavilyAdapter(client)
-    finally:
-        asyncio.new_event_loop().run_until_complete(client.aclose())
+    """Intentional Tavily replacement (PLAN 4.1, DTC 5.1): the explicit
+    constructor builds the keyless public rail instead of failing closed."""
+    from freesearch.models.provider_limits import AuthMode
 
-    assert excinfo.value.error.code == "configuration_error"
+    client = httpx.AsyncClient()
+    adapter: TavilyAdapter | None = None
+    try:
+        adapter = TavilyAdapter(client, api_key=None)
+        assert adapter.limit_auth_mode is AuthMode.KEYLESS
+    finally:
+        if adapter is not None:
+            asyncio.new_event_loop().run_until_complete(adapter.aclose())
+        asyncio.new_event_loop().run_until_complete(client.aclose())

@@ -524,8 +524,8 @@
                   maxDepth: 2
                   agentOptions:
                     provider: opencode-go-extras
-                    model: deepseek-v4.1-flash
-                    reasoningEffort: xhigh
+                    model: glm-5.3-flash
+                    reasoningEffort: max
                   toolFilter:
                     deny:
                       - subagent_planner

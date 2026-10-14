@@ -13,8 +13,12 @@ vi.mock("../model/useManualQuota", () => ({
 }))
 
 vi.mock("@/context/useFreeSearch", () => ({
-  useFreeSearch: () => ({
-    providers: [{ id: "brave", name: "Brave" }],
+  useFreeSearch: () => mockFreeSearchState.current,
+}))
+
+const mockFreeSearchState = vi.hoisted(() => ({
+  current: {
+    providers: [{ id: "brave", name: "Brave", capabilities: ["search"] }],
     providerLimits: [],
     crdUsageTotals: [],
     dashboardQuotas: [],
@@ -22,7 +26,7 @@ vi.mock("@/context/useFreeSearch", () => ({
     usageLoading: false,
     usageError: null,
     refreshDashboard: () => Promise.resolve(),
-  }),
+  },
 }))
 
 vi.mock("../model/quotaRowModel", async (importOriginal) => {
@@ -80,5 +84,322 @@ describe("QuotaPage", () => {
     )
     expect(screen.queryByText("Provider quota view")).toBe(null)
     vi.unstubAllGlobals()
+  })
+
+  it("supplies native usage totals to the Tavily block", () => {    const previous = mockFreeSearchState.current
+    const profile = {
+      reference_usd_per_crd: "0.001",
+      native_usd_per_unit: "0.008",
+      cost_basis: "paygo_reference",
+      price_version: "paygo-reference",
+      source: "documented",
+      estimated: true,
+    }
+    const search = {
+      provider: "tavily",
+      operation: "search",
+      auth_mode: "keyed",
+      supported: true,
+      transport_available: true,
+      native_pool_id: "tavily:keyed:credits",
+      rate: null,
+      budget: null,
+      conversion_profile: profile,
+      plan_name: "Tavily",
+      usage_url: null,
+      version: 2,
+    }
+    mockFreeSearchState.current = {
+      providers: [
+        { id: "brave", name: "Brave", capabilities: ["search"] },
+        { id: "tavily", name: "Tavily", capabilities: ["search", "fetch"] },
+      ],
+      providerLimits: [
+        {
+          provider: "tavily",
+          active_auth_mode: "keyed",
+          auths: [
+            {
+              auth_mode: "keyed",
+              transport_available: true,
+              search,
+              fetch: { ...search, operation: "fetch" },
+              free_tiers: [],
+              paid_tiers: [],
+              unknown_tiers: [],
+              tier_split_known: true,
+              aggregate_pool: null,
+              crd_views: [],
+              rate_progress: [],
+              grants: null,
+              detail: null,
+            },
+          ],
+          documented_keyless_operations: [],
+          version: 2,
+          generated_at: "2026-09-06T10:05:00Z",
+        },
+      ],
+      crdUsageTotals: [
+        { provider: "tavily", operation: "search", normalized_crd: "8", attempt_count: 1, volume_count: 1 },
+      ],
+      dashboardQuotas: [],
+      dashboardNotice: null,
+      usageLoading: false,
+      usageError: null,
+      refreshDashboard: () => Promise.resolve(),
+    } as never
+    try {
+      installFetchStub(() => {
+        throw new Error("no backend on page test")
+      })
+      render(<QuotaPage />)
+      expect(screen.getByText("Tavily native Credits use")).not.toBeNull()
+      expect(screen.getByText("1 Credit")).not.toBeNull()
+    } finally {
+      mockFreeSearchState.current = previous
+      vi.unstubAllGlobals()
+    }
+  })
+})
+
+/**
+ * FIX page: QuotaPage forwards the Tavily-only renderRateTier slot to the
+ * card list while the OAuth slot composition stays intact.
+ */
+
+describe("QuotaPage rate-tier slot (FIX)", () => {
+  function pageProfile() {
+    return {
+      reference_usd_per_crd: "0.001",
+      native_usd_per_unit: "0.008",
+      cost_basis: "paygo_reference",
+      price_version: "paygo-reference",
+      source: "documented",
+      estimated: true,
+    }
+  }
+
+  function tavilyLimitsEntry() {
+    const record = (operation: string, nativeCost: string) => ({
+      provider: "tavily",
+      operation,
+      auth_mode: "keyed",
+      supported: true,
+      transport_available: true,
+      native_pool_id: "tavily:keyed:credits",
+      rate: null,
+      budget: {
+        model: "credits",
+        free_allowance: "1000",
+        allowance_unit: "Credits",
+        allowance_period: "monthly",
+        cost_per_1k: null,
+        standard_native_cost: nativeCost,
+        usd_per_call: "0.008",
+        on_exhausted: "402",
+        usage_api: "/usage",
+        priced: true,
+      },
+      conversion_profile: pageProfile(),
+      plan_name: "Tavily",
+      usage_url: null,
+      version: 2,
+    })
+    return {
+      provider: "tavily",
+      active_auth_mode: "keyed",
+      auths: [
+        {
+          auth_mode: "keyed",
+          transport_available: true,
+          search: record("search", "1"),
+          fetch: record("fetch", "0.2"),
+          free_tiers: [],
+          paid_tiers: [],
+          unknown_tiers: [],
+          tier_split_known: true,
+          aggregate_pool: {
+            pool_id: "tavily:keyed:credits",
+            provider: "tavily",
+            auth_mode: "keyed",
+            native_unit: "CREDIT",
+            remaining: "999",
+            allowance: "1000",
+            actual_spend_usd: null,
+            source: "vendor_api",
+            confidence: "observed",
+            reset_at: "2026-10-01T00:00:00Z",
+            observed_at: "2026-09-06T10:05:00Z",
+            version: 2,
+            credential_generation: 1,
+            next_sync_at: null,
+            stale: false,
+            manual_anchor: false,
+          },
+          crd_views: [
+            {
+              state: "finite",
+              operation: "search",
+              remaining_crd: "7992",
+              local_remaining_crd: null,
+              request_cost_crd: "8",
+              shared_pool_id: "tavily:keyed:credits",
+              possible_standard_calls: "999",
+              price_version: "paygo-reference",
+              priced: true,
+            },
+          ],
+          rate_progress: [],
+          grants: null,
+          detail: null,
+        },
+      ],
+      documented_keyless_operations: [],
+      version: 2,
+      generated_at: "2026-09-06T10:05:00Z",
+    }
+  }
+
+  function braveLimitsEntry() {
+    return {
+      provider: "brave",
+      active_auth_mode: "keyed",
+      auths: [
+        {
+          auth_mode: "keyed",
+          transport_available: true,
+          search: {
+            provider: "brave",
+            operation: "search",
+            auth_mode: "keyed",
+            supported: true,
+            transport_available: true,
+            native_pool_id: "brave:keyed:usd",
+            rate: null,
+            budget: null,
+            conversion_profile: {
+              reference_usd_per_crd: "0.001",
+              native_usd_per_unit: "1",
+              cost_basis: "priced_native_use",
+              price_version: "v2026-09",
+              source: "documented",
+              estimated: false,
+            },
+            plan_name: "Brave Search",
+            usage_url: null,
+            version: 1,
+          },
+          fetch: {
+            provider: "brave",
+            operation: "fetch",
+            auth_mode: "keyed",
+            supported: false,
+            transport_available: false,
+            native_pool_id: null,
+            rate: null,
+            budget: null,
+            conversion_profile: {
+              reference_usd_per_crd: "0.001",
+              native_usd_per_unit: null,
+              cost_basis: "priced_native_use",
+              price_version: "",
+              source: "",
+              estimated: false,
+            },
+            plan_name: null,
+            usage_url: null,
+            version: 1,
+          },
+          free_tiers: [],
+          paid_tiers: [],
+          unknown_tiers: [],
+          tier_split_known: true,
+          aggregate_pool: {
+            pool_id: "brave:keyed:usd",
+            provider: "brave",
+            auth_mode: "keyed",
+            native_unit: "USD",
+            remaining: "4.500",
+            allowance: "5.000",
+            actual_spend_usd: null,
+            source: "vendor_headers",
+            confidence: "observed",
+            reset_at: null,
+            observed_at: null,
+            version: 1,
+            credential_generation: 1,
+            next_sync_at: null,
+            stale: false,
+            manual_anchor: false,
+          },
+          crd_views: [
+            {
+              state: "finite",
+              operation: "search",
+              remaining_crd: "4500",
+              local_remaining_crd: null,
+              request_cost_crd: "5",
+              shared_pool_id: "brave:keyed:usd",
+              possible_standard_calls: "900",
+              price_version: "v2026-09",
+              priced: true,
+            },
+          ],
+          rate_progress: [],
+          grants: null,
+          detail: null,
+        },
+      ],
+      documented_keyless_operations: [],
+      version: 1,
+      generated_at: "2026-09-06T10:05:00Z",
+    }
+  }
+
+  it("passes renderRateTier through to the Tavily card only with OAuth intact", () => {
+    const previous = mockFreeSearchState.current
+    const seen: string[] = []
+    let confirmedKind = "missing"
+    mockFreeSearchState.current = {
+      providers: [
+        { id: "tavily", name: "Tavily" },
+        { id: "brave", name: "Brave" },
+      ],
+      providerLimits: [tavilyLimitsEntry(), braveLimitsEntry()],
+      crdUsageTotals: [],
+      dashboardQuotas: [],
+      dashboardNotice: null,
+      usageLoading: false,
+      usageError: null,
+      refreshDashboard: () => Promise.resolve(),
+    } as never
+    try {
+      installFetchStub(() => {
+        throw new Error("no backend on page test")
+      })
+      render(
+        <QuotaPage
+          renderOAuthActions={({ providerId }) => (
+            <button type="button" data-testid={"oauth-stub-" + providerId}>
+              Connect
+            </button>
+          )}
+          renderRateTier={(args) => {
+            seen.push(args.providerId)
+            confirmedKind = typeof args.onConfirmed
+            return <span data-testid="tier-stub">Tier</span>
+          }}
+        />,
+      )
+      expect(seen).toEqual(["tavily"])
+      expect(confirmedKind).toBe("function")
+      expect(screen.getByTestId("tier-stub")).not.toBeNull()
+      expect(screen.getByTestId("oauth-stub-tavily")).not.toBeNull()
+      expect(screen.getByTestId("oauth-stub-brave")).not.toBeNull()
+    } finally {
+      mockFreeSearchState.current = previous
+      vi.unstubAllGlobals()
+    }
   })
 })

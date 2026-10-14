@@ -97,8 +97,32 @@ def step_then_fetch_reports_usage(context: Any) -> None:
 
 @when("I request the current Tavily quota snapshot")
 def step_when_request_quota(context: Any) -> None:
-    """Query live Tavily /usage endpoint for account quota details."""
-    context.quota_snapshot = context.loop.run_until_complete(context.adapter.quota())
+    """Query live Tavily /usage endpoint through the explicit usage seam.
+
+    The usage read is the only path that issues GET /usage; the quota read
+    stays cache-only, so this proof calls usage_snapshot first (vendor I/O)
+    and then quota (cached projection) to keep the authoritative assertions.
+    """
+    from datetime import UTC, datetime
+
+    from freesearch.models.provider_limits import UsageSyncRequest
+
+    adapter = context.adapter
+    auth_mode = getattr(adapter, "limit_auth_mode", None)
+    if auth_mode is None:
+        from freesearch.models.provider_limits import AuthMode
+
+        auth_mode = AuthMode.KEYED
+    observed = datetime.now(UTC)
+    usage = context.loop.run_until_complete(
+        adapter.usage_snapshot(
+            UsageSyncRequest(
+                provider="tavily", auth_mode=auth_mode, observed_at=observed
+            )
+        )
+    )
+    assert usage is not None, "Live usage snapshot is None"
+    context.quota_snapshot = context.loop.run_until_complete(adapter.quota())
 
 
 @then("the quota snapshot should be authoritative")

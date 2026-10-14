@@ -22,8 +22,8 @@ from pathlib import Path
 from typing import Annotated, Any
 
 import httpx
-from fastapi import Depends, FastAPI, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse, Response
 
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.adapters.registry import adapter_factory, build_adapters, close_adapters
@@ -39,11 +39,13 @@ from freesearch.infrastructure.http import create_async_client
 from freesearch.infrastructure.observability import (
     NO_OP_OBSERVABILITY,
     ObservabilityRuntime,
+    SpanHandle,
     SpanKindName,
     build_observability,
     current_observability,
 )
 from freesearch.infrastructure.observability_asgi import ProviderTraceMiddleware
+from freesearch.infrastructure.resilience import ProviderOperationError
 from freesearch.infrastructure.secrets import AsyncSecretStore, ProviderName
 from freesearch.infrastructure.trace_payloads import (
     _annotate_root,
@@ -154,19 +156,25 @@ async def _build_app_adapters(
     """Build credential-ready adapters from app-scoped encrypted vault secrets.
 
     An administrator OFF choice does not skip construction: each request
-    filters the candidate list, so a later ON choice needs no restart.
+    filters the candidate list, so a later ON choice needs no restart. A
+    missing Tavily key keeps the keyless public tier with its configured rail
+    and PAYGO values instead of dropping the provider.
     """
 
     await initialize_provider_configs(repository)
     for provider in ProviderName:
         key, _source = await _resolve_secret(provider, store)
-        if key is None and provider is not ProviderName.KEENABLE:
+        if key is None and provider not in (ProviderName.KEENABLE, ProviderName.TAVILY):
             continue
         factory = adapter_factory(provider.value)
         if factory is None:
             continue
         try:
-            routes.append(_build_with_resolved_secret(factory, client, key))
+            if provider is ProviderName.TAVILY:
+                config = await effective_config_for_name(repository, provider.value)
+                routes.append(_build_with_resolved_secret(factory, client, key, config=config))
+            else:
+                routes.append(_build_with_resolved_secret(factory, client, key))
         except Exception:
             continue
 
@@ -402,6 +410,10 @@ def create_app(
 
         return JSONResponse(status_code=503, content={"detail": str(exc)})
 
+    # Module-level handler: a terminal Tavily out-of-Credits error is a 402;
+    # every other ProviderOperationError re-raises into the standard 500 flow.
+    app.add_exception_handler(ProviderOperationError, _provider_operation_error)
+
     @app.post("/search", response_model=SearchResponse)
     async def search(request: SearchRequest) -> SearchResponse:
         """Search the web through the best available provider or all providers concurrently."""
@@ -496,6 +508,11 @@ async def _start_limits(
         return
     limits = ProviderLimitsService(repo.limits)
     await limits.initialize()
+    adapter = next((route for route in routes if route.name == ProviderName.TAVILY.value), None)
+    if adapter is not None:
+        with suppress(Exception):
+            config = await effective_config_for_name(repo, ProviderName.TAVILY.value)
+            await limits.apply_tavily_config(config, auth_mode=adapter.limit_auth_mode)
     app.state.limits = limits
     app.state.limits_sync = LimitSyncService(repo.limits, limits, lambda: routes)
     app.state._limits_task = asyncio.create_task(app.state.limits_sync.run(stop))
@@ -857,6 +874,153 @@ async def _dispatch[
     return response
 
 
+def _terminal_quota_402(exc: BaseException) -> ProviderOperationError | None:
+    """Return the terminal provider out-of-credits error, else ``None``.
+
+    The vendor 402 normalizes to ``quota_exhausted`` with ``status_code=402``
+    and ``retryable=False``; only that exact shape is a terminal transport,
+    never classified as rate limiting or a generic failure.
+    """
+
+    if not isinstance(exc, ProviderOperationError):
+        return None
+    if (
+        exc.error.provider in ("tavily", "firecrawl")
+        and exc.error.code == "quota_exhausted"
+        and exc.error.status_code == 402
+    ):
+        return exc
+    return None
+
+
+# Retain alias for backwards compatibility
+_terminal_tavily_402 = _terminal_quota_402
+
+
+async def _provider_operation_error(request: Request, exc: Exception) -> Response:
+    """Transport one :class:`ProviderOperationError` through its REST contract.
+
+    A terminal provider out-of-credits error (e.g. Tavily, Firecrawl) is an HTTP 402
+    with the safe message and named provider. Every other error re-raises, so
+    FastAPI's standard 500 flow stays untouched for all providers.
+    """
+
+    return _provider_operation_error_response(exc)
+
+
+def _provider_operation_error_response(exc: Exception) -> JSONResponse:
+    """Return the response for one :class:`ProviderOperationError`.
+
+    A terminal provider out-of-credits error (e.g. Tavily, Firecrawl) is an HTTP 402
+    with the safe message and named provider. Every other error re-raises, so
+    FastAPI's standard 500 flow stays untouched for all providers.
+    """
+
+    terminal = _terminal_quota_402(exc)
+    if terminal is None:
+        raise exc
+    return JSONResponse(
+        status_code=402,
+        content={"detail": terminal.error.message, "provider": terminal.error.provider},
+    )
+
+
+def _fanout_failure_outcome(
+    adapter_name: str,
+    exc: Exception,
+    elapsed_ms: int,
+    *,
+    provider_span: SpanHandle | None = None,
+) -> tuple[str, SearchResponse | None, int, str, int, str | None]:
+    """Return the handled-failure outcome tuple for one fanout candidate.
+
+    A vendor 429 keeps its distinctive outcome status; every other handled
+    failure stays ``failed``. The tuple shape matches the pre-terminal
+    ``asyncio.gather`` contract. A provider span in scope records the failure
+    observably first, without ever failing the outcome path.
+    """
+
+    with suppress(Exception):
+        if provider_span is not None:
+            provider_span.record_exception(exc)
+    status = "failed"
+    if getattr(getattr(exc, "error", None), "status_code", None) == 429:
+        status = "rate_limited"
+    return (adapter_name, None, elapsed_ms, status, 0, str(exc))
+
+
+def _fanout_waterfall(
+    outcomes: Sequence[tuple[str, SearchResponse | None, int, str, int, str | None]],
+) -> tuple[list[ProviderTraceItem], list[tuple[str, SearchResponse]], list[str]]:
+    """Split handled fanout outcome tuples into the fusion waterfall inputs.
+
+    The splitter is a pure helper of :func:`_dispatch_fanout_search`; the
+    guarded ``_call`` closure keeps the fanout invariant branches, and the
+    project cyclomatic budget needs this loop body out of the dispatch
+    function.
+    """
+
+    waterfall: list[ProviderTraceItem] = []
+    successful_results: list[tuple[str, SearchResponse]] = []
+    errors: list[str] = []
+    for name, res, elapsed, status, count, err in outcomes:
+        waterfall.append(
+            ProviderTraceItem(
+                provider=name,
+                latency_ms=elapsed,
+                status=status,
+                results_count=count,
+                cost_credits=0.0,
+                error=err,
+            )
+        )
+        if res is not None:
+            successful_results.append((name, res))
+        elif err is not None:
+            errors.append(err)
+    return waterfall, successful_results, errors
+
+
+async def _fanout_outcomes[T](tasks: list[asyncio.Task[T]]) -> list[T]:
+    """Await fanout tasks in candidate order, honoring a terminal 402.
+
+    Tasks either complete with an outcome tuple or raise the terminal Tavily
+    402 (the surrounding ``_call`` returns the tuple form for every other
+    failure, so local admission denials keep the former gather semantics).
+    The first exception therefore is the terminal error: its re-raise cancels
+    the pending tasks and awaits their settlement before propagation, so no
+    provider call races the closing request. Without a terminal, outcomes
+    come back in the original candidate order — the same order
+    ``asyncio.gather`` produced before.
+    """
+
+    if not tasks:
+        return []
+    task_index = {task: index for index, task in enumerate(tasks)}
+    outcomes_by_index: dict[int, T] = {}
+    pending: set[asyncio.Task[T]] = set(tasks)
+    terminal: BaseException | None = None
+    while pending and terminal is None:
+        done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_EXCEPTION)
+        for task in done:
+            if task.cancelled():
+                continue
+            error = task.exception()
+            if error is None:
+                outcomes_by_index[task_index[task]] = task.result()
+            elif terminal is None:
+                # ``_call`` only ever re-raises the terminal Tavily 402; every
+                # other failure already took the outcome-tuple form.
+                terminal = error
+    if terminal is not None:
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        raise terminal
+    return [outcomes_by_index[index] for index in range(len(tasks))]
+
+
 async def _dispatch_fanout_search(
     request: SearchRequest,
     *,
@@ -872,6 +1036,11 @@ async def _dispatch_fanout_search(
     ``freesearch.results`` span around the RRF assembly — never one trace per
     provider. A handled provider failure marks that child ERROR and the root
     ``partial`` (the caller still received a response).
+
+    A terminal Tavily out-of-Credits 402 is preserved even when another
+    provider succeeds: the remaining fanout tasks are cancelled and awaited,
+    then the error propagates to the request-level 402 transport instead of a
+    fused response.
     """
     if not routes:
         raise HTTPException(
@@ -922,64 +1091,66 @@ async def _dispatch_fanout_search(
         candidate_adapter: ProviderAdapter,
     ) -> tuple[str, SearchResponse | None, int, str, int, str | None]:
         call_start = time.perf_counter()
-        with observability.span(
-            TraceSpanName.PROVIDER,
-            kind=SpanKindName.CLIENT,
-            attributes={
-                TraceAttribute.OPERATION: TraceOperation.SEARCH.value,
-                TraceAttribute.PROVIDER: candidate_adapter.name,
-                TraceAttribute.ROUTING_MODE: RoutingMode.FANOUT.value,
-                TraceAttribute.ROUTING_CANDIDATE_COUNT: len(candidates),
-            },
-        ) as provider_span:
-            provider_span.add_event(
-                TRACE_EVENT_PROVIDER_REQUEST, attributes=_provider_request_event(request)
-            )
-            try:
-                res = await tracked_call(
-                    repository,
-                    candidate_adapter,
-                    lambda target: target.search(request),
-                    operation=UsageOperation.SEARCH,
-                    request=request,
-                    limits=limits,
+        provider_span: SpanHandle | None = None
+        try:
+            with observability.span(
+                TraceSpanName.PROVIDER,
+                kind=SpanKindName.CLIENT,
+                attributes={
+                    TraceAttribute.OPERATION: TraceOperation.SEARCH.value,
+                    TraceAttribute.PROVIDER: candidate_adapter.name,
+                    TraceAttribute.ROUTING_MODE: RoutingMode.FANOUT.value,
+                    TraceAttribute.ROUTING_CANDIDATE_COUNT: len(candidates),
+                },
+            ) as provider_span:
+                provider_span.add_event(
+                    TRACE_EVENT_PROVIDER_REQUEST, attributes=_provider_request_event(request)
                 )
-            except Exception as exc:
-                provider_span.record_exception(exc)
+                try:
+                    res = await tracked_call(
+                        repository,
+                        candidate_adapter,
+                        lambda target: target.search(request),
+                        operation=UsageOperation.SEARCH,
+                        request=request,
+                        limits=limits,
+                    )
+                except Exception as exc:
+                    elapsed = int((time.perf_counter() - call_start) * 1000)
+                    if _terminal_quota_402(exc) is not None:
+                        # The terminal out-of-Credits error is the transport: the
+                        # span context records it once as it re-raises (the same
+                        # shape as the single-path provider failure), and the
+                        # request-level 402 handler turns it into the body.
+                        raise
+                    provider_span.record_exception(exc)
+                    return _fanout_failure_outcome(candidate_adapter.name, exc, elapsed)
+                provider_span.add_event(
+                    TRACE_EVENT_PROVIDER_RESPONSE, attributes=_provider_response_event(res)
+                )
                 elapsed = int((time.perf_counter() - call_start) * 1000)
-                status = "failed"
-                status_code = getattr(getattr(exc, "error", None), "status_code", None)
-                if status_code == 429:
-                    status = "rate_limited"
-                return (candidate_adapter.name, None, elapsed, status, 0, str(exc))
-            provider_span.add_event(
-                TRACE_EVENT_PROVIDER_RESPONSE, attributes=_provider_response_event(res)
+                return (candidate_adapter.name, res, elapsed, "success", len(res.results), None)
+        except Exception as exc:
+            # The guarded fanout invariant (see _fanout_outcomes): only the
+            # terminal Tavily 402 escapes _call. Machinery failures outside the
+            # tracked_call try (span bookkeeping, event serialization) convert
+            # to the handled outcome tuple, never to a raised task error; the
+            # outcome path records the exception on its provider span.
+            # CancelledError is a BaseException, so a cancelled task still
+            # surfaces as cancelled and _fanout_outcomes skips it.
+            if _terminal_quota_402(exc) is not None:
+                raise
+            return _fanout_failure_outcome(
+                candidate_adapter.name,
+                exc,
+                int((time.perf_counter() - call_start) * 1000),
+                provider_span=provider_span,
             )
-            elapsed = int((time.perf_counter() - call_start) * 1000)
-            return (candidate_adapter.name, res, elapsed, "success", len(res.results), None)
 
-    tasks = [_call(c.adapter) for c in candidates]
-    outcomes = await asyncio.gather(*tasks)
+    tasks = [asyncio.ensure_future(_call(c.adapter)) for c in candidates]
+    outcomes = await _fanout_outcomes(tasks)
 
-    successful_results: list[tuple[str, SearchResponse]] = []
-    errors: list[str] = []
-    waterfall: list[ProviderTraceItem] = []
-
-    for name, res, elapsed, status, count, err in outcomes:
-        waterfall.append(
-            ProviderTraceItem(
-                provider=name,
-                latency_ms=elapsed,
-                status=status,
-                results_count=count,
-                cost_credits=0.0,
-                error=err,
-            )
-        )
-        if res is not None:
-            successful_results.append((name, res))
-        elif err is not None:
-            errors.append(err)
+    waterfall, successful_results, errors = _fanout_waterfall(outcomes)
 
     if not successful_results:
         first_err = errors[0] if errors else "all providers failed"

@@ -562,6 +562,11 @@ class ResilientRunner:
                     raise
                 last = exc
                 status = exc.error.status_code
+                # Normalized vendor errors keep a parsed Retry-After delay in
+                # their safe details; use this finite, nonnegative delay for
+                # HTTP 429 instead of the calculated backoff. Header-less or
+                # malformed delays keep the current backoff.
+                retry_after = _finite_retry_after_details(exc.error.details)
             except httpx.TransportError as exc:
                 last = self._transport_error(provider, exc)
             except Exception:
@@ -645,6 +650,26 @@ class ResilientRunner:
                 retryable=True,
             )
         )
+
+
+def _finite_retry_after_details(details: Any) -> float | None:
+    """Return a finite, nonnegative ``Retry-After`` seconds value, else ``None``.
+
+    The adapter preserves a parsed vendor ``Retry-After`` header in the safe
+    error details as ``retry_after_seconds``. Only a real finite nonnegative
+    number is honored; a missing, Boolean, or malformed value returns ``None``
+    so the calculated backoff stays in effect.
+    """
+
+    if not isinstance(details, Mapping):
+        return None
+    value = details.get("retry_after_seconds")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    seconds = float(value)
+    if not math.isfinite(seconds) or seconds < 0:
+        return None
+    return seconds
 
 
 def _self_check() -> None:

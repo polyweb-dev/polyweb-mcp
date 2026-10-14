@@ -22,6 +22,8 @@ interface ProviderRegistryRowProps {
   canMoveDown: boolean
   /** False for a role without control-edit access: read-only values only. */
   canEdit: boolean
+  /** Tavily-only rate-tier slot; when supplied the row gains one extra cell under the identity. */
+  rateTier?: React.ReactNode
   isDragging?: boolean
   isDragOver?: boolean
   onDragStart?: (e: React.DragEvent) => void
@@ -95,6 +97,7 @@ export const ProviderRegistryRow: React.FC<ProviderRegistryRowProps> = ({
   canMoveUp,
   canMoveDown,
   canEdit,
+  rateTier,
   isDragging = false,
   isDragOver = false,
   onDragStart,
@@ -108,7 +111,7 @@ export const ProviderRegistryRow: React.FC<ProviderRegistryRowProps> = ({
   onOpenTest,
 }) => {
   const handleDragStart = (e: React.DragEvent) => {
-    if ((e.target as HTMLElement).closest("button, input, [role='switch']")) {
+    if ((e.target as HTMLElement).closest("button, input, select, option, [role='switch']")) {
       e.preventDefault()
       return
     }
@@ -136,6 +139,9 @@ export const ProviderRegistryRow: React.FC<ProviderRegistryRowProps> = ({
         />
       </TableCell>
       {renderIdentityCell(provider)}
+      {rateTier !== undefined && (
+        <TableCell className="whitespace-nowrap px-3 py-2.5">{rateTier}</TableCell>
+      )}
       <TableCell className="max-w-[250px] whitespace-nowrap px-3 py-2.5">
         <span className="block truncate font-mono text-[12px] text-[var(--muted)]" title={provider.baseUrl}>
           {stripProtocol(provider.baseUrl)}

@@ -20,6 +20,8 @@ export interface BackendProviderStatus {
   secret_presence: BackendSecretPresence
   free_tier_estimates: Record<string, string>
   reset_schedule: string | null
+  /** Confirmed non-secret Tavily key environment; null for every other provider. */
+  tavily_key_environment?: "dev" | "prod" | null
 }
 
 export interface BackendProviderTest {

@@ -140,6 +140,8 @@ export interface ProviderLimitDetail {
   price_version: string
   crd_split_note: string | null
   rate_windows: LimitRateWindow[]
+  /** Remaining seconds of an active vendor Retry-After delay; zero stays zero. */
+  retry_after_seconds?: number | null
   tier_split_known: boolean
   aggregate_pool_id: string | null
 }

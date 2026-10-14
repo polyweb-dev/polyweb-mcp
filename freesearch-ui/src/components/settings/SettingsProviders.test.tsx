@@ -247,12 +247,22 @@ function findProviderRowTr(provider: string): HTMLTableRowElement {
   return tr as HTMLTableRowElement
 }
 
+/**
+ * Tavily-only rate-tier slot (PLAN 5.2): the Tavily row gains one extra cell
+ * under the identity, so header indexes at/after Endpoint shift by one for
+ * Tavily only. Every other row keeps the seven merged columns.
+ */
+function rateTierShift(provider: string, headerIdx: number): number {
+  return provider === "Tavily" && headerIdx >= 2 ? headerIdx + 1 : headerIdx
+}
+
 function cellFor(provider: string, header: string): HTMLElement {
   const row = findProviderRowTr(provider)
   const idx = headerNames().indexOf(header)
   if (idx < 0) throw new Error(`Merged table header not found: ${header} (got [${headerNames()}])`)
-  const cell = row.children[idx] as HTMLElement | undefined
-  if (!cell) throw new Error(`Cell ${header} (index ${idx}) missing in row ${provider}`)
+  const shifted = rateTierShift(provider, idx)
+  const cell = row.children[shifted] as HTMLElement | undefined
+  if (!cell) throw new Error(`Cell ${header} (index ${shifted}) missing in row ${provider}`)
   return cell
 }
 
@@ -305,8 +315,13 @@ describe("P1F-1: Settings registry is ONE merged table with 7 columns", () => {
     await waitForProviders()
     const rows = Array.from(mergedTable().querySelectorAll("tbody tr"))
     expect(rows).toHaveLength(8)
-    for (const row of rows) {
-      expect(row.children).toHaveLength(EXPECTED_MERGED_HEADERS.length)
+    // Seven merged columns stand; the Tavily row gains the rateTier extra cell
+    // (eight cells) while every other row keeps seven (PLAN 5.2, DTC 12.8.2).
+    for (const name of SEED_PROVIDER_NAMES) {
+      const row = findProviderRowTr(name)
+      expect(row.children).toHaveLength(
+        name === "Tavily" ? EXPECTED_MERGED_HEADERS.length + 1 : EXPECTED_MERGED_HEADERS.length
+      )
     }
   })
 
@@ -403,8 +418,11 @@ describe("P1F-3: endpoint/health ride in the merged row", () => {
     expect(headerNames()).toEqual([...EXPECTED_MERGED_HEADERS])
     const rows = Array.from(mergedTable().querySelectorAll("tbody tr"))
     expect(rows).toHaveLength(8)
-    for (const row of rows) {
-      expect(row.children).toHaveLength(EXPECTED_MERGED_HEADERS.length)
+    for (const name of SEED_PROVIDER_NAMES) {
+      const row = findProviderRowTr(name)
+      expect(row.children).toHaveLength(
+        name === "Tavily" ? EXPECTED_MERGED_HEADERS.length + 1 : EXPECTED_MERGED_HEADERS.length
+      )
     }
   })
 
@@ -648,7 +666,8 @@ describe("P1F-7: merged table scrolls horizontally from 960px", () => {
     renderSettings()
     await waitForProviders()
     const cells = Array.from(mergedTable().querySelectorAll("th, td")) as HTMLElement[]
-    expect(cells.length).toBe(EXPECTED_MERGED_HEADERS.length + 8 * EXPECTED_MERGED_HEADERS.length)
+    // Seven headers plus seven 7-cell rows plus the Tavily 8-cell row.
+    expect(cells.length).toBe(EXPECTED_MERGED_HEADERS.length + 8 * EXPECTED_MERGED_HEADERS.length + 1)
     for (const cell of cells) {
       expect(cell.className).toMatch(/whitespace-nowrap/)
     }
@@ -898,8 +917,11 @@ function columnIndex(header: string): number {
 function cellFor(provider: string, header: string): HTMLElement {
   const row = findProviderRowTr(provider)
   const idx = columnIndex(header)
-  const cell = row.children[idx] as HTMLElement | undefined
-  if (!cell) throw new Error(`Cell ${header} (index ${idx}) missing in row ${provider}`)
+  // Tavily-only rate-tier slot (PLAN 5.2): header indexes at/after Endpoint
+  // shift by one for the Tavily row, which gains the extra cell.
+  const shifted = provider === "Tavily" && idx >= 2 ? idx + 1 : idx
+  const cell = row.children[shifted] as HTMLElement | undefined
+  if (!cell) throw new Error(`Cell ${header} (index ${shifted}) missing in row ${provider}`)
   return cell
 }
 
@@ -982,8 +1004,12 @@ describe("S-P1-1: registry is a ui/table with the merged 7 columns", () => {
     await waitForProviders()
     const rows = Array.from(providerTable().querySelectorAll("tbody tr"))
     expect(rows).toHaveLength(8)
-    for (const row of rows) {
-      expect(row.children).toHaveLength(EXPECTED_HEADERS.length)
+    // Seven merged columns stand; the Tavily row gains the rateTier extra cell.
+    for (const name of SEED_PROVIDER_NAMES) {
+      const row = findProviderRowTr(name)
+      expect(row.children).toHaveLength(
+        name === "Tavily" ? EXPECTED_HEADERS.length + 1 : EXPECTED_HEADERS.length
+      )
     }
   })
 })
@@ -1000,13 +1026,16 @@ describe("S-P1-2: per-column x-position equality across 7 rows (<=1px)", () => {
     const rows = Array.from(table.querySelectorAll("tbody tr"))
     expect(rows).toHaveLength(8)
     // Every row lives in the SAME table/tbody (single column grid).
-    for (const row of rows) {
+    for (const name of SEED_PROVIDER_NAMES) {
+      const row = findProviderRowTr(name)
       expect(row.closest("table")).toBe(table)
-      expect(row.children).toHaveLength(EXPECTED_HEADERS.length)
+      expect(row.children).toHaveLength(
+        name === "Tavily" ? EXPECTED_HEADERS.length + 1 : EXPECTED_HEADERS.length
+      )
     }
     // Nowrap cells: ui/table TableHead/TableCell carry whitespace-nowrap.
     const cells = Array.from(table.querySelectorAll("th, td")) as HTMLElement[]
-    expect(cells.length).toBe(EXPECTED_HEADERS.length + 8 * EXPECTED_HEADERS.length)
+    expect(cells.length).toBe(EXPECTED_HEADERS.length + 8 * EXPECTED_HEADERS.length + 1)
     for (const cell of cells) {
       expect(cell.className).toMatch(/whitespace-nowrap/)
     }
@@ -1119,7 +1148,8 @@ describe("S-P1-4: 375px viewport scrolls horizontally without wrapping", () => {
     const container = table.closest('[data-slot="table-container"]') as HTMLElement
     expect(container.className).toMatch(/overflow-x-auto/)
     const cells = Array.from(table.querySelectorAll("th, td")) as HTMLElement[]
-    expect(cells.length).toBe(EXPECTED_HEADERS.length + 8 * EXPECTED_HEADERS.length)
+    // Seven headers plus seven 7-cell rows plus the Tavily 8-cell row.
+    expect(cells.length).toBe(EXPECTED_HEADERS.length + 8 * EXPECTED_HEADERS.length + 1)
     for (const cell of cells) {
       expect(cell.className).toMatch(/whitespace-nowrap/)
     }
@@ -1286,7 +1316,9 @@ describe("S-P1-5: all SettingsProviders contracts preserved in the table", () =>
     // ProviderTestModal (never fetches on open).
     for (const name of SEED_PROVIDER_NAMES) {
       const row = findProviderRowTr(name)
-      const testCell = row.children[columnIndex("Test")] as HTMLElement
+      // Tavily row carries the extra rate-tier cell before the Test column.
+      const testIdx = columnIndex("Test") + (name === "Tavily" ? 1 : 0)
+      const testCell = row.children[testIdx] as HTMLElement
       expect(
         within(testCell).getByRole("button", { name: `${name} test connection` })
       ).toBeInTheDocument()
@@ -1825,20 +1857,22 @@ describe("S-P2-3: priority indicator never clips at the card edge", () => {
     }
   })
 
-  it("table + scroller stay intact: single 7x7 merged table, overflow-x-auto, nowrap", async () => {
+  it("table + scroller stay intact: single 7-column merged table, overflow-x-auto, nowrap", async () => {
     renderSettingsWith(all100Fixture())
     await waitForProviders()
     expect(screen.getAllByRole("table")).toHaveLength(1)
     const table = screen.getByRole("table")
     expect(table.querySelectorAll("tbody tr")).toHaveLength(8)
-    for (const row of Array.from(table.querySelectorAll("tbody tr"))) {
-      expect(row.children).toHaveLength(7)
+    // Seven merged columns stand; the Tavily row gains the rateTier extra cell.
+    for (const name of SEED_PROVIDER_NAMES) {
+      const row = findProviderRowTr(name)
+      expect(row.children).toHaveLength(name === "Tavily" ? 8 : 7)
     }
     const container = table.closest('[data-slot="table-container"]') as HTMLElement | null
     expect(container, "ui/table scroller must wrap the table").not.toBeNull()
     expect(container!.className).toMatch(/overflow-x-auto/)
     const cells = Array.from(table.querySelectorAll("th, td")) as HTMLElement[]
-    expect(cells.length).toBe(7 + 8 * 7)
+    expect(cells.length).toBe(7 + 8 * 7 + 1)
     for (const cell of cells) {
       expect(cell.className).toMatch(/whitespace-nowrap/)
     }
@@ -2456,7 +2490,8 @@ describe("S-P3-2: modal Test interaction states (Test/Testing... + POST)", () =>
     expect(rows).toHaveLength(8)
     for (const name of SEED_PROVIDER_NAMES) {
       const row = findProviderRowTr(name)
-      const cell = row.children[testIdx] as HTMLElement
+      // Tavily row carries the extra rate-tier cell before the Test column.
+      const cell = row.children[testIdx + (name === "Tavily" ? 1 : 0)] as HTMLElement
       const btn = within(cell).getByRole("button", { name: `${name} test connection` })
       expect(btn.getAttribute("type")).toBe("button")
       expect(btn.textContent?.trim()).toBe("")
@@ -2479,14 +2514,17 @@ describe("S-P3-3: no regression â€” S-P1 table, S-P2 ranks, tokens, merge",
     ).toEqual([...EXPECTED_HEADERS])
     const rows = Array.from(table.querySelectorAll("tbody tr"))
     expect(rows).toHaveLength(8)
-    for (const row of rows) {
-      expect(row.children).toHaveLength(EXPECTED_HEADERS.length)
+    for (const name of SEED_PROVIDER_NAMES) {
+      const row = findProviderRowTr(name)
+      expect(row.children).toHaveLength(
+        name === "Tavily" ? EXPECTED_HEADERS.length + 1 : EXPECTED_HEADERS.length
+      )
     }
     const container = table.closest('[data-slot="table-container"]') as HTMLElement | null
     expect(container, "ui/table scroller must wrap the table").not.toBeNull()
     expect(container!.className).toMatch(/overflow-x-auto/)
     const cells = Array.from(table.querySelectorAll("th, td")) as HTMLElement[]
-    expect(cells.length).toBe(EXPECTED_HEADERS.length + 8 * EXPECTED_HEADERS.length)
+    expect(cells.length).toBe(EXPECTED_HEADERS.length + 8 * EXPECTED_HEADERS.length + 1)
     for (const cell of cells) {
       expect(cell.className).toMatch(/whitespace-nowrap/)
     }
@@ -2970,7 +3008,8 @@ describe("S-P4-4: responsive horizontal scroll preserved (no wrap, 375px scrolls
     await waitForProviders()
     const table = screen.getByRole("table")
     const cells = Array.from(table.querySelectorAll("th, td")) as HTMLElement[]
-    expect(cells.length).toBe(EXPECTED_HEADERS.length + 8 * EXPECTED_HEADERS.length)
+    // Seven headers plus seven 7-cell rows plus the Tavily 8-cell row.
+    expect(cells.length).toBe(EXPECTED_HEADERS.length + 8 * EXPECTED_HEADERS.length + 1)
     for (const cell of cells) {
       expect(cell.className).toMatch(/whitespace-nowrap/)
     }
@@ -2986,7 +3025,8 @@ describe("S-P4-4: responsive horizontal scroll preserved (no wrap, 375px scrolls
     expect(container.className).toMatch(/overflow-x-auto/)
     expect(table.className).toMatch(/min-w-\[960px\]/)
     const cells = Array.from(table.querySelectorAll("th, td")) as HTMLElement[]
-    expect(cells.length).toBe(EXPECTED_HEADERS.length + 8 * EXPECTED_HEADERS.length)
+    // Seven headers plus seven 7-cell rows plus the Tavily 8-cell row.
+    expect(cells.length).toBe(EXPECTED_HEADERS.length + 8 * EXPECTED_HEADERS.length + 1)
     for (const cell of cells) {
       expect(cell.className).toMatch(/whitespace-nowrap/)
     }
@@ -3009,14 +3049,17 @@ describe("S-P4-5: no regression — S-P1 table, S-P2 ranks, S-P3 buttons, Settin
     ).toEqual([...EXPECTED_HEADERS])
     const rows = Array.from(table.querySelectorAll("tbody tr"))
     expect(rows).toHaveLength(8)
-    for (const row of rows) {
-      expect(row.children).toHaveLength(EXPECTED_HEADERS.length)
+    for (const name of SEED_PROVIDER_NAMES) {
+      const row = findProviderRowTr(name)
+      expect(row.children).toHaveLength(
+        name === "Tavily" ? EXPECTED_HEADERS.length + 1 : EXPECTED_HEADERS.length
+      )
     }
     const container = table.closest('[data-slot="table-container"]') as HTMLElement | null
     expect(container, "ui/table scroller must wrap the table").not.toBeNull()
     expect(container!.className).toMatch(/overflow-x-auto/)
     const cells = Array.from(table.querySelectorAll("th, td")) as HTMLElement[]
-    expect(cells.length).toBe(EXPECTED_HEADERS.length + 8 * EXPECTED_HEADERS.length)
+    expect(cells.length).toBe(EXPECTED_HEADERS.length + 8 * EXPECTED_HEADERS.length + 1)
     for (const cell of cells) {
       expect(cell.className).toMatch(/whitespace-nowrap/)
     }
@@ -3191,5 +3234,202 @@ describe("SettingsProviders Developer read-only (canReadControls, no edit)", () 
     expect(
       stub.requests.filter((r) => r.method === "PATCH" || r.method === "PUT" || r.method === "POST")
     ).toHaveLength(0)
+  })
+})
+
+describe("SettingsProviders Tavily rate-tier slot (PLAN 5.2)", () => {
+  /**
+   * Tavily-only key-environment dropdown: one native select under the Tavily
+   * identity persists `tavily_key_environment` through one partial PATCH.
+   * The seven registry columns stand; the Tavily row gains the rateTier extra
+   * cell (eight cells) while every other row keeps seven (DTC 12.8.2).
+   */
+
+  const SLOT_HEADERS = [
+    "Priority",
+    "Provider",
+    "Endpoint",
+    "Test",
+    "Search",
+    "Fetch",
+    "Global",
+  ] as const
+
+  const SLOT_NAMES = [
+    "Brave Search",
+    "Keenable",
+    "Tavily",
+    "Exa",
+    "Firecrawl",
+    "You.com",
+    "Parallel",
+    "Tinyfish",
+  ] as const
+
+  function renderSlotSettings(
+    providers: WireProviderStatus[],
+    accountId: string = ADMIN_ACCOUNT_ID,
+    canEdit = true
+  ): FetchStub {
+    const server = providers.map((row) => ({ ...row }))
+    const stub = installFetchStub((req) => {
+      if (req.url === "/api/v1/providers" && req.method === "GET") {
+        return ok(server)
+      }
+      if (req.url === "/api/v1/routing/config" && req.method === "GET") {
+        return ok(routingConfigFixture())
+      }
+      if (req.url.startsWith("/dashboard")) return ok(dashboardFixture())
+      if (req.method === "PATCH" && req.url.startsWith("/api/v1/providers/")) {
+        const backendId = req.url.split("/").at(-1) ?? "unknown"
+        const entry = server.find((row) => row.provider_id === backendId)
+        if (!entry) return err(404, { detail: `unknown provider '${backendId}'` })
+        const patch = ((req.body as Record<string, unknown>) ?? {}) as Record<string, unknown>
+        if (
+          patch.tavily_key_environment !== undefined &&
+          patch.tavily_key_environment !== "dev" &&
+          patch.tavily_key_environment !== "prod"
+        ) {
+          return err(422, { detail: "tavily_key_environment must be dev or prod" })
+        }
+        const next = {
+          ...entry,
+          ...(patch.tavily_key_environment === "dev" || patch.tavily_key_environment === "prod"
+            ? { tavily_key_environment: patch.tavily_key_environment }
+            : {}),
+        }
+        const idx = server.findIndex((row) => row.provider_id === backendId)
+        server[idx] = next
+        return ok(next)
+      }
+      return err(404, { detail: "unhandled test route" })
+    })
+    render(
+      <FreeSearchProvider accountId={accountId} canReadControls canEditControls={canEdit}>
+        <SettingsView />
+      </FreeSearchProvider>
+    )
+    return stub
+  }
+
+  async function waitForSlotProviders() {
+    await waitFor(() => {
+      expect(screen.getByText("Brave Search", { exact: true })).toBeInTheDocument()
+    })
+  }
+
+  function slotRowTr(provider: string): HTMLTableRowElement {
+    const nameEl = screen.getByText(provider, { exact: true })
+    const tr = nameEl.closest("tr")
+    if (!tr) throw new Error(`Provider table row <tr> not found for ${provider}`)
+    return tr as HTMLTableRowElement
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
+
+  it("keeps seven registry headers while the Tavily row gains the rateTier extra cell", async () => {
+    renderSlotSettings(allProvidersFixture())
+    await waitForSlotProviders()
+    const table = screen.getByRole("table")
+    expect(
+      Array.from(table.querySelectorAll("thead th")).map((th) => th.textContent?.trim() ?? "")
+    ).toEqual([...SLOT_HEADERS])
+    for (const name of SLOT_NAMES) {
+      expect(slotRowTr(name).children).toHaveLength(name === "Tavily" ? 8 : 7)
+    }
+  })
+
+  it("renders the rate-tier slot for Tavily only", async () => {
+    renderSlotSettings(allProvidersFixture())
+    await waitForSlotProviders()
+    const selects = screen.getAllByRole("combobox", {
+      name: "Tavily rate tier (key environment)",
+      exact: true,
+    })
+    expect(selects).toHaveLength(1)
+    expect(slotRowTr("Tavily")).toContainElement(selects[0])
+    for (const name of SLOT_NAMES.filter((n) => n !== "Tavily")) {
+      expect(slotRowTr(name).querySelector("select")).toBeNull()
+    }
+  })
+
+  it("shows Unknown disabled select when the status supplies no environment", async () => {
+    renderSlotSettings(allProvidersFixture())
+    await waitForSlotProviders()
+    const select = screen.getByRole("combobox", {
+      name: "Tavily rate tier (key environment)",
+      exact: true,
+    })
+    expect(select).toHaveValue("unknown")
+    expect(select).toBeDisabled()
+  })
+
+  it("shows keyless text with no select for keyless Tavily", async () => {
+    const keyless = allProvidersFixture().map((row) =>
+      row.provider_id === "tavily" ? { ...row, secret_presence: "keyless_public" } : row
+    )
+    renderSlotSettings(keyless as WireProviderStatus[])
+    await waitForSlotProviders()
+    expect(
+      screen.getByText("Keyless — numeric rate unknown", { exact: true })
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole("combobox", { name: "Tavily rate tier (key environment)", exact: true })
+    ).not.toBeInTheDocument()
+  })
+
+  it("shows read-only text with no select and zero writes for roles without edit access", async () => {
+    const stub = renderSlotSettings(allProvidersFixture(), DEVELOPER_ACCOUNT_ID, false)
+    await waitForSlotProviders()
+    expect(
+      screen.queryByRole("combobox", { name: "Tavily rate tier (key environment)", exact: true })
+    ).not.toBeInTheDocument()
+    expect(
+      stub.requests.filter((r) => r.method === "PATCH" || r.method === "PUT" || r.method === "POST")
+    ).toHaveLength(0)
+  })
+
+  it("submits exactly one partial PATCH with only tavily_key_environment from the slot", async () => {
+    const user = userEvent.setup()
+    const dev = allProvidersFixture().map((row) =>
+      row.provider_id === "tavily" ? { ...row, tavily_key_environment: "dev" } : row
+    )
+    const stub = renderSlotSettings(dev as unknown as WireProviderStatus[])
+    await waitForSlotProviders()
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Tavily rate tier (key environment)", exact: true }),
+      "prod"
+    )
+    await waitFor(() => {
+      expect(stub.requestsTo("/api/v1/providers/tavily")).toHaveLength(1)
+    })
+    expect(stub.requestsTo("/api/v1/providers/tavily")[0].body).toEqual({
+      tavily_key_environment: "prod",
+    })
+  })
+
+  it("native select drag exclusion: a dragstart on the select never starts a registry drag", async () => {
+    const rowSource = readFileSync(path.resolve(import.meta.dirname, "./ProviderRegistryRow.tsx"), "utf8")
+    expect(rowSource).toContain("select")
+    expect(rowSource).toContain("option")
+    renderSlotSettings(allProvidersFixture())
+    await waitForSlotProviders()
+    const select = screen.getByRole("combobox", {
+      name: "Tavily rate tier (key environment)",
+      exact: true,
+    })
+    expect(select.tagName).toBe("SELECT")
+    const { fireEvent } = await import("@testing-library/react")
+    fireEvent.dragStart(select)
+    const rows = Array.from(screen.getByRole("table").querySelectorAll("tbody tr"))
+    for (const row of rows) {
+      expect((row as HTMLElement).className).not.toMatch(/opacity-40/)
+    }
+    for (let rank = 1; rank <= 8; rank += 1) {
+      expect(screen.getByText(`P${rank}`, { exact: true })).toBeInTheDocument()
+    }
   })
 })

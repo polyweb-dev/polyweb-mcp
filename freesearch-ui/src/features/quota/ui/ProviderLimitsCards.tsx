@@ -5,7 +5,7 @@ import { activeAuth } from "../model/crdCardModel"
 import { balancePrefill, type BalancePrefill } from "../model/providerInfo"
 import { Footnote } from "./Footnote"
 import type { OAuthSlotArgs } from "./QuotaRow"
-import { ProviderLimitsCard } from "./ProviderLimitsCard"
+import { ProviderLimitsCard, type RateTierSlotArgs } from "./ProviderLimitsCard"
 
 export interface ProviderLimitsCardsProps {
   providers: ProviderConfig[]
@@ -23,11 +23,32 @@ export interface ProviderLimitsCardsProps {
    * OAuth feature directly.
    */
   renderOAuthActions?: (args: OAuthSlotArgs) => ReactNode
+  /**
+   * Tavily tier control per provider. Supplied by composition (the quota
+   * overlay stays in app composition), so the quota feature never imports the
+   * Settings feature directly.
+   */
+  renderRateTier?: (args: RateTierSlotArgs) => ReactNode
 }
 
 /** Credit-unit use rows of one provider; a card receives its own rows only. */
 function usageFor(totals: CRDUsageTotal[], providerId: string): CRDUsageTotal[] {
   return totals.filter((total) => total.provider === providerId)
+}
+
+/**
+ * Credential presence of one provider for the card rail decision.
+ *
+ * The generic `hasKey` flag lies for Tavily, whose public keyless rail runs
+ * without a vault key: `configured` counts as present, and `keyless_public`
+ * and `missing` count as absent. An absent runtime state yields undefined,
+ * which keeps the catalog fallback of the rail picker for other providers.
+ */
+function credentialPresence(provider: ProviderConfig): boolean | undefined {
+  if (provider.id !== "tavily") return provider.hasKey
+  const status = provider.keyVaultStatus
+  if (status === undefined || status === null) return undefined
+  return status === "configured"
 }
 
 /** The observed balance of every reported provider, keyed by provider id. */
@@ -36,7 +57,8 @@ function observedByProvider(
 ): Record<string, BalancePrefill> {
   const map: Record<string, BalancePrefill> = {}
   for (const entry of entries) {
-    const auth = activeAuth(entry.limits, entry.provider.hasKey)
+    const presence = credentialPresence(entry.provider)
+    const auth = activeAuth(entry.limits, presence)
     if (auth === undefined) continue
     const prefill = balancePrefill(auth)
     if (prefill !== null) map[entry.provider.id] = prefill
@@ -59,6 +81,7 @@ export function ProviderLimitsCards({
   manualEligible,
   dashboardQuotas,
   renderOAuthActions,
+  renderRateTier,
 }: ProviderLimitsCardsProps): ReactNode {
   const entries = providers
     .map((provider) => ({
@@ -99,13 +122,14 @@ export function ProviderLimitsCards({
               crdUsageTotals={usageFor(crdUsageTotals, entry.provider.id)}
               refreshDashboard={refreshDashboard}
               manualEligible={manualEligible.has(entry.provider.id)}
-              hasKey={entry.provider.hasKey}
+              hasKey={credentialPresence(entry.provider)}
               providers={selectable}
               observed={observed}
               {...(quotaOf(entry.provider.id) !== undefined
                 ? { latestQuota: quotaOf(entry.provider.id) }
                 : {})}
               {...(renderOAuthActions !== undefined ? { renderOAuthActions } : {})}
+              {...(renderRateTier !== undefined ? { renderRateTier } : {})}
             />
           ))}
         </div>

@@ -8,8 +8,13 @@ import {
   TableHeader,
   TableRow,
 } from "@/shared/ui/table"
-import type { LimitAuditEvent } from "@/domains/dashboard"
+import type { CRDConversionProfile, LimitAuditEvent } from "@/domains/dashboard"
 import { formatCRDAmount } from "../model/crdDisplay"
+import {
+  DEFAULT_TAVILY_PROFILE,
+  formatCreditAmount,
+  tavilyCRDToCredits,
+} from "../model/tavilyCredits"
 import { operationLabel, reasonLabel, sourceLabel } from "../model/quotaLabels"
 import { newestFirst, timeText } from "../model/timeText"
 
@@ -20,6 +25,12 @@ export interface LimitHistoryProps {
   error: string | null
   hasMore: boolean
   onLoadMore: () => Promise<void>
+  /**
+   * The applicable CRD price profile of the rail. A Tavily event without a
+   * native side converts its CRD amount with this profile; without a profile
+   * the documented Tavily price stays the mapping. Other providers keep CRD.
+   */
+  profile?: CRDConversionProfile
 }
 
 const SYSTEM_SOURCES = [
@@ -29,6 +40,8 @@ const SYSTEM_SOURCES = [
   "local_ledger",
   "local_daily_estimate",
 ]
+
+const TAVILY_EVENT_ID = "tavily"
 
 /** One explicit actor identity, else the actor category of the audit source. */
 function actorText(event: LimitAuditEvent): string {
@@ -40,15 +53,33 @@ function actorText(event: LimitAuditEvent): string {
 
 /** Unit of a native amount; the detail says it, else the amount stays generic. */
 function nativeUnitText(event: LimitAuditEvent): string {
+  if (event.provider === TAVILY_EVENT_ID) return "Credits"
   const unit = event.detail.native_unit
   return typeof unit === "string" && unit !== "" ? unit : "native"
 }
 
-/** Visible text of one side of a balance change: credit units first, then native units. */
-function balanceText(event: LimitAuditEvent, side: "old" | "new"): string {
-  const crd = side === "old" ? event.old_crd : event.new_crd
-  if (crd !== null) return formatCRDAmount(crd)
+/**
+ * Visible text of one side of a balance change: a Tavily balance reads native
+ * Credits first and converts a CRD-only amount with the rail profile, and every
+ * other provider reads credit units first, then native units.
+ */
+function balanceText(
+  event: LimitAuditEvent,
+  side: "old" | "new",
+  profile: CRDConversionProfile | null,
+): string {
   const native = side === "old" ? event.old_native : event.new_native
+  if (native !== null && event.provider === TAVILY_EVENT_ID) {
+    return native + " " + nativeUnitText(event)
+  }
+  const crd = side === "old" ? event.old_crd : event.new_crd
+  if (crd !== null) {
+    if (event.provider === TAVILY_EVENT_ID) {
+      const credits = tavilyCRDToCredits(crd, profile ?? DEFAULT_TAVILY_PROFILE)
+      if (credits !== null) return formatCreditAmount(credits)
+    }
+    return formatCRDAmount(crd)
+  }
   return native === null ? "" : native + " " + nativeUnitText(event)
 }
 
@@ -56,9 +87,15 @@ function headingId(providerName: string): string {
   return "limit-history-" + providerName.toLowerCase().replace(/[^a-z0-9]+/g, "-")
 }
 
+/** Shown operation name of one event: Tavily names its wire fetch Extract. */
+function eventOperationLabel(event: LimitAuditEvent): string {
+  if (event.provider === TAVILY_EVENT_ID && event.operation === "fetch") return "Extract"
+  return operationLabel(event.operation)
+}
+
 /** Known operation and reason of one event, joined as one supplementary line. */
 function detailText(event: LimitAuditEvent): string {
-  return [operationLabel(event.operation), reasonLabel(event.reason)]
+  return [eventOperationLabel(event), reasonLabel(event.reason)]
     .filter((part) => part !== "")
     .join(" · ")
 }
@@ -79,6 +116,7 @@ export function LimitHistory({
   error,
   hasMore,
   onLoadMore,
+  profile,
 }: LimitHistoryProps): ReactNode {
   const id = headingId(providerName)
   const rows = newestFirst(events)
@@ -128,8 +166,8 @@ export function LimitHistory({
                       <p className="text-[11px] text-[var(--muted)]">{detail}</p>
                     )}
                   </TableCell>
-                  <TableCell className="tnum">{balanceText(event, "old")}</TableCell>
-                  <TableCell className="tnum">{balanceText(event, "new")}</TableCell>
+                  <TableCell className="tnum">{balanceText(event, "old", profile ?? null)}</TableCell>
+                  <TableCell className="tnum">{balanceText(event, "new", profile ?? null)}</TableCell>
                   <TableCell>{sourceLabel(event.source)}</TableCell>
                   <TableCell>{actorText(event)}</TableCell>
                 </TableRow>

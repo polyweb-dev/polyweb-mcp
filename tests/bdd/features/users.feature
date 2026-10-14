@@ -137,8 +137,6 @@ Feature: Local user accounts, migration, and settings
       | GET    | /dashboard        |
       | GET    | /api/v1/providers |
       | GET    | /api/v1/traces    |
-      | GET    | /docs             |
-      | GET    | /openapi.json     |
       | GET    | /no-such-route    |
 
   Scenario: Credentials work only on their own routes

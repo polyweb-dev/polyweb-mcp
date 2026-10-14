@@ -192,3 +192,150 @@ describe("LimitHistory", () => {
     expect(onLoadMore).not.toHaveBeenCalled()
   })
 })
+
+describe("LimitHistory Tavily native", () => {
+  function tavilyProfile() {
+    return {
+      reference_usd_per_crd: "0.001",
+      native_usd_per_unit: "0.008",
+      cost_basis: "paygo_reference",
+      price_version: "paygo-reference",
+      source: "documented",
+      estimated: true,
+    }
+  }
+
+  function tavilyNativeEvent() {
+    return {
+      event_id: "evt-tavily-1",
+      provider: "tavily",
+      auth_mode: "keyed",
+      operation: "search",
+      pool_id: "tavily:keyed:credits",
+      observed_at: "2026-09-06T10:04:00Z",
+      source: "vendor_api",
+      reason: "sync",
+      old_native: "999",
+      new_native: "998",
+      old_crd: "7992",
+      new_crd: "7984",
+      crd_debit: "8",
+      native_debit: "1",
+      actual_usd: null,
+      confidence: "observed",
+      local_attempt_id: "attempt-1",
+      detail: { native_unit: "CREDIT", actor: "" },
+    }
+  }
+
+  function tavilyCrdOnlyEvent() {
+    return {
+      event_id: "evt-tavily-2",
+      provider: "tavily",
+      auth_mode: "keyed",
+      operation: null,
+      pool_id: null,
+      observed_at: "2026-09-06T10:03:00Z",
+      source: "operator",
+      reason: "grant",
+      old_native: null,
+      new_native: null,
+      old_crd: null,
+      new_crd: null,
+      crd_debit: null,
+      native_debit: null,
+      actual_usd: null,
+      confidence: "authoritative",
+      local_attempt_id: null,
+      detail: { search_granted_crd: "8" },
+    }
+  }
+
+  it("prefers native Tavily balances over CRD amounts", () => {
+    render(
+      <LimitHistory
+        providerName="Tavily"
+        events={[tavilyNativeEvent()] as never}
+        loading={false}
+        error={null}
+        hasMore={false}
+        onLoadMore={() => Promise.resolve()}
+      />,
+    )
+    expect(screen.getByText("999 Credits")).not.toBeNull()
+    expect(screen.getByText("998 Credits")).not.toBeNull()
+    expect(screen.queryByText("7992 CRD")).toBeNull()
+  })
+
+  it("converts CRD-only Tavily grant events through the profile", () => {
+    const grant = {
+      event_id: "evt-tavily-3",
+      provider: "tavily",
+      auth_mode: "keyed",
+      operation: "search",
+      pool_id: "tavily:keyed:credits",
+      observed_at: "2026-09-06T10:02:00Z",
+      source: "local",
+      reason: "local_success",
+      old_native: null,
+      new_native: null,
+      old_crd: "8",
+      new_crd: "16",
+      crd_debit: "8",
+      native_debit: null,
+      actual_usd: null,
+      confidence: "observed",
+      local_attempt_id: "attempt-3",
+      detail: { native_unit: "CREDIT", actor: "" },
+    }
+    render(
+      <LimitHistory
+        providerName="Tavily"
+        events={[grant] as never}
+        loading={false}
+        error={null}
+        hasMore={false}
+        onLoadMore={() => Promise.resolve()}
+        profile={tavilyProfile() as never}
+      />,
+    )
+    expect(screen.getByText("1 Credit")).not.toBeNull()
+    expect(screen.getByText("2 Credits")).not.toBeNull()
+    expect(tavilyCrdOnlyEvent().event_id).toBe("evt-tavily-2")
+  })
+
+  it("converts CRD-only Tavily events through the default profile without a profile prop", () => {
+    const grant = {
+      event_id: "evt-tavily-4",
+      provider: "tavily",
+      auth_mode: "keyed",
+      operation: "search",
+      pool_id: "tavily:keyed:credits",
+      observed_at: "2026-09-06T10:02:00Z",
+      source: "local",
+      reason: "local_success",
+      old_native: null,
+      new_native: null,
+      old_crd: "8",
+      new_crd: "16",
+      crd_debit: "8",
+      native_debit: null,
+      actual_usd: null,
+      confidence: "observed",
+      local_attempt_id: "attempt-4",
+      detail: { native_unit: "CREDIT", actor: "" },
+    }
+    render(
+      <LimitHistory
+        providerName="Tavily"
+        events={[grant] as never}
+        loading={false}
+        error={null}
+        hasMore={false}
+        onLoadMore={() => Promise.resolve()}
+      />,
+    )
+    expect(screen.getByText("1 Credit")).not.toBeNull()
+    expect(screen.getByText("2 Credits")).not.toBeNull()
+  })
+})

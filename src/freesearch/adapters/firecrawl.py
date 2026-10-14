@@ -49,6 +49,13 @@ from freesearch.models.contracts import (
     UsageOperation,
     parse_decimal,
 )
+from freesearch.models.provider_limits import (
+    AuthMode,
+    Confidence,
+    NativeUsageSnapshot,
+    UsageSyncRequest,
+    native_pool_id,
+)
 
 __all__ = ["FirecrawlAdapter"]
 
@@ -328,7 +335,6 @@ class FirecrawlAdapter(ProviderAdapter):
         else:
             modifiers = Decimal(getattr(request, "pdf_pages", 0))
             modifiers += Decimal("4") * int(bool(getattr(request, "json_extract", False)))
-            modifiers += Decimal("4") * int(bool(getattr(request, "enhanced", False)))
             modifiers += Decimal("1") * int(bool(getattr(request, "zero_data_retention", False)))
             units = fetch_credits(Decimal("1"), modifiers)
             operation = UsageOperation.FETCH
@@ -377,8 +383,15 @@ class FirecrawlAdapter(ProviderAdapter):
         try:
             if response.is_error:
                 status = response.status_code
+                if status == 402:
+                    raise self._error(
+                        "quota_exhausted",
+                        "Firecrawl is out of credits. Wait until reset or upgrade.",
+                        retryable=False,
+                        status=402,
+                    ) from None
                 raise self._error(
-                    "insufficient_credits" if status == 402 else "http_error",
+                    "http_error",
                     f"HTTP {status}",
                     retryable=status in RETRYABLE_STATUS_CODES,
                     status=status,
@@ -391,6 +404,98 @@ class FirecrawlAdapter(ProviderAdapter):
             raise
         except Exception:
             raise self._error("invalid_response", "malformed credit usage response") from None
+
+    async def usage_snapshot(self, request: UsageSyncRequest) -> NativeUsageSnapshot | None:
+        """Poll Firecrawl's credit usage endpoint and return a native snapshot."""
+
+        if not self._supports_credit_quota or self._api_key is None:
+            return None
+        try:
+            response = await self._quota_request(self._api_key.get_secret_value())
+        except httpx.TransportError as exc:
+            raise self._error(
+                "network_error", f"Firecrawl quota transport error: {exc}", retryable=True
+            ) from exc
+        except Exception as exc:
+            raise self._error(
+                "vendor_error", f"Firecrawl quota request failed: {exc}", retryable=False
+            ) from exc
+
+        if response.status_code == 402:
+            return NativeUsageSnapshot(
+                pool_id=native_pool_id(self.name, AuthMode.KEYED, UnitKind.CREDIT),
+                provider=self.name,
+                auth_mode=AuthMode.KEYED,
+                native_unit=UnitKind.CREDIT,
+                observed_at=request.observed_at,
+                source="vendor_402",
+                confidence=Confidence.OBSERVED,
+                remaining=Decimal("0"),
+                allowance=None,
+                reset_at=None,
+                credential_generation=request.credential_generation,
+                plan_name="Free plan (1,000 monthly credits)",
+                usage_url="https://firecrawl.dev/app/settings",
+            )
+
+        if response.status_code == 200:
+            try:
+                payload = response.json()
+            except Exception:
+                raise self._error(
+                    "invalid_response", "malformed quota JSON response", retryable=False
+                ) from None
+            if not isinstance(payload, dict):
+                raise self._error(
+                    "invalid_response", "malformed quota response shape", retryable=False
+                )
+            raw_body = payload.get("data")
+            body = raw_body if isinstance(raw_body, dict) else payload
+            remaining = parse_credit(body.get("remainingCredits"))
+            limit = parse_credit(body.get("planCredits"))
+            reset = body.get("billingPeriodEnd")
+            reset_at: datetime | None = None
+            if isinstance(reset, str):
+                try:
+                    reset_at = datetime.fromisoformat(reset)
+                    if reset_at.tzinfo is None:
+                        reset_at = reset_at.replace(tzinfo=UTC)
+                    reset_at = reset_at.astimezone(UTC)
+                except ValueError:
+                    reset_at = None
+            if limit == Decimal("1000"):
+                plan_name = "Free plan (1,000 monthly credits)"
+            elif limit == Decimal("5000"):
+                plan_name = "Hobby plan (5,000 monthly credits)"
+            elif limit == Decimal("100000"):
+                plan_name = "Standard plan (100,000 monthly credits)"
+            elif limit is not None:
+                plan_name = f"Documented plan ({limit} monthly credits)"
+            else:
+                plan_name = "Free plan (1,000 monthly credits)"
+
+            return NativeUsageSnapshot(
+                pool_id=native_pool_id(self.name, AuthMode.KEYED, UnitKind.CREDIT),
+                provider=self.name,
+                auth_mode=AuthMode.KEYED,
+                native_unit=UnitKind.CREDIT,
+                observed_at=request.observed_at,
+                source="vendor_api",
+                confidence=Confidence.AUTHORITATIVE,
+                remaining=max(Decimal("0"), remaining) if remaining is not None else None,
+                allowance=limit,
+                reset_at=reset_at,
+                credential_generation=request.credential_generation,
+                plan_name=plan_name,
+                usage_url="https://firecrawl.dev/app/settings",
+            )
+
+        raise self._error(
+            "vendor_error",
+            f"Firecrawl credit usage returned HTTP {response.status_code}",
+            retryable=response.status_code in RETRYABLE_STATUS_CODES,
+            status=response.status_code,
+        )
 
     async def _quota_request(self, api_key: str) -> httpx.Response:
         return await self._client.get(
@@ -407,6 +512,13 @@ class FirecrawlAdapter(ProviderAdapter):
 
     def _normalize_error(self, exc: Exception) -> ProviderOperationError:
         status = self._status_code(exc)
+        if status == 402:
+            return self._error(
+                "quota_exhausted",
+                "Firecrawl is out of credits. Wait until reset or upgrade.",
+                retryable=False,
+                status=402,
+            )
         if status is not None:
             return self._error(
                 "http_error",

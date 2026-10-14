@@ -1856,3 +1856,104 @@ def test_monitoring_module_contains_no_html_renderer_or_template_runtime() -> No
         "<form",
     ):
         assert forbidden not in source
+
+
+async def test_cancelled_tracked_call_releases_admission(
+    repository: SQLiteRepository,
+) -> None:
+    """A cancelled tracked call re-raises CancelledError and releases admission (F6)."""
+    from freesearch.configuration.provider_limits import provider_limit_defaults
+    from freesearch.models.contracts import CostEstimate
+    from freesearch.models.provider_limits import NativeUsageSnapshot
+    from freesearch.services.monitoring import tracked_call
+    from freesearch.services.provider_limits import ProviderLimitsService
+
+    fixed_at = datetime(2026, 3, 10, 12, 0, 0, tzinfo=UTC)
+
+    class _HangingTavilyAdapter(ProviderAdapter):
+        """Tavily-named adapter that parks inside search until cancelled."""
+
+        def __init__(self, entered: asyncio.Event, release: asyncio.Event) -> None:
+            self._entered = entered
+            self._release = release
+
+        @property
+        def name(self) -> str:
+            return "tavily"
+
+        @property
+        def capabilities(self) -> ProviderCapabilities:
+            return ProviderCapabilities(search=True, fetch=True)
+
+        async def search(self, request: SearchRequest) -> SearchResponse:
+            self._entered.set()
+            await self._release.wait()
+            return SearchResponse(query=request.query, results=[], provider="tavily")
+
+        async def fetch(self, request: FetchRequest) -> FetchResponse:
+            raise NotImplementedError
+
+        async def estimate_cost(
+            self, request: SearchRequest | FetchRequest
+        ) -> CostEstimate:
+            return CostEstimate(
+                provider="tavily", operation=UsageOperation.SEARCH, units=Decimal("1")
+            )
+
+    service = ProviderLimitsService(
+        repository.limits,
+        records=[r for r in provider_limit_defaults() if r.provider == "tavily"],
+        tier_defaults=None,
+        clock=lambda: fixed_at,
+    )
+    await service.initialize()
+    await repository.limits.apply_snapshot(
+        NativeUsageSnapshot(
+            pool_id="tavily:keyed:credit",
+            provider="tavily",
+            auth_mode=AuthMode.KEYED,
+            native_unit=UnitKind.CREDIT,
+            observed_at=fixed_at,
+            remaining=Decimal("1000"),
+            allowance=Decimal("1000"),
+            credential_generation=0,
+        )
+    )
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    adapter = _HangingTavilyAdapter(entered, release)
+    captured: list[str] = []
+    original_admit = service.admit
+
+    async def _capturing_admit(context):  # type: ignore[no-untyped-def]
+        admission = await original_admit(context)
+        captured.append(admission.attempt_id)
+        return admission
+
+    service.admit = _capturing_admit  # type: ignore[method-assign]
+    task = asyncio.create_task(
+        tracked_call(
+            repository,
+            adapter,
+            lambda running: running.search(SearchRequest(query="q", limit=1)),
+            operation=UsageOperation.SEARCH,
+            request=SearchRequest(query="q", limit=1),
+            limits=service,
+        )
+    )
+    await asyncio.wait_for(entered.wait(), timeout=5)
+    assert captured != []
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=5)
+
+    async def _wait_released():  # type: ignore[no-untyped-def]
+        while True:
+            stored = await repository.limits.get_admission(captured[0])
+            assert stored is not None
+            if stored.state == "released":
+                return stored
+            await asyncio.sleep(0)
+
+    released = await asyncio.wait_for(_wait_released(), timeout=5)
+    assert released.state == "released"

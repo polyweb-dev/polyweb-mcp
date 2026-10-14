@@ -205,9 +205,15 @@ def test_quota_source_is_estimated_and_not_configurable() -> None:
 
 
 def test_configuration_records_contain_no_secret_fields() -> None:
+    # Intentional Tavily replacement (DTC 5.1): the documented non-secret
+    # names tavily_key_environment and tavily_paygo_enabled are exempt; the
+    # scan covers credential-shaped fields only.
+    exempt = {"tavily_key_environment", "tavily_paygo_enabled"}
     registry = get_provider_configs()
     for record in registry.values():
         for name in type(record).model_fields:
+            if name in exempt:
+                continue
             assert "key" not in name.lower() and "secret" not in name.lower()
         dumped = record.model_dump()
         assert "api_key" not in dumped and "secret" not in dumped
@@ -679,3 +685,105 @@ def test_provider_config_records_are_frozen() -> None:
         record.enable_mask = 0  # type: ignore[misc]
     with pytest.raises(ValidationError):
         record.support_mask = 0  # type: ignore[misc]
+
+
+# Tavily non-secret configuration (PLAN 2): explicit key environment and
+# operator PAYGO confirmation travel the persisted PATCH path.
+
+
+def test_tavily_key_environment_defaults_dev() -> None:
+    assert ProviderConfig().tavily_key_environment == "dev"
+    assert ProviderConfig().tavily_paygo_enabled is False
+
+
+def test_tavily_key_environment_accepts_dev_and_prod() -> None:
+    assert ProviderConfig(tavily_key_environment="prod").tavily_key_environment == "prod"
+    assert ProviderConfig(tavily_key_environment="dev").tavily_key_environment == "dev"
+
+
+def test_tavily_key_environment_rejects_unknown() -> None:
+    with pytest.raises(ValidationError):
+        ProviderConfig(tavily_key_environment="staging")  # type: ignore[arg-type]
+
+
+def test_tavily_paygo_flag_round_trips() -> None:
+    assert ProviderConfig(tavily_paygo_enabled=True).tavily_paygo_enabled is True
+
+
+def test_tavily_update_applies_to_base() -> None:
+    base = ProviderConfig()
+    updated = ProviderConfigUpdate(
+        tavily_key_environment="prod", tavily_paygo_enabled=True
+    ).apply_to(base)
+    assert updated.tavily_key_environment == "prod"
+    assert updated.tavily_paygo_enabled is True
+    assert base.tavily_key_environment == "dev"
+
+
+def test_tavily_update_partial_keeps_other_value() -> None:
+    base = ProviderConfig(tavily_key_environment="prod", tavily_paygo_enabled=True)
+    updated = ProviderConfigUpdate(tavily_key_environment="dev").apply_to(base)
+    assert updated.tavily_key_environment == "dev"
+    assert updated.tavily_paygo_enabled is True
+
+
+def test_tavily_values_persist_through_json_registry(monkeypatch) -> None:
+    monkeypatch.setenv(
+        OVERRIDES_ENV,
+        json.dumps({"tavily": {"tavily_key_environment": "prod", "tavily_paygo_enabled": True}}),
+    )
+    get_provider_configs.cache_clear()
+
+    record = get_provider_configs()[ProviderName.TAVILY]
+    assert record.tavily_key_environment == "prod"
+    assert record.tavily_paygo_enabled is True
+
+
+def test_tavily_env_only_update_preserves_unrelated_configuration() -> None:
+    """A PATCH-shaped env-only update keeps every unrelated field (readback need)."""
+
+    base = ProviderConfig(
+        enable_mask=6,
+        priority=7,
+        reset_schedule="monthly",
+        free_tier_estimates={
+            UsageOperation.SEARCH: Decimal("2"),
+            UsageOperation.FETCH: Decimal("3"),
+            UsageOperation.COST_ESTIMATE: Decimal("1"),
+        },
+        exa_monthly_budget_usd=Decimal("10.00"),
+        tavily_key_environment="dev",
+        tavily_paygo_enabled=True,
+    )
+
+    updated = ProviderConfigUpdate(tavily_key_environment="prod").apply_to(base)
+
+    assert updated.tavily_key_environment == "prod"
+    assert updated.tavily_paygo_enabled is True
+    assert updated.enable_mask == 6
+    assert updated.priority == 7
+    assert updated.reset_schedule == "monthly"
+    assert updated.free_tier_estimates[UsageOperation.SEARCH] == Decimal("2")
+    assert updated.free_tier_estimates[UsageOperation.FETCH] == Decimal("3")
+    assert updated.free_tier_estimates[UsageOperation.COST_ESTIMATE] == Decimal("1")
+    assert updated.exa_monthly_budget_usd == Decimal("10.00")
+
+
+def test_tavily_empty_update_preserves_env_and_unrelated_configuration() -> None:
+    """An empty PATCH-shaped update never resets the stored env or other fields."""
+
+    base = ProviderConfig(
+        enable_mask=6,
+        priority=7,
+        reset_schedule="monthly",
+        tavily_key_environment="prod",
+        tavily_paygo_enabled=True,
+    )
+
+    updated = ProviderConfigUpdate().apply_to(base)
+
+    assert updated.tavily_key_environment == "prod"
+    assert updated.tavily_paygo_enabled is True
+    assert updated.enable_mask == 6
+    assert updated.priority == 7
+    assert updated.reset_schedule == "monthly"

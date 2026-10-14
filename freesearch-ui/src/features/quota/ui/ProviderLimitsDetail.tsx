@@ -1,17 +1,27 @@
 import type { ReactNode } from "react"
 import type {
+  CRDConversionProfile,
   CRDGrantsSummary,
   ProviderAuthLimits,
   ProviderLimitDetail,
 } from "@/domains/dashboard"
 import { formatCRDAmount, resetRuleText } from "../model/crdDisplay"
 import { operationAvailable } from "../model/crdCardModel"
+import type { TavilyDisplayAdapter } from "../model/tavilyCredits"
+import { tavilyCRDToCredits, formatTavilyPopoverAmount } from "../model/tavilyCredits"
 import { SPEND_CAP } from "../model/quotaLabels"
 import { dateText } from "../model/timeText"
 
 export interface ProviderLimitsDetailProps {
   providerName: string
   auth: ProviderAuthLimits
+  /** The popover keeps each detail row on its own line at narrow widths. */
+  layout?: "default" | "popover"
+  /**
+   * The native display inputs of one Tavily rail: with a price profile, the
+   * local grant caps state themselves in Credits. Other providers keep CRD.
+   */
+  nativeDisplay?: TavilyDisplayAdapter
 }
 
 /** Value family of one row: the credit-unit block comes first and the USD block goes last. */
@@ -52,10 +62,14 @@ function resetText(detail: ProviderLimitDetail | null): string | null {
  * last sync time, and the usage page. This block states the vendor spend and
  * the reset only, so no amount and no time appears twice.
  */
-function detailRows(detail: ProviderLimitDetail | null): DetailRow[] {
+function detailRows(detail: ProviderLimitDetail | null, native: boolean = false): DetailRow[] {
   const rows: DetailRow[] = []
   if (detail === null) return rows
-  push(rows, "usd", "Vendor-reported USD spend", known(detail.actual_spend_usd))
+  const spend = known(detail.actual_spend_usd)
+  if (spend !== null) {
+    const value = native ? formatTavilyPopoverAmount(spend, "usd") : spend
+    push(rows, "usd", "Vendor-reported USD spend", value)
+  }
   push(rows, "plain", "Reset", resetText(detail))
   return rows
 }
@@ -64,8 +78,38 @@ function grantText(granted: string, consumed: string): string {
   return formatCRDAmount(granted) + " set, " + formatCRDAmount(consumed) + " used"
 }
 
+/** Whole Tavily Credits word of one floored integer amount. */
+function tavilyWord(amount: string): string {
+  return amount === "1" ? "1 Tavily Credit" : amount + " Tavily Credits"
+}
+
+/**
+ * The grant text of one rail: with a native price profile the CRD amounts
+ * convert into whole Tavily Credits at the display boundary, and a failed conversion keeps
+ * the stored CRD text. The wire values stay untouched. CRD and USD fractions stay intact.
+ */
+function grantTextNative(
+  granted: string,
+  consumed: string,
+  profile: CRDConversionProfile | null,
+): string {
+  if (profile === null) return grantText(granted, consumed)
+  const grantedCredits = tavilyCRDToCredits(granted, profile)
+  const usedCredits = tavilyCRDToCredits(consumed, profile)
+  if (grantedCredits === null || usedCredits === null) return grantText(granted, consumed)
+  const grantedInt = formatTavilyPopoverAmount(grantedCredits, "native")
+  const usedInt = formatTavilyPopoverAmount(usedCredits, "native")
+  if (grantedInt === null || usedInt === null) return grantText(granted, consumed)
+  return tavilyWord(grantedInt) + " set, " + tavilyWord(usedInt) + " used"
+}
+
 /** Spend cap facts of the supported operations only. */
-function grantRows(grants: CRDGrantsSummary | null, auth: ProviderAuthLimits): DetailRow[] {
+function grantRows(
+  grants: CRDGrantsSummary | null,
+  auth: ProviderAuthLimits,
+  profile: CRDConversionProfile | null,
+  native: boolean,
+): DetailRow[] {
   const rows: DetailRow[] = []
   if (grants === null) return rows
   const start = known(grants.period_start)
@@ -73,10 +117,11 @@ function grantRows(grants: CRDGrantsSummary | null, auth: ProviderAuthLimits): D
   const period = start === null || end === null ? null : dateText(start) + " to " + dateText(end)
   push(rows, "plain", SPEND_CAP + " period", period)
   if (operationAvailable(auth, "search")) {
-    push(rows, "crd", "Search " + SPEND_CAP.toLowerCase(), grantText(grants.search_granted_crd, grants.search_consumed_crd))
+    push(rows, "crd", "Search " + SPEND_CAP.toLowerCase(), grantTextNative(grants.search_granted_crd, grants.search_consumed_crd, profile))
   }
   if (operationAvailable(auth, "fetch")) {
-    push(rows, "crd", "Fetch " + SPEND_CAP.toLowerCase(), grantText(grants.fetch_granted_crd, grants.fetch_consumed_crd))
+    const operation = native ? "Extract" : "Fetch"
+    push(rows, "crd", operation + " " + SPEND_CAP.toLowerCase(), grantTextNative(grants.fetch_granted_crd, grants.fetch_consumed_crd, profile))
   }
   return rows
 }
@@ -95,20 +140,28 @@ function groupRows(rows: DetailRow[]): DetailRow[] {
  * yields no block at all, so the info control holds no empty divider.
  */
 export function ProviderLimitsDetail(props: ProviderLimitsDetailProps): ReactNode {
-  const { providerName, auth } = props
+  const { providerName, auth, nativeDisplay, layout = "default" } = props
+  const profile = nativeDisplay?.profile ?? null
+  const native = nativeDisplay !== undefined
   const detail = auth.detail
-  const rows = groupRows([...detailRows(detail), ...grantRows(auth.grants, auth)])
+  const rows = groupRows([...detailRows(detail, native), ...grantRows(auth.grants, auth, profile, native)])
   const splitNote = detail === null ? null : known(detail.crd_split_note)
   if (rows.length === 0 && splitNote === null) return null
 
   return (
     <div role="group" aria-label={providerName + " vendor detail"} className={EDGE}>
       {rows.length > 0 && (
-        <dl className="grid grid-cols-1 gap-x-4 gap-y-1 sm:grid-cols-2">
+        <dl
+          className={
+            layout === "popover"
+              ? "grid grid-cols-1 gap-y-1"
+              : "grid grid-cols-1 gap-x-4 gap-y-1 sm:grid-cols-2"
+          }
+        >
           {rows.map((row, index) => (
             <div key={row.label + "-" + index} className="flex items-baseline justify-between gap-3">
-              <dt className="text-[var(--muted)]">{row.label}</dt>
-              <dd className="tnum text-right text-[var(--text)]">{row.value}</dd>
+              <dt className="min-w-0 text-[var(--muted)]">{row.label}</dt>
+              <dd className="min-w-0 flex-1 break-words tnum text-right text-[var(--text)]">{row.value}</dd>
             </div>
           ))}
         </dl>

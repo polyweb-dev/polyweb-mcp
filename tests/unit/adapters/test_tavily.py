@@ -218,51 +218,56 @@ def test_init_wraps_caller_client_in_shared_runner_with_seams() -> None:
 
 
 async def test_init_missing_resolver_credential_fails_closed(monkeypatch) -> None:
-    """A missing key fails closed at construction (explicit ``api_key=None``).
+    """A missing key builds the keyless public rail (explicit ``api_key=None``).
 
-    Substitution note: this test previously asserted the retired global
-    ``get_provider_secret_resolver`` seam was asked for exactly the Tavily
-    credential (``resolver.requested == [ProviderName.TAVILY]``). The surviving
-    guarantee is asserted instead: fail-closed non-retryable
-    ``configuration_error`` with the caller client left untouched.
+    Intentional Tavily replacement (PLAN 4.1, DTC 5.1): the missing key now
+    builds a keyless adapter on ``X-Tavily-Access-Mode: keyless`` instead of
+    failing closed. The caller client stays untouched.
     """
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
     monkeypatch.delenv("TAVILY_PROJECT", raising=False)
     monkeypatch.delenv("TAVILY_ORG_ID", raising=False)
 
-    client = httpx.AsyncClient()
-    try:
-        with pytest.raises(ProviderOperationError) as excinfo:
-            TavilyAdapter(client, api_key=None)
+    from freesearch.models.provider_limits import AuthMode
 
-        assert excinfo.value.error.code == "configuration_error"
-        assert excinfo.value.error.retryable is False
-        assert "no Tavily API key configured" in excinfo.value.error.message
-        # The failing path must leave the shared client untouched.
+    client = httpx.AsyncClient()
+    adapter: TavilyAdapter | None = None
+    try:
+        adapter = TavilyAdapter(client, api_key=None)
+        assert adapter.limit_auth_mode is AuthMode.KEYLESS
+        # The keyless path must leave the shared client untouched.
         assert "Authorization" not in client.headers
     finally:
+        if adapter is not None:
+            await adapter.aclose()
         await client.aclose()
 
 
 async def test_init_missing_credential_never_falls_back_to_ambient_key(monkeypatch) -> None:
     """No ambient ``TAVILY_API_KEY`` fallback.
 
-    Substitution note: the retired resolver's ``requested`` bookkeeping is gone;
-    the surviving guarantee is fail-closed construction that leaks neither the
-    ambient key into the error nor into the caller's client.
+    Intentional Tavily replacement (PLAN 4.1, DTC 5.1): an explicit
+    ``api_key=None`` builds the isolated keyless rail even when an ambient
+    key exists; the ambient key never reaches the caller client or the
+    adapter-owned client.
     """
     monkeypatch.setenv("TAVILY_API_KEY", "ambient-sk-leak")
 
+    from freesearch.models.provider_limits import AuthMode
+
     client = httpx.AsyncClient()
+    adapter: TavilyAdapter | None = None
     try:
-        with pytest.raises(ProviderOperationError) as excinfo:
-            TavilyAdapter(client, api_key=None)
-        assert excinfo.value.error.code == "configuration_error"
-        assert "ambient-sk-leak" not in str(excinfo.value)
+        adapter = TavilyAdapter(client, api_key=None)
+        assert adapter.limit_auth_mode is AuthMode.KEYLESS
         assert "ambient-sk-leak" not in str(client.headers)
         # The ambient key is never adopted into the caller's client.
         assert "Authorization" not in client.headers
+        assert adapter._owned_http is not None
+        assert "ambient-sk-leak" not in str(adapter._owned_http.headers)
     finally:
+        if adapter is not None:
+            await adapter.aclose()
         await client.aclose()
 
 
@@ -468,6 +473,7 @@ async def test_search_maps_query_cap_domains_country_and_usage() -> None:
             "query": "python async",
             "max_results": 7,
             "include_usage": True,
+            "search_depth": "basic",
             "include_domains": ["example.com", "docs.org"],
             # Tavily's documented country enum uses names, not ISO alpha-2.
             "country": "united states",
@@ -497,7 +503,13 @@ async def test_search_omits_domains_and_country_when_unset() -> None:
     await adapter.search(SearchRequest(query="bare"))
 
     call = sdk.search_calls[0]
-    assert call == {"query": "bare", "max_results": 10, "include_usage": True, "timeout": 20.0}
+    assert call == {
+        "query": "bare",
+        "max_results": 10,
+        "include_usage": True,
+        "search_depth": "basic",
+        "timeout": 20.0,
+    }
 
 
 @pytest.mark.parametrize("country_code", ["PS", "ZZ"])
@@ -510,7 +522,13 @@ async def test_search_omits_country_kwarg_for_unsupported_iso_codes(country_code
     await adapter.search(SearchRequest(query="bare", country_code=country_code))
 
     call = sdk.search_calls[0]
-    assert call == {"query": "bare", "max_results": 10, "include_usage": True, "timeout": 20.0}
+    assert call == {
+        "query": "bare",
+        "max_results": 10,
+        "include_usage": True,
+        "search_depth": "basic",
+        "timeout": 20.0,
+    }
 
 
 async def test_search_normalizes_results_and_metadata() -> None:
@@ -567,10 +585,20 @@ async def test_search_maps_observed_credits_and_request_id_only() -> None:
 
 
 @pytest.mark.parametrize("usage", [None, {"credits": -1}, {"other": 1}, "not-a-dict"])
-async def test_search_drops_absent_or_malformed_usage(usage: object) -> None:
+async def test_search_drops_absent_or_unknown_usage_and_rejects_negative_credits(
+    usage: object,
+) -> None:
+    """Absent or unknown usage drops to None; negative credits raise invalid_response (F9)."""
     sdk = _FakeSDK()
     sdk.search_response = _search_payload(usage=usage)
     adapter = make_adapter(sdk=sdk)
+
+    if usage == {"credits": -1}:
+        with pytest.raises(ProviderOperationError) as excinfo:
+            await adapter.search(SearchRequest(query="usage"))
+        assert excinfo.value.error.code == "invalid_response"
+        assert excinfo.value.error.retryable is False
+        return
 
     response = await adapter.search(SearchRequest(query="usage"))
 
@@ -652,6 +680,7 @@ async def test_fetch_extracts_single_url_as_markdown() -> None:
             "urls": ["https://example.com/doc"],
             "format": "markdown",
             "include_usage": True,
+            "extract_depth": "basic",
             "timeout": 20.0,
         }
     ]
@@ -916,7 +945,7 @@ async def test_estimate_cost_search_is_one_credit() -> None:
 
     assert estimate.operation is UsageOperation.SEARCH
     assert estimate.units == Decimal("1")
-    assert estimate.currency == "credits"
+    assert estimate.currency == "Credits"
 
 
 async def test_estimate_cost_fetch_is_zero_point_two_credits() -> None:
@@ -926,7 +955,7 @@ async def test_estimate_cost_fetch_is_zero_point_two_credits() -> None:
 
     assert estimate.operation is UsageOperation.FETCH
     assert estimate.units == Decimal("0.2")
-    assert estimate.currency == "credits"
+    assert estimate.currency == "Credits"
 
 
 async def test_estimate_cost_is_network_free() -> None:
@@ -958,7 +987,7 @@ async def test_normalize_error_maps_transient_errors_retryable() -> None:
     assert timeout.error.retryable is True
 
 
-@pytest.mark.parametrize("status", [429, 500, 502, 503, 504])
+@pytest.mark.parametrize("status", [500, 502, 503, 504])
 async def test_normalize_error_http_status_retryable(status: int) -> None:
     adapter = make_adapter()
 
@@ -967,6 +996,18 @@ async def test_normalize_error_http_status_retryable(status: int) -> None:
     assert normalized.error.code == "http_error"
     assert normalized.error.retryable is True
     assert normalized.error.status_code == status
+
+
+async def test_normalize_error_429_is_rate_limited() -> None:
+    # Intentional Tavily replacement (PLAN 4.2, DTC 5.1): 429 normalizes by
+    # status to rate_limited with retry_after_seconds details, not http_error.
+    adapter = make_adapter()
+
+    normalized = adapter._normalize_error(_http_status_error(429))
+
+    assert normalized.error.code == "rate_limited"
+    assert normalized.error.retryable is True
+    assert normalized.error.status_code == 429
 
 
 @pytest.mark.parametrize("status", [400, 401, 418])
@@ -1227,15 +1268,13 @@ def test_capabilities_quota_enabled() -> None:
 
 
 async def test_quota_real_path_crosses_shared_runner_and_scoped_transport(monkeypatch) -> None:
-    """Stage-3 quota over the real construction path.
+    """Cache-only quota over the real construction path.
 
-    Injected credential, real installed SDK, adapter-owned scoped client,
-    borrowed transport, and the shared runner: the GET
-    ``https://api.tavily.com/usage`` must cross the shared resilience runner
-    exactly once, carry only the injected credential on the wire (never the
-    caller's ``Authorization``/``X-API-Key``), and map the account plan
-    figures into an authoritative snapshot; closing the adapter must leave
-    the caller's shared client open.
+    Intentional Tavily replacement (PLAN 4.3, DTC 5.1): ``quota()`` is
+    cache-only, so it issues zero usage GETs and spends zero runner entries.
+    The injected credential still scopes to the adapter-owned client (never
+    the caller's ``Authorization``/``X-API-Key``); closing the adapter must
+    leave the caller's shared client open.
     """
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
     monkeypatch.delenv("TAVILY_PROJECT", raising=False)
@@ -1260,25 +1299,14 @@ async def test_quota_real_path_crosses_shared_runner_and_scoped_transport(monkey
             await adapter.aclose()
         await caller.aclose()
 
-    assert runner.entries == ["tavily"]  # one runner entry per public call
-    assert [str(request.url) for request in recorder.requests] == ["https://api.tavily.com/usage"]
-    request = recorder.requests[0]
-    # The injected credential is the only auth on the wire.
-    assert request.headers["authorization"] == "Bearer sk-quota-e2e-55"
-    assert "caller-token-1" not in request.headers.values()
-    assert "caller-xkey-2" not in request.headers.values()
-    assert not any(key.lower() == "x-api-key" for key in request.headers)
-    assert snapshot is not None
-    assert snapshot.provider == "tavily"
-    assert snapshot.source is QuotaSource.AUTHORITATIVE
-    assert snapshot.remaining == Decimal("999")
-    assert snapshot.limit == Decimal("1000")
-    assert snapshot.reset_at is None
-    assert snapshot.observed_at.tzinfo is not None
-    assert snapshot.observed_at.utcoffset() == timedelta(0)
+    assert runner.entries == []  # cache-only: no runner entry, no usage GET
+    assert recorder.requests == []
+    assert snapshot is None  # never observed: unknown state
 
 
 async def test_quota_account_plan_figures_map_to_authoritative_snapshot() -> None:
+    from datetime import UTC, datetime
+
     adapter = make_adapter()
 
     snapshot = adapter._quota_snapshot(_usage_payload())
@@ -1287,7 +1315,16 @@ async def test_quota_account_plan_figures_map_to_authoritative_snapshot() -> Non
     assert snapshot.source is QuotaSource.AUTHORITATIVE
     assert snapshot.remaining == Decimal("999")
     assert snapshot.limit == Decimal("1000")
-    assert snapshot.reset_at is None
+    # Reset metadata targets the next first day of the month.
+    now = datetime.now(UTC)
+    expected_month = now.month % 12 + 1
+    expected_year = now.year + (1 if now.month == 12 else 0)
+    assert snapshot.reset_at is not None
+    assert (snapshot.reset_at.year, snapshot.reset_at.month, snapshot.reset_at.day) == (
+        expected_year,
+        expected_month,
+        1,
+    )
     assert snapshot.observed_at.tzinfo is not None
     assert snapshot.observed_at.utcoffset() == timedelta(0)
 
@@ -1303,6 +1340,9 @@ async def test_quota_over_limit_clamps_remaining_at_zero() -> None:
 
 
 async def test_quota_account_values_ignore_paygo_and_key_figures() -> None:
+    # Intentional Tavily replacement (PLAN 4.3): the per-key ceiling caps the
+    # plan remaining (min 999 plan vs 50 key = 50); PAYGO fields record
+    # payment access in metadata instead of plan balances.
     adapter = make_adapter()
 
     snapshot = adapter._quota_snapshot(
@@ -1311,7 +1351,7 @@ async def test_quota_account_values_ignore_paygo_and_key_figures() -> None:
                 "plan_usage": 1,
                 "plan_limit": 1000,
                 # Tavily's documented pay-as-you-go fields (not plan fields):
-                # they must never override the authoritative plan snapshot.
+                # they record payment access, never the plan snapshot.
                 "paygo_usage": 750,
                 "paygo_limit": 600,
             },
@@ -1319,11 +1359,9 @@ async def test_quota_account_values_ignore_paygo_and_key_figures() -> None:
         }
     )
 
-    # Account plan values take priority; the documented pay-as-you-go fields
-    # (``account.paygo_usage`` / ``account.paygo_limit``) and the key figures
-    # do not affect the snapshot.
-    assert snapshot.remaining == Decimal("999")
+    assert snapshot.remaining == Decimal("50")
     assert snapshot.limit == Decimal("1000")
+    assert snapshot.metadata.get("paygo_confirmed") is True
 
 
 async def test_quota_non_dict_account_is_invalid_response_not_key_fallback() -> None:
@@ -1371,6 +1409,8 @@ async def test_quota_non_dict_account_is_invalid_response_not_key_fallback() -> 
 async def test_quota_missing_account_figures_fall_back_to_key_figures(
     payload: dict[str, object], expected: tuple[Decimal, Decimal]
 ) -> None:
+    from datetime import UTC, datetime
+
     adapter = make_adapter()
 
     snapshot = adapter._quota_snapshot(payload)
@@ -1378,7 +1418,16 @@ async def test_quota_missing_account_figures_fall_back_to_key_figures(
     assert snapshot.source is QuotaSource.AUTHORITATIVE
     assert snapshot.remaining == expected[0]
     assert snapshot.limit == expected[1]
-    assert snapshot.reset_at is None
+    # Reset metadata targets the next first day of the month.
+    now = datetime.now(UTC)
+    expected_month = now.month % 12 + 1
+    expected_year = now.year + (1 if now.month == 12 else 0)
+    assert snapshot.reset_at is not None
+    assert (snapshot.reset_at.year, snapshot.reset_at.month, snapshot.reset_at.day) == (
+        expected_year,
+        expected_month,
+        1,
+    )
     assert snapshot.observed_at.utcoffset() == timedelta(0)
 
 
@@ -1435,12 +1484,6 @@ async def test_quota_number_accepts_whole_and_fractional_figures() -> None:
         {"account": {"plan_usage": 1, "plan_limit": -5}},
         # Malformed present plan value must not silently fall back to key.
         {"account": {"plan_usage": True}, "key": {"usage": 200, "limit": 500}},
-        # Missing key usage.
-        {"key": {"limit": 100}},
-        # Key figures not a mapping.
-        {"key": [1, 2]},
-        # Neither account nor key figures.
-        {},
     ],
 )
 async def test_quota_malformed_payload_normalizes_to_invalid_response(
@@ -1460,6 +1503,31 @@ async def test_quota_malformed_payload_normalizes_to_invalid_response(
     _assert_no_secret_leak(error, "api_key=super-secret")
 
 
+@pytest.mark.parametrize(
+    "payload,expected_limit",
+    [
+        # Missing key usage: balance unknown, key ceiling still binds limit.
+        ({"key": {"limit": 100}}, Decimal("100")),
+        # Key figures not a mapping: ignored, snapshot stays unknown.
+        ({"key": [1, 2]}, None),
+        # Neither account nor key figures: unknown snapshot, no raise.
+        ({}, None),
+    ],
+)
+async def test_quota_absent_figures_stay_unknown(
+    payload: dict[str, object], expected_limit: Decimal | None
+) -> None:
+    # Intentional Tavily replacement (PLAN 4.3): absent allowance/balance
+    # stays unknown instead of failing closed as invalid_response.
+    adapter = make_adapter()
+
+    snapshot = adapter._quota_snapshot(payload)
+
+    assert snapshot.source is QuotaSource.AUTHORITATIVE
+    assert snapshot.remaining is None
+    assert snapshot.limit == expected_limit
+
+
 async def test_quota_malformed_json_body_is_redacted_invalid_response(monkeypatch) -> None:
     """A non-JSON ``/usage`` body surfaces as the redaction-safe
     ``invalid_response`` error with the parsing cause fully suppressed.
@@ -1468,6 +1536,10 @@ async def test_quota_malformed_json_body_is_redacted_invalid_response(monkeypatc
     monkeypatch.delenv("TAVILY_PROJECT", raising=False)
     monkeypatch.delenv("TAVILY_ORG_ID", raising=False)
 
+    from datetime import UTC, datetime
+
+    from freesearch.models.provider_limits import AuthMode, UsageSyncRequest
+
     recorder = _UsageWireRecorder(
         responses=[httpx.Response(200, content=b'{"api_key": "super-secret", broken')]
     )
@@ -1475,8 +1547,19 @@ async def test_quota_malformed_json_body_is_redacted_invalid_response(monkeypatc
     adapter: TavilyAdapter | None = None
     try:
         adapter = TavilyAdapter(caller, api_key=SecretStr("sk-quota-bad-json-66"))
+        # quota() stays cache-only: no GET, unknown state.
+        assert await adapter.quota() is None
+        assert recorder.requests == []
+        # The usage seam surfaces the malformed body as redaction-safe
+        # invalid_response with the cause fully suppressed.
         with pytest.raises(ProviderOperationError) as excinfo:
-            await adapter.quota()
+            await adapter.usage_snapshot(
+                UsageSyncRequest(
+                    provider="tavily",
+                    auth_mode=AuthMode.KEYED,
+                    observed_at=datetime.now(UTC),
+                )
+            )
     finally:
         if adapter is not None:
             await adapter.aclose()
@@ -1496,16 +1579,32 @@ async def test_quota_malformed_json_body_is_redacted_invalid_response(monkeypatc
 async def test_quota_http_status_normalizes_once_through_shared_runner(
     status: int, retryable: bool
 ) -> None:
-    """HTTP status failures normalize through the shared runner with a single
-    runner entry and a single SDK-level GET: no adapter-local retry loop.
+    """HTTP status failures normalize through the usage seam with a single GET.
+
+    Intentional Tavily replacement (PLAN 4.3): the usage read runs under its
+    isolated one-attempt runner, so the shared search/extract runner sees no
+    entry and one scheduled poll spends exactly one GET.
     """
+    from datetime import UTC, datetime
+
+    from freesearch.models.provider_limits import AuthMode, UsageSyncRequest
+
     runner = _RecordingRunner()
-    adapter = make_adapter(runner=runner)
+    adapter = TavilyAdapter(
+        _FakeClient(),
+        runner=runner,
+        sdk_client=_FakeSDK(),
+        api_key=SecretStr("tvly-test-key"),
+    )
     owned = _FakeOwnedHTTP(_status_response(status))
     adapter._owned_http = owned
 
     with pytest.raises(ProviderOperationError) as excinfo:
-        await adapter.quota()
+        await adapter.usage_snapshot(
+            UsageSyncRequest(
+                provider="tavily", auth_mode=AuthMode.KEYED, observed_at=datetime.now(UTC)
+            )
+        )
 
     error = excinfo.value
     assert error.error.code == "http_error"
@@ -1513,61 +1612,67 @@ async def test_quota_http_status_normalizes_once_through_shared_runner(
     assert error.error.retryable is retryable
     assert error.__cause__ is None
     assert error.__suppress_context__ is True
-    assert runner.entries == ["tavily"]  # one runner entry per public call
+    assert runner.entries == []  # isolated usage runner: shared runner untouched
     assert owned.gets == ["https://api.tavily.com/usage"]  # no local retry loop
 
 
 async def test_quota_mock_429_retry_after_reaches_runner_raw_path() -> None:
-    """A 429 carrying ``Retry-After`` from the /usage endpoint must reach the
-    shared runner's raw response path rather than the adapter's normalized
-    error path: the runner parses ``Retry-After``, sleeps its delay instead of
-    the calculated backoff, and records a provider cooldown that a later call
-    waits out. Deterministic clock/sleeper/random seams, no real sleep.
+    """A 429 from the /usage endpoint normalizes with one GET and coalesces.
+
+    Intentional Tavily replacement (PLAN 4.3): one usage attempt per poll —
+    the failed poll raises, and the immediate second call returns the cached
+    ``None`` without a second GET (60-second local cadence). The isolated
+    usage runner keeps the shared search/extract runner untouched.
     """
-    clock = _FakeClock()
-    sleeper = _FakeSleeper()
-    runner = ResilientRunner(
+    from datetime import UTC, datetime
+
+    from freesearch.models.provider_limits import AuthMode, UsageSyncRequest
+
+    runner = _RecordingRunner()
+    adapter = TavilyAdapter(
         _FakeClient(),
-        max_attempts=2,
-        base_delay=1.0,
-        max_delay=10.0,
-        backoff_factor=2.0,
-        clock=clock,
-        sleeper=sleeper,
-        random_source=lambda: 1.0,
+        runner=runner,
+        sdk_client=_FakeSDK(),
+        api_key=SecretStr("tvly-test-key"),
     )
-    adapter = make_adapter(runner=runner)
-    adapter._owned_http = _FakeOwnedHTTP(httpx.Response(429, headers={"Retry-After": "7"}))
+    owned = _FakeOwnedHTTP(httpx.Response(429, headers={"Retry-After": "7"}))
+    adapter._owned_http = owned
 
     with pytest.raises(ProviderOperationError) as excinfo:
-        await adapter.quota()
+        await adapter.usage_snapshot(
+            UsageSyncRequest(
+                provider="tavily", auth_mode=AuthMode.KEYED, observed_at=datetime.now(UTC)
+            )
+        )
 
     error = excinfo.value
     assert error.error.code == "http_error"
     assert error.error.status_code == 429
     assert error.error.retryable is True
-    # Retry-After (7s) overrides the 1.0s calculated backoff; the retry's own
-    # cooldown deadline is credited as already slept, so only one 7s sleep.
-    assert sleeper.sleeps == [7.0]
+    assert runner.entries == []
 
-    # The recorded cooldown (until t=7) gates a later call: at t=4 the
-    # remaining 3s are slept out before the retry proceeds.
-    clock.advance(4.0)
-    adapter._owned_http = _FakeOwnedHTTP(httpx.Response(200, json=_usage_payload()))
-    snapshot = await adapter.quota()
-    assert snapshot is not None
-    assert snapshot.remaining == Decimal("999")
-    assert snapshot.limit == Decimal("1000")
-    assert sleeper.sleeps == [7.0, 3.0]
+    # The 60-second cadence coalesces the immediate retry: cached None, no GET.
+    cached = await adapter.usage_snapshot(
+        UsageSyncRequest(
+            provider="tavily", auth_mode=AuthMode.KEYED, observed_at=datetime.now(UTC)
+        )
+    )
+    assert cached is None
+    assert owned.gets == ["https://api.tavily.com/usage"]
 
 
 async def test_quota_real_path_429_retry_after_records_cooldown(monkeypatch) -> None:
-    """The real construction path (injected credential, scoped client,
-    borrowed transport, shared runner) must also let a ``Retry-After`` 429
-    reach the runner's raw path: the runner sleeps the ``Retry-After`` delay
-    (not the backoff), records the cooldown, and retries to a successful
-    snapshot.
+    """The real construction path preserves the Retry-After delay on a usage 429.
+
+    Intentional Tavily replacement (PLAN 4.2/4.3): the response hook records
+    the vendor delay before SDK conversion, so the usage 429 carries
+    ``retry_after_seconds=7`` in its safe details; the 60-second cadence then
+    coalesces the immediate retry without a second GET.
     """
+    from datetime import UTC, datetime
+
+    from freesearch.models.provider_limits import AuthMode, UsageSyncRequest
+
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
     monkeypatch.delenv("TAVILY_PROJECT", raising=False)
     monkeypatch.delenv("TAVILY_ORG_ID", raising=False)
@@ -1579,6 +1684,188 @@ async def test_quota_real_path_429_retry_after_records_cooldown(monkeypatch) -> 
         ]
     )
     caller = httpx.AsyncClient(transport=httpx.MockTransport(recorder))
+    adapter: TavilyAdapter | None = None
+    try:
+        adapter = TavilyAdapter(caller, api_key=SecretStr("sk-quota-429-77"))
+        with pytest.raises(ProviderOperationError) as excinfo:
+            await adapter.usage_snapshot(
+                UsageSyncRequest(
+                    provider="tavily",
+                    auth_mode=AuthMode.KEYED,
+                    observed_at=datetime.now(UTC),
+                )
+            )
+        # The immediate retry coalesces under the 60-second cadence: no GET.
+        cached = await adapter.usage_snapshot(
+            UsageSyncRequest(
+                provider="tavily", auth_mode=AuthMode.KEYED, observed_at=datetime.now(UTC)
+            )
+        )
+    finally:
+        if adapter is not None:
+            await adapter.aclose()
+        await caller.aclose()
+
+    error = excinfo.value
+    assert error.error.code == "http_error"
+    assert error.error.status_code == 429
+    assert error.error.retryable is True
+    assert error.error.details.get("retry_after_seconds") == 7
+    assert cached is None
+    assert [str(request.url) for request in recorder.requests] == [
+        "https://api.tavily.com/usage",
+    ]
+
+
+# --- Tavily Credits contracts: auth rails, precedence, params, 429/402 ------
+# Required cases (PLAN 7): keyed/keyless headers through the real SDK with
+# MockTransport, ambient isolation, key precedence, identical parameter
+# transfer on both rails, 429-then-success with exact Retry-After on both
+# operations, Retry-After variants, 402 normalization, cache-only quota,
+# usage coalescing, timeouts, and the isolated usage runner key.
+
+
+def _real_sdk_recorder() -> _WireRecorder:
+    return _WireRecorder()
+
+
+async def test_keyless_rail_sends_access_mode_without_key(monkeypatch) -> None:
+    """Keyless search and extract carry the access-mode header and no key."""
+    from freesearch.models.provider_limits import AuthMode
+
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    recorder = _WireRecorder()
+    caller = httpx.AsyncClient(transport=httpx.MockTransport(recorder))
+    adapter: TavilyAdapter | None = None
+    try:
+        adapter = TavilyAdapter(caller, api_key=None)
+        assert adapter.limit_auth_mode is AuthMode.KEYLESS
+        await adapter.search(SearchRequest(query="keyless"))
+        await adapter.fetch(FetchRequest(url="https://example.com/doc"))
+    finally:
+        if adapter is not None:
+            await adapter.aclose()
+        await caller.aclose()
+
+    assert [str(request.url) for request in recorder.requests] == [
+        "https://api.tavily.com/search",
+        "https://api.tavily.com/extract",
+    ]
+    for request in recorder.requests:
+        assert request.headers.get("X-Tavily-Access-Mode") == "keyless"
+        assert "authorization" not in {key.lower() for key in request.headers}
+
+
+async def test_keyless_rail_isolates_ambient_key_and_caller_headers(monkeypatch) -> None:
+    """Ambient keys and shared secret headers never reach the keyless wire."""
+    from freesearch.models.provider_limits import AuthMode
+
+    monkeypatch.setenv("TAVILY_API_KEY", "ambient-sk-leak")
+    recorder = _WireRecorder()
+    caller = httpx.AsyncClient(
+        transport=httpx.MockTransport(recorder),
+        headers={"Authorization": "Bearer caller-token-1", "X-API-Key": "caller-xkey-2"},
+    )
+    adapter: TavilyAdapter | None = None
+    try:
+        adapter = TavilyAdapter(caller, api_key=None)
+        assert adapter.limit_auth_mode is AuthMode.KEYLESS
+        await adapter.search(SearchRequest(query="isolated"))
+    finally:
+        if adapter is not None:
+            await adapter.aclose()
+        await caller.aclose()
+
+    (request,) = recorder.requests
+    assert request.headers.get("X-Tavily-Access-Mode") == "keyless"
+    assert "ambient-sk-leak" not in str(request.headers)
+    assert "caller-token-1" not in request.headers.values()
+    assert "caller-xkey-2" not in request.headers.values()
+
+
+async def test_keyed_rail_takes_precedence_with_both_headers(monkeypatch) -> None:
+    """A resolved key keeps Authorization authoritative (PLAN 4.1)."""
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    recorder = _WireRecorder()
+    caller = httpx.AsyncClient(transport=httpx.MockTransport(recorder))
+    adapter: TavilyAdapter | None = None
+    try:
+        adapter = TavilyAdapter(caller, api_key=SecretStr("tvly-key-wins-1"))
+        await adapter.search(SearchRequest(query="precedence"))
+    finally:
+        if adapter is not None:
+            await adapter.aclose()
+        await caller.aclose()
+
+    (request,) = recorder.requests
+    assert request.headers["authorization"] == "Bearer tvly-key-wins-1"
+
+
+async def test_identical_param_transfer_on_both_rails() -> None:
+    """Keyed and keyless calls forward identical SDK parameter maps."""
+    from freesearch.models.tavily import TavilyExtractParams, TavilySearchParams
+
+    keyed_sdk, keyless_sdk = _FakeSDK(), _FakeSDK()
+    keyed_sdk.search_response = _search_payload()
+    keyless_sdk.search_response = _search_payload()
+    keyed_sdk.extract_response = _extract_payload()
+    keyless_sdk.extract_response = _extract_payload()
+    keyed = TavilyAdapter(
+        _FakeClient(), sdk_client=keyed_sdk, api_key=SecretStr("tvly-param-1")
+    )
+    keyless = TavilyAdapter(_FakeClient(), sdk_client=keyless_sdk, api_key=None)
+    params = TavilySearchParams(
+        search_depth="advanced", topic="news", time_range="week", include_images=True
+    )
+    extract = TavilyExtractParams(extract_depth="advanced", format="text", query="q")
+
+    await keyed.search(SearchRequest(query="p", limit=5, tavily=params))
+    await keyless.search(SearchRequest(query="p", limit=5, tavily=params))
+    await keyed.fetch(FetchRequest(url="https://example.com/doc", tavily=extract))
+    await keyless.fetch(FetchRequest(url="https://example.com/doc", tavily=extract))
+
+    assert keyed_sdk.search_calls == keyless_sdk.search_calls
+    assert keyed_sdk.extract_calls == keyless_sdk.extract_calls
+    assert keyed_sdk.search_calls[0]["search_depth"] == "advanced"
+    assert keyed_sdk.search_calls[0]["topic"] == "news"
+    assert keyed_sdk.extract_calls[0]["extract_depth"] == "advanced"
+
+
+async def test_depth_conflict_rejected_before_vendor_io() -> None:
+    """An explicit depth conflicting with basic/advanced mode never calls out."""
+    from freesearch.models.tavily import TavilySearchParams
+
+    sdk = _FakeSDK()
+    sdk.search_response = _search_payload()
+    adapter = make_adapter(sdk=sdk)
+
+    with pytest.raises(ProviderOperationError) as excinfo:
+        await adapter.search(
+            SearchRequest(
+                query="conflict", mode="basic", tavily=TavilySearchParams(search_depth="advanced")
+            )
+        )
+
+    assert excinfo.value.error.code == "bad_request"
+    assert sdk.search_calls == []
+
+
+async def _real_sdk_429_then_success(
+    operation: str, monkeypatch: pytest.MonkeyPatch
+) -> list[float]:
+    """Drive one real-SDK 429 (Retry-After 7) then success; return sleeps."""
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        if len(calls) == 1:
+            return httpx.Response(429, headers={"Retry-After": "7"}, json={"detail": "slow"})
+        if request.url.path == "/extract":
+            return httpx.Response(200, json=_extract_payload())
+        return httpx.Response(200, json=_search_payload())
+
+    caller = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     clock = _FakeClock()
     sleeper = _FakeSleeper()
     runner = ResilientRunner(
@@ -1593,20 +1880,302 @@ async def test_quota_real_path_429_retry_after_records_cooldown(monkeypatch) -> 
     )
     adapter: TavilyAdapter | None = None
     try:
-        adapter = TavilyAdapter(caller, runner=runner, api_key=SecretStr("sk-quota-429-77"))
-        snapshot = await adapter.quota()
+        adapter = TavilyAdapter(caller, runner=runner, api_key=SecretStr("tvly-429-exact"))
+        if operation == "search":
+            await adapter.search(SearchRequest(query="retry"))
+        else:
+            await adapter.fetch(FetchRequest(url="https://example.com/doc"))
     finally:
         if adapter is not None:
             await adapter.aclose()
         await caller.aclose()
+    assert len(calls) == 2
+    return sleeper.sleeps
 
-    assert snapshot is not None
-    assert snapshot.source is QuotaSource.AUTHORITATIVE
-    assert snapshot.remaining == Decimal("999")
-    assert snapshot.limit == Decimal("1000")
-    # Retry-After (7s), not the 1.0s calculated backoff.
-    assert sleeper.sleeps == [7.0]
-    assert [str(request.url) for request in recorder.requests] == [
-        "https://api.tavily.com/usage",
-        "https://api.tavily.com/usage",
-    ]
+
+async def test_real_sdk_429_then_success_exact_retry_after_search(monkeypatch) -> None:
+    assert await _real_sdk_429_then_success("search", monkeypatch) == [7.0]
+
+
+async def test_real_sdk_429_then_success_exact_retry_after_extract(monkeypatch) -> None:
+    assert await _real_sdk_429_then_success("extract", monkeypatch) == [7.0]
+
+
+def test_retry_after_variants_absent_malformed_zero() -> None:
+    """Absent/malformed Retry-After yields None; zero stays zero."""
+    import freesearch.adapters.tavily as tavily_mod
+
+    def response(value: str | None) -> httpx.Response:
+        headers = {} if value is None else {"Retry-After": value}
+        return httpx.Response(
+            429,
+            headers=headers,
+            request=httpx.Request("GET", "https://api.tavily.com/search"),
+        )
+
+    assert tavily_mod.response_retry_after(response(None)) is None
+    assert tavily_mod.response_retry_after(response("not-a-delay")) is None
+    assert tavily_mod.response_retry_after(response("-3")) is None
+    assert tavily_mod.response_retry_after(response("0")) == 0.0
+    assert tavily_mod.response_retry_after(response("7")) == 7.0
+
+
+def test_retry_after_http_date_parses_to_delay() -> None:
+    """An HTTP-date Retry-After parses to remaining seconds (F3 fix)."""
+    import email.utils
+    import time
+
+    import freesearch.adapters.tavily as tavily_mod
+
+    future = email.utils.formatdate(time.time() + 60, usegmt=True)
+    response = httpx.Response(
+        429,
+        headers={"Retry-After": future},
+        request=httpx.Request("GET", "https://api.tavily.com/search"),
+    )
+    delay = tavily_mod.response_retry_after(response)
+    assert delay is not None
+    assert 55.0 <= delay <= 60.0
+    # The shared runner raw path still resolves HTTP-dates against its clock.
+    runner = ResilientRunner(_FakeClient())
+    assert runner._retry_after_seconds(response) is not None
+
+
+async def test_402_normalizes_quota_exhausted_safe_text() -> None:
+    """A vendor 402 is terminal quota_exhausted with the safe message."""
+    sdk = _FakeSDK()
+    sdk.search_error = _http_status_error(402)
+    adapter = make_adapter(sdk=sdk)
+
+    with pytest.raises(ProviderOperationError) as excinfo:
+        await adapter.search(SearchRequest(query="exhausted"))
+
+    error = excinfo.value.error
+    assert error.code == "quota_exhausted"
+    assert error.status_code == 402
+    assert error.retryable is False
+    assert error.message == "Tavily is out of Credits. Wait until reset or upgrade."
+
+
+async def test_402_preserved_despite_positive_cached_balance() -> None:
+    """The cached balance never softens a vendor 402 (PLAN 4.2)."""
+    from datetime import UTC, datetime
+
+    from freesearch.models.contracts import QuotaSnapshot, QuotaSource, UnitKind
+
+    adapter = TavilyAdapter(
+        _FakeClient(), sdk_client=_FakeSDK(), api_key=SecretStr("tvly-402-cache")
+    )
+    adapter._quota_cache = QuotaSnapshot(
+        provider="tavily",
+        source=QuotaSource.AUTHORITATIVE,
+        remaining=Decimal("500"),
+        limit=Decimal("1000"),
+        observed_at=datetime.now(UTC),
+        unit_kind=UnitKind.CREDIT,
+        display_unit="Credits",
+    )
+    sdk = adapter._sdk
+    sdk.search_error = _http_status_error(402)  # type: ignore[union-attr]
+
+    with pytest.raises(ProviderOperationError) as excinfo:
+        await adapter.search(SearchRequest(query="exhausted"))
+
+    assert excinfo.value.error.code == "quota_exhausted"
+    zero = await adapter.quota_after_error(402)
+    assert zero is not None and zero.remaining == Decimal("0")
+    # The terminal state holds for the rest of the month.
+    assert adapter._terminal_402 is True
+
+
+async def test_quota_cache_only_without_vendor_io() -> None:
+    """quota() returns cached snapshots and never issues GET /usage."""
+    from datetime import UTC, datetime
+
+    from freesearch.models.contracts import QuotaSnapshot, UnitKind
+    from freesearch.models.provider_limits import AuthMode
+
+    runner = _RecordingRunner()
+    adapter = TavilyAdapter(
+        _FakeClient(),
+        runner=runner,
+        sdk_client=_FakeSDK(),
+        api_key=SecretStr("tvly-cache-only"),
+    )
+    assert await adapter.quota() is None
+    adapter._quota_cache = QuotaSnapshot(
+        provider="tavily",
+        source=QuotaSource.AUTHORITATIVE,
+        remaining=Decimal("42"),
+        limit=Decimal("1000"),
+        observed_at=datetime.now(UTC),
+        unit_kind=UnitKind.CREDIT,
+        display_unit="Credits",
+    )
+    cached = await adapter.quota()
+    assert cached is not None and cached.remaining == Decimal("42")
+    assert runner.entries == []
+    keyless = TavilyAdapter(_FakeClient(), sdk_client=_FakeSDK(), api_key=None)
+    assert keyless.limit_auth_mode is AuthMode.KEYLESS
+    assert await keyless.quota() is None
+
+
+async def test_usage_snapshot_coalesces_within_60s() -> None:
+    """Direct usage_snapshot calls coalesce: one GET per 60 seconds."""
+    from datetime import UTC, datetime
+
+    from freesearch.models.provider_limits import AuthMode, UsageSyncRequest
+
+    adapter = TavilyAdapter(
+        _FakeClient(), sdk_client=_FakeSDK(), api_key=SecretStr("tvly-coalesce")
+    )
+    owned = _FakeOwnedHTTP(httpx.Response(200, json=_usage_payload()))
+    adapter._owned_http = owned
+    request = UsageSyncRequest(
+        provider="tavily", auth_mode=AuthMode.KEYED, observed_at=datetime.now(UTC)
+    )
+
+    first = await adapter.usage_snapshot(request)
+    second = await adapter.usage_snapshot(request)
+
+    assert first is not None and second is not None
+    assert owned.gets == ["https://api.tavily.com/usage"]
+    assert first.remaining == second.remaining
+
+
+async def test_keyless_usage_snapshot_issues_no_request() -> None:
+    """Keyless usage_snapshot returns None without a usage GET."""
+    from datetime import UTC, datetime
+
+    from freesearch.models.provider_limits import AuthMode, UsageSyncRequest
+
+    adapter = TavilyAdapter(_FakeClient(), sdk_client=_FakeSDK(), api_key=None)
+    owned = _FakeOwnedHTTP(httpx.Response(200, json=_usage_payload()))
+    adapter._owned_http = owned
+
+    result = await adapter.usage_snapshot(
+        UsageSyncRequest(
+            provider="tavily", auth_mode=AuthMode.KEYLESS, observed_at=datetime.now(UTC)
+        )
+    )
+
+    assert result is None
+    assert owned.gets == []
+
+
+def test_usage_request_timeout_and_runner_key() -> None:
+    """The background usage read uses a 30s outer timeout and its own key."""
+    import freesearch.adapters.tavily as tavily_mod
+
+    assert tavily_mod._USAGE_REQUEST_TIMEOUT_SECONDS == 30.0
+    assert tavily_mod._USAGE_RUNNER_KEY == "tavily-usage"
+    assert tavily_mod._USAGE_RUNNER_KEY != "tavily"
+
+
+async def test_quota_after_success_projects_local_debit() -> None:
+    """quota_after_success subtracts reported Credits without a usage GET."""
+    from datetime import UTC, datetime
+
+    from freesearch.models.contracts import QuotaSnapshot, QuotaSource, UnitKind
+
+    adapter = TavilyAdapter(
+        _FakeClient(), sdk_client=_FakeSDK(), api_key=SecretStr("tvly-project")
+    )
+    adapter._quota_cache = QuotaSnapshot(
+        provider="tavily",
+        source=QuotaSource.AUTHORITATIVE,
+        remaining=Decimal("10"),
+        limit=Decimal("1000"),
+        observed_at=datetime.now(UTC),
+        unit_kind=UnitKind.CREDIT,
+        display_unit="Credits",
+    )
+    sdk = _FakeSDK()
+    sdk.search_response = _search_payload(usage={"credits": 2})
+
+    response = await TavilyAdapter(
+        _FakeClient(), sdk_client=sdk, api_key=SecretStr("tvly-project")
+    ).search(SearchRequest(query="debit"))
+    projected = adapter.quota_after_success(response)
+
+    assert projected is not None and projected.remaining == Decimal("8")
+
+
+async def test_isolated_runner_key_for_usage() -> None:
+    """The usage runner instance is separate from the search/extract runner."""
+    adapter = make_adapter()
+
+    assert adapter._usage_runner is not adapter._runner
+
+
+async def test_quota_after_success_consecutive_calls_project_from_fresh_cache() -> None:
+    """Two successes from one cache project 8 then 6 with cache 6 (F2 re-anchor)."""
+    from datetime import UTC, datetime
+
+    from freesearch.models.contracts import QuotaSnapshot, QuotaSource, UnitKind
+
+    adapter = TavilyAdapter(
+        _FakeClient(),
+        runner=_RecordingRunner(),
+        sdk_client=_FakeSDK(),
+        api_key=SecretStr("tvly-project-twice"),
+    )
+    adapter._quota_cache = QuotaSnapshot(
+        provider="tavily",
+        source=QuotaSource.AUTHORITATIVE,
+        remaining=Decimal("10"),
+        limit=Decimal("1000"),
+        observed_at=datetime.now(UTC),
+        unit_kind=UnitKind.CREDIT,
+        display_unit="Credits",
+    )
+    adapter._owned_http = _FakeOwnedHTTP(httpx.Response(200, json=_usage_payload()))
+    sdk = adapter._sdk
+    sdk.search_response = _search_payload(usage={"credits": 2})  # type: ignore[union-attr]
+
+    first = await adapter.search(SearchRequest(query="one"))
+    projected_first = adapter.quota_after_success(first)
+    assert projected_first is not None and projected_first.remaining == Decimal("8")
+
+    second = await adapter.search(SearchRequest(query="two"))
+    projected_second = adapter.quota_after_success(second)
+    assert projected_second is not None and projected_second.remaining == Decimal("6")
+
+    assert adapter._quota_cache is not None
+    assert adapter._quota_cache.remaining == Decimal("6")
+    assert adapter._owned_http.gets == []
+
+
+async def test_usage_snapshot_after_terminal_clamps_positive_to_zero() -> None:
+    """A usage poll with balance 500 after terminal 402 reports zero (F1 clamp)."""
+    from datetime import UTC, datetime
+
+    from freesearch.models.provider_limits import AuthMode, UsageSyncRequest
+
+    adapter = TavilyAdapter(
+        _FakeClient(), sdk_client=_FakeSDK(), api_key=SecretStr("tvly-terminal-poll")
+    )
+    sdk = adapter._sdk
+    sdk.search_error = _http_status_error(402)  # type: ignore[union-attr]
+
+    with pytest.raises(ProviderOperationError):
+        await adapter.search(SearchRequest(query="exhausted"))
+    zero = await adapter.quota_after_error(402)
+    assert zero is not None and zero.remaining == Decimal("0")
+    assert adapter._terminal_402 is True
+
+    adapter._owned_http = _FakeOwnedHTTP(
+        httpx.Response(
+            200,
+            json=_usage_payload(account={"plan_usage": 500, "plan_limit": 1000}),
+        )
+    )
+    snapshot = await adapter.usage_snapshot(
+        UsageSyncRequest(
+            provider="tavily", auth_mode=AuthMode.KEYED, observed_at=datetime.now(UTC)
+        )
+    )
+
+    assert snapshot is not None and snapshot.remaining == Decimal("0")
+    assert snapshot.source == "vendor_402"
+    assert adapter._owned_http.gets == ["https://api.tavily.com/usage"]

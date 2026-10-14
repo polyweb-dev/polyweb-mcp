@@ -39,6 +39,7 @@ only when the returned payload supplies a ``usage`` mapping with a numeric
 """
 
 import traceback
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import httpx
@@ -56,7 +57,8 @@ import freesearch.adapters.firecrawl as firecrawl_module  # import seam
 from freesearch.adapters import FirecrawlAdapter
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.infrastructure.resilience import ProviderOperationError
-from freesearch.models.contracts import FetchRequest, SearchRequest, UsageOperation
+from freesearch.models.contracts import FetchRequest, SearchRequest, UnitKind, UsageOperation
+from freesearch.models.provider_limits import AuthMode, Confidence, UsageSyncRequest
 
 
 class _FakeClient:
@@ -1068,3 +1070,191 @@ async def test_fetch_sdk_status_error_maps_non_retryable(error_type: type, statu
     assert error.retryable is False
     assert error.status_code == status
     assert error.message == f"HTTP {status}"
+
+
+# --- usage_snapshot and 402 normalization ------------------------------------
+
+
+async def test_usage_snapshot_200_returns_authoritative_snapshot() -> None:
+    observed_at = datetime(2026, 3, 10, 12, 0, 0, tzinfo=UTC)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "https://api.firecrawl.dev/v2/team/credit-usage"
+        assert request.headers["Authorization"] == "Bearer test-key"
+        return httpx.Response(
+            200,
+            json={
+                "success": True,
+                "data": {
+                    "remainingCredits": 850,
+                    "planCredits": 1000,
+                    "billingPeriodEnd": "2026-04-01T00:00:00Z",
+                },
+            },
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    try:
+        adapter = FirecrawlAdapter(client, sdk_client=object(), api_key=SecretStr("test-key"))
+        sync_req = UsageSyncRequest(
+            provider="firecrawl",
+            auth_mode=AuthMode.KEYED,
+            observed_at=observed_at,
+            credential_generation=1,
+        )
+        snapshot = await adapter.usage_snapshot(sync_req)
+        assert snapshot is not None
+        assert snapshot.pool_id == "firecrawl:keyed:credit"
+        assert snapshot.provider == "firecrawl"
+        assert snapshot.auth_mode is AuthMode.KEYED
+        assert snapshot.native_unit is UnitKind.CREDIT
+        assert snapshot.remaining == Decimal("850")
+        assert snapshot.allowance == Decimal("1000")
+        assert snapshot.reset_at == datetime(2026, 4, 1, 0, 0, tzinfo=UTC)
+        assert snapshot.observed_at == observed_at
+        assert snapshot.source == "vendor_api"
+        assert snapshot.confidence is Confidence.AUTHORITATIVE
+        assert snapshot.credential_generation == 1
+        assert snapshot.plan_name == "Free plan (1,000 monthly credits)"
+        assert snapshot.usage_url == "https://firecrawl.dev/app/settings"
+    finally:
+        await client.aclose()
+
+
+async def test_usage_snapshot_402_returns_terminal_snapshot() -> None:
+    observed_at = datetime(2026, 3, 10, 12, 0, 0, tzinfo=UTC)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(402, json={"error": "Payment Required"})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    try:
+        adapter = FirecrawlAdapter(client, sdk_client=object(), api_key=SecretStr("test-key"))
+        sync_req = UsageSyncRequest(
+            provider="firecrawl",
+            auth_mode=AuthMode.KEYED,
+            observed_at=observed_at,
+            credential_generation=2,
+        )
+        snapshot = await adapter.usage_snapshot(sync_req)
+        assert snapshot is not None
+        assert snapshot.pool_id == "firecrawl:keyed:credit"
+        assert snapshot.remaining == Decimal("0")
+        assert snapshot.source == "vendor_402"
+        assert snapshot.credential_generation == 2
+    finally:
+        await client.aclose()
+
+
+async def test_usage_snapshot_500_or_transport_error_raises_operation_error() -> None:
+    observed_at = datetime(2026, 3, 10, 12, 0, 0, tzinfo=UTC)
+
+    def server_error_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, json={"error": "Internal Server Error"})
+
+    client_500 = httpx.AsyncClient(transport=httpx.MockTransport(server_error_handler))
+    try:
+        adapter = FirecrawlAdapter(client_500, sdk_client=object(), api_key=SecretStr("test-key"))
+        sync_req = UsageSyncRequest(
+            provider="firecrawl",
+            auth_mode=AuthMode.KEYED,
+            observed_at=observed_at,
+        )
+        with pytest.raises(ProviderOperationError) as exc_info:
+            await adapter.usage_snapshot(sync_req)
+        assert exc_info.value.error.code == "vendor_error"
+        assert exc_info.value.error.status_code == 500
+    finally:
+        await client_500.aclose()
+
+    def transport_error_handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("Connection refused")
+
+    client_err = httpx.AsyncClient(transport=httpx.MockTransport(transport_error_handler))
+    try:
+        adapter = FirecrawlAdapter(client_err, sdk_client=object(), api_key=SecretStr("test-key"))
+        sync_req = UsageSyncRequest(
+            provider="firecrawl",
+            auth_mode=AuthMode.KEYED,
+            observed_at=observed_at,
+        )
+        with pytest.raises(ProviderOperationError) as exc_info:
+            await adapter.usage_snapshot(sync_req)
+        assert exc_info.value.error.code == "network_error"
+        assert exc_info.value.error.retryable is True
+    finally:
+        await client_err.aclose()
+
+
+async def test_usage_snapshot_missing_key_or_unsupported_returns_none() -> None:
+    observed_at = datetime(2026, 3, 10, 12, 0, 0, tzinfo=UTC)
+    client = httpx.AsyncClient()
+    try:
+        # Missing API key
+        adapter_no_key = FirecrawlAdapter(client, sdk_client=object(), api_key=None)
+        sync_req = UsageSyncRequest(
+            provider="firecrawl",
+            auth_mode=AuthMode.KEYED,
+            observed_at=observed_at,
+        )
+        assert await adapter_no_key.usage_snapshot(sync_req) is None
+
+        # _supports_credit_quota=False (e.g. legacy injected fake SDK)
+        adapter_unsupported = FirecrawlAdapter(
+            client, sdk_client=_FakeSDK(), api_key=SecretStr("test-key")
+        )
+        assert await adapter_unsupported.usage_snapshot(sync_req) is None
+    finally:
+        await client.aclose()
+
+
+def test_normalize_error_on_402_returns_quota_exhausted() -> None:
+    adapter = make_adapter()
+
+    # status-bearing exception from SDK
+    sdk_exc = FirecrawlError("Payment required", 402)
+    err = adapter._normalize_error(sdk_exc)
+    assert err.error.provider == "firecrawl"
+    assert err.error.code == "quota_exhausted"
+    assert err.error.retryable is False
+    assert err.error.status_code == 402
+    assert "Firecrawl is out of credits" in err.error.message
+
+    # httpx.HTTPStatusError
+    req = httpx.Request("GET", "https://api.firecrawl.dev/v2/team/credit-usage")
+    resp = httpx.Response(402, request=req)
+    http_exc = httpx.HTTPStatusError("402 Payment Required", request=req, response=resp)
+    err2 = adapter._normalize_error(http_exc)
+    assert err2.error.code == "quota_exhausted"
+    assert err2.error.retryable is False
+    assert err2.error.status_code == 402
+    assert "Firecrawl is out of credits" in err2.error.message
+
+
+async def test_cost_estimate_modifiers_including_enhanced_zero() -> None:
+    client = httpx.AsyncClient()
+    try:
+        adapter = FirecrawlAdapter(client, sdk_client=object(), api_key=SecretStr("test-key"))
+        # Base fetch: 1 credit
+        req_base = FetchRequest(url="https://example.com")
+        est_base = await adapter.estimate_cost(req_base)
+        assert est_base.units == Decimal("1")
+        assert est_base.currency == "CREDIT"
+
+        # Enhanced fetch: +0 modifier -> still 1 credit
+        # (LIMITS.md section 5: enhanced proxy/auto escalation +0)
+        req_enhanced = FetchRequest(url="https://example.com", enhanced=True)
+        est_enhanced = await adapter.estimate_cost(req_enhanced)
+        assert est_enhanced.units == Decimal("1")
+
+        # json_extract (+4) + pdf_pages 2 (+2) + enhanced (0) -> 1 + 4 + 2 = 7 credits
+        req_combined = FetchRequest(
+            url="https://example.com",
+            enhanced=True,
+            json_extract=True,
+            pdf_pages=2,
+        )
+        est_combined = await adapter.estimate_cost(req_combined)
+        assert est_combined.units == Decimal("7")
+    finally:
+        await client.aclose()

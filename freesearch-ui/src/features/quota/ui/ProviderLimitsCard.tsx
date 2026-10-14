@@ -20,7 +20,8 @@ import {
   type CreditCardModel,
 } from "../model/crdCardModel"
 import type { ManualAmountMode } from "../model/manualQuotaMath"
-import { providerInfo, type BalancePrefill, type ProviderInfo } from "../model/providerInfo"
+import { displayAdapterOf, profileOf, type TavilyDisplayAdapter } from "../model/tavilyCredits"
+import { providerInfo, type BalancePrefill } from "../model/providerInfo"
 import type { CreditMode } from "../model/quotaLabels"
 import type { QuotaRowEstimates } from "../model/quotaRowModel"
 import { pairedSnapshotOf } from "../model/quotaRowModel"
@@ -40,6 +41,11 @@ import { ProviderCreditSummary } from "./ProviderCreditSummary"
 import { ProviderInfoPopover } from "./ProviderInfoPopover"
 import { ProviderRateBars } from "./ProviderRateBars"
 import type { OAuthSlotArgs } from "./QuotaRow"
+
+export interface RateTierSlotArgs {
+  providerId: string
+  onConfirmed: (environment: "dev" | "prod") => void
+}
 
 export interface ProviderLimitsCardProps {
   providerId: string
@@ -63,6 +69,12 @@ export interface ProviderLimitsCardProps {
    * OAuth feature directly.
    */
   renderOAuthActions?: (args: OAuthSlotArgs) => ReactNode
+  /**
+   * Tavily tier control of this provider. Supplied by composition (the quota
+   * overlay stays in app composition), so the quota feature never imports the
+   * Settings feature directly.
+   */
+  renderRateTier?: (args: RateTierSlotArgs) => ReactNode
 }
 
 interface ManualUnit {
@@ -94,13 +106,17 @@ function grantKey(auth: ProviderAuthLimits): string {
  * The native unit of the manual anchor. A USD pool accepts the vendor USD
  * balance; any other unit keeps the current usage entry.
  */
-function manualUnit(auth: ProviderAuthLimits): ManualUnit {
+function manualUnit(auth: ProviderAuthLimits, providerId: string): ManualUnit {
   const nativeUnit = auth.aggregate_pool?.native_unit ?? null
   if (nativeUnit === "USD") {
     return { unitKind: "USD", displayUnit: "USD", amountMode: "balance" }
   }
   if (nativeUnit === "REQUEST" || nativeUnit === "CREDIT" || nativeUnit === "FREE") {
-    return { unitKind: nativeUnit, displayUnit: nativeUnit, amountMode: "usage" }
+    const displayUnit =
+      (providerId === "tavily" || providerId === "firecrawl") && nativeUnit === "CREDIT"
+        ? "Credits"
+        : nativeUnit
+    return { unitKind: nativeUnit, displayUnit, amountMode: "usage" }
   }
   return { unitKind: null, displayUnit: null, amountMode: "usage" }
 }
@@ -147,6 +163,8 @@ interface CardModalInput {
   auth: ProviderAuthLimits
   fetchAvailable: boolean
   creditMode: CreditMode | null
+  /** The native display inputs of one Tavily rail; null on every other card. */
+  nativeDisplay: TavilyDisplayAdapter | null
   providers?: ProviderConfig[]
   observed?: Record<string, BalancePrefill>
   refreshDashboard: () => Promise<void>
@@ -210,6 +228,7 @@ function cardModals(input: CardModalInput): ReactNode {
           saving={controller.saving}
           saveError={controller.saveError}
           staleVersion={controller.staleVersion}
+          {...(input.nativeDisplay !== null ? { nativeDisplay: input.nativeDisplay } : {})}
           onSave={controller.saveGrant}
           onClose={close}
           onReload={() => void controller.reload()}
@@ -218,6 +237,9 @@ function cardModals(input: CardModalInput): ReactNode {
     )
   }
   if (modal === "history") {
+    // The history view converts a CRD-only Tavily amount with the live rail
+    // profile, the same auth every other dialog of this card reads.
+    const profile = profileOf(auth)
     return (
       <LimitHistoryModal
         open
@@ -227,6 +249,7 @@ function cardModals(input: CardModalInput): ReactNode {
         error={controller.historyError}
         hasMore={controller.hasMoreHistory}
         onLoadMore={controller.loadMoreHistory}
+        {...(profile !== null ? { profile } : {})}
         onClose={close}
       />
     )
@@ -251,9 +274,34 @@ function oauthControl(
   return <div className="flex flex-wrap items-center justify-end gap-2">{control}</div>
 }
 
-/** The details control of one card, shown beside the credit fraction. */
-function infoPopover(info: ProviderInfo, providerId: string, providerName: string, auth: ProviderAuthLimits): ReactNode {
-  return <ProviderInfoPopover providerId={providerId} providerName={providerName} info={info} auth={auth} />
+/** The confirmed minute ceiling of one Tavily key environment. */
+const TAVILY_CEILING_OF_ENV: Record<"dev" | "prod", string> = {
+  dev: "100",
+  prod: "1000",
+}
+
+/** The one provider with a rate-tier selector. */
+const TAVILY_PROVIDER = "tavily"
+
+/** A known text of one field; an absent, empty, or unknown value yields null. */
+function knownText(value: string | null | undefined): string | null {
+  if (value === null || value === undefined) return null
+  const text = value.trim()
+  if (text === "" || text.toLowerCase() === "unknown" || text === "n/a") return null
+  return text
+}
+
+/** Whole-number form of one ceiling text: "100.0" reads "100". */
+function normalizeCeiling(value: string): string {
+  return value.trim().replace(/\.0+$/, "")
+}
+
+/** The current dashboard minute ceiling of one rail, or null when unknown. */
+function dashboardMinuteCeiling(auth: ProviderAuthLimits): string | null {
+  const windows = auth.detail?.rate_windows ?? []
+  const minute = windows.find((entry) => entry.window === "1m")
+  const limit = knownText(minute?.limit ?? null)
+  return limit === null ? null : normalizeCeiling(limit)
 }
 
 /**
@@ -268,7 +316,8 @@ function infoPopover(info: ProviderInfo, providerId: string, providerName: strin
  * time, the usage page, the known tier facts, and the vendor detail. The card
  * body holds the hourly and daily rate bars below the credit summary; the
  * keyless rail of the shared-bar provider holds its shared bars there too,
- * while its popover leaves them out.
+ * while its popover leaves them out. The Tavily card holds its rate-tier
+ * selector beside the native Credits bar.
  */
 export function ProviderLimitsCard({
   providerId,
@@ -282,6 +331,7 @@ export function ProviderLimitsCard({
   observed,
   latestQuota,
   renderOAuthActions,
+  renderRateTier,
 }: ProviderLimitsCardProps): ReactNode {
   const [modal, setModal] = useState<CardModal>(null)
   // The composed control reports its pair state here. The card shows the funds
@@ -301,6 +351,22 @@ export function ProviderLimitsCard({
     [manualState.manual]
   )
   const auth = activeAuth(limits, hasKey)
+  const authMode = auth?.auth_mode ?? null
+  // The confirmed Tavily ceiling snapshot. The derived ceiling below ignores a
+  // stale snapshot after a provider or auth change and after the fresh
+  // dashboard confirms the same ceiling, so no effect clears it.
+  const [confirmedTier, setConfirmedTier] = useState<{
+    ceiling: string
+    providerId: string
+    authMode: string | null
+  } | null>(null)
+  const handleTierConfirmed = (environment: "dev" | "prod") => {
+    setConfirmedTier({
+      ceiling: TAVILY_CEILING_OF_ENV[environment],
+      providerId,
+      authMode,
+    })
+  }
   if (auth === undefined) {
     return <article className={CARD}>{providerName}: no limit data reported by the backend.</article>
   }
@@ -308,11 +374,30 @@ export function ProviderLimitsCard({
   const model = creditCardModel({ auth, usageTotals: crdUsageTotals })
   const keenableBar = providerId === KEENABLE_PROVIDER
   const tinyfishBar = providerId === TINYFISH_PROVIDER
+  const isTavily = providerId === TAVILY_PROVIDER
   const keenableKeyless = keenableBar && auth.auth_mode === "keyless"
-  // The public keyless rail has no usage endpoint to refresh.
-  const refreshSkipped = controller.refreshSkipped || keenableKeyless
-  const info = providerInfo(auth, keenableBar)
-  const unit = manualUnit(auth)
+  // The keyless Tavily rail has no usage endpoint to refresh, like the keyless
+  // Keenable rail. The hide decision reads the current rail, never a prior skip.
+  const tavilyKeyless = isTavily && auth.auth_mode === "keyless"
+  const firecrawlKeyless = providerId === "firecrawl" && auth.auth_mode === "keyless"
+  const refreshSkipped = controller.refreshSkipped || keenableKeyless || tavilyKeyless || firecrawlKeyless
+  // The whole-request floor applies to the release request rails (Keenable);
+  // every other rail keeps the verbatim values, and Tavily reads its native
+  // Credits facts through the optional display adapter.
+  // A stale snapshot (provider or auth change) and a dashboard-confirmed
+  // ceiling both yield no override, so the popover shows unknown headroom
+  // with the new ceiling until current dashboard data confirms that ceiling.
+  const confirmedCeiling =
+    isTavily &&
+    confirmedTier !== null &&
+    confirmedTier.providerId === providerId &&
+    confirmedTier.authMode === auth.auth_mode &&
+    dashboardMinuteCeiling(auth) !== confirmedTier.ceiling
+      ? confirmedTier.ceiling
+      : null
+  const info = providerInfo(auth, providerId, keenableBar, confirmedCeiling ?? undefined)
+  const unit = manualUnit(auth, providerId)
+  const nativeDisplay = displayAdapterOf(providerId, auth)
   const titleId = "limits-title-" + slug(providerId)
   const fetchAvailable = operationAvailable(auth, "fetch")
   const estimates = cardEstimates(providerId, latestQuota, model, manualState.estimate)
@@ -320,10 +405,25 @@ export function ProviderLimitsCard({
     { providerId, providerName, ...estimates, onPairedChange: setOauthPaired },
     renderOAuthActions,
   )
+  const tierSlot =
+    isTavily && renderRateTier !== undefined
+      ? renderRateTier({ providerId, onConfirmed: handleTierConfirmed })
+      : null
+  const cardButtons = (
+    <ProviderCardActions
+      providerId={providerId}
+      providerName={providerName}
+      manualEligible={manualEligible}
+      syncing={controller.syncing}
+      onSync={() => void controller.syncNow()}
+      refreshSkipped={refreshSkipped}
+      onOpenModal={setModal}
+    />
+  )
 
   return (
     <article aria-labelledby={titleId} className={CARD}>
-      <div className="flex min-w-0 items-start justify-between gap-3">
+      <div className="flex min-h-11 min-w-0 items-start justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3">
           <ProviderLogo providerId={providerId} name={providerName} className="size-9 rounded-full" />
           <div className="min-w-0">
@@ -345,29 +445,30 @@ export function ProviderLimitsCard({
       <ProviderCreditSummary
         providerName={providerName}
         model={model}
-        useSharedBar={keenableBar}
-        rateBars={
-          <ProviderRateBars
-            providerName={providerName}
-            progress={auth.rate_progress}
-            fetchAvailable={fetchAvailable}
-            useSharedBar={keenableBar || tinyfishBar}
-            hideAuthoritative={keenableBar || tinyfishBar}
-            {...(keenableBar ? { sharedTitle: "Search and Fetch Limits" } : {})}
+        {...(nativeDisplay !== null ? { credits: nativeDisplay.credits } : {})}
+        useSharedBar={keenableBar || nativeDisplay !== null}
+        fundsControl={tierSlot}
+        {...(isTavily
+          ? {}
+          : {
+              rateBars: (
+                <ProviderRateBars
+                  providerName={providerName}
+                  progress={auth.rate_progress}
+                  fetchAvailable={fetchAvailable}
+                  useSharedBar={keenableBar || tinyfishBar}
+                  hideAuthoritative={keenableBar || tinyfishBar}
+                  {...(keenableBar ? { sharedTitle: "Search and Fetch Limits" } : {})}
+                />
+              ),
+            })}
+        actions={cardButtons}
+        info={
+          <ProviderInfoPopover providerId={providerId} providerName={providerName}
+            info={info} auth={auth}
+            {...(nativeDisplay !== null ? { nativeDisplay } : {})}
           />
         }
-        actions={
-          <ProviderCardActions
-            providerId={providerId}
-            providerName={providerName}
-            manualEligible={manualEligible}
-            syncing={controller.syncing}
-            onSync={() => void controller.syncNow()}
-            refreshSkipped={refreshSkipped}
-            onOpenModal={setModal}
-          />
-        }
-        info={infoPopover(info, providerId, providerName, auth)}
       />
 
       {oauth}
@@ -384,8 +485,9 @@ export function ProviderLimitsCard({
         auth,
         fetchAvailable,
         creditMode: info.creditMode,
-        ...(providers !== undefined ? { providers } : {}),
-        ...(observed !== undefined ? { observed } : {}),
+        nativeDisplay,
+        providers,
+        observed,
         refreshDashboard,
         onClose: () => setModal(null),
       })}

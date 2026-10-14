@@ -280,11 +280,12 @@ describe("RF2: null limits render as — on simulator / settings", () => {
 
     // Registry carries no quota cells, so it must never invent an infinity marker.
     expect(screen.getByRole("table").textContent).not.toContain("∞")
-    // Tavily (no snapshot) renders a null-limit blank in the drill-down quota value.
+    // Release baseline: the reduced test modal shows "Not tested" visibly
+    // (no quota em-dash blank lives in this modal).
     await user.click(screen.getByRole("button", { name: "Tavily test connection" }))
     const dialog = await screen.findByRole("dialog")
     expect(dialog.textContent).not.toContain("∞")
-    expect(dialog.textContent).toMatch(/[\u2014]/)
+    expect(dialog.textContent).toMatch(/Not tested/)
     cleanup()
 
     renderUsage(dashboardFixture())
@@ -360,10 +361,14 @@ describe("RF4: visible unavailable/confidence semantics in Settings modal + Usag
     expect(headers).not.toContain("p95")
     const rows = Array.from(table.querySelectorAll("tbody tr"))
     expect(rows.length).toBe(8)
+    // Merged baseline: the Tavily row gains one approved rate-tier cell under
+    // its identity; every other row keeps the seven release columns.
     for (const row of rows) {
-      expect(row.children).toHaveLength(headers.length)
+      const isTavily = (row.textContent ?? "").includes("Tavily")
+      expect(row.children).toHaveLength(isTavily ? headers.length + 1 : headers.length)
     }
-    // Drill-down still carries visible confidence semantics (not title-only).
+    // Release baseline: the reduced modal carries Endpoint/Capabilities/Last
+    // result visibly (not title-only); quota confidence lives outside it.
     const braveRow = screen.getByText("Brave Search", { exact: true }).closest("tr")!
     const testIdx = headers.indexOf("Test")
     expect(testIdx).toBeGreaterThanOrEqual(0)
@@ -371,7 +376,9 @@ describe("RF4: visible unavailable/confidence semantics in Settings modal + Usag
       within(braveRow.children[testIdx] as HTMLElement).getByRole("button", { name: /brave.*test/i })
     )
     const dialog = await screen.findByRole("dialog")
-    expect(dialog.textContent).toMatch(/authoritative|observed|estimated|unavailable|no quota/i)
+    expect(dialog.textContent).toMatch(/Not tested/)
+    expect(dialog.textContent).toMatch(/Endpoint/)
+    expect(dialog.textContent).toMatch(/Capabilities/)
   })
 
   it("modal keeps normalized capacity; Usage view shows CRD cost and volume cards (UI7-05)", async () => {
@@ -381,8 +388,10 @@ describe("RF4: visible unavailable/confidence semantics in Settings modal + Usag
 
     await user.click(screen.getByRole("button", { name: "Brave Search test connection" }))
     const dialog = await screen.findByRole("dialog")
-    expect(dialog.textContent).toMatch(/95% remaining/)
-    expect(dialog.textContent).toMatch(/950\/1000 requests/)
+    // Release baseline: the reduced modal shows the release "Not tested" value
+    // with Endpoint/Capabilities, not normalized capacity rows.
+    expect(dialog.textContent).toMatch(/Not tested/)
+    expect(dialog.textContent).toMatch(/Endpoint/)
     cleanup()
 
     // UI7-05: the native quota rows left UsageTotals. Credit-unit cost uses
@@ -418,7 +427,8 @@ describe("RF4: visible unavailable/confidence semantics in Settings modal + Usag
 
     await user.click(screen.getByRole("button", { name: "Brave Search test connection" }))
     const dialog = await screen.findByRole("dialog")
-    expect(dialog.textContent).toMatch(/unavailable|no quota|[\u2014]/i)
+    // Release baseline: an untested provider shows "Not tested" visibly.
+    expect(dialog.textContent).toMatch(/Not tested/i)
     cleanup()
 
     // UI7-05: UsageTotals holds no unavailable marker. Empty totals show
@@ -444,7 +454,11 @@ describe("RF4: visible unavailable/confidence semantics in Settings modal + Usag
     await user.click(within(testCell).getByRole("button", { name: /brave.*test/i }))
 
     const dialog = await screen.findByRole("dialog")
-    expect(dialog.textContent).toMatch(/authoritative|observed|estimated|unavailable|no quota/i)
+    // Release baseline: quota confidence is not title-only hidden; the reduced
+    // modal keeps Endpoint/Capabilities/Last result visibly rendered.
+    expect(dialog.textContent).toMatch(/Endpoint/)
+    expect(dialog.textContent).toMatch(/Capabilities/)
+    expect(dialog.textContent).toMatch(/Not tested/)
   })
 
   it("page shows exactly one price note with Brave cost and version once (UI7-06)", async () => {
@@ -471,11 +485,11 @@ describe("RF4: visible unavailable/confidence semantics in Settings modal + Usag
     const note = sections[0] as HTMLElement
     expect(within(note).getByText("Provider")).toBeInTheDocument()
     expect(within(note).getByText("Operation")).toBeInTheDocument()
-    expect(within(note).getByText("USD per call")).toBeInTheDocument()
-    expect(within(note).getByText("CRD per call")).toBeInTheDocument()
-    expect(within(note).getByText("Brave Search")).toBeInTheDocument()
-    expect(within(note).getByText("0.005 USD")).toBeInTheDocument()
-    expect(within(note).getByText("5 CRD")).toBeInTheDocument()
+    expect(within(note).getByText("USD per operation")).toBeInTheDocument()
+    expect(within(note).getByText("CRD per operation")).toBeInTheDocument()
+    const bravePriceRow = within(note).getByText("Brave Search").closest("tr")!
+    expect(within(bravePriceRow).getByText("0.005 USD")).toBeInTheDocument()
+    expect(within(bravePriceRow).getByText("5 CRD")).toBeInTheDocument()
     expect(within(note).queryByText("fetch")).toBeNull()
 
     const body = document.body.textContent ?? ""

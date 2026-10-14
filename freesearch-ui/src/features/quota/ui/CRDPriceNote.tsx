@@ -9,25 +9,16 @@ export type CRDPriceNoteProps = PriceNoteInput
 
 const HEADING = "How credit units are priced"
 const PRICE_TEXT =
-  "1 CRD = USD 0.001 of priced native use. Provider prices determine CRD per call. " +
-  "Add-ons and actual native use can change that call cost."
+  "1 CRD = USD 0.001 of priced native use. Provider prices determine CRD cost. " +
+  "Add-ons and each provider's stated operation basis can change the final cost."
 const EMPTY_TEXT = "No provider price is reported in the current catalog."
 const MUTED = "text-[var(--muted)] text-[12px]"
-const COLUMNS = ["Provider", "Operation", "USD per call", "CRD per call"]
-/** The header row closes the table box on the top, the left, and the right side. */
-const HEAD_ROW = "border-t border-l border-r border-[var(--border-subtle)]"
-/**
- * One tone per operation: a search row and a fetch row differ by border and
- * text. The important marker holds the colored left border on every data row,
- * because the shared table body closes its last row with `border-0`.
- */
-const ROW_TONE: Record<string, string> = {
-  search: "border-l-2! border-l-[var(--accent-cyan)]",
-  fetch: "border-l-2! border-l-[var(--accent-seafoam)]",
+const COLUMNS = ["Provider", "Operation", "USD per operation", "CRD per operation"]
+/** The inset accent stays visible when table row borders collapse. */
+const ROW_ACCENT: Record<string, string> = {
+  search: "var(--accent-cyan)",
+  fetch: "var(--accent-seafoam)",
 }
-/** Every data row closes the box on its right side and its bottom side. */
-const ROW_EDGE =
-  "border-r! border-r-[var(--border-subtle)] border-b! border-b-[var(--border-subtle)]"
 const TEXT_TONE: Record<string, string> = {
   search: "text-[var(--accent-cyan)]",
   fetch: "text-[var(--accent-seafoam)]",
@@ -39,15 +30,37 @@ function profileText(versions: string[]): string {
   return " Price profile: " + versions.join(", ") + ". Reported prices can be estimates."
 }
 
-/** One price row: the provider logo and name, the operation, and the two call costs. */
-function priceRow(row: PriceNoteRow): ReactNode {
-  const usd = row.usdPerCall + " USD" + (row.estimated ? " (estimated)" : "")
+/** A free tier keeps its reference price visible while making its actual cost clear. */
+function costValue(value: string | null, free: boolean, missingLabel = "—"): ReactNode {
+  if (!free) return value ?? missingLabel
+  return (
+    <span className="inline-flex flex-wrap items-baseline justify-end gap-x-1.5 text-right">
+      {value !== null && <s className="min-w-0">{value}</s>}
+      <span className="text-[12px] font-semibold text-[var(--signal)]">Free</span>
+    </span>
+  )
+}
+
+/** One price row: the provider logo and name, the operation, and both costs. */
+function priceRow(row: PriceNoteRow, lastRow: boolean): ReactNode {
+  const usd = row.usdPerCall === null
+    ? null
+    : row.usdPerCall + " USD" + (row.estimated ? " (estimated)" : "")
+  const crd = row.crdPerCall === null ? null : row.crdPerCall
+  const usdMissingLabel = row.priceBasis?.toLowerCase().includes("plan")
+    ? "Plan-dependent"
+    : "—"
+  const rowClass = [
+    lastRow ? "" : "border-b border-[var(--border-subtle)]",
+  ].filter(Boolean).join(" ")
   return (
     <TableRow
       key={row.provider + "-" + row.operation}
-      className={ROW_TONE[row.operation] + " " + ROW_EDGE}
+      className={rowClass}
     >
-      <TableCell>
+      <TableCell
+        style={{ boxShadow: `inset 2px 0 0 ${ROW_ACCENT[row.operation] ?? "transparent"}` }}
+      >
         <span className="flex items-center gap-2">
           <ProviderLogo providerId={row.provider} name={row.providerName} />
           <span>{row.providerName}</span>
@@ -55,9 +68,14 @@ function priceRow(row: PriceNoteRow): ReactNode {
       </TableCell>
       <TableCell className={TEXT_TONE[row.operation] ?? ""}>
         {operationLabel(row.operation)}
+        {row.priceBasis !== null && (
+          <span className="mt-0.5 block text-[11px] text-[var(--muted)]">
+            {row.priceBasis}
+          </span>
+        )}
       </TableCell>
-      <TableCell>{usd}</TableCell>
-      <TableCell>{row.crdPerCall}</TableCell>
+      <TableCell>{costValue(usd, row.free, usdMissingLabel)}</TableCell>
+      <TableCell>{costValue(crd, row.free)}</TableCell>
     </TableRow>
   )
 }
@@ -69,6 +87,7 @@ function priceRow(row: PriceNoteRow): ReactNode {
  * its operation by border and text tone as well as by the operation column. An
  * empty catalog shows one muted sentence instead of a table. Every note of this
  * block sits in the one footnote below it, including the known price versions.
+ * Free rows keep their reference costs struck through beside the free label.
  */
 export function CRDPriceNote(props: CRDPriceNoteProps): ReactNode {
   const rows = priceNoteRows(props)
@@ -84,18 +103,22 @@ export function CRDPriceNote(props: CRDPriceNoteProps): ReactNode {
       <h3 id="crd-price-note-heading">{HEADING}</h3>
       {rows.length === 0 && <p className={MUTED}>{EMPTY_TEXT}</p>}
       {rows.length > 0 && (
-        <Table>
-          <TableHeader>
-            <TableRow className={HEAD_ROW}>
-              {COLUMNS.map((column) => (
-                <TableHead key={column} scope="col">
-                  {column}
-                </TableHead>
-              ))}
-            </TableRow>
-          </TableHeader>
-          <TableBody>{rows.map(priceRow)}</TableBody>
-        </Table>
+        <div className="overflow-hidden rounded-lg border border-[var(--border-subtle)]">
+          <Table>
+            <TableHeader>
+              <TableRow className="border-[var(--border-subtle)]">
+                {COLUMNS.map((column) => (
+                  <TableHead key={column} scope="col">
+                    {column}
+                  </TableHead>
+                ))}
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.map((row, index) => priceRow(row, index === rows.length - 1))}
+            </TableBody>
+          </Table>
+        </div>
       )}
       <Footnote className="border-t border-[var(--border-subtle)]/60 pt-2">
         {PRICE_TEXT + profileText(versions)}

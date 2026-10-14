@@ -179,3 +179,54 @@ async def test_window_reset_restores_capacity(repository) -> None:
         )
     )
     assert admission.attempt_id == "w-3"
+
+
+# --- Tavily shared-bucket rate detail (PLAN 4.2) ------------------------------
+
+
+def _tavily_records():  # type: ignore[no-untyped-def]
+    from freesearch.configuration.provider_limits import provider_limit_defaults
+
+    return [r for r in provider_limit_defaults() if r.provider == "tavily"]
+
+
+async def test_tavily_rate_windows_expose_shared_bucket_headroom(repository) -> None:
+    from freesearch.configuration.provider_config import ProviderConfig
+
+    svc = ProviderLimitsService(
+        repository.limits,
+        records=_tavily_records(),
+        tier_defaults=None,
+        clock=lambda: FIXED_AT,
+    )
+    await svc.initialize()
+    await svc.apply_tavily_config(ProviderConfig(), auth_mode=AuthMode.KEYED)
+    await svc.admit(
+        LimitCallContext(
+            provider="tavily",
+            operation=LimitOperation.SEARCH,
+            auth_mode=AuthMode.KEYED,
+            attempt_id="t-detail-1",
+            requested_at=FIXED_AT,
+        )
+    )
+    windows = await svc.rate_limits.window_details("tavily", AuthMode.KEYED, FIXED_AT)
+    assert len(windows) == 1
+    assert windows[0].bucket_id == "tavily:keyed:search:requests"
+    assert windows[0].remaining == Decimal("99")
+
+
+async def test_tavily_vendor_cooldown_exposes_retry_after(repository) -> None:
+    from freesearch.configuration.provider_config import ProviderConfig
+
+    svc = ProviderLimitsService(
+        repository.limits,
+        records=_tavily_records(),
+        tier_defaults=None,
+        clock=lambda: FIXED_AT,
+    )
+    await svc.initialize()
+    await svc.apply_tavily_config(ProviderConfig(), auth_mode=AuthMode.KEYED)
+    await svc.rate_limits.record_vendor_cooldown("tavily", AuthMode.KEYED, 45, FIXED_AT)
+    windows = await svc.rate_limits.window_details("tavily", AuthMode.KEYED, FIXED_AT)
+    assert windows[0].reset_at == FIXED_AT + timedelta(seconds=45)

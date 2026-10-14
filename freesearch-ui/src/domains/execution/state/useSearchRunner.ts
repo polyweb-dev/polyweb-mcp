@@ -1,6 +1,6 @@
 import { useCallback } from "react";
 import { apiService } from "@/services/api/freesearchApi";
-import { errorMessage } from "@/shared/api/http";
+import { ApiError, errorMessage } from "@/shared/api/http";
 import type { ToastNotification } from "@/shared/notifications/context";
 import type { BackendSearchRequest } from "@/domains/execution/api/wire";
 import type { SearchRequest, SearchResponse } from "@/domains/execution";
@@ -34,6 +34,31 @@ interface SearchRunnerDeps {
   prependUsageEvent: (event: UsageEvent) => void;
   providers: ProviderConfig[];
   routingPreset: RoutingPreset;
+}
+
+/**
+ * The safe provider id of one failure payload. Local admission denials carry
+ * the provider under `detail`; the top level stays the fallback read.
+ */
+function providerFromRaw(raw: unknown): string | null {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const body = raw as Record<string, unknown>;
+  const providerOf = (value: unknown): string | null =>
+    typeof value === "string" && value.trim() !== "" ? value : null;
+  const top = providerOf(body.provider);
+  if (top !== null) return top;
+  const detail = body.detail;
+  if (detail === null || typeof detail !== "object" || Array.isArray(detail)) return null;
+  return providerOf((detail as Record<string, unknown>).provider);
+}
+
+/** True when the failure is the terminal Tavily out-of-Credits 402. */
+function isTavilyPaymentRequired(error: unknown): boolean {
+  return (
+    error instanceof ApiError &&
+    error.status === 402 &&
+    providerFromRaw(error.raw) === "tavily"
+  );
 }
 
 /**
@@ -104,8 +129,12 @@ export function useSearchRunner({
       } catch (primaryError) {
         // Fanout searches handle partial failures on the server via ranked fusion;
         // a total fanout failure must surface directly without falling back to an
-        // arbitrary single provider.
-        if (isFanout || !fallbackEnabled) return fail(primaryError);
+        // arbitrary single provider. A terminal Tavily 402 is the out-of-Credits
+        // rail too: it must reach the caller exactly as the backend sent it, so
+        // no fallback walk and no later error can replace the primary state.
+        if (isFanout || !fallbackEnabled || isTavilyPaymentRequired(primaryError)) {
+          return fail(primaryError);
+        }
         // Auto mode pins nothing, so the arbitrated pick is unknown — assume
         // the backend tried the head of the same policy ordering and walk to
         // the next provider, never retrying the failed one.

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
-import { render, screen, within } from "@testing-library/react"
+import type { ReactNode } from "react"
+import { act, render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import type { CRDUsageTotal, CRDView, LimitRecord, ProviderAuthLimits, ProviderLimits, RateProgressView } from "@/domains/dashboard"
 import { installFetchStub, ok } from "@/test/fetchMock"
@@ -461,6 +462,205 @@ describe("ProviderLimitsCard Brave", () => {
     expect(fractionSpan?.contains(info)).toBe(true)
     const bar = screen.getByRole("progressbar", { name: "Brave credit units remaining" })
     expect((bar.compareDocumentPosition(creditRow as Node) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0).toBe(true)
+    vi.unstubAllGlobals()
+  })
+})
+
+describe("ProviderLimitsCard Tavily native", () => {
+  function tavilyProfile() {
+    return {
+      reference_usd_per_crd: "0.001",
+      native_usd_per_unit: "0.008",
+      cost_basis: "paygo_reference",
+      price_version: "paygo-reference",
+      source: "documented",
+      estimated: true,
+    }
+  }
+
+  function tavilyAuth(): ProviderAuthLimits {
+    return {
+      auth_mode: "keyed",
+      transport_available: true,
+      search: {
+        provider: "tavily",
+        operation: "search",
+        auth_mode: "keyed",
+        supported: true,
+        transport_available: true,
+        native_pool_id: "tavily:keyed:credits",
+        rate: null,
+        budget: {
+          model: "credits",
+          free_allowance: "1000",
+          allowance_unit: "Credits",
+          allowance_period: "monthly",
+          cost_per_1k: null,
+          standard_native_cost: "1",
+          usd_per_call: "0.008",
+          on_exhausted: "402",
+          usage_api: "/usage",
+          priced: true,
+        },
+        conversion_profile: tavilyProfile(),
+        plan_name: "Tavily",
+        usage_url: null,
+        version: 2,
+      },
+      fetch: {
+        provider: "tavily",
+        operation: "fetch",
+        auth_mode: "keyed",
+        supported: true,
+        transport_available: true,
+        native_pool_id: "tavily:keyed:credits",
+        rate: null,
+        budget: {
+          model: "credits",
+          free_allowance: "1000",
+          allowance_unit: "Credits",
+          allowance_period: "monthly",
+          cost_per_1k: null,
+          standard_native_cost: "0.2",
+          usd_per_call: "0.008",
+          on_exhausted: "402",
+          usage_api: "/usage",
+          priced: true,
+        },
+        conversion_profile: tavilyProfile(),
+        plan_name: "Tavily",
+        usage_url: null,
+        version: 2,
+      },
+      free_tiers: [],
+      paid_tiers: [],
+      unknown_tiers: [],
+      tier_split_known: true,
+      aggregate_pool: {
+        pool_id: "tavily:keyed:credits",
+        provider: "tavily",
+        auth_mode: "keyed",
+        native_unit: "CREDIT",
+        remaining: "999",
+        allowance: "1000",
+        actual_spend_usd: null,
+        source: "vendor_api",
+        confidence: "observed",
+        reset_at: "2026-10-01T00:00:00Z",
+        observed_at: "2026-09-06T10:05:00Z",
+        version: 2,
+        credential_generation: 1,
+        next_sync_at: null,
+        stale: false,
+        manual_anchor: false,
+      },
+      crd_views: [
+        {
+          state: "finite",
+          operation: "search",
+          remaining_crd: "7992",
+          local_remaining_crd: null,
+          request_cost_crd: "8",
+          shared_pool_id: "tavily:keyed:credits",
+          possible_standard_calls: "999",
+          price_version: "paygo-reference",
+          priced: true,
+        },
+        {
+          state: "finite",
+          operation: "fetch",
+          remaining_crd: "7992",
+          local_remaining_crd: null,
+          request_cost_crd: "8",
+          shared_pool_id: "tavily:keyed:credits",
+          possible_standard_calls: "999",
+          price_version: "paygo-reference",
+          priced: true,
+        },
+      ],
+      rate_progress: [],
+      grants: null,
+      detail: {
+        plan_name: "Tavily",
+        native_unit: "CREDIT",
+        native_balance: "999",
+        native_allowance: "1000",
+        usd_per_call: "0.008",
+        actual_spend_usd: "0.008",
+        reset_at: "2026-10-01T00:00:00Z",
+        reset_rule: "monthly_first",
+        usage_url: null,
+        source: "vendor_api",
+        confidence: "observed",
+        last_sync_at: "2026-09-06T10:05:00Z",
+        stale: false,
+        price_version: "paygo-reference",
+        crd_split_note: null,
+        rate_windows: [
+          {
+            bucket_id: "tavily:keyed:search:requests",
+            limit: "100",
+            window: "1m",
+            scope: "key",
+            unit: "requests",
+            remaining: "95",
+            reset_at: null,
+            source: "local",
+            confidence: "observed",
+          },
+        ],
+        retry_after_seconds: null,
+        tier_split_known: true,
+        aggregate_pool_id: "tavily:keyed:credits",
+      },
+    } as unknown as ProviderAuthLimits
+  }
+
+  function tavilyLimits(): ProviderLimits {
+    return {
+      provider: "tavily",
+      active_auth_mode: "keyed",
+      auths: [tavilyAuth()],
+      documented_keyless_operations: ["search", "fetch"],
+      version: 2,
+      generated_at: "2026-03-10T12:00:00Z",
+    }
+  }
+
+  function renderTavilyCard(): void {
+    installFetchStub(() => ok({ events: [], next_cursor: null }))
+    render(
+      <ProviderLimitsCard
+        providerId="tavily"
+        providerName="Tavily"
+        limits={tavilyLimits()}
+        crdUsageTotals={[]}
+        refreshDashboard={() => Promise.resolve()}
+        manualEligible
+      />,
+    )
+  }
+
+  it("selects native Credits with a native bar and no closed USD", () => {
+    renderTavilyCard()
+    const bar = screen.getByRole("progressbar", { name: "Tavily native Credits remaining" })
+    expect(bar.getAttribute("aria-valuenow")).toBe("99.9")
+    expect(screen.getByText("999")).not.toBeNull()
+    expect(screen.getByText("/ 1000")).not.toBeNull()
+    expect(screen.getByText("Credits")).not.toBeNull()
+    expect(screen.queryByText("CRD")).toBeNull()
+    expect(screen.queryByText("0.008")).toBeNull()
+    expect(screen.queryByText("$0.008")).toBeNull()
+    vi.unstubAllGlobals()
+  })
+
+  it("keeps USD absent while closed and shows USD inside the open disclosure", async () => {
+    renderTavilyCard()
+    expect(screen.queryByText("0.008")).toBeNull()
+    const user = userEvent.setup()
+    await user.click(screen.getByRole("button", { name: "Credit details for Tavily" }))
+    expect(await screen.findByText("Quota Details")).not.toBeNull()
+    expect(screen.getByText("0.008")).not.toBeNull()
     vi.unstubAllGlobals()
   })
 })
@@ -1097,6 +1297,487 @@ describe("ProviderLimitsCard Tinyfish", () => {
     expect(tinyfish.getByText("498 of 500 requests per hour")).not.toBeNull()
     expect(tinyfish.getByText("1000 of 1000 URLs per day")).not.toBeNull()
     expect(tinyfish.getAllByRole("progressbar")).toHaveLength(2)
+    vi.unstubAllGlobals()
+  })
+})
+
+/**
+ * Tavily FIX: no Tavily rate bars, a separate renderRateTier metadata row, the
+ * confirmed-ceiling snapshot with derived clearance, and no reset subtitle.
+ * Brave, Tinyfish, and Keenable cases above stay intact.
+ */
+
+describe("ProviderLimitsCard Tavily FIX", () => {
+  function fixProfile() {
+    return {
+      reference_usd_per_crd: "0.001",
+      native_usd_per_unit: "0.008",
+      cost_basis: "paygo_reference",
+      price_version: "paygo-reference",
+      source: "documented",
+      estimated: true,
+    }
+  }
+
+  function fixRecord(operation: "search" | "fetch", nativeCost: string) {
+    return {
+      provider: "tavily",
+      operation,
+      auth_mode: "keyed",
+      supported: true,
+      transport_available: true,
+      native_pool_id: "tavily:keyed:credits",
+      rate: null,
+      budget: {
+        model: "credits",
+        free_allowance: "1000",
+        allowance_unit: "Credits",
+        allowance_period: "monthly",
+        cost_per_1k: null,
+        standard_native_cost: nativeCost,
+        usd_per_call: "0.008",
+        on_exhausted: "402",
+        usage_api: "/usage",
+        priced: true,
+      },
+      conversion_profile: fixProfile(),
+      plan_name: "Tavily",
+      usage_url: null,
+      version: 2,
+    }
+  }
+
+  function fixAuth(): ProviderAuthLimits {
+    return {
+      auth_mode: "keyed",
+      transport_available: true,
+      search: fixRecord("search", "1"),
+      fetch: fixRecord("fetch", "0.2"),
+      free_tiers: [],
+      paid_tiers: [],
+      unknown_tiers: [],
+      tier_split_known: true,
+      aggregate_pool: {
+        pool_id: "tavily:keyed:credits",
+        provider: "tavily",
+        auth_mode: "keyed",
+        native_unit: "CREDIT",
+        remaining: "999",
+        allowance: "1000",
+        actual_spend_usd: null,
+        source: "vendor_api",
+        confidence: "observed",
+        reset_at: "2026-10-01T00:00:00Z",
+        observed_at: "2026-09-06T10:05:00Z",
+        version: 2,
+        credential_generation: 1,
+        next_sync_at: null,
+        stale: false,
+        manual_anchor: false,
+      },
+      crd_views: [
+        {
+          state: "finite",
+          operation: "search",
+          remaining_crd: "7992",
+          local_remaining_crd: null,
+          request_cost_crd: "8",
+          shared_pool_id: "tavily:keyed:credits",
+          possible_standard_calls: "999",
+          price_version: "paygo-reference",
+          priced: true,
+        },
+        {
+          state: "finite",
+          operation: "fetch",
+          remaining_crd: "7992",
+          local_remaining_crd: null,
+          request_cost_crd: "8",
+          shared_pool_id: "tavily:keyed:credits",
+          possible_standard_calls: "999",
+          price_version: "paygo-reference",
+          priced: true,
+        },
+      ],
+      rate_progress: [],
+      grants: null,
+      detail: {
+        plan_name: "Tavily",
+        native_unit: "CREDIT",
+        native_balance: "999",
+        native_allowance: "1000",
+        usd_per_call: "0.008",
+        actual_spend_usd: "0.008",
+        reset_at: "2026-10-01T00:00:00Z",
+        reset_rule: "monthly_first",
+        usage_url: null,
+        source: "vendor_api",
+        confidence: "observed",
+        last_sync_at: "2026-09-06T10:05:00Z",
+        stale: false,
+        price_version: "paygo-reference",
+        crd_split_note: null,
+        rate_windows: [
+          {
+            bucket_id: "tavily:keyed:search:requests",
+            limit: "100",
+            window: "1m",
+            scope: "key",
+            unit: "requests",
+            remaining: "95",
+            reset_at: null,
+            source: "local",
+            confidence: "observed",
+          },
+        ],
+        retry_after_seconds: null,
+        tier_split_known: true,
+        aggregate_pool_id: "tavily:keyed:credits",
+      },
+    } as unknown as ProviderAuthLimits
+  }
+
+  function fixLimits(): ProviderLimits {
+    return {
+      provider: "tavily",
+      active_auth_mode: "keyed",
+      auths: [fixAuth()],
+      documented_keyless_operations: ["search", "fetch"],
+      version: 2,
+      generated_at: "2026-03-10T12:00:00Z",
+    }
+  }
+
+  function renderFixCard(
+    slot?: (args: { providerId: string; onConfirmed: (environment: "dev" | "prod") => void }) => ReactNode,
+  ): void {
+    installFetchStub(() => ok({ events: [], next_cursor: null }))
+    render(
+      <ProviderLimitsCard
+        providerId="tavily"
+        providerName="Tavily"
+        limits={fixLimits()}
+        crdUsageTotals={[]}
+        refreshDashboard={() => Promise.resolve()}
+        manualEligible
+        {...(slot !== undefined ? { renderRateTier: slot } : {})}
+      />,
+    )
+  }
+
+  it("shows no Tavily rate bars with one funds bar and no reset subtitle", () => {
+    renderFixCard()
+    const article = screen.getByRole("heading", { name: "Tavily" }).closest("article") as HTMLElement
+    const bars = within(article).getAllByRole("progressbar")
+    expect(bars).toHaveLength(1)
+    expect(bars[0].getAttribute("aria-label")).toBe("Tavily native Credits remaining")
+    expect(within(article).queryByText(/requests per (minute|hour)/)).toBeNull()
+    expect(within(article).queryByText("95/100")).toBeNull()
+    expect(within(article).queryByText(/Resets /)).toBeNull()
+    vi.unstubAllGlobals()
+  })
+
+  it("places the renderRateTier slot above the funds bar for Tavily only", () => {
+    const seen: string[] = []
+    const slot = (args: { providerId: string }) => {
+      seen.push(args.providerId)
+      return <button type="button">Tier control</button>
+    }
+    installFetchStub(() => ok({ events: [], next_cursor: null }))
+    render(
+      <>
+        <ProviderLimitsCard
+          providerId="tavily"
+          providerName="Tavily"
+          limits={fixLimits()}
+          crdUsageTotals={[]}
+          refreshDashboard={() => Promise.resolve()}
+          manualEligible
+          renderRateTier={slot}
+        />
+        <ProviderLimitsCard
+          providerId="brave"
+          providerName="Brave"
+          limits={braveLimits()}
+          crdUsageTotals={[]}
+          refreshDashboard={() => Promise.resolve()}
+          manualEligible
+          renderRateTier={slot}
+        />
+      </>,
+    )
+    expect(seen).toEqual(["tavily"])
+    const tavilyArticle = screen.getByRole("heading", { name: "Tavily" }).closest("article") as HTMLElement
+    const tier = within(tavilyArticle).getByRole("button", { name: "Tier control" })
+    const progressBar = within(tavilyArticle).getByRole("progressbar")
+    expect(tier.compareDocumentPosition(progressBar) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(tier.closest("div.space-y-2")?.textContent).toContain("Tier control")
+    expect(tier.closest("div.space-y-2")?.textContent).not.toContain("Refresh Limits")
+    expect(tier.closest("div.space-y-2")?.textContent).not.toContain("Resets")
+    expect(within(tavilyArticle).getByRole("button", { name: /Refresh limits/i })).toBeTruthy()
+    const braveArticle = screen.getByRole("heading", { name: "Brave" }).closest("article") as HTMLElement
+    expect(within(braveArticle).queryByRole("button", { name: "Tier control" })).toBeNull()
+    vi.unstubAllGlobals()
+  })
+
+  it("shows the confirmed ceiling at once with unknown headroom until the dashboard confirms it", async () => {
+    let confirmed: ((environment: "dev" | "prod") => void) | null = null
+    renderFixCard((args) => {
+      confirmed = args.onConfirmed
+      return null
+    })
+    expect(confirmed).not.toBeNull()
+    const user = userEvent.setup()
+    await user.click(screen.getByRole("button", { name: "Credit details for Tavily" }))
+    expect(await screen.findByText("Search and Fetch Rate Limit")).not.toBeNull()
+    expect(screen.getByText("95/100 requests per minute")).not.toBeNull()
+    await act(async () => {
+      confirmed?.("prod")
+    })
+    expect(await screen.findByText("unknown/1000 requests per minute")).not.toBeNull()
+    vi.unstubAllGlobals()
+  })
+
+  it("clears the confirmed override after the dashboard confirms the same ceiling", async () => {
+    let confirmed: ((environment: "dev" | "prod") => void) | null = null
+    const slot = (args: { providerId: string; onConfirmed: (environment: "dev" | "prod") => void }) => {
+      confirmed = args.onConfirmed
+      return null
+    }
+    installFetchStub(() => ok({ events: [], next_cursor: null }))
+    const view = render(
+      <ProviderLimitsCard
+        providerId="tavily"
+        providerName="Tavily"
+        limits={fixLimits()}
+        crdUsageTotals={[]}
+        refreshDashboard={() => Promise.resolve()}
+        manualEligible
+        renderRateTier={slot}
+      />,
+    )
+    await act(async () => {
+      confirmed?.("prod")
+    })
+    const auth = fixAuth()
+    const confirmedAuth = {
+      ...auth,
+      detail: auth.detail === null ? null : {
+        ...auth.detail,
+        rate_windows: (auth.detail.rate_windows ?? []).map((entry) =>
+          entry.window === "1m" ? { ...entry, limit: "1000", remaining: "1000" } : entry,
+        ),
+      },
+    } as unknown as ProviderAuthLimits
+    view.rerender(
+      <ProviderLimitsCard
+        providerId="tavily"
+        providerName="Tavily"
+        limits={{ ...fixLimits(), auths: [confirmedAuth] }}
+        crdUsageTotals={[]}
+        refreshDashboard={() => Promise.resolve()}
+        manualEligible
+        renderRateTier={slot}
+      />,
+    )
+    const user = userEvent.setup()
+    await user.click(screen.getByRole("button", { name: "Credit details for Tavily" }))
+    expect(await screen.findByText("1000 requests per minute")).not.toBeNull()
+    expect(screen.queryByText("unknown/1000 requests per minute")).toBeNull()
+    vi.unstubAllGlobals()
+  })
+})
+
+
+describe("ProviderLimitsCard Firecrawl", () => {
+  function firecrawlProfile() {
+    return {
+      reference_usd_per_crd: "0.001",
+      native_usd_per_unit: "0.0038",
+      cost_basis: "hobby_reference",
+      price_version: "hobby-reference",
+      source: "documented",
+      estimated: true,
+    }
+  }
+
+  function firecrawlAuth(): ProviderAuthLimits {
+    return {
+      auth_mode: "keyed",
+      transport_available: true,
+      search: {
+        provider: "firecrawl",
+        operation: "search",
+        auth_mode: "keyed",
+        supported: true,
+        transport_available: true,
+        native_pool_id: "firecrawl:keyed:credit",
+        rate: null,
+        budget: {
+          model: "credits",
+          free_allowance: "1000",
+          allowance_unit: "Credits",
+          allowance_period: "monthly",
+          cost_per_1k: null,
+          standard_native_cost: "2",
+          usd_per_call: "0.0076",
+          on_exhausted: "402",
+          usage_api: "https://api.firecrawl.dev/v2/team/credit-usage",
+          priced: true,
+        },
+        conversion_profile: firecrawlProfile(),
+        plan_name: "Free plan (1,000 monthly credits)",
+        usage_url: "https://firecrawl.dev/app/settings",
+        version: 1,
+      },
+      fetch: {
+        provider: "firecrawl",
+        operation: "fetch",
+        auth_mode: "keyed",
+        supported: true,
+        transport_available: true,
+        native_pool_id: "firecrawl:keyed:credit",
+        rate: null,
+        budget: {
+          model: "credits",
+          free_allowance: "1000",
+          allowance_unit: "Credits",
+          allowance_period: "monthly",
+          cost_per_1k: null,
+          standard_native_cost: "1",
+          usd_per_call: "0.0038",
+          on_exhausted: "402",
+          usage_api: "https://api.firecrawl.dev/v2/team/credit-usage",
+          priced: true,
+        },
+        conversion_profile: firecrawlProfile(),
+        plan_name: "Free plan (1,000 monthly credits)",
+        usage_url: "https://firecrawl.dev/app/settings",
+        version: 1,
+      },
+      free_tiers: [],
+      paid_tiers: [],
+      unknown_tiers: [],
+      tier_split_known: true,
+      aggregate_pool: {
+        pool_id: "firecrawl:keyed:credit",
+        provider: "firecrawl",
+        auth_mode: "keyed",
+        native_unit: "CREDIT",
+        remaining: "850",
+        allowance: "1000",
+        actual_spend_usd: null,
+        source: "vendor_api",
+        confidence: "authoritative",
+        reset_at: "2026-04-01T00:00:00Z",
+        observed_at: "2026-03-10T12:00:00Z",
+        version: 1,
+        credential_generation: 1,
+        next_sync_at: null,
+        stale: false,
+        manual_anchor: false,
+      },
+      crd_views: [
+        {
+          state: "finite",
+          operation: "search",
+          remaining_crd: "3230",
+          local_remaining_crd: null,
+          request_cost_crd: "7.6",
+          shared_pool_id: "firecrawl:keyed:credit",
+          possible_standard_calls: "425",
+          price_version: "hobby-reference",
+          priced: true,
+        },
+        {
+          state: "finite",
+          operation: "fetch",
+          remaining_crd: "3230",
+          local_remaining_crd: null,
+          request_cost_crd: "3.8",
+          shared_pool_id: "firecrawl:keyed:credit",
+          possible_standard_calls: "850",
+          price_version: "hobby-reference",
+          priced: true,
+        },
+      ],
+      rate_progress: [],
+      grants: null,
+      detail: {
+        plan_name: "Free plan (1,000 monthly credits)",
+        native_unit: "CREDIT",
+        native_balance: "850",
+        native_allowance: "1000",
+        usd_per_call: null,
+        actual_spend_usd: null,
+        reset_at: "2026-04-01T00:00:00Z",
+        reset_rule: "monthly_first",
+        usage_url: "https://firecrawl.dev/app/settings",
+        source: "vendor_api",
+        confidence: "authoritative",
+        last_sync_at: "2026-03-10T12:00:00Z",
+        stale: false,
+        price_version: "hobby-reference",
+        crd_split_note: null,
+        rate_windows: [
+          {
+            bucket_id: "firecrawl:keyed:requests",
+            limit: "10",
+            window: "1m",
+            scope: "team",
+            unit: "requests",
+            remaining: "10",
+            reset_at: null,
+            source: "local",
+            confidence: "observed",
+          },
+        ],
+        retry_after_seconds: null,
+        tier_split_known: true,
+        aggregate_pool_id: "firecrawl:keyed:credit",
+      },
+    } as unknown as ProviderAuthLimits
+  }
+
+  function firecrawlLimits(): ProviderLimits {
+    return {
+      provider: "firecrawl",
+      active_auth_mode: "keyed",
+      auths: [firecrawlAuth()],
+      documented_keyless_operations: [],
+      version: 1,
+      generated_at: "2026-03-10T12:00:00Z",
+    }
+  }
+
+  function renderFirecrawlCard(): void {
+    installFetchStub(() => ok({ events: [], next_cursor: null }))
+    render(
+      <ProviderLimitsCard
+        providerId="firecrawl"
+        providerName="Firecrawl"
+        limits={firecrawlLimits()}
+        crdUsageTotals={[]}
+        refreshDashboard={() => Promise.resolve()}
+        manualEligible
+      />,
+    )
+  }
+
+  it("renders Firecrawl card with Credits display and manual entry modal displays Credits", async () => {
+    renderFirecrawlCard()
+    expect(screen.getByRole("heading", { name: "Firecrawl" })).not.toBeNull()
+
+    const user = userEvent.setup()
+    const infoButton = screen.getByRole("button", { name: "Credit details for Firecrawl" })
+    await user.click(infoButton)
+    expect(await screen.findByText("Monthly Credits")).not.toBeNull()
+
+    const balanceButton = screen.getByRole("button", { name: /Provider Balance/i })
+    await user.click(balanceButton)
+
+    expect(await screen.findByRole("dialog")).not.toBeNull()
+    expect(screen.getByText("Allowance (Credits)")).not.toBeNull()
     vi.unstubAllGlobals()
   })
 })

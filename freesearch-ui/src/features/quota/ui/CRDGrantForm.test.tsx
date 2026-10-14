@@ -137,3 +137,103 @@ describe("CRDGrantForm", () => {
     expect(screen.queryByText(SPEND_CAP_NOTE)).toBe(null)
   })
 })
+
+describe("CRDGrantForm Tavily native", () => {
+  function tavilyProfile() {
+    return {
+      reference_usd_per_crd: "0.001",
+      native_usd_per_unit: "0.008",
+      cost_basis: "paygo_reference",
+      price_version: "paygo-reference",
+      source: "documented",
+      estimated: true,
+    }
+  }
+
+  function tavilyGrants() {
+    return {
+      provider: "tavily",
+      auth_mode: "keyed",
+      period_start: "2026-09-01",
+      period_end: "2026-09-30",
+      version: 3,
+      search_granted_crd: "8",
+      search_consumed_crd: "0",
+      search_reserved_crd: "0",
+      fetch_granted_crd: "16",
+      fetch_consumed_crd: "0",
+      fetch_reserved_crd: "0",
+    }
+  }
+
+  function renderTavily(overrides: Record<string, unknown> = {}) {
+    const onSave = vi.fn(() => Promise.resolve(true))
+    const onClose = vi.fn()
+    const onReload = vi.fn()
+    render(
+      <CRDGrantForm
+        providerName="Tavily"
+        authMode="keyed"
+        grants={tavilyGrants()}
+        fetchAvailable
+        saving={false}
+        saveError={null}
+        staleVersion={false}
+        nativeDisplay={{ credits: {} as never, profile: tavilyProfile() } as never}
+        onSave={onSave}
+        onClose={onClose}
+        onReload={onReload}
+        {...overrides}
+      />,
+    )
+    return { onSave, onClose }
+  }
+
+  it("displays native Credits while keeping stored CRD text convertible", () => {
+    renderTavily()
+    expect(screen.getByLabelText("Search Credits")).toHaveValue("1")
+    expect(screen.getByLabelText("Fetch Credits")).toHaveValue("2")
+    expect(screen.getByText(/1 Credit/)).not.toBeNull()
+    expect(screen.getByText(/2 Credits/)).not.toBeNull()
+    expect(screen.queryByText("8 CRD")).toBeNull()
+  })
+
+  it("wires CRD on submit after a typed Credits amount", async () => {
+    const { onSave } = renderTavily()
+    const user = userEvent.setup()
+    await user.clear(screen.getByLabelText("Search Credits"))
+    await user.type(screen.getByLabelText("Search Credits"), "3")
+    await user.click(screen.getByRole("button", { name: "Save budget limit" }))
+    expect(onSave).toHaveBeenCalledTimes(1)
+    expect(onSave).toHaveBeenCalledWith({
+      auth_mode: "keyed",
+      version: 3,
+      period_start: "2026-09-01",
+      period_end: "2026-09-30",
+      search_crd: "24",
+      fetch_crd: "16",
+    })
+  })
+
+  it("disables conversion on an unknown profile and keeps CRD behavior", () => {
+    const onSave = vi.fn(() => Promise.resolve(true))
+    render(
+      <CRDGrantForm
+        providerName="Tavily"
+        authMode="keyed"
+        grants={tavilyGrants()}
+        fetchAvailable
+        saving={false}
+        saveError={null}
+        staleVersion={false}
+        nativeDisplay={{ credits: {} as never, profile: null } as never}
+        onSave={onSave}
+        onClose={() => {}}
+        onReload={() => {}}
+      />,
+    )
+    expect(screen.getByLabelText("Search credit units (CRD)")).toHaveValue("8")
+    expect(screen.getByLabelText("Fetch credit units (CRD)")).toHaveValue("16")
+    expect(screen.getByText(/8 CRD/)).not.toBeNull()
+  })
+})
