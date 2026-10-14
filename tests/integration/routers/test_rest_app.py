@@ -141,17 +141,12 @@ async def test_openapi_docs_are_served(
     repository: SQLiteRepository,
     auth_secret: str,
 ) -> None:
-    # Docs need any valid JWT. Anonymous calls fail first.
+    # Docs and openapi schema are public endpoints.
     app = create_app([_StubAdapter("brave", fetch=False)], repository=repository)
     with TestClient(app) as client:
-        assert client.get("/openapi.json").status_code == 401
-        assert client.get("/docs").status_code == 401
-
-        pair = register_and_login(client, temp_email("rest-docs"))
-        headers = raw_auth_headers(pair["access_token"])
-        docs = client.get("/openapi.json", headers=headers)
-        assert docs.status_code == 200
-        assert client.get("/docs", headers=headers).status_code == 200
+        assert client.get("/openapi.json").status_code == 200
+        assert client.get("/docs").status_code == 200
+        assert client.get("/redoc").status_code == 200
 
 
 def test_api_lifespan_cleans_up(auth_secret: str) -> None:

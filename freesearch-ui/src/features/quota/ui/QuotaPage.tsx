@@ -4,7 +4,6 @@ import { useFreeSearch } from "@/context/useFreeSearch"
 import { isManualQuotaEligible } from "../model/quotaEligibility"
 import { manualEligibleProviders } from "../model/quotaRowModel"
 import { CRDPriceNote } from "./CRDPriceNote"
-import { Footnote } from "./Footnote"
 import { ProviderLimitsCards } from "./ProviderLimitsCards"
 import type { RateTierSlotArgs } from "./ProviderLimitsCard"
 import type { OAuthSlotArgs } from "./QuotaRow"
@@ -41,7 +40,6 @@ export function QuotaPage({
     providerLimits,
     crdUsageTotals,
     dashboardQuotas,
-    dashboardNotice,
     usageLoading,
     usageError,
     refreshDashboard,
@@ -56,10 +54,6 @@ export function QuotaPage({
     <div className="space-y-8">
       <div className="flex flex-col gap-2 pb-2 border-b border-[var(--border-subtle)]">
         <h2 className="text-[var(--text-strong)]">Usage</h2>
-        <Footnote>
-          Credit-unit capacity and recorded provider usage reported by the backend.
-        </Footnote>
-        {dashboardNotice && <Footnote>{dashboardNotice}</Footnote>}
       </div>
 
       {usageError && (
