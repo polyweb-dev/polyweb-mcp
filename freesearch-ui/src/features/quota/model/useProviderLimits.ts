@@ -26,7 +26,6 @@ const STALE_VERSION_TEXT =
 export interface ProviderLimitsInput {
   providerId: string
   limits: ProviderLimits
-  hasKey?: boolean
   refreshDashboard: () => Promise<void>
   historyOpen: boolean
 }
@@ -212,7 +211,7 @@ function useLimitHistory(input: HistoryInput): HistoryState {
 export function useProviderLimits(input: ProviderLimitsInput): ProviderLimitsController {
   const { providerId, limits, refreshDashboard, historyOpen } = input
   const backendId = toBackendId(providerId)
-  const authMode = activeAuth(limits, input.hasKey)?.auth_mode ?? ""
+  const authMode = activeAuth(limits)?.auth_mode ?? ""
   const snapshotKey = limits.generated_at + "-" + limits.version
   const [reloadKey, setReloadKey] = useState(0)
   const [save, setSave] = useState<SaveState>({

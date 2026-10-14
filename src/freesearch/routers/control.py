@@ -1204,6 +1204,8 @@ async def _eject_provider_adapter(request: Request, provider: ProviderName) -> N
                         adapter = _build_with_resolved_secret(
                             factory, client, None, config=config
                         )
+                        if provider is ProviderName.KEENABLE:
+                            _apply_keenable_limits(app, adapter)
                         routes.append(adapter)
 
     if lock is not None:
@@ -1240,6 +1242,14 @@ async def _apply_tavily_limits(
     if limits is not None:
         with suppress(Exception):
             await limits.apply_tavily_config(config, auth_mode=adapter.limit_auth_mode)
+
+
+def _apply_keenable_limits(app: FastAPI, adapter: ProviderAdapter) -> None:
+    """Project the built Keenable adapter's rail into the app limit store."""
+
+    limits = getattr(app.state, "limits", None)
+    if limits is not None:
+        limits.apply_keenable_auth_mode(adapter.limit_auth_mode)
 
 
 async def _ensure_provider_adapter(
@@ -1301,6 +1311,8 @@ async def _ensure_provider_adapter(
         _apply_provider_budget_setters(adapter, config)
         if provider is ProviderName.TAVILY:
             await _apply_tavily_limits(app, config, adapter)
+        elif provider is ProviderName.KEENABLE:
+            _apply_keenable_limits(app, adapter)
         routes.append(adapter)
         return adapter
 

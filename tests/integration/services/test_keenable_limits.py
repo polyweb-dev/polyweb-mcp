@@ -139,6 +139,33 @@ async def _seed_full(service: ProviderLimitsService, repo: SQLiteRepository) -> 
     )
 
 
+async def test_provider_view_uses_keenable_runtime_auth_mode(
+    repository: SQLiteRepository,
+) -> None:
+    service = _service(repository)
+    await service.initialize()
+
+    service.apply_keenable_auth_mode(AuthMode.KEYLESS)
+    keyless_view = await service.provider_view("keenable")
+    assert keyless_view.active_auth_mode is AuthMode.KEYLESS
+    assert {auth.auth_mode for auth in keyless_view.auths} == {AuthMode.KEYED, AuthMode.KEYLESS}
+
+    service.apply_keenable_auth_mode(AuthMode.KEYED)
+    keyed_view = await service.provider_view("keenable")
+    assert keyed_view.active_auth_mode is AuthMode.KEYED
+
+
+async def test_provider_view_keeps_catalog_fallback_without_runtime_auth_mode(
+    repository: SQLiteRepository,
+) -> None:
+    service = _service(repository)
+    await service.initialize()
+
+    view = await service.provider_view("keenable")
+
+    assert view.active_auth_mode is AuthMode.KEYED
+
+
 async def test_search_and_fetch_reported_costs_debit_one_pool(
     repository: SQLiteRepository,
 ) -> None:

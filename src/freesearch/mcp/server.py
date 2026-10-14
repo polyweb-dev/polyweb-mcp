@@ -121,6 +121,9 @@ async def _start_limits_generation(state: _ServerState, routes: Sequence[Provide
         return
     limits = ProviderLimitsService(repository.limits)
     await limits.initialize()
+    keenable = next((route for route in routes if route.name == ProviderName.KEENABLE.value), None)
+    if keenable is not None:
+        limits.apply_keenable_auth_mode(keenable.limit_auth_mode)
     stop = asyncio.Event()
     sync = LimitSyncService(repository.limits, limits, lambda: state["routes"] or [])
     state["limits"] = limits

@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
 import { render, screen } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
+import { installFetchStub, ok } from "@/test/fetchMock"
 import { ProviderLimitsCards } from "./ProviderLimitsCards"
 
 vi.mock("../model/useManualQuota", () => ({
@@ -312,5 +314,37 @@ describe("ProviderLimitsCards rate-tier slot (FIX)", () => {
     expect(braveArticle.querySelector('[data-testid="tier-slot"]')).toBeNull()
     expect(screen.getByTestId("oauth-tavily")).not.toBeNull()
     expect(screen.getByTestId("oauth-brave")).not.toBeNull()
+  })
+
+  it("uses the Tavily backend mode for history when browser key status disagrees", async () => {
+    const stub = installFetchStub(() => ok({ events: [], next_cursor: null }))
+    const limits = tavilyEntry()
+    const keyed = limits.auths[0]
+    const keyless = { ...keyed, auth_mode: "keyless" as const }
+    render(
+      <ProviderLimitsCards
+        providers={[
+          {
+            id: "tavily",
+            name: "Tavily",
+            hasKey: true,
+            keyVaultStatus: "configured",
+            capabilities: ["search", "fetch"],
+          },
+        ] as never}
+        providerLimits={[
+          { ...limits, active_auth_mode: "keyless", auths: [keyed, keyless] },
+        ] as never}
+        crdUsageTotals={[]}
+        refreshDashboard={() => Promise.resolve()}
+        manualEligible={new Set<string>()}
+      />,
+    )
+
+    const user = userEvent.setup()
+    await user.click(screen.getByRole("button", { name: "Balance history for Tavily" }))
+    expect(await screen.findByText("Balance history")).not.toBeNull()
+    expect(stub.requestsTo(/limits\/history/).some(({ url }) => url.includes("auth_mode=keyless"))).toBe(true)
+    vi.unstubAllGlobals()
   })
 })

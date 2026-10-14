@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import type { CRDUsageTotal, ProviderAuthLimits } from "@/domains/dashboard"
+import type { CRDUsageTotal, ProviderAuthLimits, ProviderLimits } from "@/domains/dashboard"
 import {
   activeAuth,
   creditCardModel,
@@ -127,17 +127,39 @@ describe("operationAvailable", () => {
 })
 
 describe("activeAuth", () => {
-  it("prefers the active rail with fallback to the first", () => {
+  it.each([
+    ["tavily", "keyed"],
+    ["tavily", "keyless"],
+    ["keenable", "keyed"],
+    ["keenable", "keyless"],
+  ] as const)(
+    "%s selects the backend-reported %s rail when both modes are available",
+    (provider, activeAuthMode) => {
+      const keyed = braveAuth()
+      const keyless = braveAuth({ auth_mode: "keyless" })
+      const limits: ProviderLimits = {
+        provider,
+        active_auth_mode: activeAuthMode,
+        auths: [keyed, keyless],
+        documented_keyless_operations: [],
+        version: 1,
+        generated_at: "2026-09-06T10:05:00Z",
+      }
+      expect(activeAuth(limits)).toBe(activeAuthMode === "keyed" ? keyed : keyless)
+    },
+  )
+
+  it("falls back to the first reported rail if the active mode is absent", () => {
     const auth = braveAuth()
-    const limits = {
-      provider: "brave",
-      active_auth_mode: "keyed",
+    const limits: ProviderLimits = {
+      provider: "keenable",
+      active_auth_mode: "keyless",
       auths: [auth],
       documented_keyless_operations: [],
       version: 1,
       generated_at: "2026-09-06T10:05:00Z",
     }
-    expect(activeAuth(limits as never)?.auth_mode).toBe("keyed")
+    expect(activeAuth(limits)).toBe(auth)
   })
 })
 

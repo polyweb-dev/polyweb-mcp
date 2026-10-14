@@ -925,13 +925,31 @@ async def test_secret_delete_keenable_reverts_to_keyless_mode(
             client, repository, temp_email("control-keen"), UserRole.ADMIN
         )
         headers = raw_auth_headers(pair["access_token"])
+        initial_limits = client.get("/api/v1/providers/keenable/limits", headers=headers)
+        assert initial_limits.status_code == 200
+        assert initial_limits.json()["active_auth_mode"] == "keyed"
+
         delete_res = client.delete("/api/v1/providers/keenable/secret", headers=headers)
         assert delete_res.status_code == 200
         assert delete_res.json()["presence"] == "keyless_public"
 
+        keyless_limits = client.get("/api/v1/providers/keenable/limits", headers=headers)
+        assert keyless_limits.status_code == 200
+        assert keyless_limits.json()["active_auth_mode"] == "keyless"
+
         active = next((r for r in app.state._routes if r.name == "keenable"), None)
         assert active is not None
         assert active.capabilities.quota is False
+
+        write_res = client.put(
+            "/api/v1/providers/keenable/secret",
+            json={"key": "keenable-api-key-rotated"},
+            headers=headers,
+        )
+        assert write_res.status_code == 200
+        keyed_limits = client.get("/api/v1/providers/keenable/limits", headers=headers)
+        assert keyed_limits.status_code == 200
+        assert keyed_limits.json()["active_auth_mode"] == "keyed"
 
 
 @pytest.mark.asyncio

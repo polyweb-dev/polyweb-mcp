@@ -55,8 +55,6 @@ export interface ProviderLimitsCardProps {
   crdUsageTotals: CRDUsageTotal[]
   refreshDashboard: () => Promise<void>
   manualEligible: boolean
-  /** Current credential presence, independent of the catalog's active rail. */
-  hasKey?: boolean
   /** The selectable providers of the balance dialog; the own provider is the default. */
   providers?: ProviderConfig[]
   /** The observed balance per provider, which starts a new entry as an estimate. */
@@ -326,7 +324,6 @@ export function ProviderLimitsCard({
   crdUsageTotals,
   refreshDashboard,
   manualEligible,
-  hasKey,
   providers,
   observed,
   latestQuota,
@@ -343,14 +340,13 @@ export function ProviderLimitsCard({
     limits,
     refreshDashboard,
     historyOpen: modal === "history",
-    ...(hasKey !== undefined ? { hasKey } : {}),
   })
   const manualState = useManualQuota(providerId, manualEligible)
   const manualDefaults = useMemo(
     () => manualDefaultsOf(manualState.manual),
     [manualState.manual]
   )
-  const auth = activeAuth(limits, hasKey)
+  const auth = activeAuth(limits)
   const authMode = auth?.auth_mode ?? null
   // The confirmed Tavily ceiling snapshot. The derived ceiling below ignores a
   // stale snapshot after a provider or auth change and after the fresh

@@ -513,6 +513,9 @@ async def _start_limits(
         with suppress(Exception):
             config = await effective_config_for_name(repo, ProviderName.TAVILY.value)
             await limits.apply_tavily_config(config, auth_mode=adapter.limit_auth_mode)
+    keenable = next((route for route in routes if route.name == ProviderName.KEENABLE.value), None)
+    if keenable is not None:
+        limits.apply_keenable_auth_mode(keenable.limit_auth_mode)
     app.state.limits = limits
     app.state.limits_sync = LimitSyncService(repo.limits, limits, lambda: routes)
     app.state._limits_task = asyncio.create_task(app.state.limits_sync.run(stop))

@@ -132,6 +132,7 @@ class ProviderLimitsService:
         # current adapter executes with, the operator key environment, and the
         # PAYGO overage confirmation. Catalog defaults keep the pre-seed state.
         self._tavily_auth_mode: AuthMode | None = None
+        self._keenable_auth_mode: AuthMode | None = None
         self._tavily_key_environment: Literal["dev", "prod"] = "dev"
         self._tavily_paygo_enabled: bool = False
 
@@ -245,6 +246,11 @@ class ProviderLimitsService:
         rate = _tavily_minute_rate(config.tavily_key_environment)
         for record in self._tavily_keyed_records():
             await self._apply_tavily_rate(record, rate)
+
+    def apply_keenable_auth_mode(self, auth_mode: AuthMode) -> None:
+        """Store the auth rail selected by the active Keenable adapter."""
+
+        self._keenable_auth_mode = auth_mode
 
     async def _apply_tavily_rate(self, record: ProviderLimitRecord, rate: RateBlock) -> None:
         """Apply one rate limit to a record's shared minute bucket, when it moves."""
@@ -656,11 +662,7 @@ class ProviderLimitsService:
         confirmed = self._tavily_paygo_confirmed(pool)
         if pool.source == _TAVILY_TERMINAL_SOURCE and not confirmed:
             return (_FUNDS_DENIED, ["credits_exhausted"])
-        if (
-            confirmed
-            and _tavily_free_exhausted(pool, view)
-            and self._grant_overage_allowed(view)
-        ):
+        if confirmed and _tavily_free_exhausted(pool, view) and self._grant_overage_allowed(view):
             return (_FUNDS_OK, [])
         return None
 
@@ -826,13 +828,16 @@ class ProviderLimitsService:
     def _active_mode(self, provider: str, records: Sequence[ProviderLimitRecord]) -> AuthMode:
         """Return the rail the runtime executes with, when the catalog is known.
 
-        The Tavily adapter decides its rail from the credential, so the stored
-        adapter-derived mode wins where available; every other provider keeps
-        the catalog-derived fallback an empty record list has provided so far.
+        Tavily and Keenable adapters decide their rails from credentials, so
+        their stored adapter-derived modes win where available. Other providers
+        keep the catalog-derived fallback an empty record list has provided so
+        far.
         """
 
         if provider == "tavily" and self._tavily_auth_mode is not None and records:
             return self._tavily_auth_mode
+        if provider == "keenable" and self._keenable_auth_mode is not None and records:
+            return self._keenable_auth_mode
         return _active_auth_mode(records) if records else AuthMode.KEYED
 
     # ------------------------------------------------------------- internals
@@ -1291,9 +1296,7 @@ def _stored_tier(pool: NativePool, tier_pool_id: str) -> TierBalance | None:
     return next((tier for tier in pool.tiers if tier.pool_id == tier_pool_id), None)
 
 
-def _observed_stored_tier(
-    tier_pool_id: str, pools: Mapping[str, NativePool]
-) -> TierBalance | None:
+def _observed_stored_tier(tier_pool_id: str, pools: Mapping[str, NativePool]) -> TierBalance | None:
     """Return the vendor-observed tier row for one catalog tier, when stored.
 
     A usage snapshot carries its tier facts on the aggregate native pool, so

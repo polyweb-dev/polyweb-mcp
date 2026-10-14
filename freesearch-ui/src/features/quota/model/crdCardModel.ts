@@ -94,12 +94,9 @@ export function operationAvailable(auth: ProviderAuthLimits, operation: CRDOpera
   return record !== null && record.supported && record.transport_available
 }
 
-/** Select the runtime credential rail when known, else the catalog's active rail. */
-export function activeAuth(limits: ProviderLimits, hasKey?: boolean): ProviderAuthLimits | undefined {
-  const mode = hasKey === undefined ? limits.active_auth_mode : hasKey ? "keyed" : "keyless"
-  return limits.auths.find((entry) => entry.auth_mode === mode)
-    ?? limits.auths.find((entry) => entry.auth_mode === limits.active_auth_mode)
-    ?? limits.auths[0]
+/** Select the active credential rail reported by this provider limits payload. */
+export function activeAuth(limits: ProviderLimits): ProviderAuthLimits | undefined {
+  return limits.auths.find((entry) => entry.auth_mode === limits.active_auth_mode) ?? limits.auths[0]
 }
 
 /** The profile of the first runnable rail, else the first reported rail. */
