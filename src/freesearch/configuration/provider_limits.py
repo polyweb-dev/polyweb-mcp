@@ -521,6 +521,93 @@ def _tavily_records() -> list[ProviderLimitRecord]:
     return records
 
 
+def _firecrawl_records() -> list[ProviderLimitRecord]:
+    """Build the documented Firecrawl records.
+
+    Keyed search bills 2 credits per 10 results rounded up and fetch bills 1
+    base credit per page, backed by the shared 1,000 monthly free credits.
+    The keyless rail has no transport available.
+    """
+
+    shared_rate = _rate(
+        _request_window(
+            "firecrawl",
+            AuthMode.KEYED,
+            "search",
+            "10",
+            window=RateWindowName.MINUTE,
+            scope=RateScope.TEAM,
+            bucket="firecrawl:keyed:requests",
+            source="documented_plan",
+        )
+    )
+    search_budget = _budget(
+        BudgetModel.CREDITS,
+        free_allowance="1000",
+        allowance_unit="credits",
+        allowance_period="month",
+        cost_per_1k="3.8",
+        native_cost="2",
+        usd_per_call="0.0076",
+        on_exhausted=ExhaustAction.STOP,
+        usage_api="https://api.firecrawl.dev/v2/team/credit-usage",
+    )
+    fetch_budget = _budget(
+        BudgetModel.CREDITS,
+        free_allowance="1000",
+        allowance_unit="credits",
+        allowance_period="month",
+        cost_per_1k="3.8",
+        native_cost="1",
+        usd_per_call="0.0038",
+        on_exhausted=ExhaustAction.STOP,
+        usage_api="https://api.firecrawl.dev/v2/team/credit-usage",
+    )
+    keyed_profile = _profile(
+        str(FIRECRAWL_HOBBY_MONTHLY_USD_PER_CREDIT),
+        source="hobby_monthly_reference",
+        estimated=True,
+    )
+    records: list[ProviderLimitRecord] = [
+        _record(
+            "firecrawl",
+            LimitOperation.SEARCH,
+            AuthMode.KEYED,
+            rate=shared_rate,
+            budget=search_budget,
+            pool_unit=UnitKind.CREDIT,
+            profile=keyed_profile,
+            plan_name="Free plan (1,000 monthly credits)",
+            usage_url="https://firecrawl.dev/app/settings",
+        ),
+        _record(
+            "firecrawl",
+            LimitOperation.FETCH,
+            AuthMode.KEYED,
+            rate=shared_rate,
+            budget=fetch_budget,
+            pool_unit=UnitKind.CREDIT,
+            profile=keyed_profile,
+            plan_name="Free plan (1,000 monthly credits)",
+            usage_url="https://firecrawl.dev/app/settings",
+        ),
+    ]
+    for operation in (LimitOperation.SEARCH, LimitOperation.FETCH):
+        records.append(
+            _record(
+                "firecrawl",
+                operation,
+                AuthMode.KEYLESS,
+                transport_available=False,
+                rate=_unpublished_rate(),
+                budget=None,
+                profile=_profile(None, source="keyless_unpublished"),
+                plan_name="Keyless public pool (rate limit not published)",
+            )
+        )
+    return records
+
+
 def provider_limit_defaults() -> tuple[ProviderLimitRecord, ...]:
     """Return the documented catalog in stable catalog order.
 
@@ -535,6 +622,7 @@ def provider_limit_defaults() -> tuple[ProviderLimitRecord, ...]:
         _keenable_records,
         _brave_records,
         _tavily_records,
+        _firecrawl_records,
     ):
         records.extend(builder())
     return tuple(records)
@@ -662,5 +750,30 @@ def provider_tier_defaults() -> dict[str, list[TierBalance]]:
             native_unit=request,
             transport_available=True,
             label="Documented keyless search and extract (rate limit not published)",
+        ),
+        "firecrawl:keyed": [
+            _tier(
+                "firecrawl:keyed:free",
+                "free",
+                credit,
+                allowance="1000",
+                reset_rule=ResetRule.VENDOR_PERIOD,
+                source="documented_plan",
+                label="Free plan (1,000 monthly credits)",
+            ),
+            _tier(
+                "firecrawl:keyed:paid",
+                "paid",
+                credit,
+                reset_rule=ResetRule.VENDOR_PERIOD,
+                confidence=Confidence.UNKNOWN,
+                label="Purchased credits",
+            ),
+        ],
+        "firecrawl:keyless": _keyless_documented_tier(
+            "firecrawl",
+            native_unit=credit,
+            transport_available=False,
+            label="Documented keyless public pool (rate limit not published)",
         ),
     }

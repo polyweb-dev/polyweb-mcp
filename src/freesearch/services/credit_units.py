@@ -114,6 +114,17 @@ def request_native_cost(
         if depth == "advanced":
             cost *= _ADVANCED_DEPTH_FACTOR
         return cost
+    if record.provider == "firecrawl":
+        if isinstance(request, SearchRequest):
+            bundles = (Decimal(request.limit) + Decimal("9")) // Decimal("10")
+            return bundles * Decimal("2")
+        if isinstance(request, FetchRequest):
+            modifiers = Decimal(request.pdf_pages)
+            if request.json_extract:
+                modifiers += Decimal("4")
+            if request.zero_data_retention:
+                modifiers += Decimal("1")
+            return Decimal("1") + modifiers
     return cost
 
 
@@ -235,25 +246,15 @@ def spendable_crd(view: CRDView) -> Decimal | None:
 
     ``None`` means an unmetered rail has no finite funds gate. A finite rail
     with no known balance is not spendable and yields ``None`` as well, so the
-    caller must consult :attr:`CRDView.state` before allowing unpriced use.
+    funds precheck safely denies admission without an invented balance.
     """
 
     if view.state is CRDState.UNMETERED:
         return None
-    return view.spendable_crd
-
-
-def shared_pool_funds(pool: NativePool, records: Sequence[ProviderLimitRecord]) -> Decimal | None:
-    """Return a shared pool's CRD funds exactly once.
-
-    Operation views that project the same pool never add together, so a total
-    sums this value once per pool ID instead of summing each view.
-    """
-
-    profile = next(
-        (record.conversion_profile for record in records if record.native_pool_id == pool.pool_id),
-        None,
-    )
-    if profile is None:
+    remaining = view.remaining_crd
+    if remaining is None:
         return None
-    return native_to_crd(pool, profile)
+    local = view.local_remaining_crd
+    if local is not None:
+        return min(remaining, local)
+    return remaining

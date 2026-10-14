@@ -112,7 +112,10 @@ function manualUnit(auth: ProviderAuthLimits, providerId: string): ManualUnit {
     return { unitKind: "USD", displayUnit: "USD", amountMode: "balance" }
   }
   if (nativeUnit === "REQUEST" || nativeUnit === "CREDIT" || nativeUnit === "FREE") {
-    const displayUnit = providerId === "tavily" && nativeUnit === "CREDIT" ? "Credits" : nativeUnit
+    const displayUnit =
+      (providerId === "tavily" || providerId === "firecrawl") && nativeUnit === "CREDIT"
+        ? "Credits"
+        : nativeUnit
     return { unitKind: nativeUnit, displayUnit, amountMode: "usage" }
   }
   return { unitKind: null, displayUnit: null, amountMode: "usage" }
@@ -376,7 +379,8 @@ export function ProviderLimitsCard({
   // The keyless Tavily rail has no usage endpoint to refresh, like the keyless
   // Keenable rail. The hide decision reads the current rail, never a prior skip.
   const tavilyKeyless = isTavily && auth.auth_mode === "keyless"
-  const refreshSkipped = controller.refreshSkipped || keenableKeyless || tavilyKeyless
+  const firecrawlKeyless = providerId === "firecrawl" && auth.auth_mode === "keyless"
+  const refreshSkipped = controller.refreshSkipped || keenableKeyless || tavilyKeyless || firecrawlKeyless
   // The whole-request floor applies to the release request rails (Keenable);
   // every other rail keeps the verbatim values, and Tavily reads its native
   // Credits facts through the optional display adapter.

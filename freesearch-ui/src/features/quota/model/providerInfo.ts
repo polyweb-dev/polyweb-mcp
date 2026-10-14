@@ -217,7 +217,7 @@ function countFact(
   const view = auth.crd_views.find((entry) => entry.operation === operation)
   const raw = known(view?.possible_standard_calls)
   if (raw === null) return null
-  const calls = wholeRequests || providerId === TAVILY_ID ? callsText(raw) : raw
+  const calls = wholeRequests || providerId === TAVILY_ID || providerId === "firecrawl" ? callsText(raw) : raw
   if (calls === null) return null
   const period = COUNT_PERIOD[auth.detail?.reset_rule ?? UNKNOWN_TEXT]
   return {

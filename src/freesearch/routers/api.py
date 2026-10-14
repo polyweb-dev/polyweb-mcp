@@ -874,8 +874,8 @@ async def _dispatch[
     return response
 
 
-def _terminal_tavily_402(exc: BaseException) -> ProviderOperationError | None:
-    """Return the terminal Tavily out-of-Credits error, else ``None``.
+def _terminal_quota_402(exc: BaseException) -> ProviderOperationError | None:
+    """Return the terminal provider out-of-credits error, else ``None``.
 
     The vendor 402 normalizes to ``quota_exhausted`` with ``status_code=402``
     and ``retryable=False``; only that exact shape is a terminal transport,
@@ -885,7 +885,7 @@ def _terminal_tavily_402(exc: BaseException) -> ProviderOperationError | None:
     if not isinstance(exc, ProviderOperationError):
         return None
     if (
-        exc.error.provider == "tavily"
+        exc.error.provider in ("tavily", "firecrawl")
         and exc.error.code == "quota_exhausted"
         and exc.error.status_code == 402
     ):
@@ -893,11 +893,15 @@ def _terminal_tavily_402(exc: BaseException) -> ProviderOperationError | None:
     return None
 
 
+# Retain alias for backwards compatibility
+_terminal_tavily_402 = _terminal_quota_402
+
+
 async def _provider_operation_error(request: Request, exc: Exception) -> Response:
     """Transport one :class:`ProviderOperationError` through its REST contract.
 
-    A terminal Tavily out-of-Credits error is an HTTP 402 with the safe
-    message and ``provider="tavily"``. Every other error re-raises, so
+    A terminal provider out-of-credits error (e.g. Tavily, Firecrawl) is an HTTP 402
+    with the safe message and named provider. Every other error re-raises, so
     FastAPI's standard 500 flow stays untouched for all providers.
     """
 
@@ -907,17 +911,17 @@ async def _provider_operation_error(request: Request, exc: Exception) -> Respons
 def _provider_operation_error_response(exc: Exception) -> JSONResponse:
     """Return the response for one :class:`ProviderOperationError`.
 
-    A terminal Tavily out-of-Credits error is an HTTP 402 with the safe
-    message and ``provider="tavily"``. Every other error re-raises, so
+    A terminal provider out-of-credits error (e.g. Tavily, Firecrawl) is an HTTP 402
+    with the safe message and named provider. Every other error re-raises, so
     FastAPI's standard 500 flow stays untouched for all providers.
     """
 
-    terminal = _terminal_tavily_402(exc)
+    terminal = _terminal_quota_402(exc)
     if terminal is None:
         raise exc
     return JSONResponse(
         status_code=402,
-        content={"detail": terminal.error.message, "provider": "tavily"},
+        content={"detail": terminal.error.message, "provider": terminal.error.provider},
     )
 
 
@@ -1113,7 +1117,7 @@ async def _dispatch_fanout_search(
                     )
                 except Exception as exc:
                     elapsed = int((time.perf_counter() - call_start) * 1000)
-                    if _terminal_tavily_402(exc) is not None:
+                    if _terminal_quota_402(exc) is not None:
                         # The terminal out-of-Credits error is the transport: the
                         # span context records it once as it re-raises (the same
                         # shape as the single-path provider failure), and the
@@ -1134,7 +1138,7 @@ async def _dispatch_fanout_search(
             # outcome path records the exception on its provider span.
             # CancelledError is a BaseException, so a cancelled task still
             # surfaces as cancelled and _fanout_outcomes skips it.
-            if _terminal_tavily_402(exc) is not None:
+            if _terminal_quota_402(exc) is not None:
                 raise
             return _fanout_failure_outcome(
                 candidate_adapter.name,

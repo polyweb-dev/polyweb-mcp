@@ -1587,3 +1587,197 @@ describe("ProviderLimitsCard Tavily FIX", () => {
     vi.unstubAllGlobals()
   })
 })
+
+
+describe("ProviderLimitsCard Firecrawl", () => {
+  function firecrawlProfile() {
+    return {
+      reference_usd_per_crd: "0.001",
+      native_usd_per_unit: "0.0038",
+      cost_basis: "hobby_reference",
+      price_version: "hobby-reference",
+      source: "documented",
+      estimated: true,
+    }
+  }
+
+  function firecrawlAuth(): ProviderAuthLimits {
+    return {
+      auth_mode: "keyed",
+      transport_available: true,
+      search: {
+        provider: "firecrawl",
+        operation: "search",
+        auth_mode: "keyed",
+        supported: true,
+        transport_available: true,
+        native_pool_id: "firecrawl:keyed:credit",
+        rate: null,
+        budget: {
+          model: "credits",
+          free_allowance: "1000",
+          allowance_unit: "Credits",
+          allowance_period: "monthly",
+          cost_per_1k: null,
+          standard_native_cost: "2",
+          usd_per_call: "0.0076",
+          on_exhausted: "402",
+          usage_api: "https://api.firecrawl.dev/v2/team/credit-usage",
+          priced: true,
+        },
+        conversion_profile: firecrawlProfile(),
+        plan_name: "Free plan (1,000 monthly credits)",
+        usage_url: "https://firecrawl.dev/app/settings",
+        version: 1,
+      },
+      fetch: {
+        provider: "firecrawl",
+        operation: "fetch",
+        auth_mode: "keyed",
+        supported: true,
+        transport_available: true,
+        native_pool_id: "firecrawl:keyed:credit",
+        rate: null,
+        budget: {
+          model: "credits",
+          free_allowance: "1000",
+          allowance_unit: "Credits",
+          allowance_period: "monthly",
+          cost_per_1k: null,
+          standard_native_cost: "1",
+          usd_per_call: "0.0038",
+          on_exhausted: "402",
+          usage_api: "https://api.firecrawl.dev/v2/team/credit-usage",
+          priced: true,
+        },
+        conversion_profile: firecrawlProfile(),
+        plan_name: "Free plan (1,000 monthly credits)",
+        usage_url: "https://firecrawl.dev/app/settings",
+        version: 1,
+      },
+      free_tiers: [],
+      paid_tiers: [],
+      unknown_tiers: [],
+      tier_split_known: true,
+      aggregate_pool: {
+        pool_id: "firecrawl:keyed:credit",
+        provider: "firecrawl",
+        auth_mode: "keyed",
+        native_unit: "CREDIT",
+        remaining: "850",
+        allowance: "1000",
+        actual_spend_usd: null,
+        source: "vendor_api",
+        confidence: "authoritative",
+        reset_at: "2026-04-01T00:00:00Z",
+        observed_at: "2026-03-10T12:00:00Z",
+        version: 1,
+        credential_generation: 1,
+        next_sync_at: null,
+        stale: false,
+        manual_anchor: false,
+      },
+      crd_views: [
+        {
+          state: "finite",
+          operation: "search",
+          remaining_crd: "3230",
+          local_remaining_crd: null,
+          request_cost_crd: "7.6",
+          shared_pool_id: "firecrawl:keyed:credit",
+          possible_standard_calls: "425",
+          price_version: "hobby-reference",
+          priced: true,
+        },
+        {
+          state: "finite",
+          operation: "fetch",
+          remaining_crd: "3230",
+          local_remaining_crd: null,
+          request_cost_crd: "3.8",
+          shared_pool_id: "firecrawl:keyed:credit",
+          possible_standard_calls: "850",
+          price_version: "hobby-reference",
+          priced: true,
+        },
+      ],
+      rate_progress: [],
+      grants: null,
+      detail: {
+        plan_name: "Free plan (1,000 monthly credits)",
+        native_unit: "CREDIT",
+        native_balance: "850",
+        native_allowance: "1000",
+        usd_per_call: null,
+        actual_spend_usd: null,
+        reset_at: "2026-04-01T00:00:00Z",
+        reset_rule: "monthly_first",
+        usage_url: "https://firecrawl.dev/app/settings",
+        source: "vendor_api",
+        confidence: "authoritative",
+        last_sync_at: "2026-03-10T12:00:00Z",
+        stale: false,
+        price_version: "hobby-reference",
+        crd_split_note: null,
+        rate_windows: [
+          {
+            bucket_id: "firecrawl:keyed:requests",
+            limit: "10",
+            window: "1m",
+            scope: "team",
+            unit: "requests",
+            remaining: "10",
+            reset_at: null,
+            source: "local",
+            confidence: "observed",
+          },
+        ],
+        retry_after_seconds: null,
+        tier_split_known: true,
+        aggregate_pool_id: "firecrawl:keyed:credit",
+      },
+    } as unknown as ProviderAuthLimits
+  }
+
+  function firecrawlLimits(): ProviderLimits {
+    return {
+      provider: "firecrawl",
+      active_auth_mode: "keyed",
+      auths: [firecrawlAuth()],
+      documented_keyless_operations: [],
+      version: 1,
+      generated_at: "2026-03-10T12:00:00Z",
+    }
+  }
+
+  function renderFirecrawlCard(): void {
+    installFetchStub(() => ok({ events: [], next_cursor: null }))
+    render(
+      <ProviderLimitsCard
+        providerId="firecrawl"
+        providerName="Firecrawl"
+        limits={firecrawlLimits()}
+        crdUsageTotals={[]}
+        refreshDashboard={() => Promise.resolve()}
+        manualEligible
+      />,
+    )
+  }
+
+  it("renders Firecrawl card with Credits display and manual entry modal displays Credits", async () => {
+    renderFirecrawlCard()
+    expect(screen.getByRole("heading", { name: "Firecrawl" })).not.toBeNull()
+
+    const user = userEvent.setup()
+    const infoButton = screen.getByRole("button", { name: "Credit details for Firecrawl" })
+    await user.click(infoButton)
+    expect(await screen.findByText("Monthly Credits")).not.toBeNull()
+
+    const balanceButton = screen.getByRole("button", { name: /Provider Balance/i })
+    await user.click(balanceButton)
+
+    expect(await screen.findByRole("dialog")).not.toBeNull()
+    expect(screen.getByText("Allowance (Credits)")).not.toBeNull()
+    vi.unstubAllGlobals()
+  })
+})

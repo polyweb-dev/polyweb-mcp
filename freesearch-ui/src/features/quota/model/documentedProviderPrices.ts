@@ -38,8 +38,8 @@ const DOCUMENTED_PRICES: Readonly<Record<string, ProviderPrices>> = {
     fetch: price("0.001", "1", "per page, per content type"),
   },
   firecrawl: {
-    search: price(null, null, "Plan-dependent USD; 2 Firecrawl credits per 10 results, rounded up, plus 1 per scraped result"),
-    fetch: price(null, null, "Plan-dependent USD; 1 Firecrawl credit per fetched page"),
+    search: price("0.0076", "7.6", "per search request (up to 10 results, Hobby reference)"),
+    fetch: price("0.0038", "3.8", "per page fetched (Hobby reference)"),
   },
   tavily: {
     search: price("0.008", "8", "per basic search request (PAYGO reference)"),

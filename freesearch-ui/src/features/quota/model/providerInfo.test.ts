@@ -711,3 +711,97 @@ describe("providerInfo wholeRequests", () => {
     expect(base.crd_views[0]).toMatchObject({ possible_standard_calls: "99995.00000000" })
   })
 })
+
+describe("providerInfo Firecrawl", () => {
+  function firecrawlProfile() {
+    return {
+      reference_usd_per_crd: "0.001",
+      native_usd_per_unit: "0.0038",
+      cost_basis: "hobby_reference",
+      price_version: "hobby-reference",
+      source: "documented",
+      estimated: true,
+    }
+  }
+
+  function firecrawlAuth(overrides: Partial<ProviderAuthLimits> = {}): ProviderAuthLimits {
+    return auth({
+      search: record("firecrawl", {
+        operation: "search",
+        supported: true,
+        transport_available: true,
+        budget: budget({ allowance_period: "monthly", standard_native_cost: "2" }),
+        conversion_profile: firecrawlProfile(),
+      }),
+      fetch: record("firecrawl", {
+        operation: "fetch",
+        supported: true,
+        transport_available: true,
+        budget: budget({ allowance_period: "monthly", standard_native_cost: "1" }),
+        conversion_profile: firecrawlProfile(),
+      }),
+      crd_views: [
+        {
+          state: "finite",
+          operation: "search",
+          remaining_crd: "3800",
+          local_remaining_crd: null,
+          request_cost_crd: "7.6",
+          shared_pool_id: "firecrawl:keyed:credit",
+          possible_standard_calls: "500",
+          price_version: "hobby-reference",
+          priced: true,
+        },
+        {
+          state: "finite",
+          operation: "fetch",
+          remaining_crd: "3800",
+          local_remaining_crd: null,
+          request_cost_crd: "3.8",
+          shared_pool_id: "firecrawl:keyed:credit",
+          possible_standard_calls: "1000",
+          price_version: "hobby-reference",
+          priced: true,
+        },
+      ] as never,
+      detail: detail({
+        rate_windows: [
+          {
+            bucket_id: "firecrawl:keyed:requests",
+            limit: "10",
+            window: "1m",
+            scope: "team",
+            unit: "requests",
+            remaining: "10",
+            reset_at: null,
+            source: "local",
+            confidence: "observed",
+          },
+        ] as never,
+      }),
+      ...overrides,
+    })
+  }
+
+  it("produces correct facts for Firecrawl", () => {
+    const info = providerInfo(firecrawlAuth(), "firecrawl", true)
+    const searchCrd = info.facts.find((fact) => fact.label === "Search CRD cost")
+    expect(searchCrd?.value).toBe("7.6 CRD")
+    expect(searchCrd?.note).toBe("(≈ $0.0076)")
+
+    const fetchCrd = info.facts.find((fact) => fact.label === "Fetch CRD cost")
+    expect(fetchCrd?.value).toBe("3.8 CRD")
+    expect(fetchCrd?.note).toBe("(≈ $0.0038)")
+
+    const searchesLeft = info.facts.find((fact) => fact.label === "Searches left")
+    expect(searchesLeft?.value).toBe("500")
+
+    const fetchesLeft = info.facts.find((fact) => fact.label === "Fetches left")
+    expect(fetchesLeft?.value).toBe("1000")
+
+    const rate = info.facts.find((fact) => fact.label === "Rate limit")
+    expect(rate?.value).toBe("10 requests per minute")
+
+    expect(info.creditNote).toBe("Monthly Credits")
+  })
+})

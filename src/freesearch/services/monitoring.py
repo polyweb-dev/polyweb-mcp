@@ -392,8 +392,7 @@ def _measured_latency_ms(adapter_name: str, latency_ms: int) -> int | None:
     status; adapters outside that registry (synthetic doubles and custom
     integrations) keep the verbatim usage contract pinned by the Stage 4.5
     ledger tests. Direct :func:`record_response_telemetry` callers are never
-    instrumented.
-    """
+    instrumented."""
 
     return latency_ms if adapter_name in CANONICAL_PROVIDER_NAMES else None
 
@@ -451,7 +450,7 @@ async def tracked_call[ResponseT: (SearchResponse, FetchResponse)](
         # A terminal vendor 402 must gate the next pinned call at the pool
         # layer too: mirror the zero into the native Credits pool before the
         # error propagates, so the funds precheck denies it without vendor I/O.
-        if _terminal_tavily_402(exc) and limits is not None:
+        if _terminal_quota_402(exc) and limits is not None:
             with contextlib.suppress(Exception):
                 await limits.record_terminal_402(adapter.name, _adapter_auth_mode(adapter))
         raise
@@ -538,23 +537,28 @@ async def _finalize_failure(
     )
 
 
-def _terminal_tavily_402(exc: BaseException) -> bool:
-    """Return whether one failure is the terminal Tavily out-of-Credits 402.
+def _terminal_quota_402(exc: BaseException) -> bool:
+    """Return whether one failure is a terminal vendor out-of-credits 402.
 
-    The shape mirrors ``_terminal_tavily_402`` in ``routers/api.py#L876``: a
-    ``ProviderOperationError`` whose stored error names ``provider="tavily"``,
-    ``code="quota_exhausted"``, and ``status_code=402``. The monitoring layer
-    must not import from the router, so the predicate is repeated here.
+    The shape mirrors ``_terminal_quota_402`` in ``routers/api.py``: a
+    ``ProviderOperationError`` whose stored error names ``code="quota_exhausted"``
+    and ``status_code=402`` for providers with credit pools (Tavily, Firecrawl).
+    The monitoring layer must not import from the router, so the predicate is
+    repeated here.
     """
 
     if not isinstance(exc, ProviderOperationError):
         return False
     error = exc.error
     return (
-        error.provider == "tavily"
+        error.provider in ("tavily", "firecrawl")
         and error.code == "quota_exhausted"
         and error.status_code == 402
     )
+
+
+# Retain alias for Tavily-specific callers and backwards compatibility
+_terminal_tavily_402 = _terminal_quota_402
 
 
 async def _release_cancelled_admission(
@@ -602,8 +606,7 @@ def _vendor_retry_after_seconds(details: dict[str, Any]) -> int | None:
     """Return a real, finite, nonnegative integer Retry-After delay.
 
     Bools are rejected even though ``bool`` subclasses ``int``; any other
-    shape yields ``None``.
-    """
+    shape yields ``None``."""
 
     value = details.get("retry_after_seconds")
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
@@ -752,14 +755,18 @@ def normalize_degenerate_quota(snapshot: QuotaSnapshot) -> QuotaSnapshot:
 
 
 def _free_zero_due(provider: str, snapshot: QuotaSnapshot, now: datetime) -> bool:
-    """Return True when Tavily's terminal free zero has passed its reset instant.
+    """Return True when Tavily's or Firecrawl's terminal free zero has passed its reset instant.
 
     The stored exhaustion mark (``vendor_402`` or the generic ``exhaustion``
     flag) identifies the terminal zero; the monthly reset instant is the only
     trigger, so no vendor read is needed to expire it.
     """
 
-    if provider != "tavily" or snapshot.remaining != Decimal("0") or snapshot.reset_at is None:
+    if (
+        provider not in ("tavily", "firecrawl")
+        or snapshot.remaining != Decimal("0")
+        or snapshot.reset_at is None
+    ):
         return False
     metadata = snapshot.metadata
     exhausted = metadata.get("vendor_402") is True or metadata.get("exhaustion") is True
@@ -924,8 +931,7 @@ async def latency_p95_ms(
 
     Samples are the last ``window`` measured (non-null) latencies in the usage
     ledger. ``None`` is reported when no samples exist; read failures degrade
-    to ``None`` without raising.
-    """
+    to ``None`` without raising."""
 
     if repository is None:
         return None
