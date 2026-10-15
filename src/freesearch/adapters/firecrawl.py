@@ -340,7 +340,7 @@ class FirecrawlAdapter(ProviderAdapter):
         except httpx.TransportError:
             raise  # the shared ResilientRunner normalizes transport failures
         except Exception as exc:
-            raise self._normalize_error(exc) from None
+            raise self._normalize_error(exc, operation=UsageOperation.SEARCH) from None
 
     def _search_data(self, response: Any) -> list[tuple[str, Any]]:
         """Return every selected Firecrawl result channel in provider order."""
@@ -504,7 +504,7 @@ class FirecrawlAdapter(ProviderAdapter):
         except httpx.TransportError:
             raise  # the shared ResilientRunner normalizes transport failures
         except Exception as exc:
-            raise self._normalize_error(exc) from None
+            raise self._normalize_error(exc, operation=UsageOperation.FETCH) from None
 
     def _document_payload(self, response: Any) -> dict[str, Any]:
         """Return the scrape output mapping from either envelope or SDK model."""
@@ -548,7 +548,9 @@ class FirecrawlAdapter(ProviderAdapter):
         status_code = metadata.get("statusCode")
         error = metadata.get("error")
         if status_code == 403 or (
-            isinstance(error, str) and ("403" in error or "blocked" in error.lower())
+            status_code is None
+            and isinstance(error, str)
+            and ("403" in error or "blocked" in error.lower())
         ):
             raise self._error(
                 "bot_blocked",
@@ -848,7 +850,12 @@ class FirecrawlAdapter(ProviderAdapter):
             return None
         return await self.quota()
 
-    def _normalize_error(self, exc: Exception) -> ProviderOperationError:
+    def _normalize_error(
+        self,
+        exc: Exception,
+        *,
+        operation: UsageOperation = UsageOperation.FETCH,
+    ) -> ProviderOperationError:
         status = self._status_code(exc)
         if status == 402:
             return self._error(
@@ -858,6 +865,13 @@ class FirecrawlAdapter(ProviderAdapter):
                 status=402,
             )
         if status == 408:
+            if operation is UsageOperation.SEARCH:
+                return self._error(
+                    "timeout_error",
+                    "Firecrawl search request timed out.",
+                    retryable=True,
+                    status=408,
+                )
             return self._error(
                 "scrape_timeout",
                 "Firecrawl scrape request timed out.",
@@ -866,8 +880,8 @@ class FirecrawlAdapter(ProviderAdapter):
             )
         if status == 403:
             return self._error(
-                "bot_blocked",
-                "target site blocked automated bot access (HTTP 403)",
+                "forbidden",
+                "Firecrawl request forbidden",
                 retryable=False,
                 status=403,
             )
@@ -877,14 +891,6 @@ class FirecrawlAdapter(ProviderAdapter):
                 f"HTTP {status}",
                 retryable=status in RETRYABLE_STATUS_CODES,
                 status=status,
-            )
-        msg_str = str(exc).lower()
-        if "blocked" in msg_str or "forbidden" in msg_str or "403" in msg_str:
-            return self._error(
-                "bot_blocked",
-                "target site blocked automated bot access",
-                retryable=False,
-                status=403,
             )
         # The class name carries no payload or secret; raw exceptions are never
         # exposed.

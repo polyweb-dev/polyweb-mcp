@@ -41,6 +41,7 @@ only when the returned payload supplies a ``usage`` mapping with a numeric
 import traceback
 from datetime import UTC, datetime
 from decimal import Decimal
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -1579,6 +1580,135 @@ def test_normalize_error_on_402_returns_quota_exhausted() -> None:
     assert err2.error.retryable is False
     assert err2.error.status_code == 402
     assert "Firecrawl is out of credits" in err2.error.message
+
+
+@pytest.mark.parametrize(
+    ("status_code", "error", "expected_code", "expected_status"),
+    [
+        (403, "target blocked", "bot_blocked", 403),
+        (404, "not found", "not_found", 404),
+        (500, "blocked upstream", "http_error", 500),
+    ],
+)
+def test_document_data_prioritizes_numeric_status_over_error_text(
+    status_code: int,
+    error: str,
+    expected_code: str,
+    expected_status: int,
+) -> None:
+    adapter = make_adapter()
+
+    with pytest.raises(ProviderOperationError) as excinfo:
+        adapter._document_data(
+            {
+                "data": {
+                    "metadata": {"statusCode": status_code, "error": error},
+                    "markdown": "ignored",
+                }
+            }
+        )
+
+    assert excinfo.value.error.code == expected_code
+    assert excinfo.value.error.status_code == expected_status
+
+
+def test_document_data_maps_blocked_error_without_status_to_bot_blocked() -> None:
+    adapter = make_adapter()
+
+    with pytest.raises(ProviderOperationError) as excinfo:
+        adapter._document_data(
+            {"data": {"metadata": {"error": "target blocked"}, "markdown": "ignored"}}
+        )
+
+    assert excinfo.value.error.code == "bot_blocked"
+    assert excinfo.value.error.status_code == 403
+
+
+def test_document_data_preserves_attribute_only_sdk_metadata() -> None:
+    adapter = make_adapter()
+    response = SimpleNamespace(
+        markdown="ignored",
+        metadata=SimpleNamespace(statusCode=403, error="target blocked"),
+    )
+
+    with pytest.raises(ProviderOperationError) as excinfo:
+        adapter._document_data(response)
+
+    assert excinfo.value.error.code == "bot_blocked"
+    assert excinfo.value.error.status_code == 403
+
+
+def test_normalize_provider_403_as_forbidden() -> None:
+    adapter = make_adapter()
+
+    error = adapter._normalize_error(
+        FirecrawlError("Access denied", 403),
+        operation=UsageOperation.SEARCH,
+    )
+
+    assert error.error.code == "forbidden"
+    assert error.error.retryable is False
+    assert error.error.status_code == 403
+
+
+async def test_search_sdk_maps_408_to_search_timeout() -> None:
+    sdk = _FakeSDK()
+    sdk.search_error = FirecrawlError("Request timeout", 408)
+    adapter = make_adapter(sdk=sdk)
+
+    with pytest.raises(ProviderOperationError) as excinfo:
+        await adapter._search_sdk(SearchRequest(query="timeout"))
+
+    assert excinfo.value.error.code == "timeout_error"
+    assert excinfo.value.error.retryable is True
+    assert excinfo.value.error.status_code == 408
+
+
+async def test_fetch_sdk_maps_408_to_scrape_timeout() -> None:
+    sdk = _FakeSDK()
+    sdk.scrape_error = FirecrawlError("Request timeout", 408)
+    adapter = make_adapter(sdk=sdk)
+
+    with pytest.raises(ProviderOperationError) as excinfo:
+        await adapter._fetch_sdk(FetchRequest(url="https://example.com/doc"))
+
+    assert excinfo.value.error.code == "scrape_timeout"
+    assert excinfo.value.error.retryable is True
+    assert excinfo.value.error.status_code == 408
+
+
+@pytest.mark.parametrize(
+    ("operation", "expected_code", "message_fragment"),
+    [
+        (UsageOperation.SEARCH, "timeout_error", "search"),
+        (UsageOperation.FETCH, "scrape_timeout", "scrape"),
+    ],
+)
+def test_normalize_408_timeout_message_matches_operation(
+    operation: UsageOperation,
+    expected_code: str,
+    message_fragment: str,
+) -> None:
+    adapter = make_adapter()
+
+    error = adapter._normalize_error(
+        FirecrawlError("Request timeout", 408),
+        operation=operation,
+    )
+
+    assert error.error.code == expected_code
+    assert error.error.retryable is True
+    assert error.error.status_code == 408
+    assert message_fragment in error.error.message.lower()
+
+
+def test_normalize_provider_exception_text_does_not_claim_target_was_blocked() -> None:
+    adapter = make_adapter()
+
+    error = adapter._normalize_error(RuntimeError("access forbidden"))
+
+    assert error.error.code == "firecrawl_error"
+    assert error.error.status_code is None
 
 
 async def test_cost_estimate_modifiers_including_enhanced_zero() -> None:
