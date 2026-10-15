@@ -79,7 +79,7 @@ export function createExecuteHandler(deps: ExecuteActionDeps): (e?: FormEvent) =
         url: trimmedUrl,
         ...(selectedProvider !== undefined ? { providerId: selectedProvider } : {}),
         format: "markdown",
-        timeoutMs: 4000,
+        timeoutMs: 15000,
       })
       showResult(null)
     }

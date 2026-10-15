@@ -231,6 +231,20 @@ class TinyfishAdapter(ProviderAdapter):
                     retryable=False,
                     status=403,
                 )
+            if err_type in ("login_required", "auth_required"):
+                raise self._error(
+                    "bot_blocked",
+                    "fetch failed: target site requires authentication or login",
+                    retryable=False,
+                    status=403,
+                )
+            if err_type == "empty_content":
+                raise self._error(
+                    "fetch_failed",
+                    "fetch failed: target page returned empty content",
+                    retryable=False,
+                    status=status_code,
+                )
             if err_type in ("target_unreachable", "proxy_error"):
                 raise self._error(
                     "transport_error",
@@ -387,6 +401,10 @@ class TinyfishAdapter(ProviderAdapter):
         status = response.status_code
         if status == 401:
             return self._error("invalid_api_key", "invalid API key", retryable=False, status=401)
+        if status == 402:
+            return self._error(
+                "quota_exhausted", "insufficient credits", retryable=False, status=402
+            )
         if status == 429:
             return self._error("rate_limited", "rate limit exceeded", retryable=True, status=429)
         return self._error(

@@ -115,4 +115,11 @@ describe("statusMessage", () => {
     expect(message).toMatch(/timed out|timeout/i)
     expect(message).not.toMatch(/unreachable/i)
   })
+
+  it("maps modern browser signal timed out failure to a timeout message", () => {
+    const message = statusMessage(0, "signal timed out")
+
+    expect(message).toBe("Request timed out; please try again")
+    expect(message).not.toMatch(/unreachable/i)
+  })
 })
