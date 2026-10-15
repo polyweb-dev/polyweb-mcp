@@ -41,7 +41,7 @@ export function createFetchResultHandler(deps: FetchResultDeps): (result: Search
       url,
       ...(providerId !== undefined ? { providerId } : {}),
       format: "markdown",
-      timeoutMs: 4000,
+      timeoutMs: 15000,
     })
   }
 }

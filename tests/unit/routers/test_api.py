@@ -392,3 +392,111 @@ def test_main_explicit_port_wins_over_configuration(monkeypatch: pytest.MonkeyPa
 
     assert len(calls) == 1
     assert calls[0]["port"] == 9999
+
+
+async def test_dispatch_chained_fallback_on_provider_error_succeeds_second(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When candidate raises ProviderOperationError, chained fallback advances to candidate two."""
+    from freesearch.infrastructure.resilience import ProviderOperationError
+    from freesearch.models.contracts import ProviderError
+
+    adapters = [StubAdapter("alpha"), StubAdapter("beta")]
+    config_names: list[str] = []
+    scheduled: list[int] = []
+    _install_plan_spies(monkeypatch, config_names, scheduled)
+
+    async def _fake_policy(repository: Any) -> RoutingConfigResponse:
+        return RoutingConfigResponse(fallback_policy=FallbackPolicy.CHAINED)
+
+    monkeypatch.setattr(api_module, "routing_policy", _fake_policy)
+
+    request = FetchRequest(
+        url=AnyHttpUrl("https://example.com/doc"),
+        routing=RoutingPreference(mode=RoutingMode.AUTO, allow_fallback=True),
+    )
+
+    calls: dict[str, int] = {"alpha": 0, "beta": 0}
+
+    async def _invoke(
+        adapter: ProviderAdapter, current: SearchRequest | FetchRequest
+    ) -> SearchResponse | FetchResponse:
+        calls[adapter.name] += 1
+        if adapter.name == "alpha":
+            raise ProviderOperationError(
+                ProviderError(
+                    provider="alpha",
+                    code="bot_blocked",
+                    message="access denied",
+                    status_code=403,
+                )
+            )
+        return FetchResponse(
+            provider="beta",
+            document=FetchedDocument(
+                url=current.url, content="success content", fetched_at=FIXED_AT
+            ),
+        )
+
+    response = await _dispatch(
+        request,
+        UsageOperation.FETCH,
+        _invoke,
+        routes=adapters,
+        repository=None,
+        secret_store=None,
+    )
+
+    assert calls == {"alpha": 1, "beta": 1}
+    assert response.provider == "beta"
+
+
+async def test_dispatch_chained_fallback_on_provider_error_all_fail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When all candidates raise ProviderOperationError, the terminal error is re-raised."""
+    from freesearch.infrastructure.resilience import ProviderOperationError
+    from freesearch.models.contracts import ProviderError
+
+    adapters = [StubAdapter("alpha"), StubAdapter("beta")]
+    config_names: list[str] = []
+    scheduled: list[int] = []
+    _install_plan_spies(monkeypatch, config_names, scheduled)
+
+    async def _fake_policy(repository: Any) -> RoutingConfigResponse:
+        return RoutingConfigResponse(fallback_policy=FallbackPolicy.CHAINED)
+
+    monkeypatch.setattr(api_module, "routing_policy", _fake_policy)
+
+    request = FetchRequest(
+        url=AnyHttpUrl("https://example.com/doc"),
+        routing=RoutingPreference(mode=RoutingMode.AUTO, allow_fallback=True),
+    )
+
+    calls: dict[str, int] = {"alpha": 0, "beta": 0}
+
+    async def _invoke(
+        adapter: ProviderAdapter, current: SearchRequest | FetchRequest
+    ) -> SearchResponse | FetchResponse:
+        calls[adapter.name] += 1
+        raise ProviderOperationError(
+            ProviderError(
+                provider=adapter.name,
+                code="bot_blocked",
+                message=f"{adapter.name} access denied",
+                status_code=403,
+            )
+        )
+
+    with pytest.raises(ProviderOperationError) as exc_info:
+        await _dispatch(
+            request,
+            UsageOperation.FETCH,
+            _invoke,
+            routes=adapters,
+            repository=None,
+            secret_store=None,
+        )
+
+    assert calls == {"alpha": 1, "beta": 1}
+    assert exc_info.value.error.provider == "beta"

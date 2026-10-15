@@ -307,9 +307,41 @@ class FirecrawlAdapter(ProviderAdapter):
             data = response.get("data")
             if not isinstance(data, dict):
                 raise self._error("invalid_response", "malformed fetch response") from None
+            raw_meta = data.get("metadata")
+            metadata: dict[str, Any] = raw_meta if isinstance(raw_meta, dict) else {}
+            status_code = metadata.get("statusCode")
+            error = metadata.get("error")
             markdown = data.get("markdown")
         else:
+            meta = getattr(response, "metadata", None)
+            if isinstance(meta, dict):
+                status_code = meta.get("statusCode")
+                error = meta.get("error")
+            else:
+                status_code = getattr(meta, "statusCode", None)
+                error = getattr(meta, "error", None)
             markdown = getattr(response, "markdown", None)
+
+        if status_code == 403 or (
+            isinstance(error, str) and ("403" in error or "blocked" in error.lower())
+        ):
+            raise self._error(
+                "bot_blocked",
+                f"target site blocked automated access: {error or 'HTTP 403'}",
+                status=403,
+            )
+        if status_code == 404:
+            raise self._error(
+                "not_found",
+                f"target document not found: {error or 'HTTP 404'}",
+                status=404,
+            )
+        if isinstance(status_code, int) and status_code >= 400:
+            raise self._error(
+                "http_error",
+                f"target site returned HTTP {status_code}: {error or ''}",
+                status=status_code,
+            )
         if not isinstance(markdown, str):
             raise self._error("invalid_response", "malformed fetch response") from None
         return markdown
@@ -519,12 +551,34 @@ class FirecrawlAdapter(ProviderAdapter):
                 retryable=False,
                 status=402,
             )
+        if status == 408:
+            return self._error(
+                "scrape_timeout",
+                "Firecrawl scrape request timed out.",
+                retryable=True,
+                status=408,
+            )
+        if status == 403:
+            return self._error(
+                "bot_blocked",
+                "target site blocked automated bot access (HTTP 403)",
+                retryable=False,
+                status=403,
+            )
         if status is not None:
             return self._error(
                 "http_error",
                 f"HTTP {status}",
                 retryable=status in RETRYABLE_STATUS_CODES,
                 status=status,
+            )
+        msg_str = str(exc).lower()
+        if "blocked" in msg_str or "forbidden" in msg_str or "403" in msg_str:
+            return self._error(
+                "bot_blocked",
+                "target site blocked automated bot access",
+                retryable=False,
+                status=403,
             )
         # The class name carries no payload or secret; raw exceptions are never
         # exposed.

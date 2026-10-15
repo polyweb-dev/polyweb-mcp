@@ -438,20 +438,9 @@ def create_app(
             )
 
     @app.post("/fetch", response_model=FetchResponse)
-    async def fetch(request: FetchRequest) -> FetchResponse:
+    async def fetch(request: FetchRequest) -> FetchResponse | JSONResponse:
         """Fetch a URL's content through the best available provider."""
-        observability = current_observability()
-        with observability.span(TraceSpanName.BACKEND, attributes=_request_attributes(request)):
-            _require_single_url(request)
-            return await _dispatch(
-                request,
-                UsageOperation.FETCH,
-                lambda target, req: target.fetch(req),
-                routes=app.state._routes,
-                repository=app.state.repository,
-                secret_store=app.state.secret_store,
-                limits=app.state.limits,
-            )
+        return await _execute_fetch(app, request)
 
     @app.get("/stats", response_model=StatsResponse)
     async def stats(
@@ -802,6 +791,26 @@ async def _plan_route(
     return (candidates[0].adapter,)
 
 
+async def _execute_fetch(app: FastAPI, request: FetchRequest) -> FetchResponse | JSONResponse:
+    """Execute a fetch request through route planning, dispatch, and graceful error handling."""
+
+    observability = current_observability()
+    with observability.span(TraceSpanName.BACKEND, attributes=_request_attributes(request)):
+        _require_single_url(request)
+        try:
+            return await _dispatch(
+                request,
+                UsageOperation.FETCH,
+                lambda target, req: target.fetch(req),
+                routes=app.state._routes,
+                repository=app.state.repository,
+                secret_store=app.state.secret_store,
+                limits=app.state.limits,
+            )
+        except ProviderOperationError as exc:
+            return _fetch_provider_error_response(exc)
+
+
 async def _dispatch[
     RequestT: (SearchRequest, FetchRequest),
     ResponseT: (
@@ -839,42 +848,59 @@ async def _dispatch[
     observability = current_observability()
     with observability.span(TraceSpanName.ROUTE, attributes=_request_attributes(request)):
         attempts = await _plan_route(request, routes, repository, secret_store)
-    provider = attempts[0]
-    with observability.span(
-        TraceSpanName.PROVIDER,
-        kind=SpanKindName.CLIENT,
-        attributes={
-            TraceAttribute.OPERATION: _operation_name(request).value,
-            TraceAttribute.PROVIDER: provider.name,
-            TraceAttribute.ROUTING_CANDIDATE_COUNT: len(attempts),
-        },
-    ) as provider_span:
-        provider_span.add_event(
-            TRACE_EVENT_PROVIDER_REQUEST, attributes=_provider_request_event(request)
-        )
-        try:
-            response = await tracked_call(
-                repository,
-                provider,
-                lambda target: invoke(target, request),
-                operation=operation,
-                request=request,
-                limits=limits,
+
+    last_error: ProviderOperationError | None = None
+    for attempt_idx, provider in enumerate(attempts):
+        is_last = attempt_idx == len(attempts) - 1
+        with observability.span(
+            TraceSpanName.PROVIDER,
+            kind=SpanKindName.CLIENT,
+            attributes={
+                TraceAttribute.OPERATION: _operation_name(request).value,
+                TraceAttribute.PROVIDER: provider.name,
+                TraceAttribute.ROUTING_CANDIDATE_COUNT: len(attempts),
+            },
+        ) as provider_span:
+            provider_span.add_event(
+                TRACE_EVENT_PROVIDER_REQUEST, attributes=_provider_request_event(request)
             )
-        except Exception as error:
-            _annotate_root_error(observability, error)
-            _annotate_root_request_identity(observability, request, provider)
-            raise
-        provider_span.add_event(
-            TRACE_EVENT_PROVIDER_RESPONSE, attributes=_provider_response_event(response)
-        )
-    with observability.span(
-        TraceSpanName.RESULTS,
-        attributes={TraceAttribute.OPERATION: _operation_name(request).value},
-    ) as results_span:
-        results_span.set_attributes({TraceAttribute.RESPONSE_RESULT_COUNT: _result_count(response)})
-        _annotate_root(observability, request, response)
-    return response
+            try:
+                response = await tracked_call(
+                    repository,
+                    provider,
+                    lambda target: invoke(target, request),
+                    operation=operation,
+                    request=request,
+                    limits=limits,
+                )
+            except ProviderOperationError as error:
+                provider_span.record_exception(error)
+                last_error = error
+                if is_last:
+                    _annotate_root_error(observability, error)
+                    _annotate_root_request_identity(observability, request, provider)
+                    raise
+                continue
+            except Exception as error:
+                _annotate_root_error(observability, error)
+                _annotate_root_request_identity(observability, request, provider)
+                raise
+            provider_span.add_event(
+                TRACE_EVENT_PROVIDER_RESPONSE, attributes=_provider_response_event(response)
+            )
+        with observability.span(
+            TraceSpanName.RESULTS,
+            attributes={TraceAttribute.OPERATION: _operation_name(request).value},
+        ) as results_span:
+            results_span.set_attributes(
+                {TraceAttribute.RESPONSE_RESULT_COUNT: _result_count(response)}
+            )
+            _annotate_root(observability, request, response)
+        return response
+
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("route planning produced zero attempts")
 
 
 def _terminal_quota_402(exc: BaseException) -> ProviderOperationError | None:
@@ -925,6 +951,42 @@ def _provider_operation_error_response(exc: Exception) -> JSONResponse:
     return JSONResponse(
         status_code=402,
         content={"detail": terminal.error.message, "provider": terminal.error.provider},
+    )
+
+
+def _fetch_provider_error_response(exc: ProviderOperationError) -> JSONResponse:
+    """Return the structured HTTP response for a fetch ProviderOperationError.
+
+    Terminal out-of-credits errors map to HTTP 402 with detail and provider name.
+    Upstream rate limits map to HTTP 429. All other upstream provider rejections
+    (target site blocked, bot_blocked, fetch_failed, upstream 403/500) map to
+    HTTP 502 Bad Gateway with structured diagnostics.
+    """
+
+    terminal = _terminal_quota_402(exc)
+    if terminal is not None:
+        return JSONResponse(
+            status_code=402,
+            content={"detail": terminal.error.message, "provider": terminal.error.provider},
+        )
+    if exc.error.status_code == 429 or exc.error.code == "rate_limited":
+        return JSONResponse(
+            status_code=429,
+            content={
+                "detail": exc.error.message,
+                "provider": exc.error.provider,
+                "code": exc.error.code,
+                "status_code": 429,
+            },
+        )
+    return JSONResponse(
+        status_code=502,
+        content={
+            "detail": exc.error.message,
+            "provider": exc.error.provider,
+            "code": exc.error.code,
+            "status_code": exc.error.status_code,
+        },
     )
 
 

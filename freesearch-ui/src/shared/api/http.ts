@@ -46,13 +46,15 @@ export function parseDetail(body: unknown): string {
   return compactJson(body)
 }
 
+const TIMEOUT_OR_ABORT_PATTERN = /abort|timed?\s*out|timeout/i
+
 export function isAbortOrTimeout(error: unknown): boolean {
-  if (typeof error === "string") return /abort|timeout/i.test(error)
+  if (typeof error === "string") return TIMEOUT_OR_ABORT_PATTERN.test(error)
   if (!error || typeof error !== "object") return false
   const candidate = error as { name?: unknown; message?: unknown }
   const name = typeof candidate.name === "string" ? candidate.name : ""
   const message = typeof candidate.message === "string" ? candidate.message : ""
-  return /abort|timeout/i.test(`${name} ${message}`)
+  return TIMEOUT_OR_ABORT_PATTERN.test(`${name} ${message}`)
 }
 
 export function statusMessage(status: number, detail: string): string {
