@@ -41,6 +41,13 @@ from freesearch.models.contracts import (
     UsageOperation,
     parse_decimal,
 )
+from freesearch.models.provider_limits import (
+    AuthMode,
+    Confidence,
+    NativeUsageSnapshot,
+    UsageSyncRequest,
+    native_pool_id,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +65,7 @@ _STATUS_ERROR_CODES = {
 }
 SEARCH_USD_BY_MODE: dict[str, Decimal] = {
     "turbo": Decimal("0.001"),
+    "fast": Decimal("0.001"),
     "basic": Decimal("0.005"),
     "advanced": Decimal("0.005"),
     "extra_bundle": Decimal("0.001"),
@@ -159,6 +167,39 @@ class ParallelAdapter(ProviderAdapter):
     @property
     def capabilities(self) -> ProviderCapabilities:
         return ProviderCapabilities(search=True, fetch=True, cost_estimate=True)
+
+    @property
+    def limit_auth_mode(self) -> AuthMode:
+        """Return the keyed rail this adapter instance uses for limit records."""
+
+        return AuthMode.KEYED
+
+    async def usage_snapshot(self, request: UsageSyncRequest) -> NativeUsageSnapshot | None:
+        """Return the local seed ledger as the native USD observation.
+
+        No vendor usage poll exists, so the seeded monthly ledger is the
+        observation: remaining, allowance, and reset come from the existing
+        local snapshot. An unseeded account reports no snapshot.
+        """
+
+        if self._free_seed is None:
+            return None
+        self._rollover_if_needed(datetime.now(UTC))
+        quota = self._local_snapshot()
+        return NativeUsageSnapshot(
+            pool_id=native_pool_id(self.name, AuthMode.KEYED, UnitKind.USD),
+            provider=self.name,
+            auth_mode=AuthMode.KEYED,
+            native_unit=UnitKind.USD,
+            observed_at=request.observed_at,
+            source="local_ledger",
+            confidence=Confidence.ESTIMATED,
+            remaining=quota.remaining,
+            allowance=quota.limit,
+            reset_at=quota.reset_at,
+            credential_generation=request.credential_generation,
+            rate_observations=[],
+        )
 
     async def search(self, request: SearchRequest) -> SearchResponse:
         response = await self._runner.run(

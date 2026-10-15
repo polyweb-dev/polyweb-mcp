@@ -221,7 +221,7 @@ Feature: Quota and usage accounting (QUOTA.md acceptance)
       | 10    | 2       | 0   | false | false    | false | 1             |
       | 11    | 4       | 2   | false | false    | false | 3             |
       | 25    | 6       | 0   | true  | false    | false | 5             |
-      | 10    | 2       | 0   | false | true     | true  | 6             |
+      | 10    | 2       | 0   | false | true     | true  | 2             |
 
   # AC-PA — Parallel raw SKU retention, spend ledger, no API-key balance poll.
   @parallel @ac-pa

@@ -12,8 +12,8 @@ export interface QuotaRowEstimates {
 
 /**
  * Providers that may hold a manual native anchor under the current dashboard
- * snapshot. Eligibility keeps its current rule: Brave always, and the other
- * providers only while no vendor budget is configured.
+ * snapshot. Exa keeps its USD correction action because its standard API key
+ * exposes a local estimate, while other providers keep their budget rule.
  */
 export function manualEligibleProviders(
   providers: ProviderConfig[],
@@ -24,7 +24,8 @@ export function manualEligibleProviders(
   for (const provider of providers) {
     const latest = dashboardQuotas.find((quota) => quota.provider === provider.id)
     const { display } = resolveQuota(provider, latest)
-    const budgetNotConfigured = manualBudgetMissing(provider, latest, display.remainingPercent)
+    const budgetNotConfigured =
+      provider.id === "exa" || manualBudgetMissing(provider, latest, display.remainingPercent)
     if (manualQuotaEligible(provider.id, budgetNotConfigured)) ids.add(provider.id)
   }
   return ids

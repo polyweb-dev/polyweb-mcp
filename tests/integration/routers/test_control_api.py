@@ -350,14 +350,21 @@ async def test_provider_patch_rejects_non_strict_or_unknown_fields(
 @pytest.mark.asyncio
 async def test_provider_patch_rejects_read_only_support_mask(
     repository: SQLiteRepository,
+    auth_secret: str,
 ) -> None:
     """Support is system-owned: admin PATCH never accepts it, even with a matching value."""
     app = create_app([ControlAdapter("exa")], repository=repository)
 
     with TestClient(app) as client:
-        before = client.get("/api/v1/providers/exa")
-        rejected = client.patch("/api/v1/providers/exa", json={"support_mask": 7})
-        after = client.get("/api/v1/providers/exa")
+        pair = await register_promote_login(
+            client, repository, temp_email("control-readonly"), UserRole.ADMIN
+        )
+        headers = raw_auth_headers(pair["access_token"])
+        before = client.get("/api/v1/providers/exa", headers=headers)
+        rejected = client.patch(
+            "/api/v1/providers/exa", json={"support_mask": 7}, headers=headers
+        )
+        after = client.get("/api/v1/providers/exa", headers=headers)
 
     assert before.status_code == 200
     assert rejected.status_code == 422
@@ -1196,6 +1203,7 @@ async def test_search_filters_provider_with_global_mask_off(
     repository: SQLiteRepository,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    auth_secret: str,
 ) -> None:
     """A global-OFF mask excludes the provider from search without a restart."""
     monkeypatch.chdir(tmp_path)
@@ -1207,7 +1215,9 @@ async def test_search_filters_provider_with_global_mask_off(
     app = create_app([disabled, enabled], repository=repository)
 
     with TestClient(app) as client:
-        response = client.post("/search", json={"query": "skip mask-off"})
+        pair = register_and_login(client, temp_email("control-mask-off"))
+        headers = raw_auth_headers(pair["access_token"])
+        response = client.post("/search", json={"query": "skip mask-off"}, headers=headers)
 
     assert response.status_code == 200
     assert response.json()["provider"] == "brave"
@@ -1220,6 +1230,7 @@ async def test_search_filters_provider_with_search_bit_off_keeps_fetch_eligible(
     repository: SQLiteRepository,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    auth_secret: str,
 ) -> None:
     """A search-OFF mask blocks search but a direct status read still shows global ON."""
     monkeypatch.chdir(tmp_path)
@@ -1231,8 +1242,12 @@ async def test_search_filters_provider_with_search_bit_off_keeps_fetch_eligible(
     app = create_app([search_off, fallback], repository=repository)
 
     with TestClient(app) as client:
-        status = client.get("/api/v1/providers/exa")
-        response = client.post("/search", json={"query": "search bit off"})
+        pair = await register_promote_login(
+            client, repository, temp_email("control-search-off"), UserRole.ADMIN
+        )
+        headers = raw_auth_headers(pair["access_token"])
+        status = client.get("/api/v1/providers/exa", headers=headers)
+        response = client.post("/search", json={"query": "search bit off"}, headers=headers)
 
     assert status.status_code == 200
     assert status.json()["enable_mask"] == 5
@@ -1495,6 +1510,7 @@ async def _reset_control_caches() -> None:
 @pytest.mark.asyncio
 async def test_supported_admin_writes_invalidate_warm_cache(
     repository: SQLiteRepository,
+    auth_secret: str,
 ) -> None:
     """M3: every supported admin write refreshes the next read without restart."""
     from freesearch.configuration.provider_config import ProviderConfigUpdate
@@ -1573,7 +1589,13 @@ async def test_supported_admin_writes_invalidate_warm_cache(
 
         app = create_app([ControlAdapter("exa")], repository=repository)
         with TestClient(app) as client:
-            patched_rest = client.patch("/api/v1/providers/exa", json={"priority": 51})
+            pair = await register_promote_login(
+                client, repository, temp_email("control-warm"), UserRole.ADMIN
+            )
+            headers = raw_auth_headers(pair["access_token"])
+            patched_rest = client.patch(
+                "/api/v1/providers/exa", json={"priority": 51}, headers=headers
+            )
             assert patched_rest.status_code == 200
         assert (await effective_config_for_name(repository, "exa")).priority == 51
 

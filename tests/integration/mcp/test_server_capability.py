@@ -294,9 +294,11 @@ async def test_fetch_without_any_adapter_raises_no_provider(
 # --- (f) access masks and capability remain independent gates ---
 
 
-async def test_capability_gate_blocks_without_call_even_when_masks_allow() -> None:
+async def test_capability_gate_blocks_without_call_even_when_masks_allow(
+    repository: SQLiteRepository,
+) -> None:
     search_only = _CapabilityStub("searchonly", search=True, fetch=False)
-    server = create_server([search_only])
+    server = await _authed_server(repository, [search_only], "cap-gate")
 
     with pytest.raises(ToolError):
         await server.call_tool("fetch", {"request": {"url": "https://example.com"}})
@@ -305,7 +307,7 @@ async def test_capability_gate_blocks_without_call_even_when_masks_allow() -> No
 
 
 async def test_mask_gate_blocks_without_call_even_when_capability_allows(
-    tmp_path,  # type: ignore[no-untyped-def]
+    tmp_path: Path,
 ) -> None:
     from freesearch.persistence.storage import SQLiteRepository
 
@@ -315,7 +317,7 @@ async def test_mask_gate_blocks_without_call_even_when_capability_allows(
             "provider.exa", {"config": {"enable_mask": 0, "support_mask": 7, "priority": 100}}
         )
         stub = _CapabilityStub("exa", search=True, fetch=True)
-        server = create_server([stub], repository=repository)
+        server = await _authed_server(repository, [stub], "cap-mask")
 
         with pytest.raises(ToolError, match="no eligible provider"):
             await server.call_tool("search", {"request": {"query": "mask off"}})
@@ -325,13 +327,13 @@ async def test_mask_gate_blocks_without_call_even_when_capability_allows(
         await repository.close()
 
 
-async def test_unsupported_brave_fetch_never_calls_adapter(tmp_path) -> None:  # type: ignore[no-untyped-def]
+async def test_unsupported_brave_fetch_never_calls_adapter(tmp_path: Path) -> None:
     from freesearch.persistence.storage import SQLiteRepository
 
     repository = await SQLiteRepository.open(tmp_path / "brave-fetch.db")
     try:
         stub = _CapabilityStub("brave", search=True, fetch=False)
-        server = create_server([stub], repository=repository)
+        server = await _authed_server(repository, [stub], "cap-brave-fetch")
 
         with pytest.raises(ToolError):
             await server.call_tool("fetch", {"request": {"url": "https://example.com"}})

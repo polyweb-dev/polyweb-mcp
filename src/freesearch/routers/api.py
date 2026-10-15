@@ -888,7 +888,7 @@ def _terminal_quota_402(exc: BaseException) -> ProviderOperationError | None:
     if not isinstance(exc, ProviderOperationError):
         return None
     if (
-        exc.error.provider in ("tavily", "firecrawl")
+        exc.error.provider in ("tavily", "firecrawl", "exa")
         and exc.error.code == "quota_exhausted"
         and exc.error.status_code == 402
     ):

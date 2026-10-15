@@ -328,6 +328,7 @@ class _CountingAdapter(_StubAdapter):
 
 async def test_search_with_global_mask_off_returns_503_without_call(
     repository: SQLiteRepository,
+    auth_secret: str,
 ) -> None:
     adapter = _CountingAdapter("exa")
     await repository.set_runtime_setting(
@@ -336,7 +337,9 @@ async def test_search_with_global_mask_off_returns_503_without_call(
     app = create_app([adapter], repository=repository)
 
     with TestClient(app) as client:
-        response = client.post("/search", json={"query": "global off"})
+        pair = register_and_login(client, temp_email("rest-mask-off"))
+        headers = raw_auth_headers(pair["access_token"])
+        response = client.post("/search", json={"query": "global off"}, headers=headers)
 
     assert response.status_code == 503
     assert "no eligible provider" in response.json()["detail"]
@@ -345,6 +348,7 @@ async def test_search_with_global_mask_off_returns_503_without_call(
 
 async def test_fetch_with_fetch_bit_off_returns_503_without_call(
     repository: SQLiteRepository,
+    auth_secret: str,
 ) -> None:
     adapter = _CountingAdapter("exa")
     await repository.set_runtime_setting(
@@ -353,8 +357,12 @@ async def test_fetch_with_fetch_bit_off_returns_503_without_call(
     app = create_app([adapter], repository=repository)
 
     with TestClient(app) as client:
-        search = client.post("/search", json={"query": "search on"})
-        fetch = client.post("/fetch", json={"url": "https://example.com/page"})
+        pair = register_and_login(client, temp_email("rest-fetch-off"))
+        headers = raw_auth_headers(pair["access_token"])
+        search = client.post("/search", json={"query": "search on"}, headers=headers)
+        fetch = client.post(
+            "/fetch", json={"url": "https://example.com/page"}, headers=headers
+        )
 
     assert search.status_code == 200
     assert fetch.status_code == 503
@@ -364,6 +372,7 @@ async def test_fetch_with_fetch_bit_off_returns_503_without_call(
 
 async def test_search_with_search_bit_off_blocks_search_keeps_fetch(
     repository: SQLiteRepository,
+    auth_secret: str,
 ) -> None:
     adapter = _CountingAdapter("exa")
     await repository.set_runtime_setting(
@@ -372,8 +381,12 @@ async def test_search_with_search_bit_off_blocks_search_keeps_fetch(
     app = create_app([adapter], repository=repository)
 
     with TestClient(app) as client:
-        search = client.post("/search", json={"query": "search off"})
-        fetch = client.post("/fetch", json={"url": "https://example.com/page"})
+        pair = register_and_login(client, temp_email("rest-search-off"))
+        headers = raw_auth_headers(pair["access_token"])
+        search = client.post("/search", json={"query": "search off"}, headers=headers)
+        fetch = client.post(
+            "/fetch", json={"url": "https://example.com/page"}, headers=headers
+        )
 
     assert search.status_code == 503
     assert fetch.status_code == 200

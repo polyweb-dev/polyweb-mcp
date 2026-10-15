@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest"
 import type { ProviderConfig } from "@/domains/providers"
 import type { DashboardQuota } from "@/domains/dashboard"
-import { manualBudgetMissing, resolveQuotaRow } from "./quotaRowModel"
+import { isManualQuotaEligible } from "./quotaEligibility"
+import { manualBudgetMissing, manualEligibleProviders, resolveQuotaRow } from "./quotaRowModel"
 
 function quotaProvider(id: string): ProviderConfig {
   return {
@@ -66,9 +67,12 @@ function snapshot(
  * authoritative remaining-only pairing evidence used by OAuth slots.
  */
 describe("manualBudgetMissing", () => {
-  it("offers Manual Entry for Exa/Parallel only while no vendor budget exists", () => {
+  it("offers Manual Entry for Exa only while no vendor budget exists", () => {
     expect(manualBudgetMissing(quotaProvider("exa"), undefined, null)).toBe(true)
-    expect(manualBudgetMissing(quotaProvider("parallel"), snapshot("parallel"), null)).toBe(true)
+    // Parallel stays out: its prepaid USD balance comes from the OAuth Account
+    // API (AUTHORITATIVE snapshot), never from a manual seed.
+    expect(manualBudgetMissing(quotaProvider("parallel"), snapshot("parallel"), null)).toBe(false)
+    expect(manualBudgetMissing(quotaProvider("parallel"), undefined, null)).toBe(false)
   })
 
   it("stops offering Manual Entry once a snapshot or percentage exists", () => {
@@ -94,6 +98,20 @@ describe("manualBudgetMissing", () => {
   it("never treats other providers as budget-missing", () => {
     expect(manualBudgetMissing(quotaProvider("firecrawl"), undefined, null)).toBe(false)
     expect(manualBudgetMissing(quotaProvider("tavily"), snapshot("tavily"), null)).toBe(false)
+  })
+})
+
+describe("manualEligibleProviders", () => {
+  it("keeps Exa's balance correction action for a local estimate", () => {
+    const eligible = manualEligibleProviders(
+      [quotaProvider("exa"), quotaProvider("parallel")],
+      [
+        snapshot("exa", { remaining: "4.500", remainingPercent: "45", limit: "10.000" }),
+        snapshot("parallel", { remaining: "4.500", remainingPercent: "90", limit: "5.000" }),
+      ],
+      isManualQuotaEligible,
+    )
+    expect(eligible).toEqual(new Set(["exa"]))
   })
 })
 

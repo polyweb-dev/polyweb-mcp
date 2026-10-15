@@ -361,11 +361,10 @@ describe("RF4: visible unavailable/confidence semantics in Settings modal + Usag
     expect(headers).not.toContain("p95")
     const rows = Array.from(table.querySelectorAll("tbody tr"))
     expect(rows.length).toBe(8)
-    // Merged baseline: the Tavily row gains one approved rate-tier cell under
-    // its identity; every other row keeps the seven release columns.
+    // Merged baseline: every row keeps the seven release columns (7-col
+    // uniform); the Tavily rate-tier dropdown lives only in the Usage card.
     for (const row of rows) {
-      const isTavily = (row.textContent ?? "").includes("Tavily")
-      expect(row.children).toHaveLength(isTavily ? headers.length + 1 : headers.length)
+      expect(row.children).toHaveLength(headers.length)
     }
     // Release baseline: the reduced modal carries Endpoint/Capabilities/Last
     // result visibly (not title-only); quota confidence lives outside it.

@@ -10,7 +10,6 @@ import gc
 import inspect
 import json
 import time
-import uuid
 from collections.abc import AsyncIterator, Sequence
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -221,9 +220,6 @@ class _LeakyRepository:
         return self._health if provider == self._health.provider else None
 
 
-_MONITORING_DB_ROOT = Path(".runtime-tmp/monitoring-pytest-dbs")
-
-
 def _unlink_with_retries(path: Path, *, attempts: int = 20) -> None:
     """Remove a test database after Windows releases delayed SQLite handles.
 
@@ -247,11 +243,8 @@ def _unlink_with_retries(path: Path, *, attempts: int = 20) -> None:
 
 
 @pytest_asyncio.fixture
-async def repository() -> AsyncIterator[SQLiteRepository]:
-    # An isolated per-test database file: a shared cwd temp name collides with
-    # concurrent runs and pytest tmp_path is unavailable in this sandbox.
-    _MONITORING_DB_ROOT.mkdir(parents=True, exist_ok=True)
-    db_path = _MONITORING_DB_ROOT / f"monitoring-{uuid.uuid4().hex}.db"
+async def repository(tmp_path: Path) -> AsyncIterator[SQLiteRepository]:
+    db_path = tmp_path / "monitoring.db"
     db = await SQLiteRepository.open(db_path)
     try:
         yield db
@@ -1021,7 +1014,18 @@ async def test_monitoring_read_failures_return_empty_stats_and_json_dashboard(
     assert dashboard_body["latest_quota"] == []
     assert dashboard_body["latest_health"] == []
     assert dashboard_body["crd_usage_totals"] == []
-    assert dashboard_body["provider_limits"] == []
+    # provider_limits is catalog-driven, not a monitoring read: the read-failure
+    # seam leaves the eight canonical providers visible while stats stay empty.
+    assert {item["provider"] for item in dashboard_body["provider_limits"]} == {
+        "exa",
+        "firecrawl",
+        "tavily",
+        "parallel",
+        "you",
+        "brave",
+        "keenable",
+        "tinyfish",
+    }
     _parse_utc_datetime(dashboard_body["generated_at"])
 
 

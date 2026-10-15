@@ -20,6 +20,12 @@ export interface ProviderCardActionsProps {
   /** The last refresh was skipped, so the refresh action stays off the card. */
   refreshSkipped?: boolean
   onOpenModal: (modal: CardModal) => void
+  /**
+   * Composed OAuth control rendered inline at the trailing edge of the same
+   * flex-wrap action row (Parallel Connect/Disconnect). Supplied by composition
+   * so the quota feature never imports the OAuth feature directly.
+   */
+  oauthActions?: ReactNode
   /** The detail disclosure left the card. The info control owns the detail now. */
   expanded?: boolean
   /** The panel id of the earlier disclosure; the card mounts no panel now. */
@@ -72,7 +78,8 @@ function dialogAction(input: DialogAction, providerName: string): ReactNode {
 
 /**
  * The header controls of one card: sync, the provider balance dialog, the
- * budget limit dialog, and the history dialog.
+ * budget limit dialog, the history dialog, and the composed OAuth control
+ * inline at the trailing edge of the same flex-wrap row.
  *
  * Each dialog action carries its one-sentence meaning as a hover tooltip and as
  * accessible text, so a screen reader states the difference between a provider
@@ -81,7 +88,7 @@ function dialogAction(input: DialogAction, providerName: string): ReactNode {
  * action, because there is nothing to refresh.
  */
 export function ProviderCardActions(input: ProviderCardActionsProps): ReactNode {
-  const { providerId, providerName, manualEligible, syncing } = input
+  const { providerId, providerName, manualEligible, syncing, oauthActions } = input
   const actions: DialogAction[] = []
   if (manualEligible) {
     actions.push({
@@ -114,6 +121,7 @@ export function ProviderCardActions(input: ProviderCardActionsProps): ReactNode 
         onClick={() => input.onOpenModal("history")}>
         History
       </Button>
+      {oauthActions}
     </div>
   )
 }

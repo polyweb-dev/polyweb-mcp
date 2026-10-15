@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest"
 import type { ReactNode } from "react"
 import { act, render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import type { CRDUsageTotal, CRDView, LimitRecord, ProviderAuthLimits, ProviderLimits, RateProgressView } from "@/domains/dashboard"
+import type { CRDUsageTotal, CRDView, DashboardQuota, LimitRecord, ProviderAuthLimits, ProviderLimits, RateProgressView } from "@/domains/dashboard"
 import { installFetchStub, ok } from "@/test/fetchMock"
 import { ProviderLimitsCard } from "./ProviderLimitsCard"
 
@@ -1778,6 +1778,565 @@ describe("ProviderLimitsCard Firecrawl", () => {
 
     expect(await screen.findByRole("dialog")).not.toBeNull()
     expect(screen.getByText("Allowance (Credits)")).not.toBeNull()
+    vi.unstubAllGlobals()
+  })
+})
+
+/**
+ * Parallel OAuth balance fallback (Option A, frontend-only): the Account-API
+ * balance_to_snapshot returns remaining USD with limit/percent null and no
+ * aggregate pool, so the limits model holds no funds. The card shows the
+ * authoritative remaining-only latestQuota against the display-only $5/mo
+ * free credit (5000 CRD): "24870 / 5000 CRD" with a capped 100% bar (Firecrawl
+ * 4761.4/3800 pattern) while Disconnect stays inline. Desktop only.
+ */
+describe("ProviderLimitsCard Parallel OAuth balance", () => {
+  function parallelRecord(operation: "search" | "fetch"): LimitRecord {
+    return {
+      provider: "parallel",
+      operation,
+      auth_mode: "keyed",
+      supported: true,
+      transport_available: true,
+      native_pool_id: null,
+      rate: null,
+      budget: null,
+      conversion_profile: {
+        reference_usd_per_crd: "0.001",
+        native_usd_per_unit: "1",
+        cost_basis: "priced_native_use",
+        price_version: "v2026-09",
+        source: "documented",
+        estimated: false,
+      },
+      plan_name: "Parallel",
+      usage_url: null,
+      version: 1,
+    }
+  }
+
+  function parallelUnknownView(operation: "search" | "fetch"): CRDView {
+    return {
+      state: "unknown",
+      operation,
+      remaining_crd: null,
+      local_remaining_crd: null,
+      request_cost_crd: null,
+      shared_pool_id: null,
+      possible_standard_calls: null,
+      price_version: null,
+      priced: false,
+    }
+  }
+
+  function parallelNoPoolLimits(): ProviderLimits {
+    return {
+      provider: "parallel",
+      active_auth_mode: "keyed",
+      auths: [
+        {
+          auth_mode: "keyed",
+          transport_available: true,
+          search: parallelRecord("search"),
+          fetch: parallelRecord("fetch"),
+          free_tiers: [],
+          paid_tiers: [],
+          unknown_tiers: [],
+          tier_split_known: true,
+          aggregate_pool: null,
+          crd_views: [parallelUnknownView("search"), parallelUnknownView("fetch")],
+          rate_progress: [],
+          grants: null,
+          detail: null,
+        },
+      ],
+      documented_keyless_operations: [],
+      version: 1,
+      generated_at: "2026-03-10T12:00:00Z",
+    }
+  }
+
+  function authoritativeBalanceQuota(): DashboardQuota {
+    return {
+      provider: "parallel",
+      remaining: "24.87",
+      remainingPercent: null,
+      limit: null,
+      observed_at: "2026-09-06T18:00:00Z",
+      source: "authoritative",
+      unitKind: "USD",
+      displayUnit: "USD",
+      resetAt: null,
+      window: null,
+    }
+  }
+
+  it("shows the OAuth balance against the $5 free credit with a capped bar after pairing", () => {
+    installFetchStub(() => {
+      throw new Error("no backend in card test")
+    })
+    render(
+      <ProviderLimitsCard
+        providerId="parallel"
+        providerName="Parallel"
+        limits={parallelNoPoolLimits()}
+        crdUsageTotals={[]}
+        refreshDashboard={() => Promise.resolve()}
+        manualEligible={false}
+        latestQuota={authoritativeBalanceQuota()}
+        renderOAuthActions={() => <button type="button">Disconnect</button>}
+      />,
+    )
+    expect(screen.getByRole("button", { name: "Disconnect" })).not.toBeNull()
+    // CRD equivalent: 24.87 USD / 0.001 reference = 24870 CRD against the
+    // display-only $5 (5000 CRD) free credit. Remaining exceeds the allowance,
+    // so the percent caps at 100 like Firecrawl 4761.4/3800.
+    expect(screen.getByText("24870")).not.toBeNull()
+    expect(screen.getByText("/ 5000")).not.toBeNull()
+    expect(screen.getByText("CRD")).not.toBeNull()
+    const bar = screen.getByRole("progressbar", { name: "Parallel credit units remaining" })
+    expect(bar.getAttribute("aria-valuenow")).toBe("100")
+    expect(bar.getAttribute("aria-valuemin")).toBe("0")
+    expect(bar.getAttribute("aria-valuemax")).toBe("100")
+    expect(bar.getAttribute("aria-valuetext")).toBe("100% remaining, 24870 CRD left")
+    expect(screen.getByText("100%")).not.toBeNull()
+    expect(
+      screen.queryByText("Shown against the $5/mo free credit allowance."),
+    ).toBeNull()
+    expect(
+      screen.queryByText("No allowance is reported, so this card shows no percentage."),
+    ).toBeNull()
+    vi.unstubAllGlobals()
+  })
+})
+
+/**
+ * You.com Usage card parity with Parallel/Exa (frontend-only, desktop only).
+ *
+ * UI id `youcom` maps to backend `you` via idMapping. Search ($5/1k, 5 CRD)
+ * and fetch ($1/1k live pages, 1 CRD) costs differ, so the card keeps
+ * per-operation rate bars (Brave pattern): no shared bar, no shared title.
+ * Keyed funds reuse the finite-USD path; without a catalog pool the ESTIMATED
+ * cents balance-API snapshot falls back to the display-only $100 signup
+ * credit (100000 CRD total, fetch-basis) with a capped bar, like Parallel
+ * $5/5000. A vendor-balance pool without a backend allowance shows the same
+ * display-only 100000 CRD denominator with a capped 100% bar (Firecrawl
+ * 4761/3800 pattern), never the amount-only footnote. Searches left adds the
+ * daily 100 to the credit-derived searches from the same balance. Refresh
+ * Limits stays visible for keyed; a keyless rail hides it. No Free strike
+ * applies (keyed paid rail). Manual entry stays out: the vendor balance API
+ * supplies the balance and "you" holds no manual_anchor pool.
+ */
+describe("ProviderLimitsCard You.com", () => {
+  function youcomProfile(): Record<string, unknown> {
+    return {
+      reference_usd_per_crd: "0.001",
+      native_usd_per_unit: "1",
+      cost_basis: "priced_native_use",
+      price_version: "v2026-09",
+      source: "documented",
+      estimated: false,
+    }
+  }
+
+  function youcomRecord(operation: "search" | "fetch", authMode: "keyed" | "keyless" = "keyed"): LimitRecord {
+    const supported = authMode === "keyed" || operation === "search"
+    return {
+      provider: "youcom",
+      operation,
+      auth_mode: authMode,
+      supported,
+      transport_available: supported,
+      native_pool_id: authMode === "keyed" ? "youcom:keyed:usd" : null,
+      rate: null,
+      budget: null,
+      conversion_profile: youcomProfile(),
+      plan_name: "You.com",
+      usage_url: "https://you.com/platform/analytics",
+      version: 1,
+    } as unknown as LimitRecord
+  }
+
+  function youcomView(operation: "search" | "fetch", remaining: string, calls: string): CRDView {
+    return {
+      state: "finite",
+      operation,
+      remaining_crd: remaining,
+      local_remaining_crd: null,
+      request_cost_crd: operation === "search" ? "5" : "1",
+      shared_pool_id: "youcom:keyed:usd",
+      possible_standard_calls: calls,
+      price_version: "v2026-09",
+      priced: true,
+    }
+  }
+
+  function youcomUnknownView(operation: "search" | "fetch"): CRDView {
+    return {
+      state: "unknown",
+      operation,
+      remaining_crd: null,
+      local_remaining_crd: null,
+      request_cost_crd: null,
+      shared_pool_id: null,
+      possible_standard_calls: null,
+      price_version: null,
+      priced: false,
+    }
+  }
+
+  function youcomRateProgress(overrides: Partial<RateProgressView>): RateProgressView {
+    return {
+      bucket_id: "youcom:keyed:search:requests",
+      operation: "search",
+      window: "1h",
+      unit: "requests",
+      remaining: "90",
+      limit: "100",
+      reset_at: null,
+      source: "documented",
+      confidence: "observed",
+      kind: "rate",
+      stale: false,
+      enforceable: true,
+      ...overrides,
+    }
+  }
+
+  function youcomKeyedLimits(): ProviderLimits {
+    return {
+      provider: "youcom",
+      active_auth_mode: "keyed",
+      auths: [
+        {
+          auth_mode: "keyed",
+          transport_available: true,
+          search: youcomRecord("search"),
+          fetch: youcomRecord("fetch"),
+          free_tiers: [],
+          paid_tiers: [],
+          unknown_tiers: [],
+          tier_split_known: true,
+          aggregate_pool: {
+            pool_id: "youcom:keyed:usd",
+            provider: "youcom",
+            auth_mode: "keyed",
+            native_unit: "USD",
+            remaining: "95.500",
+            allowance: "100.000",
+            actual_spend_usd: null,
+            source: "vendor_api",
+            confidence: "estimated",
+            reset_at: null,
+            observed_at: "2026-09-06T10:05:00Z",
+            version: 1,
+            credential_generation: 1,
+            next_sync_at: null,
+            stale: false,
+            manual_anchor: false,
+          },
+          crd_views: [youcomView("search", "95500", "19100"), youcomView("fetch", "95500", "95500")],
+          rate_progress: [
+            youcomRateProgress({}),
+            youcomRateProgress({
+              bucket_id: "youcom:keyed:fetch:pages",
+              operation: "fetch",
+              window: "1d",
+              unit: "urls",
+              remaining: "900",
+              limit: "1000",
+            }),
+          ],
+          grants: null,
+          detail: null,
+        },
+      ],
+      documented_keyless_operations: ["search"],
+      version: 1,
+      generated_at: "2026-03-10T12:00:00Z",
+    } as unknown as ProviderLimits
+  }
+
+  function youcomVendorBalanceNoAllowanceLimits(): ProviderLimits {
+    return {
+      provider: "youcom",
+      active_auth_mode: "keyed",
+      auths: [
+        {
+          auth_mode: "keyed",
+          transport_available: true,
+          search: youcomRecord("search"),
+          fetch: youcomRecord("fetch"),
+          free_tiers: [],
+          paid_tiers: [],
+          unknown_tiers: [],
+          tier_split_known: true,
+          aggregate_pool: {
+            pool_id: "youcom:keyed:usd",
+            provider: "youcom",
+            auth_mode: "keyed",
+            native_unit: "USD",
+            remaining: "199.52",
+            allowance: null,
+            actual_spend_usd: null,
+            source: "vendor_api",
+            confidence: "estimated",
+            reset_at: null,
+            observed_at: "2026-09-06T10:05:00Z",
+            version: 1,
+            credential_generation: 1,
+            next_sync_at: null,
+            stale: false,
+            manual_anchor: false,
+          },
+          crd_views: [
+            {
+              state: "finite",
+              operation: "search",
+              remaining_crd: "100000",
+              local_remaining_crd: null,
+              request_cost_crd: "5",
+              shared_pool_id: "you:keyed:daily-search",
+              possible_standard_calls: "100",
+              price_version: "v2026-09",
+              priced: true,
+            },
+            {
+              state: "finite",
+              operation: "fetch",
+              remaining_crd: "199520",
+              local_remaining_crd: null,
+              request_cost_crd: "1",
+              shared_pool_id: "youcom:keyed:usd",
+              possible_standard_calls: "199520",
+              price_version: "v2026-09",
+              priced: true,
+            },
+          ],
+          rate_progress: [],
+          grants: null,
+          detail: null,
+        },
+      ],
+      documented_keyless_operations: ["search"],
+      version: 1,
+      generated_at: "2026-03-10T12:00:00Z",
+    } as unknown as ProviderLimits
+  }
+
+  function youcomNoPoolLimits(authMode: "keyed" | "keyless" = "keyed"): ProviderLimits {
+    return {
+      provider: "youcom",
+      active_auth_mode: authMode,
+      auths: [
+        {
+          auth_mode: authMode,
+          transport_available: true,
+          search: youcomRecord("search", authMode),
+          fetch: youcomRecord("fetch", authMode),
+          free_tiers: [],
+          paid_tiers: [],
+          unknown_tiers: [],
+          tier_split_known: true,
+          aggregate_pool: null,
+          crd_views: [youcomUnknownView("search"), youcomUnknownView("fetch")],
+          rate_progress: [],
+          grants: null,
+          detail: null,
+        },
+      ],
+      documented_keyless_operations: ["search"],
+      version: 1,
+      generated_at: "2026-03-10T12:00:00Z",
+    } as unknown as ProviderLimits
+  }
+
+  function estimatedBalanceQuota(): DashboardQuota {
+    return {
+      provider: "youcom",
+      remaining: "4.75",
+      remainingPercent: null,
+      limit: null,
+      observed_at: "2026-09-06T18:00:00Z",
+      source: "estimated",
+      unitKind: "USD",
+      displayUnit: "USD",
+      resetAt: null,
+      window: null,
+    }
+  }
+
+  it("shows finite-USD funds with per-operation rate bars and a visible refresh for keyed", async () => {
+    installFetchStub(() => ok({ events: [], next_cursor: null }))
+    render(
+      <ProviderLimitsCard
+        providerId="youcom"
+        providerName="You.com"
+        limits={youcomKeyedLimits()}
+        crdUsageTotals={[]}
+        refreshDashboard={() => Promise.resolve()}
+        manualEligible={false}
+      />,
+    )
+    // Finite-USD pool: 95.500/100.000 USD -> 95500/100000 CRD at 95.5%.
+    expect(screen.getByText("95500")).not.toBeNull()
+    expect(screen.getByText("/ 100000")).not.toBeNull()
+    expect(screen.getByText("CRD")).not.toBeNull()
+    const bar = screen.getByRole("progressbar", { name: "You.com credit units remaining" })
+    expect(bar.getAttribute("aria-valuenow")).toBe("95.5")
+    expect(bar.getAttribute("aria-valuetext")).toBe("95.5% remaining, 95500 CRD left")
+    expect(screen.getByText("95.5%")).not.toBeNull()
+    // Per-operation rate bars (Brave pattern): distinct Search/Fetch titles,
+    // never the shared Keenable title.
+    expect(screen.getByText("Search")).not.toBeNull()
+    expect(screen.getByText("Fetch")).not.toBeNull()
+    expect(screen.getByText("90 of 100 requests")).not.toBeNull()
+    expect(screen.getByText("900 of 1000 URLs")).not.toBeNull()
+    expect(
+      screen.getByRole("progressbar", { name: "You.com search hourly requests remaining" }).getAttribute("aria-valuenow"),
+    ).toBe("90")
+    expect(
+      screen.getByRole("progressbar", { name: "You.com fetch daily URLs remaining" }).getAttribute("aria-valuenow"),
+    ).toBe("90")
+    expect(screen.queryByText("Search and Fetch Limits")).toBeNull()
+    // Keyed rail keeps Refresh Limits visible.
+    expect(screen.getByRole("button", { name: "Refresh limits for You.com" })).not.toBeNull()
+    // Distinct per-operation call costs in the details popover, with no Free strike.
+    const user = userEvent.setup()
+    await user.click(screen.getByRole("button", { name: "Credit details for You.com" }))
+    expect(await screen.findByText("Search CRD cost")).not.toBeNull()
+    expect(screen.getByText("Fetch CRD cost")).not.toBeNull()
+    expect(document.querySelector("s")).toBeNull()
+    await user.keyboard("{Escape}")
+    expect(screen.queryByText("Quota Details")).toBeNull()
+    vi.unstubAllGlobals()
+  })
+
+  it("falls back to the estimated balance against the $100 signup credit without a pool", () => {
+    installFetchStub(() => {
+      throw new Error("no backend in card test")
+    })
+    render(
+      <ProviderLimitsCard
+        providerId="youcom"
+        providerName="You.com"
+        limits={youcomNoPoolLimits()}
+        crdUsageTotals={[]}
+        refreshDashboard={() => Promise.resolve()}
+        manualEligible={false}
+        latestQuota={estimatedBalanceQuota()}
+      />,
+    )
+    // CRD equivalent: 4.75 USD / 0.001 reference = 4750 CRD against the
+    // display-only $100 signup (100000 CRD total, fetch-basis): 4.8% bar.
+    expect(screen.getByText("4750")).not.toBeNull()
+    expect(screen.getByText("/ 100000")).not.toBeNull()
+    expect(screen.getByText("CRD")).not.toBeNull()
+    const bar = screen.getByRole("progressbar", { name: "You.com credit units remaining" })
+    expect(bar.getAttribute("aria-valuenow")).toBe("4.8")
+    expect(bar.getAttribute("aria-valuemin")).toBe("0")
+    expect(bar.getAttribute("aria-valuemax")).toBe("100")
+    expect(bar.getAttribute("aria-valuetext")).toBe("4.8% remaining, 4750 CRD left")
+    expect(screen.getByText("4.8%")).not.toBeNull()
+    expect(
+      screen.queryByText("No allowance is reported, so this card shows no percentage."),
+    ).toBeNull()
+    expect(screen.getByRole("button", { name: "Refresh limits for You.com" })).not.toBeNull()
+    vi.unstubAllGlobals()
+  })
+
+  it("shows the fallback amount-only when the CRD conversion is unavailable", () => {
+    installFetchStub(() => {
+      throw new Error("no backend in card test")
+    })
+    const limits = youcomNoPoolLimits()
+    const auth = limits.auths[0]
+    const unpriced = {
+      ...auth,
+      search: { ...auth.search, conversion_profile: { ...youcomProfile(), reference_usd_per_crd: "0.000" } },
+      fetch: { ...auth.fetch, conversion_profile: { ...youcomProfile(), reference_usd_per_crd: "0.000" } },
+    }
+    render(
+      <ProviderLimitsCard
+        providerId="youcom"
+        providerName="You.com"
+        limits={{ ...limits, auths: [unpriced] } as unknown as ProviderLimits}
+        crdUsageTotals={[]}
+        refreshDashboard={() => Promise.resolve()}
+        manualEligible={false}
+        latestQuota={estimatedBalanceQuota()}
+      />,
+    )
+    // The dollar balance still shows alone: no fraction, no bar, no percent.
+    expect(screen.getByText("$4.75")).not.toBeNull()
+    expect(screen.queryByRole("progressbar", { name: "You.com credit units remaining" })).toBeNull()
+    expect(screen.queryByText("4750")).toBeNull()
+    expect(screen.queryByText("4.8%")).toBeNull()
+    vi.unstubAllGlobals()
+  })
+
+  it("caps the vendor-balance pool without an allowance at 100% with no footnote", async () => {
+    installFetchStub(() => ok({ events: [], next_cursor: null }))
+    render(
+      <ProviderLimitsCard
+        providerId="youcom"
+        providerName="You.com"
+        limits={youcomVendorBalanceNoAllowanceLimits()}
+        crdUsageTotals={[]}
+        refreshDashboard={() => Promise.resolve()}
+        manualEligible={false}
+      />,
+    )
+    // Screenshot: 199.52 USD -> 199520 CRD against the display-only $100
+    // signup total (100000 CRD, fetch-basis). Remaining exceeds the
+    // allowance, so the percent caps at 100 like Firecrawl 4761/3800 and
+    // Parallel 24870/5000, with no amount-only footnote.
+    expect(screen.getByText("199520")).not.toBeNull()
+    expect(screen.getByText("/ 100000")).not.toBeNull()
+    expect(screen.getByText("CRD")).not.toBeNull()
+    const bar = screen.getByRole("progressbar", { name: "You.com credit units remaining" })
+    expect(bar.getAttribute("aria-valuenow")).toBe("100")
+    expect(bar.getAttribute("aria-valuemin")).toBe("0")
+    expect(bar.getAttribute("aria-valuemax")).toBe("100")
+    expect(bar.getAttribute("aria-valuetext")).toBe("100% remaining, 199520 CRD left")
+    expect(screen.getByText("100%")).not.toBeNull()
+    expect(
+      screen.queryByText("No allowance is reported, so this card shows no percentage."),
+    ).toBeNull()
+    // Keyed rail keeps Refresh Limits visible.
+    expect(screen.getByRole("button", { name: "Refresh limits for You.com" })).not.toBeNull()
+    // Popover: Search CRD cost 5, Searches left total 40004 (daily 100 +
+    // credit 39904 from 199520/5), Fetch CRD cost 1, Fetches left 199520.
+    const user = userEvent.setup()
+    await user.click(screen.getByRole("button", { name: "Credit details for You.com" }))
+    expect(await screen.findByText("Search CRD cost")).not.toBeNull()
+    expect(screen.getByText("Fetch CRD cost")).not.toBeNull()
+    expect(screen.getByText("Searches left")).not.toBeNull()
+    expect(screen.getByText("40004")).not.toBeNull()
+    expect(screen.getByText("Fetches left")).not.toBeNull()
+    // The card fraction and the popover Fetches left row both read 199520.
+    expect(screen.getAllByText("199520").length).toBeGreaterThanOrEqual(2)
+    await user.keyboard("{Escape}")
+    expect(screen.queryByText("Quota Details")).toBeNull()
+    vi.unstubAllGlobals()
+  })
+
+  it("hides Refresh Limits for a keyless rail", () => {
+    installFetchStub(() => {
+      throw new Error("no backend in card test")
+    })
+    render(
+      <ProviderLimitsCard
+        providerId="youcom"
+        providerName="You.com"
+        limits={youcomNoPoolLimits("keyless")}
+        crdUsageTotals={[]}
+        refreshDashboard={() => Promise.resolve()}
+        manualEligible={false}
+      />,
+    )
+    expect(screen.getByRole("heading", { name: "You.com" })).not.toBeNull()
+    expect(screen.queryByRole("button", { name: "Refresh limits for You.com" })).toBeNull()
     vi.unstubAllGlobals()
   })
 })

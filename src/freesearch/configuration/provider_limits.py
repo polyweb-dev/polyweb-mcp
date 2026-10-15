@@ -1,11 +1,11 @@
 """Documented provider limit catalog and approved CRD reference.
 
 The catalog holds one record per provider, operation, and auth mode. Sixteen
-keyed records cover the eight providers for search and fetch. Nine documented
-keyless operation records cover Keenable (search and fetch), Firecrawl, Tavily,
-and Parallel (search and fetch each) and You.com (search only). The catalog
-therefore holds 25 records: unsupported combinations have no record at all, and
-Tinyfish, Brave, and Exa keyless combinations are hidden.
+keyed records cover the eight providers for search and fetch. Eight documented
+keyless operation records cover Keenable, Firecrawl, Tavily, and Parallel
+(search and fetch each). The catalog therefore holds 24 records: unsupported
+combinations have no record at all, and Tinyfish, Brave, Exa, and You.com
+keyless combinations are hidden.
 
 The catalog also declares each provider's documented free and paid subpools.
 Those declarations are entitlement and reset documentation, not vendor
@@ -65,7 +65,7 @@ PROVIDER_IDS: Final[tuple[str, ...]] = (
 # Keyless rails with no adapter transport in this phase.
 PROVIDER_AUTH_KEYLESS: Final[tuple[str, ...]] = ("firecrawl", "keenable", "parallel")
 
-CATALOG_RECORD_COUNT: Final[int] = 25
+CATALOG_RECORD_COUNT: Final[int] = 24
 
 # Tavily search and extract draw on one documented default bucket. The search
 # bucket ID stays the ID stored attempts already use, so prior minute counts
@@ -432,6 +432,101 @@ def _brave_records() -> list[ProviderLimitRecord]:
     ]
 
 
+def _parallel_records() -> list[ProviderLimitRecord]:
+    """Build the four documented Parallel records.
+
+    Keyed search and fetch share the documented USD-per-request model on one
+    native USD pool with separate POST-only minute rate buckets (600 search +
+    600 extract). Search prices the documented Basic/Advanced default
+    (``$5/1k``; Turbo/Fast ``$1/1k`` in ``SEARCH_USD_BY_MODE``) and fetch
+    prices one URL at ``PARALLEL_USD_PER_TURBO`` (``$1/1k``). Both keyed
+    budgets carry the documented ``$5`` monthly free credit with card
+    overage billing. Keyless search and fetch run with no published numeric
+    limit and no budget.
+    """
+
+    search_rate = _rate(
+        _request_window(
+            "parallel",
+            AuthMode.KEYED,
+            "search",
+            "600",
+            window=RateWindowName.MINUTE,
+            scope=RateScope.KEY,
+        )
+    )
+    fetch_rate = _rate(
+        _request_window(
+            "parallel",
+            AuthMode.KEYED,
+            "fetch",
+            "600",
+            window=RateWindowName.MINUTE,
+            scope=RateScope.KEY,
+        )
+    )
+    search_price = "0.005"
+    fetch_price = str(PARALLEL_USD_PER_TURBO)
+    search_budget = _budget(
+        BudgetModel.USD,
+        free_allowance="5",
+        allowance_unit="USD",
+        allowance_period="month",
+        cost_per_1k="5",
+        native_cost=search_price,
+        usd_per_call=search_price,
+        on_exhausted=ExhaustAction.BILL,
+    )
+    fetch_budget = _budget(
+        BudgetModel.USD,
+        free_allowance="5",
+        allowance_unit="USD",
+        allowance_period="month",
+        cost_per_1k="1",
+        native_cost=fetch_price,
+        usd_per_call=fetch_price,
+        on_exhausted=ExhaustAction.BILL,
+    )
+    records = [
+        _record(
+            "parallel",
+            LimitOperation.SEARCH,
+            AuthMode.KEYED,
+            rate=search_rate,
+            budget=search_budget,
+            pool_unit=UnitKind.USD,
+            profile=_profile(search_price, source="usd_native"),
+            plan_name="Pay-per-request USD pricing",
+            usage_url="https://platform.parallel.ai",
+        ),
+        _record(
+            "parallel",
+            LimitOperation.FETCH,
+            AuthMode.KEYED,
+            rate=fetch_rate,
+            budget=fetch_budget,
+            pool_unit=UnitKind.USD,
+            profile=_profile(fetch_price, source="usd_native"),
+            plan_name="Pay-per-request USD pricing",
+            usage_url="https://platform.parallel.ai",
+        ),
+    ]
+    for operation in (LimitOperation.SEARCH, LimitOperation.FETCH):
+        records.append(
+            _record(
+                "parallel",
+                operation,
+                AuthMode.KEYLESS,
+                transport_available=False,
+                rate=_unpublished_rate(),
+                budget=None,
+                profile=_profile(None, source="keyless_unpublished"),
+                plan_name="Keyless access mode (rate limit not published)",
+            )
+        )
+    return records
+
+
 def _tavily_records() -> list[ProviderLimitRecord]:
     """Build the four Tavily catalog records (catalog version 2 contract).
 
@@ -608,12 +703,171 @@ def _firecrawl_records() -> list[ProviderLimitRecord]:
     return records
 
 
+def _exa_records() -> list[ProviderLimitRecord]:
+    """Build the documented Exa records.
+
+    Keyed search bills $0.007 for the first 10 results at 10 QPS (team scope),
+    and fetch bills $0.001 per page at 100 QPS (team scope), both backed by
+    the shared $10.00 monthly USD pool.
+    """
+
+    search_rate = _rate(
+        _request_window(
+            "exa",
+            AuthMode.KEYED,
+            "search",
+            "10",
+            window=RateWindowName.SECOND,
+            scope=RateScope.TEAM,
+            source="documented_team",
+        )
+    )
+    fetch_rate = _rate(
+        _request_window(
+            "exa",
+            AuthMode.KEYED,
+            "fetch",
+            "100",
+            window=RateWindowName.SECOND,
+            scope=RateScope.TEAM,
+            source="documented_team",
+        )
+    )
+    search_budget = _budget(
+        BudgetModel.USD,
+        free_allowance="10",
+        allowance_unit="USD",
+        allowance_period="month",
+        cost_per_1k="7",
+        native_cost=str(EXA_USD_PER_SEARCH),
+        usd_per_call=str(EXA_USD_PER_SEARCH),
+        on_exhausted=ExhaustAction.HTTP_402,
+        usage_api="https://exa.ai/docs/reference/team-management/get-api-key-usage",
+    )
+    fetch_budget = _budget(
+        BudgetModel.USD,
+        free_allowance="10",
+        allowance_unit="USD",
+        allowance_period="month",
+        cost_per_1k="1",
+        native_cost=str(EXA_USD_PER_PAGE),
+        usd_per_call=str(EXA_USD_PER_PAGE),
+        on_exhausted=ExhaustAction.HTTP_402,
+        usage_api="https://exa.ai/docs/reference/team-management/get-api-key-usage",
+    )
+    profile = _profile("1", source="usd_native")
+    return [
+        _record(
+            "exa",
+            LimitOperation.SEARCH,
+            AuthMode.KEYED,
+            rate=search_rate,
+            budget=search_budget,
+            pool_unit=UnitKind.USD,
+            profile=profile,
+            plan_name="Free $10 monthly grant + bonus",
+            usage_url="https://dashboard.exa.ai/",
+        ),
+        _record(
+            "exa",
+            LimitOperation.FETCH,
+            AuthMode.KEYED,
+            rate=fetch_rate,
+            budget=fetch_budget,
+            pool_unit=UnitKind.USD,
+            profile=profile,
+            plan_name="Free $10 monthly grant + bonus",
+            usage_url="https://dashboard.exa.ai/",
+        ),
+    ]
+
+
+def _you_records() -> list[ProviderLimitRecord]:
+    """Build the documented You.com records.
+
+    Keyed search bills $0.005 per call and fetch (contents) bills $0.001 per
+    live page, both backed by the shared one-time $100 signup USD pool (the
+    budget claims no monthly period, and the renewing 100-calls/day free
+    search allowance lives on the daily tier, not here). Each endpoint has
+    its own 10 req/sec team rate bucket, which stays detail-only.
+    """
+
+    search_rate = _rate(
+        _request_window(
+            "you",
+            AuthMode.KEYED,
+            "search",
+            "10",
+            window=RateWindowName.SECOND,
+            scope=RateScope.TEAM,
+            source="documented_team",
+        )
+    )
+    fetch_rate = _rate(
+        _request_window(
+            "you",
+            AuthMode.KEYED,
+            "fetch",
+            "10",
+            window=RateWindowName.SECOND,
+            scope=RateScope.TEAM,
+            source="documented_team",
+        )
+    )
+    search_budget = _budget(
+        BudgetModel.USD,
+        free_allowance="100",
+        allowance_unit="USD",
+        cost_per_1k="5",
+        native_cost=str(YOUCOM_USD_PER_SEARCH),
+        usd_per_call=str(YOUCOM_USD_PER_SEARCH),
+        on_exhausted=ExhaustAction.HTTP_402,
+        usage_api="https://api.you.com/v1/billing/account_balance",
+    )
+    fetch_budget = _budget(
+        BudgetModel.USD,
+        free_allowance="100",
+        allowance_unit="USD",
+        cost_per_1k="1",
+        native_cost=str(YOUCOM_USD_PER_PAGE),
+        usd_per_call=str(YOUCOM_USD_PER_PAGE),
+        on_exhausted=ExhaustAction.HTTP_402,
+        usage_api="https://api.you.com/v1/billing/account_balance",
+    )
+    profile = _profile("1", source="usd_native")
+    return [
+        _record(
+            "you",
+            LimitOperation.SEARCH,
+            AuthMode.KEYED,
+            rate=search_rate,
+            budget=search_budget,
+            pool_unit=UnitKind.USD,
+            profile=profile,
+            plan_name="Signup $100 credit + 100 free searches/day",
+            usage_url="https://you.com/platform/analytics",
+        ),
+        _record(
+            "you",
+            LimitOperation.FETCH,
+            AuthMode.KEYED,
+            rate=fetch_rate,
+            budget=fetch_budget,
+            pool_unit=UnitKind.USD,
+            profile=profile,
+            plan_name="Signup $100 credit + 100 free searches/day",
+            usage_url="https://you.com/platform/analytics",
+        ),
+    ]
+
+
 def provider_limit_defaults() -> tuple[ProviderLimitRecord, ...]:
     """Return the documented catalog in stable catalog order.
 
-    Slice C1 holds the two keyed Brave records, and slice C6 adds the four keyed
-    and keyless Tavily records. The other provider builders arrive with their
-    own slices.
+    Slice C1 holds the two keyed Brave records, slice P1 holds the four keyed
+    and keyless Parallel records, and slice C6 adds the four keyed and keyless
+    Tavily records. The other provider builders arrive with their own slices,
+    including the two keyed You.com records.
     """
 
     records: list[ProviderLimitRecord] = []
@@ -621,8 +875,11 @@ def provider_limit_defaults() -> tuple[ProviderLimitRecord, ...]:
         _tinyfish_records,
         _keenable_records,
         _brave_records,
+        _parallel_records,
         _tavily_records,
         _firecrawl_records,
+        _exa_records,
+        _you_records,
     ):
         records.extend(builder())
     return tuple(records)
@@ -641,8 +898,11 @@ def documented_keyless_operations(provider: str) -> list[LimitOperation]:
 def provider_tier_defaults() -> dict[str, list[TierBalance]]:
     """Return declared free and paid subpools keyed by ``provider:auth_mode``.
 
-    Slice C1 holds the Brave keyed group and slice C6 adds the Tavily keyed and
-    keyless groups. The other provider groups arrive with their own slices. The
+    Slice C1 holds the Brave keyed group, slice P1 holds the Parallel keyed
+    and keyless groups, and slice C6 adds the Tavily keyed and keyless groups.
+    The other provider groups arrive with their own slices, including the
+    You.com keyed group with its one-time signup credit and daily search
+    allowance. The
     declarations describe documented entitlement, reset rules, and funding
     mode. A vendor observation supplies the numbers; without one, a declared
     allowance still lets the UI show a denominator it can trust.
@@ -776,4 +1036,104 @@ def provider_tier_defaults() -> dict[str, list[TierBalance]]:
             transport_available=False,
             label="Documented keyless public pool (rate limit not published)",
         ),
+        "parallel:keyed": [
+            # No free allowance is claimed: the documented monthly credit
+            # varies by eligibility (card on file, one per org), so the
+            # tier keeps the USD unit with an unknown reset and no invented
+            # denominator. The local seed ledger supplies the numbers.
+            _tier(
+                "parallel:keyed:free",
+                "free",
+                usd,
+                reset_rule=ResetRule.UNKNOWN,
+                source="documented_plan",
+                confidence=Confidence.UNKNOWN,
+                label="USD balance (pay-per-request, free credit varies)",
+            ),
+            _tier(
+                "parallel:keyed:postpaid",
+                "paid",
+                usd,
+                reset_rule=ResetRule.NEVER,
+                funding_mode=FundingMode.POSTPAID,
+                confidence=Confidence.UNKNOWN,
+                label="PAYGO overage (card billed, no cap documented)",
+            ),
+        ],
+        "parallel:keyless": _keyless_documented_tier(
+            "parallel",
+            native_unit=usd,
+            transport_available=False,
+            label="Documented keyless search and extract (rate limit not published)",
+        ),
+        "exa:keyed": [
+            _tier(
+                "exa:keyed:free",
+                "free",
+                usd,
+                allowance="10",
+                reset_rule=ResetRule.MONTHLY_FIRST,
+                funding_mode=FundingMode.RECURRING,
+                source="documented_plan",
+                confidence=Confidence.ESTIMATED,
+                label="USD 10 free monthly grant (resets on the 1st)",
+            ),
+            _tier(
+                "exa:keyed:bonus",
+                "free",
+                usd,
+                allowance="10",
+                reset_rule=ResetRule.NEVER,
+                funding_mode=FundingMode.PREPAID,
+                source="documented_plan",
+                confidence=Confidence.ESTIMATED,
+                label="USD 10 onboarding bonus (one-time, no expiry)",
+            ),
+            _tier(
+                "exa:keyed:paid",
+                "paid",
+                usd,
+                reset_rule=ResetRule.NEVER,
+                funding_mode=FundingMode.PREPAID,
+                confidence=Confidence.UNKNOWN,
+                label="Purchased prepaid dollar credits",
+            ),
+        ],
+        "you:keyed": [
+            # No monthly allowance is claimed: the documented $100 signup
+            # credit is one-time, so the free tier keeps a never reset and no
+            # period. The renewing 100-calls/day free search allowance is a
+            # separate daily-estimate tier, never a second monthly grant.
+            _tier(
+                "you:keyed:free",
+                "free",
+                usd,
+                allowance="100",
+                reset_rule=ResetRule.NEVER,
+                funding_mode=FundingMode.PREPAID,
+                source="documented_plan",
+                confidence=Confidence.ESTIMATED,
+                label="USD 100 signup credit (one-time, shared across products)",
+            ),
+            _tier(
+                "you:keyed:daily-search",
+                "free",
+                request,
+                allowance="100",
+                reset_rule=ResetRule.DAILY_ESTIMATE,
+                funding_mode=FundingMode.RECURRING,
+                source="documented_plan",
+                confidence=Confidence.ESTIMATED,
+                label="100 free search calls/day (renewing, search only)",
+            ),
+            _tier(
+                "you:keyed:paid",
+                "paid",
+                usd,
+                reset_rule=ResetRule.NEVER,
+                funding_mode=FundingMode.PREPAID,
+                confidence=Confidence.UNKNOWN,
+                label="Purchased prepaid dollar credits",
+            ),
+        ],
     }

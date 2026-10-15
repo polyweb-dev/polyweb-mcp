@@ -554,7 +554,7 @@ def test_fresh_database_at_head_has_no_cache_metadata(tmp_path: Path) -> None:
     result = upgrade_database(database)
 
     assert result.current_revision == migration_head()
-    assert result.current_revision == "0004_local_users"
+    assert result.current_revision == "0005_tinyfish_plan_label"
     assert "cache_metadata" not in _tables(database)
     assert "cache_metadata_expires_at" not in _indexes(database)
     assert _indexes(database) == set(_HEAD_INDEXES) | set(_LIMIT_INDEXES)
@@ -885,7 +885,7 @@ def test_downgrade_decodes_global_bit_and_removes_masks(tmp_path: Path) -> None:
     upgrade_database(database)
     assert _provider_config(database, "exa")["enable_mask"] == 7
 
-    migration_module.command.downgrade(_config_for(database), "-1")
+    migration_module.command.downgrade(_config_for(database), "0003_open_telemetry_spans")
 
     config = _provider_config(database, "exa")
     assert config["enabled"] is True

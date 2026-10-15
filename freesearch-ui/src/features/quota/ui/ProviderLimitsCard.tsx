@@ -12,15 +12,18 @@ import type {
   BackendManualQuotaPayload,
 } from "@/domains/dashboard/api/manualQuotaWire"
 import type { ProviderConfig } from "@/domains/providers"
-import type { UnitKind } from "@/shared/api/units"
 import {
   activeAuth,
   creditCardModel,
   operationAvailable,
+  PARALLEL_FREE_ALLOWANCE_CRD,
+  YOUCOM_FREE_ALLOWANCE_CRD,
+  usdBalanceToCRD,
   type CreditCardModel,
 } from "../model/crdCardModel"
-import type { ManualAmountMode } from "../model/manualQuotaMath"
+import { percentRemaining } from "../model/crdDisplay"
 import { displayAdapterOf, profileOf, type TavilyDisplayAdapter } from "../model/tavilyCredits"
+import { manualUnit, type ManualUnit } from "../model/manualQuotaUnit"
 import { providerInfo, type BalancePrefill } from "../model/providerInfo"
 import type { CreditMode } from "../model/quotaLabels"
 import type { QuotaRowEstimates } from "../model/quotaRowModel"
@@ -57,6 +60,8 @@ export interface ProviderLimitsCardProps {
   manualEligible: boolean
   /** The selectable providers of the balance dialog; the own provider is the default. */
   providers?: ProviderConfig[]
+  /** Native entry units for each selectable provider. */
+  providerUnits?: Readonly<Record<string, ManualUnit>>
   /** The observed balance per provider, which starts a new entry as an estimate. */
   observed?: Record<string, BalancePrefill>
   /** The dashboard quota row of this provider, which states the pair evidence. */
@@ -75,12 +80,6 @@ export interface ProviderLimitsCardProps {
   renderRateTier?: (args: RateTierSlotArgs) => ReactNode
 }
 
-interface ManualUnit {
-  unitKind: UnitKind | null
-  displayUnit: string | null
-  amountMode: ManualAmountMode
-}
-
 const CARD = "flex h-full flex-col justify-between gap-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] p-4"
 
 /** The one provider that opts into the shared bar. */
@@ -88,6 +87,25 @@ const KEENABLE_PROVIDER = "keenable"
 
 /** The one provider whose rate bars share the card-body bar with short titles. */
 const TINYFISH_PROVIDER = "tinyfish"
+
+/**
+ * The Parallel provider. It keeps per-operation rate bars (Brave pattern):
+ * search and fetch costs differ and the catalog defines distinct bucket ids,
+ * so no shared bar, no shared title, and no authoritative hiding. Funds reuse
+ * the finite-USD path; the Tavily nativeDisplay path and FREE_COST_LABELS
+ * never apply here.
+ */
+const PARALLEL_PROVIDER = "parallel"
+
+/**
+ * The You.com provider (UI id `youcom`; backend `you` via idMapping). It keeps
+ * per-operation rate bars (Brave pattern): search ($5/1k) and fetch ($1/1k
+ * live pages) costs differ, so no shared bar, no shared title, and no
+ * authoritative hiding. Funds reuse the finite-USD path; the Tavily
+ * nativeDisplay path and FREE_COST_LABELS never apply here, so a keyed rail
+ * shows no Free strike.
+ */
+const YOUCOM_PROVIDER = "youcom"
 
 function slug(providerId: string): string {
   return providerId.toLowerCase().replace(/[^a-z0-9]+/g, "-")
@@ -98,25 +116,6 @@ function grantKey(auth: ProviderAuthLimits): string {
   const grants = auth.grants
   if (grants === null) return auth.auth_mode + "-none"
   return auth.auth_mode + "-" + grants.version + "-" + grants.period_start
-}
-
-/**
- * The native unit of the manual anchor. A USD pool accepts the vendor USD
- * balance; any other unit keeps the current usage entry.
- */
-function manualUnit(auth: ProviderAuthLimits, providerId: string): ManualUnit {
-  const nativeUnit = auth.aggregate_pool?.native_unit ?? null
-  if (nativeUnit === "USD") {
-    return { unitKind: "USD", displayUnit: "USD", amountMode: "balance" }
-  }
-  if (nativeUnit === "REQUEST" || nativeUnit === "CREDIT" || nativeUnit === "FREE") {
-    const displayUnit =
-      (providerId === "tavily" || providerId === "firecrawl") && nativeUnit === "CREDIT"
-        ? "Credits"
-        : nativeUnit
-    return { unitKind: nativeUnit, displayUnit, amountMode: "usage" }
-  }
-  return { unitKind: null, displayUnit: null, amountMode: "usage" }
 }
 
 function manualDefaultsOf(manual: BackendManualQuota | null): ManualQuotaDefaults | null {
@@ -142,9 +141,22 @@ function cardEstimates(
   model: CreditCardModel,
   manualEstimate: ManualQuotaEstimate | null,
 ): QuotaRowEstimates {
+  // Mirror the row selector: a vendor percent, a manual estimate, a reported
+  // remaining balance, or dashboard vendor funds is a usable estimate. The
+  // dashboard remaining matters for Parallel and You.com: the paired
+  // AUTHORITATIVE Parallel balance and the ESTIMATED You.com cents balance
+  // live in latestQuota, not in the limits model, so without this either
+  // balance would wrongly show Connect. Generic for every provider; only
+  // Parallel and You.com render the slot.
+  const vendorBalance = latestQuota !== undefined && latestQuota.remaining !== null
+  const vendorPercent = latestQuota?.remainingPercent != null
   return {
     hasUsableEstimate:
-      model.percentRemaining !== null || manualEstimate !== null || model.remainingCRD !== null,
+      model.percentRemaining !== null ||
+      manualEstimate !== null ||
+      model.remainingCRD !== null ||
+      vendorBalance ||
+      vendorPercent,
     pairedSnapshot: pairedSnapshotOf(providerId, latestQuota),
   }
 }
@@ -164,6 +176,7 @@ interface CardModalInput {
   /** The native display inputs of one Tavily rail; null on every other card. */
   nativeDisplay: TavilyDisplayAdapter | null
   providers?: ProviderConfig[]
+  providerUnits?: Readonly<Record<string, ManualUnit>>
   observed?: Record<string, BalancePrefill>
   refreshDashboard: () => Promise<void>
   onClose: () => void
@@ -201,6 +214,7 @@ function cardModals(input: CardModalInput): ReactNode {
         amountMode={unit.amountMode}
         creditMode={input.creditMode ?? "free"}
         {...(input.providers !== undefined ? { providers: input.providers } : {})}
+        {...(input.providerUnits !== undefined ? { providerUnits: input.providerUnits } : {})}
         {...(input.observed !== undefined ? { observed: input.observed } : {})}
         onClose={close}
         onSave={(payload, targetId) => saveManual(input, targetId ?? providerId, payload)}
@@ -256,11 +270,13 @@ function cardModals(input: CardModalInput): ReactNode {
 }
 
 /**
- * The composed OAuth control of one card at its trailing edge, or null when
- * the card holds none.
+ * The composed OAuth control of one card, rendered inline in the shared
+ * action row, or null when the card holds none.
  *
  * The card renders nothing when the composition supplies no callback or the
- * callback returns no node.
+ * callback returns no node. The caller passes the node into ProviderCardActions
+ * as oauthActions so Connect/Disconnect shares one flex-wrap row with Refresh
+ * Limits, Provider Balance, Budget Limit, and History.
  */
 function oauthControl(
   args: OAuthSlotArgs,
@@ -269,7 +285,7 @@ function oauthControl(
   if (renderOAuthActions === undefined) return null
   const control = renderOAuthActions(args)
   if (control === null || control === undefined) return null
-  return <div className="flex flex-wrap items-center justify-end gap-2">{control}</div>
+  return control
 }
 
 /** The confirmed minute ceiling of one Tavily key environment. */
@@ -302,13 +318,57 @@ function dashboardMinuteCeiling(auth: ProviderAuthLimits): string | null {
   return limit === null ? null : normalizeCeiling(limit)
 }
 
+interface BalanceFallback { usd: string; crd: string | null; allowanceCRD: string | null }
+
+/**
+ * OAuth balance fallback of one card (Option A, frontend-only): the Parallel
+ * Account-API balance and the You.com cents balance-API balance live in
+ * latestQuota, not in the limits model (aggregate_pool null, unknown views).
+ * A remaining-only snapshot (no limit, no percent) yields the raw USD with
+ * its CRD equivalent (USD / reference_usd_per_crd). For Parallel only, the
+ * $5/mo free credit (5000 CRD) is attached as a display-only denominator;
+ * for You.com only, the $100 signup credit (100000 CRD total, fetch-basis)
+ * is attached the same way, so each card shows a capped bar and percent like
+ * Firecrawl remaining-over-allowance; every other provider keeps an
+ * amount-only fallback with no invented allowance. Parallel accepts only the
+ * AUTHORITATIVE OAuth snapshot, while You.com accepts the AUTHORITATIVE or
+ * the ESTIMATED cents-balance snapshot (the vendor exposes no plan limit, so
+ * the adapter maps it estimated). No backend allowance is invented.
+ */
+function balanceFallbackOf(
+  providerId: string,
+  model: CreditCardModel,
+  latestQuota: DashboardQuota | undefined,
+  auth: ProviderAuthLimits,
+): BalanceFallback | null {
+  if (model.remainingCRD !== null) return null
+  const isYoucom = providerId === YOUCOM_PROVIDER
+  const source = latestQuota?.source
+  const sourceOk = isYoucom
+    ? source === "authoritative" || source === "estimated"
+    : source === "authoritative"
+  if (!sourceOk || latestQuota === undefined) return null
+  if (latestQuota.remaining === null || latestQuota.remaining.trim() === "") return null
+  if (latestQuota.limit !== null || latestQuota.remainingPercent != null) return null
+  const usd = latestQuota.remaining
+  const allowanceCRD =
+    providerId === PARALLEL_PROVIDER
+      ? PARALLEL_FREE_ALLOWANCE_CRD
+      : isYoucom
+        ? YOUCOM_FREE_ALLOWANCE_CRD
+        : null
+  return { usd, crd: usdBalanceToCRD(usd, auth), allowanceCRD }
+}
+
 /**
  * One provider credit-unit card.
  *
  * The header holds the logo, the name, and the source statement. The credit row
- * holds the four actions at its leading edge and the credit fraction at its
- * trailing edge. The card holds the composed OAuth control at the trailing edge
- * of its content. The card owns its one open modal, so a dialog of one provider
+ * holds the actions at its leading edge and the credit fraction at its
+ * trailing edge. The composed OAuth control (Parallel Connect/Disconnect)
+ * sits inline at the trailing edge of the same action row, supplied by
+ * composition so the quota feature never imports the OAuth feature directly.
+ * The card owns its one open modal, so a dialog of one provider
  * never moves another. The dashboard payload supplies the funds. The info
  * control states the call cost, the call count, the rate limit, the last sync
  * time, the usage page, the known tier facts, and the vendor detail. The card
@@ -325,6 +385,7 @@ export function ProviderLimitsCard({
   refreshDashboard,
   manualEligible,
   providers,
+  providerUnits,
   observed,
   latestQuota,
   renderOAuthActions,
@@ -371,12 +432,22 @@ export function ProviderLimitsCard({
   const keenableBar = providerId === KEENABLE_PROVIDER
   const tinyfishBar = providerId === TINYFISH_PROVIDER
   const isTavily = providerId === TAVILY_PROVIDER
+  const isParallel = providerId === PARALLEL_PROVIDER
+  const isYoucom = providerId === YOUCOM_PROVIDER
   const keenableKeyless = keenableBar && auth.auth_mode === "keyless"
   // The keyless Tavily rail has no usage endpoint to refresh, like the keyless
   // Keenable rail. The hide decision reads the current rail, never a prior skip.
   const tavilyKeyless = isTavily && auth.auth_mode === "keyless"
   const firecrawlKeyless = providerId === "firecrawl" && auth.auth_mode === "keyless"
-  const refreshSkipped = controller.refreshSkipped || keenableKeyless || tavilyKeyless || firecrawlKeyless
+  // The keyed Parallel rail keeps Refresh Limits visible: its keyed local
+  // ledger has a refreshable usage endpoint. Only a keyless Parallel rail
+  // hides refresh, like the keyless Keenable rail. The keyed You.com rail
+  // keeps Refresh Limits visible the same way: its keyed cents balance API
+  // is refreshable, while a keyless rail (100/day MCP profile) has no usage
+  // endpoint to refresh.
+  const parallelKeyless = isParallel && auth.auth_mode === "keyless"
+  const youcomKeyless = isYoucom && auth.auth_mode === "keyless"
+  const refreshSkipped = controller.refreshSkipped || keenableKeyless || tavilyKeyless || firecrawlKeyless || parallelKeyless || youcomKeyless
   // The whole-request floor applies to the release request rails (Keenable);
   // every other rail keeps the verbatim values, and Tavily reads its native
   // Credits facts through the optional display adapter.
@@ -396,8 +467,33 @@ export function ProviderLimitsCard({
   const nativeDisplay = displayAdapterOf(providerId, auth)
   const titleId = "limits-title-" + slug(providerId)
   const fetchAvailable = operationAvailable(auth, "fetch")
-  const estimates = cardEstimates(providerId, latestQuota, model, manualState.estimate)
-  const oauth = oauthControl(
+  // Display-only You.com allowance for the vendor-balance pool without a
+  // backend allowance (screenshot: 199520 CRD amount-only). The backend pool
+  // reports remaining without an allowance, so the finite model holds no
+  // percent and the summary would stay amount-only with a footnote. Attaching
+  // the $100 signup total (100000 CRD, fetch-basis) yields the capped bar and
+  // fraction like Firecrawl 4761/3800 and Parallel 24870/5000, with no
+  // footnote and no invented reset. The fallback path (no pool) already
+  // carries the same allowance through balanceFallbackOf.
+  const youcomDisplayAllowance =
+    isYoucom && model.state === "finite" && model.remainingCRD !== null && model.allowanceCRD === null
+      ? YOUCOM_FREE_ALLOWANCE_CRD
+      : null
+  const displayModel: CreditCardModel =
+    youcomDisplayAllowance !== null && model.remainingCRD !== null
+      ? {
+          ...model,
+          allowanceCRD: youcomDisplayAllowance,
+          percentRemaining: percentRemaining(model.remainingCRD, youcomDisplayAllowance),
+        }
+      : model
+  const estimates = cardEstimates(providerId, latestQuota, displayModel, manualState.estimate)
+  // Amount-only fallback with its CRD equivalent through ProviderCreditSummary.
+  // Parallel attaches the display-only $5 (5000 CRD) allowance and You.com
+  // attaches the display-only $100 signup (100000 CRD total, fetch-basis)
+  // allowance for its bar.
+  const balanceFallback = balanceFallbackOf(providerId, model, latestQuota, auth)
+  const oauthNode = oauthControl(
     { providerId, providerName, ...estimates, onPairedChange: setOauthPaired },
     renderOAuthActions,
   )
@@ -414,6 +510,7 @@ export function ProviderLimitsCard({
       onSync={() => void controller.syncNow()}
       refreshSkipped={refreshSkipped}
       onOpenModal={setModal}
+      {...(oauthNode !== null ? { oauthActions: oauthNode } : {})}
     />
   )
 
@@ -440,8 +537,13 @@ export function ProviderLimitsCard({
 
       <ProviderCreditSummary
         providerName={providerName}
-        model={model}
+        model={displayModel}
         {...(nativeDisplay !== null ? { credits: nativeDisplay.credits } : {})}
+        {...(balanceFallback !== null ? { balanceFallbackUSD: balanceFallback.usd } : {})}
+        {...(balanceFallback?.crd != null ? { balanceFallbackCRD: balanceFallback.crd } : {})}
+        {...(balanceFallback?.allowanceCRD != null
+          ? { balanceFallbackAllowanceCRD: balanceFallback.allowanceCRD }
+          : {})}
         useSharedBar={keenableBar || nativeDisplay !== null}
         fundsControl={tierSlot}
         {...(isTavily
@@ -467,8 +569,6 @@ export function ProviderLimitsCard({
         }
       />
 
-      {oauth}
-
       {cardModals({
         providerId,
         providerName,
@@ -483,6 +583,7 @@ export function ProviderLimitsCard({
         creditMode: info.creditMode,
         nativeDisplay,
         providers,
+        providerUnits,
         observed,
         refreshDashboard,
         onClose: () => setModal(null),

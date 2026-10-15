@@ -537,7 +537,7 @@ class ProviderLimitsService:
                     pool_id=pool_id,
                     provider=provider,
                     auth_mode=auth_mode,
-                    native_unit=UnitKind.CREDIT,
+                    native_unit=pool.native_unit,
                     observed_at=self._clock(),
                     source=_TAVILY_TERMINAL_SOURCE,
                     confidence=Confidence.OBSERVED,
@@ -1135,10 +1135,14 @@ class ProviderLimitsService:
         with the free allowance, because paid funds are not free Credits.
         """
 
-        if self._repository is None or provider != "tavily":
+        if self._repository is None or provider not in ("tavily", "exa"):
             return
         processed: set[str] = set()
-        for record in self._tavily_keyed_records():
+        keyed_records = [
+            r for r in self._records
+            if r.provider == provider and r.auth_mode is AuthMode.KEYED
+        ]
+        for record in keyed_records:
             allowance = record.budget.free_allowance if record.budget is not None else None
             pool_id = record.native_pool_id
             if pool_id is None or allowance is None or pool_id in processed:

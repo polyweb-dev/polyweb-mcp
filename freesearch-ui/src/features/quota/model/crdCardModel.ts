@@ -32,6 +32,26 @@ const FREE_UNIT = "FREE"
 const UNKNOWN_TEXT = "unknown"
 const MANUAL_ANCHOR_TEXT = "Estimated · " + BALANCE_ENTRY
 const USD_SCALE = 12
+/**
+ * Frontend display-only allowance for the Parallel OAuth balance fallback:
+ * $5/mo free credit (LIMITS.md §7, eligible orgs with card) at 1 CRD =
+ * $0.001, so $5 = 5000 CRD. Never a backend allowance; only a denominator
+ * for the card bar and percent.
+ */
+export const PARALLEL_FREE_ALLOWANCE_CRD = "5000"
+/**
+ * Frontend display-only allowance for the You.com balance fallback: the $100
+ * signup credit (LIMITS.md §11.5, "$100 once + 100 free/day") at 1 CRD =
+ * $0.001, so $100 = 100000 CRD total. The shared USD pool prices search at
+ * $0.005 (5 CRD) and fetch at $0.001 per live page (1 CRD), so 100000 CRD
+ * yields 20000 searches or 100000 fetches (LIMITS.md §11.3). The total
+ * 100000 CRD is the display-only denominator, consistent with poolFunds when
+ * the backend reports the $100 allowance (95500/100000). Never a backend
+ * allowance; only a denominator for the card bar and percent. The 100/day
+ * free search pool is a rate fact, not funds, so it stays out of the
+ * allowance.
+ */
+export const YOUCOM_FREE_ALLOWANCE_CRD = "100000"
 /** Confidence order: the weakest applicable member governs a combined note. */
 const CONFIDENCE_RANK: Record<string, number> = {
   authoritative: 3,
@@ -129,6 +149,21 @@ function nativeUnitPrice(nativeUnit: string, profile: CRDConversionProfile): str
 export function usdFromCRD(crd: string, profile: CRDConversionProfile | null): string | null {
   const reference = referenceProfile(profile)
   return reference === null ? null : multiplyDecimal(crd, reference)
+}
+
+/**
+ * CRD equivalent of one authoritative USD balance (Parallel OAuth fallback):
+ * USD native value divided by the rail reference price (`reference_usd_per_crd`,
+ * USD 0.001 per CRD), with exact decimal math. Null when the balance or the
+ * profile is unusable. The postpaid rail is uncapped, so no allowance or
+ * percent is derived here; the caller keeps the amount-only display.
+ */
+export function usdBalanceToCRD(usd: string, auth: ProviderAuthLimits): string | null {
+  const profile = applicableProfile(auth)
+  if (profile === null) return null
+  const text = usd.trim()
+  if (text === "") return null
+  return nativeToCRD(text, USD_UNIT, profile)
 }
 
 function nativeToCRD(amount: string, nativeUnit: string, profile: CRDConversionProfile | null): string | null {

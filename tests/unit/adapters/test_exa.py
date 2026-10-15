@@ -1002,3 +1002,152 @@ async def test_quota_defaults_to_estimated_unknown_when_unbudgeted() -> None:
     assert budgeted_snapshot is not None
     assert budgeted_snapshot.limit == Decimal("10.00")
     assert budgeted_snapshot.remaining == Decimal("10.00")
+
+
+# --- limits & budget tests ----------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "vendor_code",
+    ["NO_MORE_CREDITS", "API_KEY_BUDGET_EXCEEDED", "TEAM_BUDGET_EXCEEDED"],
+)
+async def test_normalize_error_402_vendor_codes(vendor_code: str) -> None:
+    adapter = make_adapter()
+    exc = ValueError(f"Request failed with status code 402: {{\"error\": \"{vendor_code}\"}}")
+    normalized = adapter._normalize_error(exc)
+    assert normalized.error.code == "quota_exhausted"
+    assert normalized.error.status_code == 402
+    assert normalized.error.retryable is False
+    assert normalized.error.details == {"error_code": vendor_code}
+    assert "Exa credits or spend budget exhausted" in normalized.error.message
+
+
+async def test_normalize_error_generic_402() -> None:
+    adapter = make_adapter()
+    exc = _sdk_error(402)
+    normalized = adapter._normalize_error(exc)
+    assert normalized.error.code == "quota_exhausted"
+    assert normalized.error.status_code == 402
+    assert normalized.error.retryable is False
+    assert normalized.error.details == {}
+
+
+async def test_exa_usage_snapshot() -> None:
+    from datetime import UTC, datetime
+
+    from freesearch.models.provider_limits import AuthMode, Confidence, UsageSyncRequest
+
+    adapter = make_adapter()
+    now = datetime(2026, 10, 14, 12, 0, tzinfo=UTC)
+    request = UsageSyncRequest(
+        provider="exa",
+        auth_mode=AuthMode.KEYED,
+        observed_at=now,
+        credential_generation=1,
+    )
+    snapshot = await adapter.usage_snapshot(request)
+    assert snapshot is not None
+    assert snapshot.pool_id == "exa:keyed:usd"
+    assert snapshot.provider == "exa"
+    assert snapshot.native_unit is UnitKind.USD
+    assert snapshot.confidence is Confidence.ESTIMATED
+    assert snapshot.source == "local_ledger"
+    assert snapshot.credential_generation == 1
+
+    # Soft zero state
+    adapter._soft_zero = True
+    snapshot_zero = await adapter.usage_snapshot(request)
+    assert snapshot_zero is not None
+    assert snapshot_zero.source == "vendor_402"
+    assert snapshot_zero.confidence is Confidence.OBSERVED
+
+
+async def test_estimate_cost_dynamic_pricing() -> None:
+    adapter = make_adapter()
+    # <= 10 results
+    est10 = await adapter.estimate_cost(SearchRequest(query="test", limit=10))
+    assert est10.units == Decimal("0.007")
+    assert est10.currency == "USD"
+
+    # > 10 results: 25 results -> 0.007 + 15 * 0.001 = 0.022
+    est25 = await adapter.estimate_cost(SearchRequest(query="test", limit=25))
+    assert est25.units == Decimal("0.022")
+
+    # Fetch
+    est_fetch = await adapter.estimate_cost(FetchRequest(url="https://example.com", url_count=5))
+    assert est_fetch.units == Decimal("0.005")
+
+
+def test_request_native_cost_dynamic_pricing() -> None:
+    from freesearch.configuration.provider_limits import provider_limit_defaults
+    from freesearch.models.provider_limits import LimitOperation
+    from freesearch.services.credit_units import request_native_cost
+
+    records = [r for r in provider_limit_defaults() if r.provider == "exa"]
+    search_rec = next(r for r in records if r.operation is LimitOperation.SEARCH)
+    fetch_rec = next(r for r in records if r.operation is LimitOperation.FETCH)
+
+    assert request_native_cost(search_rec, SearchRequest(query="q", limit=10)) == Decimal("0.007")
+    assert request_native_cost(search_rec, SearchRequest(query="q", limit=25)) == Decimal("0.022")
+    assert request_native_cost(
+        fetch_rec, FetchRequest(url="https://example.com", url_count=4)
+    ) == Decimal("0.004")
+
+
+def test_exa_catalog_limits_and_tiers() -> None:
+    from freesearch.configuration.provider_limits import (
+        provider_limit_defaults,
+        provider_tier_defaults,
+    )
+    from freesearch.models.provider_limits import (
+        FundingMode,
+        LimitOperation,
+        RateScope,
+        RateWindowName,
+        ResetRule,
+    )
+
+    records = [r for r in provider_limit_defaults() if r.provider == "exa"]
+    assert len(records) == 2
+
+    search_rec = next(r for r in records if r.operation is LimitOperation.SEARCH)
+    assert search_rec.native_pool_id == "exa:keyed:usd"
+    assert search_rec.native_unit is UnitKind.USD
+    assert search_rec.budget is not None
+    assert search_rec.budget.free_allowance == Decimal("10")
+    assert search_rec.budget.standard_native_cost == Decimal("0.007")
+    assert search_rec.budget.usd_per_call == Decimal("0.007")
+    assert search_rec.rate is not None
+    assert search_rec.rate.windows[0].limit == Decimal("10")
+    assert search_rec.rate.windows[0].window is RateWindowName.SECOND
+    assert search_rec.rate.windows[0].scope is RateScope.TEAM
+
+    fetch_rec = next(r for r in records if r.operation is LimitOperation.FETCH)
+    assert fetch_rec.native_pool_id == "exa:keyed:usd"
+    assert fetch_rec.native_unit is UnitKind.USD
+    assert fetch_rec.budget is not None
+    assert fetch_rec.budget.free_allowance == Decimal("10")
+    assert fetch_rec.budget.standard_native_cost == Decimal("0.001")
+    assert fetch_rec.budget.usd_per_call == Decimal("0.001")
+    assert fetch_rec.rate is not None
+    assert fetch_rec.rate.windows[0].limit == Decimal("100")
+    assert fetch_rec.rate.windows[0].window is RateWindowName.SECOND
+    assert fetch_rec.rate.windows[0].scope is RateScope.TEAM
+
+    tiers = provider_tier_defaults().get("exa:keyed", [])
+    assert len(tiers) == 3
+    free_tier, bonus_tier, paid_tier = tiers
+    assert free_tier.pool_id == "exa:keyed:free"
+    assert free_tier.native_allowance == Decimal("10")
+    assert free_tier.reset_rule is ResetRule.MONTHLY_FIRST
+    assert free_tier.funding_mode is FundingMode.RECURRING
+
+    assert bonus_tier.pool_id == "exa:keyed:bonus"
+    assert bonus_tier.native_allowance == Decimal("10")
+    assert bonus_tier.reset_rule is ResetRule.NEVER
+    assert bonus_tier.funding_mode is FundingMode.PREPAID
+
+    assert paid_tier.pool_id == "exa:keyed:paid"
+    assert paid_tier.reset_rule is ResetRule.NEVER
+    assert paid_tier.funding_mode is FundingMode.PREPAID
+

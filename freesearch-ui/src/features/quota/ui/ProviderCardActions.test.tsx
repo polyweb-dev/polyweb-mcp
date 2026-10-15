@@ -99,4 +99,27 @@ describe("ProviderCardActions", () => {
     const labels = screen.getAllByRole("button").map((button) => button.textContent)
     expect(labels).toEqual(["Refresh Limits", "Provider Balance", "Budget Limit", "History"])
   })
+
+  it("renders the composed OAuth control inline at the trailing edge of the same row", () => {
+    // Parallel never carries Provider Balance in production (manualEligible
+    // false via quotaEligibility); the row holds Refresh, Budget, History,
+    // then Connect inline.
+    renderActions({
+      providerId: "parallel",
+      providerName: "Parallel",
+      manualEligible: false,
+      oauthActions: (
+        <button type="button" data-testid="oauth-device-open-parallel">
+          Connect
+        </button>
+      ),
+    })
+    const connect = screen.getByTestId("oauth-device-open-parallel")
+    const row = connect.closest("div.flex.flex-wrap")
+    expect(row?.textContent).toContain("Budget Limit")
+    expect(row?.textContent).toContain("History")
+    expect(row?.textContent).toContain("Connect")
+    const labels = screen.getAllByRole("button").map((button) => button.textContent)
+    expect(labels[labels.length - 1]).toBe("Connect")
+  })
 })

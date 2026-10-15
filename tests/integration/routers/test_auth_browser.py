@@ -61,12 +61,26 @@ async def browser_client(tmp_path: Path, auth_secret: str, browser_origins: str)
 
 
 @pytest_asyncio.fixture
-async def programmatic_client(tmp_path: Path, auth_secret: str) -> TestClient:
-    repository = await SQLiteRepository.open(tmp_path / "auth-programmatic.db")
-    app = create_app([_StubAdapter("stubby")], repository=repository)
-    with TestClient(app) as client:
-        yield client
-    await repository.close()
+async def programmatic_client(
+    tmp_path: Path, auth_secret: str, monkeypatch: pytest.MonkeyPatch
+) -> TestClient:
+    # Empty allowlist keeps the programmatic contract. The worktree .env file
+    # may carry origins, and pydantic-settings reads the file when the process
+    # env lacks the var, so set an explicit empty value (env wins over .env).
+    monkeypatch.setenv("FREESEARCH_AUTH_BROWSER_ORIGINS", "")
+    get_settings.cache_clear()
+    try:
+        repository = await SQLiteRepository.open(tmp_path / "auth-programmatic.db")
+    except Exception:
+        get_settings.cache_clear()
+        raise
+    try:
+        app = create_app([_StubAdapter("stubby")], repository=repository)
+        with TestClient(app) as client:
+            yield client
+    finally:
+        await repository.close()
+        get_settings.cache_clear()
 
 
 def _register(client: TestClient, email: str) -> None:

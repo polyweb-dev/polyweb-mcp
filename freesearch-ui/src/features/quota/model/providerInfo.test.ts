@@ -596,6 +596,10 @@ describe("providerInfo wholeRequests", () => {
     }
   }
 
+  function exaWindow(limit: string): Record<string, unknown> {
+    return { ...window(limit, "requests"), scope: "team" }
+  }
+
   it("floors integer standard calls with the opt-in flag", () => {
     const base = auth({
       search: record("keenable", { supported: true, transport_available: true }),
@@ -639,6 +643,42 @@ describe("providerInfo wholeRequests", () => {
     })
     expect(providerInfo(base).facts.map((fact) => fact.value)).toContain("1000.00000000 requests per second")
     expect(providerInfo(base, "keenable", true).facts.map((fact) => fact.value)).toContain("1000 requests per second")
+  })
+
+  it("floors Exa whole calls and shows search and fetch rate limits separately", () => {
+    const base = auth({
+      search: record("exa", {
+        supported: true,
+        transport_available: true,
+        rate: { windows: [exaWindow("10")], published: true } as never,
+      }),
+      fetch: record("exa", {
+        operation: "fetch",
+        supported: true,
+        transport_available: true,
+        rate: { windows: [exaWindow("100")], published: true } as never,
+      }),
+      crd_views: [view("search", "12.9"), view("fetch", "3.7")] as never,
+      detail: detail({ rate_windows: [exaWindow("10")] as never }),
+    })
+
+    const facts = providerInfo(base, "exa").facts
+    expect(
+      facts
+        .filter((fact) => fact.label === "Search rate limit" || fact.label === "Fetch rate limit")
+        .map((fact) => [fact.label, fact.value, fact.note]),
+    ).toEqual([
+      ["Search rate limit", "10 requests per second", "(team)"],
+      ["Fetch rate limit", "100 requests per second", "(team)"],
+    ])
+    expect(
+      facts
+        .filter((fact) => fact.label === "Searches left" || fact.label === "Fetches left")
+        .map((fact) => [fact.label, fact.value]),
+    ).toEqual([
+      ["Searches left", "12"],
+      ["Fetches left", "3"],
+    ])
   })
 
   it("keeps URL rate limits verbatim with the opt-in flag", () => {
@@ -803,5 +843,99 @@ describe("providerInfo Firecrawl", () => {
     expect(rate?.value).toBe("10 requests per minute")
 
     expect(info.creditNote).toBe("Monthly Credits")
+  })
+})
+
+describe("providerInfo You.com search total", () => {
+  function youcomAuth(): ProviderAuthLimits {
+    return auth({
+      search: record("youcom", {
+        operation: "search",
+        supported: true,
+        transport_available: true,
+      }),
+      fetch: record("youcom", {
+        operation: "fetch",
+        supported: true,
+        transport_available: true,
+      }),
+      aggregate_pool: pool({
+        pool_id: "youcom:keyed:usd",
+        provider: "youcom",
+        auth_mode: "keyed",
+        native_unit: "USD",
+        remaining: "199.52",
+        allowance: null,
+      }),
+      crd_views: [
+        {
+          state: "finite",
+          operation: "search",
+          remaining_crd: "100000",
+          local_remaining_crd: null,
+          request_cost_crd: "5",
+          shared_pool_id: "you:keyed:daily-search",
+          possible_standard_calls: "100",
+          price_version: "v2026-09",
+          priced: true,
+        },
+        {
+          state: "finite",
+          operation: "fetch",
+          remaining_crd: "199520",
+          local_remaining_crd: null,
+          request_cost_crd: "1",
+          shared_pool_id: "youcom:keyed:usd",
+          possible_standard_calls: "199520",
+          price_version: "v2026-09",
+          priced: true,
+        },
+      ] as never,
+      detail: detail({ reset_rule: "unknown" }),
+    })
+  }
+
+  it("adds the daily pool to the credit-derived searches without inventing a reset", () => {
+    const info = providerInfo(youcomAuth(), "youcom")
+    const searchesLeft = info.facts.find((fact) => fact.label === "Searches left")
+    // Daily 100 + floor(199520/5) = 100 + 39904 = 40004.
+    expect(searchesLeft?.value).toBe("40004")
+    expect(searchesLeft?.note).toBe(null)
+    const fetchesLeft = info.facts.find((fact) => fact.label === "Fetches left")
+    expect(fetchesLeft?.value).toBe("199520")
+  })
+
+  it("keeps the pool-projected search view verbatim without double-counting", () => {
+    const base = youcomAuth()
+    const pooled = {
+      ...base,
+      crd_views: [
+        {
+          state: "finite",
+          operation: "search",
+          remaining_crd: "95500",
+          local_remaining_crd: null,
+          request_cost_crd: "5",
+          shared_pool_id: "youcom:keyed:usd",
+          possible_standard_calls: "19100",
+          price_version: "v2026-09",
+          priced: true,
+        },
+        {
+          state: "finite",
+          operation: "fetch",
+          remaining_crd: "95500",
+          local_remaining_crd: null,
+          request_cost_crd: "1",
+          shared_pool_id: "youcom:keyed:usd",
+          possible_standard_calls: "95500",
+          price_version: "v2026-09",
+          priced: true,
+        },
+      ],
+    } as unknown as ProviderAuthLimits
+    const info = providerInfo(pooled, "youcom")
+    expect(info.facts.find((fact) => fact.label === "Searches left")?.value).toBe("19100")
+    expect(info.facts.find((fact) => fact.label === "Fetches left")?.value).toBe("95500")
   })
 })

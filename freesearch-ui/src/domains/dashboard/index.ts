@@ -4,7 +4,6 @@ export type { QuotaConfidence, DashboardQuota } from "./model/quotaTypes";
 export type { UsageEvent, UsageTotal } from "./model/types";
 export {
   decodeLimitHistory,
-  decodeProviderLimits,
 } from "./api/limitsWire";
 export type {
   CRDAuthMode,

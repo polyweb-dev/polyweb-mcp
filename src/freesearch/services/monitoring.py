@@ -551,7 +551,7 @@ def _terminal_quota_402(exc: BaseException) -> bool:
         return False
     error = exc.error
     return (
-        error.provider in ("tavily", "firecrawl")
+        error.provider in ("tavily", "firecrawl", "exa")
         and error.code == "quota_exhausted"
         and error.status_code == 402
     )
@@ -763,7 +763,7 @@ def _free_zero_due(provider: str, snapshot: QuotaSnapshot, now: datetime) -> boo
     """
 
     if (
-        provider not in ("tavily", "firecrawl")
+        provider not in ("tavily", "firecrawl", "exa")
         or snapshot.remaining != Decimal("0")
         or snapshot.reset_at is None
     ):

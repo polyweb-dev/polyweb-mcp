@@ -7,11 +7,13 @@ describe("isManualQuotaEligible", () => {
     expect(isManualQuotaEligible("tinyfish", false)).toBe(false)
     expect(isManualQuotaEligible("brave", true)).toBe(true)
     expect(isManualQuotaEligible("brave", false)).toBe(false)
-    for (const provider of ["exa", "parallel"]) {
+    for (const provider of ["exa"]) {
       expect(isManualQuotaEligible(provider, true)).toBe(true)
       expect(isManualQuotaEligible(provider, false)).toBe(false)
     }
-    for (const provider of ["firecrawl", "tavily", "keenable", "youcom", "unknown"]) {
+    // Parallel stays out: its prepaid USD balance comes from the OAuth Account
+    // API (AUTHORITATIVE snapshot), never from a manual seed.
+    for (const provider of ["firecrawl", "tavily", "keenable", "youcom", "unknown", "parallel"]) {
       expect(isManualQuotaEligible(provider, true)).toBe(false)
     }
   })

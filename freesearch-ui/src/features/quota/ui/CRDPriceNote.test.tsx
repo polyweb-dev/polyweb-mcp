@@ -208,8 +208,10 @@ describe("CRDPriceNote", () => {
     expect(screen.getByText("Tavily")).not.toBeNull()
     expect(screen.getByText("0.008 USD")).not.toBeNull()
     expect(screen.getByText("8 CRD")).not.toBeNull()
-    expect(screen.getAllByText("Plan-dependent", { exact: true })).toHaveLength(2)
-    expect(screen.getAllByText("—", { exact: true })).toHaveLength(2)
+    expect(screen.queryByText("Plan-dependent", { exact: true })).toBeNull()
+    expect(screen.queryByText("—", { exact: true })).toBeNull()
+    expect(screen.getByText("0.0076 USD (estimated)")).not.toBeNull()
+    expect(screen.getByText("7.6 CRD")).not.toBeNull()
 
     for (const referenceCost of ["0.004 USD (estimated)", "4 CRD"]) {
       const struckPrices = screen.getAllByText(referenceCost, { exact: true })

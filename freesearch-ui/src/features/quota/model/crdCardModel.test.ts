@@ -319,9 +319,12 @@ describe("priceNoteRows", () => {
       usdPerCall: "0.001", crdPerCall: "1 CRD", priceBasis: "per page, per content type",
     })
     expect(documentedRow("firecrawl", "search")).toMatchObject({
-      usdPerCall: null, crdPerCall: null, free: false,
+      usdPerCall: "0.0076", crdPerCall: "7.6 CRD", free: false,
     })
-    expect(documentedRow("firecrawl", "search")?.priceBasis).toContain("rounded up")
+    expect(documentedRow("firecrawl", "search")?.priceBasis).toContain("Hobby reference")
+    expect(documentedRow("firecrawl", "fetch")).toMatchObject({
+      usdPerCall: "0.0038", crdPerCall: "3.8 CRD", free: false,
+    })
     expect(documentedRow("parallel", "search")).toMatchObject({
       usdPerCall: "0.001", crdPerCall: "1 CRD",
     })

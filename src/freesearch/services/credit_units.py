@@ -125,6 +125,12 @@ def request_native_cost(
             if request.zero_data_retention:
                 modifiers += Decimal("1")
             return Decimal("1") + modifiers
+    if record.provider == "exa":
+        if isinstance(request, SearchRequest):
+            extra = max(0, request.limit - 10)
+            return cost + Decimal(extra) * Decimal("0.001")
+        if isinstance(request, FetchRequest):
+            return Decimal(request.url_count) * Decimal("0.001")
     return cost
 
 
@@ -225,6 +231,24 @@ def project_shared_crd_views(
         for record in records
         if record.native_pool_id is not None and record.native_pool_id == pool.pool_id
     ]
+
+
+def shared_pool_funds(
+    pool: NativePool, records: Sequence[ProviderLimitRecord]
+) -> Decimal | None:
+    """Return the shared pool's funds counted once, or ``None`` when unknown.
+
+    Both shared operation views project from the same native balance, so the
+    funds contribute once. An empty record list or no record referencing
+    ``pool`` yields ``None``. An unknown price stays ``None``, never zero.
+    """
+
+    if not records:
+        return None
+    for record in records:
+        if record.native_pool_id is not None and record.native_pool_id == pool.pool_id:
+            return native_to_crd(pool, record.conversion_profile)
+    return None
 
 
 def effective_crd(view: CRDView, grant_remaining: Decimal | None) -> CRDView:

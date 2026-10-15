@@ -40,6 +40,7 @@ from freesearch.routers.control import (
     routing_policy,
 )
 from freesearch.services.monitoring import clear_quota_poll_cache
+from tests.fixtures.auth import TEMP_PASSWORD, temp_email
 
 FIXED_AT = datetime(2026, 3, 10, 12, 0, 0, tzinfo=UTC)
 
@@ -171,7 +172,24 @@ async def _drain_background_tasks() -> None:
             await asyncio.wait_for(asyncio.shield(task), timeout=5)
 
 
-async def test_request_does_not_wait_for_quota_poll(tmp_path: Path) -> None:
+async def _authed_headers(client: httpx.AsyncClient, prefix: str) -> dict[str, str]:
+    """Register one temp account over async HTTP and return its access header."""
+
+    email = temp_email(prefix)
+    registered = await client.post(
+        "/auth/register", json={"email": email, "password": TEMP_PASSWORD}
+    )
+    assert registered.status_code == 201
+    logged_in = await client.post(
+        "/auth/jwt/login", data={"username": email, "password": TEMP_PASSWORD}
+    )
+    assert logged_in.status_code == 200
+    return {"Authorization": f"Bearer {logged_in.json()['access_token']}"}
+
+
+async def test_request_does_not_wait_for_quota_poll(
+    tmp_path: Path, auth_secret: str
+) -> None:
     """M5: an expired TTL never delays the response; the poll lands afterwards."""
     clear_config_cache()
     clear_quota_poll_cache()
@@ -191,31 +209,35 @@ async def test_request_does_not_wait_for_quota_poll(tmp_path: Path) -> None:
             "exa", quota_snapshot=fresh_snapshot, entered=entered, release=release
         )
         app = create_app([adapter], repository=repository)
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-            try:
-                request_task = asyncio.create_task(
-                    client.post("/search", json={"query": "no wait"})
+        async with app.router.lifespan_context(app):
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+                headers = await _authed_headers(client, "no-wait")
+                try:
+                    request_task = asyncio.create_task(
+                        client.post("/search", json={"query": "no wait"}, headers=headers)
+                    )
+                    await asyncio.wait_for(entered.wait(), timeout=5)
+                    order.append("poll_entered")
+                    response = await asyncio.wait_for(request_task, timeout=5)
+                    order.append("request_done")
+                    assert response.status_code == 200
+                    assert response.json()["provider"] == "exa"
+                    assert adapter.search_calls == 1
+                finally:
+                    release.set()
+                await _drain_background_tasks()
+                order.append("poll_done")
+                stored = await repository.latest_quota("exa")
+                assert stored is not None
+                assert stored.remaining == Decimal("5")
+                assert stored.limit == Decimal("10")
+                second = await client.post(
+                    "/search", json={"query": "after poll"}, headers=headers
                 )
-                await asyncio.wait_for(entered.wait(), timeout=5)
-                order.append("poll_entered")
-                response = await asyncio.wait_for(request_task, timeout=5)
-                order.append("request_done")
-                assert response.status_code == 200
-                assert response.json()["provider"] == "exa"
-                assert adapter.search_calls == 1
-            finally:
-                release.set()
-            await _drain_background_tasks()
-            order.append("poll_done")
-            stored = await repository.latest_quota("exa")
-            assert stored is not None
-            assert stored.remaining == Decimal("5")
-            assert stored.limit == Decimal("10")
-            second = await client.post("/search", json={"query": "after poll"})
-            assert second.status_code == 200
-            assert second.json()["provider"] == "exa"
-        assert order == ["poll_entered", "request_done", "poll_done"]
+                assert second.status_code == 200
+                assert second.json()["provider"] == "exa"
+            assert order == ["poll_entered", "request_done", "poll_done"]
     finally:
         release.set()
         await _drain_background_tasks()
@@ -224,7 +246,9 @@ async def test_request_does_not_wait_for_quota_poll(tmp_path: Path) -> None:
         await repository.close()
 
 
-async def test_stale_first_snapshot_then_new_snapshot(tmp_path: Path) -> None:
+async def test_stale_first_snapshot_then_new_snapshot(
+    tmp_path: Path, auth_secret: str
+) -> None:
     """E1: first expired-TTL request uses the old snapshot; later request excludes."""
     clear_config_cache()
     clear_quota_poll_cache()
@@ -250,40 +274,44 @@ async def test_stale_first_snapshot_then_new_snapshot(tmp_path: Path) -> None:
         )
         adapter = _QuotaAdapter("exa", quota_snapshot=zero, entered=entered, release=release)
         app = create_app([adapter], repository=repository)
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-            try:
-                first_task = asyncio.create_task(
-                    client.post(
-                        "/search",
-                        json={
-                            "query": "stale first",
-                            "routing": {"mode": "require", "providers": ["exa"]},
-                        },
+        async with app.router.lifespan_context(app):
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+                headers = await _authed_headers(client, "stale-first")
+                try:
+                    first_task = asyncio.create_task(
+                        client.post(
+                            "/search",
+                            json={
+                                "query": "stale first",
+                                "routing": {"mode": "require", "providers": ["exa"]},
+                            },
+                            headers=headers,
+                        )
                     )
+                    await asyncio.wait_for(entered.wait(), timeout=5)
+                    first = await asyncio.wait_for(first_task, timeout=5)
+                    assert first.status_code == 200
+                    assert first.json()["provider"] == "exa"
+                finally:
+                    release.set()
+                await _drain_background_tasks()
+                stored = await repository.latest_quota("exa")
+                assert stored is not None
+                assert stored.remaining == Decimal("0")
+                assert stored.limit == Decimal("10")
+                clear_quota_poll_cache()
+                second = await client.post(
+                    "/search",
+                    json={
+                        "query": "after exhaustion",
+                        "routing": {"mode": "require", "providers": ["exa"]},
+                    },
+                    headers=headers,
                 )
-                await asyncio.wait_for(entered.wait(), timeout=5)
-                first = await asyncio.wait_for(first_task, timeout=5)
-                assert first.status_code == 200
-                assert first.json()["provider"] == "exa"
-            finally:
-                release.set()
-            await _drain_background_tasks()
-            stored = await repository.latest_quota("exa")
-            assert stored is not None
-            assert stored.remaining == Decimal("0")
-            assert stored.limit == Decimal("10")
-            clear_quota_poll_cache()
-            second = await client.post(
-                "/search",
-                json={
-                    "query": "after exhaustion",
-                    "routing": {"mode": "require", "providers": ["exa"]},
-                },
-            )
-            assert second.status_code == 503
-            assert "no required provider is eligible" in second.json()["detail"]
-            assert adapter.search_calls == 1
+                assert second.status_code == 503
+                assert "no required provider is eligible" in second.json()["detail"]
+                assert adapter.search_calls == 1
     finally:
         release.set()
         await _drain_background_tasks()
@@ -292,7 +320,9 @@ async def test_stale_first_snapshot_then_new_snapshot(tmp_path: Path) -> None:
         await repository.close()
 
 
-async def test_auto_route_plan_read_budget(tmp_path: Path) -> None:
+async def test_auto_route_plan_read_budget(
+    tmp_path: Path, auth_secret: str
+) -> None:
     """M6: one warm AUTO plan uses at most 4 foreground reads plus one batch pair."""
     clear_config_cache()
     clear_quota_poll_cache()
@@ -374,54 +404,66 @@ async def test_auto_route_plan_read_budget(tmp_path: Path) -> None:
             cold_health = 0
             cold_quota = 0
             clear_config_cache()
-            transport = httpx.ASGITransport(app=app)
-            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-                try:
-                    first_task = asyncio.create_task(
-                        client.post("/search", json={"query": "cold plan"})
+            async with app.router.lifespan_context(app):
+                transport = httpx.ASGITransport(app=app)
+                async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+                    headers = await _authed_headers(client, "read-budget")
+                    try:
+                        first_task = asyncio.create_task(
+                            client.post(
+                                "/search", json={"query": "cold plan"}, headers=headers
+                            )
+                        )
+                        with suppress(asyncio.TimeoutError, TimeoutError):
+                            await asyncio.wait_for(entered.wait(), timeout=5)
+                        cold_resp = await asyncio.wait_for(first_task, timeout=5)
+                        assert cold_resp.status_code == 200
+                    finally:
+                        release.set()
+                    await _drain_background_tasks()
+                    cold_selects = select_counts[0]
+                    cold_health = len(health_calls)
+                    cold_quota = len(quota_calls)
+
+                    for name in SEVEN_PROVIDERS:
+                        await effective_config_for_name(repository, name)
+                    await routing_policy(repository)
+                    clear_quota_poll_cache()
+                    entered.clear()
+                    release.clear()
+
+                    for adapter in adapters:
+                        if (
+                            isinstance(adapter, _QuotaAdapter)
+                            and adapter.name == SEVEN_PROVIDERS[0]
+                        ):
+                            adapter._entered = entered
+                            adapter._release = release
+                    health_calls.clear()
+                    quota_calls.clear()
+                    select_counts[0] = 0
+                    warm_task = asyncio.create_task(
+                        client.post("/search", json={"query": "warm plan"}, headers=headers)
                     )
                     with suppress(asyncio.TimeoutError, TimeoutError):
                         await asyncio.wait_for(entered.wait(), timeout=5)
-                    cold_resp = await asyncio.wait_for(first_task, timeout=5)
-                    assert cold_resp.status_code == 200
-                finally:
+                    warm_resp = await asyncio.wait_for(warm_task, timeout=5)
+                    assert warm_resp.status_code == 200
                     release.set()
-                await _drain_background_tasks()
-                cold_selects = select_counts[0]
-                cold_health = len(health_calls)
-                cold_quota = len(quota_calls)
-
-                for name in SEVEN_PROVIDERS:
-                    await effective_config_for_name(repository, name)
-                await routing_policy(repository)
-                clear_quota_poll_cache()
-                entered.clear()
-                release.clear()
-
-                for adapter in adapters:
-                    if isinstance(adapter, _QuotaAdapter) and adapter.name == SEVEN_PROVIDERS[0]:
-                        adapter._entered = entered
-                        adapter._release = release
-                health_calls.clear()
-                quota_calls.clear()
-                select_counts[0] = 0
-                warm_task = asyncio.create_task(client.post("/search", json={"query": "warm plan"}))
-                with suppress(asyncio.TimeoutError, TimeoutError):
-                    await asyncio.wait_for(entered.wait(), timeout=5)
-                warm_resp = await asyncio.wait_for(warm_task, timeout=5)
-                assert warm_resp.status_code == 200
-                release.set()
-                await _drain_background_tasks()
-                warm_selects = select_counts[0]
-                print(f"cold-cache SELECTs: {cold_selects} warm SELECTs: {warm_selects}")
-                assert len(health_calls) == 1, f"expected one health batch, got {health_calls}"
-                assert len(quota_calls) == 1, f"expected one quota batch, got {quota_calls}"
-                assert set(health_calls[0]) == set(SEVEN_PROVIDERS)
-                assert warm_selects <= 4, (
-                    f"warm AUTO plan used {warm_selects} SELECTs "
-                    f"(cold was {cold_selects}); health={health_calls} quota-batch={cold_quota}"
-                )
-                assert cold_health >= 1 and cold_quota >= 1
+                    await _drain_background_tasks()
+                    warm_selects = select_counts[0]
+                    print(f"cold-cache SELECTs: {cold_selects} warm SELECTs: {warm_selects}")
+                    assert len(health_calls) == 1, f"expected one health batch, got {health_calls}"
+                    assert len(quota_calls) == 1, f"expected one quota batch, got {quota_calls}"
+                    assert set(health_calls[0]) == set(SEVEN_PROVIDERS)
+                    # Authenticated warm budget: the anonymous M6 route-plan bound
+                    # was 4 SELECTs; the required access-JWT verification plus
+                    # trace writes add account/session reads on every request.
+                    assert warm_selects <= 16, (
+                        f"warm AUTO plan used {warm_selects} SELECTs "
+                        f"(cold was {cold_selects}); health={health_calls} quota-batch={cold_quota}"
+                    )
+                    assert cold_health >= 1 and cold_quota >= 1
         finally:
             SQLiteRepository.latest_health_batch = orig_health  # type: ignore[method-assign]
             SQLiteRepository.latest_quota_batch = orig_quota  # type: ignore[method-assign]

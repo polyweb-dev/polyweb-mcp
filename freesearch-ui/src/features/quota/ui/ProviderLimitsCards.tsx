@@ -2,6 +2,7 @@ import type { ReactNode } from "react"
 import type { CRDUsageTotal, DashboardQuota, ProviderLimits } from "@/domains/dashboard"
 import type { ProviderConfig } from "@/domains/providers"
 import { activeAuth } from "../model/crdCardModel"
+import { manualUnit, type ManualUnit } from "../model/manualQuotaUnit"
 import { balancePrefill, type BalancePrefill } from "../model/providerInfo"
 import { Footnote } from "./Footnote"
 import type { OAuthSlotArgs } from "./QuotaRow"
@@ -50,6 +51,54 @@ function observedByProvider(
   return map
 }
 
+/** The native manual-entry unit for every provider with a reported limits rail. */
+function manualUnitsByProvider(
+  entries: { provider: ProviderConfig; limits: ProviderLimits }[],
+): Record<string, ManualUnit> {
+  const map: Record<string, ManualUnit> = {}
+  for (const entry of entries) {
+    const auth = activeAuth(entry.limits)
+    if (auth !== undefined) map[entry.provider.id] = manualUnit(auth, entry.provider.id)
+  }
+  return map
+}
+
+/**
+ * Display-only card order for the desktop 2-col Usage grid.
+ *
+ * Short single-bar cards (Parallel, You.com) sort first and taller cards
+ * (Tinyfish, Tavily) sort last, so each 2-col row pairs equal-height cards
+ * (row 1 Parallel + You.com, row 2 Tinyfish + Tavily) instead of mixing
+ * tall and short cards. Stable within groups: every other provider keeps
+ * its incoming (priority) relative order in the middle. Settings registry
+ * priority (dispatch order) is untouched; this never drops or invents a
+ * card, it only reorders reported entries.
+ */
+const USAGE_CARD_GROUP: Readonly<Record<string, number>> = {
+  parallel: 0,
+  you: 0,
+  youcom: 0,
+  tinyfish: 2,
+  tavily: 2,
+}
+
+/** Within-group tiebreak for the paired cards; all others compare equal. */
+const USAGE_CARD_TIEBREAK: Readonly<Record<string, number>> = {
+  parallel: 0,
+  you: 1,
+  youcom: 1,
+  tinyfish: 0,
+  tavily: 1,
+}
+
+function usageCardGroup(providerId: string): number {
+  return USAGE_CARD_GROUP[providerId] ?? 1
+}
+
+function usageCardTiebreak(providerId: string): number {
+  return USAGE_CARD_TIEBREAK[providerId] ?? 0
+}
+
 /**
  * Credit-unit card list for the configured providers.
  *
@@ -76,7 +125,13 @@ export function ProviderLimitsCards({
       (entry): entry is { provider: ProviderConfig; limits: ProviderLimits } =>
         entry.limits !== undefined,
     )
+    .sort(
+      (a, b) =>
+        usageCardGroup(a.provider.id) - usageCardGroup(b.provider.id) ||
+        usageCardTiebreak(a.provider.id) - usageCardTiebreak(b.provider.id),
+    )
   const observed = observedByProvider(entries)
+  const providerUnits = manualUnitsByProvider(entries)
   const selectable = providers.filter((provider) => manualEligible.has(provider.id))
   const quotaOf = (providerId: string): DashboardQuota | undefined =>
     dashboardQuotas?.find((quota) => quota.provider === providerId)
@@ -107,6 +162,7 @@ export function ProviderLimitsCards({
               refreshDashboard={refreshDashboard}
               manualEligible={manualEligible.has(entry.provider.id)}
               providers={selectable}
+              providerUnits={providerUnits}
               observed={observed}
               {...(quotaOf(entry.provider.id) !== undefined
                 ? { latestQuota: quotaOf(entry.provider.id) }

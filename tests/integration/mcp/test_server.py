@@ -258,7 +258,7 @@ async def test_mcp_search_respects_global_mask_off(tmp_path: Path) -> None:
             "provider.exa", {"config": {"enable_mask": 0, "support_mask": 7, "priority": 100}}
         )
         adapter = _MaskStub("exa")
-        server = create_server([adapter], repository=repository)
+        server = await _authed_server(repository, [adapter], "mcp-mask-off")
 
         with pytest.raises(ToolError, match="no eligible provider"):
             await server.call_tool("search", {"request": {"query": "global off"}})
@@ -275,7 +275,7 @@ async def test_mcp_fetch_respects_fetch_bit_off(tmp_path: Path) -> None:
             "provider.exa", {"config": {"enable_mask": 3, "support_mask": 7, "priority": 100}}
         )
         adapter = _MaskStub("exa")
-        server = create_server([adapter], repository=repository)
+        server = await _authed_server(repository, [adapter], "mcp-fetch-off")
 
         search = await server.call_tool("search", {"request": {"query": "search on"}})
         assert search[1]["provider"] == "exa"
@@ -293,7 +293,7 @@ async def test_mcp_reads_fresh_masks_after_startup_without_restart(tmp_path: Pat
     repository = await SQLiteRepository.open(tmp_path / "mcp-fresh.db")
     try:
         adapter = _MaskStub("exa")
-        server = create_server([adapter], repository=repository)
+        server = await _authed_server(repository, [adapter], "mcp-fresh")
 
         first = await server.call_tool("search", {"request": {"query": "before"}})
         assert first[1]["provider"] == "exa"
@@ -314,7 +314,7 @@ async def test_mcp_preserves_injected_noncanonical_names(tmp_path: Path) -> None
     repository = await SQLiteRepository.open(tmp_path / "mcp-injected.db")
     try:
         adapter = _MaskStub("test_provider")
-        server = create_server([adapter], repository=repository)
+        server = await _authed_server(repository, [adapter], "mcp-injected")
 
         response = await server.call_tool("search", {"request": {"query": "injected"}})
 
@@ -332,7 +332,7 @@ async def test_mcp_fanout_excludes_masked_provider(tmp_path: Path) -> None:
         )
         off = _MaskStub("exa")
         on = _MaskStub("brave", fetch=False)
-        server = create_server([off, on], repository=repository)
+        server = await _authed_server(repository, [off, on], "mcp-fanout-mask")
 
         response = await server.call_tool(
             "search", {"request": {"query": "fanout", "fanout": True}}
@@ -409,7 +409,7 @@ async def test_mcp_require_unknown_fails_fast_without_unrelated_reads(
     try:
         first = _MaskStub("exa")
         second = _MaskStub("brave")
-        server = create_server([first, second], repository=repository)
+        server = await _authed_server(repository, [first, second], "mcp-require-unknown")
         health_calls: list[list[str]] = []
         quota_calls: list[list[str]] = []
         orig_h = _Repo.latest_health_batch
@@ -456,7 +456,7 @@ async def test_mcp_require_unknown_fails_fast_without_unrelated_reads(
         assert health_calls == []
         assert quota_calls == []
 
-        empty = create_server([], repository=repository)
+        empty = await _authed_server(repository, [], "mcp-require-empty")
         with pytest.raises(ToolError, match="no provider is configured"):
             await empty.call_tool("search", {"request": {"query": "anything"}})
 
@@ -466,7 +466,7 @@ async def test_mcp_require_unknown_fails_fast_without_unrelated_reads(
         from freesearch.routers.control import clear_config_cache as _clear
 
         _clear(repository)
-        masked = create_server([_MaskStub("exa")], repository=repository)
+        masked = await _authed_server(repository, [_MaskStub("exa")], "mcp-require-masked")
         with pytest.raises(ToolError, match="no eligible provider"):
             await masked.call_tool("search", {"request": {"query": "masked"}})
     finally:
@@ -487,7 +487,7 @@ async def test_mcp_auto_and_prefer_inspect_all_eligible(tmp_path: Path) -> None:
     repository = await _Repo.open(tmp_path / "mcp-auto-inspect.db")
     try:
         adapters = [_MaskStub("exa"), _MaskStub("brave"), _MaskStub("tavily")]
-        server = create_server(adapters, repository=repository)
+        server = await _authed_server(repository, adapters, "mcp-auto-inspect")
         seen: list[list[str]] = []
         orig = _Repo.latest_health_batch
 
@@ -532,7 +532,7 @@ async def test_mcp_pinned_fanout_reads_only_subset(tmp_path: Path) -> None:
     repository = await _Repo.open(tmp_path / "mcp-pinned.db")
     try:
         adapters = [_MaskStub(f"p{i}") for i in (1, 2, 3, 4)]
-        server = create_server(adapters, repository=repository)
+        server = await _authed_server(repository, adapters, "mcp-pinned")
         health_names: list[list[str]] = []
         orig = _Repo.latest_health_batch
 
@@ -608,7 +608,7 @@ async def test_mcp_stale_first_then_new_snapshot(tmp_path: Path) -> None:
             observed_at=_dt(2026, 3, 10, 12, 5, 0, tzinfo=_UTC),
         )
         adapter = _QuotaStub("exa", snapshot=zero, entered=entered, release=release)
-        server = create_server([adapter], repository=repository)
+        server = await _authed_server(repository, [adapter], "mcp-stale")
         first_task = _asyncio.create_task(
             server.call_tool(
                 "search",
@@ -684,7 +684,9 @@ async def test_mcp_single_attempt_preserves_tool_error(tmp_path: Path) -> None:
             for allow in (True, False):
                 primary = _FailStub("exa")
                 fallback_adapter = _MaskStub("brave")
-                server = create_server([primary, fallback_adapter], repository=repository)
+                server = await _authed_server(
+                    repository, [primary, fallback_adapter], f"mcp-single-{fallback}"
+                )
                 with pytest.raises(ToolError, match="simulated failure"):
                     await server.call_tool(
                         "search",
@@ -703,7 +705,9 @@ async def test_mcp_single_attempt_preserves_tool_error(tmp_path: Path) -> None:
                 assert fallback_adapter.search_calls == 0
                 primary_f = _FailStub("exa")
                 fallback_f = _MaskStub("brave")
-                server_f = create_server([primary_f, fallback_f], repository=repository)
+                server_f = await _authed_server(
+                    repository, [primary_f, fallback_f], f"mcp-single-f-{fallback}"
+                )
                 with pytest.raises(ToolError, match="simulated failure"):
                     await server_f.call_tool(
                         "fetch",
@@ -737,7 +741,9 @@ async def test_mcp_fanout_partial_and_all_fail(tmp_path: Path) -> None:
     try:
         failing = _FailStub("flaky_provider")
         working = _MaskStub("reliable_provider")
-        server = create_server([failing, working], repository=repository)
+        server = await _authed_server(
+            repository, [failing, working], "mcp-fanout-partial"
+        )
         response = await server.call_tool(
             "search", {"request": {"query": "partial", "fanout": True}}
         )
@@ -751,7 +757,7 @@ async def test_mcp_fanout_partial_and_all_fail(tmp_path: Path) -> None:
 
         first = _FailStub("flaky-a")
         second = _FailStub("flaky-b")
-        doomed = create_server([first, second], repository=repository)
+        doomed = await _authed_server(repository, [first, second], "mcp-fanout-doomed")
         with pytest.raises(ToolError, match="all search providers failed"):
             await doomed.call_tool("search", {"request": {"query": "doomed", "fanout": True}})
         assert first.search_calls == 1
@@ -811,6 +817,7 @@ async def test_mcp_lifespan_clears_config_cache(tmp_path: Path) -> None:
 
 async def test_mcp_generation_replacement_builds_fresh_state(tmp_path: Path) -> None:
     """MCP generations detach cleanly so a later session never reuses closed state."""
+    from freesearch.infrastructure.observability import NO_OP_OBSERVABILITY
     from freesearch.mcp.server import _detach_generation
 
     await _reset_mcp_caches()
@@ -822,12 +829,17 @@ async def test_mcp_generation_replacement_builds_fresh_state(tmp_path: Path) -> 
             "client": None,
             "routes": [first],
             "secret_store": None,
+            "limits": None,
+            "limits_sync": None,
+            "limits_task": None,
+            "limits_stop": None,
+            "observability": NO_OP_OBSERVABILITY,
         }
         await _detach_generation(state, owns_repository=False)
         assert state["routes"] is None
         assert state["client"] is None
         second = _MaskStub("brave")
-        server = create_server([second], repository=repository)
+        server = await _authed_server(repository, [second], "mcp-gen-fresh")
         response = await server.call_tool("search", {"request": {"query": "fresh"}})
         assert response[1]["provider"] == "brave"
         assert second.search_calls == 1

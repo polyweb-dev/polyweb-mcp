@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import gc
 import json
 import sqlite3
-import uuid
+import time
 from collections.abc import Iterator
-from contextlib import suppress
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -126,17 +126,26 @@ def _http_stub(
     yield stub_server
 
 
-_ADV_DB_ROOT = Path(".runtime-tmp/adv-pytest-dbs")
+def _unlink_with_retries(path: Path, *, attempts: int = 20) -> None:
+    """Remove a test database after Windows releases delayed SQLite handles."""
+
+    for attempt in range(attempts):
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            gc.collect()
+            time.sleep(0.05)
+        else:
+            return
 
 
 @pytest_asyncio.fixture
-async def repository() -> Any:
-    # NOTE: pytest tmp_path (mode 0o700 mkdir) and system-temp file writes are
-    # denied in this sandbox; plain dirs/files under .runtime-tmp work, so the
-    # OAuth security DBs live there explicitly (tester-owned, best-effort cleanup).
-    _ADV_DB_ROOT.mkdir(parents=True, exist_ok=True)
-    # uuid names: counters reset per process and stale files must never collide.
-    db_path = _ADV_DB_ROOT / f"adv-{uuid.uuid4().hex}.db"
+async def repository(tmp_path: Path) -> Any:
+    db_path = tmp_path / "adv.db"
     repo = await SQLiteRepository.open(db_path)
     repo.adv_db_path = db_path  # type: ignore[attr-defined]
     try:
@@ -144,10 +153,8 @@ async def repository() -> Any:
     finally:
         await repo.close()
         clear_oauth_poll_state(repo)
-        with suppress(OSError):
-            db_path.unlink(missing_ok=True)
-        with suppress(OSError):
-            Path(str(db_path) + ".migration.lock").unlink(missing_ok=True)
+        _unlink_with_retries(db_path)
+        _unlink_with_retries(Path(str(db_path) + ".migration.lock"))
 
 
 @pytest.fixture

@@ -7,10 +7,11 @@
  * Every amount stays an exact decimal string here; only the shown text rounds.
  */
 
-import type { CRDResetRule, LimitRateWindow, NativePool, ProviderAuthLimits } from "@/domains/dashboard"
+import type { CRDResetRule, CRDView, NativePool, ProviderAuthLimits } from "@/domains/dashboard"
 import { callsText, dollarText, formatCRDAmount } from "./crdDisplay"
 import { operationAvailable, usdFromCRD } from "./crdCardModel"
-import { multiplyDecimal } from "./manualQuotaMath"
+import { multiplyDecimal, parseDecimal } from "./manualQuotaMath"
+import { providerRateFacts } from "./providerRateFacts"
 import { formatTavilyPopoverAmount } from "./tavilyCredits"
 import { operationLabel, type CreditMode } from "./quotaLabels"
 import { timestampOrNull } from "./timeText"
@@ -78,11 +79,6 @@ function operationViewName(providerId: string | undefined, operation: string): s
   return operationLabel(operation)
 }
 
-/** Rate windows from tight to loose. Only the tightest known limit becomes a row. */
-const RATE_WINDOW_ORDER = ["1s", "1m", "1h", "1d"]
-const WINDOW_WORD: Record<string, string> = { "1s": "second", "1m": "minute", "1h": "hour", "1d": "day" }
-const RATE_UNIT_WORD: Record<string, string> = { requests: "requests", urls: "URLs" }
-
 /** A known text of one field; an absent, empty, or unknown value yields null. */
 function known(value: string | null | undefined): string | null {
   if (value === null || value === undefined) return null
@@ -95,37 +91,6 @@ function known(value: string | null | undefined): string | null {
 export function safeHref(url: string | null | undefined): string | null {
   const text = known(url)
   return text !== null && /^https?:\/\//i.test(text) ? text : null
-}
-
-/** The tightest rate window with a known limit; no such window yields null. */
-function rateWindowOf(windows: LimitRateWindow[]): LimitRateWindow | null {
-  for (const window of RATE_WINDOW_ORDER) {
-    const entry = windows.find((item) => item.window === window && known(item.limit) !== null)
-    if (entry !== undefined) return entry
-  }
-  return null
-}
-
-function rateFact(
-  windows: LimitRateWindow[],
-  wholeRequests: boolean = false,
-): ProviderInfoFact | null {
-  const entry = rateWindowOf(windows)
-  const limit = entry === null ? null : known(entry.limit)
-  if (entry === null || limit === null) return null
-  // With whole requests, the request-unit limit text floors through callsText,
-  // so a decimal request limit never becomes a whole extra request. URL units
-  // and the off path keep the verbatim limit.
-  const count = wholeRequests && entry.unit === "requests" ? callsText(limit) : limit
-  if (count === null) return null
-  const unit = RATE_UNIT_WORD[entry.unit] ?? entry.unit
-  const window = WINDOW_WORD[entry.window] ?? entry.window
-  const scope = known(entry.scope)
-  return {
-    label: "Rate limit",
-    value: count + " " + unit + " per " + window,
-    note: scope === null ? null : "(" + scope + ")",
-  }
 }
 
 /** The CRD call cost of one available operation, with its USD value. */
@@ -207,6 +172,49 @@ function nativeCostFact(
   }
 }
 
+/** Exact floor of one non-negative division, or null when either side is unusable. */
+function floorDivToInt(numerator: string, denominator: string): string | null {
+  const top = parseDecimal(numerator.trim())
+  const bottom = parseDecimal(denominator.trim())
+  if (top === null || bottom === null || bottom.int === 0n) return null
+  const num = top.int * 10n ** BigInt(bottom.scale)
+  const den = bottom.int * 10n ** BigInt(top.scale)
+  if (den <= 0n || num < 0n) return null
+  return (num / den).toString()
+}
+
+/**
+ * Total You.com searches left: the daily free pool plus the credit-derived
+ * searches from the shared USD balance (frontend display-only).
+ *
+ * The backend search view holds only the covering daily pool (100/day) while
+ * it still covers one request, so its possible_standard_calls reads 100 even
+ * when the credit balance covers thousands more (39904 from $199.52 at
+ * $0.005/search). The fetch view already projects the same balance in
+ * fetch units (199520 at 1 CRD each), so the credit searches come from
+ * floor(fetch remaining CRD / search CRD cost) without a second conversion.
+ * Null unless the search view is the daily pool (a different shared pool
+ * than the aggregate) with both CRD amounts known, so a pool-projected
+ * search view never double-counts and no reset is invented.
+ */
+function youcomSearchTotal(auth: ProviderAuthLimits, searchView: CRDView | undefined, dailyRaw: string): string | null {
+  const daily = callsText(dailyRaw)
+  if (daily === null) return null
+  const poolId = auth.aggregate_pool?.pool_id ?? null
+  if (poolId === null || searchView?.shared_pool_id === poolId) return null
+  const fetchView = auth.crd_views.find((entry) => entry.operation === "fetch")
+  const fetchRemaining = known(fetchView?.remaining_crd)
+  const searchCost = known(searchView?.request_cost_crd)
+  if (fetchRemaining === null || searchCost === null) return null
+  const extra = floorDivToInt(fetchRemaining, searchCost)
+  if (extra === null) return null
+  try {
+    return (BigInt(daily) + BigInt(extra)).toString()
+  } catch {
+    return null
+  }
+}
+
 /** The whole standard calls left of one operation, with the reset period. */
 function countFact(
   auth: ProviderAuthLimits,
@@ -217,7 +225,16 @@ function countFact(
   const view = auth.crd_views.find((entry) => entry.operation === operation)
   const raw = known(view?.possible_standard_calls)
   if (raw === null) return null
-  const calls = wholeRequests || providerId === TAVILY_ID || providerId === "firecrawl" ? callsText(raw) : raw
+  // You.com search total (display-only): daily 100 plus credit-derived
+  // searches from the same balance the Fetches left row already projects.
+  // Every other provider keeps its verbatim view count.
+  const effective = providerId === "youcom" && operation === "search"
+    ? (youcomSearchTotal(auth, view, raw) ?? raw)
+    : raw
+  const calls =
+    wholeRequests || providerId === TAVILY_ID || providerId === "firecrawl" || providerId === "exa"
+      ? callsText(effective)
+      : effective
   if (calls === null) return null
   const period = COUNT_PERIOD[auth.detail?.reset_rule ?? UNKNOWN_TEXT]
   return {
@@ -452,8 +469,7 @@ export function providerInfo(
     for (const operation of OPERATIONS) {
       appendOperationFacts(facts, auth, operation, providerId, wholeRequests)
     }
-    const rate = rateFact(auth.detail?.rate_windows ?? [], wholeRequests)
-    if (rate !== null) facts.push(rate)
+    facts.push(...providerRateFacts(auth, providerId, wholeRequests))
   }
   const lastSync = timestampOrNull(auth.detail?.last_sync_at)
   if (lastSync !== null) facts.push({ label: "Last sync", value: lastSync, note: null })

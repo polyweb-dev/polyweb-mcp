@@ -26,6 +26,31 @@ export interface ProviderCreditSummaryProps {
   fundsControl?: ReactNode
   /** Rate progress bars rendered above the action row. */
   rateBars?: ReactNode
+  /**
+   * Authoritative OAuth balance fallback (raw USD decimal, e.g. Parallel
+   * Account-API remaining or You.com cents-balance remaining). Shown
+   * amount-only when the limits model holds no funds; with a display-only
+   * allowance it shows a fraction, bar, and capped percent instead. Only
+   * Parallel and You.com produce this shape today (aggregate_pool null +
+   * remaining-only latestQuota), so other cards leave it absent.
+   */
+  balanceFallbackUSD?: string | null
+  /**
+   * CRD equivalent of the fallback balance (exact decimal, e.g. "24870" for
+   * USD 24.87 at the USD 0.001 reference). Computed by the card from the
+   * rail profile through `usdBalanceToCRD`; the summary only formats it.
+   * Absent when the conversion is unavailable, and the dollar amount still
+   * shows alone.
+   */
+  balanceFallbackCRD?: string | null
+  /**
+   * Display-only allowance of the fallback balance (exact CRD decimal, e.g.
+   * Parallel "$5/mo free credit" as "5000" or You.com "$100 signup" as
+   * "100000"). Frontend-only; never a backend allowance. With both CRD
+   * amounts known, the card shows the "remaining / allowance CRD" fraction
+   * with a capped bar and percent; otherwise the fallback stays amount-only.
+   */
+  balanceFallbackAllowanceCRD?: string | null
 }
 
 const AMOUNT = "tnum text-[18px] font-semibold text-[var(--text-strong)]"
@@ -150,6 +175,112 @@ function nativeFundsBar(
   )
 }
 
+/** Amount-only fallback of one authoritative OAuth balance: "$24.87 (24870 CRD)", no bar, no percent. */
+function balanceFallbackValue(
+  usd: string,
+  crd: string | null,
+  allowance: string | null,
+  usdLeft: string | null,
+): ReactNode {
+  if (crd !== null && allowance !== null) {
+    const total = amountNumber(allowance)
+    return (
+      <>
+        <span
+          className={AMOUNT}
+          {...(usdLeft === null ? {} : { title: usdLeft, "aria-label": usdLeft })}
+        >
+          {amountNumber(crd)}
+        </span>
+        <span className={TOTAL}>/ {total}</span>
+        <span className={UNIT}>CRD</span>
+      </>
+    )
+  }
+  if (crd === null) return <span className={AMOUNT}>{dollarText(usd)}</span>
+  return <span className={AMOUNT}>{dollarText(usd) + " (" + formatCRDAmount(crd) + ")"}</span>
+}
+
+/** A usable fallback balance: a finite non-empty decimal string. */
+function usableFallbackBalance(value: string | null | undefined): string | null {
+  if (value === null || value === undefined) return null
+  const text = value.trim()
+  if (text === "") return null
+  return Number.isFinite(Number(text)) ? value : null
+}
+
+interface FallbackBalance { usd: string; crd: string | null; allowance: string | null }
+
+/**
+ * Amount-only OAuth balance of one card: the limits model holds no funds, so
+ * the authoritative remaining shows with its CRD equivalent. An unmetered rail
+ * keeps Free; the fallback never overrides it. Null when unusable. A
+ * display-only allowance (Parallel $5/mo free credit, You.com $100 signup
+ * 100000 CRD total) rides along for the fraction, bar, and capped percent;
+ * it never invents backend funds.
+ */
+function fallbackBalanceOf(
+  model: CreditCardModel,
+  usd: string | null | undefined,
+  crd: string | null | undefined,
+  allowance: string | null | undefined,
+): FallbackBalance | null {
+  if (model.remainingCRD !== null || model.state === "unmetered") return null
+  const fallbackUSD = usableFallbackBalance(usd)
+  if (fallbackUSD === null) return null
+  return { usd: fallbackUSD, crd: usableFallbackBalance(crd), allowance: usableFallbackBalance(allowance) }
+}
+
+/**
+ * The funds bar of one fallback balance with a display-only allowance (e.g.
+ * Parallel 24870/5000 CRD, You.com 4750/100000 CRD). Mirrors the finite funds
+ * bar: a finite percent is required, and the bar caps at 100 when remaining
+ * exceeds the allowance (Firecrawl 4761.4/3800 pattern). Null without both
+ * CRD amounts or a finite percent.
+ */
+interface FallbackFundsBarInput {
+  providerName: string
+  fallback: FallbackBalance
+  percent: number | null
+  label: string | null
+  useSharedBar: boolean
+}
+
+function fallbackFundsBar(input: FallbackFundsBarInput): ReactNode {
+  const { providerName, fallback, percent, label, useSharedBar } = input
+  if (percent === null || label === null || fallback.crd === null || fallback.allowance === null) {
+    return null
+  }
+  const valueText = label + " remaining, " + formatCRDAmount(fallback.crd) + " left"
+  if (useSharedBar) {
+    return (
+      <>
+        <RemainingBar
+          percentRemaining={percent}
+          label={providerName + " credit units remaining"}
+          valueText={valueText}
+        />
+        <div className="flex justify-end">
+          <span className="tnum text-[18px] font-semibold text-[var(--text-strong)]">
+            {label}
+          </span>
+        </div>
+      </>
+    )
+  }
+  return (
+    <div className="space-y-0.5">
+      <div className="text-[12px] text-[var(--text-strong)]">Credits</div>
+      <RemainingBar
+        percentRemaining={percent}
+        label={providerName + " credit units remaining"}
+        valueText={valueText}
+        showPercent
+      />
+    </div>
+  )
+}
+
 /** The visible value line of one native Credits rail: the fraction or its honest state. */
 function nativeCreditValue(credits: TavilyCreditsDisplay): ReactNode {
   if (credits.state === "keyless") {
@@ -265,6 +396,9 @@ export function ProviderCreditSummary({
   useSharedBar = false,
   fundsControl,
   rateBars,
+  balanceFallbackUSD,
+  balanceFallbackCRD,
+  balanceFallbackAllowanceCRD,
 }: ProviderCreditSummaryProps): ReactNode {
   if (credits !== undefined) {
     return nativeSummary({ providerName, model, credits, actions, info, bodyNotes, fundsControl, rateBars })
@@ -272,20 +406,38 @@ export function ProviderCreditSummary({
   const percent = model.state === "finite" ? model.percentRemaining : null
   const label = percent === null ? null : percentLabel(percent)
   const usdLeft = model.remainingUSD === null ? null : dollarText(model.remainingUSD) + " left"
+  // OAuth balance fallback: amount-only without an allowance, or the fraction
+  // with a capped bar and percent against a display-only allowance (Parallel
+  // $5/mo free credit, You.com $100 signup 100000 CRD total). The allowance
+  // is frontend-only, never backend funds.
+  const fallback = fallbackBalanceOf(model, balanceFallbackUSD, balanceFallbackCRD, balanceFallbackAllowanceCRD)
+  const fallbackPercent =
+    fallback?.crd == null || fallback?.allowance == null
+      ? null
+      : percentRemaining(fallback.crd, fallback.allowance)
+  const fallbackLabel = fallbackPercent === null ? null : percentLabel(fallbackPercent)
+  const fallbackUsdLeft = fallback === null ? null : dollarText(fallback.usd) + " left"
   return (
     <div className="flex flex-1 flex-col justify-between gap-3">
       <div className="space-y-2">
         {fundsBar({ providerName, model, percent, label, useSharedBar })}
+        {fallback !== null &&
+          fallbackFundsBar({ providerName, fallback, percent: fallbackPercent, label: fallbackLabel, useSharedBar })}
         {rateBars}
       </div>
       {model.state === "finite" && model.allowanceCRD === null && (
+        <Footnote>No allowance is reported, so this card shows no percentage.</Footnote>
+      )}
+      {fallback !== null && fallback.allowance === null && (
         <Footnote>No allowance is reported, so this card shows no percentage.</Footnote>
       )}
       {bodyNotes}
       <div className={`${CREDIT_ROW} mt-auto`}>
         {actions}
         <span className={CREDIT_VALUE}>
-          {creditValue(model, usdLeft)}
+          {fallback !== null
+            ? balanceFallbackValue(fallback.usd, fallback.crd, fallback.allowance, fallbackUsdLeft)
+            : creditValue(model, usdLeft)}
           {info}
         </span>
       </div>

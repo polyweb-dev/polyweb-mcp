@@ -4,8 +4,8 @@ Synthetic providers only. Covers leases, reservations, audit, idempotence,
 manual anchors, and stale-generation rejection. No vendor I/O.
 """
 
-import uuid
-from contextlib import suppress
+import gc
+import time
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -34,21 +34,35 @@ from freesearch.models.provider_limits import (
 from freesearch.persistence.storage import SQLiteRepository
 
 FIXED_AT = datetime(2026, 3, 10, 12, 0, 0, tzinfo=UTC)
-_DB_ROOT = Path(".runtime-tmp/limit-repo-pytest-dbs")
+
+
+def _unlink_with_retries(path: Path, *, attempts: int = 20) -> None:
+    """Remove a test database after Windows releases delayed SQLite handles."""
+
+    for attempt in range(attempts):
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            gc.collect()
+            time.sleep(0.05)
+        else:
+            return
 
 
 @pytest_asyncio.fixture
 async def limits_repo(tmp_path: Path):
-    _DB_ROOT.mkdir(parents=True, exist_ok=True)
-    db_path = _DB_ROOT / f"limit-repo-{uuid.uuid4().hex}.db"
+    db_path = tmp_path / "limit-repo.db"
     repo = await SQLiteRepository.open(db_path)
     try:
         yield repo.limits
     finally:
         await repo.close()
         for extra in (db_path, Path(f"{db_path}.migration.lock")):
-            with suppress(FileNotFoundError):
-                extra.unlink()
+            _unlink_with_retries(extra)
 
 
 def _record(provider: str = "synth") -> ProviderLimitRecord:

@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest"
 import { render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { installFetchStub, ok } from "@/test/fetchMock"
+import { isManualQuotaEligible } from "../model/quotaEligibility"
+import { manualEligibleProviders } from "../model/quotaRowModel"
 import { ProviderLimitsCards } from "./ProviderLimitsCards"
 
 vi.mock("../model/useManualQuota", () => ({
@@ -119,6 +121,161 @@ function braveEntry() {
   }
 }
 
+function exaEntry() {
+  const rate = (operation: "search" | "fetch", limit: string) => ({
+    published: true,
+    windows: [
+      {
+        bucket_id: `exa:keyed:${operation}:requests`,
+        limit,
+        window: "1s",
+        scope: "team",
+        unit: "requests",
+        remaining: null,
+        reset_at: null,
+        source: "documented_team",
+        confidence: "observed",
+      },
+    ],
+  })
+  const operationRecord = (operation: "search" | "fetch", limit: string) => ({
+    provider: "exa",
+    operation,
+    auth_mode: "keyed",
+    supported: true,
+    transport_available: true,
+    native_pool_id: "exa:keyed:usd",
+    rate: rate(operation, limit),
+    budget: {
+      model: "usd",
+      free_allowance: "10",
+      allowance_unit: "USD",
+      allowance_period: "month",
+      cost_per_1k: operation === "search" ? "7" : "1",
+      standard_native_cost: operation === "search" ? "0.007" : "0.001",
+      usd_per_call: operation === "search" ? "0.007" : "0.001",
+      on_exhausted: "http_402",
+      usage_api: "https://exa.ai/docs/reference/team-management/get-api-key-usage",
+      priced: true,
+    },
+    conversion_profile: {
+      reference_usd_per_crd: "0.001",
+      native_usd_per_unit: "1",
+      cost_basis: "usd_native",
+      price_version: "2026-09",
+      source: "documented",
+      estimated: false,
+    },
+    plan_name: "Free $10 monthly grant + bonus",
+    usage_url: "https://dashboard.exa.ai/",
+    version: 1,
+  })
+  return {
+    provider: "exa",
+    active_auth_mode: "keyed",
+    auths: [
+      {
+        auth_mode: "keyed",
+        transport_available: true,
+        search: operationRecord("search", "10"),
+        fetch: operationRecord("fetch", "100"),
+        free_tiers: [],
+        paid_tiers: [],
+        unknown_tiers: [],
+        tier_split_known: true,
+        aggregate_pool: {
+          pool_id: "exa:keyed:usd",
+          provider: "exa",
+          auth_mode: "keyed",
+          native_unit: "USD",
+          remaining: "4.500",
+          allowance: "10.000",
+          actual_spend_usd: "5.500",
+          source: "local_ledger",
+          confidence: "estimated",
+          reset_at: "2026-11-01T00:00:00Z",
+          observed_at: "2026-10-14T12:00:00Z",
+          version: 1,
+          credential_generation: 1,
+          next_sync_at: null,
+          stale: false,
+          manual_anchor: false,
+        },
+        crd_views: [
+          {
+            state: "finite",
+            operation: "search",
+            remaining_crd: "4500",
+            local_remaining_crd: null,
+            request_cost_crd: "7",
+            shared_pool_id: "exa:keyed:usd",
+            possible_standard_calls: "642.857142857142857",
+            price_version: "2026-09",
+            priced: true,
+          },
+          {
+            state: "finite",
+            operation: "fetch",
+            remaining_crd: "4500",
+            local_remaining_crd: null,
+            request_cost_crd: "1",
+            shared_pool_id: "exa:keyed:usd",
+            possible_standard_calls: "4500",
+            price_version: "2026-09",
+            priced: true,
+          },
+        ],
+        rate_progress: [],
+        grants: null,
+        detail: {
+          plan_name: "Free $10 monthly grant + bonus",
+          native_unit: "USD",
+          native_balance: "4.500",
+          native_allowance: "10.000",
+          usd_per_call: null,
+          actual_spend_usd: null,
+          reset_at: "2026-11-01T00:00:00Z",
+          reset_rule: "monthly_first",
+          usage_url: "https://dashboard.exa.ai/",
+          source: "local_ledger",
+          confidence: "estimated",
+          last_sync_at: null,
+          stale: false,
+          price_version: "2026-09",
+          crd_split_note: null,
+          rate_windows: [],
+          tier_split_known: true,
+          aggregate_pool_id: "exa:keyed:usd",
+        },
+      },
+    ],
+    documented_keyless_operations: [],
+    version: 1,
+    generated_at: "2026-10-14T12:00:00Z",
+  }
+}
+
+function exaEntryWithoutPoolBalance() {
+  const entry = exaEntry()
+  const auth = entry.auths[0]
+  if (auth === undefined || auth.detail === null) throw new Error("Exa auth fixture is incomplete")
+  return {
+    ...entry,
+    auths: [
+      {
+        ...auth,
+        aggregate_pool: null,
+        detail: {
+          ...auth.detail,
+          native_balance: null,
+          native_allowance: null,
+          aggregate_pool_id: null,
+        },
+      },
+    ],
+  }
+}
+
 describe("ProviderLimitsCards", () => {
   it("renders the reported Brave card with its own totals only (UI7-02, final-polish 3c)", () => {
     render(
@@ -185,6 +342,90 @@ describe("ProviderLimitsCards", () => {
     )
     expect(screen.getByText("No provider limit data reported by the backend.")).not.toBeNull()
     expect(screen.queryByRole("progressbar")).toBe(null)
+  })
+
+  it("renders Exa's USD balance entry and CRD budget limit controls", async () => {
+    const user = userEvent.setup()
+    const exaProvider = { id: "exa", name: "Exa" }
+    const estimatedQuota = {
+      provider: "exa",
+      remaining: "4.500",
+      remainingPercent: "45",
+      limit: "10.000",
+      observed_at: "2026-10-14T12:00:00Z",
+      source: "estimated",
+      unitKind: "USD",
+      displayUnit: "USD",
+      resetAt: "2026-11-01T00:00:00Z",
+      window: "monthly",
+    }
+    const manualEligible = manualEligibleProviders(
+      [exaProvider as never],
+      [estimatedQuota as never],
+      isManualQuotaEligible,
+    )
+    render(
+      <ProviderLimitsCards
+        providers={[exaProvider] as never}
+        providerLimits={[exaEntry()] as never}
+        crdUsageTotals={[]}
+        refreshDashboard={() => Promise.resolve()}
+        manualEligible={manualEligible}
+        dashboardQuotas={[estimatedQuota] as never}
+      />,
+    )
+
+    expect(screen.getByRole("heading", { name: "Exa" })).not.toBeNull()
+    expect(screen.getByTestId("provider-logo-exa")).not.toBeNull()
+    expect(screen.getByRole("button", { name: "Refresh limits for Exa" })).not.toBeNull()
+    expect(screen.getByTestId("manual-quota-open-exa")).not.toBeNull()
+    expect(screen.getByTestId("crd-grant-open-exa")).not.toBeNull()
+    expect(screen.getByTestId("limit-history-open-exa")).not.toBeNull()
+
+    await user.click(screen.getByTestId("credit-info-exa"))
+    expect(screen.getByText("Search rate limit")).not.toBeNull()
+    expect(screen.getByText("Fetch rate limit")).not.toBeNull()
+    expect(screen.getByText("10 requests per second")).not.toBeNull()
+    expect(screen.getByText("100 requests per second")).not.toBeNull()
+    expect(screen.getByText("Search CRD cost")).not.toBeNull()
+    expect(screen.getByText("Fetch CRD cost")).not.toBeNull()
+    expect(screen.getByText("7 CRD")).not.toBeNull()
+    expect(screen.getByText("1 CRD")).not.toBeNull()
+    await user.click(screen.getByTestId("credit-info-exa"))
+
+    await user.click(screen.getByTestId("manual-quota-open-exa"))
+    const allowance = screen.getByLabelText<HTMLInputElement>("Allowance (USD)")
+    const remaining = screen.getByLabelText<HTMLInputElement>("Balance remaining (USD)")
+    expect(allowance.value).toBe("10.000")
+    expect(remaining.value).toBe("4.500")
+    expect(allowance.disabled).toBe(false)
+    expect(remaining.disabled).toBe(false)
+    await user.clear(remaining)
+    await user.type(remaining, "4.25")
+    expect(remaining.value).toBe("4.25")
+
+    await user.click(screen.getByTestId("manual-quota-cancel"))
+    await user.click(screen.getByTestId("crd-grant-open-exa"))
+    expect(screen.getByLabelText("Search credit units (CRD)")).not.toBeNull()
+    expect(screen.getByLabelText("Fetch credit units (CRD)")).not.toBeNull()
+  })
+
+  it("uses Exa's declared USD unit without guessing a balance when its pool is empty", async () => {
+    const user = userEvent.setup()
+    const exaProvider = { id: "exa", name: "Exa" }
+    render(
+      <ProviderLimitsCards
+        providers={[exaProvider] as never}
+        providerLimits={[exaEntryWithoutPoolBalance()] as never}
+        crdUsageTotals={[]}
+        refreshDashboard={() => Promise.resolve()}
+        manualEligible={new Set(["exa"])}
+      />,
+    )
+
+    await user.click(screen.getByTestId("manual-quota-open-exa"))
+    expect(screen.getByLabelText<HTMLInputElement>("Allowance (USD)").value).toBe("")
+    expect(screen.getByLabelText<HTMLInputElement>("Balance remaining (USD)").value).toBe("")
   })
 })
 
@@ -346,5 +587,53 @@ describe("ProviderLimitsCards rate-tier slot (FIX)", () => {
     expect(await screen.findByText("Balance history")).not.toBeNull()
     expect(stub.requestsTo(/limits\/history/).some(({ url }) => url.includes("auth_mode=keyless"))).toBe(true)
     vi.unstubAllGlobals()
+  })
+})
+
+/**
+ * Usage display order: the desktop 2-col grid pairs equal-height cards, so
+ * the short single-bar cards (Parallel, You.com) share row 1 and the taller
+ * cards (Tinyfish, Tavily) share row 2. Display-only: Settings registry
+ * priority (dispatch order) is untouched.
+ */
+describe("ProviderLimitsCards display order", () => {
+  function entryFor(providerId: string) {
+    return JSON.parse(JSON.stringify(braveEntry()).replaceAll("brave", providerId))
+  }
+
+  it("orders Parallel, You.com, Tinyfish, Tavily so equal-height cards share each 2-col row", () => {
+    const providers = [
+      { id: "parallel", name: "Parallel" },
+      { id: "tavily", name: "Tavily" },
+      { id: "tinyfish", name: "Tinyfish" },
+      { id: "youcom", name: "You.com" },
+    ]
+    render(
+      <ProviderLimitsCards
+        providers={providers as never}
+        providerLimits={providers.map((provider) => entryFor(provider.id)) as never}
+        crdUsageTotals={[]}
+        refreshDashboard={() => Promise.resolve()}
+        manualEligible={new Set<string>()}
+      />,
+    )
+
+    // No card dropped or invented: all four reported entries render.
+    expect(screen.getByText("4 reported")).not.toBeNull()
+    for (const provider of providers) {
+      expect(screen.getByRole("heading", { name: provider.name })).not.toBeNull()
+    }
+
+    const visible = screen
+      .getAllByRole("heading")
+      .map((heading) => heading.textContent)
+      .filter((text) => ["Parallel", "Tavily", "Tinyfish", "You.com"].includes(text ?? ""))
+    expect(visible).toEqual(["Parallel", "You.com", "Tinyfish", "Tavily"])
+
+    // Same row parity in a 2-col grid: floor(index / 2) equal per pair.
+    const rowOf = (name: string): number => Math.floor(visible.indexOf(name) / 2)
+    expect(rowOf("Parallel")).toBe(rowOf("You.com"))
+    expect(rowOf("Tinyfish")).toBe(rowOf("Tavily"))
+    expect(rowOf("Parallel")).not.toBe(rowOf("Tinyfish"))
   })
 })

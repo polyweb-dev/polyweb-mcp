@@ -1,6 +1,5 @@
 import React, { useState } from "react"
 import { useFreeSearch } from "@/context/useFreeSearch"
-import type { ProviderConfig } from "@/domains/providers"
 import { TooltipProvider } from "@/shared/ui/tooltip"
 import {
   Table,
@@ -13,7 +12,6 @@ import { ProviderRegistryHeader } from "./ProviderRegistryHeader"
 import { ProviderRegistryRow } from "./ProviderRegistryRow"
 import { ProviderTestModal } from "./ProviderTestModal"
 import { ResiliencePolicy } from "./ResiliencePolicy"
-import { TavilyRateTierSelect } from "./TavilyRateTierSelect"
 import { useProviderRegistryDnD } from "./useProviderRegistryDnD"
 
 type TestResult = Awaited<ReturnType<ReturnType<typeof useFreeSearch>["testProviderConnection"]>>
@@ -64,26 +62,6 @@ function useProviderTester(
   return { testingId, selectedTestId, setSelectedTestId, testResults, handleTest }
 }
 
-/** The Tavily-only rate-tier slot; every other provider renders no extra cell. */
-function rateTierSlot(
-  provider: ProviderConfig,
-  canEdit: boolean,
-  refreshProviders: () => Promise<void>,
-  refreshDashboard: () => Promise<void>,
-): React.ReactNode {
-  if (provider.id !== "tavily") return undefined
-  return (
-    <TavilyRateTierSelect
-      provider={provider}
-      canEdit={canEdit}
-      onUpdated={async () => {
-        await refreshProviders()
-        await refreshDashboard()
-      }}
-    />
-  )
-}
-
 /** Registry controls and live fleet telemetry in one operational table. */
 export const SettingsProviders: React.FC = () => {
   const {
@@ -96,8 +74,6 @@ export const SettingsProviders: React.FC = () => {
     moveProviderPriority,
     reorderProviderPriority,
     testProviderConnection,
-    refreshProviders,
-    refreshDashboard,
   } = useFreeSearch()
   const { pendingProviderIds, handleFlagToggle } = useFlagToggle()
   const { testingId, selectedTestId, setSelectedTestId, testResults, handleTest } =
@@ -153,7 +129,6 @@ export const SettingsProviders: React.FC = () => {
                   canMoveUp={providers.length > 1 && provider.id !== firstId}
                   canMoveDown={providers.length > 1 && provider.id !== lastId}
                   canEdit={canEditControls}
-                  rateTier={rateTierSlot(provider, canEditControls, refreshProviders, refreshDashboard)}
                   isDragging={draggingId === provider.id}
                   isDragOver={dragOverId === provider.id}
                   onDragStart={(e) => handleDragStart(provider.id, e)}

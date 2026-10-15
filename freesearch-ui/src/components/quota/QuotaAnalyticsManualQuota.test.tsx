@@ -89,8 +89,10 @@ function limitEntry(provider: string): Record<string, unknown> {
 
 /**
  * Dashboard rows for the manual suite: Brave carries a vendor snapshot
- * (remaining 999 of limit 1000, so no manual entry), Exa and Parallel
- * carry null snapshots (eligible), and Tinyfish has no row (eligible).
+ * (remaining 999 of limit 1000, so no manual entry), Exa carries a null
+ * snapshot (eligible), Parallel carries a null snapshot but stays ineligible
+ * (its prepaid USD balance comes from the OAuth Account API, never a manual
+ * seed), and Tinyfish has no row (eligible).
  */
 function manualQuotaRows(): WireDashboardQuota[] {
   return [
@@ -169,14 +171,16 @@ describe("QuotaAnalytics manual billing entry (UI7)", () => {
     vi.unstubAllGlobals()
   })
 
-  it("offers Provider Balance on Exa, Parallel, and Tinyfish, never on Brave or Tavily (UI7-07, NUDGE-5)", async () => {
+  it("offers Provider Balance on Exa and Tinyfish, never on Brave, Parallel, or Tavily (UI7-07, NUDGE-5)", async () => {
     renderWithManualStub()
     await waitFor(() => {
       expect(screen.getByTestId("manual-quota-open-tinyfish")).toBeInTheDocument()
     })
     expect(screen.getByTestId("manual-quota-open-tinyfish")).toHaveTextContent("Provider Balance")
     expect(screen.getByTestId("manual-quota-open-exa")).toHaveTextContent("Provider Balance")
-    expect(screen.getByTestId("manual-quota-open-parallel")).toHaveTextContent("Provider Balance")
+    // Parallel stays out: its prepaid USD balance comes from the OAuth Account
+    // API (AUTHORITATIVE snapshot), never from a manual seed.
+    expect(screen.queryByTestId("manual-quota-open-parallel")).toBe(null)
     // NUDGE-5 lock: Brave reports a vendor budget, so its card keeps no entry control.
     expect(screen.getByRole("heading", { name: "Brave Search" })).toBeInTheDocument()
     expect(screen.queryByTestId("manual-quota-open-brave")).toBe(null)
@@ -196,6 +200,43 @@ describe("QuotaAnalytics manual billing entry (UI7)", () => {
     const dialog = await screen.findByRole("dialog")
     expect(dialog).toHaveTextContent("Tinyfish")
     expect(stub.requestsTo("/api/v1/providers/tinyfish/manual-quota").map((request) => request.method)).toContain("GET")
+  })
+
+  it("accepts Exa balance in USD and stores exact USD allowance and usage", async () => {
+    const user = userEvent.setup()
+    const stub = renderWithManualStub()
+    await waitFor(() => {
+      expect(screen.getByTestId("manual-quota-open-exa")).toBeInTheDocument()
+    })
+
+    await user.click(screen.getByTestId("manual-quota-open-exa"))
+    expect(screen.getByLabelText<HTMLInputElement>("Allowance (USD)").value).toBe("")
+    expect(screen.getByLabelText<HTMLInputElement>("Balance remaining (USD)").value).toBe("")
+    fireEvent.change(screen.getByTestId("manual-quota-start"), {
+      target: { value: "2026-10-01" },
+    })
+    fireEvent.change(screen.getByTestId("manual-quota-end"), {
+      target: { value: "2026-10-31" },
+    })
+    fireEvent.change(screen.getByTestId("manual-quota-allowance"), {
+      target: { value: "5.00" },
+    })
+    fireEvent.change(screen.getByTestId("manual-quota-usage"), {
+      target: { value: "4.12" },
+    })
+    await user.click(screen.getByTestId("manual-quota-save"))
+
+    await waitFor(() => {
+      expect(stub.requestsTo("/api/v1/providers/exa/manual-quota").map((request) => request.method)).toContain("PUT")
+    })
+    expect(
+      stub.requestsTo("/api/v1/providers/exa/manual-quota").find((request) => request.method === "PUT")?.body,
+    ).toEqual({
+      billing_start: "2026-10-01",
+      billing_end: "2026-10-31",
+      allowance: "5.00",
+      current_usage: "0.88",
+    })
   })
 
   it("saves a Tinyfish window through the unchanged native payload (UI7-07)", async () => {

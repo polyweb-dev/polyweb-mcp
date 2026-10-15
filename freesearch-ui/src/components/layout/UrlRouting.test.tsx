@@ -341,6 +341,14 @@ describe("C4-7: no regression — shell, providers, views", () => {
 
   it("legacy /providers URL redirects into the merged Settings registry", async () => {
     await renderAt("/providers")
+    // Redirect plus Settings registry render under full-suite parallel load:
+    // budget above the default 1000ms (assertion unchanged).
+    await waitFor(
+      () => {
+        expect(screen.getByRole("heading", { name: "Settings" })).toBeInTheDocument()
+      },
+      { timeout: 5000 },
+    )
     await expectView("Settings", "Settings", "/settings")
     await waitFor(() => {
       expect(screen.getByText("Brave Search")).toBeInTheDocument()
