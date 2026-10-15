@@ -6,10 +6,9 @@ module never imports the service layer.
 
 Policy (PLAN P3):
 
-* ``POST /auth/register``, ``POST /auth/jwt/login``, and documentation routes
-  (``GET /docs``, ``GET /redoc``, ``GET /openapi.json``) are public exceptions.
-  Every other path — including unknown paths and the MCP HTTP application's
-  metadata routes — requires a credential.
+* Registration, login, documentation, Search, and Fetch are public exceptions.
+  Search and Fetch permit a missing credential but verify any supplied Bearer
+  token. Every other path, including unknown paths, requires a credential.
 * ``POST /auth/jwt/refresh`` is validated by the refresh-credential callback when
   one is injected. Every other protected surface uses the access verifier, so the
   refresh credential is rejected everywhere except that one route.
@@ -23,9 +22,9 @@ Policy (PLAN P3):
   ``WWW-Authenticate: Bearer`` header. Only the verified principal reaches
   ``scope["state"]["user"]``. On an approved cookie route, that 401 also expires
   the refresh cookie, because the presented cookie is not trustworthy.
-* A public auth body is read from the stream and capped at 4096 bytes, so a
-  declared ``Content-Length`` cannot bypass the limit. An excess body returns
-  HTTP 413 without any credential content.
+* Public auth bodies are read from the stream and capped at 4096 bytes; Search
+  and Fetch bodies use a separate 1 MiB cap for provider options. A declared
+  ``Content-Length`` cannot bypass either limit.
 * An authenticated ``POST /api/v1/users`` body is capped at the same 4096 bytes
   before endpoint dispatch, so a provisioning request cannot stream an unbounded
   body into the endpoint.
@@ -36,6 +35,7 @@ Policy (PLAN P3):
 import json
 import logging
 from collections.abc import Awaitable, Callable
+from contextvars import ContextVar
 from typing import Any
 
 from freesearch.infrastructure.browser_auth import (
@@ -58,16 +58,28 @@ ASGIApp = Callable[[Scope, Receive, Send], Awaitable[None]]
 VerifyToken = Callable[[str], Awaitable[UserPrincipal | None]]
 RegistrationLimit = Callable[[str], Awaitable[int | None]]
 
-#: The exact public exceptions from Q1.
+#: Explicit public API operations and documentation routes.
 PUBLIC_ROUTES: frozenset[tuple[str, str]] = frozenset(
     {
         ("POST", "/auth/register"),
         ("POST", "/auth/jwt/login"),
+        ("POST", "/search"),
+        ("POST", "/fetch"),
         ("GET", "/docs"),
         ("GET", "/redoc"),
         ("GET", "/openapi.json"),
     }
 )
+
+#: Search and Fetch accept anonymous requests. When a Bearer token is present,
+#: it must be valid and its principal is made available to downstream tracing.
+OPTIONAL_AUTH_ROUTES: frozenset[tuple[str, str]] = frozenset(
+    {("POST", "/search"), ("POST", "/fetch")}
+)
+
+#: Streamable HTTP requests can carry the provider options object, which is
+#: larger than the small registration and login payloads.
+MAX_PUBLIC_OPERATION_BODY_BYTES: int = 1_048_576
 
 #: The one route whose credential is an opaque refresh token.
 REFRESH_ROUTE: tuple[str, str] = ("POST", REFRESH_COOKIE_PATH)
@@ -91,6 +103,22 @@ PROVISION_ROUTE: tuple[str, str] = ("POST", "/api/v1/users")
 MAX_PUBLIC_AUTH_BODY_BYTES: int = 4096
 
 _CHALLENGE = [(b"www-authenticate", b"Bearer")]
+_CURRENT_PRINCIPAL: ContextVar[UserPrincipal | None] = ContextVar(
+    "freesearch_verified_principal", default=None
+)
+_AUTH_REQUEST_ACTIVE: ContextVar[bool] = ContextVar("freesearch_auth_request_active", default=False)
+
+
+def current_verified_principal() -> UserPrincipal | None:
+    """Return the verified principal for the active ASGI request, if any."""
+
+    return _CURRENT_PRINCIPAL.get()
+
+
+def has_auth_request_context() -> bool:
+    """Return whether the current call is inside the auth ASGI boundary."""
+
+    return _AUTH_REQUEST_ACTIVE.get()
 
 
 async def _send_json(
@@ -229,11 +257,12 @@ async def _capped_body(receive: Receive, limit: int) -> Receive | None:
 
 
 class BearerAuthMiddleware:
-    """Require a verified account on every HTTP surface except the public set.
+    """Guard HTTP surfaces and allow anonymous calls on explicit public routes.
 
-    The default public set holds the two Q1 exceptions of the API surface. The
-    MCP composition passes an empty set, because that transport mounts no
-    account route and must answer 401 on every path.
+    The default public set includes authentication/docs routes and provider
+    Search/Fetch. Search/Fetch accept an absent credential; a supplied Bearer
+    credential must still verify. The MCP composition supplies its own public
+    Streamable HTTP routes.
 
     ``browser_origins`` is empty by default, so this guard accepts no cookie
     unless API composition supplies the operator origin allowlist. The MCP
@@ -248,6 +277,7 @@ class BearerAuthMiddleware:
         verify_refresh_token: VerifyToken | None = None,
         registration_limit: RegistrationLimit | None = None,
         public_routes: frozenset[tuple[str, str]] = PUBLIC_ROUTES,
+        optional_auth_routes: frozenset[tuple[str, str]] = OPTIONAL_AUTH_ROUTES,
         browser_origins: frozenset[str] = frozenset(),
     ) -> None:
         self.app = app
@@ -255,6 +285,7 @@ class BearerAuthMiddleware:
         self._verify_refresh_token = verify_refresh_token
         self._registration_limit = registration_limit
         self._public_routes = public_routes
+        self._optional_auth_routes = optional_auth_routes
         self._browser_origins = browser_origins
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
@@ -263,8 +294,12 @@ class BearerAuthMiddleware:
             return
         method = str(scope.get("method", "")).upper()
         path = str(scope.get("path", ""))
-        if (method, path) in self._public_routes:
-            await self._public_request(scope, receive, send, method)
+        route = (method, path)
+        if route in self._public_routes:
+            if route in self._optional_auth_routes:
+                await self._optional_bearer_request(scope, receive, send, method, path)
+            else:
+                await self._public_request(scope, receive, send, method, path)
             return
         if self._cookie_transport(method, path, scope):
             await self._cookie_request(scope, receive, send)
@@ -302,7 +337,7 @@ class BearerAuthMiddleware:
             await _reject_unauthorized(send, clear_refresh_cookie=True)
             return
         store_principal(scope, principal)
-        await self.app(scope, receive, send)
+        await self._call_app(scope, receive, send, principal)
 
     async def _bearer_request(
         self, scope: Scope, receive: Receive, send: Send, method: str, path: str
@@ -326,7 +361,7 @@ class BearerAuthMiddleware:
                 await _reject_too_large(send)
                 return
             receive = replay
-        await self.app(scope, receive, send)
+        await self._call_app(scope, receive, send, principal)
 
     async def _verified_principal(
         self, verifier: VerifyToken, token: str | None
@@ -358,22 +393,76 @@ class BearerAuthMiddleware:
         return self._verify_token
 
     async def _public_request(
-        self, scope: Scope, receive: Receive, send: Send, method: str
+        self,
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+        method: str,
+        path: str,
+        *,
+        principal: UserPrincipal | None = None,
     ) -> None:
-        """Serve one of the two public exceptions with capacity and body bounds."""
+        """Serve a public route with its route-specific body bound."""
 
-        is_registration = (method, scope.get("path")) == ("POST", "/auth/register")
+        route = (method, path)
+        is_registration = route == ("POST", "/auth/register")
         if (
             is_registration
             and self._registration_limit is not None
             and not await self._reserve_registration(scope, send)
         ):
             return
-        replay = await _capped_body(receive, MAX_PUBLIC_AUTH_BODY_BYTES)
-        if replay is None:
-            await _reject_too_large(send)
-            return
-        await self.app(scope, replay, send)
+        if route in self._optional_auth_routes:
+            body_limit = MAX_PUBLIC_OPERATION_BODY_BYTES
+        elif route in PUBLIC_ROUTES:
+            body_limit = MAX_PUBLIC_AUTH_BODY_BYTES
+        else:
+            body_limit = None
+        if body_limit is not None:
+            replay = await _capped_body(receive, body_limit)
+            if replay is None:
+                await _reject_too_large(send)
+                return
+            receive = replay
+        await self._call_app(scope, receive, send, principal)
+
+    async def _optional_bearer_request(
+        self, scope: Scope, receive: Receive, send: Send, method: str, path: str
+    ) -> None:
+        """Allow an anonymous public call and verify any supplied credential."""
+
+        authorization = [
+            value for name, value in scope.get("headers") or [] if name.lower() == b"authorization"
+        ]
+        principal: UserPrincipal | None = None
+        if authorization:
+            token = bearer_credential_from_scope(scope)
+            if token is None:
+                await _reject_unauthorized(send)
+                return
+            principal = await self._verified_principal(self._verify_token, token)
+            if principal is None:
+                await _reject_unauthorized(send)
+                return
+            store_principal(scope, principal)
+        await self._public_request(scope, receive, send, method, path, principal=principal)
+
+    async def _call_app(
+        self,
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+        principal: UserPrincipal | None,
+    ) -> None:
+        """Run the downstream app with request-local verified identity."""
+
+        principal_marker = _CURRENT_PRINCIPAL.set(principal)
+        request_marker = _AUTH_REQUEST_ACTIVE.set(True)
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            _AUTH_REQUEST_ACTIVE.reset(request_marker)
+            _CURRENT_PRINCIPAL.reset(principal_marker)
 
     async def _reserve_registration(self, scope: Scope, send: Send) -> bool:
         """Reserve registration capacity before the endpoint runs.
@@ -407,12 +496,16 @@ class BearerAuthMiddleware:
 
 __all__ = [
     "MAX_PUBLIC_AUTH_BODY_BYTES",
+    "MAX_PUBLIC_OPERATION_BODY_BYTES",
+    "OPTIONAL_AUTH_ROUTES",
     "PROVISION_ROUTE",
     "PUBLIC_ROUTES",
     "REFRESH_COOKIE_ROUTES",
     "REFRESH_ROUTE",
     "BearerAuthMiddleware",
     "bearer_credential_from_scope",
+    "current_verified_principal",
+    "has_auth_request_context",
     "peer_address_from_scope",
     "store_principal",
 ]

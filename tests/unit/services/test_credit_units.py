@@ -451,13 +451,10 @@ def test_tavily_search_depth_rule_basic_and_advanced() -> None:
         price="0.008",
         pool_id="tavily:keyed:credit",
     )
-    assert (
-        request_native_cost(record, SearchRequest(query="q", limit=2)) == Decimal("1")
-    )
-    assert (
-        request_native_cost(record, SearchRequest(query="q", limit=2, mode="advanced"))
-        == Decimal("2")
-    )
+    assert request_native_cost(record, SearchRequest(query="q", limit=2)) == Decimal("1")
+    assert request_native_cost(
+        record, SearchRequest(query="q", limit=2, mode="advanced")
+    ) == Decimal("2")
 
 
 def test_tavily_extract_depth_rule_basic_and_advanced() -> None:
@@ -474,10 +471,12 @@ def test_tavily_extract_depth_rule_basic_and_advanced() -> None:
         pool_id="tavily:keyed:credit",
     )
     basic = FetchRequest(
-        url="https://example.com/a", tavily=TavilyExtractParams(extract_depth="basic")
+        url="https://example.com/a",
+        provider_options={"tavily": TavilyExtractParams(extract_depth="basic")},
     )
     advanced = FetchRequest(
-        url="https://example.com/a", tavily=TavilyExtractParams(extract_depth="advanced")
+        url="https://example.com/a",
+        provider_options={"tavily": TavilyExtractParams(extract_depth="advanced")},
     )
     assert request_native_cost(record, basic) == Decimal("0.2")
     assert request_native_cost(record, advanced) == Decimal("0.4")

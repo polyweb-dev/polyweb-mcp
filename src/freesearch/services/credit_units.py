@@ -26,6 +26,8 @@ from freesearch.models.provider_limits import (
     ProviderLimitRecord,
 )
 from freesearch.models.tavily import (
+    TavilyExtractParams,
+    TavilySearchParams,
     tavily_extract_credits,
     tavily_extract_depth,
     tavily_search_depth,
@@ -101,11 +103,21 @@ def request_native_cost(
     if request is None:
         return cost
     if record.provider == "tavily":
+        tavily_fetch_options: TavilyExtractParams | None = (
+            request.provider_options.tavily
+            if isinstance(request, FetchRequest) and request.provider_options is not None
+            else None
+        )
+        tavily_search_options: TavilySearchParams | None = (
+            request.provider_options.tavily
+            if isinstance(request, SearchRequest) and request.provider_options is not None
+            else None
+        )
         if isinstance(request, FetchRequest):
             return tavily_extract_credits(
-                successful_urls=1, depth=tavily_extract_depth(request.tavily)
+                successful_urls=1, depth=tavily_extract_depth(tavily_fetch_options)
             )
-        depth = _tavily_search_depth(request)
+        depth = _tavily_search_depth(request, tavily_search_options)
         if depth is None:
             # A conflict between an explicit depth and a basic or advanced
             # mode stays unpriced, so the funds gate takes the safe 422
@@ -134,11 +146,14 @@ def request_native_cost(
     return cost
 
 
-def _tavily_search_depth(request: SearchRequest) -> str | None:
+def _tavily_search_depth(
+    request: SearchRequest,
+    params: TavilySearchParams | None = None,
+) -> str | None:
     """Return the resolved Tavily search depth, or ``None`` on a conflict."""
 
     try:
-        return tavily_search_depth(request.mode, request.tavily)
+        return tavily_search_depth(request.mode, params)
     except ValueError:
         return None
 
@@ -233,9 +248,7 @@ def project_shared_crd_views(
     ]
 
 
-def shared_pool_funds(
-    pool: NativePool, records: Sequence[ProviderLimitRecord]
-) -> Decimal | None:
+def shared_pool_funds(pool: NativePool, records: Sequence[ProviderLimitRecord]) -> Decimal | None:
     """Return the shared pool's funds counted once, or ``None`` when unknown.
 
     Both shared operation views project from the same native balance, so the

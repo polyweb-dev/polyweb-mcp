@@ -2098,9 +2098,7 @@ def step_tavily_concurrent_race(context: Any) -> None:
 def step_tavily_race_result(context: Any) -> None:
     from freesearch.models.provider_limits import LimitAdmission as Adm
 
-    admissions = [
-        r for r in (context.tavily_race_a, context.tavily_race_b) if isinstance(r, Adm)
-    ]
+    admissions = [r for r in (context.tavily_race_a, context.tavily_race_b) if isinstance(r, Adm)]
     denials = [
         r for r in (context.tavily_race_a, context.tavily_race_b) if isinstance(r, LimitDeniedError)
     ]
@@ -2376,14 +2374,17 @@ def step_tavily_full_params(context: Any) -> None:
                     mode="advanced",
                     domains=("caller.example",),
                     country_code="GB",
-                    tavily=search_params,
+                    provider_options={"tavily": search_params},
                 )
             ),
         )
         _run(
             context,
             adapter.fetch(
-                FetchRequest(url="https://example.com/doc", tavily=extract_params)
+                FetchRequest(
+                    url="https://example.com/doc",
+                    provider_options={"tavily": extract_params},
+                )
             ),
         )
 
@@ -2441,7 +2442,7 @@ def step_tavily_depth_conflict(context: Any) -> None:
                     SearchRequest(
                         query="conflict",
                         mode="basic",
-                        tavily=TavilySearchParams(search_depth="advanced"),
+                        provider_options={"tavily": TavilySearchParams(search_depth="advanced")},
                     )
                 ),
             )
@@ -2475,16 +2476,14 @@ def step_tavily_estimate_search(context: Any) -> None:
     )
     context.tavily_basic_extract_estimate = _run(
         context,
-        context.tavily_cost_adapter.estimate_cost(
-            FetchRequest(url="https://example.com/doc")
-        ),
+        context.tavily_cost_adapter.estimate_cost(FetchRequest(url="https://example.com/doc")),
     )
     context.tavily_advanced_extract_estimate = _run(
         context,
         context.tavily_cost_adapter.estimate_cost(
             FetchRequest(
                 url="https://example.com/doc",
-                tavily=TavilyExtractParams(extract_depth="advanced"),
+                provider_options={"tavily": TavilyExtractParams(extract_depth="advanced")},
             )
         ),
     )
@@ -2677,9 +2676,7 @@ def step_tavily_mixed_urls(context: Any) -> None:
         ),
     )
     context.tavily_expected_debit = Decimal("0.6")
-    context.tavily_cumulative = getattr(context, "tavily_cumulative", Decimal("0")) + Decimal(
-        "0.6"
-    )
+    context.tavily_cumulative = getattr(context, "tavily_cumulative", Decimal("0")) + Decimal("0.6")
 
 
 @when("one Tavily call fails definitely")
@@ -2742,9 +2739,7 @@ def step_tavily_empty_docs(context: Any) -> None:
         ),
     )
     context.tavily_expected_debit = Decimal("0")
-    context.tavily_cumulative = getattr(context, "tavily_cumulative", Decimal("0")) + Decimal(
-        "0"
-    )
+    context.tavily_cumulative = getattr(context, "tavily_cumulative", Decimal("0")) + Decimal("0")
 
 
 @given("a Tavily adapter with stub usage payloads")
@@ -2761,7 +2756,9 @@ def step_tavily_stub_usage(context: Any) -> None:
     context.tavily_caller_clients = getattr(context, "tavily_caller_clients", [])
     context.tavily_caller_clients.append(stub_caller)
     context.tavily_stub_adapter = TavilyAdapter(
-        stub_caller, sdk_client=_TavilyFakeSDK(), api_key=SecretStr("tvly-stub-1")  # type: ignore[arg-type]
+        stub_caller,
+        sdk_client=_TavilyFakeSDK(),
+        api_key=SecretStr("tvly-stub-1"),  # type: ignore[arg-type]
     )
 
 
@@ -2856,9 +2853,8 @@ def step_tavily_april(context: Any) -> None:
 
 @then("the Tavily free pool refills to 1000 Credits with a reset audit")
 def step_tavily_refill_assert(context: Any) -> None:
-    pool = (
-        getattr(context, "tavily_reset_pool", None)
-        or _run(context, _limits_repo(context).get_pool(_tavily_pool_id()))
+    pool = getattr(context, "tavily_reset_pool", None) or _run(
+        context, _limits_repo(context).get_pool(_tavily_pool_id())
     )
     assert pool is not None
     assert pool.remaining == Decimal("1000")
@@ -3009,9 +3005,7 @@ def step_tavily_gate_decision(context: Any, decision: str, status: int) -> None:
         assert status == 200
     elif decision == "deny":
         try:
-            _run(
-                context, context.service.admit(_tavily_ctx(LimitOperation.SEARCH, "tav-gate"))
-            )
+            _run(context, context.service.admit(_tavily_ctx(LimitOperation.SEARCH, "tav-gate")))
             raise AssertionError(f"state {context.tavily_funds_state} must deny")
         except LimitDeniedError as exc:
             assert exc.status_code == status
@@ -3237,9 +3231,7 @@ def step_tavily_run_while_held(context: Any) -> None:
         return await context.tavily_held_adapter.search(SearchRequest(query="held-q"))
 
     async def _extract() -> Any:
-        return await context.tavily_held_adapter.fetch(
-            FetchRequest(url="https://example.com/doc")
-        )
+        return await context.tavily_held_adapter.fetch(FetchRequest(url="https://example.com/doc"))
 
     async def _scenario() -> tuple[Any, Any, Any]:
         poll_task = asyncio.ensure_future(_held_poll())
@@ -3278,9 +3270,7 @@ def step_tavily_zero_gets(context: Any) -> None:
     _run(context, context.tavily_held_adapter.estimate_cost(SearchRequest(query="q")))
     _run(
         context,
-        context.tavily_held_adapter.estimate_cost(
-            FetchRequest(url="https://example.com/doc")
-        ),
+        context.tavily_held_adapter.estimate_cost(FetchRequest(url="https://example.com/doc")),
     )
     _run(context, context.tavily_held_adapter.quota())
     _run(context, context.service.provider_view("tavily"))
@@ -3351,9 +3341,7 @@ def step_tavily_claim_60(context: Any) -> None:
 def step_tavily_third_ok(context: Any) -> None:
     assert context.tavily_third is True
     assert context.tavily_after_third is not None
-    assert context.tavily_after_third.next_sync_at == FIXED_AT + timedelta(
-        seconds=90.001 + 60
-    )
+    assert context.tavily_after_third.next_sync_at == FIXED_AT + timedelta(seconds=90.001 + 60)
 
 
 @when("two Tavily schedulers race and one owner forces sync twice")
@@ -3444,9 +3432,7 @@ def step_tavily_poll_fail(context: Any) -> None:
             )
         ),
     )
-    context.tavily_after_fail = _run(
-        context, _limits_repo(context).get_pool(_tavily_pool_id())
-    )
+    context.tavily_after_fail = _run(context, _limits_repo(context).get_pool(_tavily_pool_id()))
     from freesearch.services.limits_sync import _cadence_delay
 
     context.tavily_retry_delay = _cadence_delay("tavily", 60, 60)
@@ -3464,9 +3450,7 @@ def step_tavily_stale(context: Any) -> None:
 @when("the Tavily runtime restarts and the key changes")
 def step_tavily_restart(context: Any) -> None:
     _run(context, context.service.credential_changed("tavily"))
-    context.tavily_after_restart = _run(
-        context, _limits_repo(context).get_pool(_tavily_pool_id())
-    )
+    context.tavily_after_restart = _run(context, _limits_repo(context).get_pool(_tavily_pool_id()))
     late = _run(
         context,
         _limits_repo(context).apply_snapshot(
@@ -3483,9 +3467,7 @@ def step_tavily_restart(context: Any) -> None:
         ),
     )
     context.tavily_late_accepted = late
-    context.tavily_after_late = _run(
-        context, _limits_repo(context).get_pool(_tavily_pool_id())
-    )
+    context.tavily_after_late = _run(context, _limits_repo(context).get_pool(_tavily_pool_id()))
 
 
 @then("the Tavily terminal state clears and stale reads reject old polls")
@@ -3629,9 +3611,7 @@ def step_tavily_rest_search(context: Any) -> None:
         )
 
 
-@then(
-    "the Tavily REST answer is HTTP 402 out of Credits with one vendor attempt and zero debit"
-)
+@then("the Tavily REST answer is HTTP 402 out of Credits with one vendor attempt and zero debit")
 def step_tavily_rest_402_assert(context: Any) -> None:
     response = context.tavily_rest_response
     assert response.status_code == 402
@@ -3684,9 +3664,7 @@ def step_tavily_mcp_search(context: Any) -> None:
     try:
         _run(
             context,
-            context.tavily_mcp_server.call_tool(
-                "search", {"request": {"query": "mcp 402 probe"}}
-            ),
+            context.tavily_mcp_server.call_tool("search", {"request": {"query": "mcp 402 probe"}}),
         )
         context.tavily_mcp_error = None
     except ToolError as exc:
@@ -3933,9 +3911,9 @@ def step_tavily_search_retry_7(context: Any) -> None:
     original = context.tavily_retry_adapter._normalize_error
 
     def _patched(exc: Exception) -> Any:
-        context.tavily_retry_adapter._response_probes[
-            context.tavily_retry_adapter._task_key()
-        ] = type("Probe", (), {"status": 429, "retry_after_seconds": 7.0})()
+        context.tavily_retry_adapter._response_probes[context.tavily_retry_adapter._task_key()] = (
+            type("Probe", (), {"status": 429, "retry_after_seconds": 7.0})()
+        )
         return original(exc)
 
     context.tavily_retry_adapter._normalize_error = _patched  # type: ignore[assignment]
@@ -3976,9 +3954,9 @@ def step_tavily_extract_retry_3(context: Any) -> None:
     pristine = context.tavily_retry_pristine
 
     def _patched(exc: Exception) -> Any:
-        context.tavily_retry_adapter._response_probes[
-            context.tavily_retry_adapter._task_key()
-        ] = type("Probe", (), {"status": 429, "retry_after_seconds": 3.0})()
+        context.tavily_retry_adapter._response_probes[context.tavily_retry_adapter._task_key()] = (
+            type("Probe", (), {"status": 429, "retry_after_seconds": 3.0})()
+        )
         return pristine(exc)
 
     context.tavily_retry_adapter._normalize_error = _patched  # type: ignore[assignment]

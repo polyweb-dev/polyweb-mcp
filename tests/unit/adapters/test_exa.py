@@ -31,8 +31,8 @@ from decimal import Decimal
 
 import httpx
 import pytest
-from exa_py.api import CostDollars, Result, SearchResponse
-from pydantic import SecretStr
+from exa_py.api import ContentStatus, CostDollars, Result, SearchResponse
+from pydantic import SecretStr, ValidationError
 
 import freesearch.adapters.exa as exa_module
 from freesearch.adapters.base import ProviderAdapter
@@ -415,6 +415,178 @@ async def test_search_omits_domains_kwarg_when_unset() -> None:
     assert call == {"query": "bare", "num_results": 10, "contents": {"highlights": True}}
 
 
+async def test_search_forwards_exa_search_and_contents_options() -> None:
+    sdk = _FakeSDK()
+    sdk.search_response = _response([_result()])
+    adapter = make_adapter(sdk=sdk)
+
+    await adapter.search(
+        SearchRequest(
+            query="typed options",
+            limit=6,
+            country_code="gb",
+            domains=("common.example",),
+            provider_options={
+                "exa": {
+                    "type": "fast",
+                    "category": "news",
+                    "include_domains": ["nested.example"],
+                    "exclude_domains": ["blocked.example"],
+                    "start_published_date": "2025-01-01",
+                    "end_published_date": "2025-12-31",
+                    "moderation": False,
+                    "additional_queries": ["second query"],
+                    "user_location": {
+                        "country": "us",
+                        "latitude": 37.7,
+                        "longitude": -122.4,
+                    },
+                    "compliance": "hipaa",
+                    "output_schema": {
+                        "type": "object",
+                        "properties": {"answer": {"type": "string"}},
+                    },
+                    "objective": "Find primary-source articles",
+                    "system_prompt": "Prefer official documentation.",
+                    "user_identifier": "agent_1",
+                    "contents": {
+                        "text": {"max_characters": 2000},
+                        "highlights": {
+                            "query": "typed options",
+                            "highlights_per_url": 3,
+                            "num_sentences": 2,
+                            "highlights_text_length": 500,
+                        },
+                        "summary": {"query": "answer", "max_characters": 250},
+                        "extras": {"links": 5, "image_links": 2, "code_blocks": 1},
+                        "livecrawl_timeout": 5000,
+                        "max_age_hours": -1,
+                        "snapshot_as_of": "2025-05-01T00:00:00Z",
+                        "subpages": 2,
+                        "subpage_target": ["installation", "api"],
+                        "compliance": "hipaa",
+                        "user_identifier": "agent_1",
+                    },
+                }
+            },
+        )
+    )
+
+    assert sdk.search_calls == [
+        {
+            "query": "typed options",
+            "num_results": 6,
+            "type": "fast",
+            "category": "news",
+            "include_domains": ["nested.example"],
+            "exclude_domains": ["blocked.example"],
+            "start_published_date": "2025-01-01",
+            "end_published_date": "2025-12-31",
+            "moderation": False,
+            "additional_queries": ["second query"],
+            "user_location": {
+                "country": "us",
+                "latitude": 37.7,
+                "longitude": -122.4,
+            },
+            "compliance": "hipaa",
+            "output_schema": {"type": "object", "properties": {"answer": {"type": "string"}}},
+            "objective": "Find primary-source articles",
+            "system_prompt": "Prefer official documentation.",
+            "user_identifier": "agent_1",
+            "contents": {
+                "highlights": {
+                    "query": "typed options",
+                    "highlights_per_url": 3,
+                    "num_sentences": 2,
+                    "highlights_text_length": 500,
+                },
+                "text": {"max_characters": 2000},
+                "summary": {"query": "answer", "max_characters": 250},
+                "extras": {"links": 5, "image_links": 2, "code_blocks": 1},
+                "livecrawl_timeout": 5000,
+                "max_age_hours": -1,
+                "snapshot_as_of": "2025-05-01T00:00:00Z",
+                "subpages": 2,
+                "subpage_target": ["installation", "api"],
+                "compliance": "hipaa",
+                "user_identifier": "agent_1",
+            },
+        }
+    ]
+
+
+async def test_search_explicit_empty_include_domains_overrides_common_domains() -> None:
+    sdk = _FakeSDK()
+    sdk.search_response = _response([_result()])
+    adapter = make_adapter(sdk=sdk)
+
+    await adapter.search(
+        SearchRequest(
+            query="no domain filter",
+            domains=("common.example",),
+            provider_options={"exa": {"include_domains": []}},
+        )
+    )
+
+    assert sdk.search_calls[0]["include_domains"] == []
+
+
+async def test_search_maps_common_country_when_user_location_is_not_overridden() -> None:
+    sdk = _FakeSDK()
+    sdk.search_response = _response([_result()])
+    adapter = make_adapter(sdk=sdk)
+
+    await adapter.search(SearchRequest(query="country", country_code="gb"))
+
+    assert sdk.search_calls[0]["user_location"] == {"country": "GB"}
+
+
+async def test_search_preserves_exa_content_and_response_metadata() -> None:
+    sdk = _FakeSDK()
+    sdk.search_response = SearchResponse(
+        results=[
+            _result(
+                id="exa-result-1",
+                author="Ada",
+                image="https://example.com/image.png",
+                favicon="https://example.com/favicon.ico",
+                crawl_date="2025-03-04T00:00:00Z",
+                text="Full extracted text.",
+                summary="Short summary.",
+                highlights=["Useful passage."],
+                highlight_scores=[0.9],
+                extras={"links": ["https://example.com/related"]},
+            )
+        ],
+        resolved_search_type="neural",
+        auto_date="2025-01-01",
+        search_time=12.5,
+    )
+    adapter = make_adapter(sdk=sdk)
+
+    response = await adapter.search(SearchRequest(query="metadata"))
+
+    assert response.provider_metadata == {
+        "resolved_search_type": "neural",
+        "auto_date": "2025-01-01",
+        "search_time": 12.5,
+    }
+    assert response.results[0].snippet == "Useful passage."
+    assert response.results[0].metadata == {
+        "id": "exa-result-1",
+        "favicon": "https://example.com/favicon.ico",
+        "author": "Ada",
+        "image": "https://example.com/image.png",
+        "crawl_date": "2025-03-04T00:00:00Z",
+        "extras": {"links": ["https://example.com/related"]},
+        "text": "Full extracted text.",
+        "summary": "Short summary.",
+        "highlights": ["Useful passage."],
+        "highlight_scores": [0.9],
+    }
+
+
 async def test_search_normalizes_results_and_metadata() -> None:
     sdk = _FakeSDK()
     sdk.search_response = _response(
@@ -448,14 +620,19 @@ async def test_search_normalizes_results_and_metadata() -> None:
     assert first.score == 0.9
     assert first.published_at is not None
     assert first.published_at.year == 2025
-    assert first.metadata == {"id": "abc-1", "favicon": "https://example.com/favicon.ico"}
+    assert first.metadata == {
+        "id": "abc-1",
+        "favicon": "https://example.com/favicon.ico",
+        "published_date": "2025-01-02T03:04:05Z",
+        "highlights": ["A snippet."],
+    }
 
     second = response.results[1]
     assert second.title == ""
     assert second.snippet == ""
     assert second.score is None
     assert second.published_at is None
-    assert second.metadata == {"id": "abc-2"}
+    assert second.metadata == {"id": "abc-2", "published_date": "nope"}
     assert response.total_results == 2
 
 
@@ -624,6 +801,131 @@ async def test_fetch_calls_get_contents_with_url_list_and_text_flag() -> None:
     assert sdk.contents_calls == [{"urls": ["https://example.com/doc"], "text": True}]
 
 
+async def test_fetch_forwards_exa_contents_options_and_preserves_content_metadata() -> None:
+    sdk = _FakeSDK()
+    sdk.contents_response = _response(
+        [
+            _result(
+                id="content-1",
+                title="Fetched title",
+                author="Grace",
+                text="Fetched body.",
+                summary="A useful summary.",
+                highlights=["An important highlight."],
+                highlight_scores=[0.8],
+                extras={"links": ["https://example.com/related"]},
+            )
+        ]
+    )
+    sdk.contents_response.statuses = [
+        ContentStatus(id="content-1", status="success", source="cache")
+    ]
+    sdk.contents_response.search_time = 9.5
+    adapter = make_adapter(sdk=sdk)
+
+    response = await adapter.fetch(
+        FetchRequest(
+            url="https://example.com/doc",
+            provider_options={
+                "exa": {
+                    "text": {"max_characters": 1500},
+                    "highlights": {
+                        "query": "fetch metadata",
+                        "highlights_per_url": 2,
+                        "num_sentences": 3,
+                        "highlights_text_length": 250,
+                    },
+                    "summary": {"query": "extract key findings", "max_characters": 300},
+                    "extras": {"links": 4, "rich_links": 2},
+                    "livecrawl_timeout": 4000,
+                    "max_age_hours": 24,
+                    "snapshot_as_of": "2025-04-01T00:00:00Z",
+                    "subpages": 1,
+                    "subpage_target": "installation",
+                    "compliance": "hipaa",
+                    "user_identifier": "fetch_agent",
+                }
+            },
+        )
+    )
+
+    assert sdk.contents_calls == [
+        {
+            "urls": ["https://example.com/doc"],
+            "text": {"max_characters": 1500},
+            "highlights": {
+                "query": "fetch metadata",
+                "highlights_per_url": 2,
+                "num_sentences": 3,
+                "highlights_text_length": 250,
+            },
+            "summary": {"query": "extract key findings", "max_characters": 300},
+            "extras": {"links": 4, "rich_links": 2},
+            "livecrawl_timeout": 4000,
+            "max_age_hours": 24,
+            "snapshot_as_of": "2025-04-01T00:00:00Z",
+            "subpages": 1,
+            "subpage_target": "installation",
+            "compliance": "hipaa",
+            "user_identifier": "fetch_agent",
+        }
+    ]
+    assert response.document.content == "Fetched body."
+    assert response.document.title == "Fetched title"
+    assert response.document.metadata == {
+        "id": "content-1",
+        "author": "Grace",
+        "extras": {"links": ["https://example.com/related"]},
+        "summary": "A useful summary.",
+        "highlights": ["An important highlight."],
+        "highlight_scores": [0.8],
+    }
+    assert response.provider_metadata == {
+        "search_time": 9.5,
+        "statuses": [{"id": "content-1", "status": "success", "source": "cache"}],
+    }
+
+
+async def test_fetch_uses_requested_summary_when_text_extraction_is_disabled() -> None:
+    sdk = _FakeSDK()
+    sdk.contents_response = _response(
+        [_result(text=None, summary="Summary body.", highlights=["A highlight."])]
+    )
+    adapter = make_adapter(sdk=sdk)
+
+    response = await adapter.fetch(
+        FetchRequest(
+            url="https://example.com/doc",
+            provider_options={"exa": {"text": False, "summary": True}},
+        )
+    )
+
+    assert sdk.contents_calls == [
+        {"urls": ["https://example.com/doc"], "text": False, "summary": True}
+    ]
+    assert response.document.content == "Summary body."
+    assert response.document.metadata == {
+        "id": "r-1",
+        "summary": "Summary body.",
+        "highlights": ["A highlight."],
+    }
+
+
+def test_exa_provider_options_validate_modes_and_location_coordinates() -> None:
+    with pytest.raises(ValidationError):
+        SearchRequest(query="bad type", provider_options={"exa": {"type": "wrong"}})
+    with pytest.raises(ValidationError):
+        SearchRequest(
+            query="one coordinate",
+            provider_options={"exa": {"user_location": {"latitude": 10}}},
+        )
+    with pytest.raises(ValidationError):
+        FetchRequest(
+            url="https://example.com/doc",
+            provider_options={"exa": {"max_age_hours": 721}},
+        )
+
+
 async def test_fetch_matches_normalized_url_and_extracts_text() -> None:
     sdk = _FakeSDK()
     sdk.contents_response = _response(
@@ -635,7 +937,7 @@ async def test_fetch_matches_normalized_url_and_extracts_text() -> None:
 
     assert response.document.content == "body"
     assert str(response.document.url) == "https://example.com/doc"
-    assert response.document.metadata == {}
+    assert response.document.metadata == {"id": "c-1"}
 
 
 async def test_fetch_matches_scheme_and_host_case_insensitively_and_retains_path_case() -> None:
@@ -703,7 +1005,7 @@ async def test_fetch_truncates_content_over_max_chars() -> None:
     response = await adapter.fetch(FetchRequest(url="https://example.com/doc", max_chars=100))
 
     assert response.document.content == "x" * 100
-    assert response.document.metadata == {"truncated": True}
+    assert response.document.metadata == {"id": "c-1", "truncated": True}
 
 
 async def test_fetch_exact_max_chars_boundary_is_not_truncated() -> None:
@@ -716,7 +1018,7 @@ async def test_fetch_exact_max_chars_boundary_is_not_truncated() -> None:
     response = await adapter.fetch(FetchRequest(url="https://example.com/doc", max_chars=100))
 
     assert response.document.content == "x" * 100
-    assert response.document.metadata == {}
+    assert response.document.metadata == {"id": "c-1"}
 
 
 async def test_fetch_without_max_chars_returns_full_content() -> None:
@@ -729,7 +1031,7 @@ async def test_fetch_without_max_chars_returns_full_content() -> None:
     response = await adapter.fetch(FetchRequest(url="https://example.com/doc"))
 
     assert response.document.content == "full body"
-    assert response.document.metadata == {}
+    assert response.document.metadata == {"id": "c-1"}
 
 
 @pytest.mark.parametrize("text", [None, 123])
@@ -754,7 +1056,7 @@ async def test_fetch_empty_string_text_is_accepted() -> None:
     response = await adapter.fetch(FetchRequest(url="https://example.com/doc"))
 
     assert response.document.content == ""
-    assert response.document.metadata == {}
+    assert response.document.metadata == {"id": "c-1"}
 
 
 async def test_fetch_reports_only_real_usage() -> None:
@@ -1013,7 +1315,7 @@ async def test_quota_defaults_to_estimated_unknown_when_unbudgeted() -> None:
 )
 async def test_normalize_error_402_vendor_codes(vendor_code: str) -> None:
     adapter = make_adapter()
-    exc = ValueError(f"Request failed with status code 402: {{\"error\": \"{vendor_code}\"}}")
+    exc = ValueError(f'Request failed with status code 402: {{"error": "{vendor_code}"}}')
     normalized = adapter._normalize_error(exc)
     assert normalized.error.code == "quota_exhausted"
     assert normalized.error.status_code == 402
@@ -1150,4 +1452,3 @@ def test_exa_catalog_limits_and_tiers() -> None:
     assert paid_tier.pool_id == "exa:keyed:paid"
     assert paid_tier.reset_rule is ResetRule.NEVER
     assert paid_tier.funding_mode is FundingMode.PREPAID
-

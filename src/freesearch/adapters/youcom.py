@@ -146,7 +146,8 @@ class YoucomAdapter(ProviderAdapter):
             response = await self._runner.run(
                 self.name, lambda: _search_request(self._owned_http, request)
             )
-            items = self._search_items(self._payload(response, "search"))
+            payload = self._payload(response, "search")
+            items = self._search_items(payload)
             results: list[SearchResult] = []
             parse_errors: list[dict[str, object]] = []
             for index, item in enumerate(items):
@@ -171,12 +172,14 @@ class YoucomAdapter(ProviderAdapter):
         }
         if parse_errors:
             gap["parse_errors"] = parse_errors
+        provider_metadata = payload.get("metadata") if isinstance(payload, dict) else None
         return SearchResponse(
             query=request.query,
             provider=self.name,
             results=results,
             total_results=len(results),
             usage_gap=gap,
+            provider_metadata=provider_metadata if isinstance(provider_metadata, dict) else None,
         )
 
     def _search_items(self, payload: Any) -> list[Any]:
@@ -200,13 +203,17 @@ class YoucomAdapter(ProviderAdapter):
         url = item.get("url")
         if not isinstance(url, str) or not url:
             raise self._error("invalid_response", "malformed search result item")
+        metadata = _safe_metadata(item)
+        contents = item.get("contents")
+        if isinstance(contents, dict):
+            metadata["contents"] = contents
         return SearchResult(
             title=item.get("title") or "",
             url=cast(Any, url),
             snippet=self._snippet(item),
             published_at=self._published_at(item),
             score=None,
-            metadata=_safe_metadata(item),
+            metadata=metadata,
         )
 
     @staticmethod
@@ -254,8 +261,13 @@ class YoucomAdapter(ProviderAdapter):
 
     def _document(self, match: dict[str, Any], request: FetchRequest) -> FetchedDocument:
         content = match.get("markdown")
-        if not isinstance(content, str):
-            raise self._error("invalid_response", "malformed fetch response")
+        if isinstance(content, str):
+            content_type = "text/markdown"
+        else:
+            content = match.get("html")
+            if not isinstance(content, str):
+                raise self._error("invalid_response", "malformed fetch response")
+            content_type = "text/html"
         truncated = request.max_chars is not None and len(content) > request.max_chars
         if truncated:
             content = content[: request.max_chars]
@@ -264,7 +276,7 @@ class YoucomAdapter(ProviderAdapter):
             url=request.url,
             content=content,
             title=title if isinstance(title, str) else None,
-            content_type="text/markdown",
+            content_type=content_type,
             fetched_at=datetime.now(UTC),
             metadata=_page_metadata(match, truncated),
         )

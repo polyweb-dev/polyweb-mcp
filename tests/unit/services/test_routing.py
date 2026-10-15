@@ -138,6 +138,17 @@ def test_fetch_route_excludes_adapters_without_fetch_capability() -> None:
     assert names(candidates) == ["fetch-only"]
 
 
+def test_provider_options_do_not_select_or_reorder_providers() -> None:
+    request = SearchRequest(
+        query="routing",
+        provider_options={"exa": {"type": "deep"}},
+    )
+
+    candidates = route(request, [adapter("brave"), adapter("exa")])
+
+    assert names(candidates) == ["brave", "exa"]
+
+
 # --- Health and quota exclusion --------------------------------------------
 
 

@@ -315,11 +315,23 @@ async def test_search_normalizes_results_with_joined_excerpts_and_publish_date()
         1,
         15,
     )
+    assert first.metadata == {
+        "excerpts": [
+            "First relevant markdown excerpt.",
+            "Second relevant markdown excerpt.",
+        ]
+    }
+    assert response.provider_metadata == {
+        "search_id": "search_fcb2b4f3c75e418687bccaa1a8381331",
+        "warnings": None,
+        "session_id": "session_fcb2b4f3c75e418687bccaa1a8381331",
+    }
 
     second = response.results[1]
     assert second.title == ""
     assert second.snippet == "Single excerpt without a title."
     assert second.published_at is None
+    assert second.metadata == {"excerpts": ["Single excerpt without a title."]}
 
 
 @pytest.mark.parametrize(
@@ -683,8 +695,18 @@ async def test_fetch_normalizes_full_content_and_usage() -> None:
 
     assert response.provider == "parallel"
     assert str(response.document.url) == "https://www.example.com/guide"
+    assert response.document.title == "Example Guide"
     assert response.document.content == "Full page content formatted as markdown."
-    assert response.document.metadata == {}
+    assert response.document.metadata == {
+        "publish_date": "2024-01-15",
+        "excerpts": ["Relevant excerpt text ..."],
+    }
+    assert response.provider_metadata == {
+        "extract_id": "extract_8a911eb27c7a4afaa20d0d9dc98d07c0",
+        "errors": [],
+        "warnings": None,
+        "session_id": "session_8a911eb27c7a4afaa20d0d9dc98d07c0",
+    }
     assert response.usage is not None
     assert response.usage.operation is UsageOperation.FETCH
     assert response.usage.units == Decimal("1")
@@ -1173,6 +1195,153 @@ async def test_search_default_limit_maps_to_max_results_ten() -> None:
 
     body = json.loads(wire.requests[0].content)
     assert body["advanced_settings"] == {"max_results": 10}
+
+
+async def test_nested_search_options_override_common_defaults_and_price_by_mode() -> None:
+    wire = _Wire()
+    caller = make_client(wire)
+    runner = _RecordingRunner()
+    try:
+        adapter = make_adapter(caller, runner=runner)
+        response = await adapter.search(
+            SearchRequest(
+                query="common query",
+                limit=12,
+                mode="advanced",
+                extra_bundles=0,
+                domains=("common.example",),
+                country_code="US",
+                provider_options={
+                    "parallel": {
+                        "objective": "nested objective",
+                        "search_queries": ["first query", "second query"],
+                        "mode": "turbo",
+                        "max_chars_total": 8000,
+                        "session_id": "session-1",
+                        "client_model": "model-1",
+                        "advanced_settings": {
+                            "source_policy": {
+                                "include_domains": ["nested.example"],
+                                "exclude_domains": ["excluded.example"],
+                                "after_date": "2025-03-01",
+                            },
+                            "fetch_policy": {
+                                "max_age_seconds": 3600,
+                                "timeout_seconds": 30,
+                                "disable_cache_fallback": True,
+                            },
+                            "excerpt_settings": {"max_chars_per_result": 1200},
+                            "location": "ca",
+                            "max_results": 5,
+                        },
+                    }
+                },
+            )
+        )
+        estimate = await adapter.estimate_cost(
+            SearchRequest(
+                query="common query",
+                mode="advanced",
+                provider_options={"parallel": {"mode": "turbo"}},
+            )
+        )
+    finally:
+        await caller.aclose()
+
+    body = json.loads(wire.requests[0].content)
+    assert body == {
+        "objective": "nested objective",
+        "search_queries": ["first query", "second query"],
+        "mode": "turbo",
+        "max_chars_total": 8000,
+        "session_id": "session-1",
+        "client_model": "model-1",
+        "advanced_settings": {
+            "max_results": 5,
+            "source_policy": {
+                "include_domains": ["nested.example"],
+                "exclude_domains": ["excluded.example"],
+                "after_date": "2025-03-01",
+            },
+            "fetch_policy": {
+                "max_age_seconds": 3600,
+                "timeout_seconds": 30,
+                "disable_cache_fallback": True,
+            },
+            "excerpt_settings": {"max_chars_per_result": 1200},
+            "location": "ca",
+        },
+    }
+    assert "extra_bundles" not in body
+    assert len(response.results) == 2
+    assert estimate.units == Decimal("0.001")
+    assert runner.entries == ["parallel"]
+
+
+async def test_fetch_forwards_nested_parallel_extract_options() -> None:
+    wire = _Wire()
+    caller = make_client(wire)
+    try:
+        adapter = make_adapter(caller)
+        await adapter.fetch(
+            FetchRequest(
+                url="https://www.example.com/guide",
+                provider_options={
+                    "parallel": {
+                        "objective": "extract objective",
+                        "search_queries": ["extract query"],
+                        "max_chars_total": 5000,
+                        "session_id": "extract-session",
+                        "client_model": "extract-model",
+                        "advanced_settings": {
+                            "fetch_policy": {
+                                "max_age_seconds": 3600,
+                                "timeout_seconds": 30,
+                                "disable_cache_fallback": True,
+                            },
+                            "excerpt_settings": {"max_chars_per_result": 700},
+                            "full_content": {"max_chars_per_result": 6000},
+                        },
+                    }
+                },
+            )
+        )
+    finally:
+        await caller.aclose()
+
+    body = json.loads(wire.requests[0].content)
+    assert body == {
+        "urls": ["https://www.example.com/guide"],
+        "objective": "extract objective",
+        "search_queries": ["extract query"],
+        "max_chars_total": 5000,
+        "session_id": "extract-session",
+        "client_model": "extract-model",
+        "advanced_settings": {
+            "full_content": {"max_chars_per_result": 6000},
+            "fetch_policy": {
+                "max_age_seconds": 3600,
+                "timeout_seconds": 30,
+                "disable_cache_fallback": True,
+            },
+            "excerpt_settings": {"max_chars_per_result": 700},
+        },
+    }
+
+
+async def test_search_rejects_unsupported_extra_bundles_before_runner_or_wire() -> None:
+    caller = make_client(_UnreachableWire())
+    runner = _RecordingRunner()
+    try:
+        adapter = make_adapter(caller, runner=runner)
+        with pytest.raises(ProviderOperationError) as excinfo:
+            await adapter.search(SearchRequest(query="legacy expansion", extra_bundles=1))
+    finally:
+        await caller.aclose()
+
+    assert excinfo.value.error.code == "bad_request"
+    assert "extra_bundles" in excinfo.value.error.message
+    assert runner.entries == []
 
 
 async def test_aclose_closes_only_adapter_owned_client() -> None:

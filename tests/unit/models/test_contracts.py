@@ -28,6 +28,46 @@ def test_search_request_defaults_are_stable() -> None:
     assert request.routing.allow_fallback is True
 
 
+def test_provider_options_are_optional_ordered_after_routing_and_use_public_alias() -> None:
+    search_properties = list(SearchRequest.model_json_schema(by_alias=True)["properties"])
+    fetch_properties = list(FetchRequest.model_json_schema(by_alias=True)["properties"])
+
+    assert search_properties.index("providerOptions") == search_properties.index("routing") + 1
+    assert fetch_properties.index("providerOptions") == fetch_properties.index("routing") + 1
+    assert "tavily" not in search_properties
+    assert "tavily" not in fetch_properties
+    assert SearchRequest.model_fields["provider_options"].alias == "providerOptions"
+    assert FetchRequest.model_fields["provider_options"].alias == "providerOptions"
+
+
+def test_provider_options_validate_per_operation_without_changing_routing() -> None:
+    search = SearchRequest.model_validate(
+        {"query": "q", "providerOptions": {"tavily": {"search_depth": "fast"}}}
+    )
+    assert search.provider_options is not None
+    assert search.provider_options.tavily is not None
+    assert search.provider_options.tavily.search_depth == "fast"
+    assert search.routing.mode is RoutingMode.AUTO
+    assert search.routing.providers == ()
+
+    fetch = FetchRequest.model_validate(
+        {
+            "url": "https://example.com/page",
+            "providerOptions": {"tavily": {"extract_depth": "advanced"}},
+        }
+    )
+    assert fetch.provider_options is not None
+    assert fetch.provider_options.tavily is not None
+    assert fetch.provider_options.tavily.extract_depth == "advanced"
+
+    with pytest.raises(ValidationError):
+        SearchRequest.model_validate({"query": "q", "tavily": {"topic": "news"}})
+    with pytest.raises(ValidationError):
+        FetchRequest.model_validate(
+            {"url": "https://example.com/page", "providerOptions": {"tavily": {"topic": "news"}}}
+        )
+
+
 def test_contract_models_reject_unknown_fields() -> None:
     with pytest.raises(ValidationError):
         SearchRequest(query="query", provider="unexpected")  # type: ignore[call-arg]

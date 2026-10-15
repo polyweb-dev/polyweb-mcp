@@ -131,13 +131,16 @@ Feature: Local user accounts, migration, and settings
 
     Examples:
       | method | path              |
-      | POST   | /search           |
-      | POST   | /fetch            |
       | GET    | /stats            |
       | GET    | /dashboard        |
       | GET    | /api/v1/providers |
       | GET    | /api/v1/traces    |
       | GET    | /no-such-route    |
+
+  Scenario: Anonymous Search and Fetch calls are accepted
+    Given an offline users API with account auth and stub adapters
+    When I call Search and Fetch without a token
+    Then both provider operations should succeed
 
   Scenario: Credentials work only on their own routes
     Given an offline users API with account auth and stub adapters

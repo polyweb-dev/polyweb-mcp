@@ -56,6 +56,7 @@ from freesearch.adapters.base import ProviderAdapter
 from freesearch.adapters.tavily import TavilyAdapter
 from freesearch.infrastructure.resilience import ProviderOperationError, ResilientRunner
 from freesearch.models.contracts import FetchRequest, QuotaSource, SearchRequest, UsageOperation
+from freesearch.models.provider_options import FetchProviderOptions, SearchProviderOptions
 
 
 class _FakeClient:
@@ -958,6 +959,19 @@ async def test_estimate_cost_fetch_is_zero_point_two_credits() -> None:
     assert estimate.currency == "Credits"
 
 
+async def test_estimate_cost_uses_nested_tavily_depth_over_common_mode() -> None:
+    adapter = make_adapter()
+    request = SearchRequest(
+        query="cost",
+        mode="basic",
+        provider_options=SearchProviderOptions(tavily={"search_depth": "advanced"}),
+    )
+
+    estimate = await adapter.estimate_cost(request)
+
+    assert estimate.units == Decimal("2")
+
+
 async def test_estimate_cost_is_network_free() -> None:
     sdk = _FakeSDK()
     runner = _RecordingRunner()
@@ -1653,9 +1667,7 @@ async def test_quota_mock_429_retry_after_reaches_runner_raw_path() -> None:
 
     # The 60-second cadence coalesces the immediate retry: cached None, no GET.
     cached = await adapter.usage_snapshot(
-        UsageSyncRequest(
-            provider="tavily", auth_mode=AuthMode.KEYED, observed_at=datetime.now(UTC)
-        )
+        UsageSyncRequest(provider="tavily", auth_mode=AuthMode.KEYED, observed_at=datetime.now(UTC))
     )
     assert cached is None
     assert owned.gets == ["https://api.tavily.com/usage"]
@@ -1810,19 +1822,39 @@ async def test_identical_param_transfer_on_both_rails() -> None:
     keyless_sdk.search_response = _search_payload()
     keyed_sdk.extract_response = _extract_payload()
     keyless_sdk.extract_response = _extract_payload()
-    keyed = TavilyAdapter(
-        _FakeClient(), sdk_client=keyed_sdk, api_key=SecretStr("tvly-param-1")
-    )
+    keyed = TavilyAdapter(_FakeClient(), sdk_client=keyed_sdk, api_key=SecretStr("tvly-param-1"))
     keyless = TavilyAdapter(_FakeClient(), sdk_client=keyless_sdk, api_key=None)
     params = TavilySearchParams(
         search_depth="advanced", topic="news", time_range="week", include_images=True
     )
     extract = TavilyExtractParams(extract_depth="advanced", format="text", query="q")
 
-    await keyed.search(SearchRequest(query="p", limit=5, tavily=params))
-    await keyless.search(SearchRequest(query="p", limit=5, tavily=params))
-    await keyed.fetch(FetchRequest(url="https://example.com/doc", tavily=extract))
-    await keyless.fetch(FetchRequest(url="https://example.com/doc", tavily=extract))
+    await keyed.search(
+        SearchRequest(
+            query="p",
+            limit=5,
+            provider_options=SearchProviderOptions(tavily=params),
+        )
+    )
+    await keyless.search(
+        SearchRequest(
+            query="p",
+            limit=5,
+            provider_options=SearchProviderOptions(tavily=params),
+        )
+    )
+    await keyed.fetch(
+        FetchRequest(
+            url="https://example.com/doc",
+            provider_options=FetchProviderOptions(tavily=extract),
+        )
+    )
+    await keyless.fetch(
+        FetchRequest(
+            url="https://example.com/doc",
+            provider_options=FetchProviderOptions(tavily=extract),
+        )
+    )
 
     assert keyed_sdk.search_calls == keyless_sdk.search_calls
     assert keyed_sdk.extract_calls == keyless_sdk.extract_calls
@@ -1831,23 +1863,152 @@ async def test_identical_param_transfer_on_both_rails() -> None:
     assert keyed_sdk.extract_calls[0]["extract_depth"] == "advanced"
 
 
-async def test_depth_conflict_rejected_before_vendor_io() -> None:
-    """An explicit depth conflicting with basic/advanced mode never calls out."""
+async def test_search_forwards_modeled_options_and_preserves_response_extras() -> None:
+    from freesearch.models.tavily import TavilySearchParams
+
+    sdk = _FakeSDK()
+    sdk.search_response = _search_payload(
+        answer="A provider answer",
+        images=[{"url": "https://example.com/image.png"}],
+        response_time=0.25,
+        auto_parameters={"topic": "news"},
+        results=[
+            {
+                "title": "Example",
+                "url": "https://example.com/doc",
+                "content": "A snippet.",
+                "images": ["https://example.com/result-image.png"],
+            }
+        ],
+    )
+    params = TavilySearchParams(
+        search_depth="advanced",
+        chunks_per_source=3,
+        topic="finance",
+        time_range="week",
+        start_date="2025-03-01",
+        end_date="2025-03-31",
+        days=7,
+        include_domains=("nested.example",),
+        exclude_domains=("blocked.example",),
+        include_answer="advanced",
+        include_raw_content="markdown",
+        include_images=True,
+        include_image_descriptions=True,
+        include_published_date=True,
+        filter_by_published_date=True,
+        include_domains_mode="prefer",
+        language="de",
+        filter_by_language=True,
+        safe_search=True,
+        auto_parameters=True,
+        include_favicon=True,
+        exact_match=True,
+        country="germany",
+    )
+    adapter = make_adapter(sdk=sdk)
+
+    response = await adapter.search(
+        SearchRequest(
+            query="query",
+            limit=25,
+            mode="basic",
+            language="fr",
+            country_code="US",
+            domains=("common.example",),
+            provider_options=SearchProviderOptions(tavily=params),
+        )
+    )
+
+    call = sdk.search_calls[0]
+    for key, value in params.model_dump(mode="json", exclude_none=True).items():
+        assert call[key] == value
+    assert call["query"] == "query"
+    assert call["max_results"] == 20
+    assert call["include_usage"] is True
+    assert call["timeout"] == 20.0
+    assert call["search_depth"] == "advanced"
+    assert call["include_domains"] == ["nested.example"]
+    assert call["language"] == "de"
+    assert call["country"] == "germany"
+    assert response.provider_metadata == {
+        "request_id": "req-1",
+        "answer": "A provider answer",
+        "images": [{"url": "https://example.com/image.png"}],
+        "response_time": 0.25,
+        "auto_parameters": {"topic": "news"},
+    }
+    assert response.results[0].metadata["images"] == ["https://example.com/result-image.png"]
+
+
+async def test_extract_forwards_modeled_options_but_keeps_shared_timeout() -> None:
+    from freesearch.models.tavily import TavilyExtractParams
+
+    sdk = _FakeSDK()
+    sdk.extract_response = _extract_payload(response_time=0.5, failed_results=[])
+    params = TavilyExtractParams(
+        extract_depth="advanced",
+        format="text",
+        query="extract query",
+        chunks_per_source=2,
+        include_images=True,
+        include_favicon=True,
+        timeout=1,
+    )
+    adapter = make_adapter(sdk=sdk)
+
+    request = FetchRequest(
+        url="https://example.com/doc",
+        provider_options=FetchProviderOptions(tavily=params),
+    )
+    response = await adapter.fetch(request)
+    estimate = await adapter.estimate_cost(request)
+
+    call = sdk.extract_calls[0]
+    for key, value in params.model_dump(mode="json", exclude_none=True).items():
+        if key != "timeout":
+            assert call[key] == value
+    assert call["urls"] == ["https://example.com/doc"]
+    assert call["include_usage"] is True
+    assert call["timeout"] == 20.0
+    assert call["extract_depth"] == "advanced"
+    assert response.provider_metadata == {
+        "request_id": "ext-1",
+        "response_time": 0.5,
+        "failed_results": [],
+    }
+    assert estimate.units == Decimal("0.4")
+
+
+async def test_nested_depth_overrides_common_mode_before_vendor_io() -> None:
+    """Nested search depth overrides common mode and determines the cost."""
     from freesearch.models.tavily import TavilySearchParams
 
     sdk = _FakeSDK()
     sdk.search_response = _search_payload()
     adapter = make_adapter(sdk=sdk)
 
-    with pytest.raises(ProviderOperationError) as excinfo:
-        await adapter.search(
-            SearchRequest(
-                query="conflict", mode="basic", tavily=TavilySearchParams(search_depth="advanced")
-            )
+    await adapter.search(
+        SearchRequest(
+            query="conflict",
+            mode="basic",
+            provider_options=SearchProviderOptions(
+                tavily=TavilySearchParams(search_depth="advanced")
+            ),
         )
+    )
 
-    assert excinfo.value.error.code == "bad_request"
-    assert sdk.search_calls == []
+    assert sdk.search_calls[0]["search_depth"] == "advanced"
+    estimate = await adapter.estimate_cost(
+        SearchRequest(
+            query="conflict",
+            mode="basic",
+            provider_options=SearchProviderOptions(
+                tavily=TavilySearchParams(search_depth="advanced")
+            ),
+        )
+    )
+    assert estimate.units == Decimal("2")
 
 
 async def _real_sdk_429_then_success(
@@ -2078,9 +2239,7 @@ async def test_quota_after_success_projects_local_debit() -> None:
 
     from freesearch.models.contracts import QuotaSnapshot, QuotaSource, UnitKind
 
-    adapter = TavilyAdapter(
-        _FakeClient(), sdk_client=_FakeSDK(), api_key=SecretStr("tvly-project")
-    )
+    adapter = TavilyAdapter(_FakeClient(), sdk_client=_FakeSDK(), api_key=SecretStr("tvly-project"))
     adapter._quota_cache = QuotaSnapshot(
         provider="tavily",
         source=QuotaSource.AUTHORITATIVE,
@@ -2171,9 +2330,7 @@ async def test_usage_snapshot_after_terminal_clamps_positive_to_zero() -> None:
         )
     )
     snapshot = await adapter.usage_snapshot(
-        UsageSyncRequest(
-            provider="tavily", auth_mode=AuthMode.KEYED, observed_at=datetime.now(UTC)
-        )
+        UsageSyncRequest(provider="tavily", auth_mode=AuthMode.KEYED, observed_at=datetime.now(UTC))
     )
 
     assert snapshot is not None and snapshot.remaining == Decimal("0")

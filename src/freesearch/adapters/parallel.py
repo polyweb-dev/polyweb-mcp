@@ -48,6 +48,7 @@ from freesearch.models.provider_limits import (
     UsageSyncRequest,
     native_pool_id,
 )
+from freesearch.models.provider_options import ParallelSearchOptions
 
 logger = logging.getLogger(__name__)
 
@@ -202,6 +203,11 @@ class ParallelAdapter(ProviderAdapter):
         )
 
     async def search(self, request: SearchRequest) -> SearchResponse:
+        if request.extra_bundles:
+            raise self._error(
+                "bad_request",
+                "Parallel /v1/search does not support extra_bundles",
+            )
         response = await self._runner.run(
             self.name, lambda: self._request(_SEARCH_URL, self._search_body(request))
         )
@@ -212,21 +218,48 @@ class ParallelAdapter(ProviderAdapter):
         except Exception:
             raise self._error("invalid_response", "malformed search response") from None
 
+    def _parallel_search_options(self, request: SearchRequest) -> ParallelSearchOptions | None:
+        provider_options = request.provider_options
+        return None if provider_options is None else provider_options.parallel
+
+    def _search_mode(self, request: SearchRequest) -> str | None:
+        options = self._parallel_search_options(request)
+        if options is not None and options.mode is not None:
+            return options.mode
+        return request.mode
+
+    def _search_limit(self, request: SearchRequest) -> int:
+        options = self._parallel_search_options(request)
+        advanced = None if options is None else options.advanced_settings
+        configured_limit = None if advanced is None else advanced.max_results
+        return min(request.limit if configured_limit is None else configured_limit, 20)
+
     def _search_body(self, request: SearchRequest) -> dict[str, Any]:
-        settings: dict[str, Any] = {"max_results": min(request.limit, 20)}
-        if request.mode is not None:
-            settings["mode"] = request.mode
-        if request.extra_bundles:
-            settings["extra_bundles"] = request.extra_bundles
+        settings: dict[str, Any] = {"max_results": self._search_limit(request)}
         if request.domains:
             settings["source_policy"] = {"include_domains": list(request.domains)}
         if request.country_code is not None:
             settings["location"] = request.country_code.lower()
-        return {
+        body: dict[str, Any] = {
             "objective": request.query,
             "search_queries": [request.query],
             "advanced_settings": settings,
         }
+        mode = self._search_mode(request)
+        if mode is not None:
+            body["mode"] = mode
+
+        options = self._parallel_search_options(request)
+        if options is not None:
+            overrides = options.model_dump(mode="json", exclude_none=True)
+            advanced_overrides = overrides.pop("advanced_settings", None)
+            body.update(overrides)
+            if isinstance(advanced_overrides, dict):
+                configured_limit = advanced_overrides.get("max_results")
+                if isinstance(configured_limit, int):
+                    advanced_overrides["max_results"] = min(configured_limit, 20)
+                settings.update(advanced_overrides)
+        return body
 
     async def _request(self, url: str, body: dict[str, Any]) -> httpx.Response:
         return await self._http.post(url, headers={"x-api-key": self._api_key}, json=body)
@@ -244,14 +277,14 @@ class ParallelAdapter(ProviderAdapter):
                 if exc.error.code != "invalid_response":
                     raise
                 parse_errors.append(_parse_error_record(index))
-        results = results[: request.limit]
+        results = results[: self._search_limit(request)]
         # Usage validation stays outside item recovery: malformed vendor usage
         # is still fatal for the whole response.
         usage = self._usage_event(
             payload,
             UsageOperation.SEARCH,
             request_id,
-            mode=request.mode,
+            mode=self._search_mode(request),
             extra_bundles=request.extra_bundles,
         )
         usage_gap: dict[str, Any] | None = None
@@ -269,6 +302,7 @@ class ParallelAdapter(ProviderAdapter):
             total_results=len(results),
             usage=usage,
             usage_gap=usage_gap,
+            provider_metadata=self._provider_metadata(payload),
         )
 
     def _normalize_search_result(self, item: Any) -> SearchResult:
@@ -285,10 +319,23 @@ class ParallelAdapter(ProviderAdapter):
             url=cast(Any, url),
             snippet="\n\n".join(excerpts),
             published_at=_parse_published_at(item.get("publish_date")),
+            metadata={"excerpts": excerpts},
         )
 
     async def fetch(self, request: FetchRequest) -> FetchResponse:
-        body = {"urls": [str(request.url)], "advanced_settings": {"full_content": True}}
+        advanced_settings: dict[str, Any] = {"full_content": True}
+        body: dict[str, Any] = {
+            "urls": [str(request.url)],
+            "advanced_settings": advanced_settings,
+        }
+        provider_options = request.provider_options
+        options = None if provider_options is None else provider_options.parallel
+        if options is not None:
+            overrides = options.model_dump(mode="json", exclude_none=True)
+            advanced_overrides = overrides.pop("advanced_settings", None)
+            body.update(overrides)
+            if isinstance(advanced_overrides, dict):
+                advanced_settings.update(advanced_overrides)
         response = await self._runner.run(self.name, lambda: self._request(_EXTRACT_URL, body))
         try:
             return self._fetch_response(request, self._normalize_response(response))
@@ -301,6 +348,16 @@ class ParallelAdapter(ProviderAdapter):
         request_id = self._require(payload, "extract_id", str)
         match = self._matching_result(self._require(payload, "results", list), str(request.url))
         content = match.get("full_content")
+        options = None if request.provider_options is None else request.provider_options.parallel
+        extract_settings = None if options is None else options.advanced_settings
+        if (
+            not isinstance(content, str)
+            and extract_settings is not None
+            and extract_settings.full_content is False
+        ):
+            excerpts = match.get("excerpts")
+            if isinstance(excerpts, list) and all(isinstance(item, str) for item in excerpts):
+                content = "\n\n".join(excerpts)
         if not isinstance(content, str):
             raise self._error("invalid_response", "malformed fetch response")
         truncated = request.max_chars is not None and len(content) > request.max_chars
@@ -311,8 +368,21 @@ class ParallelAdapter(ProviderAdapter):
             document=FetchedDocument(
                 url=request.url,
                 content=content,
+                title=match.get("title") if isinstance(match.get("title"), str) else None,
                 fetched_at=datetime.now(UTC),
-                metadata={"truncated": True} if truncated else {},
+                metadata={
+                    **(
+                        {"publish_date": match["publish_date"]}
+                        if isinstance(match.get("publish_date"), str)
+                        else {}
+                    ),
+                    **(
+                        {"excerpts": match["excerpts"]}
+                        if isinstance(match.get("excerpts"), list) and match["excerpts"]
+                        else {}
+                    ),
+                    **({"truncated": True} if truncated else {}),
+                },
             ),
             usage=self._usage_event(
                 payload,
@@ -320,7 +390,14 @@ class ParallelAdapter(ProviderAdapter):
                 request_id,
                 url_count=request.url_count,
             ),
+            provider_metadata=self._provider_metadata(payload),
         )
+
+    @staticmethod
+    def _provider_metadata(payload: dict[str, Any]) -> dict[str, Any] | None:
+        """Preserve documented response fields outside normalized results/usage."""
+        metadata = {key: value for key, value in payload.items() if key not in {"results", "usage"}}
+        return metadata or None
 
     def _matching_result(self, results: list[Any], target: str) -> dict[str, Any]:
         for item in results:
@@ -330,7 +407,7 @@ class ParallelAdapter(ProviderAdapter):
 
     async def estimate_cost(self, request: SearchRequest | FetchRequest) -> CostEstimate:
         if isinstance(request, SearchRequest):
-            units = search_cost_usd(request.mode, request.extra_bundles)
+            units = search_cost_usd(self._search_mode(request), request.extra_bundles)
             operation = UsageOperation.SEARCH
             notes = "mode-aware local estimate"
         else:

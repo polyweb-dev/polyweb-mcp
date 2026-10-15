@@ -51,10 +51,7 @@ from freesearch.infrastructure.trace_payloads import (
     _request_attributes,
 )
 from freesearch.mcp.auth import (
-    LocalTokenVerifier,
-    McpAuthenticationError,
-    build_auth_settings,
-    require_mcp_user,
+    optional_mcp_user,
     run_http_server,
     run_stdio_server,
 )
@@ -167,30 +164,28 @@ def _trace_database(
 
 
 def _mcp_root_attributes(
-    principal: UserPrincipal, request: SearchRequest | FetchRequest
+    principal: UserPrincipal | None, request: SearchRequest | FetchRequest
 ) -> dict[str, object]:
-    """Root attributes for one authenticated MCP tool call.
+    """Root attributes for one MCP tool call, with identity when verified.
 
-    The operation, the schema version, and the account UUID are set at root
-    creation, so the persisted root row carries its owner even when the call
-    fails before the response projection runs.
+    A project/account owner is absent for anonymous calls. The schema version
+    and operation are still present when a provider call fails.
     """
 
-    attributes: dict[str, object] = {
-        TraceAttribute.SCHEMA_VERSION: TRACE_SCHEMA_VERSION,
-        TraceAttribute.USER_ID: str(principal.id),
-    }
+    attributes: dict[str, object] = {TraceAttribute.SCHEMA_VERSION: TRACE_SCHEMA_VERSION}
+    if principal is not None:
+        attributes[TraceAttribute.USER_ID] = str(principal.id)
     attributes.update(_request_attributes(request))
     return attributes
 
 
 @asynccontextmanager
-async def _authenticated_root(
+async def _tool_root(
     observability: ObservabilityRuntime,
     name: str,
     attributes: Mapping[str, object],
 ) -> AsyncIterator[None]:
-    """Open one authenticated SERVER root around a tool body.
+    """Open one SERVER root around a tool body.
 
     The runtime is bound for the call, a failure annotates the root before it
     propagates, and one bounded flush runs after the root closes — the same
@@ -676,9 +671,9 @@ def _register_tools(
     state: _ServerState,
     owns_client: bool,
     routes: list[ProviderAdapter] | None,
-    require_account: Callable[[], Awaitable[UserPrincipal]],
+    resolve_principal: Callable[[], Awaitable[UserPrincipal | None]],
 ) -> None:
-    """Register the two authenticated, traced tool bodies on ``server``."""
+    """Register the public, traced Search and Fetch tools on ``server``."""
 
     def _active_routes() -> Sequence[ProviderAdapter] | None:
         return state["routes"] if owns_client else routes
@@ -686,14 +681,12 @@ def _register_tools(
     @server.tool()
     async def search(request: SearchRequest) -> dict[str, Any]:
         """Search the web through the best available provider or all providers concurrently."""
-        # The account check precedes route selection, fanout, quota work, and
-        # every adapter call, so a rejected caller cannot spend provider credit.
-        principal = await require_account()
+        principal = await resolve_principal()
         active = _active_routes()
         if not active:
             raise RuntimeError("no provider is configured: set a FREESEARCH_*_API_KEY")
         observability = state["observability"]
-        async with _authenticated_root(
+        async with _tool_root(
             observability,
             TraceRootSpan.MCP_SEARCH.value,
             _mcp_root_attributes(principal, request),
@@ -705,12 +698,12 @@ def _register_tools(
     @server.tool()
     async def fetch(request: FetchRequest) -> dict[str, Any]:
         """Fetch a URL's content through the best available provider."""
-        principal = await require_account()
+        principal = await resolve_principal()
         active = _active_routes()
         if not active:
             raise RuntimeError("no provider is configured: set a FREESEARCH_*_API_KEY")
         observability = state["observability"]
-        async with _authenticated_root(
+        async with _tool_root(
             observability,
             TraceRootSpan.MCP_FETCH.value,
             _mcp_root_attributes(principal, request),
@@ -729,13 +722,11 @@ def create_server(
     auth_service: AuthService | None = None,
     stdio_token: SecretStr | None = None,
 ) -> FastMCP:
-    """Create the MCP server, routing every tool call to a configured adapter.
+    """Create public Search/Fetch tools over a configured adapter set.
 
-    Account authentication is explicit. A supplied ``auth_service`` arms the SDK
-    Bearer verifier and the SDK auth settings, so the HTTP resource and the
-    metadata routes need a live access JWT. Every tool body then verifies the
-    same account and session family again. Only an explicit ``stdio_token``, or
-    the SDK request auth context, can authorize a tool call.
+    HTTP Bearer credentials are optional and verified by the outer ASGI guard.
+    A configured stdio credential remains optional account context for local
+    calls; neither credential is required to invoke these provider operations.
     """
 
     owns_client = adapters is None
@@ -812,25 +803,17 @@ def create_server(
         "freesearch",
         lifespan=lifespan,
         stateless_http=stateless_http,
-        # The SDK accepts a token verifier only together with auth settings, so
-        # both stay absent in a composition that has no account store.
-        token_verifier=LocalTokenVerifier(auth_service) if auth_service is not None else None,
-        auth=build_auth_settings(get_settings()) if auth_service is not None else None,
     )
 
-    async def _require_account() -> UserPrincipal:
-        """Return the verified account of this tool call, or reject the call."""
-
-        if auth_service is None:
-            raise McpAuthenticationError("account authentication is not configured")
-        return await require_mcp_user(auth_service, stdio_token=stdio_token)
+    async def _resolve_principal() -> UserPrincipal | None:
+        return await optional_mcp_user(auth_service, stdio_token=stdio_token)
 
     _register_tools(
         server,
         state=state,
         owns_client=owns_client,
         routes=routes,
-        require_account=_require_account,
+        resolve_principal=_resolve_principal,
     )
 
     return server

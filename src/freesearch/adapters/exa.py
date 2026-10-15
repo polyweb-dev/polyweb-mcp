@@ -11,6 +11,7 @@ only when that response telemetry is absent.
 """
 
 import re
+from dataclasses import asdict, is_dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from math import isfinite
@@ -78,6 +79,8 @@ def _detect_402_vendor_code(exc: Exception) -> str | None:
         except Exception:
             pass
     return None
+
+
 # The SDK surfaces HTTP failures as ``ValueError("Request failed with status
 # code {status}: {body}")``; only the status code is parsed out - the body is
 # never included so provider text cannot leak.
@@ -138,6 +141,63 @@ def _contents_fallback_cost(page_count: int, content_type_count: int) -> Decimal
 def _summary_count(results: list[Result]) -> int:
     """Count non-empty AI summaries; omitted summary fields cost nothing."""
     return sum(1 for item in results if bool(getattr(item, "summary", None)))
+
+
+def _metadata_value(value: Any) -> Any:
+    """Convert SDK dataclasses and containers to response-serializable values."""
+    if is_dataclass(value) and not isinstance(value, type):
+        return _metadata_value(asdict(value))
+    if isinstance(value, dict):
+        return {str(key): _metadata_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_metadata_value(item) for item in value]
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        return _metadata_value(model_dump(mode="json"))
+    return value
+
+
+def _result_metadata(item: Result, *, include_text: bool = True) -> dict[str, Any]:
+    """Keep Exa's useful identity, extraction, and page metadata with a result."""
+    metadata: dict[str, Any] = {}
+    for key in (
+        "id",
+        "author",
+        "image",
+        "favicon",
+        "published_date",
+        "crawl_date",
+        "subpages",
+        "extras",
+        "entities",
+        "summary",
+        "highlights",
+        "highlight_scores",
+    ):
+        value = getattr(item, key, None)
+        if value is not None:
+            metadata[key] = _metadata_value(value)
+    if include_text:
+        text = getattr(item, "text", None)
+        if text is not None:
+            metadata["text"] = _metadata_value(text)
+    return metadata
+
+
+def _response_metadata(
+    response: ExaSearchResponse[Result], *, include_statuses: bool = False
+) -> dict[str, Any] | None:
+    """Retain non-metering response metadata exposed by the Exa SDK."""
+    metadata: dict[str, Any] = {}
+    for key in ("resolved_search_type", "auto_date", "search_time", "output"):
+        value = getattr(response, key, None)
+        if value is not None:
+            metadata[key] = _metadata_value(value)
+    if include_statuses:
+        statuses = getattr(response, "statuses", None)
+        if statuses is not None:
+            metadata["statuses"] = _metadata_value(statuses)
+    return metadata or None
 
 
 class ExaAdapter(ProviderAdapter):
@@ -406,16 +466,32 @@ class ExaAdapter(ProviderAdapter):
             results=results,
             total_results=len(results),
             usage=usage,
+            provider_metadata=_response_metadata(response),
         )
 
     async def _search_sdk(self, request: SearchRequest) -> ExaSearchResponse[Result]:
         kwargs: dict[str, Any] = {
             "query": request.query,
             "num_results": request.limit,
-            "contents": {"highlights": True},
         }
-        if request.domains:
+        options = request.provider_options.exa if request.provider_options is not None else None
+        contents: dict[str, Any] = {"highlights": True}
+        if options is not None:
+            option_values = options.model_dump(exclude_none=True, exclude={"contents"}, mode="json")
+            # The common FreeSearch domains are defaults. An explicitly supplied
+            # provider include_domains value, including an empty tuple, wins.
+            if "include_domains" not in option_values and request.domains:
+                option_values["include_domains"] = list(request.domains)
+            if "user_location" not in option_values and request.country_code is not None:
+                option_values["user_location"] = {"country": request.country_code.upper()}
+            kwargs.update(option_values)
+            if options.contents is not None:
+                contents.update(options.contents.model_dump(exclude_none=True, mode="json"))
+        elif request.domains:
             kwargs["include_domains"] = list(request.domains)
+        if options is None and request.country_code is not None:
+            kwargs["user_location"] = {"country": request.country_code.upper()}
+        kwargs["contents"] = contents
         try:
             return await self._sdk.search(**kwargs)
         except httpx.TransportError:
@@ -429,14 +505,28 @@ class ExaAdapter(ProviderAdapter):
         if not isinstance(score, (int, float)) or not 0 <= score <= 1:
             score = None
         metadata: dict[str, Any] = {}
-        for key in ("id", "favicon"):
+        for key in (
+            "id",
+            "favicon",
+            "author",
+            "image",
+            "published_date",
+            "crawl_date",
+            "subpages",
+            "extras",
+            "entities",
+            "text",
+            "summary",
+            "highlights",
+            "highlight_scores",
+        ):
             value = getattr(item, key, None)
             if value is not None:
-                metadata[key] = value
+                metadata[key] = _metadata_value(value)
         return SearchResult(
             title=item.title or "",
             url=cast(AnyHttpUrl, item.url),
-            snippet=highlights[0] if highlights else (item.text or ""),
+            snippet=highlights[0] if highlights else (item.text or item.summary or ""),
             published_at=_parse_published_at(item.published_date),
             score=score,
             metadata=metadata,
@@ -452,22 +542,39 @@ class ExaAdapter(ProviderAdapter):
             )
             if match is None:
                 raise self._error("fetch_failed", "no successful contents result") from None
-            # An explicit empty string is a valid (empty) document; a missing
-            # or non-string text means the payload is malformed.
+            # An explicit empty string is a valid (empty) document. When the
+            # caller selected summary/highlights instead of text, use that
+            # returned content as the document body and retain the other
+            # content fields as metadata.
             content = match.text
+            if not isinstance(content, str) and isinstance(match.summary, str):
+                content = match.summary
+            if (
+                not isinstance(content, str)
+                and isinstance(match.highlights, list)
+                and all(isinstance(highlight, str) for highlight in match.highlights)
+            ):
+                content = "\n\n".join(match.highlights)
+            options = request.provider_options.exa if request.provider_options is not None else None
+            if not isinstance(content, str) and options is not None and options.text is False:
+                content = ""
             if not isinstance(content, str):
                 raise self._error("invalid_response", "malformed fetch response")
             truncated = False
             if request.max_chars is not None and len(content) > request.max_chars:
                 content = content[: request.max_chars]
                 truncated = True
+            document_metadata = _result_metadata(match, include_text=False)
+            if truncated:
+                document_metadata["truncated"] = True
             return FetchResponse(
                 provider=self.name,
                 document=FetchedDocument(
                     url=request.url,
                     content=content,
+                    title=match.title,
                     fetched_at=datetime.now(UTC),
-                    metadata={"truncated": True} if truncated else {},
+                    metadata=document_metadata,
                 ),
                 usage=self._usage_event_with_fallback(
                     response,
@@ -478,6 +585,7 @@ class ExaAdapter(ProviderAdapter):
                         "content_type_count": 1,
                     },
                 ),
+                provider_metadata=_response_metadata(response, include_statuses=True),
             )
         except ProviderOperationError:
             raise
@@ -487,12 +595,16 @@ class ExaAdapter(ProviderAdapter):
             raise self._error("invalid_response", "malformed fetch response") from None
 
     async def _fetch_sdk(self, request: FetchRequest) -> ExaSearchResponse[Result]:
+        options = request.provider_options.exa if request.provider_options is not None else None
+        contents: dict[str, Any] = {"text": True}
+        if options is not None:
+            contents.update(options.model_dump(exclude_none=True, mode="json"))
         try:
             # get_contents has no return annotation in the SDK, so the result
             # is cast to the documented SearchResponse[Result] shape.
             return cast(
                 ExaSearchResponse[Result],
-                await self._sdk.get_contents([str(request.url)], text=True),
+                await self._sdk.get_contents([str(request.url)], **contents),
             )
         except httpx.TransportError:
             raise  # the shared ResilientRunner normalizes transport failures

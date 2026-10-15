@@ -8,6 +8,7 @@ fetch half (contents ``metadata`` normalizes into document metadata). The
 ``_same_url`` unit behavior (AC-11/R3) lives in ``test_youcom_fetch_errors.py``.
 """
 
+import json
 from datetime import timedelta
 
 from freesearch.models.contracts import FetchRequest
@@ -167,3 +168,43 @@ async def test_fetch_exact_boundary_length_is_not_truncated() -> None:
 
     assert response.document.content == "abcde"
     assert response.document.metadata == {}
+
+
+async def test_fetch_forwards_you_contents_options_and_normalizes_html() -> None:
+    page = {
+        "url": "https://example.com/page",
+        "title": "HTML page",
+        "html": "<main>Page body</main>",
+        "metadata": {
+            "site_name": "Example",
+            "favicon_url": "https://example.com/favicon.ico",
+        },
+    }
+    recorder = _WireRecorder(fetch=_fetch_payload(page))
+    async with _wired(recorder) as adapter:
+        response = await adapter.fetch(
+            FetchRequest(
+                url="https://example.com/page",
+                provider_options={
+                    "you": {
+                        "formats": ["html", "metadata"],
+                        "crawl_timeout": 25,
+                        "max_age": 0,
+                    }
+                },
+            )
+        )
+
+    body = json.loads(recorder.requests[0].content)
+    assert body == {
+        "urls": ["https://example.com/page"],
+        "formats": ["html", "metadata"],
+        "crawl_timeout": 25,
+        "max_age": 0,
+    }
+    assert response.document.content == "<main>Page body</main>"
+    assert response.document.content_type == "text/html"
+    assert response.document.metadata == {
+        "site_name": "Example",
+        "favicon_url": "https://example.com/favicon.ico",
+    }

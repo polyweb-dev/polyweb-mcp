@@ -102,8 +102,6 @@ async def guard_client(tmp_path: Path, auth_secret: str) -> TestClient:
 
 
 _ANONYMOUS_SURFACES: tuple[tuple[str, str, dict], ...] = (
-    ("POST", "/search", {"query": "anonymous probe"}),
-    ("POST", "/fetch", {"url": "https://example.com/page"}),
     ("GET", "/stats", {}),
     ("GET", "/dashboard", {}),
     ("GET", "/api/v1/providers", {}),
@@ -127,16 +125,39 @@ def test_anonymous_calls_reach_no_protected_surface(guard_client: TestClient) ->
         assert response.headers["www-authenticate"] == "Bearer", path
 
 
-def test_rejected_requests_cause_no_provider_call(guard_client: TestClient) -> None:
-    assert guard_client.post("/search", json={"query": "quiet"}).status_code == 401
-    assert guard_client.post("/fetch", json={"url": "https://example.com/x"}).status_code == 401
+def test_search_and_fetch_allow_anonymous_calls_but_reject_bad_bearer(
+    guard_client: TestClient,
+) -> None:
     adapter = guard_client.app.state.counting_adapter
-    assert adapter.search_calls == 0
-    assert adapter.fetch_calls == 0
+    search = guard_client.post("/search", json={"query": "anonymous search"})
+    fetch = guard_client.post("/fetch", json={"url": "https://example.com/x"})
+    assert search.status_code == 200
+    assert fetch.status_code == 200
+    assert adapter.search_calls == 1
+    assert adapter.fetch_calls == 1
+
+    invalid_headers = {"Authorization": "Bearer invalid-access-token"}
+    rejected_search = guard_client.post(
+        "/search", json={"query": "invalid bearer"}, headers=invalid_headers
+    )
+    rejected_fetch = guard_client.post(
+        "/fetch", json={"url": "https://example.com/y"}, headers=invalid_headers
+    )
+    assert rejected_search.status_code == 401
+    assert rejected_fetch.status_code == 401
+    assert rejected_search.headers["www-authenticate"] == "Bearer"
+    assert rejected_fetch.headers["www-authenticate"] == "Bearer"
+    assert adapter.search_calls == 1
+    assert adapter.fetch_calls == 1
 
 
 def test_rejected_requests_create_no_trace_root(guard_client: TestClient) -> None:
-    assert guard_client.post("/search", json={"query": "ghost"}).status_code == 401
+    invalid = guard_client.post(
+        "/search",
+        json={"query": "ghost"},
+        headers={"Authorization": "Bearer invalid-access-token"},
+    )
+    assert invalid.status_code == 401
 
     pair = register_and_login(guard_client, temp_email("guard-trace"))
     headers = raw_auth_headers(pair["access_token"])

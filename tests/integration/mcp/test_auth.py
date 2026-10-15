@@ -1,9 +1,8 @@
 """MCP transport guard contracts on real HTTP and direct calls (P4, T3/T4/T13).
 
-Every test uses an isolated database, stub adapters, and explicit account
-credentials. The same access JWT spans the REST app and the MCP server of one
-test. A rejected tool call reaches no provider. No test uses anonymous MCP
-access and no test bypasses the guard.
+Every test uses an isolated database and stub adapters. Tests cover anonymous
+Search/Fetch, optional verified account context, and guarded unknown paths. A
+rejected tool call reaches no provider.
 """
 
 from __future__ import annotations
@@ -27,7 +26,6 @@ from pydantic import SecretStr
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.mcp.auth import (
     MCP_AUTH_ERROR,
-    McpAuthenticationError,
     build_http_app,
     run_stdio_server,
 )
@@ -193,26 +191,24 @@ async def test_same_jwt_permits_rest_and_direct_tool_calls(
     assert payload["provider"] == "stubby"
 
 
-async def test_mcp_http_session_permits_search_and_fetch_with_api_jwt(
-    repository: SQLiteRepository, auth_secret: str
+async def test_mcp_http_session_allows_anonymous_search_and_fetch(
+    repository: SQLiteRepository,
 ) -> None:
     adapter = _RecordingAdapter("stubby")
-    rest_app = create_app([adapter], repository=repository)
-    with TestClient(rest_app) as client:
-        pair = register_and_login(client, temp_email("mcp-http"))
-
     service = http_jwt_service(repository)
     server = create_server([adapter], repository=repository, auth_service=service)
     http_app = build_http_app(server, auth_service=service, settings=service.settings)
-    headers = raw_auth_headers(pair["access_token"])
     async with http_app.router.lifespan_context(http_app):
         factory, base_url = _http_factory(http_app, service.settings.mcp_port)
         async with (
-            streamablehttp_client(
-                f"{base_url}/mcp", headers=headers, httpx_client_factory=factory
-            ) as (read, write, _session_id),
+            streamablehttp_client(f"{base_url}/mcp", httpx_client_factory=factory) as (
+                read,
+                write,
+                session_id,
+            ),
             ClientSession(read, write) as session,
         ):
+            assert session_id is not None
             await session.initialize()
             search = _tool_payload(
                 await session.call_tool("search", {"request": {"query": "http probe"}})
@@ -227,7 +223,7 @@ async def test_mcp_http_session_permits_search_and_fetch_with_api_jwt(
     assert adapter.fetch_calls == 1
 
 
-async def test_mcp_http_rejects_anonymous_resource_metadata_and_unknown(
+async def test_mcp_http_keeps_invalid_bearer_and_unknown_paths_guarded(
     repository: SQLiteRepository, auth_secret: str
 ) -> None:
     adapter = _RecordingAdapter("stubby")
@@ -236,12 +232,13 @@ async def test_mcp_http_rejects_anonymous_resource_metadata_and_unknown(
     http_app = build_http_app(server, auth_service=service, settings=service.settings)
     transport = httpx.ASGITransport(app=http_app)
     async with httpx.AsyncClient(transport=transport, base_url="http://localhost") as client:
-        anonymous = await client.post("/mcp", json={"jsonrpc": "2.0", "id": 1})
-        assert anonymous.status_code == 401
-        assert anonymous.headers["www-authenticate"] == "Bearer"
-
-        metadata = await client.get("/.well-known/oauth-protected-resource/mcp")
-        assert metadata.status_code == 401
+        invalid = await client.post(
+            "/mcp",
+            headers={"Authorization": "Bearer invalid-token"},
+            json={"jsonrpc": "2.0", "id": 1},
+        )
+        assert invalid.status_code == 401
+        assert invalid.headers["www-authenticate"] == "Bearer"
 
         unknown = await client.get("/no-such-route")
         assert unknown.status_code == 401
@@ -253,7 +250,7 @@ async def test_mcp_http_rejects_anonymous_resource_metadata_and_unknown(
         assert (await client.get("/no-such-route", headers=headers)).status_code == 404
         assert (
             await client.get("/.well-known/oauth-protected-resource/mcp", headers=headers)
-        ).status_code == 200
+        ).status_code == 404
 
 
 async def test_mcp_port_holds_no_public_auth_exception(
@@ -276,31 +273,6 @@ async def test_mcp_port_holds_no_public_auth_exception(
         )
         assert login.status_code == 401
         assert login.headers["www-authenticate"] == "Bearer"
-
-    assert adapter.search_calls == 0
-    assert adapter.fetch_calls == 0
-
-
-async def test_session_id_alone_grants_no_tool_access(
-    repository: SQLiteRepository, auth_secret: str
-) -> None:
-    adapter = _RecordingAdapter("stubby")
-    service = http_jwt_service(repository)
-    server = create_server([adapter], repository=repository, auth_service=service)
-    http_app = build_http_app(server, auth_service=service, settings=service.settings)
-    transport = httpx.ASGITransport(app=http_app)
-    session_headers = {"mcp-session-id": "live-session-id"}
-    async with httpx.AsyncClient(transport=transport, base_url="http://localhost") as client:
-        bare = await client.post("/mcp", headers=session_headers, json={"jsonrpc": "2.0", "id": 1})
-        assert bare.status_code == 401
-        assert bare.headers["www-authenticate"] == "Bearer"
-
-        forged = await client.post(
-            "/mcp",
-            headers={**session_headers, "Authorization": "Bearer not-a-token"},
-            json={"jsonrpc": "2.0", "id": 2},
-        )
-        assert forged.status_code == 401
 
     assert adapter.search_calls == 0
     assert adapter.fetch_calls == 0
@@ -420,10 +392,11 @@ async def test_stdio_absent_credential_rejects_before_provider_call(
     service, _token, _email = await mcp_account_token(repository, "mcp-naked")
     server = create_server([adapter], repository=repository, auth_service=service)
 
-    with pytest.raises(ToolError, match=MCP_AUTH_ERROR):
-        await server.call_tool("search", {"request": {"query": "quiet"}})
-
-    assert adapter.search_calls == 0
+    payload = _direct_payload(
+        await server.call_tool("search", {"request": {"query": "anonymous stdio"}})
+    )
+    assert payload["provider"] == "stubby"
+    assert adapter.search_calls == 1
 
 
 async def test_stdio_handoff_serves_with_explicit_process_token(
@@ -494,17 +467,22 @@ async def test_stdio_revoked_family_causes_no_provider_call(
     assert adapter.search_calls == 1
 
 
-async def test_run_stdio_server_rejects_missing_token_before_open(tmp_path: Path) -> None:
+async def test_run_stdio_server_allows_anonymous_tools_without_token(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     database = tmp_path / "stdio-guard.db"
     from freesearch.services.users import AuthService
 
     service = AuthService(test_settings(), database=database)
     server = create_server([])
 
-    with pytest.raises(McpAuthenticationError, match="FREESEARCH_MCP_BEARER_TOKEN"):
-        await run_stdio_server(server, auth_service=service, settings=test_settings())
+    async def run() -> None:
+        return None
 
-    assert not database.exists()
+    monkeypatch.setattr(server, "run_stdio_async", run)
+    await run_stdio_server(server, auth_service=service, settings=test_settings())
+
+    assert database.exists()
 
 
 def test_main_stdio_dispatch_reads_process_token(

@@ -85,18 +85,11 @@ class _StubAdapter(ProviderAdapter):
 
 async def test_search_endpoint_routes_and_returns_contract_shape(
     repository: SQLiteRepository,
-    auth_secret: str,
 ) -> None:
-    # Use one Agent account for the call.
+    # Search is public; account credentials remain optional for browser callers.
     app = create_app([_StubAdapter("brave", fetch=False)], repository=repository)
     with TestClient(app) as client:
-        anonymous = client.post("/search", json={"query": "python asyncio"})
-        assert anonymous.status_code == 401
-        assert anonymous.headers["www-authenticate"] == "Bearer"
-
-        pair = register_and_login(client, temp_email("rest-search"))
-        headers = raw_auth_headers(pair["access_token"])
-        response = client.post("/search", json={"query": "python asyncio"}, headers=headers)
+        response = client.post("/search", json={"query": "python asyncio"})
     assert response.status_code == 200
     assert response.json()["provider"] == "brave"
     assert response.json()["results"][0]["title"] == "brave result"
@@ -104,17 +97,10 @@ async def test_search_endpoint_routes_and_returns_contract_shape(
 
 async def test_fetch_endpoint_returns_document(
     repository: SQLiteRepository,
-    auth_secret: str,
 ) -> None:
-    # Use one Agent account for the call.
     app = create_app([_StubAdapter("youcom")], repository=repository)
     with TestClient(app) as client:
-        anonymous = client.post("/fetch", json={"url": "https://example.com/page"})
-        assert anonymous.status_code == 401
-
-        pair = register_and_login(client, temp_email("rest-fetch"))
-        headers = raw_auth_headers(pair["access_token"])
-        response = client.post("/fetch", json={"url": "https://example.com/page"}, headers=headers)
+        response = client.post("/fetch", json={"url": "https://example.com/page"})
     assert response.status_code == 200
     assert response.json()["provider"] == "youcom"
     assert response.json()["document"]["content"] == "youcom content"
@@ -122,17 +108,10 @@ async def test_fetch_endpoint_returns_document(
 
 async def test_search_without_any_adapter_returns_503(
     repository: SQLiteRepository,
-    auth_secret: str,
 ) -> None:
-    # Anonymous call fails first. Agent call shows the 503 shape.
     app = create_app([], repository=repository)
     with TestClient(app) as client:
-        anonymous = client.post("/search", json={"query": "anything"})
-        assert anonymous.status_code == 401
-
-        pair = register_and_login(client, temp_email("rest-empty"))
-        headers = raw_auth_headers(pair["access_token"])
-        response = client.post("/search", json={"query": "anything"}, headers=headers)
+        response = client.post("/search", json={"query": "anything"})
     assert response.status_code == 503
     assert "no provider is configured" in response.json()["detail"]
 
@@ -144,9 +123,58 @@ async def test_openapi_docs_are_served(
     # Docs and openapi schema are public endpoints.
     app = create_app([_StubAdapter("brave", fetch=False)], repository=repository)
     with TestClient(app) as client:
-        assert client.get("/openapi.json").status_code == 200
+        openapi = client.get("/openapi.json")
+        assert openapi.status_code == 200
         assert client.get("/docs").status_code == 200
         assert client.get("/redoc").status_code == 200
+
+        schemas = openapi.json()["components"]["schemas"]
+        search_fields = list(schemas["SearchRequest"]["properties"])
+        fetch_fields = list(schemas["FetchRequest"]["properties"])
+        assert search_fields.index("providerOptions") == search_fields.index("routing") + 1
+        assert fetch_fields.index("providerOptions") == fetch_fields.index("routing") + 1
+        assert "tavily" not in search_fields
+        assert "tavily" not in fetch_fields
+        assert "tavily" in schemas["SearchProviderOptions"]["properties"]
+        assert "tavily" in schemas["FetchProviderOptions"]["properties"]
+
+
+async def test_rest_accepts_provider_options_without_changing_route_or_dropping_metadata(
+    repository: SQLiteRepository,
+    auth_secret: str,
+) -> None:
+    class _ProviderOptionsAdapter(_StubAdapter):
+        def __init__(self) -> None:
+            super().__init__("brave", fetch=False)
+            self.seen: SearchRequest | None = None
+
+        async def search(self, request: SearchRequest) -> SearchResponse:
+            self.seen = request
+            response = await super().search(request)
+            response.provider_metadata = {"request_id": "brave-search-1"}
+            return response
+
+    adapter = _ProviderOptionsAdapter()
+    app = create_app([adapter], repository=repository)
+    with TestClient(app) as client:
+        pair = register_and_login(client, temp_email("rest-provider-options"))
+        headers = raw_auth_headers(pair["access_token"])
+        response = client.post(
+            "/search",
+            json={
+                "query": "provider options",
+                "providerOptions": {"exa": {"type": "deep-lite"}},
+            },
+            headers=headers,
+        )
+
+    assert response.status_code == 200
+    assert response.json()["provider"] == "brave"
+    assert response.json()["provider_metadata"] == {"request_id": "brave-search-1"}
+    assert adapter.seen is not None
+    assert adapter.seen.provider_options is not None
+    assert adapter.seen.provider_options.exa is not None
+    assert adapter.seen.provider_options.exa.type == "deep-lite"
 
 
 def test_api_lifespan_cleans_up(auth_secret: str) -> None:
@@ -360,9 +388,7 @@ async def test_fetch_with_fetch_bit_off_returns_503_without_call(
         pair = register_and_login(client, temp_email("rest-fetch-off"))
         headers = raw_auth_headers(pair["access_token"])
         search = client.post("/search", json={"query": "search on"}, headers=headers)
-        fetch = client.post(
-            "/fetch", json={"url": "https://example.com/page"}, headers=headers
-        )
+        fetch = client.post("/fetch", json={"url": "https://example.com/page"}, headers=headers)
 
     assert search.status_code == 200
     assert fetch.status_code == 503
@@ -384,9 +410,7 @@ async def test_search_with_search_bit_off_blocks_search_keeps_fetch(
         pair = register_and_login(client, temp_email("rest-search-off"))
         headers = raw_auth_headers(pair["access_token"])
         search = client.post("/search", json={"query": "search off"}, headers=headers)
-        fetch = client.post(
-            "/fetch", json={"url": "https://example.com/page"}, headers=headers
-        )
+        fetch = client.post("/fetch", json={"url": "https://example.com/page"}, headers=headers)
 
     assert search.status_code == 503
     assert fetch.status_code == 200
