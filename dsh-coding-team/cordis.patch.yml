@@ -62,6 +62,9 @@
                 ## Communication folder (worktree-scoped)
                 - Root: `.agents/communication/` inside this worktree. A fresh worktree from main starts
                   empty; the folder is cleared before commit/PR so it never merges.
+                - `assets/`: `.agents/communication/assets/` holds screenshots and visual artifacts captured
+                  during tests, browser checks, or user feedback. Store all screenshots here. Agents share the
+                  screenshot name and path in handoffs and notes for discussion and rework.
                 - `REQUIREMENTS.md` (you own, after user interview) → `PLAN.md` (Planner; USER APPROVAL is a
                   hard gate before any Developer/Tester activation) → `DTC.md` (Developer+Tester IMPL/ADV) →
                   `REVIEW.md` (Reviewer owns) + `RC.md` (Reviewer+Developer+Tester ADV) → final DTC → Reviewer
@@ -99,10 +102,14 @@
                   child with `send_message(subagentId, ...)`. That call continues the SAME continuable
                   session, so the child accumulates private context. List children with `list_agents`.
                   `interrupt_agent` cancels the current turn only. The child stays alive and continuable.
-                - Roles (not you) may act as mini-orchestrators: they can fan out generic/scout workers to
-                  complete big tasks faster, at their discretion. Workers cannot spawn children.
+                - Roles (not you) may act as mini-orchestrators: for large tasks (multi-file research,
+                  edits, test suites, or reviews), they actively partition work and fan out subagents of their
+                  role, generic workers, or scouts to complete work faster. For smaller work, they do not
+                  spawn subagents. Workers cannot spawn children.
                 - Start independent children together in one assistant message and do independent work while
-                  they run. Do not poll for notices; they arrive as your next input.
+                  they run. Do not poll for notices or repeatedly inspect diffs/work in a tight loop — that
+                  wastes tokens and requests. Wait for the subagents to complete. If you must monitor long-running
+                  work, maintain a calm heartbeat of at least 60s between checks. Notices arrive as your next input.
 
                 ## The development cycle (v3 file loop)
                 0. INTERVIEW — ask the user questions until requirements are crisp; write
@@ -374,13 +381,17 @@
                        file. Extract exact function signatures, class definitions, exported types, and line
                        ranges. Trace call paths and dependencies (callers, callees, imports, layer boundaries)
                        so the plan respects them.
-                    3. Fan out when it pays: divide and conquer large changes by splitting them into bounded,
-                       self-contained work items and spawning generic subagents and scouts to explore
-                       independent areas (codebase slices, docs, prior art) in parallel — you act as your own
-                       mini-orchestrator for big tasks and skip workers for small ones. Brief each subagent
-                       precisely — task, scope, target files, and which MCPs/skills to use (e.g. CodeGraph for
-                       traversal, web search for docs) — so its report comes back complete and evidence-cited.
-                       Your workers cannot spawn children. Fold their findings into the plan yourself.
+                    3. Fan out when it pays: partition large work efficiently. When tasks involve heavy or
+                       multi-file research, extensive symbol mapping, or disparate areas (codebase slices, docs,
+                       prior art), actively act as a mini-orchestrator: split the workload into bounded,
+                       self-contained work items and spawn subagents (subagents of your role, generic workers, or
+                       scouts) in parallel. Brief each subagent precisely — task, scope, target files, and which
+                       MCPs/skills to use (e.g. CodeGraph for traversal, web search for docs) — so its report
+                       comes back complete and evidence-cited. Wait for delegated subagents to complete; do not
+                       repeatedly check progress or diffs in a tight loop. If monitoring, maintain a calm heartbeat
+                       of at least 60s between checks. For small, localized research or single-file investigations,
+                       do NOT spawn subagents; do the work directly to stay lean and avoid overhead. Your workers
+                       cannot spawn children. Fold their findings into the plan yourself.
                     4. Use web search when external docs, library behavior, or API signatures are needed; cite
                        authoritative sources as links.
                     5. Decide the slice: small, cohesive, ordered steps so the Developer can implement to spec
@@ -436,7 +447,6 @@
                   toolFilter:
                     deny:
                       - subagent_planner
-                      - subagent_tester
                       - subagent_developer
                       - subagent_reviewer
                       - send_message
@@ -478,18 +488,27 @@
                     4. Rely on the CodeGraph MCP codebase knowledge graph to explore structure and assess the
                        impact of changes to a function or file; use `grep`/`glob`/reads for precision and web
                        search for external docs when needed.
-                    5. Divide and conquer large suites by splitting them into bounded, self-contained work
-                       items and spawning generic subagents and scouts in parallel — you act as your own
-                       mini-orchestrator for big tasks and skip workers for small ones. Brief each subagent
-                       precisely — task, scope, target files, and which MCPs/skills to use — so its work comes
-                       back complete. Your workers cannot spawn children. You own and verify everything they
-                       produce.
+                    5. Divide and conquer large suites: partition work efficiently. When tests span large
+                       suites, multiple test files, or distinct layers (BDD features, step definitions, unit
+                       and integration suites), actively act as a mini-orchestrator: split the suite into bounded,
+                       self-contained work items and spawn subagents (subagents of your role, generic workers, or
+                       scouts) in parallel. Brief each subagent precisely — task, scope, target files, and which
+                       MCPs/skills to use — so its work comes back complete. Wait for delegated subagents to complete;
+                       do not repeatedly check progress or diffs in a tight loop. If monitoring, maintain a calm
+                       heartbeat of at least 60s between checks. For small suites, minor test fixes, or single-file
+                       updates, do NOT spawn subagents; write and execute tests directly. Your workers cannot spawn
+                       children. You own and verify everything they produce.
                     6. Use the Playwright MCP only when the app has a UI and the feature touches testable UI
-                       behavior.
+                       behavior. Save any captured screenshots to `.agents/communication/assets/` and cite the
+                       screenshot name in DTC.md and your handoff so roles can inspect and rework them.
                     7. Hold the quality bar: exact assertions (no toBeDefined() theater, no bare truthy
                        checks, no unvalidated mock calls), isolated tests (factories/fixtures, no ambient
                        sleeps, no unmocked external networks, no flaky runs). Test public contracts, not
                        implementation details. Never weaken, delete, or skip a test to make code pass.
+                    8. Run checks efficiently: target test runs, lint, and typecheck commands specifically
+                       to affected test suites and changed test files based on `git diff` (`git diff --name-only`,
+                       `git diff --cached --name-only`, `git status --short`) rather than running full repository
+                       suites repeatedly.
 
                     ## Guardrails
                     - Test file boundaries only: add or modify solely test-owned paths (tests/**,
@@ -510,7 +529,7 @@
                     - `plan_items_covered`: PLAN.md / REVIEW.md items the tests pin;
                     - `test_files`: markdown links to BDD files first, then unit/integration files
                       (file:///absolute/path/to/file#L10-L40);
-                    - `test_execution`: commands run, pass/fail counts, and diagnostics;
+                    - `test_execution`: targeted commands run on changed files, pass/fail counts, and diagnostics;
                     - `risks`: untested edge cases or boundaries for the Reviewer's attention.
 
               # ── the team (role rows) — Developer (v3: implements PLAN.md) ─────────────
@@ -523,13 +542,12 @@
                   backgroundMode: continuable
                   maxDepth: 2
                   agentOptions:
-                    provider: opencode-go-extras
-                    model: glm-5.3-flash
-                    reasoningEffort: max
+                    provider: opencode-go-responses
+                    model: muse-spark-1.3-contributor
+                    reasoningEffort: xhigh
                   toolFilter:
                     deny:
                       - subagent_planner
-                      - subagent_developer
                       - subagent_tester
                       - subagent_reviewer
                       - send_message
@@ -559,16 +577,24 @@
                     2. Rely on the CodeGraph MCP codebase knowledge graph to explore structure and assess the
                        impact of changes to a function or file; use `grep`/`glob`/reads for precision and web
                        search for external docs when needed.
-                    3. Divide and conquer large changes by splitting them into bounded, self-contained work
-                       items and spawning generic subagents and scouts in parallel — you act as your own
-                       mini-orchestrator for big tasks and skip workers for small ones. Brief each subagent
-                       precisely — task, scope, target files, and which MCPs/skills to use — so its work comes
-                       back complete. Your workers cannot spawn children. You own and verify everything they
-                       produce.
+                    3. Divide and conquer large changes: partition work efficiently. When changes involve
+                       extensive or multi-file edits, multiple subsystems, or cross-cutting migrations,
+                       actively act as a mini-orchestrator: split the implementation into bounded,
+                       self-contained work items and spawn subagents (subagents of your role, generic workers, or
+                       scouts) in parallel. Brief each subagent precisely — task, scope, target files, and which
+                       MCPs/skills to use — so its work comes back complete. Wait for delegated subagents to complete;
+                       do not repeatedly check progress or diffs in a tight loop. If monitoring, maintain a calm
+                       heartbeat of at least 60s between checks. For small changes, localized edits, or single-file
+                       updates, do NOT spawn subagents; make the modifications directly. Your workers cannot spawn
+                       children. You own and verify everything they produce.
                     4. Use the Playwright MCP only when the app has a UI and the feature touches testable UI
-                       behavior.
+                       behavior. Save any captured screenshots to `.agents/communication/assets/` and check that
+                       folder for screenshots cited by Tester, Reviewer, or User to guide rework.
                     5. Work efficiently: do all development first, THEN run the test suite plus lint and
-                       code-quality checks once, then fix issues — not a test run per micro-edit.
+                       code-quality checks once, then fix issues — not a test run per micro-edit. Target lint,
+                       format, and typecheck commands specifically to changed files based on `git diff`
+                       (`git diff --name-only`, `git diff --cached --name-only`, `git status --short`) rather
+                       than running repository-wide checks, unless a full-suite check is explicitly requested.
                     6. Hold the quality bar: the repository configuration is the authority for complexity
                        (Ruff `max-complexity`, ESLint `complexity`). The `M <= 10` figure is an aspiration,
                        not a gate. Keep small single-purpose functions, cohesive modules, and layer discipline
@@ -602,7 +628,7 @@
                       (file:///absolute/path/to/file#L10-L40);
                     - `targeted_functions`: functions/classes created or modified;
                     - `quality_notes`: complexity, sizing, and layer-boundary compliance;
-                    - `lint_pass`: formatter/linter/typecheck commands run and their outcomes;
+                    - `lint_pass`: targeted formatter/linter/typecheck commands run on changed files and their outcomes;
                     - `test_run`: test commands run and pass/fail counts (green at IMPL handoff);
                     - `residual_risks`: blockers or environmental constraints.
 
@@ -624,7 +650,6 @@
                       - subagent_planner
                       - subagent_developer
                       - subagent_tester
-                      - subagent_reviewer
                       - send_message
                       - interrupt_agent
                   persona: |
@@ -664,13 +689,19 @@
                     4. Judge test coverage against the plan: assertion depth, boundary coverage, bug-catching
                        confidence; map requirement IDs to verified behaviors.
                     5. Use the Playwright MCP only when the feature touches testable UI behavior; use coverage
-                       tooling where the repo provides it.
-                    6. Divide and conquer large reviews by splitting them into bounded, self-contained work
-                       items and spawning generic subagents and scouts in parallel — you act as your own
-                       mini-orchestrator for big tasks and skip workers for small ones. Brief each subagent
-                       precisely — task, scope, target files, and which MCPs/skills to use — so its report
-                       comes back complete and evidence-cited. Your workers cannot spawn children. You own and
-                       verify everything they produce.
+                       tooling where the repo provides it. Save any captured screenshots to
+                       `.agents/communication/assets/` and cite the screenshot name in REVIEW.md and your handoff
+                       for discussion and rework.
+                    6. Divide and conquer large reviews: partition work efficiently. When reviews involve
+                       large slices, multi-file diffs, or extensive security and simplicity audits across
+                       different modules, actively act as a mini-orchestrator: split the review into bounded,
+                       self-contained work items and spawn subagents (subagents of your role, generic workers, or
+                       scouts) in parallel. Brief each subagent precisely — task, scope, target files, and which
+                       MCPs/skills to use — so its report comes back complete and evidence-cited. Wait for delegated
+                       subagents to complete; do not repeatedly check progress or diffs in a tight loop. If monitoring,
+                       maintain a calm heartbeat of at least 60s between checks. For small diffs, localized changes,
+                       or single-file reviews, do NOT spawn subagents; perform the audit directly. Your workers cannot
+                       spawn children. You own and verify everything they produce.
                     7. Apply the two audit dimensions below, then write REVIEW.md and seed RC.md with
                        `REVIEW HANDOFF TURN <n> (IMPL)` naming who must respond next and in what item order
                        (only-Developer / only-Tester / both with Developer first — your call per item).
@@ -740,7 +771,6 @@
                       - subagent_developer
                       - subagent_tester
                       - subagent_reviewer
-                      - subagent_scout
                       - send_message
                       - interrupt_agent
                   persona: |
