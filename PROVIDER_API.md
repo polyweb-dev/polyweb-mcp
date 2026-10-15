@@ -206,4 +206,3 @@ and translating upstream errors into the FreeSearch error contract. Unknown
 fields are rejected rather than passed through. Options that FreeSearch does
 not expose are intentionally excluded until a typed mapping, normalization,
 and test can be provided.
-
