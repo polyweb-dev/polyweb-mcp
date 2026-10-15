@@ -11,13 +11,20 @@ in the audit trail. An unpriced request against a finite ceiling is a safe
 configuration error instead of an invented charge.
 """
 
+import contextlib
 import logging
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from math import ceil
+from typing import Final, Literal
 from uuid import uuid4
 
+from freesearch.configuration.provider_config import ProviderConfig
 from freesearch.configuration.provider_limits import (
+    TAVILY_DEFAULT_BUCKET_ID,
+    TAVILY_RPM_DEV,
+    TAVILY_RPM_PROD,
     documented_keyless_operations,
     provider_limit_defaults,
     provider_tier_defaults,
@@ -50,6 +57,7 @@ from freesearch.models.provider_limits import (
     LimitRecordNotFound,
     LimitRecordUpdate,
     LimitStoreUnavailable,
+    LimitVersionConflict,
     NativeDebit,
     NativePool,
     NativeUsageSnapshot,
@@ -58,7 +66,11 @@ from freesearch.models.provider_limits import (
     ProviderLimitRecord,
     ProviderLimitsResponse,
     RateAdmission,
+    RateBlock,
     RateProgressView,
+    RateScope,
+    RateWindow,
+    RateWindowName,
     ResetRule,
     TierBalance,
     effective_attempt_deadline,
@@ -82,6 +94,13 @@ logger = logging.getLogger(__name__)
 _FUNDS_OK = "ok"
 _FUNDS_DENIED = "funds"
 _FUNDS_UNPRICED = "unpriced"
+
+# Tavily keyed Credits facts. The usage snapshot persists its tier rows with
+# those pool IDs, and a vendor 402 publishes the terminal observation source.
+_TAVILY_TERMINAL_SOURCE: Final[str] = "vendor_402"
+_TAVILY_MONTHLY_RESET_SOURCE: Final[str] = "free_monthly_reset"
+_TAVILY_PAYGO_TIER_ID: Final[str] = "tavily:keyed:paygo"
+_TAVILY_PLAN_TIER_ID: Final[str] = "tavily:keyed:plan"
 
 
 def _utc_now() -> datetime:
@@ -109,6 +128,13 @@ class ProviderLimitsService:
         self._tiers = dict(tier_defaults if tier_defaults is not None else provider_tier_defaults())
         self._clock = clock or _utc_now
         self._rates = rate_limits or RateLimitService(repository, self._records, clock=self._clock)
+        # Runtime Tavily facts stored by apply_tavily_config: the rail the
+        # current adapter executes with, the operator key environment, and the
+        # PAYGO overage confirmation. Catalog defaults keep the pre-seed state.
+        self._tavily_auth_mode: AuthMode | None = None
+        self._keenable_auth_mode: AuthMode | None = None
+        self._tavily_key_environment: Literal["dev", "prod"] = "dev"
+        self._tavily_paygo_enabled: bool = False
 
     # ------------------------------------------------------------- lifecycle
 
@@ -134,8 +160,49 @@ class ProviderLimitsService:
         if stored:
             self._records = stored
             self._rates.replace_records(stored)
+        await self._reconcile_tavily_versions()
         for pool in self._declared_pools():
             await self._repository.ensure_pool(pool)
+
+    async def _reconcile_tavily_versions(self) -> None:
+        """Re-sync stored Tavily rows whose catalog version is newer.
+
+        Seeding is insert-only, so an existing database still holds a
+        version-1 Tavily row after the version-2 catalog arrives. The stored
+        record's own version satisfies the update precondition, and a
+        conflicting later operator edit keeps its row and is logged instead
+        of raised. Catalog defaults come from ``provider_limit_defaults``.
+        """
+
+        defaults = {
+            record.key: record
+            for record in provider_limit_defaults()
+            if record.provider == "tavily"
+        }
+        for stored in list(self._records):
+            default = defaults.get(stored.key)
+            if default is None or stored.version >= default.version:
+                continue
+            repository = self._require_repository(stored.provider)
+            try:
+                refreshed = await repository.update_record(
+                    LimitRecordUpdate(
+                        provider=stored.provider,
+                        operation=stored.operation,
+                        auth_mode=stored.auth_mode,
+                        version=stored.version,
+                        rate=default.rate,
+                        budget=default.budget,
+                        conversion_profile=default.conversion_profile,
+                        plan_name=default.plan_name,
+                        usage_url=default.usage_url,
+                        transport_available=default.transport_available,
+                    )
+                )
+            except LimitVersionConflict:
+                logger.warning("tavily catalog row could not be reconciled")
+                continue
+            self._refresh_record(refreshed)
 
     async def credential_changed(self, provider: str) -> None:
         """Invalidate stale credential generations after a secret change."""
@@ -160,6 +227,64 @@ class ProviderLimitsService:
                     error_code="credential_changed",
                 )
             )
+
+    async def apply_tavily_config(self, config: ProviderConfig, *, auth_mode: AuthMode) -> None:
+        """Store the runtime Tavily facts and apply the keyed minute limit.
+
+        ``auth_mode`` is the rail the runtime adapter currently executes with,
+        so the dashboard reports the active rail instead of deriving one from
+        the catalog record order, and the funds gate reads the operator key
+        environment and PAYGO choices. The documented minute limit (development
+        100, production 1000 rpm) applies to the shared bucket of BOTH keyed
+        operation records together. Keyless records and every other provider
+        stay untouched.
+        """
+
+        self._tavily_auth_mode = auth_mode
+        self._tavily_key_environment = config.tavily_key_environment
+        self._tavily_paygo_enabled = bool(config.tavily_paygo_enabled)
+        rate = _tavily_minute_rate(config.tavily_key_environment)
+        for record in self._tavily_keyed_records():
+            await self._apply_tavily_rate(record, rate)
+
+    def apply_keenable_auth_mode(self, auth_mode: AuthMode) -> None:
+        """Store the auth rail selected by the active Keenable adapter."""
+
+        self._keenable_auth_mode = auth_mode
+
+    async def _apply_tavily_rate(self, record: ProviderLimitRecord, rate: RateBlock) -> None:
+        """Apply one rate limit to a record's shared minute bucket, when it moves."""
+
+        stored = _minute_window(record)
+        incoming = _minute_window(rate)
+        if stored is not None and incoming is not None and stored.limit == incoming.limit:
+            return
+        if self._repository is None:
+            self._refresh_record(record.model_copy(update={"rate": rate}))
+            return
+        try:
+            updated = await self._repository.update_record(
+                LimitRecordUpdate(
+                    provider=record.provider,
+                    operation=record.operation,
+                    auth_mode=record.auth_mode,
+                    version=record.version,
+                    rate=rate,
+                )
+            )
+        except LimitVersionConflict:
+            logger.warning("tavily rate reconfiguration hit a version conflict")
+            return
+        self._refresh_record(updated)
+
+    def _tavily_keyed_records(self) -> list[ProviderLimitRecord]:
+        """Return the keyed Tavily operation records that share the limits."""
+
+        return [
+            record
+            for record in self._records
+            if record.provider == "tavily" and record.auth_mode is AuthMode.KEYED
+        ]
 
     async def apply_manual_anchor(self, provider: str, anchor: object | None) -> None:
         """Project an operator manual native anchor into the matching pool.
@@ -281,7 +406,10 @@ class ProviderLimitsService:
         )
         if self._repository is None:
             return admission.model_copy(update={"local_only": True})
-        return await self._repository.reserve(admission)
+        # The repository rechecks rate capacity inside its transaction and may
+        # raise LimitDeniedError from the atomic recheck; it propagates
+        # unchanged to the router transport.
+        return await self._repository.reserve(admission, record=record)
 
     async def record_success(
         self,
@@ -371,6 +499,56 @@ class ProviderLimitsService:
             )
         )
 
+    async def record_terminal_402(self, provider: str, auth_mode: AuthMode) -> None:
+        """Write one terminal out-of-Credits observation after a vendor 402.
+
+        The legacy quota table alone does not gate the next pinned call: the
+        funds precheck reads the native pool, so the terminal zero is mirrored
+        into one native pool with provenance ``vendor_402``. The pool comes
+        from the provider's record on the calling auth rail that declares a
+        ``native_pool_id`` (for the keyed Tavily rail that is
+        ``tavily:keyed:credit``); a keyless rail declares none, so it stays
+        silent. A second pinned call then denies locally before vendor I/O.
+        A missing repository, a record without a native pool row, a missing
+        pool, or a failed write stays silent: the next usage poll or monthly
+        refill restores pool truth. The repository's own snapshot guards keep
+        the terminal record ahead of later vendor observations.
+        """
+
+        record = next(
+            (
+                candidate
+                for candidate in self._records
+                if candidate.provider == provider
+                and candidate.auth_mode is auth_mode
+                and candidate.native_pool_id is not None
+            ),
+            None,
+        )
+        if record is None or record.native_pool_id is None or self._repository is None:
+            return
+        pool_id = record.native_pool_id
+        pool = await self._repository.get_pool(pool_id)
+        if pool is None:
+            return
+        with contextlib.suppress(Exception):
+            await self._repository.apply_snapshot(
+                NativeUsageSnapshot(
+                    pool_id=pool_id,
+                    provider=provider,
+                    auth_mode=auth_mode,
+                    native_unit=pool.native_unit,
+                    observed_at=self._clock(),
+                    source=_TAVILY_TERMINAL_SOURCE,
+                    confidence=Confidence.OBSERVED,
+                    remaining=Decimal("0"),
+                    allowance=pool.allowance,
+                    reset_at=pool.reset_at or _next_month_start(self._clock()),
+                    credential_generation=pool.credential_generation,
+                    plan_name=record.plan_name,
+                )
+            )
+
     def _reservation(
         self,
         record: ProviderLimitRecord,
@@ -430,6 +608,10 @@ class ProviderLimitsService:
         """Return the funds decision and its reasons for one request."""
 
         view = await self._view_for(record, self._clock(), _as_request(context))
+        if record.provider == "tavily":
+            precheck = await self._tavily_funds_precheck(record, view)
+            if precheck is not None:
+                return precheck
         if view.state is CRDState.UNMETERED:
             return (_FUNDS_OK, [])
         if view.state is CRDState.UNAVAILABLE:
@@ -447,6 +629,77 @@ class ProviderLimitsService:
         if spendable < cost:
             return (_FUNDS_DENIED, ["funds_exhausted"])
         return (_FUNDS_OK, [])
+
+    async def _tavily_funds_precheck(
+        self, record: ProviderLimitRecord, view: CRDView
+    ) -> tuple[str, list[str]] | None:
+        """Return the keyed Credits decision, or None for the generic CRD gate.
+
+        The keyed rail stores its native Credits balance on one durable pool.
+        A terminal vendor 402 observation denies the call until the monthly
+        refill, unless stored usage tiers or the operator PAYGO choice confirm
+        paid overage. A zero aggregate whose stored observed paid-plan tier
+        still holds native funds is the vendor KEY ceiling: that denial reason
+        is ``key_cap_exhausted`` and PAYGO never lifts it, while a plan-bound
+        zero keeps the overage rule. A local grant spend cap keeps the generic
+        gate, so its denial reasons stay unchanged for reserved operator
+        funds.
+        """
+
+        if (
+            not record.supported
+            or not record.transport_available
+            or record.auth_mode is not AuthMode.KEYED
+            or record.native_pool_id is None
+            or self._repository is None
+        ):
+            return None
+        pool = await self._repository.get_pool(record.native_pool_id)
+        if pool is None:
+            return None
+        if _tavily_key_cap_zero(pool):
+            return (_FUNDS_DENIED, ["key_cap_exhausted"])
+        confirmed = self._tavily_paygo_confirmed(pool)
+        if pool.source == _TAVILY_TERMINAL_SOURCE and not confirmed:
+            return (_FUNDS_DENIED, ["credits_exhausted"])
+        if confirmed and _tavily_free_exhausted(pool, view) and self._grant_overage_allowed(view):
+            return (_FUNDS_OK, [])
+        return None
+
+    def _tavily_paygo_confirmed(self, pool: NativePool) -> bool:
+        """Return whether configuration or stored usage confirms PAID overage.
+
+        The operator flag is the explicit confirmation. The usage snapshot's
+        PAYGO tier confirms overage when the vendor payload reported its
+        fields, and an OBSERVED paid-plan tier with a known amount confirms a
+        paid plan. A free plan keeps the terminal denial until the monthly
+        refill.
+        """
+
+        if self._tavily_paygo_enabled:
+            return True
+        paygo = _stored_tier(pool, _TAVILY_PAYGO_TIER_ID)
+        if paygo is not None and paygo.confidence is Confidence.OBSERVED:
+            return True
+        plan = _stored_tier(pool, _TAVILY_PLAN_TIER_ID)
+        return (
+            plan is not None
+            and plan.confidence is Confidence.OBSERVED
+            and (plan.native_remaining is not None or plan.native_allowance is not None)
+        )
+
+    @staticmethod
+    def _grant_overage_allowed(view: CRDView) -> bool:
+        """Return whether a local grant spend cap still permits one call.
+
+        A grant is an operator spend cap, not vendor funds: confirmed overage
+        must not bypass it, so the effective grant ceiling must still cover
+        the whole request cost.
+        """
+
+        cost = view.request_cost_crd
+        grant = view.local_remaining_crd
+        return cost is not None and (grant is None or grant >= cost)
 
     async def _audit_denial(
         self,
@@ -494,9 +747,10 @@ class ProviderLimitsService:
             for pool in (await self._repository.list_pools(provider) if self._repository else [])
         }
         await self._refresh_daily_pool(provider, pools, now)
+        await self._refresh_monthly_pool(provider, pools, now)
         return ProviderLimitsResponse(
             provider=provider,
-            active_auth_mode=_active_auth_mode(records) if records else AuthMode.KEYED,
+            active_auth_mode=self._active_mode(provider, records),
             auths=[
                 await self._auth_limits(provider, auth_mode, records, pools, now)
                 for auth_mode in _auth_modes(records)
@@ -557,16 +811,34 @@ class ProviderLimitsService:
 
         repository = self._require_repository(change.provider)
         record = await repository.update_record(change)
-        self._records = [
-            record if existing.key == record.key else existing for existing in self._records
-        ]
-        self._rates.replace_records(self._records)
+        self._refresh_record(record)
         return await self.provider_view(change.provider)
+
+    def _refresh_record(self, record: ProviderLimitRecord) -> None:
+        """Swap one refreshed record into the in-memory catalog and the rate gate."""
+
+        self._records = [record if item.key == record.key else item for item in self._records]
+        self._rates.replace_records(self._records)
 
     def _require_repository(self, provider: str) -> LimitRepository:
         if self._repository is None:
             raise LimitStoreUnavailable(provider)
         return self._repository
+
+    def _active_mode(self, provider: str, records: Sequence[ProviderLimitRecord]) -> AuthMode:
+        """Return the rail the runtime executes with, when the catalog is known.
+
+        Tavily and Keenable adapters decide their rails from credentials, so
+        their stored adapter-derived modes win where available. Other providers
+        keep the catalog-derived fallback an empty record list has provided so
+        far.
+        """
+
+        if provider == "tavily" and self._tavily_auth_mode is not None and records:
+            return self._tavily_auth_mode
+        if provider == "keenable" and self._keenable_auth_mode is not None and records:
+            return self._keenable_auth_mode
+        return _active_auth_mode(records) if records else AuthMode.KEYED
 
     # ------------------------------------------------------------- internals
 
@@ -602,6 +874,14 @@ class ProviderLimitsService:
         free_tiers = [tier for tier in tiers if tier.tier == "free"]
         paid_tiers = [tier for tier in tiers if tier.tier == "paid"]
         unknown_tiers = [tier for tier in tiers if tier.tier == "unknown"]
+        # The Tavily rail exposes live minute headroom and its vendor cooldown
+        # through the detail windows; the hourly/daily progress contract above
+        # stays untouched.
+        rate_windows = (
+            await self._rates.window_details(provider, auth_mode, now)
+            if provider == "tavily"
+            else None
+        )
         return ProviderAuthLimits(
             auth_mode=auth_mode,
             transport_available=any(record.transport_available for record in auth_records),
@@ -627,7 +907,14 @@ class ProviderLimitsService:
                 provider, auth_mode, pools, await self._rates.progress(provider, now)
             ),
             grants=grants,
-            detail=_detail(search or fetch, pools, tiers, grants),
+            detail=_detail(
+                search or fetch,
+                pools,
+                tiers,
+                grants,
+                rate_windows=rate_windows,
+                now=now,
+            ),
         )
 
     def _daily_bar(
@@ -835,6 +1122,64 @@ class ProviderLimitsService:
                     )
                 )
 
+    async def _refresh_monthly_pool(
+        self, provider: str, pools: dict[str, NativePool], now: datetime
+    ) -> None:
+        """Refill a keyed Credits month whose free exhaustion expired.
+
+        A terminal vendor 402 observation or an exhaustion zero denies keyed
+        calls until the documented first-of-month reset. This local path
+        expires that state without a request-path vendor read and refills only
+        the declared free allowance from the record's budget. A pool whose
+        usage snapshot observed the paid plan or PAYGO tier is never refilled
+        with the free allowance, because paid funds are not free Credits.
+        """
+
+        if self._repository is None or provider not in ("tavily", "exa"):
+            return
+        processed: set[str] = set()
+        keyed_records = [
+            r for r in self._records
+            if r.provider == provider and r.auth_mode is AuthMode.KEYED
+        ]
+        for record in keyed_records:
+            allowance = record.budget.free_allowance if record.budget is not None else None
+            pool_id = record.native_pool_id
+            if pool_id is None or allowance is None or pool_id in processed:
+                continue
+            processed.add(pool_id)
+            pool = pools.get(pool_id)
+            if pool is None or not _free_month_expired(pool, now):
+                continue
+            if _tavily_paygo_observed(pool):
+                continue
+            refreshed = await self._repository.record_manual_anchor(
+                pool,
+                remaining=allowance,
+                allowance=allowance,
+                reset_at=_next_month_start(now),
+                observed_at=now,
+                source=_TAVILY_MONTHLY_RESET_SOURCE,
+            )
+            if refreshed is None:
+                continue
+            pools[pool.pool_id] = refreshed
+            await self._repository.record_event(
+                LimitAuditEvent(
+                    event_id=uuid4().hex,
+                    provider=provider,
+                    auth_mode=AuthMode.KEYED,
+                    operation=LimitOperation.SEARCH,
+                    pool_id=pool.pool_id,
+                    observed_at=now,
+                    source=_TAVILY_MONTHLY_RESET_SOURCE,
+                    reason="reset",
+                    old_native=pool.remaining,
+                    new_native=allowance,
+                    confidence=Confidence.ESTIMATED,
+                )
+            )
+
     def _tiers_for(
         self,
         provider: str,
@@ -846,6 +1191,14 @@ class ProviderLimitsService:
 
         tiers: list[TierBalance] = []
         for tier in self._tiers.get(f"{provider}:{auth_mode.value}", []):
+            # A usage snapshot persists its tier facts on the aggregate pool.
+            # A vendor-observed tier row wins over the catalog-only
+            # declaration, and the free and paid tiers stay alternative views
+            # of one pool, so the aggregate funds are never duplicated into
+            # the tier sums.
+            stored = _observed_stored_tier(tier.pool_id, pools)
+            if stored is not None:
+                tier = _project_stored_tier(tier, stored)
             pool = pools.get(tier.pool_id)
             profile = self._profile_for(provider, auth_mode, tier)
             remaining = pool.remaining if pool is not None else tier.native_remaining
@@ -899,6 +1252,154 @@ def _is_fresh_vendor_value(pool: NativePool) -> bool:
     return pool.confidence is Confidence.AUTHORITATIVE and not pool.stale and not pool.manual_anchor
 
 
+def _minute_window(block: RateBlock | ProviderLimitRecord) -> RateWindow | None:
+    """Return a rate block or record's documented minute window, when declared."""
+
+    rate = block if isinstance(block, RateBlock) else block.rate
+    if rate is None:
+        return None
+    return next(
+        (window for window in rate.windows if window.window is RateWindowName.MINUTE),
+        None,
+    )
+
+
+def _tavily_minute_rate(environment: Literal["dev", "prod"]) -> RateBlock:
+    """Build the documented shared minute bucket for one key environment.
+
+    Search and extract share the keyed default bucket, so both operation
+    records receive the same block: one minute window at the configured
+    per-key request limit from the provider limit catalog.
+    """
+
+    return RateBlock(
+        windows=[
+            RateWindow(
+                bucket_id=TAVILY_DEFAULT_BUCKET_ID,
+                limit=TAVILY_RPM_DEV if environment == "dev" else TAVILY_RPM_PROD,
+                window=RateWindowName.MINUTE,
+                scope=RateScope.KEY,
+                source="configured_key_environment",
+            )
+        ],
+        published=True,
+    )
+
+
+def _next_month_start(now: datetime) -> datetime:
+    """Return the first instant of the month after ``now`` in UTC."""
+
+    if now.month == 12:
+        return datetime(now.year + 1, 1, 1, tzinfo=UTC)
+    return datetime(now.year, now.month + 1, 1, tzinfo=UTC)
+
+
+def _stored_tier(pool: NativePool, tier_pool_id: str) -> TierBalance | None:
+    """Return the tier row one pool's usage snapshot persisted, when present."""
+
+    return next((tier for tier in pool.tiers if tier.pool_id == tier_pool_id), None)
+
+
+def _observed_stored_tier(tier_pool_id: str, pools: Mapping[str, NativePool]) -> TierBalance | None:
+    """Return the vendor-observed tier row for one catalog tier, when stored.
+
+    A usage snapshot carries its tier facts on the aggregate native pool, so
+    the stored rows surface wherever that pool is held. Only an OBSERVED tier
+    outranks the catalog declaration; an unknown row keeps the declaration.
+    """
+
+    for pool in pools.values():
+        for stored in pool.tiers:
+            if stored.pool_id == tier_pool_id and stored.confidence is Confidence.OBSERVED:
+                return stored
+    return None
+
+
+def _project_stored_tier(tier: TierBalance, stored: TierBalance) -> TierBalance:
+    """Merge one stored tier row over a catalog tier declaration.
+
+    The stored reported values, funding mode, and provenance replace the
+    declared placeholders; the reset behavior stays the catalog's because the
+    declared monthly rule is what the vendor follows.
+    """
+
+    return tier.model_copy(
+        update={
+            "native_remaining": stored.native_remaining,
+            "native_allowance": stored.native_allowance,
+            "funding_mode": stored.funding_mode,
+            "source": stored.source,
+            "confidence": stored.confidence,
+        }
+    )
+
+
+def _tavily_paygo_observed(pool: NativePool) -> bool:
+    """Return whether the usage snapshot observed a paid plan or PAYGO tier.
+
+    A pool that carries such a tier is paid or unknown, so the free monthly
+    allowance must never refill it: paid Credits and pay-as-you-go access are
+    not the free plan's development budget.
+    """
+
+    return any(
+        tier.confidence is Confidence.OBSERVED
+        and tier.pool_id in (_TAVILY_PAYGO_TIER_ID, _TAVILY_PLAN_TIER_ID)
+        for tier in pool.tiers
+    )
+
+
+def _free_month_expired(pool: NativePool, now: datetime) -> bool:
+    """Return whether a keyed Credits pool's exhausted month has ended.
+
+    A terminal vendor 402 observation or an exhaustion zero expires once the
+    stored reset instant has passed or once the observation is from a month
+    earlier than the current one, so a local refill can replace it without a
+    request-path vendor read.
+    """
+
+    exhausted = pool.source == _TAVILY_TERMINAL_SOURCE or pool.remaining == Decimal("0")
+    if not exhausted:
+        return False
+    if pool.reset_at is not None and now >= pool.reset_at:
+        return True
+    observed = pool.observed_at
+    if observed is None:
+        return False
+    return (observed.year, observed.month) < (now.year, now.month)
+
+
+def _tavily_free_exhausted(pool: NativePool, view: CRDView) -> bool:
+    """Return whether the free plan Credits and the spendable view are both zero."""
+
+    return (
+        pool.remaining is not None
+        and pool.remaining == Decimal("0")
+        and view.spendable_crd is not None
+        and view.spendable_crd == Decimal("0")
+    )
+
+
+def _tavily_key_cap_zero(pool: NativePool) -> bool:
+    """Return whether a zero aggregate proves a KEY ceiling, not a plan bound.
+
+    The stored usage tiers split the collapsed ``min(plan, key)`` balance the
+    usage snapshot published. An observed paid-plan tier whose native balance
+    is still above zero shows the plan is funded, so the aggregate zero is the
+    vendor key ceiling and PAYGO overage never lifts it. A plan-bound zero
+    keeps the PAYGO overage rule instead.
+    """
+
+    plan = _stored_tier(pool, _TAVILY_PLAN_TIER_ID)
+    return (
+        pool.remaining == Decimal("0")
+        and plan is not None
+        and plan.confidence is Confidence.OBSERVED
+        and plan.native_remaining is not None
+        and plan.native_remaining > 0
+    )
+
+
 def _active_auth_mode(records: Sequence[ProviderLimitRecord]) -> AuthMode:
     """Return the rail the runtime currently executes with."""
 
@@ -946,12 +1447,25 @@ def _detail(
     pools: dict[str, NativePool],
     tiers: Sequence[TierBalance],
     grants: CRDGrantsSummary | None,
+    *,
+    rate_windows: list[RateWindow] | None = None,
+    now: datetime | None = None,
 ) -> ProviderLimitDetail | None:
-    """Build detail-only native, USD, plan, and rate information."""
+    """Build detail-only native, USD, plan, and rate information.
+
+    ``rate_windows`` replaces the static catalog windows with measured ones
+    where the rate service supplies them, and ``now`` derives the seconds
+    left of an active vendor cooldown from the returned reset instants.
+    """
 
     if record is None:
         return None
     pool = pools.get(record.native_pool_id or "")
+    windows = (
+        rate_windows
+        if rate_windows is not None
+        else (list(record.rate.windows) if record.rate is not None else [])
+    )
     return ProviderLimitDetail(
         plan_name=record.plan_name,
         native_unit=record.native_unit,
@@ -968,11 +1482,32 @@ def _detail(
         stale=bool(pool.stale) if pool is not None else False,
         price_version=record.conversion_profile.price_version,
         crd_split_note=_split_note(record),
-        rate_windows=list(record.rate.windows) if record.rate is not None else [],
+        rate_windows=windows,
+        retry_after_seconds=_cooldown_seconds(windows, now) if now is not None else None,
         tier_split_known=grants is not None
         or any(tier.native_remaining is not None for tier in tiers),
         aggregate_pool_id=record.native_pool_id,
     )
+
+
+def _cooldown_seconds(windows: Sequence[RateWindow], now: datetime) -> int | None:
+    """Return the seconds left of the active vendor cooldown, else ``None``.
+
+    Only a window recorded from a vendor ``Retry-After`` cooldown carries
+    that state: its observation names ``vendor_retry_after`` as the source.
+    A locally measured rolling window always owns its own boundary reset and
+    is not a cooldown, so a rail without a vendor cooldown reports ``None``
+    instead of an invented delay, and an elapsed one reports zero.
+    """
+
+    resets = [
+        window.reset_at
+        for window in windows
+        if window.source == "vendor_retry_after" and window.reset_at is not None
+    ]
+    if not resets:
+        return None
+    return max(0, ceil((max(resets) - now).total_seconds()))
 
 
 def _reset_rule_for(record: ProviderLimitRecord, tiers: Sequence[TierBalance]) -> ResetRule:
@@ -1115,14 +1650,28 @@ def _debit_crd(record: ProviderLimitRecord, native_units: Decimal | None) -> Dec
 def _reported_native(
     response: SearchResponse | FetchResponse, record: ProviderLimitRecord
 ) -> Decimal | None:
-    """Return a vendor-reported native charge for one response, when present."""
+    """Return a vendor-reported native charge for one response, when present.
+
+    The Keenable keyed catalog pool counts native units as requests, while the
+    adapter reports the actual debit as credits. This narrow compatibility rule
+    accepts Keenable keyed credit usage on that request pool. Every other
+    provider keeps the exact-unit rule, and the keyless rail stays outside the
+    native funds debit.
+    """
 
     usage = response.usage
     if usage is None or record.native_unit is None:
         return None
-    if usage.unit_kind is not record.native_unit:
-        return None
-    return usage.units
+    if usage.unit_kind is record.native_unit:
+        return usage.units
+    if (
+        record.provider == "keenable"
+        and record.auth_mode is AuthMode.KEYED
+        and record.native_unit is UnitKind.REQUEST
+        and usage.unit_kind is UnitKind.CREDIT
+    ):
+        return usage.units
+    return None
 
 
 def _reported_usd(response: SearchResponse | FetchResponse) -> Decimal | None:

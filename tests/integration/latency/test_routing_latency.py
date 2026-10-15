@@ -391,6 +391,7 @@ def _group_label(transport: str, operation: str, mode: str, providers: str) -> s
 
 def _write_latency_report(rows: Sequence[dict[str, Any]], output_dir: Path) -> None:
     """Write routing_latency.csv, both PNG charts, and routing_latency.md."""
+    pytest.importorskip("matplotlib")
     import matplotlib
 
     matplotlib.use("Agg")
@@ -703,8 +704,9 @@ async def test_rest_search_latency(tmp_path: Path, latency_rows: list[dict[str, 
                 selects=measured_selects,
                 call=_fanout_search,
             )
-        _write_latency_report(latency_rows, _default_output_dir())
-        _assert_report(latency_rows, _default_output_dir())
+        report_dir = tmp_path / "latency-rest-search"
+        _write_latency_report(latency_rows, report_dir)
+        _assert_report(latency_rows, report_dir)
     finally:
         if detach is not None:
             detach()
@@ -773,8 +775,9 @@ async def test_mcp_search_latency(tmp_path: Path, latency_rows: list[dict[str, A
             selects=measured_selects,
             call=_fanout_search,
         )
-        _write_latency_report(latency_rows, _default_output_dir())
-        _assert_report(latency_rows, _default_output_dir())
+        report_dir = tmp_path / "latency-mcp-search"
+        _write_latency_report(latency_rows, report_dir)
+        _assert_report(latency_rows, report_dir)
     finally:
         if detach is not None:
             detach()
@@ -826,8 +829,9 @@ async def test_mcp_fetch_latency(tmp_path: Path, latency_rows: list[dict[str, An
             selects=measured_selects,
             call=_auto_fetch,
         )
-        _write_latency_report(latency_rows, _default_output_dir())
-        _assert_report(latency_rows, _default_output_dir())
+        report_dir = tmp_path / "latency-mcp-fetch"
+        _write_latency_report(latency_rows, report_dir)
+        _assert_report(latency_rows, report_dir)
     finally:
         if detach is not None:
             detach()

@@ -22,10 +22,10 @@ Feature: Local user accounts, migration, and settings
     Then the stored account should use email "agent@example.com" and role "agent"
     And the Agent account should not carry the superuser flag
 
-  Scenario: Migration reaches head 0004 with backup and intact data
+  Scenario: Migration reaches head 0005 with backup and intact data
     Given a pre-Alembic users database with historical usage rows
     When I run the users database migration
-    Then the users database should be at head "0004_local_users" with a valid schema
+    Then the users database should be at head "0005_tinyfish_plan_label" with a valid schema
     And the historical usage rows should remain unchanged
     And the migration should create the account tables and trace ownership column
 
@@ -137,8 +137,6 @@ Feature: Local user accounts, migration, and settings
       | GET    | /dashboard        |
       | GET    | /api/v1/providers |
       | GET    | /api/v1/traces    |
-      | GET    | /docs             |
-      | GET    | /openapi.json     |
       | GET    | /no-such-route    |
 
   Scenario: Credentials work only on their own routes

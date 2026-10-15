@@ -53,6 +53,7 @@ from freesearch.models.contracts import (
     SetSecretRequest,
 )
 from freesearch.models.provider_access import ALL_BITS, validate_mask
+from freesearch.models.provider_limits import AuthMode
 from freesearch.models.users import UserPrincipal
 from freesearch.persistence.storage import SQLiteRepository, register_setting_listener
 from freesearch.routers.auth import require_admin, require_control_reader
@@ -143,6 +144,11 @@ def register_control_routes(app: FastAPI) -> None:
         name = _require_provider(provider_id)
         repository: SQLiteRepository | None = request.app.state.repository
         await patch_provider_config(repository, name, update or ProviderConfigUpdate())
+        if name is ProviderName.TAVILY:
+            # A Tavily PATCH may change the rail or the PAYGO choice, so the
+            # live adapter is rebuilt against the merged record on demand.
+            with suppress(HTTPException):
+                await _ensure_provider_adapter(request, name, force_rebuild=True)
         return await _provider_entry(repository, name, request.app.state.secret_store)
 
     @app.post("/api/v1/providers/{provider_id}/test", response_model=ProviderTestResponse)
@@ -234,7 +240,12 @@ def register_control_routes(app: FastAPI) -> None:
         await _eject_provider_adapter(request, name)
         await _notify_credential_change(request, name)
         repo: SQLiteRepository | None = request.app.state.repository
-        if repo is not None and key is None and name is not ProviderName.KEENABLE:
+        if (
+            repo is not None
+            and key is None
+            and name is not ProviderName.KEENABLE
+            and name is not ProviderName.TAVILY
+        ):
             with suppress(Exception):
                 await repo.record_health(
                     ProviderHealth(
@@ -543,11 +554,15 @@ async def _resolve_secret(
 
 
 def _secret_presence(provider: ProviderName, key: str | None) -> SecretPresence:
-    """Return presence: configured, keyless public (Keenable), or missing."""
+    """Return presence: configured, keyless public (Keenable, Tavily), or missing.
+
+    Tavily joins Keenable on the keyless public tier: a missing key is an
+    available public transport, never a missing-credential condition.
+    """
 
     if key is not None:
         return SecretPresence.CONFIGURED
-    if provider is ProviderName.KEENABLE:
+    if provider is ProviderName.KEENABLE or provider is ProviderName.TAVILY:
         return SecretPresence.KEYLESS_PUBLIC
     return SecretPresence.MISSING
 
@@ -741,6 +756,8 @@ def _provider_payload(config: ProviderConfig) -> dict[str, Any]:
             "exa_manual_starting_credits_usd": _decimal_text(
                 config.exa_manual_starting_credits_usd
             ),
+            "tavily_key_environment": config.tavily_key_environment,
+            "tavily_paygo_enabled": config.tavily_paygo_enabled,
         }
     }
 
@@ -1075,7 +1092,7 @@ async def _provider_entry(
     health = await _latest_health(repository, provider.value)
     key, _source = await _resolve_secret(provider, store)
     reported_health = health.status if health is not None else None
-    if key is None and provider is not ProviderName.KEENABLE:
+    if key is None and provider not in (ProviderName.KEENABLE, ProviderName.TAVILY):
         reported_health = None
     return ProviderStatusResponse(
         provider_id=provider.value,
@@ -1089,6 +1106,11 @@ async def _provider_entry(
         secret_presence=_secret_presence(provider, key),
         free_tier_estimates=config.free_tier_estimates,
         reset_schedule=config.reset_schedule,
+        # The confirmed stored environment readback rides only on Tavily;
+        # every other provider keeps the null default.
+        tavily_key_environment=(
+            config.tavily_key_environment if provider is ProviderName.TAVILY else None
+        ),
     )
 
 
@@ -1124,11 +1146,29 @@ def _probe_detail(status: HealthStatus) -> str | None:
 
 
 def _build_with_resolved_secret(
-    factory: Callable[..., ProviderAdapter], client: httpx.AsyncClient | None, key: str | None
+    factory: Callable[..., ProviderAdapter],
+    client: httpx.AsyncClient | None,
+    key: str | None,
+    *,
+    config: ProviderConfig | None = None,
 ) -> ProviderAdapter:
-    """Pass a resolved key only to constructors that explicitly accept it."""
+    """Pass a resolved key only to constructors that explicitly accept it.
 
-    if key is not None and "api_key" in inspect.signature(factory).parameters:
+    A constructor that also accepts ``key_environment`` (Tavily) receives the
+    resolved key together with the explicit non-secret rail and PAYGO
+    configuration, so a keyless build still gets its configured access mode
+    instead of the constructor defaults.
+    """
+
+    parameters = inspect.signature(factory).parameters
+    if "key_environment" in parameters:
+        return factory(
+            client,
+            api_key=SecretStr(key) if key is not None else None,
+            key_environment=config.tavily_key_environment if config else "dev",
+            paygo_enabled=config.tavily_paygo_enabled if config else False,
+        )
+    if key is not None and "api_key" in parameters:
         return factory(client, api_key=SecretStr(key))
     return factory(client)
 
@@ -1137,7 +1177,8 @@ async def _eject_provider_adapter(request: Request, provider: ProviderName) -> N
     """Eject or rebuild an adapter after its secret is removed from the vault.
 
     For non-keyless providers, any live adapter is removed from app routes and closed.
-    For Keenable, if enabled, it reverts to the keyless public tier adapter.
+    For Keenable and Tavily, if enabled, the adapter reverts to the keyless
+    public tier instead.
     """
 
     app = request.app
@@ -1150,7 +1191,7 @@ async def _eject_provider_adapter(request: Request, provider: ProviderName) -> N
         if existing is not None:
             routes.remove(existing)
             await existing.aclose()
-        if provider is ProviderName.KEENABLE:
+        if provider is ProviderName.KEENABLE or provider is ProviderName.TAVILY:
             config = await effective_provider_config(app.state.repository, provider)
             if config.enabled:
                 factory = adapter_factory(provider.value)
@@ -1160,7 +1201,11 @@ async def _eject_provider_adapter(request: Request, provider: ProviderName) -> N
                         client = create_async_client()
                         app.state._client = client
                     with suppress(Exception):
-                        adapter = _build_with_resolved_secret(factory, client, None)
+                        adapter = _build_with_resolved_secret(
+                            factory, client, None, config=config
+                        )
+                        if provider is ProviderName.KEENABLE:
+                            _apply_keenable_limits(app, adapter)
                         routes.append(adapter)
 
     if lock is not None:
@@ -1170,16 +1215,54 @@ async def _eject_provider_adapter(request: Request, provider: ProviderName) -> N
         await _eject()
 
 
+def _tavily_rebuild_needed(
+    existing: ProviderAdapter, key: str | None, config: ProviderConfig
+) -> bool:
+    """Return whether the live Tavily adapter no longer matches its build inputs.
+
+    A rebuild is due when the resolved key state changed the auth rail, or
+    when the explicit key-environment / PAYGO configuration differs from the
+    values the adapter was built with.
+    """
+
+    expected_mode = AuthMode.KEYED if key is not None else AuthMode.KEYLESS
+    return bool(
+        existing.limit_auth_mode != expected_mode
+        or getattr(existing, "key_environment", "dev") != config.tavily_key_environment
+        or bool(getattr(existing, "paygo_enabled", False)) != bool(config.tavily_paygo_enabled)
+    )
+
+
+async def _apply_tavily_limits(
+    app: FastAPI, config: ProviderConfig, adapter: ProviderAdapter
+) -> None:
+    """Project the built Tavily adapter's rail into the app limit store."""
+
+    limits = getattr(app.state, "limits", None)
+    if limits is not None:
+        with suppress(Exception):
+            await limits.apply_tavily_config(config, auth_mode=adapter.limit_auth_mode)
+
+
+def _apply_keenable_limits(app: FastAPI, adapter: ProviderAdapter) -> None:
+    """Project the built Keenable adapter's rail into the app limit store."""
+
+    limits = getattr(app.state, "limits", None)
+    if limits is not None:
+        limits.apply_keenable_auth_mode(adapter.limit_auth_mode)
+
+
 async def _ensure_provider_adapter(
     request: Request, provider: ProviderName, *, force_rebuild: bool = False
 ) -> ProviderAdapter:
     """Return the provider's adapter, constructing it on demand when possible.
 
     Construction happens under the app control lock and only when the provider
-    is enabled and its vault key resolves (Keenable's keyless public tier
-    counts). A constructed adapter is appended once and never rebuilt unless
-    its key status changes (e.g. key added/removed) or force_rebuild is True;
-    the MCP server's generation refcount is untouched.
+    is enabled and its vault key resolves (Keenable's and Tavily's keyless
+    public tiers count). A constructed adapter is appended once and never
+    rebuilt unless its key status changes (e.g. key added/removed), its Tavily
+    rail configuration changed, or force_rebuild is True; the MCP server's
+    generation refcount is untouched.
     """
 
     app = request.app
@@ -1193,6 +1276,10 @@ async def _ensure_provider_adapter(
                 is_keyed = key is not None
                 has_quota = bool(existing.capabilities.quota)
                 if is_keyed == has_quota:
+                    return existing
+            elif provider is ProviderName.TAVILY:
+                current = await effective_provider_config(app.state.repository, provider)
+                if not _tavily_rebuild_needed(existing, key, current):
                     return existing
             else:
                 return existing
@@ -1208,7 +1295,7 @@ async def _ensure_provider_adapter(
                 status_code=503,
                 detail=f"provider {provider.value} is disabled; enable it before testing",
             )
-        if key is None and provider is not ProviderName.KEENABLE:
+        if key is None and provider not in (ProviderName.KEENABLE, ProviderName.TAVILY):
             raise HTTPException(status_code=503, detail=_restart_hint(provider.value))
         factory = adapter_factory(provider.value)
         if factory is None:
@@ -1218,17 +1305,27 @@ async def _ensure_provider_adapter(
             client = create_async_client()
             app.state._client = client
         try:
-            adapter = _build_with_resolved_secret(factory, client, key)
+            adapter = _build_with_resolved_secret(factory, client, key, config=config)
         except Exception:
             raise HTTPException(status_code=503, detail=_restart_hint(provider.value)) from None
-        parallel_setter = getattr(adapter, "set_free_seed", None)
-        if callable(parallel_setter):
-            parallel_setter(config.parallel_free_seed_usd)
-        exa_setter = getattr(adapter, "set_monthly_budget", None)
-        if callable(exa_setter):
-            exa_setter(config.exa_monthly_budget_usd)
-        credits_setter = getattr(adapter, "set_manual_starting_credits", None)
-        if callable(credits_setter):
-            credits_setter(config.exa_manual_starting_credits_usd)
+        _apply_provider_budget_setters(adapter, config)
+        if provider is ProviderName.TAVILY:
+            await _apply_tavily_limits(app, config, adapter)
+        elif provider is ProviderName.KEENABLE:
+            _apply_keenable_limits(app, adapter)
         routes.append(adapter)
         return adapter
+
+
+def _apply_provider_budget_setters(adapter: ProviderAdapter, config: ProviderConfig) -> None:
+    """Seed the optional native-budget setters from the effective configuration."""
+
+    parallel_setter = getattr(adapter, "set_free_seed", None)
+    if callable(parallel_setter):
+        parallel_setter(config.parallel_free_seed_usd)
+    exa_setter = getattr(adapter, "set_monthly_budget", None)
+    if callable(exa_setter):
+        exa_setter(config.exa_monthly_budget_usd)
+    credits_setter = getattr(adapter, "set_manual_starting_credits", None)
+    if callable(credits_setter):
+        credits_setter(config.exa_manual_starting_credits_usd)

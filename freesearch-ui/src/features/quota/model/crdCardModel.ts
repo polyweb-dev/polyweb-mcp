@@ -19,10 +19,12 @@ import type {
   ProviderAuthLimits,
   ProviderLimits,
 } from "@/domains/dashboard"
-import type { ProviderConfig } from "@/domains/providers"
 import { formatCRDAmount, percentRemaining, sumAmounts } from "./crdDisplay"
 import { multiplyDecimal, parseDecimal } from "./manualQuotaMath"
+import { buildPriceNoteRows, type PriceNoteInput, type PriceNoteRow } from "./priceNoteRows"
 import { sourceLabel, BALANCE_ENTRY } from "./quotaLabels"
+
+export type { PriceNoteInput, PriceNoteRow } from "./priceNoteRows"
 
 const OPERATIONS: readonly CRDOperation[] = ["search", "fetch"]
 const USD_UNIT = "USD"
@@ -30,6 +32,26 @@ const FREE_UNIT = "FREE"
 const UNKNOWN_TEXT = "unknown"
 const MANUAL_ANCHOR_TEXT = "Estimated · " + BALANCE_ENTRY
 const USD_SCALE = 12
+/**
+ * Frontend display-only allowance for the Parallel OAuth balance fallback:
+ * $5/mo free credit (LIMITS.md §7, eligible orgs with card) at 1 CRD =
+ * $0.001, so $5 = 5000 CRD. Never a backend allowance; only a denominator
+ * for the card bar and percent.
+ */
+export const PARALLEL_FREE_ALLOWANCE_CRD = "5000"
+/**
+ * Frontend display-only allowance for the You.com balance fallback: the $100
+ * signup credit (LIMITS.md §11.5, "$100 once + 100 free/day") at 1 CRD =
+ * $0.001, so $100 = 100000 CRD total. The shared USD pool prices search at
+ * $0.005 (5 CRD) and fetch at $0.001 per live page (1 CRD), so 100000 CRD
+ * yields 20000 searches or 100000 fetches (LIMITS.md §11.3). The total
+ * 100000 CRD is the display-only denominator, consistent with poolFunds when
+ * the backend reports the $100 allowance (95500/100000). Never a backend
+ * allowance; only a denominator for the card bar and percent. The 100/day
+ * free search pool is a rate fact, not funds, so it stays out of the
+ * allowance.
+ */
+export const YOUCOM_FREE_ALLOWANCE_CRD = "100000"
 /** Confidence order: the weakest applicable member governs a combined note. */
 const CONFIDENCE_RANK: Record<string, number> = {
   authoritative: 3,
@@ -54,23 +76,6 @@ export interface CreditCardModel {
   pricedUseUSD: string | null
   provenanceNote: string | null
   poolIds: string[]
-}
-
-/** Input of the page price note. */
-export interface PriceNoteInput {
-  providers: ProviderConfig[]
-  providerLimits: ProviderLimits[]
-}
-
-/** One supported operation price of one provider. */
-export interface PriceNoteRow {
-  provider: string
-  providerName: string
-  operation: CRDOperation
-  usdPerCall: string
-  crdPerCall: string
-  priceVersion: string | null
-  estimated: boolean
 }
 
 interface Funds {
@@ -109,7 +114,7 @@ export function operationAvailable(auth: ProviderAuthLimits, operation: CRDOpera
   return record !== null && record.supported && record.transport_available
 }
 
-/** The active auth rail of one payload, with the current fallback to the first. */
+/** Select the active credential rail reported by this provider limits payload. */
 export function activeAuth(limits: ProviderLimits): ProviderAuthLimits | undefined {
   return limits.auths.find((entry) => entry.auth_mode === limits.active_auth_mode) ?? limits.auths[0]
 }
@@ -144,6 +149,21 @@ function nativeUnitPrice(nativeUnit: string, profile: CRDConversionProfile): str
 export function usdFromCRD(crd: string, profile: CRDConversionProfile | null): string | null {
   const reference = referenceProfile(profile)
   return reference === null ? null : multiplyDecimal(crd, reference)
+}
+
+/**
+ * CRD equivalent of one authoritative USD balance (Parallel OAuth fallback):
+ * USD native value divided by the rail reference price (`reference_usd_per_crd`,
+ * USD 0.001 per CRD), with exact decimal math. Null when the balance or the
+ * profile is unusable. The postpaid rail is uncapped, so no allowance or
+ * percent is derived here; the caller keeps the amount-only display.
+ */
+export function usdBalanceToCRD(usd: string, auth: ProviderAuthLimits): string | null {
+  const profile = applicableProfile(auth)
+  if (profile === null) return null
+  const text = usd.trim()
+  if (text === "") return null
+  return nativeToCRD(text, USD_UNIT, profile)
 }
 
 function nativeToCRD(amount: string, nativeUnit: string, profile: CRDConversionProfile | null): string | null {
@@ -332,38 +352,7 @@ export function creditCardModel(input: CreditCardInput): CreditCardModel {
   return modelOf(input, funds, profile)
 }
 
-function providerNameOf(providers: ProviderConfig[], providerId: string): string {
-  return providers.find((provider) => provider.id === providerId)?.name ?? providerId
-}
-
-/**
- * Footer price rows: one row per supported operation of the reported payload.
- * The USD call value comes from `request_cost_crd` and its profile reference,
- * so an unknown or unsupported operation never becomes a price row.
- */
+/** Footer price rows from runtime limits and documented provider references. */
 export function priceNoteRows(input: PriceNoteInput): PriceNoteRow[] {
-  const rows: PriceNoteRow[] = []
-  for (const limits of input.providerLimits) {
-    const auth = activeAuth(limits)
-    if (auth === undefined) continue
-    for (const operation of OPERATIONS) {
-      if (!operationAvailable(auth, operation)) continue
-      const record = recordFor(auth, operation)
-      const view = auth.crd_views.find((entry) => entry.operation === operation)
-      if (record === null || view === undefined || view.request_cost_crd === null) continue
-      const usdPerCall = usdFromCRD(view.request_cost_crd, record.conversion_profile)
-      if (usdPerCall === null) continue
-      const version = record.conversion_profile.price_version
-      rows.push({
-        provider: limits.provider,
-        providerName: providerNameOf(input.providers, limits.provider),
-        operation,
-        usdPerCall,
-        crdPerCall: formatCRDAmount(view.request_cost_crd),
-        priceVersion: version === "" ? null : version,
-        estimated: record.conversion_profile.estimated,
-      })
-    }
-  }
-  return rows
+  return buildPriceNoteRows(input, { activeAuth, usdFromCRD, formatCRDAmount })
 }

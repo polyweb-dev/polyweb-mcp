@@ -8,14 +8,14 @@ workspace-local temp files mirroring the manual-quota suite.
 from __future__ import annotations
 
 import asyncio
+import gc
 import json
-from contextlib import suppress
+import time
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl
-from uuid import uuid4
 
 import httpx
 import pytest
@@ -84,18 +84,33 @@ async def _clean_oauth_state():  # type: ignore[no-untyped-def]
     clear_oauth_poll_state()
 
 
+def _unlink_with_retries(path: Path, *, attempts: int = 20) -> None:
+    """Remove a test database after Windows releases delayed SQLite handles."""
+
+    for attempt in range(attempts):
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            gc.collect()
+            time.sleep(0.05)
+        else:
+            return
+
+
 @pytest_asyncio.fixture
-async def repository():  # type: ignore[no-untyped-def]
-    path = Path.cwd() / f"parallel-oauth-{uuid4().hex}.db"
+async def repository(tmp_path: Path):  # type: ignore[no-untyped-def]
+    path = tmp_path / "parallel-oauth.db"
     repo = await SQLiteRepository.open(path)
     try:
         yield repo
     finally:
         await repo.close()
-        with suppress(OSError):
-            path.unlink()
-        with suppress(OSError):
-            Path(str(path) + ".migration.lock").unlink()
+        _unlink_with_retries(path)
+        _unlink_with_retries(Path(str(path) + ".migration.lock"))
 
 
 class _StubPlatform:

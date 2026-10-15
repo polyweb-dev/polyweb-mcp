@@ -4,8 +4,8 @@ import { useFreeSearch } from "@/context/useFreeSearch"
 import { isManualQuotaEligible } from "../model/quotaEligibility"
 import { manualEligibleProviders } from "../model/quotaRowModel"
 import { CRDPriceNote } from "./CRDPriceNote"
-import { Footnote } from "./Footnote"
 import { ProviderLimitsCards } from "./ProviderLimitsCards"
+import type { RateTierSlotArgs } from "./ProviderLimitsCard"
 import type { OAuthSlotArgs } from "./QuotaRow"
 import { UsageTotals } from "./UsageTotals"
 
@@ -17,6 +17,12 @@ export interface QuotaPageProps {
    * imports the OAuth feature directly.
    */
   renderOAuthActions?: (args: OAuthSlotArgs) => ReactNode
+  /**
+   * Tavily tier control per provider. Supplied by composition (the quota
+   * overlay stays in app composition) so the quota feature never imports the
+   * Settings feature directly.
+   */
+  renderRateTier?: (args: RateTierSlotArgs) => ReactNode
 }
 
 /**
@@ -27,13 +33,13 @@ export interface QuotaPageProps {
 export function QuotaPage({
   manualQuotaEligible = isManualQuotaEligible,
   renderOAuthActions,
+  renderRateTier,
 }: QuotaPageProps): ReactNode {
   const {
     providers,
     providerLimits,
     crdUsageTotals,
     dashboardQuotas,
-    dashboardNotice,
     usageLoading,
     usageError,
     refreshDashboard,
@@ -48,10 +54,6 @@ export function QuotaPage({
     <div className="space-y-8">
       <div className="flex flex-col gap-2 pb-2 border-b border-[var(--border-subtle)]">
         <h2 className="text-[var(--text-strong)]">Usage</h2>
-        <Footnote>
-          Credit-unit capacity and recorded provider usage reported by the backend.
-        </Footnote>
-        {dashboardNotice && <Footnote>{dashboardNotice}</Footnote>}
       </div>
 
       {usageError && (
@@ -76,9 +78,10 @@ export function QuotaPage({
         manualEligible={manualEligible}
         dashboardQuotas={dashboardQuotas}
         {...(renderOAuthActions !== undefined ? { renderOAuthActions } : {})}
+        {...(renderRateTier !== undefined ? { renderRateTier } : {})}
       />
 
-      <UsageTotals crdUsageTotals={crdUsageTotals} providers={providers} />
+      <UsageTotals crdUsageTotals={crdUsageTotals} providers={providers} providerLimits={providerLimits} />
 
       <CRDPriceNote providers={providers} providerLimits={providerLimits} />
     </div>

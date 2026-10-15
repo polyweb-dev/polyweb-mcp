@@ -435,3 +435,51 @@ def test_unsupported_view_has_no_request_cost() -> None:
     assert view.state is CRDState.UNAVAILABLE
     assert view.request_cost_crd is None
     assert view.remaining_crd is None
+
+
+# Tavily depth rule (PLAN 4.1): same rule as the adapter ------------------------
+
+
+def test_tavily_search_depth_rule_basic_and_advanced() -> None:
+    from freesearch.models.contracts import SearchRequest
+
+    record = _record(
+        provider="tavily",
+        budget_model=BudgetModel.CREDITS,
+        native_cost="1",
+        native_unit=UnitKind.CREDIT,
+        price="0.008",
+        pool_id="tavily:keyed:credit",
+    )
+    assert (
+        request_native_cost(record, SearchRequest(query="q", limit=2)) == Decimal("1")
+    )
+    assert (
+        request_native_cost(record, SearchRequest(query="q", limit=2, mode="advanced"))
+        == Decimal("2")
+    )
+
+
+def test_tavily_extract_depth_rule_basic_and_advanced() -> None:
+    from freesearch.models.contracts import FetchRequest
+    from freesearch.models.tavily import TavilyExtractParams
+
+    record = _record(
+        provider="tavily",
+        operation=LimitOperation.FETCH,
+        budget_model=BudgetModel.CREDITS,
+        native_cost="0.2",
+        native_unit=UnitKind.CREDIT,
+        price="0.008",
+        pool_id="tavily:keyed:credit",
+    )
+    basic = FetchRequest(
+        url="https://example.com/a", tavily=TavilyExtractParams(extract_depth="basic")
+    )
+    advanced = FetchRequest(
+        url="https://example.com/a", tavily=TavilyExtractParams(extract_depth="advanced")
+    )
+    assert request_native_cost(record, basic) == Decimal("0.2")
+    assert request_native_cost(record, advanced) == Decimal("0.4")
+    assert request_cost_crd(record, basic) == Decimal("1.6")
+    assert request_cost_crd(record, advanced) == Decimal("3.2")

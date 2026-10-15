@@ -100,7 +100,7 @@ async def test_provider_config_env_json_is_base_and_persisted_update_wins(
 
 @pytest.mark.asyncio
 async def test_partial_legacy_record_decodes_before_persisted_merge(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, auth_secret: str
 ) -> None:
     """A legacy global choice decodes into all enable bits on the read path."""
     monkeypatch.chdir(tmp_path)
@@ -113,7 +113,11 @@ async def test_partial_legacy_record_decodes_before_persisted_merge(
         app = create_app([adapter], repository=repository)
 
         with TestClient(app) as client:
-            item = client.get("/api/v1/providers/exa")
+            pair = await register_promote_login(
+                client, repository, temp_email("runtime-legacy"), UserRole.DEVELOPER
+            )
+            headers = raw_auth_headers(pair["access_token"])
+            item = client.get("/api/v1/providers/exa", headers=headers)
 
         assert item.status_code == 200
         assert item.json()["enable_mask"] == 0
@@ -124,7 +128,9 @@ async def test_partial_legacy_record_decodes_before_persisted_merge(
 
 
 @pytest.mark.asyncio
-async def test_stale_support_mask_is_reconciled_to_system_map(tmp_path: Path) -> None:
+async def test_stale_support_mask_is_reconciled_to_system_map(
+    tmp_path: Path, auth_secret: str
+) -> None:
     """A stale stored support mask is corrected without touching admin bits."""
     repository = await SQLiteRepository.open(tmp_path / "reconcile.db")
     try:
@@ -135,7 +141,11 @@ async def test_stale_support_mask_is_reconciled_to_system_map(tmp_path: Path) ->
         app = create_app([], repository=repository)
 
         with TestClient(app) as client:
-            item = client.get("/api/v1/providers/brave")
+            pair = await register_promote_login(
+                client, repository, temp_email("runtime-reconcile"), UserRole.DEVELOPER
+            )
+            headers = raw_auth_headers(pair["access_token"])
+            item = client.get("/api/v1/providers/brave", headers=headers)
 
         assert item.status_code == 200
         assert item.json()["enable_mask"] == 5
@@ -149,7 +159,7 @@ async def test_stale_support_mask_is_reconciled_to_system_map(tmp_path: Path) ->
 
 @pytest.mark.asyncio
 async def test_locked_reconcile_write_keeps_strict_search_at_200(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, auth_secret: str
 ) -> None:
     """RC Item 1: a held write lock cannot fail a strict search read."""
     from sqlalchemy import event as sa_event
@@ -175,8 +185,12 @@ async def test_locked_reconcile_write_keeps_strict_search_at_200(
         app = create_app([adapter], repository=repository)
 
         with TestClient(app) as client:
-            search = client.post("/search", json={"query": "locked write"})
-            item = client.get("/api/v1/providers/exa")
+            pair = await register_promote_login(
+                client, repository, temp_email("runtime-locked"), UserRole.DEVELOPER
+            )
+            headers = raw_auth_headers(pair["access_token"])
+            search = client.post("/search", json={"query": "locked write"}, headers=headers)
+            item = client.get("/api/v1/providers/exa", headers=headers)
 
         assert search.status_code == 200
         assert search.json()["provider"] == "exa"
@@ -193,7 +207,7 @@ async def test_locked_reconcile_write_keeps_strict_search_at_200(
 
 @pytest.mark.asyncio
 async def test_released_lock_persists_reconciled_support_mask(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, auth_secret: str
 ) -> None:
     """RC Item 1: the next read after lock release persists the system mask."""
     from sqlalchemy.exc import OperationalError
@@ -213,14 +227,18 @@ async def test_released_lock_persists_reconciled_support_mask(
         app = create_app([], repository=repository)
 
         with TestClient(app) as client:
-            first = client.get("/api/v1/providers/exa")
+            pair = await register_promote_login(
+                client, repository, temp_email("runtime-released"), UserRole.DEVELOPER
+            )
+            headers = raw_auth_headers(pair["access_token"])
+            first = client.get("/api/v1/providers/exa", headers=headers)
             assert first.status_code == 200
             assert first.json()["support_mask"] == 7
             stored = await repository.get_runtime_setting("provider.exa")
             assert stored["config"]["support_mask"] == 0
 
             monkeypatch.setattr(repository, "update_runtime_setting", real_update)
-            second = client.get("/api/v1/providers/exa")
+            second = client.get("/api/v1/providers/exa", headers=headers)
 
         assert second.status_code == 200
         assert second.json()["support_mask"] == 7

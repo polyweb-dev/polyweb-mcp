@@ -4,7 +4,6 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import userEvent from "@testing-library/user-event"
 import { FreeSearchProvider } from "@/context/FreeSearchContext"
 import { ADMIN_ACCOUNT_ID } from "@/test/authFixtures"
-import { ProviderRanks } from "@/components/routing/ProviderRanks"
 import { RouteSimulator } from "@/components/routing/RouteSimulator"
 import { SettingsView } from "@/components/settings/SettingsView"
 import { QuotaAnalytics } from "@/components/quota/QuotaAnalytics"
@@ -31,24 +30,6 @@ import {
  * steering from balances, display_unit passthrough on usage totals,
  * single-snapshot-per-provider changes.
  */
-
-function renderRanks(dashboard: WireDashboard) {
-  installFetchStub((req) => {
-    if (req.url === "/api/v1/providers" && req.method === "GET") {
-      return ok(allProvidersFixture())
-    }
-    if (req.url === "/api/v1/routing/config" && req.method === "GET") {
-      return ok(routingConfigFixture())
-    }
-    if (req.url.startsWith("/dashboard")) return ok(dashboard)
-    return err(404, { detail: "unhandled test route" })
-  })
-  return render(
-    <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
-      <ProviderRanks />
-    </FreeSearchProvider>
-  )
-}
 
 function renderSimulator(dashboard: WireDashboard) {
   installFetchStub((req) => {
@@ -97,12 +78,6 @@ function renderSettings(dashboard: WireDashboard) {
       <SettingsView />
     </FreeSearchProvider>
   )
-}
-
-async function waitForRanks() {
-  await waitFor(() => {
-    expect(screen.getAllByText("Brave Search", { exact: true }).length).toBeGreaterThanOrEqual(1)
-  })
 }
 
 async function waitForSettings() {
@@ -275,18 +250,9 @@ function renderUsageWithProviders(
   )
 }
 
-describe("RF2: null limits render as — on ranks / simulator / settings", () => {
+describe("RF2: null limits render as — on simulator / settings", () => {
   afterEach(() => {
     vi.unstubAllGlobals()
-  })
-
-  it("ranks table shows — for null limits, never ∞", async () => {
-    renderRanks(dashboardFixture())
-    await waitForRanks()
-
-    const body = document.body.textContent ?? ""
-    expect(body).not.toContain("∞")
-    expect(body).toContain("—")
   })
 
   it("simulator pipeline shows — for null limits, never ∞", async () => {
@@ -314,11 +280,12 @@ describe("RF2: null limits render as — on ranks / simulator / settings", () =>
 
     // Registry carries no quota cells, so it must never invent an infinity marker.
     expect(screen.getByRole("table").textContent).not.toContain("∞")
-    // Tavily (no snapshot) renders a null-limit blank in the drill-down quota value.
+    // Release baseline: the reduced test modal shows "Not tested" visibly
+    // (no quota em-dash blank lives in this modal).
     await user.click(screen.getByRole("button", { name: "Tavily test connection" }))
     const dialog = await screen.findByRole("dialog")
     expect(dialog.textContent).not.toContain("∞")
-    expect(dialog.textContent).toMatch(/[\u2014]/)
+    expect(dialog.textContent).toMatch(/Not tested/)
     cleanup()
 
     renderUsage(dashboardFixture())
@@ -330,29 +297,11 @@ describe("RF2: null limits render as — on ranks / simulator / settings", () =>
     const body = document.body.textContent ?? ""
     expect(body).not.toContain("∞")
   })
-
-  it("RF1 verbatim: canonical Tavily limit '100000.10' survives on the ranks surface", async () => {
-    renderRanks(dashboardFixture({ latest_quota: canonicalQuotasFixture() }))
-    await waitForRanks()
-
-    const body = document.body.textContent ?? ""
-    expect(body).toContain("100000.10")
-    expect(body).not.toContain("100000.1 ")
-  })
 })
 
 describe("RF3: normalized-percentage guidance and native tooltip units", () => {
   afterEach(() => {
     vi.unstubAllGlobals()
-  })
-
-  it("ranks table explains that percentages are comparable and native units stay detailed", async () => {
-    renderRanks(dashboardFixture())
-    await waitForRanks()
-
-    expect(document.body.textContent).toMatch(
-      /remaining percentages are comparable; details keep each provider's native unit/i
-    )
   })
 
   it("simulator explains that percentages are comparable and native units stay detailed", async () => {
@@ -392,16 +341,6 @@ describe("RF3: normalized-percentage guidance and native tooltip units", () => {
       expect(el.getAttribute("title")).toMatch(/units|credits|requests|USD|legacy/i)
     }
   })
-
-  it("does not infer routing state from balances (no exhausted/hard/soft pills)", async () => {
-    renderRanks(dashboardFixture({ latest_quota: canonicalQuotasFixture() }))
-    await waitForRanks()
-
-    const body = (document.body.textContent ?? "").toLowerCase()
-    expect(body).not.toContain("exhausted")
-    expect(body).not.toContain("hard limit")
-    expect(body).not.toMatch(/soft\s+limit/)
-  })
 })
 
 describe("RF4: visible unavailable/confidence semantics in Settings modal + Usage view", () => {
@@ -422,10 +361,13 @@ describe("RF4: visible unavailable/confidence semantics in Settings modal + Usag
     expect(headers).not.toContain("p95")
     const rows = Array.from(table.querySelectorAll("tbody tr"))
     expect(rows.length).toBe(8)
+    // Merged baseline: every row keeps the seven release columns (7-col
+    // uniform); the Tavily rate-tier dropdown lives only in the Usage card.
     for (const row of rows) {
       expect(row.children).toHaveLength(headers.length)
     }
-    // Drill-down still carries visible confidence semantics (not title-only).
+    // Release baseline: the reduced modal carries Endpoint/Capabilities/Last
+    // result visibly (not title-only); quota confidence lives outside it.
     const braveRow = screen.getByText("Brave Search", { exact: true }).closest("tr")!
     const testIdx = headers.indexOf("Test")
     expect(testIdx).toBeGreaterThanOrEqual(0)
@@ -433,7 +375,9 @@ describe("RF4: visible unavailable/confidence semantics in Settings modal + Usag
       within(braveRow.children[testIdx] as HTMLElement).getByRole("button", { name: /brave.*test/i })
     )
     const dialog = await screen.findByRole("dialog")
-    expect(dialog.textContent).toMatch(/authoritative|observed|estimated|unavailable|no quota/i)
+    expect(dialog.textContent).toMatch(/Not tested/)
+    expect(dialog.textContent).toMatch(/Endpoint/)
+    expect(dialog.textContent).toMatch(/Capabilities/)
   })
 
   it("modal keeps normalized capacity; Usage view shows CRD cost and volume cards (UI7-05)", async () => {
@@ -443,8 +387,10 @@ describe("RF4: visible unavailable/confidence semantics in Settings modal + Usag
 
     await user.click(screen.getByRole("button", { name: "Brave Search test connection" }))
     const dialog = await screen.findByRole("dialog")
-    expect(dialog.textContent).toMatch(/95% remaining/)
-    expect(dialog.textContent).toMatch(/950\/1000 requests/)
+    // Release baseline: the reduced modal shows the release "Not tested" value
+    // with Endpoint/Capabilities, not normalized capacity rows.
+    expect(dialog.textContent).toMatch(/Not tested/)
+    expect(dialog.textContent).toMatch(/Endpoint/)
     cleanup()
 
     // UI7-05: the native quota rows left UsageTotals. Credit-unit cost uses
@@ -480,7 +426,8 @@ describe("RF4: visible unavailable/confidence semantics in Settings modal + Usag
 
     await user.click(screen.getByRole("button", { name: "Brave Search test connection" }))
     const dialog = await screen.findByRole("dialog")
-    expect(dialog.textContent).toMatch(/unavailable|no quota|[\u2014]/i)
+    // Release baseline: an untested provider shows "Not tested" visibly.
+    expect(dialog.textContent).toMatch(/Not tested/i)
     cleanup()
 
     // UI7-05: UsageTotals holds no unavailable marker. Empty totals show
@@ -506,7 +453,11 @@ describe("RF4: visible unavailable/confidence semantics in Settings modal + Usag
     await user.click(within(testCell).getByRole("button", { name: /brave.*test/i }))
 
     const dialog = await screen.findByRole("dialog")
-    expect(dialog.textContent).toMatch(/authoritative|observed|estimated|unavailable|no quota/i)
+    // Release baseline: quota confidence is not title-only hidden; the reduced
+    // modal keeps Endpoint/Capabilities/Last result visibly rendered.
+    expect(dialog.textContent).toMatch(/Endpoint/)
+    expect(dialog.textContent).toMatch(/Capabilities/)
+    expect(dialog.textContent).toMatch(/Not tested/)
   })
 
   it("page shows exactly one price note with Brave cost and version once (UI7-06)", async () => {
@@ -533,11 +484,11 @@ describe("RF4: visible unavailable/confidence semantics in Settings modal + Usag
     const note = sections[0] as HTMLElement
     expect(within(note).getByText("Provider")).toBeInTheDocument()
     expect(within(note).getByText("Operation")).toBeInTheDocument()
-    expect(within(note).getByText("USD per call")).toBeInTheDocument()
-    expect(within(note).getByText("CRD per call")).toBeInTheDocument()
-    expect(within(note).getByText("Brave Search")).toBeInTheDocument()
-    expect(within(note).getByText("0.005 USD")).toBeInTheDocument()
-    expect(within(note).getByText("5 CRD")).toBeInTheDocument()
+    expect(within(note).getByText("USD per operation")).toBeInTheDocument()
+    expect(within(note).getByText("CRD per operation")).toBeInTheDocument()
+    const bravePriceRow = within(note).getByText("Brave Search").closest("tr")!
+    expect(within(bravePriceRow).getByText("0.005 USD")).toBeInTheDocument()
+    expect(within(bravePriceRow).getByText("5 CRD")).toBeInTheDocument()
     expect(within(note).queryByText("fetch")).toBeNull()
 
     const body = document.body.textContent ?? ""

@@ -38,6 +38,7 @@ type ProviderPatch = {
   search_enabled?: boolean
   fetch_enabled?: boolean
   priority?: number
+  tavily_key_environment?: "dev" | "prod"
 }
 
 /** Optional Activity list filters; omitted values ask for the backend default. */
@@ -78,6 +79,9 @@ export class FreeSearchApiService {
     if (patch.search_enabled !== undefined) body.search_enabled = patch.search_enabled
     if (patch.fetch_enabled !== undefined) body.fetch_enabled = patch.fetch_enabled
     if (patch.priority !== undefined) body.priority = patch.priority
+    if (patch.tavily_key_environment !== undefined) {
+      body.tavily_key_environment = patch.tavily_key_environment
+    }
     return this.request<BackendProviderStatus>(`/api/v1/providers/${backendId}`, {
       method: "PATCH",
       body: JSON.stringify(body),

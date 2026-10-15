@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest"
-import { render, screen, within } from "@testing-library/react"
+import { describe, expect, it, vi } from "vitest"
+import { fireEvent, render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { BALANCE_ENTRY, BALANCE_ENTRY_NOTE, CREDIT_MODE_LABEL, SPEND_CAP_NOTE } from "../model/quotaLabels"
 import { ManualQuotaModal } from "./ManualQuotaModal"
@@ -366,5 +366,112 @@ describe("ManualQuotaModal balance prefill", () => {
     expect(screen.getByTestId("manual-quota-allowance")).toHaveValue("5.00")
     expect(screen.getByTestId("manual-quota-usage")).toHaveValue("4.12")
     expect(screen.queryByTestId("manual-quota-prefill")).toBeNull()
+  })
+})
+
+describe("ManualQuotaModal target units", () => {
+  const providers = [{ id: "tinyfish", name: "Tinyfish" }, { id: "exa", name: "Exa" }] as never
+  const providerUnits = {
+    tinyfish: { unitKind: "REQUEST", displayUnit: "requests", amountMode: "usage" as const },
+    exa: { unitKind: "USD", displayUnit: "USD", amountMode: "balance" as const },
+  } as const
+
+  it("uses Exa USD inputs and saves exact native-dollar usage after retargeting", async () => {
+    const user = userEvent.setup()
+    const onSave = vi.fn(() => Promise.resolve())
+    render(
+      <ManualQuotaModal
+        open
+        providerId="tinyfish"
+        providerName="Tinyfish"
+        unitKind="REQUEST"
+        displayUnit="requests"
+        defaults={null}
+        amountMode="usage"
+        providers={providers}
+        providerUnits={providerUnits}
+        onClose={() => {}}
+        onSave={onSave}
+      />,
+    )
+
+    expect(screen.getByText("Allowance (requests)")).toBeInTheDocument()
+    await user.click(screen.getByRole("combobox", { name: "Provider" }))
+    await user.click(screen.getByRole("option", { name: "Exa" }))
+    expect(screen.getByText("Allowance (USD)")).toBeInTheDocument()
+    expect(screen.getByText("Balance remaining (USD)")).toBeInTheDocument()
+    expect(screen.getByTestId("manual-quota-allowance")).toHaveValue("")
+    expect(screen.getByTestId("manual-quota-usage")).toHaveValue("")
+
+    fireEvent.change(screen.getByTestId("manual-quota-start"), {
+      target: { value: "2026-10-01" },
+    })
+    fireEvent.change(screen.getByTestId("manual-quota-end"), {
+      target: { value: "2026-10-31" },
+    })
+    fireEvent.change(screen.getByTestId("manual-quota-allowance"), {
+      target: { value: "5.00" },
+    })
+    fireEvent.change(screen.getByTestId("manual-quota-usage"), {
+      target: { value: "4.12" },
+    })
+    await user.click(screen.getByTestId("manual-quota-save"))
+    expect(onSave).toHaveBeenCalledWith(
+      {
+        billing_start: "2026-10-01",
+        billing_end: "2026-10-31",
+        allowance: "5.00",
+        current_usage: "0.88",
+      },
+      "exa",
+    )
+  })
+
+  it("switches Exa back to request usage fields and clears its prior draft", async () => {
+    const user = userEvent.setup()
+    render(
+      <ManualQuotaModal
+        open
+        providerId="exa"
+        providerName="Exa"
+        unitKind="USD"
+        displayUnit="USD"
+        defaults={null}
+        amountMode="balance"
+        providers={providers}
+        providerUnits={providerUnits}
+        onClose={() => {}}
+        onSave={() => Promise.resolve()}
+      />,
+    )
+    fireEvent.change(screen.getByTestId("manual-quota-allowance"), {
+      target: { value: "5.00" },
+    })
+    fireEvent.change(screen.getByTestId("manual-quota-usage"), {
+      target: { value: "4.12" },
+    })
+
+    await user.click(screen.getByRole("combobox", { name: "Provider" }))
+    await user.click(screen.getByRole("option", { name: "Tinyfish" }))
+    expect(screen.getByText("Allowance (requests)")).toBeInTheDocument()
+    expect(screen.getByText("Current usage (requests)")).toBeInTheDocument()
+    expect(screen.getByTestId("manual-quota-allowance")).toHaveValue("")
+    expect(screen.getByTestId("manual-quota-usage")).toHaveValue("")
+  })
+
+  it("uses Exa USD balance fields when no balance or catalog unit metadata is available", () => {
+    render(
+      <ManualQuotaModal
+        open
+        providerId="exa"
+        providerName="Exa"
+        unitKind={null}
+        displayUnit={null}
+        onClose={() => {}}
+        onSave={() => Promise.resolve()}
+      />,
+    )
+    expect(screen.getByText("Allowance (USD)")).toBeInTheDocument()
+    expect(screen.getByText("Balance remaining (USD)")).toBeInTheDocument()
   })
 })

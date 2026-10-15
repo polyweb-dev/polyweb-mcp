@@ -37,7 +37,15 @@ from freesearch.models.contracts import (
     SearchRequest,
     SearchResponse,
     SearchResult,
+    UnitKind,
     UsageOperation,
+)
+from freesearch.models.provider_limits import (
+    AuthMode,
+    Confidence,
+    NativeUsageSnapshot,
+    UsageSyncRequest,
+    native_pool_id,
 )
 
 __all__ = ["YoucomAdapter"]
@@ -98,6 +106,40 @@ class YoucomAdapter(ProviderAdapter):
     @property
     def capabilities(self) -> ProviderCapabilities:
         return ProviderCapabilities(search=True, fetch=True, cost_estimate=True, quota=True)
+
+    @property
+    def limit_auth_mode(self) -> AuthMode:
+        """Return the keyed rail this adapter instance uses for limit records."""
+
+        return AuthMode.KEYED
+
+    async def usage_snapshot(self, request: UsageSyncRequest) -> NativeUsageSnapshot | None:
+        """Return the vendor balance poll as the native USD observation.
+
+        The account-balance endpoint reports the remaining USD credit balance
+        in cents, validated by the shared quota-balance check; the vendor
+        exposes no plan limit or reset, so the allowance stays unknown. The
+        observation reuses the existing quota mapping, so confidence stays
+        estimated and no rate observation is fabricated.
+        """
+
+        quota = await self.quota()
+        return NativeUsageSnapshot(
+            pool_id=native_pool_id(self.name, AuthMode.KEYED, UnitKind.USD),
+            provider=self.name,
+            auth_mode=AuthMode.KEYED,
+            native_unit=UnitKind.USD,
+            observed_at=request.observed_at,
+            source="vendor_api",
+            confidence=Confidence.ESTIMATED,
+            remaining=quota.remaining,
+            allowance=quota.limit,
+            reset_at=quota.reset_at,
+            credential_generation=request.credential_generation,
+            plan_name="Signup $100 credit + 100 free searches/day",
+            usage_url="https://you.com/platform/analytics",
+            rate_observations=[],
+        )
 
     async def search(self, request: SearchRequest) -> SearchResponse:
         try:

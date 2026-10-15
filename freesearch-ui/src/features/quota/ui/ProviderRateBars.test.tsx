@@ -55,8 +55,8 @@ describe("ProviderRateBars", () => {
         ]}
       />,
     )
-    expect(screen.getByText("Search hourly rate")).not.toBeNull()
-    expect(screen.getByText("Fetch daily rate")).not.toBeNull()
+    expect(screen.getByText("Search")).not.toBeNull()
+    expect(screen.getByText("Fetch")).not.toBeNull()
     expect(screen.getAllByRole("progressbar")).toHaveLength(2)
   })
 
@@ -86,6 +86,70 @@ describe("ProviderRateBars", () => {
     )
     expect(screen.getByText("5 of 10 requests")).not.toBeNull()
     expect(screen.getByText("7 of 20 URLs")).not.toBeNull()
+  })
+
+  it("shows_integer_request_and_url_counts", () => {
+    const { unmount: unmountTinyfish } = render(
+      <ProviderRateBars
+        providerName="Tinyfish"
+        fetchAvailable
+        progress={[
+          makeProgress({
+            bucket_id: "tinyfish-fetch-daily",
+            operation: "fetch",
+            window: "1d",
+            unit: "urls",
+            remaining: "1000.000000000",
+            limit: "1000.000000000",
+          }),
+          makeProgress({
+            bucket_id: "tinyfish-search-hourly",
+            operation: "search",
+            window: "1h",
+            unit: "requests",
+            remaining: "498.000000000",
+            limit: "500",
+          }),
+        ]}
+      />,
+    )
+    expect(screen.getByText("1000 of 1000 URLs")).not.toBeNull()
+    expect(screen.getByText("498 of 500 requests")).not.toBeNull()
+    expect(screen.queryByText("1000.000000000 of 1000.000000000 URLs")).toBeNull()
+    expect(screen.queryByText("498.000000000 of 500 requests")).toBeNull()
+    expect(
+      screen
+        .getByRole("progressbar", { name: "Tinyfish fetch daily URLs remaining" })
+        .getAttribute("aria-valuenow"),
+    ).toBe("100")
+    expect(
+      screen
+        .getByRole("progressbar", { name: "Tinyfish search hourly requests remaining" })
+        .getAttribute("aria-valuenow"),
+    ).toBe("99.6")
+    unmountTinyfish()
+
+    const { unmount: unmountNull } = render(
+      <ProviderRateBars
+        providerName="Synth B"
+        fetchAvailable
+        progress={[makeProgress({ bucket_id: "synth-null", remaining: "7", limit: null })]}
+      />,
+    )
+    expect(screen.getByText("7 left requests")).not.toBeNull()
+    expect(screen.queryByRole("progressbar")).toBe(null)
+    unmountNull()
+
+    const { unmount: unmountZero } = render(
+      <ProviderRateBars
+        providerName="Synth C"
+        fetchAvailable
+        progress={[makeProgress({ bucket_id: "synth-zero", remaining: "5", limit: "0" })]}
+      />,
+    )
+    expect(screen.getByText("5 of 0 requests")).not.toBeNull()
+    expect(screen.queryByRole("progressbar")).toBe(null)
+    unmountZero()
   })
 
   it("hides fetch rate rows without fetch support (UI7-04)", () => {
@@ -190,5 +254,154 @@ describe("ProviderRateBars", () => {
       <ProviderRateBars providerName="Synth A" fetchAvailable progress={[]} />,
     )
     expect(container.textContent).toBe("")
+  })
+})
+
+describe("ProviderRateBars shared bar", () => {
+  it("floors decimal request counts through the shared bar with green", () => {
+    render(
+      <ProviderRateBars
+        providerName="Keenable"
+        fetchAvailable
+        useSharedBar
+        progress={[
+          makeProgress({
+            bucket_id: "keenable:keyless:requests",
+            operation: "search",
+            window: "1h",
+            unit: "requests",
+            remaining: "990.00000000",
+            limit: "1000",
+            confidence: "observed",
+          }),
+        ]}
+      />,
+    )
+    // The shared bar holds the title only; the counts sit in the hover popover.
+    expect(screen.getByText("990 of 1000 requests per hour")).not.toBeNull()
+    expect(screen.queryByText("990.00000000")).toBeNull()
+    const bar = screen.getByRole("progressbar", {
+      name: "Keenable search hourly requests remaining",
+    })
+    expect(bar.getAttribute("aria-valuenow")).toBe("99")
+    expect(bar.querySelector("div")?.getAttribute("class")).toContain(
+      "bg-[var(--status-healthy)]",
+    )
+  })
+
+  it("keeps URL units verbatim on the shared bar path", () => {
+    render(
+      <ProviderRateBars
+        providerName="Synth A"
+        fetchAvailable
+        useSharedBar
+        progress={[
+          makeProgress({
+            bucket_id: "bucket-url",
+            operation: "fetch",
+            window: "1d",
+            unit: "urls",
+            remaining: "7.5",
+            limit: "20",
+          }),
+        ]}
+      />,
+    )
+    expect(screen.getByText("7.5 of 20 URLs per day")).not.toBeNull()
+  })
+
+  it("shows limit-only text without a fabricated remaining amount", () => {
+    render(
+      <ProviderRateBars
+        providerName="Synth A"
+        fetchAvailable
+        useSharedBar
+        progress={[makeProgress({ remaining: null, limit: "10" })]}
+      />,
+    )
+    // An unknown remaining draws no bar and no hover counts, so the row holds the title only.
+    expect(screen.getByText("Search")).not.toBeNull()
+    expect(screen.queryByRole("progressbar")).toBeNull()
+    expect(screen.queryByText("0 of 10 requests")).toBeNull()
+  })
+
+  it("shows remaining-only text without a fabricated limit amount", () => {
+    render(
+      <ProviderRateBars
+        providerName="Synth A"
+        fetchAvailable
+        useSharedBar
+        progress={[makeProgress({ remaining: "7", limit: null })]}
+      />,
+    )
+    // An unknown limit draws no bar and no hover counts, so the row holds the title only.
+    expect(screen.getByText("Search")).not.toBeNull()
+    expect(screen.queryByRole("progressbar")).toBeNull()
+  })
+
+  it("shows zero limit text with no bar and no invented capacity", () => {
+    render(
+      <ProviderRateBars
+        providerName="Synth A"
+        fetchAvailable
+        useSharedBar
+        progress={[makeProgress({ remaining: "0", limit: "0" })]}
+      />,
+    )
+    // A zero limit draws no bar and no hover counts, so the row holds the title only.
+    expect(screen.getByText("Search")).not.toBeNull()
+    expect(screen.queryByRole("progressbar")).toBeNull()
+  })
+
+  it("drops a row with invalid amounts instead of a fabricated zero", () => {
+    const { container } = render(
+      <ProviderRateBars
+        providerName="Synth A"
+        fetchAvailable
+        useSharedBar
+        progress={[makeProgress({ remaining: "lots", limit: "lots" })]}
+      />,
+    )
+    expect(container.textContent).toBe("")
+    expect(screen.queryByRole("progressbar")).toBeNull()
+  })
+
+  it("keeps reset notes after authoritative suppression", () => {
+    render(
+      <ProviderRateBars
+        providerName="Keenable"
+        fetchAvailable
+        useSharedBar
+        hideAuthoritative
+        progress={[
+          makeProgress({
+            bucket_id: "keenable:keyless:requests",
+            remaining: "990",
+            limit: "1000",
+            confidence: "authoritative",
+            reset_at: "2026-03-01T00:00:00Z",
+          }),
+        ]}
+      />,
+    )
+    expect(screen.queryByText("authoritative")).toBeNull()
+    expect(screen.getByText(/Resets /)).not.toBeNull()
+  })
+
+  it("preserves observed confidence on the shared bar path", () => {
+    render(
+      <ProviderRateBars
+        providerName="Keenable"
+        fetchAvailable
+        useSharedBar
+        progress={[
+          makeProgress({
+            bucket_id: "keenable:keyless:requests",
+            confidence: "observed",
+          }),
+        ]}
+      />,
+    )
+    expect(screen.getByText("observed")).not.toBeNull()
   })
 })

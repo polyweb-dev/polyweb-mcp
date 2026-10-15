@@ -824,3 +824,103 @@ async def test_fetch_target_failures_map_to_retryable_provider_errors(
     assert raised.value.error.code == code
     assert raised.value.error.retryable is retryable
     assert raised.value.error.status_code == expected_status
+
+
+def test_tinyfish_rate_catalog() -> None:
+    from freesearch.configuration.provider_limits import provider_limit_defaults
+    from freesearch.models.provider_limits import (
+        AuthMode,
+        LimitOperation,
+        RateScope,
+        RateUnit,
+        RateWindowName,
+    )
+
+    records = [r for r in provider_limit_defaults() if r.provider == "tinyfish"]
+    assert len(records) == 2
+    search = next(r for r in records if r.operation is LimitOperation.SEARCH)
+    fetch = next(r for r in records if r.operation is LimitOperation.FETCH)
+    assert search.auth_mode is AuthMode.KEYED
+    assert fetch.auth_mode is AuthMode.KEYED
+    assert search.rate is not None
+    assert fetch.rate is not None
+    assert len(search.rate.windows) == 2
+    assert len(fetch.rate.windows) == 2
+    search_by_window = {w.window: w for w in search.rate.windows}
+    fetch_by_window = {w.window: w for w in fetch.rate.windows}
+    assert set(search_by_window) == {RateWindowName.MINUTE, RateWindowName.HOUR}
+    assert set(fetch_by_window) == {RateWindowName.MINUTE, RateWindowName.DAY}
+    minute_search = search_by_window[RateWindowName.MINUTE]
+    hour_search = search_by_window[RateWindowName.HOUR]
+    assert minute_search.limit == Decimal("30")
+    assert minute_search.scope is RateScope.KEY
+    assert minute_search.unit is RateUnit.REQUESTS
+    assert hour_search.limit == Decimal("500")
+    assert hour_search.scope is RateScope.KEY
+    assert hour_search.unit is RateUnit.REQUESTS
+    minute_fetch = fetch_by_window[RateWindowName.MINUTE]
+    day_fetch = fetch_by_window[RateWindowName.DAY]
+    assert minute_fetch.limit == Decimal("150")
+    assert minute_fetch.scope is RateScope.KEY
+    assert minute_fetch.unit is RateUnit.URLS
+    assert day_fetch.limit == Decimal("1000")
+    assert day_fetch.scope is RateScope.KEY
+    assert day_fetch.unit is RateUnit.URLS
+    assert minute_search.bucket_id == "tinyfish:keyed:search:requests"
+    assert hour_search.bucket_id == "tinyfish:keyed:search:requests"
+    assert minute_fetch.bucket_id == "tinyfish:keyed:fetch:urls"
+    assert day_fetch.bucket_id == "tinyfish:keyed:fetch:urls"
+    assert minute_search.bucket_id != minute_fetch.bucket_id
+    assert search.rate.published is True
+    assert fetch.rate.published is True
+
+
+def test_tinyfish_budget_is_null() -> None:
+    from freesearch.configuration.provider_limits import (
+        provider_limit_defaults,
+        provider_tier_defaults,
+    )
+    from freesearch.models.provider_limits import AuthMode, FundingMode, LimitOperation
+
+    records = [r for r in provider_limit_defaults() if r.provider == "tinyfish"]
+    assert len(records) == 2
+    search = next(r for r in records if r.operation is LimitOperation.SEARCH)
+    fetch = next(r for r in records if r.operation is LimitOperation.FETCH)
+    assert search.auth_mode is AuthMode.KEYED
+    assert fetch.auth_mode is AuthMode.KEYED
+    assert search.budget is None
+    assert fetch.budget is None
+    assert search.native_unit is None
+    assert fetch.native_unit is None
+    assert search.native_pool_id is None
+    assert fetch.native_pool_id is None
+    assert search.conversion_profile.native_usd_per_unit == Decimal("0")
+    assert fetch.conversion_profile.native_usd_per_unit == Decimal("0")
+    assert search.conversion_profile.source == "unbilled_free"
+    assert fetch.conversion_profile.source == "unbilled_free"
+    tiers = provider_tier_defaults().get("tinyfish:keyed", [])
+    assert len(tiers) == 1
+    assert tiers[0].funding_mode is FundingMode.NO_BUDGET
+    assert tiers[0].native_allowance is None
+    assert tiers[0].native_remaining is None
+
+
+@pytest.mark.asyncio
+async def test_tinyfish_fetch_wire_respects_url_cap() -> None:
+    transport = _Transport()
+    adapter = _adapter(transport)
+
+    response = await adapter.fetch(_fetch_request("https://example.com/page"))
+
+    assert len(transport.requests) == 1
+    req = transport.requests[0]
+    assert req.method == "POST"
+    assert "api.fetch.tinyfish.ai" in req.url.host
+    payload = json.loads(req.content)
+    assert payload["urls"] == ["https://example.com/page"]
+    assert len(payload["urls"]) == 1
+    assert len(payload["urls"]) <= 10
+    assert payload["format"] == "markdown"
+    assert response.provider == "tinyfish"
+    assert response.usage is not None
+    assert response.usage.units == Decimal("1")

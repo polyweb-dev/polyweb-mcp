@@ -25,9 +25,16 @@ from freesearch.models.provider_limits import (
     NativePool,
     ProviderLimitRecord,
 )
+from freesearch.models.tavily import (
+    tavily_extract_credits,
+    tavily_extract_depth,
+    tavily_search_depth,
+)
 
 ZERO: Final[Decimal] = Decimal("0")
 _ONE: Final[Decimal] = Decimal("1")
+# A Tavily advanced search bills twice the basic depth factor.
+_ADVANCED_DEPTH_FACTOR: Final[Decimal] = Decimal("2")
 
 
 def _unit_price(native_unit: UnitKind, profile: CRDPriceProfile) -> Decimal | None:
@@ -82,14 +89,58 @@ def request_native_cost(
 ) -> Decimal | None:
     """Return the exact native cost one request is expected to consume.
 
-    C0 prices the standard call only. Provider add-ons, such as the Firecrawl
-    JSON credits, the Tavily advanced depth, and the Exa or Parallel extra
-    result rule, arrive with slices C1 to C8.
+    The standard cost comes from the record's budget block. A Tavily advanced
+    search doubles that cost, and a Tavily advanced extract costs
+    per-URL ``0.4`` Credits through the same depth rule the adapter applies.
+    The other provider add-ons arrive with their own slices.
     """
 
     if record.budget is None or record.native_unit is None:
         return None
-    return record.budget.standard_native_cost
+    cost = record.budget.standard_native_cost
+    if request is None:
+        return cost
+    if record.provider == "tavily":
+        if isinstance(request, FetchRequest):
+            return tavily_extract_credits(
+                successful_urls=1, depth=tavily_extract_depth(request.tavily)
+            )
+        depth = _tavily_search_depth(request)
+        if depth is None:
+            # A conflict between an explicit depth and a basic or advanced
+            # mode stays unpriced, so the funds gate takes the safe 422
+            # configuration path instead of an invented reservation.
+            return None
+        if depth == "advanced":
+            cost *= _ADVANCED_DEPTH_FACTOR
+        return cost
+    if record.provider == "firecrawl":
+        if isinstance(request, SearchRequest):
+            bundles = (Decimal(request.limit) + Decimal("9")) // Decimal("10")
+            return bundles * Decimal("2")
+        if isinstance(request, FetchRequest):
+            modifiers = Decimal(request.pdf_pages)
+            if request.json_extract:
+                modifiers += Decimal("4")
+            if request.zero_data_retention:
+                modifiers += Decimal("1")
+            return Decimal("1") + modifiers
+    if record.provider == "exa":
+        if isinstance(request, SearchRequest):
+            extra = max(0, request.limit - 10)
+            return cost + Decimal(extra) * Decimal("0.001")
+        if isinstance(request, FetchRequest):
+            return Decimal(request.url_count) * Decimal("0.001")
+    return cost
+
+
+def _tavily_search_depth(request: SearchRequest) -> str | None:
+    """Return the resolved Tavily search depth, or ``None`` on a conflict."""
+
+    try:
+        return tavily_search_depth(request.mode, request.tavily)
+    except ValueError:
+        return None
 
 
 def request_cost_crd(
@@ -182,6 +233,24 @@ def project_shared_crd_views(
     ]
 
 
+def shared_pool_funds(
+    pool: NativePool, records: Sequence[ProviderLimitRecord]
+) -> Decimal | None:
+    """Return the shared pool's funds counted once, or ``None`` when unknown.
+
+    Both shared operation views project from the same native balance, so the
+    funds contribute once. An empty record list or no record referencing
+    ``pool`` yields ``None``. An unknown price stays ``None``, never zero.
+    """
+
+    if not records:
+        return None
+    for record in records:
+        if record.native_pool_id is not None and record.native_pool_id == pool.pool_id:
+            return native_to_crd(pool, record.conversion_profile)
+    return None
+
+
 def effective_crd(view: CRDView, grant_remaining: Decimal | None) -> CRDView:
     """Combine a CRD view with an optional local grant ceiling.
 
@@ -201,25 +270,15 @@ def spendable_crd(view: CRDView) -> Decimal | None:
 
     ``None`` means an unmetered rail has no finite funds gate. A finite rail
     with no known balance is not spendable and yields ``None`` as well, so the
-    caller must consult :attr:`CRDView.state` before allowing unpriced use.
+    funds precheck safely denies admission without an invented balance.
     """
 
     if view.state is CRDState.UNMETERED:
         return None
-    return view.spendable_crd
-
-
-def shared_pool_funds(pool: NativePool, records: Sequence[ProviderLimitRecord]) -> Decimal | None:
-    """Return a shared pool's CRD funds exactly once.
-
-    Operation views that project the same pool never add together, so a total
-    sums this value once per pool ID instead of summing each view.
-    """
-
-    profile = next(
-        (record.conversion_profile for record in records if record.native_pool_id == pool.pool_id),
-        None,
-    )
-    if profile is None:
+    remaining = view.remaining_crd
+    if remaining is None:
         return None
-    return native_to_crd(pool, profile)
+    local = view.local_remaining_crd
+    if local is not None:
+        return min(remaining, local)
+    return remaining

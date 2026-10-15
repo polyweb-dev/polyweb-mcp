@@ -17,7 +17,15 @@ export interface ProviderCardActionsProps {
   manualEligible: boolean
   syncing: boolean
   onSync: () => void
+  /** The last refresh was skipped, so the refresh action stays off the card. */
+  refreshSkipped?: boolean
   onOpenModal: (modal: CardModal) => void
+  /**
+   * Composed OAuth control rendered inline at the trailing edge of the same
+   * flex-wrap action row (Parallel Connect/Disconnect). Supplied by composition
+   * so the quota feature never imports the OAuth feature directly.
+   */
+  oauthActions?: ReactNode
   /** The detail disclosure left the card. The info control owns the detail now. */
   expanded?: boolean
   /** The panel id of the earlier disclosure; the card mounts no panel now. */
@@ -70,15 +78,17 @@ function dialogAction(input: DialogAction, providerName: string): ReactNode {
 
 /**
  * The header controls of one card: sync, the provider balance dialog, the
- * budget limit dialog, and the history dialog.
+ * budget limit dialog, the history dialog, and the composed OAuth control
+ * inline at the trailing edge of the same flex-wrap row.
  *
  * Each dialog action carries its one-sentence meaning as a hover tooltip and as
  * accessible text, so a screen reader states the difference between a provider
  * balance and a budget limit. The card holds no detail disclosure, because the
- * info control of the card owns the detail.
+ * info control of the card owns the detail. A skipped refresh hides the sync
+ * action, because there is nothing to refresh.
  */
 export function ProviderCardActions(input: ProviderCardActionsProps): ReactNode {
-  const { providerId, providerName, manualEligible, syncing } = input
+  const { providerId, providerName, manualEligible, syncing, oauthActions } = input
   const actions: DialogAction[] = []
   if (manualEligible) {
     actions.push({
@@ -96,10 +106,12 @@ export function ProviderCardActions(input: ProviderCardActionsProps): ReactNode 
   })
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <Button type="button" variant="outline" size="lg" className={ACTION}
-        disabled={syncing} aria-label={"Sync limits for " + providerName} onClick={input.onSync}>
-        {syncing ? "Syncing…" : "Sync"}
-      </Button>
+      {input.refreshSkipped !== true && (
+        <Button type="button" variant="outline" size="lg" className={ACTION}
+          disabled={syncing} aria-label={"Refresh limits for " + providerName} onClick={input.onSync}>
+          {syncing ? "Refreshing…" : "Refresh Limits"}
+        </Button>
+      )}
       <TooltipProvider delay={TOOLTIP_DELAY}>
         {actions.map((action) => dialogAction(action, providerName))}
       </TooltipProvider>
@@ -109,6 +121,7 @@ export function ProviderCardActions(input: ProviderCardActionsProps): ReactNode 
         onClick={() => input.onOpenModal("history")}>
         History
       </Button>
+      {oauthActions}
     </div>
   )
 }

@@ -46,6 +46,13 @@ from freesearch.models.contracts import (
     UsageEvent,
     UsageOperation,
 )
+from freesearch.models.provider_limits import (
+    AuthMode,
+    Confidence,
+    NativeUsageSnapshot,
+    UsageSyncRequest,
+    native_pool_id,
+)
 
 __all__ = ["ExaAdapter"]
 
@@ -54,6 +61,23 @@ _SEARCH_BASE_USD = Decimal("0.007")
 _SEARCH_INCREMENT_USD = Decimal("0.001")
 _CONTENTS_PAGE_USD = Decimal("0.001")
 _FALLBACK_PRICING_DATE = "2026-09-18"
+_EXA_402_CODES = ("NO_MORE_CREDITS", "API_KEY_BUDGET_EXCEEDED", "TEAM_BUDGET_EXCEEDED")
+
+
+def _detect_402_vendor_code(exc: Exception) -> str | None:
+    text = str(exc)
+    for code in _EXA_402_CODES:
+        if code in text:
+            return code
+    if isinstance(exc, httpx.HTTPStatusError):
+        try:
+            body = exc.response.text
+            for code in _EXA_402_CODES:
+                if code in body:
+                    return code
+        except Exception:
+            pass
+    return None
 # The SDK surfaces HTTP failures as ``ValueError("Request failed with status
 # code {status}: {body}")``; only the status code is parsed out - the body is
 # never included so provider text cannot leak.
@@ -308,6 +332,27 @@ class ExaAdapter(ProviderAdapter):
         self._hydrated_month = month_start
         return self._current_snapshot(now=now)
 
+    async def usage_snapshot(self, request: UsageSyncRequest) -> NativeUsageSnapshot | None:
+        """Return a native usage snapshot for the Exa USD pool."""
+        quota = self._current_snapshot(now=request.observed_at)
+        source = "vendor_402" if self._soft_zero else "local_ledger"
+        confidence = Confidence.OBSERVED if self._soft_zero else Confidence.ESTIMATED
+        return NativeUsageSnapshot(
+            pool_id=native_pool_id(self.name, AuthMode.KEYED, UnitKind.USD),
+            provider=self.name,
+            auth_mode=AuthMode.KEYED,
+            native_unit=UnitKind.USD,
+            observed_at=request.observed_at,
+            source=source,
+            confidence=confidence,
+            remaining=quota.remaining,
+            allowance=quota.limit,
+            reset_at=quota.reset_at,
+            credential_generation=request.credential_generation,
+            plan_name="Free $10 monthly grant + bonus",
+            usage_url="https://dashboard.exa.ai/",
+        )
+
     def _build_sdk(self, api_key: SecretStr | None = None) -> AsyncExa:
         """Build the official SDK with the injected vault key.
 
@@ -457,17 +502,18 @@ class ExaAdapter(ProviderAdapter):
     async def estimate_cost(self, request: SearchRequest | FetchRequest) -> CostEstimate:
         if isinstance(request, SearchRequest):
             operation = UsageOperation.SEARCH
-            units = _search_fallback_cost(request.limit, 0)
+            extra = max(0, request.limit - 10)
+            units = _SEARCH_BASE_USD + Decimal(extra) * _SEARCH_INCREMENT_USD
             notes = "published fallback estimate; response costDollars wins; summaries excluded"
         else:
             operation = UsageOperation.FETCH
-            units = _contents_fallback_cost(request.url_count, 1)
+            units = _CONTENTS_PAGE_USD * Decimal(request.url_count)
             notes = "published text-content fallback estimate; response costDollars wins"
         return CostEstimate(
             provider=self.name,
             operation=operation,
             units=units,
-            currency="USD",
+            currency=UnitKind.USD.value,
             notes=notes,
         )
 
@@ -527,14 +573,22 @@ class ExaAdapter(ProviderAdapter):
         )
 
     def _normalize_error(self, exc: Exception) -> ProviderOperationError:
+        vendor_code = _detect_402_vendor_code(exc)
         status = _sdk_status_code(exc)
         if status is not None:
             if status == 429:
                 return self._error(
                     "rate_limited", "rate limit exceeded", retryable=True, status=429
                 )
-            if status == 402:
-                return self._error("quota_exhausted", "quotaExceeded", retryable=False, status=402)
+            if status == 402 or vendor_code is not None:
+                details = {"error_code": vendor_code} if vendor_code is not None else {}
+                return self._error(
+                    "quota_exhausted",
+                    "Exa credits or spend budget exhausted. Wait until monthly reset or top up.",
+                    retryable=False,
+                    status=402,
+                    details=details,
+                )
             if status == 401:
                 return self._error("invalid_api_key", "invalid API key", status=401)
             if status == 403:
@@ -553,13 +607,28 @@ class ExaAdapter(ProviderAdapter):
                 return self._error(
                     "rate_limited", "rate limit exceeded", retryable=True, status=429
                 )
-            if status == 402:
-                return self._error("quota_exhausted", "quotaExceeded", retryable=False, status=402)
+            if status == 402 or vendor_code is not None:
+                details = {"error_code": vendor_code} if vendor_code is not None else {}
+                return self._error(
+                    "quota_exhausted",
+                    "Exa credits or spend budget exhausted. Wait until monthly reset or top up.",
+                    retryable=False,
+                    status=402,
+                    details=details,
+                )
             return self._error(
                 "http_error",
                 f"HTTP {status}",
                 retryable=status in RETRYABLE_STATUS_CODES,
                 status=status,
+            )
+        if vendor_code is not None:
+            return self._error(
+                "quota_exhausted",
+                "Exa credits or spend budget exhausted. Wait until monthly reset or top up.",
+                retryable=False,
+                status=402,
+                details={"error_code": vendor_code},
             )
         return self._error("exa_error", type(exc).__name__)
 
@@ -570,6 +639,7 @@ class ExaAdapter(ProviderAdapter):
         *,
         retryable: bool = False,
         status: int | None = None,
+        details: dict[str, Any] | None = None,
     ) -> ProviderOperationError:
         return ProviderOperationError(
             ProviderError(
@@ -578,6 +648,7 @@ class ExaAdapter(ProviderAdapter):
                 message=message,
                 retryable=retryable,
                 status_code=status,
+                details=details or {},
             )
         )
 

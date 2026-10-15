@@ -7,10 +7,8 @@ import { getEligibleProviders } from "@/domains/routing/model/routingPolicy";
  *
  * Ordering reuses the routing policy (priority/latency/quality preset via
  * getEligibleProviders, which already drops disabled and circuit-open
- * providers); candidates must additionally hold an API key (hasKey covers
- * keyless_public tiers) so the retry never spends its single shot on a
- * provider that cannot authenticate. Never returns an id in excludeUiIds,
- * so the failed provider is never retried.
+ * providers and those without a key or keyless access). Never returns an id
+ * in excludeUiIds, so the failed provider is never retried.
  */
 export function pickFallbackSearchProvider(
   providers: ProviderConfig[],
@@ -19,6 +17,6 @@ export function pickFallbackSearchProvider(
 ): ProviderConfig | undefined {
   const excluded = new Set(excludeUiIds);
   return getEligibleProviders(providers, "search", preset).find(
-    (provider) => !excluded.has(provider.id) && provider.hasKey,
+    (provider) => !excluded.has(provider.id),
   );
 }

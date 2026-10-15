@@ -115,6 +115,17 @@ function quotaDetail(input: QuotaDisplayInput, nativeLabel: string): string | nu
     : `No hard limit reported; showing remaining ${nativeLabel} balance.`
 }
 
+/**
+ * Unit name of one quota value. Tavily native values are vendor `Credits`
+ * (one native CREDIT unit), which keeps every Tavily message in Credits, never
+ * CRD and never the generic "credits" lowercase label. Every other provider
+ * keeps the shared unit label.
+ */
+function nativeLabel(input: QuotaDisplayInput): string {
+  if (input.providerId === "tavily" && input.unitKind === "CREDIT") return "Credits"
+  return unitLabel(input.unitKind, input.displayUnit)
+}
+
 /** Build the consistent headline/detail values used by every quota surface. */
 export function quotaDisplay(input: QuotaDisplayInput): QuotaDisplay {
   const remainingNumber = finiteNumber(input.remaining)
@@ -124,16 +135,16 @@ export function quotaDisplay(input: QuotaDisplayInput): QuotaDisplay {
   // noisy vendor precision in the headline. Never expose a percentage unless
   // native remaining and limit are both finite and the limit is positive.
   const percent = remainingPercent(input, remainingNumber, limitNumber)
-  const nativeLabel = unitLabel(input.unitKind, input.displayUnit)
-  const nativeQuotaValue = nativeValue(input, nativeLabel)
+  const shownLabel = nativeLabel(input)
+  const nativeQuotaValue = nativeValue(input, shownLabel)
   const confidenceLabel = input.confidence ?? "not reported"
-  const detail = quotaDetail(input, nativeLabel)
+  const detail = quotaDetail(input, shownLabel)
 
   return {
     remainingPercent: percent,
     headline: quotaHeadline(input, percent, remainingNumber),
     periodLabel: periodLabel(input),
-    nativeLabel,
+    nativeLabel: shownLabel,
     nativeValue: nativeQuotaValue,
     confidenceLabel,
     resetLabel: resetLabel(input.resetAt),

@@ -245,7 +245,7 @@ Every API route except `POST /auth/register` and `POST /auth/jwt/login` needs a 
 - **Log out:** `POST /auth/jwt/logout` revokes the current family, so its access and refresh credentials stop at once.
 - **Current account:** `GET /users/me` returns the account record without the password hash.
 - **Roles:** Admin changes provider controls and provider OAuth, Developer reads the sanitized control views and statistics, and Agent searches and fetches. Every role reads only its own traces.
-- **Guarded documentation:** `/docs`, `/redoc`, and `/openapi.json` need an access JWT, because this release adds no anonymous discovery route.
+- **Public documentation:** `/docs`, `/redoc`, and `/openapi.json` are accessible anonymously without authentication.
 - **Limits:** 5 pair attempts and 20 peer-address attempts per 900 seconds for login, 5 peer-address attempts and 100 deployment attempts per 900 seconds for registration, and a 4096-byte cap on a public auth body.
 - **Token lifetime:** 900 seconds for an access JWT and 604800 seconds for the absolute refresh family. An ordinary API call and an ordinary MCP call never extend a token.
 

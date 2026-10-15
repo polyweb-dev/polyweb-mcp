@@ -118,9 +118,9 @@ const SEED_PROVIDER_NAMES = [
 ] as const
 
 const EXPECTED_MERGED_HEADERS = [
+  "Priority",
   "Provider",
   "Endpoint",
-  "Health",
   "Test",
   "Search",
   "Fetch",
@@ -247,6 +247,9 @@ function findProviderRowTr(provider: string): HTMLTableRowElement {
   return tr as HTMLTableRowElement
 }
 
+/** Seven-column merged registry: every row (including Tavily) keeps exactly
+ * seven cells; the Tavily rate-tier dropdown lives only in the Usage card.
+ */
 function cellFor(provider: string, header: string): HTMLElement {
   const row = findProviderRowTr(provider)
   const idx = headerNames().indexOf(header)
@@ -305,7 +308,9 @@ describe("P1F-1: Settings registry is ONE merged table with 7 columns", () => {
     await waitForProviders()
     const rows = Array.from(mergedTable().querySelectorAll("tbody tr"))
     expect(rows).toHaveLength(8)
-    for (const row of rows) {
+    // Seven merged columns stand for every row (no Tavily extra cell).
+    for (const name of SEED_PROVIDER_NAMES) {
+      const row = findProviderRowTr(name)
       expect(row.children).toHaveLength(EXPECTED_MERGED_HEADERS.length)
     }
   })
@@ -389,15 +394,10 @@ describe("P1F-3: endpoint/health ride in the merged row", () => {
     expect(tavilyEndpoint.textContent).toContain("api.tavily.com")
   })
 
-  it("shows a health dot + label per row", async () => {
+  it("does not render Health as a table column", async () => {
     renderSettings()
     await waitForProviders()
-    for (const name of SEED_PROVIDER_NAMES) {
-      const health = cellFor(name, "Health")
-      expect(health.textContent?.trim().length).toBeGreaterThan(0)
-      expect(health.textContent).toMatch(/healthy|degraded|offline|unavailable|unknown|open/i)
-    }
-    expect(cellFor("Brave Search", "Health").textContent).toMatch(/healthy/i)
+    expect(headerNames()).not.toContain("Health")
   })
 
   it("does not render Quota or p95 as registry columns (telemetry lives in the modal + Usage view)", async () => {
@@ -408,19 +408,24 @@ describe("P1F-3: endpoint/health ride in the merged row", () => {
     expect(headerNames()).toEqual([...EXPECTED_MERGED_HEADERS])
     const rows = Array.from(mergedTable().querySelectorAll("tbody tr"))
     expect(rows).toHaveLength(8)
-    for (const row of rows) {
+    for (const name of SEED_PROVIDER_NAMES) {
+      const row = findProviderRowTr(name)
       expect(row.children).toHaveLength(EXPECTED_MERGED_HEADERS.length)
     }
   })
 
-  it("keeps quota/p95 drill-down in the test modal (not in row cells)", async () => {
+  it("keeps only endpoint and capabilities in the test modal (no health, quota, or p95)", async () => {
     const user = userEvent.setup()
     renderSettings()
     await waitForProviders()
     await user.click(testIconFor("Brave Search"))
     const dialog = await screen.findByRole("dialog")
-    expect(dialog.textContent).toMatch(/\d+ms|—/)
-    expect(dialog.textContent).not.toContain("∞")
+    expect(dialog.textContent).toContain("Endpoint")
+    expect(dialog.textContent).toContain("Capabilities")
+    expect(dialog.textContent).toContain("Last result")
+    expect(dialog.textContent).not.toContain("Health")
+    expect(dialog.textContent).not.toContain("p95")
+    expect(dialog.textContent).not.toContain("Quota")
   })
 
   it("does not expose a Breaker column or Trip/Reset buttons", async () => {
@@ -434,9 +439,7 @@ describe("P1F-3: endpoint/health ride in the merged row", () => {
   it("keeps row cells left-aligned with no right-aligned drift", async () => {
     renderSettings()
     await waitForProviders()
-    const health = cellFor("Brave Search", "Health")
     const test = cellFor("Brave Search", "Test")
-    expect(health.className).not.toContain("text-right")
     expect(test.className).not.toContain("text-right")
   })
 })
@@ -481,11 +484,9 @@ describe("P1F-4: icon opens the ProviderTestModal (never fetches on open)", () =
     expect(stub.requestsTo("/api/v1/providers/brave/test")).toHaveLength(0)
     expect(dialog.textContent).toContain("Brave Search")
     expect(dialog.textContent).toContain("api.search.brave.com")
-    expect(dialog.textContent).toMatch(/healthy|degraded|offline|unknown/i)
-    expect(dialog.textContent).toMatch(/\d+ms|—/)
-    // RF2: null limits stay blank/emdash (infinity retired). Brave with no
-    // snapshot shows its honest unavailable message; Tavily renders the
-    // blank native form, so the em-dash blank is pinned on Tavily.
+    expect(dialog.textContent).not.toContain("Health")
+    expect(dialog.textContent).not.toContain("p95")
+    expect(dialog.textContent).not.toContain("Quota")
     expect(dialog.textContent).not.toContain("∞")
     await user.keyboard("{Escape}")
     await waitFor(() => {
@@ -493,7 +494,7 @@ describe("P1F-4: icon opens the ProviderTestModal (never fetches on open)", () =
     })
     await user.click(testIconFor("Tavily"))
     const tavilyDialog = await screen.findByRole("dialog")
-    expect(tavilyDialog.textContent).toContain("—/—")
+    expect(tavilyDialog.textContent).toContain("api.tavily.com")
     expect(tavilyDialog.textContent).not.toContain("∞")
 
   })
@@ -628,7 +629,7 @@ describe("P1F-6: Providers page retired — redirect + no providers nav", () => 
   })
 
   it("SettingsProviders carries the fleet merge markers", () => {
-    for (const marker of ["Endpoint", "Health", "Quota", "p95", "ProviderTestModal"]) {
+    for (const marker of ["Endpoint", "ProviderTestModal"]) {
       expect(settingsFeatureSource, `merged table must carry ${marker}`).toContain(marker)
     }
   })
@@ -653,6 +654,7 @@ describe("P1F-7: merged table scrolls horizontally from 960px", () => {
     renderSettings()
     await waitForProviders()
     const cells = Array.from(mergedTable().querySelectorAll("th, td")) as HTMLElement[]
+    // Seven headers plus eight 7-cell rows.
     expect(cells.length).toBe(EXPECTED_MERGED_HEADERS.length + 8 * EXPECTED_MERGED_HEADERS.length)
     for (const cell of cells) {
       expect(cell.className).toMatch(/whitespace-nowrap/)
@@ -796,9 +798,9 @@ const FETCH_UNSUPPORTED = ["Brave Search"] as const
 const FETCH_SUPPORTED = ["Keenable", "Tavily", "Exa", "Firecrawl", "You.com", "Parallel", "Tinyfish"] as const
 
 const EXPECTED_HEADERS = [
+  "Priority",
   "Provider",
   "Endpoint",
-  "Health",
   "Test",
   "Search",
   "Fetch",
@@ -987,7 +989,9 @@ describe("S-P1-1: registry is a ui/table with the merged 7 columns", () => {
     await waitForProviders()
     const rows = Array.from(providerTable().querySelectorAll("tbody tr"))
     expect(rows).toHaveLength(8)
-    for (const row of rows) {
+    // Seven merged columns stand for every row (no Tavily extra cell).
+    for (const name of SEED_PROVIDER_NAMES) {
+      const row = findProviderRowTr(name)
       expect(row.children).toHaveLength(EXPECTED_HEADERS.length)
     }
   })
@@ -1005,7 +1009,8 @@ describe("S-P1-2: per-column x-position equality across 7 rows (<=1px)", () => {
     const rows = Array.from(table.querySelectorAll("tbody tr"))
     expect(rows).toHaveLength(8)
     // Every row lives in the SAME table/tbody (single column grid).
-    for (const row of rows) {
+    for (const name of SEED_PROVIDER_NAMES) {
+      const row = findProviderRowTr(name)
       expect(row.closest("table")).toBe(table)
       expect(row.children).toHaveLength(EXPECTED_HEADERS.length)
     }
@@ -1124,6 +1129,7 @@ describe("S-P1-4: 375px viewport scrolls horizontally without wrapping", () => {
     const container = table.closest('[data-slot="table-container"]') as HTMLElement
     expect(container.className).toMatch(/overflow-x-auto/)
     const cells = Array.from(table.querySelectorAll("th, td")) as HTMLElement[]
+    // Seven headers plus eight 7-cell rows.
     expect(cells.length).toBe(EXPECTED_HEADERS.length + 8 * EXPECTED_HEADERS.length)
     for (const cell of cells) {
       expect(cell.className).toMatch(/whitespace-nowrap/)
@@ -1291,7 +1297,9 @@ describe("S-P1-5: all SettingsProviders contracts preserved in the table", () =>
     // ProviderTestModal (never fetches on open).
     for (const name of SEED_PROVIDER_NAMES) {
       const row = findProviderRowTr(name)
-      const testCell = row.children[columnIndex("Test")] as HTMLElement
+      // Every row (including Tavily) keeps seven cells; Test column index is unshifted.
+      const testIdx = columnIndex("Test")
+      const testCell = row.children[testIdx] as HTMLElement
       expect(
         within(testCell).getByRole("button", { name: `${name} test connection` })
       ).toBeInTheDocument()
@@ -1412,7 +1420,7 @@ describe("S-P1-6: P1-FINAL merge guards (inverted — page merged, RED)", () => 
   it("P1-FINAL page merge: ProviderMatrix retired, fleet telemetry merged into SettingsProviders", () => {
     // Standalone fleet page is gone: no Trip/Reset matrix, no fleet filter,
     // no stat cards in a separate page — the merged registry carries them.
-    for (const marker of ["Endpoint", "Health", "Quota", "p95", "ProviderTestModal"]) {
+    for (const marker of ["Endpoint", "ProviderTestModal"]) {
       expect(settingsFeatureSource, `merged registry must carry ${marker}`).toContain(marker)
     }
     expect(settingsFeatureSource).not.toMatch(/Total fleet/)
@@ -1830,13 +1838,15 @@ describe("S-P2-3: priority indicator never clips at the card edge", () => {
     }
   })
 
-  it("table + scroller stay intact: single 7x7 merged table, overflow-x-auto, nowrap", async () => {
+  it("table + scroller stay intact: single 7-column merged table, overflow-x-auto, nowrap", async () => {
     renderSettingsWith(all100Fixture())
     await waitForProviders()
     expect(screen.getAllByRole("table")).toHaveLength(1)
     const table = screen.getByRole("table")
     expect(table.querySelectorAll("tbody tr")).toHaveLength(8)
-    for (const row of Array.from(table.querySelectorAll("tbody tr"))) {
+    // Seven merged columns stand for every row (no Tavily extra cell).
+    for (const name of SEED_PROVIDER_NAMES) {
+      const row = findProviderRowTr(name)
       expect(row.children).toHaveLength(7)
     }
     const container = table.closest('[data-slot="table-container"]') as HTMLElement | null
@@ -2085,7 +2095,7 @@ describe("S-P2-5: no restyle, no merge, freesearch-ui only (stays green)", () =>
   })
 
   it("P1-FINAL page merge: fleet telemetry merged into SettingsProviders (ProviderMatrix retired)", () => {
-    for (const marker of ["Endpoint", "Health", "Quota", "p95", "ProviderTestModal"]) {
+    for (const marker of ["Endpoint", "ProviderTestModal"]) {
       expect(settingsFeatureSource, `merged registry must carry ${marker}`).toContain(marker)
     }
   })
@@ -2189,9 +2199,9 @@ const SEED_PROVIDER_NAMES = [
 ] as const
 
 const EXPECTED_HEADERS = [
+  "Priority",
   "Provider",
   "Endpoint",
-  "Health",
   "Test",
   "Search",
   "Fetch",
@@ -2461,6 +2471,7 @@ describe("S-P3-2: modal Test interaction states (Test/Testing... + POST)", () =>
     expect(rows).toHaveLength(8)
     for (const name of SEED_PROVIDER_NAMES) {
       const row = findProviderRowTr(name)
+      // Every row (including Tavily) keeps seven cells; Test column index is unshifted.
       const cell = row.children[testIdx] as HTMLElement
       const btn = within(cell).getByRole("button", { name: `${name} test connection` })
       expect(btn.getAttribute("type")).toBe("button")
@@ -2484,7 +2495,8 @@ describe("S-P3-3: no regression â€” S-P1 table, S-P2 ranks, tokens, merge",
     ).toEqual([...EXPECTED_HEADERS])
     const rows = Array.from(table.querySelectorAll("tbody tr"))
     expect(rows).toHaveLength(8)
-    for (const row of rows) {
+    for (const name of SEED_PROVIDER_NAMES) {
+      const row = findProviderRowTr(name)
       expect(row.children).toHaveLength(EXPECTED_HEADERS.length)
     }
     const container = table.closest('[data-slot="table-container"]') as HTMLElement | null
@@ -2557,7 +2569,7 @@ describe("S-P3-3: no regression â€” S-P1 table, S-P2 ranks, tokens, merge",
   })
 
   it("P1-FINAL page merge: fleet telemetry merged into SettingsProviders (ProviderMatrix retired)", () => {
-    for (const marker of ["Endpoint", "Health", "Quota", "p95", "ProviderTestModal"]) {
+    for (const marker of ["Endpoint", "ProviderTestModal"]) {
       expect(settingsFeatureSource, `merged registry must carry ${marker}`).toContain(marker)
     }
   })
@@ -2675,9 +2687,9 @@ const SEED_PROVIDER_NAMES = [
 ] as const
 
 const EXPECTED_HEADERS = [
+  "Priority",
   "Provider",
   "Endpoint",
-  "Health",
   "Test",
   "Search",
   "Fetch",
@@ -2975,6 +2987,7 @@ describe("S-P4-4: responsive horizontal scroll preserved (no wrap, 375px scrolls
     await waitForProviders()
     const table = screen.getByRole("table")
     const cells = Array.from(table.querySelectorAll("th, td")) as HTMLElement[]
+    // Seven headers plus eight 7-cell rows.
     expect(cells.length).toBe(EXPECTED_HEADERS.length + 8 * EXPECTED_HEADERS.length)
     for (const cell of cells) {
       expect(cell.className).toMatch(/whitespace-nowrap/)
@@ -2991,6 +3004,7 @@ describe("S-P4-4: responsive horizontal scroll preserved (no wrap, 375px scrolls
     expect(container.className).toMatch(/overflow-x-auto/)
     expect(table.className).toMatch(/min-w-\[960px\]/)
     const cells = Array.from(table.querySelectorAll("th, td")) as HTMLElement[]
+    // Seven headers plus eight 7-cell rows.
     expect(cells.length).toBe(EXPECTED_HEADERS.length + 8 * EXPECTED_HEADERS.length)
     for (const cell of cells) {
       expect(cell.className).toMatch(/whitespace-nowrap/)
@@ -3014,7 +3028,8 @@ describe("S-P4-5: no regression — S-P1 table, S-P2 ranks, S-P3 buttons, Settin
     ).toEqual([...EXPECTED_HEADERS])
     const rows = Array.from(table.querySelectorAll("tbody tr"))
     expect(rows).toHaveLength(8)
-    for (const row of rows) {
+    for (const name of SEED_PROVIDER_NAMES) {
+      const row = findProviderRowTr(name)
       expect(row.children).toHaveLength(EXPECTED_HEADERS.length)
     }
     const container = table.closest('[data-slot="table-container"]') as HTMLElement | null
@@ -3126,7 +3141,7 @@ describe("S-P4-5: no regression — S-P1 table, S-P2 ranks, S-P3 buttons, Settin
   })
 
   it("P1-FINAL page merge: fleet telemetry merged into SettingsProviders (ProviderMatrix retired)", () => {
-    for (const marker of ["Endpoint", "Health", "Quota", "p95", "ProviderTestModal"]) {
+    for (const marker of ["Endpoint", "ProviderTestModal"]) {
       expect(settingsFeatureSource, `merged registry must carry ${marker}`).toContain(marker)
     }
   })
@@ -3177,7 +3192,7 @@ describe("SettingsProviders Developer read-only (canReadControls, no edit)", () 
     const headers = Array.from(screen.getByRole("table").querySelectorAll("thead th")).map(
       (th) => th.textContent?.trim() ?? ""
     )
-    expect(headers).toEqual(["Provider", "Endpoint", "Health", "Test", "Search", "Fetch", "Global"])
+    expect(headers).toEqual(["Priority", "Provider", "Endpoint", "Test", "Search", "Fetch", "Global"])
     for (let rank = 1; rank <= 8; rank += 1) {
       expect(screen.getByText(`P${rank}`, { exact: true })).toBeInTheDocument()
     }
@@ -3198,3 +3213,147 @@ describe("SettingsProviders Developer read-only (canReadControls, no edit)", () 
     ).toHaveLength(0)
   })
 })
+
+describe("SettingsProviders Tavily rate-tier removed from Settings registry", () => {
+  /**
+   * The Tavily key-environment dropdown was removed from the Settings
+   * registry; it lives only in the Usage Tavily card (compact tier select
+   * via QuotaAnalytics renderRateTier -> ProviderLimitsCard tierSlot).
+   * The seven registry columns stand; every row (including Tavily) keeps
+   * exactly seven cells. Usage coverage for the compact select lives in
+   * ProviderLimitsCard.test.tsx / TavilyRateTierSelect.test.tsx.
+   */
+
+  const SLOT_HEADERS = [
+    "Priority",
+    "Provider",
+    "Endpoint",
+    "Test",
+    "Search",
+    "Fetch",
+    "Global",
+  ] as const
+
+  const SLOT_NAMES = [
+    "Brave Search",
+    "Keenable",
+    "Tavily",
+    "Exa",
+    "Firecrawl",
+    "You.com",
+    "Parallel",
+    "Tinyfish",
+  ] as const
+
+  function renderNoSlotSettings(
+    providers: WireProviderStatus[],
+    accountId: string = ADMIN_ACCOUNT_ID,
+    canEdit = true
+  ): FetchStub {
+    const server = providers.map((row) => ({ ...row }))
+    const stub = installFetchStub((req) => {
+      if (req.url === "/api/v1/providers" && req.method === "GET") {
+        return ok(server)
+      }
+      if (req.url === "/api/v1/routing/config" && req.method === "GET") {
+        return ok(routingConfigFixture())
+      }
+      if (req.url.startsWith("/dashboard")) return ok(dashboardFixture())
+      if (req.method === "PATCH" && req.url.startsWith("/api/v1/providers/")) {
+        const backendId = req.url.split("/").at(-1) ?? "unknown"
+        const entry = server.find((row) => row.provider_id === backendId)
+        if (!entry) return err(404, { detail: `unknown provider '${backendId}'` })
+        return ok(entry)
+      }
+      return err(404, { detail: "unhandled test route" })
+    })
+    render(
+      <FreeSearchProvider accountId={accountId} canReadControls canEditControls={canEdit}>
+        <SettingsView />
+      </FreeSearchProvider>
+    )
+    return stub
+  }
+
+  async function waitForNoSlotProviders() {
+    await waitFor(() => {
+      expect(screen.getByText("Brave Search", { exact: true })).toBeInTheDocument()
+    })
+  }
+
+  function noSlotRowTr(provider: string): HTMLTableRowElement {
+    const nameEl = screen.getByText(provider, { exact: true })
+    const tr = nameEl.closest("tr")
+    if (!tr) throw new Error(`Provider table row <tr> not found for ${provider}`)
+    return tr as HTMLTableRowElement
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
+
+  it("keeps seven registry headers and seven cells in every row", async () => {
+    renderNoSlotSettings(allProvidersFixture())
+    await waitForNoSlotProviders()
+    const table = screen.getByRole("table")
+    expect(
+      Array.from(table.querySelectorAll("thead th")).map((th) => th.textContent?.trim() ?? "")
+    ).toEqual([...SLOT_HEADERS])
+    for (const name of SLOT_NAMES) {
+      expect(noSlotRowTr(name).children).toHaveLength(7)
+    }
+  })
+
+  it("does not render Tavily rate-tier in Settings registry", async () => {
+    renderNoSlotSettings(allProvidersFixture())
+    await waitForNoSlotProviders()
+    expect(screen.queryByText("Rate tier (key environment)")).not.toBeInTheDocument()
+    expect(document.querySelector("select#tavily-rate-tier")).toBeNull()
+    expect(
+      screen.queryByRole("combobox", { name: /tavily rate tier/i })
+    ).not.toBeInTheDocument()
+    const tavilyRow = noSlotRowTr("Tavily")
+    expect(tavilyRow.querySelector("select")).toBeNull()
+    expect(tavilyRow.children).toHaveLength(7)
+    for (const name of SLOT_NAMES) {
+      expect(noSlotRowTr(name).children).toHaveLength(7)
+      expect(noSlotRowTr(name).querySelector("select")).toBeNull()
+    }
+  })
+
+  it("Tavily Endpoint cell shows endpoint text only with no dropdown", async () => {
+    renderNoSlotSettings(allProvidersFixture())
+    await waitForNoSlotProviders()
+    const table = screen.getByRole("table")
+    const headers = Array.from(table.querySelectorAll("thead th")).map(
+      (th) => th.textContent?.trim() ?? ""
+    )
+    const endpointIdx = headers.indexOf("Endpoint")
+    expect(endpointIdx).toBe(2)
+    const tavilyRow = noSlotRowTr("Tavily")
+    const endpointCell = tavilyRow.children[endpointIdx] as HTMLElement
+    expect(endpointCell.textContent).toContain("api.tavily.com")
+    expect(endpointCell.querySelector("select")).toBeNull()
+    expect(within(endpointCell).queryByRole("combobox")).toBeNull()
+  })
+
+  it("Settings registry source owns no rate-tier slot", () => {
+    const settingsSrc = readFileSync(path.resolve(import.meta.dirname, "./SettingsProviders.tsx"), "utf8")
+    expect(settingsSrc).not.toContain("TavilyRateTierSelect")
+    expect(settingsSrc).not.toContain("rateTierSlot")
+    expect(settingsSrc).not.toContain("rateTier=")
+    const rowSrc = readFileSync(path.resolve(import.meta.dirname, "./ProviderRegistryRow.tsx"), "utf8")
+    expect(rowSrc).not.toContain("rateTier")
+  })
+
+  it("Usage card still owns the compact Tavily tier select", () => {
+    const tierSrc = readFileSync(path.resolve(import.meta.dirname, "./TavilyRateTierSelect.tsx"), "utf8")
+    expect(tierSrc).toContain("compact")
+    const quotaSrc = readFileSync(path.resolve(import.meta.dirname, "../quota/QuotaAnalytics.tsx"), "utf8")
+    expect(quotaSrc).toContain("renderRateTier")
+    expect(quotaSrc).toContain("TavilyRateTierSelect")
+    expect(quotaSrc).toContain("compact")
+  })
+})
+

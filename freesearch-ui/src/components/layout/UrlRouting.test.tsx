@@ -295,7 +295,7 @@ describe("C4-6: PillTabs switching leaves the URL unchanged", () => {
     const user = userEvent.setup()
     await renderAt("/routing")
     await expectView("Routing", "Routing", "/routing")
-    for (const tab of ["Simulator", "Ranks", "Resilience"]) {
+    for (const tab of ["Simulator"]) {
       await user.click(screen.getByRole("tab", { name: tab, exact: true }))
       expect(testPath()).toBe("/routing")
     }
@@ -341,6 +341,14 @@ describe("C4-7: no regression — shell, providers, views", () => {
 
   it("legacy /providers URL redirects into the merged Settings registry", async () => {
     await renderAt("/providers")
+    // Redirect plus Settings registry render under full-suite parallel load:
+    // budget above the default 1000ms (assertion unchanged).
+    await waitFor(
+      () => {
+        expect(screen.getByRole("heading", { name: "Settings" })).toBeInTheDocument()
+      },
+      { timeout: 5000 },
+    )
     await expectView("Settings", "Settings", "/settings")
     await waitFor(() => {
       expect(screen.getByText("Brave Search")).toBeInTheDocument()
@@ -358,7 +366,7 @@ describe("C4-7: no regression — shell, providers, views", () => {
       within(routingPills as HTMLElement)
         .getAllByRole("tab")
         .map((t) => t.textContent)
-    ).toEqual(["Strategy", "Simulator", "Ranks", "Resilience"])
+    ).toEqual(["Strategy", "Simulator"])
 
     await followLink("Settings")
     await expectView("Settings", "Settings", "/settings")

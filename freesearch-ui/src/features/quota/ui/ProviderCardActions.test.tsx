@@ -48,7 +48,7 @@ describe("ProviderCardActions", () => {
     expect(
       screen.getByRole("button", { name: "Balance history for Brave" }).getAttribute("data-testid"),
     ).toBe("limit-history-open-brave")
-    expect(screen.getByRole("button", { name: "Sync limits for Brave" })).not.toBeNull()
+    expect(screen.getByRole("button", { name: "Refresh limits for Brave" })).not.toBeNull()
   })
 
   it("hides the manual control when the provider is not eligible", () => {
@@ -60,9 +60,9 @@ describe("ProviderCardActions", () => {
 
   it("disables sync and shows syncing text while syncing", () => {
     renderActions({ syncing: true })
-    const sync = screen.getByRole("button", { name: "Sync limits for Brave" })
+    const sync = screen.getByRole("button", { name: "Refresh limits for Brave" })
     expect(sync.hasAttribute("disabled")).toBe(true)
-    expect(sync.textContent).toBe("Syncing…")
+    expect(sync.textContent).toBe("Refreshing…")
   })
 
   it("mounts no detail disclosure; the info popover owns detail (CARD-3)", () => {
@@ -72,7 +72,7 @@ describe("ProviderCardActions", () => {
     expect(screen.getByTestId("manual-quota-open-brave")).not.toBeNull()
     expect(screen.getByTestId("crd-grant-open-brave")).not.toBeNull()
     expect(screen.getByTestId("limit-history-open-brave")).not.toBeNull()
-    expect(screen.getByRole("button", { name: "Sync limits for Brave" })).not.toBeNull()
+    expect(screen.getByRole("button", { name: "Refresh limits for Brave" })).not.toBeNull()
 
     rerender(
       <ProviderCardActions
@@ -94,9 +94,32 @@ describe("ProviderCardActions", () => {
     expect(screen.getByTestId("limit-history-open-brave")).not.toBeNull()
   })
 
-  it("locks action order Sync, Provider Balance, Budget Limit, History (CARD-3)", () => {
+  it("locks action order Refresh Limits, Provider Balance, Budget Limit, History (CARD-3)", () => {
     renderActions()
     const labels = screen.getAllByRole("button").map((button) => button.textContent)
-    expect(labels).toEqual(["Sync", "Provider Balance", "Budget Limit", "History"])
+    expect(labels).toEqual(["Refresh Limits", "Provider Balance", "Budget Limit", "History"])
+  })
+
+  it("renders the composed OAuth control inline at the trailing edge of the same row", () => {
+    // Parallel never carries Provider Balance in production (manualEligible
+    // false via quotaEligibility); the row holds Refresh, Budget, History,
+    // then Connect inline.
+    renderActions({
+      providerId: "parallel",
+      providerName: "Parallel",
+      manualEligible: false,
+      oauthActions: (
+        <button type="button" data-testid="oauth-device-open-parallel">
+          Connect
+        </button>
+      ),
+    })
+    const connect = screen.getByTestId("oauth-device-open-parallel")
+    const row = connect.closest("div.flex.flex-wrap")
+    expect(row?.textContent).toContain("Budget Limit")
+    expect(row?.textContent).toContain("History")
+    expect(row?.textContent).toContain("Connect")
+    const labels = screen.getAllByRole("button").map((button) => button.textContent)
+    expect(labels[labels.length - 1]).toBe("Connect")
   })
 })

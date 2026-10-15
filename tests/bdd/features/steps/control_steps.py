@@ -37,7 +37,13 @@ from freesearch.models.provider_access import is_operation_enabled
 from freesearch.models.users import UserRole
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
-from tests.fixtures.auth import TEMP_PASSWORD, configure_bdd_secret, promote_account, temp_email
+from tests.fixtures.auth import (
+    TEMP_PASSWORD,
+    configure_bdd_secret,
+    mcp_account_token,
+    promote_account,
+    temp_email,
+)
 
 
 class _MemorySecretStore:
@@ -247,7 +253,34 @@ def _reopen_control_repository(context: Any) -> None:
     )
     _build_app(context)
     if getattr(context, "server", None) is not None:
-        context.server = create_server(context.adapters, repository=context.repository)
+        context.server = _build_mcp_server(context)
+
+
+def _control_headers(context: Any) -> dict[str, str]:
+    """Return the Developer headers, creating the account on first use."""
+
+    existing = getattr(context, "developer_headers", None)
+    if existing is not None:
+        return existing
+    headers = _login_headers(context, UserRole.DEVELOPER, "control-dev")
+    context.developer_headers = headers
+    return headers
+
+
+def _build_mcp_server(context: Any) -> Any:
+    """Build one MCP tool server with a real account and its stdio credential."""
+
+    from pydantic import SecretStr
+
+    service, token, _email = context.loop.run_until_complete(
+        mcp_account_token(context.repository, "control-mcp")
+    )
+    return create_server(
+        context.adapters,
+        repository=context.repository,
+        auth_service=service,
+        stdio_token=SecretStr(token.get_secret_value()),
+    )
 
 
 @given("an offline control API with stub adapters")
@@ -263,6 +296,7 @@ def step_given_control_api(context: Any) -> None:
 
 @given("an offline control API with stub adapters and call counters")
 def step_given_control_api_counters(context: Any) -> None:
+    configure_bdd_secret(context)
     _open_repository(context)
     context.adapters = [
         _ControlAdapter("exa", search_capable=True, fetch_capable=True),
@@ -271,10 +305,14 @@ def step_given_control_api_counters(context: Any) -> None:
     _reset_counts(context)
     context.server = None
     _build_app(context)
+    # Reads and searches need an account; mutations need Admin.
+    context.admin_headers = _login_headers(context, UserRole.ADMIN, "control-admin")
+    context.developer_headers = _login_headers(context, UserRole.DEVELOPER, "control-dev")
 
 
 @given("an offline control API with stub adapters and call counters and an MCP server")
 def step_given_control_api_counters_mcp(context: Any) -> None:
+    configure_bdd_secret(context)
     _open_repository(context)
     context.adapters = [
         _ControlAdapter("exa", search_capable=True, fetch_capable=True),
@@ -282,7 +320,9 @@ def step_given_control_api_counters_mcp(context: Any) -> None:
     ]
     _reset_counts(context)
     _build_app(context)
-    context.server = create_server(context.adapters, repository=context.repository)
+    context.admin_headers = _login_headers(context, UserRole.ADMIN, "control-admin")
+    context.developer_headers = _login_headers(context, UserRole.DEVELOPER, "control-dev")
+    context.server = _build_mcp_server(context)
 
 
 @given("an offline control API with an in-memory secret store")
@@ -488,8 +528,14 @@ def step_then_failure_telemetry(context: Any) -> None:
 
 @when('I apply the "{choice}" access choice to "{provider}"')
 def step_when_apply_access_choice(context: Any, choice: str, provider: str) -> None:
+    headers = getattr(context, "admin_headers", None) or _login_headers(
+        context, UserRole.ADMIN, "control-admin"
+    )
+    context.admin_headers = headers
     with _client(context) as client:
-        response = client.patch(f"/api/v1/providers/{provider}", json=_patch_for_choice(choice))
+        response = client.patch(
+            f"/api/v1/providers/{provider}", json=_patch_for_choice(choice), headers=headers
+        )
     assert response.status_code == 200, response.text
     context.last_patch_response = response
 
@@ -502,7 +548,9 @@ def step_then_provider_masks(
     context: Any, provider: str, enable_mask: int, support_mask: int
 ) -> None:
     with _client(context) as client:
-        response = client.get(f"/api/v1/providers/{provider}")
+        response = client.get(
+            f"/api/v1/providers/{provider}", headers=_control_headers(context)
+        )
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["provider_id"] == provider
@@ -528,9 +576,12 @@ def _store_fanout(context: Any, status: int, body: Any) -> None:
 
 @when("I submit offline search and fetch via REST")
 def step_when_rest_search_and_fetch(context: Any) -> None:
+    headers = _control_headers(context)
     with _client(context) as client:
-        search = client.post("/search", json={"query": "offline mask probe"})
-        fetch = client.post("/fetch", json={"url": "https://example.com/doc"})
+        search = client.post("/search", json={"query": "offline mask probe"}, headers=headers)
+        fetch = client.post(
+            "/fetch", json={"url": "https://example.com/doc"}, headers=headers
+        )
     _store_search(context, search.status_code, search.json() if search.content else None)
     _store_fetch(context, fetch.status_code, fetch.json() if fetch.content else None)
 
@@ -538,7 +589,9 @@ def step_when_rest_search_and_fetch(context: Any) -> None:
 @when("I submit offline search via REST")
 def step_when_rest_search_only(context: Any) -> None:
     with _client(context) as client:
-        search = client.post("/search", json={"query": "offline mask probe"})
+        search = client.post(
+            "/search", json={"query": "offline mask probe"}, headers=_control_headers(context)
+        )
     _store_search(context, search.status_code, search.json() if search.content else None)
 
 
@@ -549,7 +602,7 @@ def step_when_rest_fetch_require(context: Any, provider: str) -> None:
         "routing": {"mode": "require", "providers": [provider]},
     }
     with _client(context) as client:
-        fetch = client.post("/fetch", json=payload)
+        fetch = client.post("/fetch", json=payload, headers=_control_headers(context))
     _store_fetch(context, fetch.status_code, fetch.json() if fetch.content else None)
 
 
@@ -560,7 +613,7 @@ def step_when_rest_search_require(context: Any, provider: str) -> None:
         "routing": {"mode": "require", "providers": [provider]},
     }
     with _client(context) as client:
-        search = client.post("/search", json=payload)
+        search = client.post("/search", json=payload, headers=_control_headers(context))
     _store_search(context, search.status_code, search.json() if search.content else None)
 
 
@@ -571,7 +624,7 @@ def step_when_rest_search_prefer(context: Any, provider: str) -> None:
         "routing": {"mode": "prefer", "providers": [provider]},
     }
     with _client(context) as client:
-        search = client.post("/search", json=payload)
+        search = client.post("/search", json=payload, headers=_control_headers(context))
     _store_search(context, search.status_code, search.json() if search.content else None)
 
 
@@ -579,7 +632,9 @@ def step_when_rest_search_prefer(context: Any, provider: str) -> None:
 def step_when_rest_search_auto(context: Any) -> None:
     with _client(context) as client:
         search = client.post(
-            "/search", json={"query": "offline mask probe", "routing": {"mode": "auto"}}
+            "/search",
+            json={"query": "offline mask probe", "routing": {"mode": "auto"}},
+            headers=_control_headers(context),
         )
     _store_search(context, search.status_code, search.json() if search.content else None)
 
@@ -587,7 +642,11 @@ def step_when_rest_search_auto(context: Any) -> None:
 @when("I submit an offline fanout search via REST")
 def step_when_rest_fanout(context: Any) -> None:
     with _client(context) as client:
-        response = client.post("/search", json={"query": "offline mask probe", "fanout": True})
+        response = client.post(
+            "/search",
+            json={"query": "offline mask probe", "fanout": True},
+            headers=_control_headers(context),
+        )
     _store_fanout(context, response.status_code, response.json() if response.content else None)
 
 
@@ -600,7 +659,7 @@ def step_when_rest_fanout_restricted(context: Any, allow_list: str) -> None:
         "routing": {"mode": "fanout", "providers": providers},
     }
     with _client(context) as client:
-        response = client.post("/search", json=payload)
+        response = client.post("/search", json=payload, headers=_control_headers(context))
     _store_fanout(context, response.status_code, response.json() if response.content else None)
 
 
@@ -701,7 +760,9 @@ def step_then_call_counts(
 def step_then_fresh_masks(context: Any, provider: str, enable_mask: int) -> None:
     _reopen_control_repository(context)
     with _client(context) as client:
-        response = client.get(f"/api/v1/providers/{provider}")
+        response = client.get(
+            f"/api/v1/providers/{provider}", headers=_control_headers(context)
+        )
     assert response.status_code == 200, response.text
     assert response.json()["enable_mask"] == enable_mask, response.json()
 

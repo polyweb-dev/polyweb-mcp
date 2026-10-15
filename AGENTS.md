@@ -10,7 +10,7 @@ If there is no `.codegraph/` directory, skip CodeGraph entirely — indexing is 
 <!-- CODEGRAPH_END -->
 
 ## UI unit tests
-
+- We only support desktop view, not the mobile view.
 - In `freesearch-ui/src`, colocate each unit/component test with its source as `<basename>.test.ts` or `<basename>.test.tsx`; keep one canonical test file per source and never add suffix variants.
 - When consolidating historical suites, keep each origin traceable as `describe("<old filename>", ...)` and preserve test titles, bodies, and assertions.
 - Keep shared fixtures/helpers shared; deduplicate imports and change paths only when relocation requires it.

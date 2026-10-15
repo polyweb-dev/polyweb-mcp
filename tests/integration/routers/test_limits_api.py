@@ -4,8 +4,8 @@ Covers limits GET, record PATCH validation, grant PUT, history GET, sync POST
 status mapping (404/422/409/503), safe-link rules, and batch url_count 422.
 """
 
-import uuid
-from contextlib import suppress
+import gc
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -22,21 +22,34 @@ from tests.fixtures.auth import (
     temp_email,
 )
 
-_DB_ROOT = Path(".runtime-tmp/limit-api-pytest-dbs")
+
+def _unlink_with_retries(path: Path, *, attempts: int = 20) -> None:
+    """Remove a test database after Windows releases delayed SQLite handles."""
+
+    for attempt in range(attempts):
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            gc.collect()
+            time.sleep(0.05)
+        else:
+            return
 
 
 @pytest_asyncio.fixture
-async def repository():
-    _DB_ROOT.mkdir(parents=True, exist_ok=True)
-    db_path = _DB_ROOT / f"limit-api-{uuid.uuid4().hex}.db"
+async def repository(tmp_path: Path):
+    db_path = tmp_path / "limit-api.db"
     repo = await SQLiteRepository.open(db_path)
     try:
         yield repo
     finally:
         await repo.close()
         for extra in (db_path, Path(f"{db_path}.migration.lock")):
-            with suppress(FileNotFoundError):
-                extra.unlink()
+            _unlink_with_retries(extra)
 
 
 def _client(repository, adapters=None):

@@ -64,5 +64,7 @@ export interface ProviderConfig {
   keyVaultStatus: "configured" | "missing" | "keyless_public";
   keySource?: KeySource;
   authHeaderName?: string;
+  /** Confirmed stored Tavily key environment; null when the status supplied none. */
+  tavilyKeyEnvironment?: "dev" | "prod" | null;
   quota: ProviderQuota;
 }

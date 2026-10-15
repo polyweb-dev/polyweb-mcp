@@ -58,26 +58,3 @@ Feature: Provider search and fetch against the stubbed backend
     And I pin the playground fetch provider to "Tinyfish"
     And I submit the playground fetch URL "https://example.com"
     Then the playground should show fetch content or an error banner
-
-  # S1 — Ranks fetch table must include Parallel (not just the picker).
-  # Brave stays fetch-incapable everywhere (picker + Ranks).
-  @stub @parallel @fetch
-  Scenario: Parallel appears in the Ranks fetch table
-    When I select the "Routing" header tab
-    And I open the "Ranks" routing tab
-    And I choose the "Fetch" ranks operation
-    Then the ranks fetch table should show provider "Parallel"
-
-  @stub @brave @fetch
-  Scenario: Brave stays absent from the Ranks fetch table
-    When I select the "Routing" header tab
-    And I open the "Ranks" routing tab
-    And I choose the "Fetch" ranks operation
-    Then the ranks fetch table should not show provider "Brave Search"
-
-  @stub @tinyfish @fetch
-  Scenario: Tinyfish appears in the Ranks fetch table
-    When I select the "Routing" header tab
-    And I open the "Ranks" routing tab
-    And I choose the "Fetch" ranks operation
-    Then the ranks fetch table should show provider "Tinyfish"

@@ -1699,3 +1699,88 @@ def test_multi_word_dotted_and_digit_leading_credential_keys_are_redacted() -> N
     for secret in ("AKIAIOSFODNN7EXAMPLE", "AKIA2EXAMPLE", "482913"):
         assert secret not in str(error)
         assert secret not in error.error.model_dump_json()
+
+
+# Tavily Retry-After preservation (PLAN 4.2): normalized 429 errors carry a
+# finite nonnegative retry_after_seconds detail; missing or malformed values
+# fall back to the calculated backoff.
+
+
+def test_finite_retry_after_details_accepts_int_and_float() -> None:
+    from freesearch.infrastructure.resilience import _finite_retry_after_details
+
+    assert _finite_retry_after_details({"retry_after_seconds": 7}) == 7.0
+    assert _finite_retry_after_details({"retry_after_seconds": 2.5}) == 2.5
+    assert _finite_retry_after_details({"retry_after_seconds": 0}) == 0.0
+
+
+def test_finite_retry_after_details_rejects_malformed() -> None:
+    from freesearch.infrastructure.resilience import _finite_retry_after_details
+
+    assert _finite_retry_after_details({}) is None
+    assert _finite_retry_after_details(None) is None
+    assert _finite_retry_after_details({"retry_after_seconds": True}) is None
+    assert _finite_retry_after_details({"retry_after_seconds": "7"}) is None
+    assert _finite_retry_after_details({"retry_after_seconds": -1}) is None
+    assert _finite_retry_after_details({"retry_after_seconds": float("inf")}) is None
+    assert _finite_retry_after_details({"retry_after_seconds": float("nan")}) is None
+
+
+async def test_runner_uses_normalized_retry_after_for_429() -> None:
+    from freesearch.infrastructure.resilience import _finite_retry_after_details
+
+    clock = FakeClock()
+    sleeper = FakeSleeper()
+    runner = ResilientRunner(
+        None, max_attempts=2, clock=clock, sleeper=sleeper, random_source=lambda: 1.0
+    )
+    calls = 0
+
+    async def _flaky() -> object:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise ProviderOperationError(
+                ProviderError(
+                    provider="tavily",
+                    code="rate_limited",
+                    message="usage limit exceeded",
+                    retryable=True,
+                    status_code=429,
+                    details={"retry_after_seconds": 9},
+                )
+            )
+        return object()
+
+    result = await runner.run("tavily", _flaky)
+    assert result is not None
+    assert sleeper.sleeps == [9.0]
+    assert _finite_retry_after_details({"retry_after_seconds": 9}) == 9.0
+
+
+async def test_runner_falls_back_without_retry_after_detail() -> None:
+    clock = FakeClock()
+    sleeper = FakeSleeper()
+    runner = ResilientRunner(
+        None, max_attempts=2, clock=clock, sleeper=sleeper, random_source=lambda: 1.0
+    )
+    calls = 0
+
+    async def _flaky() -> object:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise ProviderOperationError(
+                ProviderError(
+                    provider="tavily",
+                    code="rate_limited",
+                    message="usage limit exceeded",
+                    retryable=True,
+                    status_code=429,
+                )
+            )
+        return object()
+
+    await runner.run("tavily", _flaky)
+    assert len(sleeper.sleeps) == 1
+    assert sleeper.sleeps[0] != 9.0

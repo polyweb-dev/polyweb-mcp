@@ -2469,3 +2469,94 @@ class TestExaMonthlyLedger:
             if adapter is not None:
                 await adapter.aclose()
             await client.aclose()
+
+
+# --------------------------------------------------------------------------
+# Tavily legacy coexistence: failed/empty debits, stale-positive vs 402
+# --------------------------------------------------------------------------
+
+
+class _TavilyFakeSDK:
+    """Recording stand-in for the Tavily SDK (no network)."""
+
+    def __init__(self) -> None:
+        self.search_response: object = None
+        self.search_error: Exception | None = None
+
+    async def search(self, **kwargs: object) -> object:
+        if self.search_error is not None:
+            raise self.search_error
+        return self.search_response
+
+    async def extract(self, **kwargs: object) -> object:
+        raise NotImplementedError
+
+
+class TestTavilyQuotaCoexistence:
+    async def test_failed_call_records_zero_debit(self, repo: SQLiteRepository) -> None:
+        from freesearch.adapters.tavily import TavilyAdapter
+
+        sdk = _TavilyFakeSDK()
+        sdk.search_error = ValueError("boom")
+        client = httpx.AsyncClient(timeout=30.0)
+        adapter: TavilyAdapter | None = None
+        try:
+            adapter = TavilyAdapter(client, sdk_client=sdk, api_key=TEST_API_KEY)  # type: ignore[arg-type]
+            with pytest.raises(ProviderOperationError):
+                await tracked_call(
+                    repo,
+                    adapter,
+                    lambda running: running.search(SearchRequest(query="fail", limit=1)),
+                    operation=UsageOperation.SEARCH,
+                )
+        finally:
+            if adapter is not None:
+                await adapter.aclose()
+            await client.aclose()
+
+        totals = await repo.limits.crd_usage_totals("tavily")
+        assert all(t.normalized_crd == Decimal("0") for t in totals)
+
+    async def test_empty_valid_documents_debit_reported_only(self, repo: SQLiteRepository) -> None:
+        from freesearch.adapters.tavily import TavilyAdapter
+
+        sdk = _TavilyFakeSDK()
+        sdk.search_response = {"results": []}
+        client = httpx.AsyncClient(timeout=30.0)
+        adapter: TavilyAdapter | None = None
+        try:
+            adapter = TavilyAdapter(client, sdk_client=sdk, api_key=TEST_API_KEY)  # type: ignore[arg-type]
+            response = await tracked_call(
+                repo,
+                adapter,
+                lambda running: running.search(SearchRequest(query="empty", limit=1)),
+                operation=UsageOperation.SEARCH,
+            )
+        finally:
+            if adapter is not None:
+                await adapter.aclose()
+            await client.aclose()
+
+        assert response.results == []
+        assert response.usage is None
+
+    async def test_stale_positive_cache_loses_to_vendor_402(self, repo: SQLiteRepository) -> None:
+        from freesearch.adapters.tavily import TavilyAdapter
+        from freesearch.models.contracts import UnitKind
+
+        sdk = _TavilyFakeSDK()
+        sdk.search_response = {"results": []}
+        client = httpx.AsyncClient(timeout=30.0)
+        adapter: TavilyAdapter | None = None
+        try:
+            adapter = TavilyAdapter(client, sdk_client=sdk, api_key=TEST_API_KEY)  # type: ignore[arg-type]
+            latest = await effective_quota(repo, "tavily")
+            assert latest is None
+            zero = await adapter.quota_after_error(402)
+            assert zero is not None and zero.remaining == Decimal("0")
+            assert zero.unit_kind == UnitKind.CREDIT
+            assert zero.display_unit == "Credits"
+        finally:
+            if adapter is not None:
+                await adapter.aclose()
+            await client.aclose()

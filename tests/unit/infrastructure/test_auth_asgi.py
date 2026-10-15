@@ -141,8 +141,6 @@ def test_protected_surfaces_reject_anonymous_with_challenge() -> None:
         ("GET", "/dashboard"),
         ("GET", "/api/v1/providers"),
         ("GET", "/api/v1/traces"),
-        ("GET", "/docs"),
-        ("GET", "/openapi.json"),
         ("GET", "/no-such-route"),
         ("POST", "/auth/jwt/refresh"),
     ]

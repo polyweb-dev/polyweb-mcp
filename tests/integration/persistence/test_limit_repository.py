@@ -4,8 +4,8 @@ Synthetic providers only. Covers leases, reservations, audit, idempotence,
 manual anchors, and stale-generation rejection. No vendor I/O.
 """
 
-import uuid
-from contextlib import suppress
+import gc
+import time
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -34,21 +34,35 @@ from freesearch.models.provider_limits import (
 from freesearch.persistence.storage import SQLiteRepository
 
 FIXED_AT = datetime(2026, 3, 10, 12, 0, 0, tzinfo=UTC)
-_DB_ROOT = Path(".runtime-tmp/limit-repo-pytest-dbs")
+
+
+def _unlink_with_retries(path: Path, *, attempts: int = 20) -> None:
+    """Remove a test database after Windows releases delayed SQLite handles."""
+
+    for attempt in range(attempts):
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            gc.collect()
+            time.sleep(0.05)
+        else:
+            return
 
 
 @pytest_asyncio.fixture
 async def limits_repo(tmp_path: Path):
-    _DB_ROOT.mkdir(parents=True, exist_ok=True)
-    db_path = _DB_ROOT / f"limit-repo-{uuid.uuid4().hex}.db"
+    db_path = tmp_path / "limit-repo.db"
     repo = await SQLiteRepository.open(db_path)
     try:
         yield repo.limits
     finally:
         await repo.close()
         for extra in (db_path, Path(f"{db_path}.migration.lock")):
-            with suppress(FileNotFoundError):
-                extra.unlink()
+            _unlink_with_retries(extra)
 
 
 def _record(provider: str = "synth") -> ProviderLimitRecord:
@@ -379,6 +393,167 @@ async def test_finalize_real_overspend_stays_visible(limits_repo) -> None:
     event = next(e for e in page.events if e.local_attempt_id == "over-1")
     assert event.detail["clamped"] is True
     assert event.detail["overspend"] == "2"
+
+
+async def test_tavily_reserve_rechecks_rate_and_funds_atomically(limits_repo) -> None:
+    """Tavily reserve() rechecks minute capacity and native funds in-txn."""
+    from freesearch.configuration.provider_limits import provider_limit_defaults
+    from freesearch.models.provider_limits import RateReservation, RateWindowName
+
+    record = next(
+        r
+        for r in provider_limit_defaults()
+        if r.provider == "tavily"
+        and r.operation is LimitOperation.SEARCH
+        and r.auth_mode is AuthMode.KEYED
+    )
+    await limits_repo.seed_records(
+        [r for r in provider_limit_defaults() if r.provider == "tavily"]
+    )
+    await limits_repo.ensure_pool(
+        NativePool(
+            pool_id="tavily:keyed:credit",
+            provider="tavily",
+            auth_mode=AuthMode.KEYED,
+            native_unit=UnitKind.CREDIT,
+            source="vendor_api",
+        )
+    )
+    await limits_repo.apply_snapshot(
+        NativeUsageSnapshot(
+            pool_id="tavily:keyed:credit",
+            provider="tavily",
+            auth_mode=AuthMode.KEYED,
+            native_unit=UnitKind.CREDIT,
+            observed_at=FIXED_AT,
+            remaining=Decimal("1000"),
+            allowance=Decimal("1000"),
+            credential_generation=0,
+        )
+    )
+
+    def _admission(attempt: str) -> LimitAdmission:
+        return LimitAdmission(
+            attempt_id=attempt,
+            provider="tavily",
+            operation=LimitOperation.SEARCH,
+            auth_mode=AuthMode.KEYED,
+            pool_id="tavily:keyed:credit",
+            reserved_crd=Decimal("8"),
+            reserved_native=Decimal("1"),
+            created_at=FIXED_AT,
+            expires_at=FIXED_AT + timedelta(minutes=5),
+            rate_reservations=[
+                RateReservation(
+                    bucket_id="tavily:keyed:search:requests",
+                    window=RateWindowName.MINUTE,
+                    units=Decimal("1"),
+                )
+            ],
+        )
+
+    first = await limits_repo.reserve(_admission("t-atomic-1"), record=record)
+    assert first.attempt_id == "t-atomic-1"
+    # Idempotent attempt IDs keep the first reservation.
+    again = await limits_repo.reserve(_admission("t-atomic-1"), record=record)
+    assert again.attempt_id == "t-atomic-1"
+
+    # Exhaust funds: the funds denial takes status precedence (402).
+    await limits_repo.apply_snapshot(
+        NativeUsageSnapshot(
+            pool_id="tavily:keyed:credit",
+            provider="tavily",
+            auth_mode=AuthMode.KEYED,
+            native_unit=UnitKind.CREDIT,
+            observed_at=FIXED_AT,
+            remaining=Decimal("0"),
+            allowance=Decimal("1000"),
+            credential_generation=0,
+        )
+    )
+    try:
+        await limits_repo.reserve(_admission("t-atomic-2"), record=record)
+        raise AssertionError("reserve must deny")
+    except Exception as exc:
+        from freesearch.models.provider_limits import LimitDeniedError
+
+        assert isinstance(exc, LimitDeniedError)
+        assert exc.status_code == 402
+
+
+async def test_tavily_claim_sync_anchors_canonical_pool(limits_repo) -> None:
+    """Tavily claims anchor on the keyed Credits pool with a 60s next_sync."""
+    await limits_repo.ensure_pool(
+        NativePool(
+            pool_id="tavily:keyed:credit",
+            provider="tavily",
+            auth_mode=AuthMode.KEYED,
+            native_unit=UnitKind.CREDIT,
+            source="vendor_api",
+        )
+    )
+    assert (
+        await limits_repo.claim_sync(
+            SyncClaim(provider="tavily", owner="a", now=FIXED_AT, lease_seconds=90)
+        )
+        is True
+    )
+    pool = await limits_repo.get_pool("tavily:keyed:credit")
+    assert pool is not None
+    assert pool.next_sync_at == FIXED_AT + timedelta(seconds=60)
+    # Same owner cannot bypass the active claim; another pool is not leased.
+    assert (
+        await limits_repo.claim_sync(
+            SyncClaim(provider="tavily", owner="a", now=FIXED_AT, lease_seconds=90)
+        )
+        is False
+    )
+
+
+async def test_tavily_snapshot_rejects_older_terminal_overwrite(limits_repo) -> None:
+    """An older in-flight observation cannot replace a newer vendor_402."""
+    await limits_repo.ensure_pool(
+        NativePool(
+            pool_id="tavily:keyed:credit",
+            provider="tavily",
+            auth_mode=AuthMode.KEYED,
+            native_unit=UnitKind.CREDIT,
+            source="vendor_api",
+        )
+    )
+    assert (
+        await limits_repo.apply_snapshot(
+            NativeUsageSnapshot(
+                pool_id="tavily:keyed:credit",
+                provider="tavily",
+                auth_mode=AuthMode.KEYED,
+                native_unit=UnitKind.CREDIT,
+                observed_at=FIXED_AT,
+                remaining=Decimal("0"),
+                allowance=Decimal("1000"),
+                credential_generation=0,
+                source="vendor_402",
+            )
+        )
+        is True
+    )
+    assert (
+        await limits_repo.apply_snapshot(
+            NativeUsageSnapshot(
+                pool_id="tavily:keyed:credit",
+                provider="tavily",
+                auth_mode=AuthMode.KEYED,
+                native_unit=UnitKind.CREDIT,
+                observed_at=FIXED_AT - timedelta(seconds=30),
+                remaining=Decimal("1000"),
+                allowance=Decimal("1000"),
+                credential_generation=0,
+            )
+        )
+        is False
+    )
+    pool = await limits_repo.get_pool("tavily:keyed:credit")
+    assert pool is not None and pool.remaining == Decimal("0")
 
 
 async def test_manual_anchor_delete_restores_unknown(limits_repo) -> None:

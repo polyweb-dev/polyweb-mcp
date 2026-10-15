@@ -361,7 +361,7 @@ describe("mergeProviderStatus", () => {
     expect(merged.keyMasked).toBe("—")
   })
 
-  it("renders null p95 latency (never NaN) and marks keyless tiers as keyed", () => {
+  it("renders null p95 latency (never NaN) and marks keyless tiers as keyless without a key", () => {
     const keenableEntry = {
       id: "keenable",
       backendId: "keenable",
@@ -377,7 +377,7 @@ describe("mergeProviderStatus", () => {
     )
 
     expect(merged.latencyP95Ms).toBeNull()
-    expect(merged.hasKey).toBe(true)
+    expect(merged.hasKey).toBe(false)
     expect(merged.keyVaultStatus).toBe("keyless_public")
   })
 
@@ -513,6 +513,69 @@ describe("mergeProviderStatus", () => {
         mergeProviderStatus(catalogEntry, { ...providerStatus("tavily"), support_mask: bad } as never),
       ).toThrow()
     }
+  })
+
+  it("reads back the confirmed dev key environment without inference", () => {
+    const merged = mergeProviderStatus(
+      catalogEntry,
+      { ...providerStatus("tavily"), tavily_key_environment: "dev" } as never
+    )
+    expect(merged.tavilyKeyEnvironment).toBe("dev")
+  })
+
+  it("reads back the confirmed prod key environment without inference", () => {
+    const merged = mergeProviderStatus(
+      catalogEntry,
+      { ...providerStatus("tavily"), tavily_key_environment: "prod" } as never
+    )
+    expect(merged.tavilyKeyEnvironment).toBe("prod")
+  })
+
+  it("narrows absent, null, and invalid key environments to null (never inferred)", () => {
+    const base = providerStatus("tavily") as unknown as Record<string, unknown>
+    expect(
+      mergeProviderStatus(catalogEntry, { ...base } as never).tavilyKeyEnvironment
+    ).toBeNull()
+    expect(
+      mergeProviderStatus(catalogEntry, { ...base, tavily_key_environment: null } as never)
+        .tavilyKeyEnvironment
+    ).toBeNull()
+    for (const invalid of ["researcher", "DEV", "Prod", "", 0, 1, true, {}, []]) {
+      expect(
+        mergeProviderStatus(catalogEntry, { ...base, tavily_key_environment: invalid } as never)
+          .tavilyKeyEnvironment
+      ).toBeNull()
+    }
+  })
+
+  it("never infers the key environment from funds, key text, or account plan", () => {
+    // A missing secret with a healthy wire report still yields null, not dev.
+    const merged = mergeProviderStatus(
+      catalogEntry,
+      {
+        ...providerStatus("tavily", { secret_presence: "missing" }),
+        tavily_key_environment: undefined,
+      } as never
+    )
+    expect(merged.keyVaultStatus).toBe("missing")
+    expect(merged.tavilyKeyEnvironment).toBeNull()
+  })
+
+  it("leaves non-Tavily mapping unchanged with a null key environment", () => {
+    const braveEntry = {
+      id: "brave",
+      backendId: "brave",
+      name: "Brave Search",
+      description: "Search only.",
+      baseUrl: "https://api.search.brave.com/res/v1/web/search",
+      authHeaderName: "X-Subscription-Token",
+      capabilities: ["search"],
+    } as never
+    const brave = mergeProviderStatus(braveEntry, providerStatus("brave") as never)
+    expect(brave.tavilyKeyEnvironment).toBeNull()
+    expect(brave.enableMask).toBe(7)
+    expect(brave.supportMask).toBe(3)
+    expect(brave.healthStatus).toBe("healthy")
   })
 })
 

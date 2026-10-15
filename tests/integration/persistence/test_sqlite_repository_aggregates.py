@@ -1,6 +1,7 @@
 """Boundary tests for the Stage 4.5 SQLite usage aggregate reads."""
 
-import tempfile
+import gc
+import time
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
@@ -12,21 +13,32 @@ from freesearch.models.contracts import UsageEvent, UsageOperation
 from freesearch.persistence.storage import SQLiteRepository
 
 
+def _unlink_with_retries(path: Path, *, attempts: int = 20) -> None:
+    """Remove a test database after Windows releases delayed SQLite handles."""
+
+    for attempt in range(attempts):
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            gc.collect()
+            time.sleep(0.05)
+        else:
+            return
+
+
 @pytest_asyncio.fixture
-async def repository() -> AsyncIterator[SQLiteRepository]:
-    with tempfile.NamedTemporaryFile(
-        prefix="freesearch-aggregates-",
-        suffix=".db",
-        dir=Path.cwd(),
-        delete=False,
-    ) as temporary_file:
-        db_path = Path(temporary_file.name)
+async def repository(tmp_path: Path) -> AsyncIterator[SQLiteRepository]:
+    db_path = tmp_path / "aggregates.db"
     db = await SQLiteRepository.open(db_path)
     try:
         yield db
     finally:
         await db.close()
-        db_path.unlink(missing_ok=True)
+        _unlink_with_retries(db_path)
 
 
 def _event(

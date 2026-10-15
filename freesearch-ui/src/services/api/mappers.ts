@@ -180,11 +180,17 @@ export function mergeProviderStatus(
     circuitBreaker: wire.circuit_breaker.state,
     consecutiveFailures: 0,
     latencyP95Ms: wire.latency_p95_ms,
-    hasKey: wire.secret_presence !== "missing",
+    hasKey: wire.secret_presence === "configured",
     // GAP: 12 — GET status has presence only; fingerprints arrive after secret writes.
     keyMasked: "—",
     keyVaultStatus: wire.secret_presence,
     authHeaderName: catalogEntry.authHeaderName,
+    // Confirmed readback only: any raw value outside dev/prod narrows to null
+    // so no inferred or unknown environment ever reaches the UI.
+    tavilyKeyEnvironment:
+      wire.tavily_key_environment === "dev" || wire.tavily_key_environment === "prod"
+        ? wire.tavily_key_environment
+        : null,
     quota: {
       used: null,
       limit: null,

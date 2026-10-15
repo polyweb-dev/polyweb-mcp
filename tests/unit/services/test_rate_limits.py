@@ -429,3 +429,55 @@ async def test_fake_oldest_attempt_tracks_window_age() -> None:
     oldest = await fake.oldest_attempt("synth-hour", window=RateWindowName.HOUR, now=FIXED)
     assert oldest == FIXED - timedelta(seconds=100)
     assert await fake.oldest_attempt("missing", window=RateWindowName.HOUR, now=FIXED) is None
+
+
+# Tavily window_details (PLAN 4.2): live minute headroom and cooldown ----------
+
+
+def _tavily_minute_record() -> ProviderLimitRecord:
+    return ProviderLimitRecord(
+        provider="tavily",
+        operation=LimitOperation.SEARCH,
+        auth_mode=AuthMode.KEYED,
+        supported=True,
+        transport_available=True,
+        rate=RateBlock(
+            windows=[
+                _window(
+                    "tavily:keyed:search:requests", "100", RateWindowName.MINUTE
+                )
+            ],
+            published=True,
+        ),
+        budget=None,
+        native_unit=None,
+        native_pool_id=None,
+    )
+
+
+async def test_window_details_headroom_without_repository() -> None:
+    service = RateLimitService(None, [_tavily_minute_record()])  # type: ignore[arg-type]
+    windows = await service.window_details("tavily", AuthMode.KEYED, FIXED)
+    assert len(windows) == 1
+    assert windows[0].bucket_id == "tavily:keyed:search:requests"
+    assert windows[0].limit == Decimal("100")
+
+
+async def test_window_details_headroom_with_attempts() -> None:
+    fake = _FakeRateRepository()
+    service = RateLimitService(fake, [_tavily_minute_record()])  # type: ignore[arg-type]
+    admission = await service.admit(_context("t-headroom", provider="tavily"))
+    assert admission.admitted is True
+    await service.record_attempt(admission, FIXED)
+    windows = await service.window_details("tavily", AuthMode.KEYED, FIXED)
+    assert len(windows) == 1
+    assert windows[0].remaining == Decimal("99")
+
+
+async def test_record_vendor_cooldown_sets_reset_headroom() -> None:
+    fake = _FakeRateRepository()
+    service = RateLimitService(fake, [_tavily_minute_record()])  # type: ignore[arg-type]
+    await service.record_vendor_cooldown("tavily", AuthMode.KEYED, 30, FIXED)
+    windows = await service.window_details("tavily", AuthMode.KEYED, FIXED)
+    assert len(windows) == 1
+    assert windows[0].reset_at == FIXED + timedelta(seconds=30)

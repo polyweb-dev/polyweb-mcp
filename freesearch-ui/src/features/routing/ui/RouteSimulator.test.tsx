@@ -1,26 +1,18 @@
 import React from "react"
-import { readFileSync, existsSync } from "node:fs"
+import { readFileSync } from "node:fs"
 import path from "node:path"
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest"
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import { MemoryRouter } from "react-router"
-import App from "@/App"
 import { FreeSearchProvider } from "@/context/FreeSearchContext"
 import { RoutingEngine } from "./RoutingEngine"
-import { installAuthStub, installFetchStub, ok, err } from "@/test/fetchMock"
-import { ADMIN_ACCOUNT_ID, adminAccountFixture } from "@/test/authFixtures"
-import {
-  installFakeChannel,
-  installImmediateLocks,
-  removeLocks,
-} from "@/test/browserStubs"
+import { installFetchStub, ok, err } from "@/test/fetchMock"
+import { ADMIN_ACCOUNT_ID } from "@/test/authFixtures"
+import { removeLocks } from "@/test/browserStubs"
 import {
   allProvidersFixture,
   routingConfigFixture,
   dashboardFixture,
-  fetchResponseFixture,
-  searchResponseFixture,
   type WireProviderStatus,
 } from "@/test/backendFixtures"
 
@@ -121,8 +113,6 @@ const playgroundOwnerFiles = [
   "../../playground/ui/WaterfallPanel.tsx",
   "../../playground/ui/FetchResult.tsx",
 ]
-const appPath = path.resolve(testDir, "../../../App.tsx")
-const statusBarPath = path.resolve(testDir, "../../../app/layout/StatusBar.tsx")
 const pgf1Path = path.resolve(testDir, "../../playground/ui/PlaygroundPage.test.tsx")
 
 const simulatorSource = simulatorOwnerFiles
@@ -134,13 +124,6 @@ const strategySource = strategyOwnerFiles
 const playgroundSource = playgroundOwnerFiles
   .map((file) => readFileSync(path.resolve(testDir, file), "utf8"))
   .join("\n")
-const appSource = readFileSync(appPath, "utf8")
-// Slice 4: the Routes table + shell live in app/DashboardShell.tsx; App.tsx
-// is a thin AppProviders>DashboardShell shim.
-const dashboardShellSource = readFileSync(
-  path.resolve(testDir, "../../../app/DashboardShell.tsx"),
-  "utf8"
-)
 const pgf1Source = readFileSync(pgf1Path, "utf8")
 
 function renderRouting(providers: WireProviderStatus[] = allProvidersFixture()) {
@@ -550,21 +533,13 @@ describe("R-SIM AC-R-REG-1: regressions stay GREEN (Search/Fetch, bar, tabs, log
     expect(strategySource).toContain("STRATEGY_CARDS")
   })
 
-  it("R1 StatusBar still owns page status (single source, App renders once)", () => {
-    expect(existsSync(statusBarPath)).toBe(true)
-    expect(dashboardShellSource).toMatch(/from\s+["']@\/app\/layout\/StatusBar["']/)
-    expect(dashboardShellSource.match(/<StatusBar/g) ?? []).toHaveLength(1)
-    // Thin App shim renders the shell that owns the single StatusBar.
-    expect(appSource).toContain("DashboardShell")
-  })
-
   it("routing tabs intact with no page-level status cluster reintroduced", async () => {
     renderRouting()
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: /^Routing$/ })).toBeInTheDocument()
     })
-    expect(screen.getAllByRole("tab")).toHaveLength(4)
-    for (const label of ["Strategy", "Simulator", "Ranks", "Resilience"]) {
+    expect(screen.getAllByRole("tab")).toHaveLength(2)
+    for (const label of ["Strategy", "Simulator"]) {
       expect(
         screen.getByRole("tab", { name: new RegExp(`^${label}$`) })
       ).toBeInTheDocument()
@@ -572,49 +547,6 @@ describe("R-SIM AC-R-REG-1: regressions stay GREEN (Search/Fetch, bar, tabs, log
     expect(screen.queryByText("Failover active", { exact: true })).toBeNull()
     expect(screen.queryByText("Failover inactive", { exact: true })).toBeNull()
     expect(screen.queryByText(/providers eligible/)).toBeNull()
-  })
-
-  it("R1 bar renders on the routing route beside the Strategy cards", async () => {
-    installImmediateLocks()
-    installFakeChannel()
-    installAuthStub({ account: adminAccountFixture() }, (req) => {
-      if (req.url === "/api/v1/providers" && req.method === "GET") {
-        return ok(allProvidersFixture())
-      }
-      if (req.url === "/api/v1/routing/config" && req.method === "GET") {
-        return ok(routingConfigFixture())
-      }
-      if (req.url.startsWith("/dashboard")) return ok(dashboardFixture())
-      if (req.url === "/search" && req.method === "POST") {
-        return ok(searchResponseFixture())
-      }
-      if (req.url === "/fetch" && req.method === "POST") {
-        return ok(fetchResponseFixture())
-      }
-      return err(404, { detail: "unhandled test route" })
-    })
-    render(
-      <MemoryRouter initialEntries={["/routing"]}>
-        <App />
-      </MemoryRouter>
-    )
-
-    await waitFor(() => {
-      expect(screen.getByTestId("status-bar")).toBeInTheDocument()
-    })
-    await waitFor(() => {
-      expect(screen.getByText("8 of 8 providers")).toBeInTheDocument()
-    })
-    await waitFor(() => {
-      expect(screen.getByText(/Failover (active|inactive)/)).toBeInTheDocument()
-    })
-    expect(screen.getAllByText(/Failover (active|inactive)/)).toHaveLength(1)
-    expect(screen.queryByText(/providers eligible/)).toBeNull()
-    await waitFor(() => {
-      expect(
-        screen.getByRole("button", { name: /^Strict priority/ })
-      ).toBeInTheDocument()
-    })
   })
 })
 

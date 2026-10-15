@@ -1821,8 +1821,9 @@ def step_when_firecrawl_fetch_estimate(
 ) -> None:
     # T-6 (estimate≡executed options): the estimate must read the same
     # FetchRequest options an executed fetch would bill, not an abstract
-    # modifier count. Documented weights: +1 per PDF page, +4 JSON/LLM
-    # extraction, +4 enhanced, +1 zero-data-retention, base 1.
+    # modifier count. Documented weights (LIMITS.md section 5): +1 per PDF
+    # page, +4 JSON/LLM extraction, +0 enhanced proxy/auto escalation,
+    # +1 zero-data-retention, base 1.
     adapter = _opt(context, "firecrawl_adapter", None)
     if adapter is None:  # pragma: no cover - outline always sets the adapter first
         client = httpx.AsyncClient(timeout=30.0)
@@ -1847,7 +1848,6 @@ def step_then_firecrawl_fetch_estimate(context: Any, credits: int) -> None:
     modifiers = (
         Decimal(request.pdf_pages)
         + Decimal("4") * int(request.json_extract)
-        + Decimal("4") * int(request.enhanced)
         + Decimal("1") * int(request.zero_data_retention)
     )
     expected = fetch_credits(Decimal("1"), modifiers)
@@ -1857,7 +1857,7 @@ def step_then_firecrawl_fetch_estimate(context: Any, credits: int) -> None:
     assert estimate.units == expected, (
         f"AC-FC-3: estimate_cost must equal the executed-option price "
         f"(1 + pdf {request.pdf_pages} + json {request.json_extract} + "
-        f"enhanced {request.enhanced} + zdr {request.zero_data_retention} = "
+        f"enhanced {request.enhanced}(+0) + zdr {request.zero_data_retention} = "
         f"{credits} credits), saw {estimate.units!r}"
     )
     assert str(estimate.currency).upper().startswith("CREDIT"), (

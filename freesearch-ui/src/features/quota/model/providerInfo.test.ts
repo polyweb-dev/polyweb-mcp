@@ -162,3 +162,780 @@ describe("balancePrefill", () => {
     expect(balancePrefill(auth({ aggregate_pool: null, detail: null }))).toBe(null)
   })
 })
+
+describe("providerInfo Tavily native", () => {
+  function tavilyProfile() {
+    return {
+      reference_usd_per_crd: "0.001",
+      native_usd_per_unit: "0.008",
+      cost_basis: "paygo_reference",
+      price_version: "paygo-reference",
+      source: "documented",
+      estimated: true,
+    }
+  }
+
+  function tavilyAuth(overrides: Partial<ProviderAuthLimits> = {}): ProviderAuthLimits {
+    return auth({
+      search: record("tavily", {
+        operation: "search",
+        supported: true,
+        transport_available: true,
+        budget: budget({ standard_native_cost: "1" }),
+        conversion_profile: tavilyProfile(),
+      }),
+      fetch: record("tavily", {
+        operation: "fetch",
+        supported: true,
+        transport_available: true,
+        budget: budget({ standard_native_cost: "0.2" }),
+        conversion_profile: tavilyProfile(),
+      }),
+      crd_views: [
+        {
+          state: "finite",
+          operation: "search",
+          remaining_crd: "7992",
+          local_remaining_crd: null,
+          request_cost_crd: "8",
+          shared_pool_id: "tavily:keyed:credits",
+          possible_standard_calls: "999",
+          price_version: "paygo-reference",
+          priced: true,
+        },
+        {
+          state: "finite",
+          operation: "fetch",
+          remaining_crd: "7992",
+          local_remaining_crd: null,
+          request_cost_crd: "8",
+          shared_pool_id: "tavily:keyed:credits",
+          possible_standard_calls: "999",
+          price_version: "paygo-reference",
+          priced: true,
+        },
+      ] as never,
+      detail: detail({
+        rate_windows: [
+          {
+            bucket_id: "tavily:keyed:search:requests",
+            limit: "100",
+            window: "1m",
+            scope: "key",
+            unit: "requests",
+            remaining: "95",
+            reset_at: null,
+            source: "local",
+            confidence: "observed",
+          },
+        ] as never,
+        retry_after_seconds: 12,
+      }),
+      ...overrides,
+    })
+  }
+
+  it("states 1 and 2 Tavily Credits search costs", () => {
+    const info = providerInfo(tavilyAuth(), "tavily")
+    const search = info.facts.find((fact) => fact.label === "Search cost")
+    expect(search?.value).toBe("1 Tavily Credit")
+    expect(search?.note).toBe("(advanced: 2 Tavily Credits)")
+  })
+
+  it("states 1 to 2 Tavily Credits per five URLs extract costs with the Extract label", () => {
+    const info = providerInfo(tavilyAuth(), "tavily")
+    const extract = info.facts.find((fact) => fact.label === "Extract cost")
+    expect(extract?.value).toBe("1 Tavily Credit per 5 URLs")
+    expect(extract?.note).toBe("(advanced: 2 Tavily Credits)")
+    expect(info.facts.some((fact) => fact.label === "Fetch cost")).toBe(false)
+    expect(info.facts.some((fact) => fact.label === "Fetch CRD cost")).toBe(true)
+    expect(info.facts.some((fact) => fact.label === "Extract CRD cost")).toBe(false)
+  })
+
+  it("shares one Search and Fetch Rate Limit row and states the Retry-After delay", () => {
+    const info = providerInfo(tavilyAuth(), "tavily")
+    const rate = info.facts.find((fact) => fact.label === "Search and Fetch Rate Limit")
+    expect(rate?.value).toBe("95/100 requests per minute")
+    expect(rate?.note).toBe(null)
+    expect(info.facts.some((fact) => fact.label === "Minute headroom")).toBe(false)
+    expect(info.facts.some((fact) => fact.label === "Rate limit")).toBe(false)
+    const retry = info.facts.find((fact) => fact.label === "Retry-After")
+    expect(retry?.value).toBe("12 s")
+  })
+
+  it("keeps USD inside the disclosure cost note while native rows carry no USD", () => {
+    const info = providerInfo(tavilyAuth(), "tavily")
+    const native = info.facts.find((fact) => fact.label === "Search cost")
+    expect(native?.value).not.toContain("$")
+    expect(native?.note).not.toContain("$")
+    const crd = info.facts.find((fact) => fact.label === "Search CRD cost")
+    expect(crd?.value).toBe("8 CRD")
+    expect(crd?.note).toBe("(≈ $0.008)")
+  })
+
+  it("shows keyless numeric headroom as unknown with no rate row", () => {
+    const info = providerInfo(
+      tavilyAuth({ auth_mode: "keyless", detail: detail({ rate_windows: [] }) }),
+      "tavily",
+    )
+    expect(info.facts.some((fact) => fact.label === "Search and Fetch Rate Limit")).toBe(false)
+    expect(info.facts.some((fact) => fact.label === "Minute headroom")).toBe(false)
+  })
+})
+
+describe("providerInfo Tavily row order", () => {
+  function orderedAuth(overrides: Partial<ProviderAuthLimits> = {}): ProviderAuthLimits {
+    return auth({
+      search: record("tavily", {
+        operation: "search",
+        supported: true,
+        transport_available: true,
+        budget: budget({ standard_native_cost: "1" }),
+        conversion_profile: {
+          reference_usd_per_crd: "0.001",
+          native_usd_per_unit: "0.008",
+          cost_basis: "paygo_reference",
+          price_version: "paygo-reference",
+          source: "documented",
+          estimated: true,
+        },
+      }),
+      fetch: record("tavily", {
+        operation: "fetch",
+        supported: true,
+        transport_available: true,
+        budget: budget({ standard_native_cost: "0.2" }),
+        conversion_profile: {
+          reference_usd_per_crd: "0.001",
+          native_usd_per_unit: "0.008",
+          cost_basis: "paygo_reference",
+          price_version: "paygo-reference",
+          source: "documented",
+          estimated: true,
+        },
+      }),
+      crd_views: [
+        {
+          state: "finite",
+          operation: "search",
+          remaining_crd: "7992",
+          local_remaining_crd: null,
+          request_cost_crd: "8",
+          shared_pool_id: "tavily:keyed:credits",
+          possible_standard_calls: "999",
+          price_version: "paygo-reference",
+          priced: true,
+        },
+        {
+          state: "finite",
+          operation: "fetch",
+          remaining_crd: "7992",
+          local_remaining_crd: null,
+          request_cost_crd: "8",
+          shared_pool_id: "tavily:keyed:credits",
+          possible_standard_calls: "999",
+          price_version: "paygo-reference",
+          priced: true,
+        },
+      ] as never,
+      detail: detail({
+        last_sync_at: "2026-09-06T10:05:00Z",
+        rate_windows: [
+          {
+            bucket_id: "tavily:keyed:search:requests",
+            limit: "100",
+            window: "1m",
+            scope: "key",
+            unit: "requests",
+            remaining: "95",
+            reset_at: null,
+            source: "local",
+            confidence: "observed",
+          },
+        ] as never,
+        retry_after_seconds: 12,
+      }),
+      ...overrides,
+    })
+  }
+
+  it("orders native costs, counts, CRD costs, rate, then Retry-After and Last sync", () => {
+    const info = providerInfo(orderedAuth(), "tavily")
+    expect(info.facts.map((fact) => fact.label)).toEqual([
+      "Search cost",
+      "Extract cost",
+      "Searches left",
+      "Fetches left",
+      "Search CRD cost",
+      "Fetch CRD cost",
+      "Search and Fetch Rate Limit",
+      "Retry-After",
+      "Last sync",
+    ])
+  })
+
+  it("floors fractional call counts through callsText", () => {
+    const rail = orderedAuth({
+      crd_views: [
+        {
+          state: "finite",
+          operation: "search",
+          remaining_crd: "7992",
+          local_remaining_crd: null,
+          request_cost_crd: "8",
+          shared_pool_id: "tavily:keyed:credits",
+          possible_standard_calls: "999.9",
+          price_version: "paygo-reference",
+          priced: true,
+        },
+        {
+          state: "finite",
+          operation: "fetch",
+          remaining_crd: "7992",
+          local_remaining_crd: null,
+          request_cost_crd: "8",
+          shared_pool_id: "tavily:keyed:credits",
+          possible_standard_calls: "999.9",
+          price_version: "paygo-reference",
+          priced: true,
+        },
+      ] as never,
+    })
+    const info = providerInfo(rail, "tavily")
+    expect(
+      info.facts.filter((fact) => fact.label === "Searches left").map((fact) => fact.value),
+    ).toEqual(["999"])
+    expect(
+      info.facts.filter((fact) => fact.label === "Fetches left").map((fact) => fact.value),
+    ).toEqual(["999"])
+  })
+})
+
+describe("providerInfo Tavily combined rate", () => {
+  function rateAuth(remaining: string | null, limit: string | null): ProviderAuthLimits {
+    return auth({
+      detail: detail({
+        rate_windows:
+          remaining === null && limit === null
+            ? []
+            : [
+                {
+                  bucket_id: "tavily:keyed:search:requests",
+                  limit,
+                  window: "1m",
+                  scope: "key",
+                  unit: "requests",
+                  remaining,
+                  reset_at: null,
+                  source: "local",
+                  confidence: "observed",
+                },
+              ] as never,
+      }),
+    })
+  }
+
+  it.each([
+    ["100", "100", "100 requests per minute"],
+    ["1000", "1000", "1000 requests per minute"],
+    ["90", "100", "90/100 requests per minute"],
+    ["900", "1000", "900/1000 requests per minute"],
+    ["0", "100", "0/100 requests per minute"],
+  ])("shows dev/prod headroom %s/%s", (remaining, limit, value) => {
+    const info = providerInfo(rateAuth(remaining, limit), "tavily")
+    const rate = info.facts.find((fact) => fact.label === "Search and Fetch Rate Limit")
+    expect(rate?.value).toBe(value)
+  })
+
+  it("floors fractional dashboard headroom through callsText", () => {
+    const info = providerInfo(rateAuth("100.000000000", "100.000000000"), "tavily")
+    const rate = info.facts.find((fact) => fact.label === "Search and Fetch Rate Limit")
+    expect(rate?.value).toBe("100 requests per minute")
+  })
+
+  it("shows unknown headroom with a confirmed ceiling override", () => {
+    const info = providerInfo(rateAuth("90", "100"), "tavily", false, "1000")
+    const rate = info.facts.find((fact) => fact.label === "Search and Fetch Rate Limit")
+    expect(rate?.value).toBe("unknown/1000 requests per minute")
+  })
+
+  it("keeps dashboard headroom once it confirms the override ceiling", () => {
+    const info = providerInfo(rateAuth("95", "100"), "tavily", false, "100")
+    const rate = info.facts.find((fact) => fact.label === "Search and Fetch Rate Limit")
+    expect(rate?.value).toBe("95/100 requests per minute")
+  })
+
+  it("keeps keyless numeric rate unknown without a dev/prod denominator", () => {
+    const info = providerInfo(
+      auth({ auth_mode: "keyless", detail: detail({ rate_windows: [] }) }),
+      "tavily",
+    )
+    expect(info.facts.some((fact) => fact.label === "Search and Fetch Rate Limit")).toBe(false)
+  })
+})
+
+describe("providerInfo Tavily precision", () => {
+  function preciseAuth(searchCost: string, fetchCost: string): ProviderAuthLimits {
+    return auth({
+      search: record("tavily", {
+        operation: "search",
+        supported: true,
+        transport_available: true,
+        budget: budget({ standard_native_cost: searchCost }),
+        conversion_profile: {
+          reference_usd_per_crd: "0.001",
+          native_usd_per_unit: "0.008",
+          cost_basis: "paygo_reference",
+          price_version: "paygo-reference",
+          source: "documented",
+          estimated: true,
+        },
+      }),
+      fetch: record("tavily", {
+        operation: "fetch",
+        supported: true,
+        transport_available: true,
+        budget: budget({ standard_native_cost: fetchCost }),
+        conversion_profile: {
+          reference_usd_per_crd: "0.001",
+          native_usd_per_unit: "0.008",
+          cost_basis: "paygo_reference",
+          price_version: "paygo-reference",
+          source: "documented",
+          estimated: true,
+        },
+      }),
+      crd_views: [
+        {
+          state: "finite",
+          operation: "search",
+          remaining_crd: "7992",
+          local_remaining_crd: null,
+          request_cost_crd: "8.000000000",
+          shared_pool_id: "tavily:keyed:credits",
+          possible_standard_calls: "999",
+          price_version: "paygo-reference",
+          priced: true,
+        },
+        {
+          state: "finite",
+          operation: "fetch",
+          remaining_crd: "7992",
+          local_remaining_crd: null,
+          request_cost_crd: "1.600000000",
+          shared_pool_id: "tavily:keyed:credits",
+          possible_standard_calls: "999",
+          price_version: "paygo-reference",
+          priced: true,
+        },
+      ] as never,
+      detail: detail({ rate_windows: [] }),
+    })
+  }
+
+  it("floors native amounts and trims CRD/USD zeros", () => {
+    const info = providerInfo(preciseAuth("1.9", "0.2"), "tavily")
+    const search = info.facts.find((fact) => fact.label === "Search cost")
+    expect(search?.value).toBe("1 Tavily Credit")
+    const searchCrd = info.facts.find((fact) => fact.label === "Search CRD cost")
+    expect(searchCrd?.value).toBe("8 CRD")
+    expect(searchCrd?.note).toBe("(≈ $0.008)")
+  })
+
+  it("keeps the 1.6 CRD extract fraction with its USD fraction", () => {
+    const info = providerInfo(preciseAuth("1", "0.2"), "tavily")
+    const fetchCrd = info.facts.find((fact) => fact.label === "Fetch CRD cost")
+    expect(fetchCrd?.value).toBe("1.6 CRD")
+    expect(fetchCrd?.note).toBe("(≈ $0.0016)")
+  })
+
+  it("names Monthly Tavily Credits for a monthly Tavily rail", () => {
+    const rail = auth({
+      search: record("tavily", {
+        supported: true,
+        transport_available: true,
+        budget: budget({ allowance_period: "monthly", free_allowance: "1000" }),
+      }),
+    })
+    expect(providerInfo(rail, "tavily").creditNote).toBe("Monthly Tavily Credits")
+  })
+
+  it("rounds a fractional Retry-After delay up to whole seconds", () => {
+    const rail = auth({ detail: detail({ retry_after_seconds: 12.2 }) })
+    const info = providerInfo(rail, "tavily")
+    expect(info.facts.find((fact) => fact.label === "Retry-After")?.value).toBe("13 s")
+  })
+})
+
+describe("providerInfo wholeRequests", () => {
+  function view(operation: "search" | "fetch", calls: string | null): Record<string, unknown> {
+    return {
+      state: "finite",
+      operation,
+      remaining_crd: "400000",
+      local_remaining_crd: null,
+      request_cost_crd: "4",
+      shared_pool_id: "keenable:keyed:request",
+      possible_standard_calls: calls,
+      price_version: "list_price",
+      priced: true,
+    }
+  }
+
+  function window(limit: string, unit: "requests" | "urls"): Record<string, unknown> {
+    return {
+      bucket_id: "keenable:keyed:requests",
+      limit,
+      window: "1s",
+      scope: "ip",
+      unit,
+      remaining: null,
+      reset_at: null,
+      source: "documented",
+      confidence: "observed",
+    }
+  }
+
+  function exaWindow(limit: string): Record<string, unknown> {
+    return { ...window(limit, "requests"), scope: "team" }
+  }
+
+  it("floors integer standard calls with the opt-in flag", () => {
+    const base = auth({
+      search: record("keenable", { supported: true, transport_available: true }),
+      fetch: record("keenable", {
+        operation: "fetch",
+        supported: true,
+        transport_available: true,
+      }),
+      crd_views: [
+        view("search", "99995.00000000"),
+        view("fetch", "99995.00000000"),
+      ] as never,
+      detail: detail({ reset_rule: "vendor_period" }),
+    })
+    const whole = providerInfo(base, "keenable", true)
+    expect(
+      whole.facts.filter((fact) => fact.label === "Searches left").map((fact) => fact.value),
+    ).toEqual(["99995"])
+    expect(
+      whole.facts.filter((fact) => fact.label === "Fetches left").map((fact) => fact.value),
+    ).toEqual(["99995"])
+  })
+
+  it("keeps decimal standard calls without the opt-in flag", () => {
+    const base = auth({
+      search: record("keenable", { supported: true, transport_available: true }),
+      crd_views: [view("search", "99995.00000000")] as never,
+      detail: detail({ reset_rule: "vendor_period" }),
+    })
+    const current = providerInfo(base)
+    expect(
+      current.facts.filter((fact) => fact.label === "Searches left").map((fact) => fact.value),
+    ).toEqual(["99995.00000000"])
+  })
+
+  it("floors request rate limits only with the opt-in flag", () => {
+    const base = auth({
+      detail: detail({
+        rate_windows: [window("1000.00000000", "requests")] as never,
+      }),
+    })
+    expect(providerInfo(base).facts.map((fact) => fact.value)).toContain("1000.00000000 requests per second")
+    expect(providerInfo(base, "keenable", true).facts.map((fact) => fact.value)).toContain("1000 requests per second")
+  })
+
+  it("floors Exa whole calls and shows search and fetch rate limits separately", () => {
+    const base = auth({
+      search: record("exa", {
+        supported: true,
+        transport_available: true,
+        rate: { windows: [exaWindow("10")], published: true } as never,
+      }),
+      fetch: record("exa", {
+        operation: "fetch",
+        supported: true,
+        transport_available: true,
+        rate: { windows: [exaWindow("100")], published: true } as never,
+      }),
+      crd_views: [view("search", "12.9"), view("fetch", "3.7")] as never,
+      detail: detail({ rate_windows: [exaWindow("10")] as never }),
+    })
+
+    const facts = providerInfo(base, "exa").facts
+    expect(
+      facts
+        .filter((fact) => fact.label === "Search rate limit" || fact.label === "Fetch rate limit")
+        .map((fact) => [fact.label, fact.value, fact.note]),
+    ).toEqual([
+      ["Search rate limit", "10 requests per second", "(team)"],
+      ["Fetch rate limit", "100 requests per second", "(team)"],
+    ])
+    expect(
+      facts
+        .filter((fact) => fact.label === "Searches left" || fact.label === "Fetches left")
+        .map((fact) => [fact.label, fact.value]),
+    ).toEqual([
+      ["Searches left", "12"],
+      ["Fetches left", "3"],
+    ])
+  })
+
+  it("keeps URL rate limits verbatim with the opt-in flag", () => {
+    const base = auth({
+      detail: detail({ rate_windows: [window("10.5", "urls")] as never }),
+    })
+    expect(providerInfo(base, "keenable", true).facts.map((fact) => fact.value)).toContain("10.5 URLs per second")
+  })
+
+  it("omits invalid counts instead of a fabricated zero", () => {
+    const base = auth({
+      search: record("keenable", { supported: true, transport_available: true }),
+      crd_views: [view("search", "lots")] as never,
+      detail: detail({
+        reset_rule: "vendor_period",
+        rate_windows: [window("lots", "requests")] as never,
+      }),
+    })
+    const info = providerInfo(base, "keenable", true)
+    expect(info.facts.some((fact) => fact.value === "0")).toBe(false)
+    expect(info.facts.some((fact) => fact.label === "Searches left")).toBe(false)
+  })
+
+  it("preserves cost labels, USD notes, and monthly header notes", () => {
+    const profile = {
+      reference_usd_per_crd: "0.001",
+      native_usd_per_unit: "0.004",
+      cost_basis: "priced_native_use",
+      price_version: "list_price",
+      source: "list_price_assumed",
+      estimated: true,
+    }
+    const base = auth({
+      search: record("keenable", {
+        supported: true,
+        transport_available: true,
+        conversion_profile: profile,
+        budget: budget({ allowance_period: "month", free_allowance: "100000" }),
+      }),
+      fetch: record("keenable", {
+        operation: "fetch",
+        supported: true,
+        transport_available: true,
+        conversion_profile: profile,
+        budget: budget({ allowance_period: "month", free_allowance: "100000" }),
+      }),
+      crd_views: [
+        { ...view("search", "99995"), request_cost_crd: "4" },
+        { ...view("fetch", "99995"), request_cost_crd: "4" },
+      ] as never,
+      detail: detail({ reset_rule: "monthly_first" }),
+    })
+    const info = providerInfo(base, "keenable", true)
+    expect(info.facts.map((fact) => fact.label)).toContain("Search CRD cost")
+    expect(info.facts.map((fact) => fact.label)).toContain("Fetch CRD cost")
+    expect(info.creditNote).toBe("Monthly Credits")
+    const searchCost = info.facts.find((fact) => fact.label === "Search CRD cost")
+    expect(searchCost?.note).toContain("$0.004")
+  })
+
+  it("keeps exact input strings unchanged", () => {
+    const base = auth({
+      search: record("keenable", { supported: true, transport_available: true }),
+      crd_views: [view("search", "99995.00000000")] as never,
+      detail: detail({ reset_rule: "vendor_period" }),
+    })
+    const first = providerInfo(base, "keenable", true)
+    const second = providerInfo(base, "keenable", true)
+    expect(first).toEqual(second)
+    expect(base.crd_views[0]).toMatchObject({ possible_standard_calls: "99995.00000000" })
+  })
+})
+
+describe("providerInfo Firecrawl", () => {
+  function firecrawlProfile() {
+    return {
+      reference_usd_per_crd: "0.001",
+      native_usd_per_unit: "0.0038",
+      cost_basis: "hobby_reference",
+      price_version: "hobby-reference",
+      source: "documented",
+      estimated: true,
+    }
+  }
+
+  function firecrawlAuth(overrides: Partial<ProviderAuthLimits> = {}): ProviderAuthLimits {
+    return auth({
+      search: record("firecrawl", {
+        operation: "search",
+        supported: true,
+        transport_available: true,
+        budget: budget({ allowance_period: "monthly", standard_native_cost: "2" }),
+        conversion_profile: firecrawlProfile(),
+      }),
+      fetch: record("firecrawl", {
+        operation: "fetch",
+        supported: true,
+        transport_available: true,
+        budget: budget({ allowance_period: "monthly", standard_native_cost: "1" }),
+        conversion_profile: firecrawlProfile(),
+      }),
+      crd_views: [
+        {
+          state: "finite",
+          operation: "search",
+          remaining_crd: "3800",
+          local_remaining_crd: null,
+          request_cost_crd: "7.6",
+          shared_pool_id: "firecrawl:keyed:credit",
+          possible_standard_calls: "500",
+          price_version: "hobby-reference",
+          priced: true,
+        },
+        {
+          state: "finite",
+          operation: "fetch",
+          remaining_crd: "3800",
+          local_remaining_crd: null,
+          request_cost_crd: "3.8",
+          shared_pool_id: "firecrawl:keyed:credit",
+          possible_standard_calls: "1000",
+          price_version: "hobby-reference",
+          priced: true,
+        },
+      ] as never,
+      detail: detail({
+        rate_windows: [
+          {
+            bucket_id: "firecrawl:keyed:requests",
+            limit: "10",
+            window: "1m",
+            scope: "team",
+            unit: "requests",
+            remaining: "10",
+            reset_at: null,
+            source: "local",
+            confidence: "observed",
+          },
+        ] as never,
+      }),
+      ...overrides,
+    })
+  }
+
+  it("produces correct facts for Firecrawl", () => {
+    const info = providerInfo(firecrawlAuth(), "firecrawl", true)
+    const searchCrd = info.facts.find((fact) => fact.label === "Search CRD cost")
+    expect(searchCrd?.value).toBe("7.6 CRD")
+    expect(searchCrd?.note).toBe("(≈ $0.0076)")
+
+    const fetchCrd = info.facts.find((fact) => fact.label === "Fetch CRD cost")
+    expect(fetchCrd?.value).toBe("3.8 CRD")
+    expect(fetchCrd?.note).toBe("(≈ $0.0038)")
+
+    const searchesLeft = info.facts.find((fact) => fact.label === "Searches left")
+    expect(searchesLeft?.value).toBe("500")
+
+    const fetchesLeft = info.facts.find((fact) => fact.label === "Fetches left")
+    expect(fetchesLeft?.value).toBe("1000")
+
+    const rate = info.facts.find((fact) => fact.label === "Rate limit")
+    expect(rate?.value).toBe("10 requests per minute")
+
+    expect(info.creditNote).toBe("Monthly Credits")
+  })
+})
+
+describe("providerInfo You.com search total", () => {
+  function youcomAuth(): ProviderAuthLimits {
+    return auth({
+      search: record("youcom", {
+        operation: "search",
+        supported: true,
+        transport_available: true,
+      }),
+      fetch: record("youcom", {
+        operation: "fetch",
+        supported: true,
+        transport_available: true,
+      }),
+      aggregate_pool: pool({
+        pool_id: "youcom:keyed:usd",
+        provider: "youcom",
+        auth_mode: "keyed",
+        native_unit: "USD",
+        remaining: "199.52",
+        allowance: null,
+      }),
+      crd_views: [
+        {
+          state: "finite",
+          operation: "search",
+          remaining_crd: "100000",
+          local_remaining_crd: null,
+          request_cost_crd: "5",
+          shared_pool_id: "you:keyed:daily-search",
+          possible_standard_calls: "100",
+          price_version: "v2026-09",
+          priced: true,
+        },
+        {
+          state: "finite",
+          operation: "fetch",
+          remaining_crd: "199520",
+          local_remaining_crd: null,
+          request_cost_crd: "1",
+          shared_pool_id: "youcom:keyed:usd",
+          possible_standard_calls: "199520",
+          price_version: "v2026-09",
+          priced: true,
+        },
+      ] as never,
+      detail: detail({ reset_rule: "unknown" }),
+    })
+  }
+
+  it("adds the daily pool to the credit-derived searches without inventing a reset", () => {
+    const info = providerInfo(youcomAuth(), "youcom")
+    const searchesLeft = info.facts.find((fact) => fact.label === "Searches left")
+    // Daily 100 + floor(199520/5) = 100 + 39904 = 40004.
+    expect(searchesLeft?.value).toBe("40004")
+    expect(searchesLeft?.note).toBe(null)
+    const fetchesLeft = info.facts.find((fact) => fact.label === "Fetches left")
+    expect(fetchesLeft?.value).toBe("199520")
+  })
+
+  it("keeps the pool-projected search view verbatim without double-counting", () => {
+    const base = youcomAuth()
+    const pooled = {
+      ...base,
+      crd_views: [
+        {
+          state: "finite",
+          operation: "search",
+          remaining_crd: "95500",
+          local_remaining_crd: null,
+          request_cost_crd: "5",
+          shared_pool_id: "youcom:keyed:usd",
+          possible_standard_calls: "19100",
+          price_version: "v2026-09",
+          priced: true,
+        },
+        {
+          state: "finite",
+          operation: "fetch",
+          remaining_crd: "95500",
+          local_remaining_crd: null,
+          request_cost_crd: "1",
+          shared_pool_id: "youcom:keyed:usd",
+          possible_standard_calls: "95500",
+          price_version: "v2026-09",
+          priced: true,
+        },
+      ],
+    } as unknown as ProviderAuthLimits
+    const info = providerInfo(pooled, "youcom")
+    expect(info.facts.find((fact) => fact.label === "Searches left")?.value).toBe("19100")
+    expect(info.facts.find((fact) => fact.label === "Fetches left")?.value).toBe("95500")
+  })
+})

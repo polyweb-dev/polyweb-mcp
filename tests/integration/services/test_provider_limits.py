@@ -5,8 +5,8 @@ manual reuse, unknown rails, and absent-record compatibility. No vendor I/O.
 """
 
 import asyncio
-import uuid
-from contextlib import suppress
+import gc
+import time
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -39,21 +39,35 @@ from freesearch.persistence.storage import SQLiteRepository
 from freesearch.services.provider_limits import ProviderLimitsService
 
 FIXED_AT = datetime(2026, 3, 10, 12, 0, 0, tzinfo=UTC)
-_DB_ROOT = Path(".runtime-tmp/limit-service-pytest-dbs")
+
+
+def _unlink_with_retries(path: Path, *, attempts: int = 20) -> None:
+    """Remove a test database after Windows releases delayed SQLite handles."""
+
+    for attempt in range(attempts):
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            gc.collect()
+            time.sleep(0.05)
+        else:
+            return
 
 
 @pytest_asyncio.fixture
-async def repository():
-    _DB_ROOT.mkdir(parents=True, exist_ok=True)
-    db_path = _DB_ROOT / f"limit-service-{uuid.uuid4().hex}.db"
+async def repository(tmp_path: Path):
+    db_path = tmp_path / "limit-service.db"
     repo = await SQLiteRepository.open(db_path)
     try:
         yield repo
     finally:
         await repo.close()
         for extra in (db_path, Path(f"{db_path}.migration.lock")):
-            with suppress(FileNotFoundError):
-                extra.unlink()
+            _unlink_with_retries(extra)
 
 
 def _record(
@@ -263,3 +277,149 @@ async def test_manual_anchor_delete_clears_to_unknown(repository) -> None:
     assert cleared is not None
     assert cleared.remaining is None
     assert cleared.allowance is None
+
+
+# --- Tavily funds and rate admission (PLAN 4.2/4.3) ---------------------------
+
+
+def _tavily_service(repo, at=FIXED_AT):  # type: ignore[no-untyped-def]
+    from freesearch.configuration.provider_config import ProviderConfig
+    from freesearch.configuration.provider_limits import provider_limit_defaults
+
+    svc = ProviderLimitsService(
+        repo.limits,
+        records=[r for r in provider_limit_defaults() if r.provider == "tavily"],
+        tier_defaults=None,
+        clock=lambda: at,
+    )
+    return svc, ProviderConfig()
+
+
+def _tavily_ctx(operation, attempt, at=FIXED_AT):  # type: ignore[no-untyped-def]
+    return LimitCallContext(
+        provider="tavily",
+        operation=operation,
+        auth_mode=AuthMode.KEYED,
+        attempt_id=attempt,
+        requested_at=at,
+    )
+
+
+async def test_tavily_dev_bucket_mixed_ops_deny_101(repository) -> None:
+    svc, config = _tavily_service(repository)
+    await svc.initialize()
+    await svc.apply_tavily_config(config, auth_mode=AuthMode.KEYED)
+    for index in range(50):
+        await svc.admit(_tavily_ctx(LimitOperation.SEARCH, f"dev-s-{index}"))
+        await svc.admit(_tavily_ctx(LimitOperation.FETCH, f"dev-f-{index}"))
+    with pytest.raises(LimitDeniedError) as exc:
+        await svc.admit(_tavily_ctx(LimitOperation.SEARCH, "dev-s-101"))
+    assert exc.value.status_code == 429
+
+
+async def test_tavily_prod_bucket_mixed_ops_deny_1001(repository) -> None:
+    from freesearch.configuration.provider_config import ProviderConfig
+
+    svc, _ = _tavily_service(repository)
+    await svc.initialize()
+    await svc.apply_tavily_config(
+        ProviderConfig(tavily_key_environment="prod"), auth_mode=AuthMode.KEYED
+    )
+    for index in range(500):
+        await svc.admit(_tavily_ctx(LimitOperation.SEARCH, f"prod-s-{index}"))
+        await svc.admit(_tavily_ctx(LimitOperation.FETCH, f"prod-f-{index}"))
+    with pytest.raises(LimitDeniedError) as exc:
+        await svc.admit(_tavily_ctx(LimitOperation.FETCH, "prod-f-1001"))
+    assert exc.value.status_code == 429
+
+
+async def test_tavily_concurrent_mixed_ops_share_bucket(repository) -> None:
+    svc, config = _tavily_service(repository)
+    await svc.initialize()
+    await svc.apply_tavily_config(config, auth_mode=AuthMode.KEYED)
+    for index in range(99):
+        await svc.admit(_tavily_ctx(LimitOperation.SEARCH, f"pre-{index}"))
+
+    async def admit(attempt: str, operation):  # type: ignore[no-untyped-def]
+        try:
+            return await svc.admit(_tavily_ctx(operation, attempt))
+        except LimitDeniedError as exc:
+            return exc
+
+    results = await asyncio.gather(
+        admit("race-s-1", LimitOperation.SEARCH),
+        admit("race-f-1", LimitOperation.FETCH),
+        admit("race-s-2", LimitOperation.SEARCH),
+        admit("race-f-2", LimitOperation.FETCH),
+        admit("race-s-3", LimitOperation.SEARCH),
+    )
+    admitted = [r for r in results if not isinstance(r, LimitDeniedError)]
+    denied = [r for r in results if isinstance(r, LimitDeniedError)]
+    assert len(admitted) == 1
+    assert len(denied) == 4
+    assert all(d.status_code == 429 for d in denied)
+
+
+async def test_tavily_free_zero_denies_vendor_402_zero(repository) -> None:
+    svc, config = _tavily_service(repository)
+    await svc.initialize()
+    await svc.apply_tavily_config(config, auth_mode=AuthMode.KEYED)
+    await repository.limits.apply_snapshot(
+        NativeUsageSnapshot(
+            pool_id="tavily:keyed:credit",
+            provider="tavily",
+            auth_mode=AuthMode.KEYED,
+            native_unit=UnitKind.CREDIT,
+            observed_at=FIXED_AT,
+            remaining=Decimal("0"),
+            allowance=Decimal("1000"),
+            credential_generation=0,
+            source="vendor_402",
+        )
+    )
+    with pytest.raises(LimitDeniedError) as exc:
+        await svc.admit(_tavily_ctx(LimitOperation.SEARCH, "t-zero"))
+    assert exc.value.status_code == 402
+    assert "credits_exhausted" in exc.value.reasons
+
+
+async def test_tavily_unknown_balance_stays_eligible(repository) -> None:
+    svc, config = _tavily_service(repository)
+    await svc.initialize()
+    await svc.apply_tavily_config(config, auth_mode=AuthMode.KEYED)
+    admission = await svc.admit(_tavily_ctx(LimitOperation.SEARCH, "t-unknown"))
+    assert admission.attempt_id == "t-unknown"
+
+
+async def test_tavily_shared_pool_both_views_after_debit(repository) -> None:
+    from freesearch.models.contracts import SearchRequest, SearchResponse
+
+    svc, config = _tavily_service(repository)
+    await svc.initialize()
+    await svc.apply_tavily_config(config, auth_mode=AuthMode.KEYED)
+    await repository.limits.apply_snapshot(
+        NativeUsageSnapshot(
+            pool_id="tavily:keyed:credit",
+            provider="tavily",
+            auth_mode=AuthMode.KEYED,
+            native_unit=UnitKind.CREDIT,
+            observed_at=FIXED_AT,
+            remaining=Decimal("1000"),
+            allowance=Decimal("1000"),
+            credential_generation=0,
+        )
+    )
+    admission = await svc.admit(_tavily_ctx(LimitOperation.SEARCH, "t-shared"))
+    await svc.record_success(
+        admission,
+        SearchResponse(query="q", results=[], provider="tavily"),
+        request=SearchRequest(query="q", limit=2),
+    )
+    view = await svc.provider_view("tavily")
+    auth = view.auth(AuthMode.KEYED)
+    assert auth is not None
+    assert auth.aggregate_pool is not None
+    assert auth.aggregate_pool.remaining == Decimal("999")
+    by_operation = {v.operation: v for v in auth.crd_views}
+    assert by_operation[LimitOperation.SEARCH].shared_pool_id == "tavily:keyed:credit"
+    assert by_operation[LimitOperation.FETCH].shared_pool_id == "tavily:keyed:credit"

@@ -9,6 +9,7 @@ from freesearch.models.contracts import (
     ManualQuota,
     ManualQuotaUpdate,
     ProviderError,
+    ProviderStatusResponse,
     QuotaSnapshot,
     QuotaSource,
     RoutingMode,
@@ -150,3 +151,82 @@ def test_manual_quota_inputs_permit_zero_allowance(
         current_usage="0",
     )
     assert quota.allowance == Decimal("0")
+
+
+def _status_kwargs(**overrides: object) -> dict[str, object]:
+    base: dict[str, object] = {
+        "provider_id": "tavily",
+        "enabled": True,
+        "enable_mask": 7,
+        "support_mask": 7,
+        "priority": 100,
+        "health": None,
+        "circuit_breaker": {"state": "closed", "updated_at": "2026-01-01T00:00:00Z"},
+        "latency_p95_ms": None,
+        "secret_presence": "missing",
+        "free_tier_estimates": {},
+        "reset_schedule": None,
+    }
+    base.update(overrides)
+    return base
+
+
+def test_provider_status_tavily_key_environment_defaults_none() -> None:
+    """The readback is absent unless the control seam sets it (other providers null)."""
+
+    status = ProviderStatusResponse(**_status_kwargs())  # type: ignore[arg-type]
+
+    assert status.tavily_key_environment is None
+
+
+@pytest.mark.parametrize("value", ["dev", "prod"])
+def test_provider_status_tavily_key_environment_accepts_dev_prod(value: str) -> None:
+    """Strict dev/prod readback values validate."""
+
+    status = ProviderStatusResponse(**_status_kwargs(tavily_key_environment=value))  # type: ignore[arg-type]
+
+    assert status.tavily_key_environment == value
+
+
+def test_provider_status_tavily_key_environment_accepts_explicit_none() -> None:
+    """Explicit null stays null (unknown/absent stored environment)."""
+
+    status = ProviderStatusResponse(**_status_kwargs(tavily_key_environment=None))  # type: ignore[arg-type]
+
+    assert status.tavily_key_environment is None
+
+
+@pytest.mark.parametrize("bad", ["staging", "DEV", "PROD", "", "keyless", 0, 1, True, False])
+def test_provider_status_tavily_key_environment_rejects_other_values(bad: object) -> None:
+    """Only dev/prod/None validate; no generic tier or inferred value passes."""
+
+    with pytest.raises(ValidationError):
+        ProviderStatusResponse(**_status_kwargs(tavily_key_environment=bad))  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("provider_id", ["exa", "brave", "keenable", "tinyfish", "tavily"])
+def test_provider_status_other_records_keep_null_default(provider_id: str) -> None:
+    """Non-Tavily readback stays null; Tavily without a value also stays null."""
+
+    status = ProviderStatusResponse(**_status_kwargs(provider_id=provider_id))  # type: ignore[arg-type]
+
+    assert status.tavily_key_environment is None
+
+
+def test_provider_status_response_keeps_all_current_fields() -> None:
+    """All current status fields stay intact beside the nullable readback."""
+
+    assert set(ProviderStatusResponse.model_fields) == {
+        "provider_id",
+        "enabled",
+        "enable_mask",
+        "support_mask",
+        "priority",
+        "health",
+        "circuit_breaker",
+        "latency_p95_ms",
+        "secret_presence",
+        "free_tier_estimates",
+        "reset_schedule",
+        "tavily_key_environment",
+    }

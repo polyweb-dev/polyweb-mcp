@@ -7,6 +7,7 @@ import type { BackendManualQuotaPayload } from "@/domains/dashboard/api/manualQu
 import type { ProviderConfig } from "@/domains/providers"
 import type { UnitKind } from "@/shared/api/units"
 import type { ManualAmountMode } from "../model/manualQuotaMath"
+import type { ManualUnit } from "../model/manualQuotaUnit"
 import type { BalancePrefill } from "../model/providerInfo"
 import { BALANCE_ENTRY, BALANCE_ENTRY_NOTE, type CreditMode } from "../model/quotaLabels"
 import type { ManualQuotaDefaults } from "../model/useQuotaForm"
@@ -26,6 +27,8 @@ export interface ManualEntryVariant {
   creditMode?: CreditMode
   /** The selectable providers of the dropdown; the own provider is the default. */
   providers?: ProviderConfig[]
+  /** Native entry units for each selectable provider. */
+  providerUnits?: Readonly<Record<string, ManualUnit>>
   /** The observed balance per provider, which starts a new entry as an estimate. */
   observed?: Record<string, BalancePrefill>
   /** `balance` accepts the remaining balance of a USD vendor dashboard. */
@@ -49,6 +52,21 @@ function placeholdersFor(
   if (unitKind === "REQUEST") return { allowance: "1000", used: "120" }
   if (unitKind === "CREDIT") return { allowance: "100000", used: "12000" }
   return { allowance: "100", used: "12" }
+}
+
+function unitForTarget(
+  targetProviderId: string,
+  providerId: string,
+  currentUnit: ManualUnit,
+  providerUnits?: Readonly<Record<string, ManualUnit>>,
+): ManualUnit {
+  const knownUnit = providerUnits?.[targetProviderId]
+  if (knownUnit !== undefined) return knownUnit
+  if (targetProviderId === "exa") {
+    return { unitKind: "USD", displayUnit: "USD", amountMode: "balance" }
+  }
+  if (targetProviderId === providerId) return currentUnit
+  return { unitKind: null, displayUnit: null, amountMode: "usage" }
 }
 
 /**
@@ -98,6 +116,17 @@ function providerField(
 /** The modal title: an existing entry states the update. */
 function titleOf(isEditing: boolean): string {
   return isEditing ? "Update " + BALANCE_ENTRY.toLowerCase() : BALANCE_ENTRY
+}
+
+function editingEntry(own: boolean, defaults: ManualQuotaDefaults | null): boolean {
+  return own && Boolean(defaults?.allowance)
+}
+
+function defaultsForTarget(
+  own: boolean,
+  defaults: ManualQuotaDefaults | null,
+): ManualQuotaDefaults | null {
+  return own ? defaults : null
 }
 
 /** The selectable targets: the payload list, else the own provider alone. */
@@ -152,21 +181,26 @@ export function ManualEntryModal(props: ManualEntryVariant): ReactNode {
     amountMode = "usage",
     creditMode = "free",
     providers,
+    providerUnits,
     observed,
     onClose,
     onSave,
     onDelete,
   } = props
-  const rawNoun = unitLabel(unitKind, displayUnit)
-  // Presentation fallback only; branching logic still uses unitKind.
-  const noun = rawNoun === "legacy" ? "units" : rawNoun
-  const placeholders = placeholdersFor(unitKind, amountMode)
+  const currentUnit = { unitKind, displayUnit, amountMode }
   const options = targetsOf(providers, providerId, providerName)
   const [target, setTarget] = useState<ProviderTarget>({ id: providerId, name: providerName })
+  const targetUnit = unitForTarget(target.id, providerId, currentUnit, providerUnits)
+  const rawNoun = unitLabel(targetUnit.unitKind, targetUnit.displayUnit)
+  // Presentation fallback only; amount handling still uses the target unit.
+  const noun = rawNoun === "legacy" ? "units" : rawNoun
+  const placeholders = placeholdersFor(targetUnit.unitKind, targetUnit.amountMode)
   const own = target.id === providerId
-  const isEditing = own && Boolean(defaults?.allowance)
+  const isEditing = editingEntry(own, defaults)
   // A late entry read remounts the form, so the saved values win over the estimate.
-  const formKey = target.id + (isEditing ? "-entry" : "-empty")
+  const formKey =
+    [target.id, targetUnit.unitKind ?? "legacy", targetUnit.displayUnit ?? "", targetUnit.amountMode].join(":") +
+    (isEditing ? "-entry" : "-empty")
 
   return (
     <Modal
@@ -181,10 +215,10 @@ export function ManualEntryModal(props: ManualEntryVariant): ReactNode {
         providerId={target.id}
         noun={noun}
         placeholders={placeholders}
-        defaults={own ? defaults : null}
+        defaults={defaultsForTarget(own, defaults)}
         observed={observed?.[target.id] ?? null}
         creditMode={creditMode}
-        amountMode={amountMode}
+        amountMode={targetUnit.amountMode}
         providerField={providerField(options, target, setTarget)}
         onSave={saveFor(onSave, own, target.id)}
         {...deleteProp(onDelete)}

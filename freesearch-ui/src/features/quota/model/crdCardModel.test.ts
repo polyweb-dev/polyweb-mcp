@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import type { CRDUsageTotal, ProviderAuthLimits } from "@/domains/dashboard"
+import type { CRDUsageTotal, ProviderAuthLimits, ProviderLimits } from "@/domains/dashboard"
 import {
   activeAuth,
   creditCardModel,
@@ -127,17 +127,39 @@ describe("operationAvailable", () => {
 })
 
 describe("activeAuth", () => {
-  it("prefers the active rail with fallback to the first", () => {
+  it.each([
+    ["tavily", "keyed"],
+    ["tavily", "keyless"],
+    ["keenable", "keyed"],
+    ["keenable", "keyless"],
+  ] as const)(
+    "%s selects the backend-reported %s rail when both modes are available",
+    (provider, activeAuthMode) => {
+      const keyed = braveAuth()
+      const keyless = braveAuth({ auth_mode: "keyless" })
+      const limits: ProviderLimits = {
+        provider,
+        active_auth_mode: activeAuthMode,
+        auths: [keyed, keyless],
+        documented_keyless_operations: [],
+        version: 1,
+        generated_at: "2026-09-06T10:05:00Z",
+      }
+      expect(activeAuth(limits)).toBe(activeAuthMode === "keyed" ? keyed : keyless)
+    },
+  )
+
+  it("falls back to the first reported rail if the active mode is absent", () => {
     const auth = braveAuth()
-    const limits = {
-      provider: "brave",
-      active_auth_mode: "keyed",
+    const limits: ProviderLimits = {
+      provider: "keenable",
+      active_auth_mode: "keyless",
       auths: [auth],
       documented_keyless_operations: [],
       version: 1,
       generated_at: "2026-09-06T10:05:00Z",
     }
-    expect(activeAuth(limits as never)?.auth_mode).toBe("keyed")
+    expect(activeAuth(limits)).toBe(auth)
   })
 })
 
@@ -265,6 +287,88 @@ describe("priceNoteRows", () => {
     expect(rows[0].usdPerCall).toBe("0.005")
     expect(rows[0].crdPerCall).toBe("5 CRD")
     expect(rows[0].priceVersion).toBe("v2026-09")
+
+    const documentedRows = priceNoteRows({
+      providers: [
+        { id: "keenable", name: "Keenable", hasKey: false, keyVaultStatus: "keyless_public", capabilities: ["search", "fetch", "keyless_tier"] },
+        { id: "tinyfish", name: "Tinyfish", hasKey: true, capabilities: ["search", "fetch"] },
+        { id: "tavily", name: "Tavily", hasKey: false, keyVaultStatus: "configured", capabilities: ["search", "fetch"] },
+        { id: "exa", name: "Exa", hasKey: true, capabilities: ["search", "fetch"] },
+        { id: "firecrawl", name: "Firecrawl", hasKey: true, capabilities: ["search", "fetch"] },
+        { id: "parallel", name: "Parallel", hasKey: true, capabilities: ["search", "fetch"] },
+        { id: "youcom", name: "You.com", hasKey: true, capabilities: ["search", "fetch"] },
+      ] as never,
+      providerLimits: [],
+    })
+    const documentedRow = (provider: string, operation: "search" | "fetch") =>
+      documentedRows.find((row) => row.provider === provider && row.operation === operation)
+    expect(documentedRows).toHaveLength(14)
+    expect(documentedRow("keenable", "search")).toMatchObject({
+      usdPerCall: "0.004", crdPerCall: "4 CRD", free: true,
+    })
+    expect(documentedRow("tinyfish", "fetch")).toMatchObject({
+      usdPerCall: null, crdPerCall: null, free: true,
+    })
+    expect(documentedRow("tavily", "search")).toMatchObject({
+      usdPerCall: "0.008", crdPerCall: "8 CRD", free: false,
+    })
+    expect(documentedRow("tavily", "fetch")).toMatchObject({
+      usdPerCall: "0.0016", crdPerCall: "1.6 CRD", free: false,
+    })
+    expect(documentedRow("exa", "fetch")).toMatchObject({
+      usdPerCall: "0.001", crdPerCall: "1 CRD", priceBasis: "per page, per content type",
+    })
+    expect(documentedRow("firecrawl", "search")).toMatchObject({
+      usdPerCall: "0.0076", crdPerCall: "7.6 CRD", free: false,
+    })
+    expect(documentedRow("firecrawl", "search")?.priceBasis).toContain("Hobby reference")
+    expect(documentedRow("firecrawl", "fetch")).toMatchObject({
+      usdPerCall: "0.0038", crdPerCall: "3.8 CRD", free: false,
+    })
+    expect(documentedRow("parallel", "search")).toMatchObject({
+      usdPerCall: "0.001", crdPerCall: "1 CRD",
+    })
+    expect(documentedRow("youcom", "fetch")).toMatchObject({
+      usdPerCall: "0.001", crdPerCall: "1 CRD",
+    })
+
+    const zeroCostAuth = braveAuth({
+      search: { ...searchRecord(), budget: { model: "none", usd_per_call: "0", priced: false } } as never,
+      crd_views: [{ ...braveAuth().crd_views[0], request_cost_crd: "0" }],
+    })
+    const zeroCostRows = priceNoteRows({
+      providers: [{ id: "custom", name: "Custom", hasKey: true, capabilities: ["search"] }] as never,
+      providerLimits: [{
+        provider: "custom",
+        active_auth_mode: "keyed",
+        auths: [zeroCostAuth],
+        documented_keyless_operations: [],
+        version: 1,
+        generated_at: "2026-09-06T10:05:00Z",
+      }] as never,
+    })
+    expect(zeroCostRows[0]).toMatchObject({
+      usdPerCall: "0.000", crdPerCall: "0 CRD", free: true,
+    })
+
+    const tinyPositiveAuth = braveAuth({
+      crd_views: [{
+        ...braveAuth().crd_views[0],
+        request_cost_crd: "0.000000000000000000000000000000000001",
+      }],
+    })
+    const tinyPositiveRows = priceNoteRows({
+      providers: [{ id: "custom", name: "Custom", hasKey: true, capabilities: ["search"] }] as never,
+      providerLimits: [{
+        provider: "custom",
+        active_auth_mode: "keyed",
+        auths: [tinyPositiveAuth],
+        documented_keyless_operations: [],
+        version: 1,
+        generated_at: "2026-09-06T10:05:00Z",
+      }] as never,
+    })
+    expect(tinyPositiveRows[0]?.free).toBe(false)
   })
 })
 

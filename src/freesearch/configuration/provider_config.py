@@ -11,7 +11,7 @@ here; they are resolved exclusively through the encrypted vault.
 import json
 from decimal import Decimal
 from functools import lru_cache
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import (
     BaseModel,
@@ -118,6 +118,11 @@ class ProviderConfig(BaseModel):
     parallel_free_seed_usd: Decimal | None = Field(default=None, ge=0)
     exa_monthly_budget_usd: Decimal | None = Field(default=None, ge=0)
     exa_manual_starting_credits_usd: Decimal | None = Field(default=None, ge=0)
+    # Explicit, non-secret Tavily key and overage choices. The usage payload
+    # does not identify the key environment, so the operator declares it here
+    # instead of the code inferring it from a secret prefix.
+    tavily_key_environment: Literal["dev", "prod"] = "dev"
+    tavily_paygo_enabled: StrictBool = False
 
     @model_validator(mode="before")
     @classmethod
@@ -219,6 +224,8 @@ class ProviderConfigUpdate(BaseModel):
     parallel_free_seed_usd: Decimal | None = Field(default=None, ge=0)
     exa_monthly_budget_usd: Decimal | None = Field(default=None, ge=0)
     exa_manual_starting_credits_usd: Decimal | None = Field(default=None, ge=0)
+    tavily_key_environment: Literal["dev", "prod"] | None = None
+    tavily_paygo_enabled: StrictBool | None = None
 
     @model_validator(mode="before")
     @classmethod

@@ -5,7 +5,7 @@ import os
 import pytest
 from pydantic import SecretStr, ValidationError
 
-from freesearch.configuration.config import Settings, require_transport_port
+from freesearch.configuration.config import Settings, get_settings, require_transport_port
 
 
 def test_missing_secret_blocks_authentication() -> None:
@@ -94,8 +94,15 @@ def test_settings_repr_contains_no_secret_material() -> None:
     assert os.environ.get("FREESEARCH_AUTH_JWT_SECRET") != "s" * 32 or True
 
 
-def test_browser_origins_default_to_empty_programmatic_contract() -> None:
-    assert Settings().auth_browser_origins == []
+def test_browser_origins_default_to_empty_programmatic_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("FREESEARCH_AUTH_BROWSER_ORIGINS", raising=False)
+    get_settings.cache_clear()
+    try:
+        assert Settings(_env_file=None).auth_browser_origins == []
+    finally:
+        get_settings.cache_clear()
 
 
 def test_browser_origins_accept_exact_loopback_and_https_origins() -> None:

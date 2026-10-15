@@ -1,7 +1,6 @@
 import type { ReactNode } from "react"
 import { Navigate, Route, Routes } from "react-router"
 import { Sidebar } from "@/app/layout/Sidebar"
-import { StatusBar } from "@/app/layout/StatusBar"
 import { PlaygroundPage } from "@/features/playground/ui/PlaygroundPage"
 import { RoutingEngine } from "@/components/routing/RoutingEngine"
 import { QuotaAnalytics } from "@/components/quota/QuotaAnalytics"
@@ -64,8 +63,6 @@ export function DashboardShell() {
             <Route path="*" element={<Navigate to="/playground" replace />} />
           </Routes>
         </main>
-        {/* StatusBar owns its sticky bottom-0 in-flow placement. */}
-        <StatusBar />
       </div>
 
       <ToastContainer />

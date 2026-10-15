@@ -39,6 +39,20 @@ import type {
 const RESET_RULES = ["monthly_first", "vendor_period", "daily_vendor", "daily_estimate", "never", "unknown"] as const
 const CONFIDENCE = ["authoritative", "observed", "estimated", "unknown"] as const
 
+/** Whole-second Retry-After delay from unknown data; a negative stays null and zero stays zero. */
+function retryAfterSeconds(value: unknown): number | null {
+  if (typeof value === "number") {
+    return Number.isFinite(value) && value >= 0 ? value : null
+  }
+  if (typeof value === "string") {
+    const text = value.trim()
+    if (text === "") return null
+    const parsed = Number(text)
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : null
+  }
+  return null
+}
+
 export function decodePool(value: unknown): NativePool | null {
   const item = raw(value)
   if (!item) return null
@@ -84,6 +98,7 @@ export function decodeDetail(value: unknown): ProviderLimitDetail | null {
     price_version: text(item.price_version),
     crd_split_note: maybeText(item.crd_split_note),
     rate_windows: mapItems(item.rate_windows, decodeRateWindow),
+    retry_after_seconds: retryAfterSeconds(item.retry_after_seconds),
     tier_split_known: flag(item.tier_split_known, true),
     aggregate_pool_id: maybeText(item.aggregate_pool_id),
   }

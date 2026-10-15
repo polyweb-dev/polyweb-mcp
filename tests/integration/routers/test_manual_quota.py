@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from contextlib import suppress
+import gc
+import time
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
 import pytest
 import pytest_asyncio
@@ -28,20 +28,33 @@ from freesearch.services.monitoring import effective_quota
 from tests.fixtures.auth import raw_auth_headers, register_promote_login, temp_email
 
 
+def _unlink_with_retries(path: Path, *, attempts: int = 20) -> None:
+    """Remove a test database after Windows releases delayed SQLite handles."""
+
+    for attempt in range(attempts):
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            gc.collect()
+            time.sleep(0.05)
+        else:
+            return
+
+
 @pytest_asyncio.fixture
-async def repository():  # type: ignore[no-untyped-def]
-    # NOTE: workspace-local DB file (not tmp_path) so the constrained
-    # Windows sandbox can create it; mirrors features/steps file handling.
-    path = Path.cwd() / f"manual-quota-{uuid4().hex}.db"
+async def repository(tmp_path: Path):  # type: ignore[no-untyped-def]
+    path = tmp_path / "manual-quota.db"
     repo = await SQLiteRepository.open(path)
     try:
         yield repo
     finally:
         await repo.close()
-        with suppress(OSError):
-            path.unlink()
-        with suppress(OSError):
-            Path(f"{path}.migration.lock").unlink()
+        _unlink_with_retries(path)
+        _unlink_with_retries(Path(f"{path}.migration.lock"))
 
 
 def _payload(

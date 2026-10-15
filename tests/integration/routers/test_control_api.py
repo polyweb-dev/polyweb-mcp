@@ -240,6 +240,7 @@ async def test_get_providers_enumerates_canonical_status_contract(
             "secret_presence",
             "free_tier_estimates",
             "reset_schedule",
+            "tavily_key_environment",
         }
         assert isinstance(item["enabled"], bool)
         assert isinstance(item["enable_mask"], int)
@@ -259,6 +260,10 @@ async def test_get_providers_enumerates_canonical_status_contract(
         assert item["secret_presence"] in {"configured", "missing", "keyless_public"}
         assert isinstance(item["free_tier_estimates"], dict)
         assert item["reset_schedule"] is None
+        if item["provider_id"] == "tavily":
+            assert item["tavily_key_environment"] == "dev"
+        else:
+            assert item["tavily_key_environment"] is None
 
 
 @pytest.mark.parametrize(
@@ -345,14 +350,21 @@ async def test_provider_patch_rejects_non_strict_or_unknown_fields(
 @pytest.mark.asyncio
 async def test_provider_patch_rejects_read_only_support_mask(
     repository: SQLiteRepository,
+    auth_secret: str,
 ) -> None:
     """Support is system-owned: admin PATCH never accepts it, even with a matching value."""
     app = create_app([ControlAdapter("exa")], repository=repository)
 
     with TestClient(app) as client:
-        before = client.get("/api/v1/providers/exa")
-        rejected = client.patch("/api/v1/providers/exa", json={"support_mask": 7})
-        after = client.get("/api/v1/providers/exa")
+        pair = await register_promote_login(
+            client, repository, temp_email("control-readonly"), UserRole.ADMIN
+        )
+        headers = raw_auth_headers(pair["access_token"])
+        before = client.get("/api/v1/providers/exa", headers=headers)
+        rejected = client.patch(
+            "/api/v1/providers/exa", json={"support_mask": 7}, headers=headers
+        )
+        after = client.get("/api/v1/providers/exa", headers=headers)
 
     assert before.status_code == 200
     assert rejected.status_code == 422
@@ -920,13 +932,31 @@ async def test_secret_delete_keenable_reverts_to_keyless_mode(
             client, repository, temp_email("control-keen"), UserRole.ADMIN
         )
         headers = raw_auth_headers(pair["access_token"])
+        initial_limits = client.get("/api/v1/providers/keenable/limits", headers=headers)
+        assert initial_limits.status_code == 200
+        assert initial_limits.json()["active_auth_mode"] == "keyed"
+
         delete_res = client.delete("/api/v1/providers/keenable/secret", headers=headers)
         assert delete_res.status_code == 200
         assert delete_res.json()["presence"] == "keyless_public"
 
+        keyless_limits = client.get("/api/v1/providers/keenable/limits", headers=headers)
+        assert keyless_limits.status_code == 200
+        assert keyless_limits.json()["active_auth_mode"] == "keyless"
+
         active = next((r for r in app.state._routes if r.name == "keenable"), None)
         assert active is not None
         assert active.capabilities.quota is False
+
+        write_res = client.put(
+            "/api/v1/providers/keenable/secret",
+            json={"key": "keenable-api-key-rotated"},
+            headers=headers,
+        )
+        assert write_res.status_code == 200
+        keyed_limits = client.get("/api/v1/providers/keenable/limits", headers=headers)
+        assert keyed_limits.status_code == 200
+        assert keyed_limits.json()["active_auth_mode"] == "keyed"
 
 
 @pytest.mark.asyncio
@@ -1173,6 +1203,7 @@ async def test_search_filters_provider_with_global_mask_off(
     repository: SQLiteRepository,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    auth_secret: str,
 ) -> None:
     """A global-OFF mask excludes the provider from search without a restart."""
     monkeypatch.chdir(tmp_path)
@@ -1184,7 +1215,9 @@ async def test_search_filters_provider_with_global_mask_off(
     app = create_app([disabled, enabled], repository=repository)
 
     with TestClient(app) as client:
-        response = client.post("/search", json={"query": "skip mask-off"})
+        pair = register_and_login(client, temp_email("control-mask-off"))
+        headers = raw_auth_headers(pair["access_token"])
+        response = client.post("/search", json={"query": "skip mask-off"}, headers=headers)
 
     assert response.status_code == 200
     assert response.json()["provider"] == "brave"
@@ -1197,6 +1230,7 @@ async def test_search_filters_provider_with_search_bit_off_keeps_fetch_eligible(
     repository: SQLiteRepository,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    auth_secret: str,
 ) -> None:
     """A search-OFF mask blocks search but a direct status read still shows global ON."""
     monkeypatch.chdir(tmp_path)
@@ -1208,8 +1242,12 @@ async def test_search_filters_provider_with_search_bit_off_keeps_fetch_eligible(
     app = create_app([search_off, fallback], repository=repository)
 
     with TestClient(app) as client:
-        status = client.get("/api/v1/providers/exa")
-        response = client.post("/search", json={"query": "search bit off"})
+        pair = await register_promote_login(
+            client, repository, temp_email("control-search-off"), UserRole.ADMIN
+        )
+        headers = raw_auth_headers(pair["access_token"])
+        status = client.get("/api/v1/providers/exa", headers=headers)
+        response = client.post("/search", json={"query": "search bit off"}, headers=headers)
 
     assert status.status_code == 200
     assert status.json()["enable_mask"] == 5
@@ -1472,6 +1510,7 @@ async def _reset_control_caches() -> None:
 @pytest.mark.asyncio
 async def test_supported_admin_writes_invalidate_warm_cache(
     repository: SQLiteRepository,
+    auth_secret: str,
 ) -> None:
     """M3: every supported admin write refreshes the next read without restart."""
     from freesearch.configuration.provider_config import ProviderConfigUpdate
@@ -1550,7 +1589,13 @@ async def test_supported_admin_writes_invalidate_warm_cache(
 
         app = create_app([ControlAdapter("exa")], repository=repository)
         with TestClient(app) as client:
-            patched_rest = client.patch("/api/v1/providers/exa", json={"priority": 51})
+            pair = await register_promote_login(
+                client, repository, temp_email("control-warm"), UserRole.ADMIN
+            )
+            headers = raw_auth_headers(pair["access_token"])
+            patched_rest = client.patch(
+                "/api/v1/providers/exa", json={"priority": 51}, headers=headers
+            )
             assert patched_rest.status_code == 200
         assert (await effective_config_for_name(repository, "exa")).priority == 51
 
@@ -1676,3 +1721,420 @@ async def test_rest_lifespan_clears_config_cache(repository: SQLiteRepository) -
         from freesearch.services.monitoring import clear_quota_poll_cache as _clear_q
 
         _clear_q()
+
+
+# --- Tavily control plane: PATCH persist, rebuild triggers (PLAN 4.1) --------
+
+
+@pytest.mark.asyncio
+async def test_tavily_patch_persists_key_environment_and_paygo(
+    repository: SQLiteRepository, auth_secret: str, vault_env: None
+) -> None:
+    """PATCH stores the non-secret Tavily values through the persisted path."""
+    from freesearch.routers.control import effective_config_for_name
+
+    app = create_app([], repository=repository)
+    with TestClient(app) as client:
+        pair = await register_promote_login(
+            client, repository, temp_email("control-tavily-patch"), UserRole.ADMIN
+        )
+        headers = raw_auth_headers(pair["access_token"])
+        response = client.patch(
+            "/api/v1/providers/tavily",
+            json={"tavily_key_environment": "prod", "tavily_paygo_enabled": True},
+            headers=headers,
+        )
+        assert response.status_code == 200, response.text
+
+    config = await effective_config_for_name(repository, "tavily")
+    assert config.tavily_key_environment == "prod"
+    assert config.tavily_paygo_enabled is True
+
+
+@pytest.mark.asyncio
+async def test_tavily_patch_survives_repository_reopen(
+    tmp_path: Path, auth_secret: str, vault_env: None
+) -> None:
+    """The Tavily values travel the persisted JSON path across a reopen."""
+    from freesearch.routers.control import effective_config_for_name
+
+    db_path = tmp_path / "control-tavily.db"
+    first = await SQLiteRepository.open(db_path)
+    try:
+        app = create_app([], repository=first)
+        with TestClient(app) as client:
+            pair = await register_promote_login(
+                client, first, temp_email("control-tavily-reopen"), UserRole.ADMIN
+            )
+            headers = raw_auth_headers(pair["access_token"])
+            response = client.patch(
+                "/api/v1/providers/tavily",
+                json={"tavily_key_environment": "prod"},
+                headers=headers,
+            )
+            assert response.status_code == 200, response.text
+    finally:
+        await first.close()
+
+    second = await SQLiteRepository.open(db_path)
+    try:
+        config = await effective_config_for_name(second, "tavily")
+    finally:
+        await second.close()
+    assert config.tavily_key_environment == "prod"
+
+
+@pytest.mark.asyncio
+async def test_tavily_keyless_secret_presence_and_rebuild(
+    repository: SQLiteRepository, auth_secret: str, vault_env: None
+) -> None:
+    """Missing Tavily key reports keyless_public; PUT rebuilds the adapter."""
+    import httpx
+
+    from freesearch.adapters.tavily import TavilyAdapter
+    from freesearch.configuration.provider_config import ProviderConfig
+    from freesearch.models.provider_limits import AuthMode
+    from freesearch.routers.control import _build_with_resolved_secret
+
+    app = create_app([], repository=repository)
+    with TestClient(app) as client:
+        pair = await register_promote_login(
+            client, repository, temp_email("control-tavily-rebuild"), UserRole.ADMIN
+        )
+        headers = raw_auth_headers(pair["access_token"])
+        listing = client.get("/api/v1/providers", headers=headers)
+        assert listing.status_code == 200
+        tavily = next(item for item in listing.json() if item["provider_id"] == "tavily")
+        assert tavily["secret_presence"] == "keyless_public"
+
+    caller = httpx.AsyncClient(timeout=30.0)
+    try:
+        keyless = _build_with_resolved_secret(
+            TavilyAdapter, caller, None, config=ProviderConfig()
+        )
+        assert isinstance(keyless, TavilyAdapter)
+        assert keyless.limit_auth_mode is AuthMode.KEYLESS
+        keyed = _build_with_resolved_secret(
+            TavilyAdapter,
+            caller,
+            "tvly-rebuild-1",
+            config=ProviderConfig(tavily_key_environment="prod"),
+        )
+        assert keyed.limit_auth_mode is AuthMode.KEYED
+        assert keyed.key_environment == "prod"
+    finally:
+        await caller.aclose()
+
+
+@pytest.mark.asyncio
+async def test_tavily_env_patch_list_get_readback_dev_prod(
+    repository: SQLiteRepository, auth_secret: str, vault_env: None
+) -> None:
+    """PATCH plus list/get readback carries dev/prod for Tavily and null elsewhere."""
+
+    app = create_app([], repository=repository)
+    with TestClient(app) as client:
+        pair = await register_promote_login(
+            client, repository, temp_email("control-tavily-readback"), UserRole.ADMIN
+        )
+        headers = raw_auth_headers(pair["access_token"])
+
+        patched = client.patch(
+            "/api/v1/providers/tavily", json={"tavily_key_environment": "prod"}, headers=headers
+        )
+        assert patched.status_code == 200, patched.text
+        assert patched.json()["tavily_key_environment"] == "prod"
+
+        listing = client.get("/api/v1/providers", headers=headers)
+        assert listing.status_code == 200
+        body = listing.json()
+        assert _provider(body, "tavily")["tavily_key_environment"] == "prod"
+        for other in ("exa", "brave", "keenable", "tinyfish", "parallel", "you", "firecrawl"):
+            assert _provider(body, other)["tavily_key_environment"] is None
+
+        single = client.get("/api/v1/providers/tavily", headers=headers)
+        assert single.status_code == 200
+        assert single.json()["tavily_key_environment"] == "prod"
+
+        back = client.patch(
+            "/api/v1/providers/tavily", json={"tavily_key_environment": "dev"}, headers=headers
+        )
+        assert back.status_code == 200, back.text
+        assert back.json()["tavily_key_environment"] == "dev"
+        assert client.get("/api/v1/providers/tavily", headers=headers).json()[
+            "tavily_key_environment"
+        ] == "dev"
+
+    # Restart with the same repository keeps the confirmed stored value.
+    restarted = create_app([], repository=repository)
+    with TestClient(restarted) as client:
+        pair = await register_promote_login(
+            client, repository, temp_email("control-tavily-restart"), UserRole.ADMIN
+        )
+        headers = raw_auth_headers(pair["access_token"])
+        assert client.get("/api/v1/providers/tavily", headers=headers).json()[
+            "tavily_key_environment"
+        ] == "dev"
+
+
+@pytest.mark.asyncio
+async def test_tavily_env_patch_denied_for_developer_reader(
+    repository: SQLiteRepository, auth_secret: str, vault_env: None
+) -> None:
+    """A Developer read succeeds but the env PATCH is admin-only (403, value kept)."""
+
+    app = create_app([], repository=repository)
+    with TestClient(app) as client:
+        pair = await register_promote_login(
+            client, repository, temp_email("control-tavily-deny"), UserRole.DEVELOPER
+        )
+        headers = raw_auth_headers(pair["access_token"])
+        readable = client.get("/api/v1/providers/tavily", headers=headers)
+        assert readable.status_code == 200
+        assert readable.json()["tavily_key_environment"] == "dev"
+
+        denied = client.patch(
+            "/api/v1/providers/tavily", json={"tavily_key_environment": "prod"}, headers=headers
+        )
+        assert denied.status_code == 403
+
+    from freesearch.routers.control import effective_config_for_name
+
+    assert (await effective_config_for_name(repository, "tavily")).tavily_key_environment == "dev"
+
+
+@pytest.mark.asyncio
+async def test_tavily_env_patch_rejects_invalid_value(
+    repository: SQLiteRepository, auth_secret: str, vault_env: None
+) -> None:
+    """Invalid env values reject with 422 and keep the stored value."""
+
+    app = create_app([], repository=repository)
+    with TestClient(app) as client:
+        pair = await register_promote_login(
+            client, repository, temp_email("control-tavily-invalid"), UserRole.ADMIN
+        )
+        headers = raw_auth_headers(pair["access_token"])
+        rejected = client.patch(
+            "/api/v1/providers/tavily", json={"tavily_key_environment": "staging"}, headers=headers
+        )
+        assert rejected.status_code == 422
+        assert rejected.json()["detail"]
+        assert client.get("/api/v1/providers/tavily", headers=headers).json()[
+            "tavily_key_environment"
+        ] == "dev"
+
+
+@pytest.mark.asyncio
+async def test_tavily_env_switch_keeps_shared_bucket_with_zero_vendor_calls(
+    repository: SQLiteRepository,
+    auth_secret: str,
+    vault_env: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Dev-to-prod and prod-to-dev keep bucket/pool/caps/terminal with zero vendor I/O."""
+
+    from datetime import date
+
+    import httpx
+
+    from freesearch.adapters.tavily import TavilyAdapter
+    from freesearch.configuration.provider_config import ProviderConfig
+    from freesearch.configuration.provider_limits import provider_limit_defaults
+    from freesearch.infrastructure.borrowed_transport import BorrowedTransport
+    from freesearch.models.contracts import UnitKind
+    from freesearch.models.provider_limits import (
+        AuthMode,
+        CRDGrantPayload,
+        LimitOperation,
+        NativeUsageSnapshot,
+    )
+    from freesearch.routers.control import effective_config_for_name
+    from freesearch.services.provider_limits import ProviderLimitsService
+
+    pool_id = "tavily:keyed:credit"
+
+    # Keyed transport recorder starts before any PATCH/readback/persistence step.
+    # Every Tavily vendor read (search, extract, GET /usage) travels through the
+    # borrowed transport, so one spy there plus a direct-client guard proves
+    # zero vendor calls across the complete path.
+    vendor_calls: list[httpx.Request] = []
+    usage_attempts: list[object] = []
+    _borrowed_request = BorrowedTransport.handle_async_request
+
+    async def _recording_borrowed(
+        self: BorrowedTransport, request: httpx.Request
+    ) -> httpx.Response:
+        if "tavily" in str(request.url).lower():
+            vendor_calls.append(request)
+        return await _borrowed_request(self, request)
+
+    monkeypatch.setattr(
+        BorrowedTransport, "handle_async_request", _recording_borrowed
+    )
+    _client_send = httpx.AsyncClient.send
+
+    async def _recording_send(
+        self: httpx.AsyncClient, request: httpx.Request, *args: object, **kwargs: object
+    ) -> httpx.Response:
+        if "tavily" in str(request.url).lower():
+            vendor_calls.append(request)
+        return await _client_send(self, request, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(httpx.AsyncClient, "send", _recording_send)
+    _refresh_usage = TavilyAdapter._refresh_usage
+
+    async def _recording_refresh(self: TavilyAdapter, request: object) -> object:
+        usage_attempts.append(request)
+        return await _refresh_usage(self, request)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(TavilyAdapter, "_refresh_usage", _recording_refresh)
+
+    # Seed native terminal state plus one local grant cap before the switches.
+    seed_records = [r for r in provider_limit_defaults() if r.provider == "tavily"]
+    seed = ProviderLimitsService(repository.limits, records=seed_records)
+    await seed.initialize()
+    await seed.apply_tavily_config(ProviderConfig(), auth_mode=AuthMode.KEYED)
+    await repository.limits.apply_snapshot(
+        NativeUsageSnapshot(
+            pool_id=pool_id,
+            provider="tavily",
+            auth_mode=AuthMode.KEYED,
+            native_unit=UnitKind.CREDIT,
+            observed_at=datetime.now(UTC),
+            remaining=Decimal("0"),
+            allowance=Decimal("1000"),
+            credential_generation=0,
+            source="vendor_402",
+        )
+    )
+    await seed.save_grant(
+        "tavily",
+        CRDGrantPayload(
+            version=0,
+            period_start=date(2026, 10, 1),
+            period_end=date(2026, 11, 1),
+            search_crd=Decimal("10"),
+            fetch_crd=Decimal("4"),
+        ),
+        AuthMode.KEYED,
+    )
+    before_pool = await repository.limits.get_pool(pool_id)
+    assert before_pool is not None
+    before_grants = await repository.limits.grants(
+        "tavily", AuthMode.KEYED, now=datetime.now(UTC)
+    )
+    assert before_grants is not None
+
+    def _assert_unchanged_pool_caps_terminal(
+        pool: object, grants_now: object, label: str
+    ) -> None:
+        assert pool is not None, label
+        assert pool.remaining == Decimal("0"), label  # type: ignore[union-attr]
+        assert pool.source == "vendor_402", label  # type: ignore[union-attr]
+        assert pool.allowance == before_pool.allowance, label  # type: ignore[union-attr]
+        assert grants_now is not None, label
+        assert grants_now.remaining(LimitOperation.SEARCH) == before_grants.remaining(  # type: ignore[union-attr]
+            LimitOperation.SEARCH
+        ), label
+        assert grants_now.remaining(LimitOperation.FETCH) == before_grants.remaining(  # type: ignore[union-attr]
+            LimitOperation.FETCH
+        ), label
+
+    async def _assert_shared_bucket(limit: Decimal, label: str) -> None:
+        records = [r for r in provider_limit_defaults() if r.provider == "tavily"]
+        service = ProviderLimitsService(repository.limits, records=records)
+        await service.initialize()
+        config = await effective_config_for_name(repository, "tavily")
+        await service.apply_tavily_config(config, auth_mode=AuthMode.KEYED)
+        keyed = [
+            r for r in service.records if r.provider == "tavily" and r.auth_mode is AuthMode.KEYED
+        ]
+        assert len(keyed) == 2, label
+        assert {r.operation for r in keyed} == {LimitOperation.SEARCH, LimitOperation.FETCH}, label
+        buckets = set()
+        for record in keyed:
+            assert record.rate is not None, label
+            assert record.rate.windows[0].limit == limit, label
+            buckets.add(record.rate.windows[0].bucket_id)
+        assert buckets == {"tavily:keyed:search:requests"}, label
+
+    app = create_app([], repository=repository)
+    with TestClient(app) as client:
+        pair = await register_promote_login(
+            client, repository, temp_email("control-tavily-bucket"), UserRole.ADMIN
+        )
+        headers = raw_auth_headers(pair["access_token"])
+
+        # Dev-to-prod across the PATCH plus list/get readback path.
+        patched = client.patch(
+            "/api/v1/providers/tavily", json={"tavily_key_environment": "prod"}, headers=headers
+        )
+        assert patched.status_code == 200, patched.text
+        assert patched.json()["tavily_key_environment"] == "prod"
+        listing = client.get("/api/v1/providers", headers=headers)
+        assert listing.status_code == 200
+        body = listing.json()
+        assert _provider(body, "tavily")["tavily_key_environment"] == "prod"
+        for other in ("exa", "brave", "keenable", "tinyfish", "parallel", "you", "firecrawl"):
+            assert _provider(body, other)["tavily_key_environment"] is None
+        single = client.get("/api/v1/providers/tavily", headers=headers)
+        assert single.status_code == 200
+        assert single.json()["tavily_key_environment"] == "prod"
+        assert vendor_calls == []
+        assert usage_attempts == []
+        await _assert_shared_bucket(Decimal("1000"), "dev-to-prod bucket")
+        pool = await repository.limits.get_pool(pool_id)
+        grants_now = await repository.limits.grants(
+            "tavily", AuthMode.KEYED, now=datetime.now(UTC)
+        )
+        _assert_unchanged_pool_caps_terminal(pool, grants_now, "dev-to-prod pool/caps/terminal")
+
+        # Prod-to-dev across the same complete path.
+        back = client.patch(
+            "/api/v1/providers/tavily", json={"tavily_key_environment": "dev"}, headers=headers
+        )
+        assert back.status_code == 200, back.text
+        assert back.json()["tavily_key_environment"] == "dev"
+        assert client.get("/api/v1/providers/tavily", headers=headers).json()[
+            "tavily_key_environment"
+        ] == "dev"
+        assert vendor_calls == []
+        assert usage_attempts == []
+        await _assert_shared_bucket(Decimal("100"), "prod-to-dev bucket")
+        pool = await repository.limits.get_pool(pool_id)
+        grants_now = await repository.limits.grants(
+            "tavily", AuthMode.KEYED, now=datetime.now(UTC)
+        )
+        _assert_unchanged_pool_caps_terminal(pool, grants_now, "prod-to-dev pool/caps/terminal")
+
+    # Restart with the same repository keeps the confirmed stored value.
+    restarted = create_app([], repository=repository)
+    with TestClient(restarted) as client:
+        pair = await register_promote_login(
+            client, repository, temp_email("control-tavily-bucket-restart"), UserRole.ADMIN
+        )
+        headers = raw_auth_headers(pair["access_token"])
+        assert client.get("/api/v1/providers/tavily", headers=headers).json()[
+            "tavily_key_environment"
+        ] == "dev"
+    assert vendor_calls == []
+    assert usage_attempts == []
+
+    recorded: list[httpx.Request] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        recorded.append(request)
+        return httpx.Response(200, json={"account": {"plan_usage": 1, "plan_limit": 1000}})
+
+    transport_client = httpx.AsyncClient(transport=httpx.MockTransport(_handler), timeout=30.0)
+    adapter = TavilyAdapter(
+        transport_client, api_key=None, key_environment="dev"
+    )
+    try:
+        assert await adapter.quota() is None
+        assert adapter.key_environment == "dev"
+    finally:
+        await adapter.aclose()
+        await transport_client.aclose()
+    assert recorded == []

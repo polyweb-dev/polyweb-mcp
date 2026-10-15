@@ -185,3 +185,439 @@ Feature: Provider credit units display honestly
     And the stubbed credit totals show "Brave no use"
     When I navigate directly to "/usage"
     Then the Brave card subtitle should contain "calculated usage"
+
+  @stub @ui7 @tavily @finite
+  Scenario: U7-T01 Tavily native budget shows 1000 of 1000 Credits
+    Given the stubbed provider limits show "Tavily finite credits"
+    And the stubbed credit totals show "Tavily no use"
+    When I navigate directly to "/usage"
+    Then the Tavily credit bar should show "100" percent
+    And the Tavily card should show "1000 / 1000 Credits"
+    And the Tavily card should show one credit bar
+    And the Tavily card should show the "Credits" bar title
+    And the Tavily credit percent should be vertically centered on its track
+    And the Tavily card should show no minute bar
+    And the Tavily card outside the popover should not show "requests per minute"
+    And the Tavily card outside the popover should not show "100/100"
+    And the Tavily card outside the popover should not show "Resets"
+    And the Tavily card should show "Tavily Credits"
+    And the usage view should not show "CRD left"
+    And the usage view should not show "∞"
+    And the Tavily card should show the "Sync" action
+    And the Tavily card should show the "Provider Balance" action
+    And the Tavily card should show the "Budget Limit" action
+    And the Tavily card should show the "History" action
+    And the Tavily card subtitle should contain "Observed from the vendor API"
+
+  @stub @ui7 @tavily @debit
+  Scenario: U7-T02 One basic search debit moves 1000 to 999 Credits
+    Given the stubbed provider limits show "Tavily finite credits"
+    And the stubbed credit totals show "Tavily no use"
+    When I navigate directly to "/usage"
+    Then the Tavily credit bar should show "100" percent
+    And the Tavily card should show one credit bar
+    And the Tavily card should show no minute bar
+    When the stubbed provider limits show "Tavily finite credits after basic"
+    And the stubbed credit totals show "Tavily no use"
+    And I reload the page
+    Then the Tavily credit bar should show "99.9" percent
+    And the Tavily card should show "999 / 1000 Credits"
+    And the Tavily card should show one credit bar
+    And the Tavily card outside the popover should not show "requests per minute"
+
+  @stub @ui7 @tavily @debit
+  Scenario: U7-T03 One advanced search debit moves 1000 to 998 Credits
+    Given the stubbed provider limits show "Tavily finite credits"
+    And the stubbed credit totals show "Tavily no use"
+    When I navigate directly to "/usage"
+    Then the Tavily credit bar should show "100" percent
+    And the Tavily card should show one credit bar
+    And the Tavily card should show no minute bar
+    When the stubbed provider limits show "Tavily finite credits after advanced"
+    And the stubbed credit totals show "Tavily no use"
+    And I reload the page
+    Then the Tavily credit bar should show "99.8" percent
+    And the Tavily card should show "998 / 1000 Credits"
+    And the Tavily card should show one credit bar
+    And the Tavily card outside the popover should not show "requests per minute"
+
+  @stub @ui7 @tavily @keyless
+  Scenario: U7-T04 Keyless access reports no Credits quota and no invented headroom
+    Given the stubbed provider limits show "Tavily keyless credits"
+    And the stubbed credit totals show "Tavily no use"
+    When I navigate directly to "/usage"
+    Then the usage view should show "Keyless access (no Credits quota is reported)"
+    And the Tavily card should show no credit bar
+    And the Tavily card should show no minute bar
+    And the Tavily card outside the popover should not show "requests per minute"
+    And the Tavily card outside the popover should not show "requests/minute"
+    When I open the credit details for "Tavily"
+    Then the credit details should not show "Search and Fetch Rate Limit"
+    Then the credit details should not show "Minute headroom"
+    And the credit details should not show "100/100"
+    And the credit details should not show "1000/1000"
+    And the usage view should not show "∞"
+
+  @stub @ui7 @tavily @shared
+  Scenario: U7-T05 Shared pool serves search and extract with one minute window
+    Given the stubbed provider limits show "Tavily finite credits"
+    And the stubbed credit totals show "Tavily no use"
+    When I navigate directly to "/usage"
+    Then the Tavily card should show one credit bar
+    And the Tavily card should show no minute bar
+    And the Tavily card outside the popover should not show "requests per minute"
+    When I open the credit details for "Tavily"
+    Then the credit details should show "Search cost"
+    And the credit details should show "1 Tavily Credit"
+    And the credit details should show "Extract cost"
+    And the credit details should show "per 5 URLs"
+    And the credit details should show "(advanced: 2 Tavily Credits)"
+    And the credit details should show "Searches left"
+    And the credit details should show "Fetches left"
+    And the credit details should show "Search CRD cost"
+    And the credit details should show "8 CRD"
+    And the credit details should show "(≈ $0.008)"
+    And the credit details should show "Fetch CRD cost"
+    And the credit details should show "1.6 CRD"
+    And the credit details should show "(≈ $0.0016)"
+    And the credit details should show "Search and Fetch Rate Limit 100 requests per minute"
+    And the credit details should show rows in order "Search cost, Extract cost, Searches left, Fetches left, Search CRD cost, Fetch CRD cost, Search and Fetch Rate Limit"
+    And the credit details should not show "Minute headroom"
+    And the credit details should not show "Extract CRD cost"
+    And the Tavily card outside the popover should not show "requests per minute"
+
+  @stub @ui7 @tavily @exhaust
+  Scenario: U7-T06 Free exhaustion stops at zero Credits without PAYGO
+    Given the stubbed provider limits show "Tavily exhausted with consumed rate"
+    And the stubbed credit totals show "Tavily no use"
+    When I navigate directly to "/usage"
+    Then the Tavily card should show "0 / 1000 Credits"
+    And the Tavily credit bar should show "0" percent
+    And the Tavily card should show one credit bar
+    And the Tavily card should show the "Credits" bar title
+    And the Tavily card should show no minute bar
+    And the usage view should not show "pay-as-you-go"
+    And the usage view should not show "∞"
+    When I open the credit details for "Tavily"
+    Then the credit details should show "Search and Fetch Rate Limit 0/100 requests per minute"
+    And the credit details should not show "Minute headroom"
+
+  @stub @ui7 @tavily @paygo
+  Scenario: U7-T07 Paid overage continues under pay-as-you-go
+    Given the stubbed provider limits show "Tavily paygo overage"
+    And the stubbed credit totals show "Tavily no use"
+    When I navigate directly to "/usage"
+    Then the Tavily card should show "0 / 1000 Credits"
+    And the Tavily card should show no minute bar
+    And the Tavily card outside the popover should not show "requests per minute"
+    And the usage view should show "Free Credits are spent; further use continues under pay-as-you-go."
+    When I open the credit details for "Tavily"
+    Then the credit details should show "Monthly Tavily Credits"
+    And the credit details should not show "Minute headroom"
+
+  @stub @ui7 @tavily @grant
+  Scenario: U7-T08 Grant converts both directions and keeps stored CRD
+    Given the stubbed provider limits show "Tavily grant credits"
+    And the stubbed credit totals show "Tavily no use"
+    When I navigate directly to "/usage"
+    And I open the Tavily credit grant
+    Then the grant form should show "Search Credits"
+    And the grant form should show "Fetch Credits"
+    And the "Search Credits" grant field should show "100"
+    And the "Fetch Credits" grant field should show "200"
+    When I type "101" into the "Search Credits" grant field
+    And I save the credit grant
+    Then the submitted grant should carry "search_crd" "808"
+    And the submitted grant should carry "fetch_crd" "1600"
+
+  @stub @ui7 @tavily @history
+  Scenario: U7-T09 History shows native Credits balances
+    Given the stubbed provider limits show "Tavily finite credits"
+    And the stubbed credit totals show "Tavily no use"
+    And the stubbed credit history shows "Tavily credit history"
+    When I navigate directly to "/usage"
+    And I open the credit history for "Tavily"
+    Then the history modal should show "Balance history"
+    And the history modal should show "1000 Credits"
+    And the history modal should show "999 Credits"
+
+  @stub @ui7 @tavily @totals
+  Scenario: U7-T10 Native totals stay in Credits with extract labels
+    Given the stubbed provider limits show "Tavily finite credits"
+    And the stubbed credit totals show "Tavily search and extract use"
+    When I navigate directly to "/usage"
+    Then the usage view should show "Tavily native Credits use"
+    And the usage view should show "Credits spent"
+    And the usage view should show "extract"
+    And the usage view should show "1 Credit"
+    And the usage view should show "0.2 Credits"
+
+  @stub @ui7 @tavily @disclosure
+  Scenario: U7-T11 USD stays absent while the disclosure is closed
+    Given the stubbed provider limits show "Tavily finite credits"
+    And the stubbed credit totals show "Tavily no use"
+    When I navigate directly to "/usage"
+    Then the Tavily card should show "1000 / 1000 Credits"
+    And the Tavily card outside the popover should not show "(≈ $0.008)"
+    And the Tavily card outside the popover should not show "(≈ $0.0016)"
+    And the Tavily card outside the popover should not show "requests per minute"
+    And the Tavily card outside the popover should not show "Search and Fetch Rate Limit"
+    And the usage view should not show "$0.008"
+
+  @stub @ui7 @tavily @disclosure
+  Scenario: U7-T12 USD appears once the disclosure is open
+    Given the stubbed provider limits show "Tavily finite credits"
+    And the stubbed credit totals show "Tavily no use"
+    When I navigate directly to "/usage"
+    And I open the credit details for "Tavily"
+    Then the credit details should show "8 CRD"
+    And the credit details should show "(≈ $0.008)"
+    And the credit details should show "1.6 CRD"
+    And the credit details should show "(≈ $0.0016)"
+    And the Tavily card outside the popover should not show "(≈ $0.008)"
+    And the Tavily card outside the popover should not show "requests per minute"
+
+  @stub @ui7 @tavily @rate
+  Scenario: U7-T13 Prod rail shows 1000 RPM headroom with Retry-After
+    Given the stubbed provider limits show "Tavily prod credits"
+    And the stubbed credit totals show "Tavily no use"
+    When I navigate directly to "/usage"
+    Then the Tavily card should show "1000 / 1000 Credits"
+    And the Tavily card should show one credit bar
+    And the Tavily card should show no minute bar
+    And the Tavily card outside the popover should not show "requests per minute"
+    When I open the credit details for "Tavily"
+    Then the credit details should show "Search and Fetch Rate Limit 1000 requests per minute"
+    And the credit details should show "Retry-After"
+    And the credit details should show "45 s"
+    And the credit details should not show "Minute headroom"
+    And the credit details should show rows in order "Search cost, Extract cost, Searches left, Fetches left, Search CRD cost, Fetch CRD cost, Search and Fetch Rate Limit"
+
+  @stub @ui7 @tavily @402
+  Scenario: U7-T14 Out-of-Credits 402 reaches the user at once
+    Given the stubbed provider limits show "Tavily finite credits"
+    And the stubbed credit totals show "Tavily no use"
+    When I navigate directly to "/"
+    And I pin the playground provider to "Tavily"
+    And I submit the playground search query "tavily out of credits probe"
+    Then the playground search error should show "Tavily is out of Credits. Wait until reset or upgrade."
+
+  @stub @ui7 @tavily @brave
+  Scenario: U7-T15 Brave card stays in CRD beside the Tavily card
+    Given the stubbed provider limits show "Brave and Tavily finite credits"
+    And the stubbed credit totals show "Brave no use"
+    When I navigate directly to "/usage"
+    Then the Brave credit bar should show "90" percent
+    And the Brave card should show "4500 / 5000 CRD"
+    And the Brave card should show one credit bar
+    And the Tavily credit bar should show "100" percent
+    And the Tavily card should show "1000 / 1000 Credits"
+    And the Tavily card should show one credit bar
+    And the Tavily card should show the "Credits" bar title
+    And the Tavily card should show no minute bar
+    And the price note should show "0.005 USD"
+
+  @stub @ui7 @tavily @rate
+  Scenario: U7-T16 Dev consumed headroom shows 90 of 100 requests per minute
+    Given the stubbed provider limits show "Tavily dev consumed rate"
+    And the stubbed credit totals show "Tavily no use"
+    When I navigate directly to "/usage"
+    Then the Tavily card should show one credit bar
+    And the Tavily card should show no minute bar
+    And the Tavily card outside the popover should not show "requests per minute"
+    When I open the credit details for "Tavily"
+    Then the credit details should show "Search and Fetch Rate Limit 90/100 requests per minute"
+    And the credit details should not show "Minute headroom"
+    And the Tavily card outside the popover should not show "requests per minute"
+
+  @stub @ui7 @tavily @rate
+  Scenario: U7-T17 Prod consumed headroom shows 900 of 1000 requests per minute
+    Given the stubbed provider limits show "Tavily prod consumed rate"
+    And the stubbed credit totals show "Tavily no use"
+    When I navigate directly to "/usage"
+    Then the Tavily card should show one credit bar
+    And the Tavily card should show no minute bar
+    When I open the credit details for "Tavily"
+    Then the credit details should show "Search and Fetch Rate Limit 900/1000 requests per minute"
+    And the credit details should not show "Minute headroom"
+    And the Tavily card outside the popover should not show "requests per minute"
+
+  @stub @ui7 @tavily @tier
+  Scenario: U7-T18 Confirmed prod ceiling shows unknown headroom before dashboard confirms
+    Given the sidebar session belongs to an admin account
+    And the Tavily stored key environment is "dev"
+    And the stubbed provider limits show "Tavily finite credits"
+    And the stubbed credit totals show "Tavily no use"
+    When I navigate directly to "/usage"
+    And I choose the Tavily card rate tier "prod"
+    Then exactly one Tavily rate tier PATCH should carry "prod"
+    When I open the credit details for "Tavily"
+    Then the credit details should show "Search and Fetch Rate Limit unknown/1000 requests per minute"
+    And the Tavily card outside the popover should not show "requests per minute"
+    And no Tavily usage requests should exist
+    And no Tavily provider test requests should exist
+    And no Tavily force-sync requests should exist
+
+  @stub @ui7 @tavily @tier
+  Scenario: U7-T19 Deferred dashboard still shows confirmed ceiling at once
+    Given the sidebar session belongs to an admin account
+    And the Tavily stored key environment is "dev"
+    And the stubbed provider limits show "Tavily finite credits"
+    And the stubbed credit totals show "Tavily no use"
+    And the provider PATCH for "Tavily" is delayed by 500 milliseconds
+    When I navigate directly to "/usage"
+    And I choose the Tavily card rate tier "prod" without waiting
+    Then the Tavily card rate tier should be disabled while pending
+    When I open the credit details for "Tavily"
+    Then the credit details should eventually show "Search and Fetch Rate Limit unknown/1000 requests per minute"
+    And no Tavily usage requests should exist
+    And no Tavily provider test requests should exist
+    And no Tavily force-sync requests should exist
+
+  @stub @ui7 @tavily @tier
+  Scenario: U7-T20 Card PATCH rejection keeps stored dev value
+    Given the sidebar session belongs to an admin account
+    And the Tavily stored key environment is "dev"
+    And the stubbed provider limits show "Tavily finite credits"
+    And the stubbed credit totals show "Tavily no use"
+    And the provider PATCH for "Tavily" will fail with "db down"
+    When I navigate directly to "/usage"
+    And I choose the Tavily card rate tier "prod"
+    Then an inline Tavily rate tier error should show "db down"
+    And no Tavily force-sync requests should exist
+
+  @stub @ui7 @tavily @tier
+  Scenario: U7-T21 Missing PATCH readback shows confirmation unavailable
+    Given the sidebar session belongs to an admin account
+    And the Tavily stored key environment is "dev"
+    And the stubbed provider limits show "Tavily finite credits"
+    And the stubbed credit totals show "Tavily no use"
+    And the Tavily provider PATCH readback will be missing
+    When I navigate directly to "/usage"
+    And I choose the Tavily card rate tier "prod"
+    Then a Tavily confirmation unavailable note should show
+
+  @stub @ui7 @tavily @tier
+  Scenario: U7-T22 Obsolete PATCH after unmount writes no state
+    Given the sidebar session belongs to an admin account
+    And the Tavily stored key environment is "dev"
+    And the stubbed provider limits show "Tavily finite credits"
+    And the stubbed credit totals show "Tavily no use"
+    And the provider PATCH for "Tavily" is delayed by 500 milliseconds
+    When I navigate directly to "/usage"
+    And I choose the Tavily card rate tier "prod" without waiting
+    And I navigate directly to "/"
+    Then exactly one Tavily rate tier PATCH should carry "prod"
+    And no Tavily usage requests should exist
+    And no Tavily provider test requests should exist
+
+  @stub @ui7 @tavily @tier
+  Scenario: U7-T23 Credential replacement ignores obsolete PATCH response
+    Given the sidebar session belongs to an admin account
+    And the Tavily stored key environment is "dev"
+    And the stubbed provider limits show "Tavily finite credits"
+    And the stubbed credit totals show "Tavily no use"
+    And the provider PATCH for "Tavily" is delayed by 500 milliseconds
+    When I navigate directly to "/usage"
+    And I choose the Tavily card rate tier "prod" without waiting
+    And I replace the Tavily credential while the PATCH is pending
+    Then exactly one Tavily rate tier PATCH should carry "prod"
+    And no Tavily usage requests should exist
+    And no Tavily provider test requests should exist
+
+  @stub @ui7 @tavily @tier
+  Scenario: U7-T24 Confirmed save stays after refresh failure
+    Given the sidebar session belongs to an admin account
+    And the Tavily stored key environment is "dev"
+    And the stubbed provider limits show "Tavily finite credits"
+    And the stubbed credit totals show "Tavily no use"
+    And the Tavily dashboard refresh will fail with "dashboard down"
+    When I navigate directly to "/usage"
+    And I choose the Tavily card rate tier "prod"
+    Then exactly one Tavily rate tier PATCH should carry "prod"
+    And the Tavily card rate tier should show "prod"
+    And no Tavily usage requests should exist
+    And no Tavily provider test requests should exist
+
+  @stub @ui7 @tavily @tier
+  Scenario: U7-T25 Reader role shows read-only tier text with zero PATCH
+    Given the sidebar session belongs to a developer account
+    And the Tavily stored key environment is "dev"
+    And the stubbed provider limits show "Tavily finite credits"
+    And the stubbed credit totals show "Tavily no use"
+    When I navigate directly to "/usage"
+    Then the Tavily card read-only rate text should show "Development"
+    And no Tavily rate tier PATCH should exist
+    And no Tavily usage requests should exist
+    And no Tavily provider test requests should exist
+
+  @stub @ui7 @tavily @tier
+  Scenario: U7-T26 Keyless card shows keyless access without numeric rate
+    Given the sidebar session belongs to an admin account
+    And the Tavily key is keyless
+    And the stubbed provider limits show "Tavily keyless credits"
+    And the stubbed credit totals show "Tavily no use"
+    When I navigate directly to "/usage"
+    Then the Tavily card keyless rate text should show "Keyless access"
+    And no Tavily rate tier PATCH should exist
+    When I open the credit details for "Tavily"
+    Then the credit details should not show "Search and Fetch Rate Limit"
+
+  @stub @ui7 @tavily @keyboard
+  Scenario: U7-T27 Keyboard opens details and Escape returns focus
+    Given the stubbed provider limits show "Tavily finite credits"
+    And the stubbed credit totals show "Tavily no use"
+    When I navigate directly to "/usage"
+    And I focus the Tavily credit details control with the keyboard
+    And I activate the focused Tavily credit details control
+    Then the credit details should show "Search and Fetch Rate Limit 100 requests per minute"
+    When I press Escape
+    Then the Tavily details control regains focus
+    And the Tavily card outside the popover should not show "requests per minute"
+
+  @stub @ui7 @tavily @viewport
+  Scenario: U7-T28 Narrow viewport keeps Tavily details inside the viewport
+    Given I use a narrow viewport
+    And the stubbed provider limits show "Tavily finite credits"
+    And the stubbed credit totals show "Tavily no use"
+    When I navigate directly to "/usage"
+    And I open the credit details for "Tavily"
+    Then the Tavily details popover should stay within the viewport
+
+  @stub @ui7 @tavily @precision
+  Scenario: U7-T29 Fractional CRD and USD keep fractions while long zeros trim
+    Given the stubbed provider limits show "Tavily long zero decimals"
+    And the stubbed credit totals show "Tavily no use"
+    When I navigate directly to "/usage"
+    And I open the credit details for "Tavily"
+    Then the credit details should show "1.6 CRD"
+    And the credit details should show "(≈ $0.008)"
+    And the credit details should show "(≈ $0.0016)"
+    And the credit details should not show "1.600000000"
+    And the credit details should not show "0.008000000"
+    And the Tavily card outside the popover should not show "(≈ $0.008)"
+
+  @stub @ui7 @tavily @stale
+  Scenario: U7-T30 Stale vendor read keeps reset line with unknown rate headroom
+    Given the stubbed provider limits show "Tavily stale credits"
+    And the stubbed credit totals show "Tavily no use"
+    When I navigate directly to "/usage"
+    Then the Tavily card should show "1000 / 1000 Credits"
+    And the Tavily card should show one credit bar
+    And the Tavily card outside the popover should not show "Resets"
+    And the usage view should show "stale"
+    When I open the credit details for "Tavily"
+    Then the credit details should show "Monthly Tavily Credits"
+    And the Tavily card outside the popover should not show "requests per minute"
+
+  @stub @ui7 @tavily @unknown
+  Scenario: U7-T31 Unknown Tavily balance shows no invented bar or rate
+    Given the stubbed provider limits show "Tavily unknown credits"
+    And the stubbed credit totals show "Tavily no use"
+    When I navigate directly to "/usage"
+    Then the Tavily card should show no credit bar
+    And the Tavily card should show no minute bar
+    And the Tavily card outside the popover should not show "requests per minute"
+    When I open the credit details for "Tavily"
+    Then the credit details should not show "Search and Fetch Rate Limit"
+    And the credit details should not show "Minute headroom"

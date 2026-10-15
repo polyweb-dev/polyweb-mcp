@@ -53,7 +53,7 @@ describe("ManualQuotaModal", () => {
       />
     )
     expect(screen.getByText("Allowance (USD)")).toBeInTheDocument()
-    expect(screen.getByText("Current usage (USD)")).toBeInTheDocument()
+    expect(screen.getByText("Balance remaining (USD)")).toBeInTheDocument()
   })
 
   it("previews the Brave 0.88/5.00 estimate live as 82.4% remaining", async () => {

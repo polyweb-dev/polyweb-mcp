@@ -5,26 +5,42 @@ and that absent catalog records stay ungated through MCP tools.
 """
 
 import asyncio
-import uuid
-from contextlib import suppress
+import gc
+import time
 from pathlib import Path
 
 import pytest
 import pytest_asyncio
+from pydantic import SecretStr
 
 from freesearch.mcp.server import create_server
+from freesearch.persistence.storage import SQLiteRepository
+from tests.fixtures.auth import mcp_account_token
 
-_DB_ROOT = Path(".runtime-tmp/limit-mcp-pytest-dbs")
+
+def _unlink_with_retries(path: Path, *, attempts: int = 20) -> None:
+    """Remove a test database after Windows releases delayed SQLite handles."""
+
+    for attempt in range(attempts):
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            gc.collect()
+            time.sleep(0.05)
+        else:
+            return
 
 
 @pytest_asyncio.fixture
-async def database():
-    _DB_ROOT.mkdir(parents=True, exist_ok=True)
-    db_path = _DB_ROOT / f"limit-mcp-{uuid.uuid4().hex}.db"
+async def database(tmp_path: Path):
+    db_path = tmp_path / "limit-mcp.db"
     yield db_path
     for extra in (db_path, Path(f"{db_path}.migration.lock")):
-        with suppress(FileNotFoundError):
-            extra.unlink()
+        _unlink_with_retries(extra)
 
 
 def _stub_only(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -43,10 +59,20 @@ async def test_generation_lifecycle_closes_cleanly(
     database: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _stub_only(monkeypatch)
-    server = create_server(None, database=database)
-    async with server._mcp_server.lifespan(server):
-        result = await server.call_tool("search", {"request": {"query": "s0 probe"}})
-        assert isinstance(result, tuple)
+    service_repository = await SQLiteRepository.open(database)
+    try:
+        service, token, _email = await mcp_account_token(service_repository, "mcp-lifecycle")
+        server = create_server(
+            None,
+            database=database,
+            auth_service=service,
+            stdio_token=SecretStr(token.get_secret_value()),
+        )
+        async with server._mcp_server.lifespan(server):
+            result = await server.call_tool("search", {"request": {"query": "s0 probe"}})
+            assert isinstance(result, tuple)
+    finally:
+        await service_repository.close()
     assert database.is_file()
 
 
@@ -54,17 +80,27 @@ async def test_overlapping_generations_share_one_repository(
     database: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _stub_only(monkeypatch)
-    server = create_server(None, database=database)
-    first = server._mcp_server.lifespan(server)
-    second = server._mcp_server.lifespan(server)
-    await first.__aenter__()
-    await second.__aenter__()
+    service_repository = await SQLiteRepository.open(database)
     try:
-        result = await server.call_tool("search", {"request": {"query": "s0"}})
-        assert isinstance(result, tuple)
+        service, token, _email = await mcp_account_token(service_repository, "mcp-overlap")
+        server = create_server(
+            None,
+            database=database,
+            auth_service=service,
+            stdio_token=SecretStr(token.get_secret_value()),
+        )
+        first = server._mcp_server.lifespan(server)
+        second = server._mcp_server.lifespan(server)
+        await first.__aenter__()
+        await second.__aenter__()
+        try:
+            result = await server.call_tool("search", {"request": {"query": "s0"}})
+            assert isinstance(result, tuple)
+        finally:
+            await first.__aexit__(None, None, None)
+            await second.__aexit__(None, None, None)
     finally:
-        await first.__aexit__(None, None, None)
-        await second.__aexit__(None, None, None)
+        await service_repository.close()
 
 
 async def test_one_schedule_task_per_generation_with_clean_close(
