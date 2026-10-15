@@ -42,7 +42,9 @@ from freesearch.models.provider_limits import (
 
 _NAME = "brave"
 _SEARCH_URL = "https://api.search.brave.com/res/v1/web/search"
+_LLM_CONTEXT_URL = "https://api.search.brave.com/res/v1/llm/context"
 _MAX_SEARCH_RESULTS = 20
+_MAX_CONTEXT_RESULTS = 50
 
 __all__ = [
     "BRAVE_EXHAUSTION_BODY_CODES",
@@ -251,13 +253,36 @@ class BraveAdapter(ProviderAdapter):
 
     async def _search_request(self, request: SearchRequest) -> httpx.Response:
         headers = {"X-Subscription-Token": self._api_key.get_secret_value()}
+        options = request.provider_options.brave if request.provider_options is not None else None
+        if options is not None:
+            if options.api_version is not None:
+                headers["Api-Version"] = options.api_version
+            if options.no_cache:
+                headers["Cache-Control"] = "no-cache"
+            if options.location is not None:
+                location_headers = {
+                    "latitude": "X-Loc-Lat",
+                    "longitude": "X-Loc-Long",
+                    "timezone": "X-Loc-Timezone",
+                    "city": "X-Loc-City",
+                    "state": "X-Loc-State",
+                    "state_name": "X-Loc-State-Name",
+                    "country": "X-Loc-Country",
+                    "postal_code": "X-Loc-Postal-Code",
+                }
+                for key, header in location_headers.items():
+                    value = getattr(options.location, key)
+                    if value is not None:
+                        headers[header] = str(value)
         user_agent = self._client.headers.get("User-Agent")
         if user_agent is not None:
             headers["User-Agent"] = user_agent
+        options = request.provider_options.brave if request.provider_options is not None else None
+        search_type = options.search_type if options is not None else "web"
         wire_request = httpx.Request(
             "GET",
-            _SEARCH_URL,
-            params=self._params(request),
+            _LLM_CONTEXT_URL if search_type == "llm_context" else _SEARCH_URL,
+            params=self._params(request, search_type=search_type),
             headers=headers,
         )
         response = await self._client.send(wire_request, auth=None, follow_redirects=False)
@@ -270,19 +295,84 @@ class BraveAdapter(ProviderAdapter):
             raise self._http_error(response)
         return response
 
-    def _params(self, request: SearchRequest) -> dict[str, str | int]:
-        params: dict[str, str | int] = {
+    def _params(
+        self, request: SearchRequest, *, search_type: str = "web"
+    ) -> dict[str, str | int | list[str]]:
+        options = request.provider_options.brave if request.provider_options is not None else None
+        country = options.country if options is not None else None
+        language = options.search_lang if options is not None else None
+        params: dict[str, str | int | list[str]] = {
             "q": request.query,
-            "count": min(request.limit, _MAX_SEARCH_RESULTS),
+            "count": min(
+                request.limit,
+                _MAX_CONTEXT_RESULTS if search_type == "llm_context" else _MAX_SEARCH_RESULTS,
+            ),
         }
-        if request.country_code is not None:
-            params["country"] = request.country_code.upper()
-        if request.language is not None:
-            params["search_lang"] = request.language
+        resolved_country = country if country is not None else request.country_code
+        resolved_language = language if language is not None else request.language
+        if resolved_country is not None:
+            params["country"] = resolved_country.upper()
+        if resolved_language is not None:
+            params["search_lang"] = resolved_language
+        if options is None:
+            return params
+        if search_type == "llm_context" and options.offset is not None:
+            raise self._error("bad_request", "offset is only supported by Brave Web Search")
+
+        option_values = options.model_dump(exclude_none=True, exclude={"search_type"}, mode="json")
+        if search_type == "llm_context":
+            supported = {
+                "freshness",
+                "safesearch",
+                "spellcheck",
+                "offset",
+                "maximum_number_of_urls",
+                "maximum_number_of_tokens",
+                "maximum_number_of_snippets",
+                "maximum_number_of_tokens_per_url",
+                "maximum_number_of_snippets_per_url",
+                "context_threshold_mode",
+                "goggles",
+                "enable_local",
+                "enable_source_metadata",
+            }
+        else:
+            supported = {
+                "ui_lang",
+                "freshness",
+                "safesearch",
+                "spellcheck",
+                "offset",
+                "text_decorations",
+                "result_filter",
+                "units",
+                "goggles",
+                "extra_snippets",
+                "summary",
+                "enable_rich_callback",
+                "include_fetch_metadata",
+                "operators",
+            }
+        for key in supported:
+            if key not in option_values:
+                continue
+            value = option_values[key]
+            if key == "result_filter":
+                # Brave documents result_filter as a comma-delimited list.
+                params[key] = ",".join(value)
+            elif key == "goggles" and isinstance(value, list):
+                params[key] = value
+            elif isinstance(value, bool):
+                params[key] = "true" if value else "false"
+            else:
+                params[key] = value
         return params
 
     def _search_response(self, request: SearchRequest, response: httpx.Response) -> SearchResponse:
         payload = response.json()
+        options = request.provider_options.brave if request.provider_options is not None else None
+        if options is not None and options.search_type == "llm_context":
+            return self._context_search_response(request, response, payload)
         web = payload["web"]
         results = web["results"]
         if not isinstance(web, dict) or not isinstance(results, list):
@@ -313,6 +403,84 @@ class BraveAdapter(ProviderAdapter):
             total_results=len(normalized),
             usage=usage,
             quota_snapshot=snapshot,
+        )
+
+    def _context_search_response(
+        self, request: SearchRequest, response: httpx.Response, payload: Any
+    ) -> SearchResponse:
+        if not isinstance(payload, dict):
+            raise TypeError("context response must be an object")
+        grounding = payload.get("grounding")
+        sources = payload.get("sources", {})
+        if not isinstance(grounding, dict) or not isinstance(sources, dict):
+            raise TypeError("missing context grounding or sources")
+
+        normalized: list[SearchResult] = []
+        parse_errors: list[dict[str, object]] = []
+        context_groups: list[tuple[str, Any]] = [("generic", grounding.get("generic", []))]
+        poi = grounding.get("poi")
+        if poi is not None:
+            context_groups.append(("poi", [poi]))
+        context_groups.append(("map", grounding.get("map", [])))
+        index = 0
+        for kind, items in context_groups:
+            if not isinstance(items, list):
+                if kind == "poi" and isinstance(items, dict):
+                    items = [items]
+                else:
+                    raise TypeError("context grounding groups must be lists")
+            for item in items:
+                try:
+                    normalized.append(self._normalize_context_result(item, kind, sources))
+                except (ValidationError, ProviderOperationError):
+                    parse_errors.append(_parse_error_record(index))
+                index += 1
+        normalized = normalized[: request.limit]
+        usage = self._usage_event(response)
+        if parse_errors:
+            usage.metadata["parse_errors"] = parse_errors
+        snapshot = self._quota_snapshot(response)
+        self._last_quota = snapshot
+        return SearchResponse(
+            query=request.query,
+            provider=self.name,
+            results=normalized,
+            total_results=len(normalized),
+            usage=usage,
+            quota_snapshot=snapshot,
+            provider_metadata={
+                "search_type": "llm_context",
+                "grounding": grounding,
+                "sources": sources,
+            },
+        )
+
+    @staticmethod
+    def _normalize_context_result(item: Any, kind: str, sources: dict[str, Any]) -> SearchResult:
+        if not isinstance(item, dict):
+            raise _malformed_item_error()
+        url = item.get("url")
+        if not isinstance(url, str) or not url:
+            raise _malformed_item_error()
+        snippets = item.get("snippets", [])
+        if snippets is None:
+            snippets = []
+        if not isinstance(snippets, list) or any(
+            not isinstance(snippet, str) for snippet in snippets
+        ):
+            raise _malformed_item_error()
+        metadata: dict[str, Any] = {"context_type": kind, "snippets": snippets}
+        name = item.get("name")
+        if isinstance(name, str):
+            metadata["name"] = name
+        source = sources.get(url)
+        if isinstance(source, dict):
+            metadata["source"] = source
+        return SearchResult(
+            title=item.get("title") or name or "",
+            url=cast(Any, url),
+            snippet="\n\n".join(snippets),
+            metadata=metadata,
         )
 
     def quota_after_success(self, response: SearchResponse) -> QuotaSnapshot:

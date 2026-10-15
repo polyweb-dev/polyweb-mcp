@@ -11,12 +11,12 @@ login interface comes in a later release.
 This release includes:
 
 - local email and password accounts through the `fastapi-users` library
-- JWT Bearer access for the REST API and for the MCP surfaces
+- JWT Bearer access for protected REST routes, with optional account context on public Search/Fetch
 - three account roles: Admin, Developer, and Agent
 - a protected refresh route, current-family logout, and login and registration limits
 - account-only trace reads with the same HTTP 404 for every unowned record
 - an operator CLI for Admin bootstrap and role assignment
-- the whole-application Bearer guard, the role gates, the trace owner, and the stdio credential handoff
+- the Bearer guard, the role gates, the trace owner, and optional stdio account context
 
 This release excludes WorkOS login, verification mail, password reset mail, an
 OAuth authorization server, HTTP role management, provider tenant isolation, and
@@ -122,6 +122,16 @@ Roles:
 Every role reads only its own traces. An absent, foreign-owned, or historical
 unowned trace gives the same HTTP 404.
 
+REST `POST /search` and `POST /fetch` are public data operations. The MCP
+Streamable HTTP transport exposes its Search and Fetch tools publicly on `/mcp`;
+stdio also permits anonymous calls. A supplied Bearer credential is verified,
+and a valid account is attached to trace records. An invalid supplied token is
+rejected. Anonymous activity has no account attribution, so account-only trace
+reads do not include it. Provider quota and rate admission still applies to all
+calls, and all callers share the configured provider credentials and budgets;
+this release adds no per-caller spend cap. Account, trace, and provider-control
+routes remain protected.
+
 Reuse of a consumed refresh credential revokes the whole family. Logout revokes
 the current family. A role change revokes every family of that account. An
 ordinary API call and an ordinary MCP call never extend an access token.
@@ -159,18 +169,19 @@ state. It never claims a successful Admin creation.
 
 ## 7. Stdio MCP policy
 
-The stdio transport needs an explicit access JWT in
-`FREESEARCH_MCP_BEARER_TOKEN`. That value comes from the process environment
-only, so the local environment file can never supply an account credential.
+The stdio transport accepts anonymous Search and Fetch calls. To attribute a
+call to an account, set `FREESEARCH_MCP_BEARER_TOKEN` in the child process
+environment. That optional value comes from the process environment only, so
+the local environment file cannot supply an account credential.
 
-Give the child process only that credential.
-Renew the access JWT in the parent and restart the child after expiry.
-Do not give the child a refresh credential, a password, or an Admin credential.
+If configured, the child verifies the access token and live account at each
+tool call. An expired, revoked, or deactivated credential stops that tool call,
+and no provider call happens after a rejected check. Do not give the child a
+refresh credential, a password, or an Admin credential.
 
-The child verifies the token and the live account at each tool call. The access
-lifetime is 900 seconds, the same value as the API. An expired, revoked, or
-deactivated credential stops tool access, and no provider call happens after a
-rejected check.
+The access lifetime is 900 seconds, the same value as the API. Renew the token
+in the parent and restart the child after expiry if account attribution is
+required.
 
 ---
 

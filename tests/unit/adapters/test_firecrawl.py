@@ -51,7 +51,7 @@ from firecrawl.v2.utils.error_handler import (
     RateLimitError,
     UnauthorizedError,
 )
-from pydantic import BaseModel, SecretStr
+from pydantic import BaseModel, SecretStr, ValidationError
 
 import freesearch.adapters.firecrawl as firecrawl_module  # import seam
 from freesearch.adapters import FirecrawlAdapter
@@ -178,6 +178,204 @@ async def test_search_defaults_limit_to_request_value() -> None:
     assert sdk.search_calls == [{"query": "bare", "limit": 10}]
 
 
+async def test_search_forwards_provider_options_and_overrides_common_values() -> None:
+    sdk = _FakeSDK()
+    sdk.search_response = _search_payload()
+    request = SearchRequest(
+        query="options",
+        limit=4,
+        country_code="US",
+        domains=("common.example",),
+        provider_options={
+            "firecrawl": {
+                "sources": [{"type": "news", "tbs": "qdr:m", "location": "Toronto"}],
+                "domain_tools": True,
+                "tool_detail": "full",
+                "categories": ["research", {"type": "pdf"}],
+                "include_domains": ["nested.example"],
+                "tbs": "qdr:w",
+                "location": "Canada",
+                "country": "CA",
+                "safe": False,
+                "timeout": 12,
+                "ignore_invalid_urls": True,
+                "highlights": True,
+                "enterprise": ["zdr"],
+                "scrape_options": {
+                    "formats": ["markdown", {"type": "json", "schema": {"type": "object"}}],
+                    "only_main_content": False,
+                    "only_clean_content": True,
+                    "include_tags": ["article"],
+                    "exclude_tags": ["nav"],
+                    "max_age": 100,
+                    "min_age": 5,
+                    "headers": {"X-Test": "yes"},
+                    "wait_for": 100,
+                    "mobile": True,
+                    "skip_tls_verification": True,
+                    "timeout": 30_000,
+                    "parsers": [{"type": "pdf", "mode": "auto", "max_pages": 3}],
+                    "actions": [{"type": "click", "selector": "button"}],
+                    "location": {"country": "CA", "languages": ["en"]},
+                    "remove_base64_images": True,
+                    "block_ads": False,
+                    "proxy": "enhanced",
+                    "store_in_cache": False,
+                    "lockdown": True,
+                    "check_prompt_injection": True,
+                    "redact_pii": {
+                        "mode": "accurate",
+                        "entities": ["EMAIL"],
+                        "replacement": "mask",
+                    },
+                    "profile": {"name": "docs", "save_changes": True},
+                    "zero_data_retention": True,
+                    "domain_tools": True,
+                    "tool_detail": "summary",
+                },
+                "threat_protection": {
+                    "mode": "normal",
+                    "risk_score_threshold": 40,
+                    "blacklist": ["blocked.example"],
+                    "whitelist": ["safe.example"],
+                    "blocked_tlds": [".zip"],
+                    "failure_policy": "closed",
+                },
+            }
+        },
+    )
+    adapter = make_adapter(sdk=sdk)
+
+    await adapter.search(request)
+
+    expected_options = request.provider_options.firecrawl.model_dump(mode="json", exclude_none=True)
+    assert sdk.search_calls == [
+        {
+            "query": "options",
+            "limit": 4,
+            "country": "CA",
+            "include_domains": ["nested.example"],
+            **expected_options,
+        }
+    ]
+
+
+async def test_search_forwards_exclude_domains_option() -> None:
+    sdk = _FakeSDK()
+    sdk.search_response = _search_payload()
+
+    await make_adapter(sdk=sdk).search(
+        SearchRequest(
+            query="exclude",
+            provider_options={"firecrawl": {"exclude_domains": ["blocked.example"]}},
+        )
+    )
+
+    assert sdk.search_calls == [
+        {
+            "query": "exclude",
+            "limit": 10,
+            "exclude_domains": ["blocked.example"],
+        }
+    ]
+
+
+async def test_search_uses_common_country_and_domains_when_provider_options_omit_them() -> None:
+    sdk = _FakeSDK()
+    sdk.search_response = _search_payload()
+    adapter = make_adapter(sdk=sdk)
+
+    await adapter.search(
+        SearchRequest(
+            query="common",
+            country_code="GB",
+            domains=("one.example", "two.example"),
+        )
+    )
+
+    assert sdk.search_calls == [
+        {
+            "query": "common",
+            "limit": 10,
+            "country": "GB",
+            "include_domains": ["one.example", "two.example"],
+        }
+    ]
+
+
+async def test_search_normalizes_web_news_and_image_channels_and_response_metadata() -> None:
+    sdk = _FakeSDK()
+    sdk.search_response = {
+        "success": True,
+        "data": {
+            "web": [{"title": "Web", "url": "https://example.com/web", "position": 1}],
+            "news": [
+                {
+                    "title": "News",
+                    "url": "https://example.com/news",
+                    "snippet": "A news result.",
+                    "date": "2026-01-02T03:04:05Z",
+                    "image_url": "https://example.com/news.png",
+                }
+            ],
+            "images": [
+                {
+                    "title": "Image",
+                    "url": "https://example.com/page",
+                    "image_url": "https://example.com/image.png",
+                    "image_width": 800,
+                    "image_height": 600,
+                }
+            ],
+        },
+        "warning": "Some sources were unavailable.",
+    }
+    response = await make_adapter(sdk=sdk).search(SearchRequest(query="multi-source"))
+
+    assert [item.source for item in response.results] == ["web", "news", "images"]
+    assert response.results[1].snippet == "A news result."
+    assert response.results[1].published_at is not None
+    assert response.results[1].metadata["image_url"] == "https://example.com/news.png"
+    assert response.results[2].metadata["image_width"] == 800
+    assert response.provider_metadata == {
+        "success": True,
+        "warning": "Some sources were unavailable.",
+    }
+
+
+async def test_search_provider_options_reject_unsupported_documented_values() -> None:
+    with pytest.raises(ValidationError):
+        SearchRequest(query="bad", provider_options={"firecrawl": {"categories": ["other"]}})
+
+
+@pytest.mark.parametrize(
+    ("native_data", "provider_options"),
+    [
+        (
+            {"tools": [{"provider": "example", "capability": "search"}]},
+            {"sources": ["alexandria"]},
+        ),
+        (
+            {"research": [{"paperId": "paper-1", "title": "Paper", "abstract": "Text"}]},
+            {"categories": [{"type": "research"}]},
+        ),
+    ],
+)
+async def test_search_preserves_native_data_without_normalized_urls(
+    native_data: dict[str, object], provider_options: dict[str, object]
+) -> None:
+    sdk = _FakeSDK()
+    sdk.search_response = _search_payload(data=native_data)
+
+    response = await make_adapter(sdk=sdk).search(
+        SearchRequest(query="native result", provider_options={"firecrawl": provider_options})
+    )
+
+    assert response.results == []
+    assert response.provider_metadata is not None
+    assert response.provider_metadata["data"] == native_data
+
+
 async def test_search_normalizes_title_url_description_and_published_date() -> None:
     sdk = _FakeSDK()
     sdk.search_response = _search_payload(
@@ -259,6 +457,158 @@ async def test_fetch_truncates_markdown_exactly_at_max_chars() -> None:
 
     assert response.document.content == "x" * 100
     assert response.document.metadata == {"truncated": True}
+
+
+async def test_fetch_forwards_modeled_scrape_options() -> None:
+    sdk = _FakeSDK()
+    sdk.scrape_response = _scrape_payload()
+    request = FetchRequest(
+        url="https://example.com/doc",
+        provider_options={
+            "firecrawl": {
+                "formats": [
+                    {
+                        "type": "json",
+                        "prompt": "extract title",
+                        "schema": {"type": "object"},
+                        "selector": "main",
+                        "attributes": ["href"],
+                        "full_page": True,
+                        "quality": 80,
+                        "viewport": {"width": 1200, "height": 800},
+                        "mode": "git-diff",
+                        "question": "what is this?",
+                        "query": "product details",
+                    }
+                ],
+                "only_main_content": False,
+                "only_clean_content": True,
+                "include_tags": ["main"],
+                "exclude_tags": ["nav"],
+                "max_age": 20,
+                "min_age": 5,
+                "headers": {"X-Test": "yes"},
+                "wait_for": 250,
+                "mobile": True,
+                "skip_tls_verification": True,
+                "timeout": 20_000,
+                "parsers": [{"type": "pdf", "mode": "ocr", "max_pages": 4, "pages": True}],
+                "actions": [
+                    {"type": "wait", "milliseconds": 100},
+                    {"type": "scroll", "direction": "down"},
+                ],
+                "location": {"country": "DE", "languages": ["de"]},
+                "remove_base64_images": True,
+                "block_ads": False,
+                "proxy": "auto",
+                "store_in_cache": False,
+                "lockdown": True,
+                "check_prompt_injection": True,
+                "redact_pii": {
+                    "mode": "aggressive",
+                    "entities": ["PERSON", "EMAIL"],
+                    "replacement": "remove",
+                },
+                "profile": {"name": "profile-a", "save_changes": False},
+                "zero_data_retention": True,
+                "domain_tools": True,
+                "tool_detail": "full",
+            }
+        },
+    )
+    adapter = make_adapter(sdk=sdk)
+
+    await adapter.fetch(request)
+
+    expected_options = request.provider_options.firecrawl.model_dump(mode="json", exclude_none=True)
+    assert sdk.scrape_calls == [{"url": "https://example.com/doc", **expected_options}]
+
+
+async def test_fetch_nested_options_override_common_fetch_defaults() -> None:
+    sdk = _FakeSDK()
+    sdk.scrape_response = _scrape_payload()
+    request = FetchRequest(
+        url="https://example.com/doc",
+        pdf_pages=6,
+        json_extract=True,
+        enhanced=True,
+        zero_data_retention=True,
+        provider_options={
+            "firecrawl": {
+                "formats": ["markdown"],
+                "parsers": [],
+                "proxy": "basic",
+                "zero_data_retention": False,
+                "only_main_content": False,
+            }
+        },
+    )
+
+    await make_adapter(sdk=sdk).fetch(request)
+
+    assert sdk.scrape_calls == [
+        {
+            "url": "https://example.com/doc",
+            "formats": ["markdown"],
+            "parsers": [],
+            "proxy": "basic",
+            "zero_data_retention": False,
+            "only_main_content": False,
+        }
+    ]
+
+
+async def test_fetch_maps_common_flags_and_normalizes_json_and_page_metadata() -> None:
+    sdk = _FakeSDK()
+    sdk.scrape_response = {
+        "data": {
+            "json": {"answer": 42},
+            "links": ["https://example.com/other"],
+            "metadata": {
+                "title": "Document title",
+                "content_type": "application/json",
+                "language": "en",
+                "status_code": 200,
+            },
+        },
+        "warning": "Partial scrape.",
+        "creditsUsed": 2,
+    }
+    request = FetchRequest(
+        url="https://example.com/doc",
+        pdf_pages=3,
+        json_extract=True,
+        enhanced=True,
+        zero_data_retention=True,
+    )
+
+    response = await make_adapter(sdk=sdk).fetch(request)
+
+    assert sdk.scrape_calls == [
+        {
+            "url": "https://example.com/doc",
+            "formats": ["json"],
+            "parsers": [{"type": "pdf", "max_pages": 3}],
+            "proxy": "enhanced",
+            "zero_data_retention": True,
+        }
+    ]
+    assert response.document.content == '{"answer": 42}'
+    assert response.document.title == "Document title"
+    assert response.document.content_type == "application/json"
+    assert response.document.metadata["language"] == "en"
+    assert response.document.metadata["status_code"] == 200
+    assert response.document.metadata["links"] == ["https://example.com/other"]
+    assert response.provider_metadata == {"warning": "Partial scrape.", "creditsUsed": 2}
+    assert response.usage is not None and response.usage.units == Decimal("2")
+
+
+async def test_fetch_provider_options_reject_invalid_scrape_limits() -> None:
+    with pytest.raises(ValidationError):
+        FetchRequest(
+            url="https://example.com/doc",
+            provider_options={"firecrawl": {"timeout": 999}},
+        )
 
 
 async def test_fetch_within_max_chars_is_not_truncated() -> None:

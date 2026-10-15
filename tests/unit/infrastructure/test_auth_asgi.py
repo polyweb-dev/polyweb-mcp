@@ -14,6 +14,7 @@ from typing import Any
 
 from freesearch.infrastructure.auth_asgi import (
     MAX_PUBLIC_AUTH_BODY_BYTES,
+    MAX_PUBLIC_OPERATION_BODY_BYTES,
     BearerAuthMiddleware,
 )
 from freesearch.models.users import UserPrincipal, UserRole
@@ -135,8 +136,6 @@ def test_public_register_and_login_pass_without_credential() -> None:
 
 def test_protected_surfaces_reject_anonymous_with_challenge() -> None:
     paths = [
-        ("POST", "/search"),
-        ("POST", "/fetch"),
         ("GET", "/stats"),
         ("GET", "/dashboard"),
         ("GET", "/api/v1/providers"),
@@ -151,6 +150,39 @@ def test_protected_surfaces_reject_anonymous_with_challenge() -> None:
         assert headers[b"www-authenticate"] == b"Bearer"
         assert b"not authenticated" in body
         assert "state_user" not in seen
+
+
+def test_search_and_fetch_allow_anonymous_and_verify_optional_bearer() -> None:
+    for path in ("/search", "/fetch"):
+        guard, seen = _guard()
+        status, _, _ = _run(guard, method="POST", path=path)
+        assert status == 200
+        assert seen["state_user"] is None
+
+        guard, _ = _guard()
+        status, headers, _ = _run(guard, method="POST", path=path, headers=_bearer("bad-access"))
+        assert status == 401
+        assert headers[b"www-authenticate"] == b"Bearer"
+
+        guard, seen = _guard()
+        status, _, _ = _run(guard, method="POST", path=path, headers=_bearer("good-access"))
+        assert status == 200
+        assert seen["state_user"] == _PRINCIPAL
+
+
+def test_search_fetch_body_cap_supports_large_provider_options() -> None:
+    guard, seen = _guard()
+    payload = b"x" * (MAX_PUBLIC_AUTH_BODY_BYTES + 1)
+    status, _, _ = _run(guard, method="POST", path="/search", body_chunks=[payload])
+    assert status == 200
+    assert seen["body"] == payload
+
+    guard, seen = _guard()
+    payload = b"x" * (MAX_PUBLIC_OPERATION_BODY_BYTES + 1)
+    status, _, body = _run(guard, method="POST", path="/fetch", body_chunks=[payload])
+    assert status == 413
+    assert body == b'{"detail": "request body is too large"}'
+    assert "state_user" not in seen
 
 
 def test_valid_access_reaches_app_with_principal_in_state() -> None:
@@ -369,9 +401,10 @@ def test_cookie_never_authenticates_ordinary_routes() -> None:
     status, _, _ = _run(guard, method="GET", path="/stats", headers=_browser_cookie_headers())
     assert status == 401
 
-    guard, _ = _guard(browser_origins=frozenset({_BROWSER_ORIGIN}))
+    guard, seen = _guard(browser_origins=frozenset({_BROWSER_ORIGIN}))
     status, _, _ = _run(guard, method="POST", path="/search", headers=_browser_cookie_headers())
-    assert status == 401
+    assert status == 200
+    assert seen["state_user"] is None
 
 
 def test_provisioning_body_cap_applies_before_dispatch() -> None:

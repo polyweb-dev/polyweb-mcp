@@ -23,6 +23,7 @@ from freesearch.mcp.auth import (
     McpAuthenticationError,
     build_auth_settings,
     build_http_app,
+    optional_mcp_user,
     require_mcp_user,
     run_stdio_server,
 )
@@ -49,6 +50,14 @@ class _StubService:
     def __init__(self, principal: UserPrincipal | None) -> None:
         self._principal = principal
         self.seen: list[str] = []
+        self.opened = False
+        self.closed = False
+
+    async def open(self) -> None:
+        self.opened = True
+
+    async def close(self) -> None:
+        self.closed = True
 
     async def verify_token(self, token: str) -> UserPrincipal | None:
         self.seen.append(token)
@@ -130,6 +139,21 @@ async def test_tool_call_with_foreign_http_subject_rejects() -> None:
         auth_context_var.reset(reset)
 
 
+async def test_optional_tool_identity_allows_anonymous_and_verifies_stdio_token() -> None:
+    anonymous_service = _StubService(_principal())
+    assert await optional_mcp_user(anonymous_service) is None  # type: ignore[arg-type]
+    assert anonymous_service.seen == []
+
+    principal = _principal()
+    service = _StubService(principal)
+    result = await optional_mcp_user(
+        service,
+        stdio_token=SecretStr("good-token"),  # type: ignore[arg-type]
+    )
+    assert result == principal
+    assert service.seen == ["good-token"]
+
+
 def test_auth_settings_derive_from_transport_settings() -> None:
     settings = test_settings()
 
@@ -151,19 +175,32 @@ def test_auth_settings_explicit_overrides_win() -> None:
     assert str(auth_settings.resource_server_url) == "https://api.example.com/mcp"
 
 
-def test_http_app_rejects_server_without_verifier() -> None:
+def test_http_app_exposes_public_transport_without_sdk_auth() -> None:
     server = create_server([])
+    app = build_http_app(
+        server,
+        auth_service=_StubService(_principal()),
+        settings=test_settings(),  # type: ignore[arg-type]
+    )
+    assert app.routes
+    assert server.settings.auth is None
 
-    with pytest.raises(McpAuthenticationError, match="without account authentication"):
-        build_http_app(server, auth_service=_StubService(_principal()), settings=test_settings())  # type: ignore[arg-type]
 
-
-async def test_stdio_runner_rejects_absent_process_credential() -> None:
+async def test_stdio_runner_allows_anonymous_tools_without_process_credential(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     server = create_server([])
+    service = _StubService(_principal())
 
-    with pytest.raises(McpAuthenticationError, match="FREESEARCH_MCP_BEARER_TOKEN"):
-        await run_stdio_server(
-            server,
-            auth_service=_StubService(_principal()),
-            settings=test_settings(),  # type: ignore[arg-type]
-        )
+    async def run() -> None:
+        return None
+
+    monkeypatch.setattr(server, "run_stdio_async", run)
+    await run_stdio_server(
+        server,
+        auth_service=service,  # type: ignore[arg-type]
+        settings=test_settings(),  # type: ignore[arg-type]
+    )
+
+    assert service.opened
+    assert service.closed

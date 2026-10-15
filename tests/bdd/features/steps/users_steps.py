@@ -761,6 +761,19 @@ def step_when_auth_anonymous_call(context: Any, method: str, path: str) -> None:
             context.anonymous_response = client.get(path)
 
 
+@when("I call Search and Fetch without a token")
+def step_when_auth_anonymous_provider_operations(context: Any) -> None:
+    with _auth_client(context) as client:
+        context.anonymous_search = client.post("/search", json={"query": "public probe"})
+        context.anonymous_fetch = client.post("/fetch", json={"url": "https://example.com/public"})
+
+
+@then("both provider operations should succeed")
+def step_then_auth_anonymous_provider_operations(context: Any) -> None:
+    assert context.anonymous_search.status_code == 200
+    assert context.anonymous_fetch.status_code == 200
+
+
 @then("the call should fail with HTTP 401 and a Bearer challenge")
 def step_then_auth_anonymous_401(context: Any) -> None:
     assert context.anonymous_response.status_code == 401

@@ -144,7 +144,11 @@ async def test_search_constructs_query_and_normalizes_response() -> None:
     assert str(result.url) == "https://example.com/item"
     assert result.snippet == "A test snippet from Tinyfish."
     assert result.published_at == datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
-    assert result.metadata == {"position": 1, "site_name": "Example Site"}
+    assert result.metadata == {
+        "position": 1,
+        "site_name": "Example Site",
+        "date": "2026-06-01T12:00:00Z",
+    }
     assert response.usage is not None
     assert response.usage.units == Decimal("1")
     assert response.usage.unit_kind is UnitKind.REQUEST
@@ -924,3 +928,233 @@ async def test_tinyfish_fetch_wire_respects_url_cap() -> None:
     assert response.provider == "tinyfish"
     assert response.usage is not None
     assert response.usage.units == Decimal("1")
+
+
+@pytest.mark.asyncio
+async def test_search_forwards_tinyfish_options_and_keeps_academic_metadata() -> None:
+    result = {
+        "position": 2,
+        "site_name": "Example Journal",
+        "title": "A paper",
+        "snippet": "Paper abstract",
+        "url": "https://example.com/paper",
+        "date": "2026-03-04",
+        "publisher": "Example Press",
+        "authors": ["A. Author"],
+        "venue": "Example Conference",
+        "year": 2026,
+        "cited_by_count": 12,
+        "pdf_url": "https://example.com/paper.pdf",
+    }
+    transport = _Transport(
+        handler=lambda _: httpx.Response(
+            200,
+            json={"query": "papers", "results": [result], "total_results": 1, "page": 2},
+        )
+    )
+    adapter = _adapter(transport)
+
+    response = await adapter.search(
+        SearchRequest(
+            query="papers",
+            country_code="US",
+            language="en",
+            domains=("common.com", "-common-blocked.com"),
+            provider_options={
+                "tinyfish": {
+                    "purpose": "Find recent academic work",
+                    "location": "CA",
+                    "language": "fr",
+                    "include_domains": ["journal.example", "papers.example"],
+                    "exclude_domains": ["spam.example"],
+                    "after_date": "2026-01-01",
+                    "before_date": "2026-06-30",
+                    "domain_type": "research_paper",
+                    "pub_year_min": 2024,
+                    "pub_year_max": 2026,
+                    "page": 2,
+                }
+            },
+        )
+    )
+
+    params = transport.requests[0].url.params
+    assert params["query"] == "papers"
+    assert params["purpose"] == "Find recent academic work"
+    assert params["location"] == "CA"
+    assert params["language"] == "fr"
+    assert params["include_domains"] == "journal.example,papers.example"
+    assert params["exclude_domains"] == "spam.example"
+    assert params["after_date"] == "2026-01-01"
+    assert params["before_date"] == "2026-06-30"
+    assert params["domain_type"] == "research_paper"
+    assert params["pub_year_min"] == "2024"
+    assert params["pub_year_max"] == "2026"
+    assert params["page"] == "2"
+
+    normalized = response.results[0]
+    assert normalized.published_at is not None
+    assert normalized.metadata == {
+        "site_name": "Example Journal",
+        "position": 2,
+        "date": "2026-03-04",
+        "publisher": "Example Press",
+        "authors": ["A. Author"],
+        "venue": "Example Conference",
+        "year": 2026,
+        "cited_by_count": 12,
+        "pdf_url": "https://example.com/paper.pdf",
+    }
+
+
+@pytest.mark.asyncio
+async def test_search_forwards_tinyfish_recency_option() -> None:
+    transport = _Transport()
+    adapter = _adapter(transport)
+
+    await adapter.search(
+        SearchRequest(
+            query="recent pages",
+            provider_options={"tinyfish": {"recency_minutes": 60}},
+        )
+    )
+
+    assert transport.requests[0].url.params["recency_minutes"] == "60"
+
+
+@pytest.mark.asyncio
+async def test_fetch_forwards_tinyfish_options_and_normalizes_json_metadata() -> None:
+    extracted = {"heading": "Page title", "prices": [10, 20]}
+    response_fields = {
+        "url": "https://example.com/data",
+        "final_url": "https://example.com/data/current",
+        "title": "JSON document",
+        "description": "A structured page",
+        "language": "en",
+        "author": "Example Author",
+        "published_date": "2026-04-05",
+        "format": "json",
+        "text": extracted,
+        "links": ["https://example.com/next"],
+        "image_links": ["https://example.com/image.png"],
+        "iframe_links": ["https://example.com/embed"],
+        "not_modified": False,
+        "etag": '"revision-1"',
+        "last_modified": "Sun, 05 Apr 2026 12:00:00 GMT",
+        "unmatched_selectors": ["#missing"],
+        "latency_ms": 85,
+    }
+    transport = _Transport(
+        handler=lambda _: httpx.Response(200, json={"results": [response_fields], "errors": []})
+    )
+    adapter = _adapter(transport)
+
+    response = await adapter.fetch(
+        _fetch_request(
+            "https://example.com/data",
+            provider_options={
+                "tinyfish": {
+                    "purpose": "Read the embedded pricing data",
+                    "format": "json",
+                    "links": True,
+                    "image_links": True,
+                    "iframe_links": True,
+                    "ttl": 0,
+                    "per_url_timeout_ms": 15000,
+                    "if_none_match": '"old-revision"',
+                    "if_modified_since": "Sat, 04 Apr 2026 12:00:00 GMT",
+                    "include_etag_and_last_modified": True,
+                    "include_selectors": ["main"],
+                    "exclude_selectors": ["nav", ".cookie-banner"],
+                }
+            },
+        )
+    )
+
+    sent = json.loads(transport.requests[0].content)
+    assert sent == {
+        "urls": ["https://example.com/data"],
+        "format": "json",
+        "purpose": "Read the embedded pricing data",
+        "links": True,
+        "image_links": True,
+        "iframe_links": True,
+        "ttl": 0,
+        "per_url_timeout_ms": 15000,
+        "if_none_match": '"old-revision"',
+        "if_modified_since": "Sat, 04 Apr 2026 12:00:00 GMT",
+        "include_etag_and_last_modified": True,
+        "include_selectors": ["main"],
+        "exclude_selectors": ["nav", ".cookie-banner"],
+    }
+    document = response.document
+    assert json.loads(document.content) == extracted
+    assert document.content_type == "application/json"
+    assert document.metadata == {
+        "final_url": "https://example.com/data/current",
+        "description": "A structured page",
+        "language": "en",
+        "author": "Example Author",
+        "published_date": "2026-04-05",
+        "format": "json",
+        "links": ["https://example.com/next"],
+        "image_links": ["https://example.com/image.png"],
+        "iframe_links": ["https://example.com/embed"],
+        "not_modified": False,
+        "etag": '"revision-1"',
+        "last_modified": "Sun, 05 Apr 2026 12:00:00 GMT",
+        "unmatched_selectors": ["#missing"],
+        "latency_ms": 85,
+    }
+
+
+@pytest.mark.asyncio
+async def test_fetch_highlights_without_full_page_text_become_document_content() -> None:
+    highlights = [
+        {"text": "The first matching passage.", "rank": 1},
+        {"text": "The next matching passage.", "rank": 2},
+    ]
+    transport = _Transport(
+        handler=lambda _: httpx.Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "url": "https://example.com/page",
+                        "title": "Highlighted page",
+                        "format": "markdown",
+                        "text": None,
+                        "highlights": highlights,
+                    }
+                ],
+                "errors": [],
+            },
+        )
+    )
+    adapter = _adapter(transport)
+
+    response = await adapter.fetch(
+        _fetch_request(
+            "https://example.com/page",
+            provider_options={
+                "tinyfish": {
+                    "highlights": {
+                        "query": "company founder",
+                        "max_snippets": 2,
+                        "max_characters": 600,
+                        "include_full_page_text": False,
+                    }
+                }
+            },
+        )
+    )
+
+    sent = json.loads(transport.requests[0].content)
+    assert sent["highlights"] == {
+        "query": "company founder",
+        "max_snippets": 2,
+        "max_characters": 600,
+        "include_full_page_text": False,
+    }
+    assert response.document.content == "The first matching passage.\n\nThe next matching passage."
+    assert response.document.metadata["highlights"] == highlights

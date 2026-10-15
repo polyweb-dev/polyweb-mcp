@@ -18,7 +18,7 @@ from pydantic import (
 )
 
 from freesearch.models.provider_access import ALL_BITS
-from freesearch.models.tavily import TavilyExtractParams, TavilySearchParams
+from freesearch.models.provider_options import FetchProviderOptions, SearchProviderOptions
 
 
 def parse_decimal(value: object, *, allow_negative: bool = False) -> Decimal:
@@ -40,7 +40,7 @@ def parse_decimal(value: object, *, allow_negative: bool = False) -> Decimal:
 class ContractModel(BaseModel):
     """Base model used to keep contract payloads strict and serializable."""
 
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, populate_by_name=True)
 
 
 class RoutingMode(StrEnum):
@@ -68,13 +68,13 @@ class RoutingPreference(ContractModel):
 class SearchRequest(ContractModel):
     query: str = Field(min_length=1, max_length=2_000)
     limit: int = Field(default=10, ge=1, le=100)
-    mode: Literal["turbo", "basic", "advanced"] | None = None
+    mode: Literal["turbo", "fast", "basic", "advanced"] | None = None
     extra_bundles: int = Field(default=0, ge=0, le=10_000)
     language: str | None = Field(default=None, min_length=2, max_length=16)
     country_code: str | None = Field(default=None, min_length=2, max_length=2)
     domains: tuple[str, ...] = ()
-    tavily: TavilySearchParams | None = None
     routing: RoutingPreference = Field(default_factory=RoutingPreference)
+    provider_options: SearchProviderOptions | None = Field(default=None, alias="providerOptions")
     fanout: bool = False
 
 
@@ -110,6 +110,14 @@ class SearchResponse(ContractModel):
     usage_gap: dict[str, Any] | None = Field(default=None, exclude=True)
     participating_providers: list[str] = Field(default_factory=list)
     waterfall: list[ProviderTraceItem] = Field(default_factory=list)
+    provider_metadata: dict[str, Any] | None = None
+
+    @model_serializer(mode="wrap")
+    def _serialize_provider_metadata(self, handler: Any) -> Any:
+        payload = handler(self)
+        if self.provider_metadata is None:
+            payload.pop("provider_metadata", None)
+        return payload
 
 
 class FetchRequest(ContractModel):
@@ -120,8 +128,8 @@ class FetchRequest(ContractModel):
     json_extract: bool = False
     enhanced: bool = False
     zero_data_retention: bool = False
-    tavily: TavilyExtractParams | None = None
     routing: RoutingPreference = Field(default_factory=RoutingPreference)
+    provider_options: FetchProviderOptions | None = Field(default=None, alias="providerOptions")
 
 
 class FetchedDocument(ContractModel):
@@ -138,6 +146,14 @@ class FetchResponse(ContractModel):
     document: FetchedDocument
     usage: "UsageEvent | None" = None
     usage_gap: dict[str, Any] | None = Field(default=None, exclude=True)
+    provider_metadata: dict[str, Any] | None = None
+
+    @model_serializer(mode="wrap")
+    def _serialize_provider_metadata(self, handler: Any) -> Any:
+        payload = handler(self)
+        if self.provider_metadata is None:
+            payload.pop("provider_metadata", None)
+        return payload
 
 
 class UsageOperation(StrEnum):

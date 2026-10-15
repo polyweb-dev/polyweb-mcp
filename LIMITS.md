@@ -1,5 +1,9 @@
 # Provider Limits — Rate Limits vs Budget Limits (research)
 
+For the authoritative Search and Fetch request-option surface and vendor API
+references, see [PROVIDER_API.md](PROVIDER_API.md). This document remains
+focused on provider limits and quota behavior.
+
 **Date:** 2026-10-05
 **Method:** `freesearch` MCP `search` + `fetch` with routing `prefer ["keenable","tinyfish"] allow_fallback true`, `firecrawl` as fetch backup. All authoritative pages below were fetched through the MCP (no plain-web fallback).
 **Goal:** separate **rate limits** (how *fast* you may call — req/sec/min, concurrency, 429 + `Retry-After`) from **budget limits** (how *much* you may spend — credits / USD / requests per day-month, 402 / quota headers / usage API), per operation (**search** vs **fetch/extract/contents/scrape**), per auth mode (**keyless/free** vs **keyed/paid**). No code was changed for this doc.

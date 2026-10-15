@@ -16,10 +16,11 @@ search, and usage evidence is read only from raw mapping payloads.
 """
 
 import inspect
+import json
 import math
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, cast
 
 import httpx
 from firecrawl import AsyncFirecrawl  # type: ignore[import-untyped]
@@ -128,6 +129,96 @@ def _item_value(item: Any, key: str, default: Any = None) -> Any:
     return getattr(item, key, default)
 
 
+def _as_mapping(value: Any) -> dict[str, Any]:
+    """Convert raw JSON or an SDK Pydantic model to a JSON-shaped mapping."""
+
+    if isinstance(value, dict):
+        return value
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        try:
+            result = model_dump(mode="json", exclude_none=True)
+        except Exception:
+            return {}
+        return result if isinstance(result, dict) else {}
+    return {}
+
+
+def _provider_options(request: SearchRequest | FetchRequest) -> Any:
+    options = request.provider_options
+    if options is None:
+        return None
+    return getattr(options, "firecrawl", None)
+
+
+def _option_payload(options: Any) -> tuple[dict[str, Any], set[str]]:
+    if options is None:
+        return {}, set()
+    payload = options.model_dump(mode="json", exclude_none=True)
+    return payload, set(options.model_fields_set)
+
+
+def _response_metadata(
+    response: Any,
+    *,
+    excluded: set[str],
+) -> dict[str, Any] | None:
+    """Keep response-envelope fields without duplicating result/content data."""
+
+    payload = _as_mapping(response)
+    if "data" in payload:
+        metadata = {
+            key: value
+            for key, value in payload.items()
+            if key not in excluded and value is not None
+        }
+    else:
+        # Scrape returns a Document directly through the SDK. Only envelope-like
+        # fields belong at response level; page metadata and formats are stored
+        # on FetchedDocument instead.
+        useful = {
+            "success",
+            "warning",
+            "error",
+            "request_id",
+            "requestId",
+            "search_id",
+            "searchId",
+            "creditsUsed",
+            "credits_used",
+        }
+        metadata = {
+            key: value
+            for key, value in payload.items()
+            if key in useful and key not in excluded and value is not None
+        }
+    return metadata or None
+
+
+def _format_key(format_name: str) -> str:
+    return {
+        "rawHtml": "raw_html",
+        "rawBase64": "raw_base64",
+        "changeTracking": "change_tracking",
+        "question": "answer",
+    }.get(format_name, format_name)
+
+
+def _content_text(value: Any, *, allow_scalar_json: bool = False) -> str | None:
+    if isinstance(value, str):
+        return value
+    if value is None:
+        return None
+    if isinstance(value, list) and all(isinstance(item, str) for item in value):
+        return "\n".join(value)
+    if not isinstance(value, (dict, list)) and not allow_scalar_json:
+        return None
+    try:
+        return json.dumps(_as_mapping(value) or value, ensure_ascii=False)
+    except (TypeError, ValueError):
+        return None
+
+
 class FirecrawlAdapter(ProviderAdapter):
     """Search and fetch operations against the Firecrawl API."""
 
@@ -202,7 +293,9 @@ class FirecrawlAdapter(ProviderAdapter):
     async def search(self, request: SearchRequest) -> SearchResponse:
         response = await self._runner.run(self.name, lambda: self._search_sdk(request))
         try:
-            results = [self._normalize_result(item) for item in self._search_data(response)]
+            results = [
+                self._normalize_result(item, source) for source, item in self._search_data(response)
+            ]
             usage = self._usage_event(response, UsageOperation.SEARCH)
         except ProviderOperationError:
             raise
@@ -210,66 +303,171 @@ class FirecrawlAdapter(ProviderAdapter):
             # A structurally malformed payload must not escape as a raw
             # AttributeError/KeyError/ValidationError after the call succeeded.
             raise self._error("invalid_response", "malformed search response") from None
+        provider_metadata = _response_metadata(
+            response,
+            excluded={"data", "results", "usage", "request_id", "requestId"},
+        )
+        response_data = _as_mapping(_item_value(response, "data"))
+        unnormalized_data = {
+            key: value
+            for key, value in response_data.items()
+            if key not in {"web", "news", "images"}
+        }
+        if unnormalized_data:
+            provider_metadata = {**(provider_metadata or {}), "data": unnormalized_data}
         return SearchResponse(
             query=request.query,
             provider=self.name,
             results=results,
             total_results=len(results),
             usage=usage,
+            provider_metadata=provider_metadata,
         )
 
     async def _search_sdk(self, request: SearchRequest) -> Any:
         try:
-            return await self._sdk.search(query=request.query, limit=request.limit)
+            kwargs: dict[str, Any] = {"limit": request.limit}
+            options = _provider_options(request)
+            option_values, explicitly_set = _option_payload(options)
+            defaults: dict[str, Any] = {}
+            if request.country_code is not None and "country" not in explicitly_set:
+                defaults["country"] = request.country_code
+            if request.domains and "include_domains" not in explicitly_set:
+                defaults["include_domains"] = list(request.domains)
+            kwargs.update(defaults)
+            kwargs.update(option_values)
+            return await self._sdk.search(query=request.query, **kwargs)
         except httpx.TransportError:
             raise  # the shared ResilientRunner normalizes transport failures
         except Exception as exc:
             raise self._normalize_error(exc) from None
 
-    def _search_data(self, response: Any) -> list[Any]:
-        """Return the web search results from a raw dict or SDK model.
+    def _search_data(self, response: Any) -> list[tuple[str, Any]]:
+        """Return every selected Firecrawl result channel in provider order."""
 
-        Only the ``web`` source is consumed; news/images are never used to
-        invent results.
-        """
-        if isinstance(response, dict):
-            data = response.get("data")
-            if not isinstance(data, list):
+        response_mapping = _as_mapping(response)
+        if response_mapping.get("success") is False:
+            raise self._error("invalid_response", "malformed search response") from None
+        missing = object()
+        data = _item_value(response, "data", missing)
+        if data is missing:
+            data = response
+        if isinstance(data, list):
+            return [("web", item) for item in data]
+
+        results: list[tuple[str, Any]] = []
+        has_channels = False
+        for source in ("web", "news", "images"):
+            items = _item_value(data, source, missing)
+            if items is missing:
+                continue
+            has_channels = True
+            if items is None:
+                continue
+            if not isinstance(items, list):
                 raise self._error("invalid_response", "malformed search response") from None
-            return data
-        if hasattr(response, "web"):
-            web = response.web
-            if web is None or isinstance(web, list):
-                return web or []
+            results.extend((source, item) for item in items)
+        # Alexandria returns tool contracts, and newer categories may expose
+        # result records that do not have URLs. Preserve these native sections
+        # in provider_metadata rather than treating an otherwise valid response
+        # as malformed or silently discarding its data.
+        has_channels = has_channels or any(
+            _item_value(data, source, missing) is not missing for source in ("research", "tools")
+        )
+        if has_channels:
+            return results
         raise self._error("invalid_response", "malformed search response") from None
 
-    def _normalize_result(self, item: Any) -> SearchResult:
+    def _normalize_result(self, item: Any, source: str = "web") -> SearchResult:
+        page_metadata = _as_mapping(_item_value(item, "metadata"))
+        title = _item_value(item, "title") or page_metadata.get("title") or ""
+        url = _item_value(item, "url") or page_metadata.get("url")
+        image_url = _item_value(item, "image_url")
+        if not url and source == "images":
+            url = image_url
+        if not isinstance(url, str) or not url:
+            raise self._error("invalid_response", "malformed search result item") from None
+        snippet = (
+            _item_value(item, "description")
+            or _item_value(item, "snippet")
+            or _item_value(item, "summary")
+            or _item_value(item, "markdown")
+            or _item_value(item, "highlights")
+            or ""
+        )
+        metadata = {
+            key: value
+            for key, value in page_metadata.items()
+            if key not in {"title", "url", "description", "content_type"} and value is not None
+        }
+        item_mapping = _as_mapping(item)
+        metadata.update(
+            {
+                key: value
+                for key, value in item_mapping.items()
+                if key
+                not in {
+                    "title",
+                    "url",
+                    "description",
+                    "snippet",
+                    "date",
+                    "published_date",
+                    "published_at",
+                    "metadata",
+                    "summary",
+                    "markdown",
+                    "highlights",
+                }
+                and value is not None
+            }
+        )
         return SearchResult(
-            title=_item_value(item, "title") or "",
-            url=_item_value(item, "url"),
-            snippet=_item_value(item, "description") or "",
+            title=title,
+            url=cast(Any, url),
+            snippet=snippet,
             published_at=_parse_published_at(
-                _item_value(item, "date") or _item_value(item, "published_date")
+                _item_value(item, "date")
+                or _item_value(item, "published_date")
+                or _item_value(item, "published_at")
+                or page_metadata.get("published_time")
             ),
+            source=source,
+            metadata=metadata,
         )
 
     async def fetch(self, request: FetchRequest) -> FetchResponse:
         response = await self._runner.run(self.name, lambda: self._fetch_sdk(request))
         try:
-            content = self._document_data(response)
+            options = _provider_options(request)
+            option_values, _explicitly_set = _option_payload(options)
+            data = self._document_payload(response)
+            content = self._document_data(response, option_values.get("formats"))
             truncated = False
             if request.max_chars is not None and len(content) > request.max_chars:
                 content = content[: request.max_chars]
                 truncated = True
+            page_metadata = _as_mapping(data.get("metadata"))
+            document_metadata = self._document_metadata(data, page_metadata)
+            if truncated:
+                document_metadata["truncated"] = True
+            title = data.get("title") or page_metadata.get("title")
+            content_type = data.get("content_type") or page_metadata.get("content_type")
             return FetchResponse(
                 provider=self.name,
                 document=FetchedDocument(
                     url=request.url,
                     content=content,
+                    title=title if isinstance(title, str) else None,
+                    content_type=content_type if isinstance(content_type, str) else None,
                     fetched_at=datetime.now(UTC),
-                    metadata={"truncated": True} if truncated else {},
+                    metadata=document_metadata,
                 ),
                 usage=self._usage_event(response, UsageOperation.FETCH),
+                provider_metadata=_response_metadata(
+                    response,
+                    excluded={"data", "usage", "request_id", "requestId"},
+                ),
             )
         except ProviderOperationError:
             raise
@@ -281,38 +479,134 @@ class FirecrawlAdapter(ProviderAdapter):
     async def _fetch_sdk(self, request: FetchRequest) -> Any:
         try:
             scrape = self._sdk.scrape
-            kwargs: dict[str, Any] = {"url": str(request.url), "formats": ["markdown"]}
+            options = _provider_options(request)
+            option_values, explicitly_set = _option_payload(options)
+            defaults: dict[str, Any] = {}
+            if "formats" not in explicitly_set:
+                defaults["formats"] = ["json"] if request.json_extract else ["markdown"]
+            if request.pdf_pages > 0 and "parsers" not in explicitly_set:
+                defaults["parsers"] = [{"type": "pdf", "max_pages": request.pdf_pages}]
+            if request.enhanced and "proxy" not in explicitly_set:
+                defaults["proxy"] = "enhanced"
+            if request.zero_data_retention and "zero_data_retention" not in explicitly_set:
+                defaults["zero_data_retention"] = True
+            kwargs: dict[str, Any] = {"url": str(request.url), **defaults, **option_values}
             parameters = inspect.signature(scrape).parameters
             supports_kwargs = any(
                 parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()
             )
-            options = {
-                "pdf_pages": request.pdf_pages,
-                "json_extract": request.json_extract,
-                "enhanced": request.enhanced,
-                "zero_data_retention": request.zero_data_retention,
+            kwargs = {
+                name: value
+                for name, value in kwargs.items()
+                if supports_kwargs or name in parameters
             }
-            for name, value in options.items():
-                if value and (supports_kwargs or name in parameters):
-                    kwargs[name] = value
             return await scrape(**kwargs)
         except httpx.TransportError:
             raise  # the shared ResilientRunner normalizes transport failures
         except Exception as exc:
             raise self._normalize_error(exc) from None
 
-    def _document_data(self, response: Any) -> str:
-        """Return the markdown from a raw dict or an SDK ``Document`` model."""
-        if isinstance(response, dict):
-            data = response.get("data")
+    def _document_payload(self, response: Any) -> dict[str, Any]:
+        """Return the scrape output mapping from either envelope or SDK model."""
+
+        response_mapping = _as_mapping(response)
+        if "data" in response_mapping:
+            data = response_mapping["data"]
             if not isinstance(data, dict):
+                data = _as_mapping(data)
+            if not data:
                 raise self._error("invalid_response", "malformed fetch response") from None
-            markdown = data.get("markdown")
-        else:
-            markdown = getattr(response, "markdown", None)
-        if not isinstance(markdown, str):
-            raise self._error("invalid_response", "malformed fetch response") from None
-        return markdown
+            return cast(dict[str, Any], data)
+        if response_mapping:
+            return response_mapping
+        # Compatibility for injected SDK doubles that expose attributes but do
+        # not implement Pydantic's model_dump method.
+        markdown = getattr(response, "markdown", None)
+        if isinstance(markdown, str):
+            return {"markdown": markdown}
+        raise self._error("invalid_response", "malformed fetch response") from None
+
+    def _document_data(self, response: Any, formats: Any = None) -> str:
+        """Choose a requested textual format, falling back to returned content."""
+
+        data = self._document_payload(response)
+        format_names: list[str] = []
+        if isinstance(formats, (list, tuple)):
+            for format_option in formats:
+                name = (
+                    format_option
+                    if isinstance(format_option, str)
+                    else format_option.get("type")
+                    if isinstance(format_option, dict)
+                    else None
+                )
+                if isinstance(name, str):
+                    format_names.append(name)
+        preferred = [(_format_key(name), name == "json") for name in format_names]
+        preferred.extend(
+            [
+                ("markdown", False),
+                ("summary", False),
+                ("html", False),
+                ("raw_html", False),
+                ("json", True),
+                ("highlights", False),
+                ("answer", False),
+                ("links", False),
+                ("images", False),
+                ("screenshot", False),
+                ("audio", False),
+                ("video", False),
+                ("change_tracking", False),
+                ("branding", False),
+                ("product", False),
+                ("menu", False),
+                ("raw_base64", False),
+            ]
+        )
+        seen: set[str] = set()
+        for key, allow_scalar_json in preferred:
+            if key in seen:
+                continue
+            seen.add(key)
+            content = _content_text(data.get(key), allow_scalar_json=allow_scalar_json)
+            if content is not None:
+                return content
+        raise self._error("invalid_response", "malformed fetch response") from None
+
+    def _document_metadata(
+        self,
+        data: dict[str, Any],
+        page_metadata: dict[str, Any],
+    ) -> dict[str, Any]:
+        metadata = {
+            key: value
+            for key, value in page_metadata.items()
+            if key not in {"title", "url", "content_type"} and value is not None
+        }
+        for key in (
+            "summary",
+            "html",
+            "raw_html",
+            "json",
+            "links",
+            "images",
+            "screenshot",
+            "audio",
+            "video",
+            "answer",
+            "highlights",
+            "actions",
+            "change_tracking",
+            "branding",
+            "product",
+            "menu",
+            "pages",
+            "blocks",
+        ):
+            if data.get(key) is not None:
+                metadata[key] = data[key]
+        return metadata
 
     async def estimate_cost(self, request: SearchRequest | FetchRequest) -> CostEstimate:
         if not self._supports_credit_quota:
@@ -347,13 +641,20 @@ class FirecrawlAdapter(ProviderAdapter):
         )
 
     def _usage_event(self, response: Any, operation: UsageOperation) -> UsageEvent | None:
-        """Return an event only when a raw mapping reported credit usage."""
-        if not isinstance(response, dict):
-            return None
-        usage = response.get("usage")
-        if not isinstance(usage, dict):
-            return None
-        raw_credits = usage.get("credits")
+        """Return an event when an envelope or scrape metadata reports credits."""
+
+        response_mapping = _as_mapping(response)
+        usage = response_mapping.get("usage")
+        raw_credits = usage.get("credits") if isinstance(usage, dict) else None
+        if raw_credits is None:
+            raw_credits = response_mapping.get("creditsUsed")
+        if raw_credits is None:
+            raw_credits = response_mapping.get("credits_used")
+        data = response_mapping.get("data", response)
+        data_mapping = _as_mapping(data)
+        page_metadata = _as_mapping(data_mapping.get("metadata"))
+        if raw_credits is None:
+            raw_credits = page_metadata.get("credits_used")
         if raw_credits is None:
             return None
         if isinstance(raw_credits, str):
@@ -368,7 +669,7 @@ class FirecrawlAdapter(ProviderAdapter):
             unit_kind=UnitKind.CREDIT,
             display_unit="credits",
             observed_at=datetime.now(UTC),
-            request_id=response.get("request_id"),
+            request_id=response_mapping.get("request_id") or response_mapping.get("requestId"),
         )
 
     async def quota(self) -> QuotaSnapshot | None:

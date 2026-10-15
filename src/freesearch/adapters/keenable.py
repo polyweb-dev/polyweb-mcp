@@ -103,6 +103,15 @@ def _parse_error_record(index: int) -> dict[str, object]:
     }
 
 
+def _response_metadata(payload: dict[str, Any], excluded: set[str]) -> dict[str, Any] | None:
+    """Keep useful top-level Keenable fields outside normalized result data."""
+
+    metadata = {
+        key: value for key, value in payload.items() if key not in excluded and value is not None
+    }
+    return metadata or None
+
+
 class KeenableAdapter(ProviderAdapter):
     """Search, fetch, and cost-estimate operations against the Keenable API."""
 
@@ -233,6 +242,7 @@ class KeenableAdapter(ProviderAdapter):
                     total_results=len(results),
                     usage=usage,
                     quota_snapshot=(self._keyless_snapshot() if mode == _KEYLESS else None),
+                    provider_metadata=_response_metadata(payload, {"results"}),
                 )
             except ProviderOperationError:
                 raise
@@ -243,6 +253,18 @@ class KeenableAdapter(ProviderAdapter):
 
     async def _search_request(self, request: SearchRequest) -> httpx.Response:
         mode, headers = self._auth()
+        option_model = (
+            request.provider_options.keenable if request.provider_options is not None else None
+        )
+        options = (
+            option_model.model_dump(mode="json", exclude_none=True)
+            if option_model is not None
+            else {}
+        )
+        if len(request.domains) == 1 and (
+            option_model is None or "site" not in option_model.model_fields_set
+        ):
+            options["site"] = request.domains[0]
         return await self._send_request(
             "POST",
             self._endpoint(mode, "search"),
@@ -250,6 +272,7 @@ class KeenableAdapter(ProviderAdapter):
             json={
                 "query": request.query,
                 "max_results": min(request.limit, _MAX_SEARCH_RESULTS),
+                **options,
             },
         )
 
@@ -259,15 +282,19 @@ class KeenableAdapter(ProviderAdapter):
         url = item.get("url")
         if not isinstance(url, str) or not url:
             raise self._error("invalid_response", "malformed search result item")
-        metadata: dict[str, Any] = {}
-        for key in ("description", "acquired_at"):
-            if item.get(key) is not None:
-                metadata[key] = item[key]
+        metadata = {
+            key: value
+            for key, value in item.items()
+            if key not in {"title", "url", "snippet", "published_at", "source", "content"}
+            and value is not None
+        }
+        source = item.get("source")
         return SearchResult(
             title=item.get("title") or "",
             url=cast(Any, url),
-            snippet=item.get("snippet") or "",
+            snippet=item.get("snippet") or item.get("description") or item.get("content") or "",
             published_at=_parse_published_at(item.get("published_at")),
+            source=source if isinstance(source, str) else None,
             metadata=metadata,
         )
 
@@ -311,9 +338,20 @@ class KeenableAdapter(ProviderAdapter):
                         content=content,
                         title=title,
                         fetched_at=datetime.now(UTC),
-                        metadata={"truncated": True} if truncated else {},
+                        metadata={
+                            **{
+                                key: value
+                                for key, value in payload.items()
+                                if key not in {"content", "title", "url"} and value is not None
+                            },
+                            **({"truncated": True} if truncated else {}),
+                        },
                     ),
                     usage=self._usage_event(UsageOperation.FETCH, payload),
+                    provider_metadata=_response_metadata(
+                        payload,
+                        {"content", "title", "url", "description", "published_at"},
+                    ),
                 )
             except ProviderOperationError:
                 raise
@@ -327,6 +365,23 @@ class KeenableAdapter(ProviderAdapter):
         params: dict[str, str] = {"url": str(request.url)}
         if request.max_chars is not None:
             params["max_chars"] = str(request.max_chars)
+        option_model = (
+            request.provider_options.keenable if request.provider_options is not None else None
+        )
+        options = (
+            option_model.model_dump(mode="json", exclude_none=True)
+            if option_model is not None
+            else {}
+        )
+        if request.enhanced and (
+            option_model is None or "live" not in option_model.model_fields_set
+        ):
+            params["live"] = "true"
+        for key, value in options.items():
+            if key == "live":
+                params[key] = str(value).lower()
+            elif key == "prompt":
+                params[key] = str(value)
         return await self._send_request(
             "GET", self._endpoint(mode, "fetch"), headers, params=params
         )

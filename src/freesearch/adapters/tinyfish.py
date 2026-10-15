@@ -6,6 +6,7 @@ GET https://api.search.tinyfish.ai and markdown document extraction via
 POST https://api.fetch.tinyfish.ai.
 """
 
+import json
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any, NoReturn, cast
@@ -161,21 +162,50 @@ class TinyfishAdapter(ProviderAdapter):
             raise self._error("invalid_response", "malformed search response") from None
 
     def _search_params(self, request: SearchRequest) -> dict[str, str | int]:
+        options = (
+            request.provider_options.tinyfish if request.provider_options is not None else None
+        )
         params: dict[str, str | int] = {
             "query": request.query,
-            "page": 0,
+            "page": options.page if options is not None and options.page is not None else 0,
         }
-        if request.domains:
-            include = [d for d in request.domains if not d.startswith("-")]
-            exclude = [d.lstrip("-") for d in request.domains if d.startswith("-")]
-            if include:
-                params["include_domains"] = ",".join(include)
-            if exclude:
-                params["exclude_domains"] = ",".join(exclude)
-        if request.country_code is not None:
-            params["location"] = request.country_code.upper()
-        if request.language is not None:
-            params["language"] = request.language
+
+        include = [domain for domain in request.domains if not domain.startswith("-")]
+        exclude = [domain.lstrip("-") for domain in request.domains if domain.startswith("-")]
+        if options is not None and options.include_domains is not None:
+            include = list(options.include_domains)
+        if options is not None and options.exclude_domains is not None:
+            exclude = list(options.exclude_domains)
+        if include:
+            params["include_domains"] = ",".join(include)
+        if exclude:
+            params["exclude_domains"] = ",".join(exclude)
+
+        location = options.location if options is not None else None
+        if location is None:
+            location = request.country_code.upper() if request.country_code is not None else None
+        if location is not None:
+            params["location"] = location
+
+        language = options.language if options is not None else None
+        if language is None:
+            language = request.language
+        if language is not None:
+            params["language"] = language
+
+        if options is not None:
+            for key in (
+                "purpose",
+                "recency_minutes",
+                "after_date",
+                "before_date",
+                "domain_type",
+                "pub_year_min",
+                "pub_year_max",
+            ):
+                value = getattr(options, key)
+                if value is not None:
+                    params[key] = value
         return params
 
     async def _search_request(self, request: SearchRequest) -> httpx.Response:
@@ -193,7 +223,17 @@ class TinyfishAdapter(ProviderAdapter):
         if not isinstance(url, str) or not url:
             raise self._error("invalid_response", "missing or invalid url in search result")
         metadata: dict[str, Any] = {}
-        for key in ("site_name", "position"):
+        for key in (
+            "site_name",
+            "position",
+            "date",
+            "publisher",
+            "authors",
+            "venue",
+            "year",
+            "cited_by_count",
+            "pdf_url",
+        ):
             if item.get(key) is not None:
                 metadata[key] = item[key]
         published_raw = item.get("date") or item.get("published_date") or item.get("published_at")
@@ -257,10 +297,19 @@ class TinyfishAdapter(ProviderAdapter):
         if not isinstance(item, dict):
             raise self._error("invalid_response", "malformed fetch document item")
         raw_content = item.get("text") if item.get("text") is not None else item.get("content")
-        if not isinstance(raw_content, str):
+        if isinstance(raw_content, str):
+            content = raw_content
+        elif isinstance(raw_content, (dict, list)):
+            content = json.dumps(raw_content, ensure_ascii=False)
+        elif raw_content is None and isinstance(item.get("highlights"), list):
+            content = "\n\n".join(
+                highlight["text"]
+                for highlight in item["highlights"]
+                if isinstance(highlight, dict) and isinstance(highlight.get("text"), str)
+            )
+        else:
             raise self._error("invalid_response", "missing or non-string text in fetch response")
 
-        content = raw_content
         truncated = False
         if request.max_chars is not None and len(content) > request.max_chars:
             content = content[: max(0, request.max_chars)]
@@ -278,6 +327,14 @@ class TinyfishAdapter(ProviderAdapter):
             "published_date",
             "latency_ms",
             "format",
+            "links",
+            "image_links",
+            "iframe_links",
+            "not_modified",
+            "etag",
+            "last_modified",
+            "unmatched_selectors",
+            "highlights",
         ):
             if item.get(key) is not None:
                 metadata[key] = item[key]
@@ -285,6 +342,8 @@ class TinyfishAdapter(ProviderAdapter):
         format_val = str(item.get("format") or "").strip().lower()
         if format_val == "html":
             content_type = "text/html"
+        elif format_val == "json" or isinstance(raw_content, (dict, list)):
+            content_type = "application/json"
         elif format_val in ("plain", "text"):
             content_type = "text/plain"
         else:
@@ -329,10 +388,36 @@ class TinyfishAdapter(ProviderAdapter):
     async def _fetch_request(self, request: FetchRequest) -> httpx.Response:
         headers = self._auth()
         headers["Content-Type"] = "application/json"
-        payload = {
+        options = (
+            request.provider_options.tinyfish if request.provider_options is not None else None
+        )
+        payload: dict[str, Any] = {
             "urls": [str(request.url)],
-            "format": "markdown",
+            "format": options.format
+            if options is not None and options.format is not None
+            else "markdown",
         }
+        if options is not None:
+            for key in (
+                "purpose",
+                "links",
+                "image_links",
+                "iframe_links",
+                "ttl",
+                "per_url_timeout_ms",
+                "if_none_match",
+                "if_modified_since",
+                "include_etag_and_last_modified",
+            ):
+                value = getattr(options, key)
+                if value is not None:
+                    payload[key] = value
+            for key in ("include_selectors", "exclude_selectors"):
+                value = getattr(options, key)
+                if value is not None:
+                    payload[key] = list(value)
+            if options.highlights is not None:
+                payload["highlights"] = options.highlights.model_dump(exclude_none=True)
         return await self._send_request(
             "POST",
             _FETCH_URL,

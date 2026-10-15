@@ -21,6 +21,7 @@ __all__ = [
 ]
 
 TavilyDepth = Literal["basic", "advanced"]
+TavilySearchDepth = Literal["basic", "advanced", "fast", "ultra-fast"]
 
 # Tavily bills extract as one credit (basic) or two credits (advanced) per five
 # successful URLs, so one good URL costs an exact fraction of a credit.
@@ -47,9 +48,10 @@ class TavilySearchParams(_TavilyParamsBase):
     ``include_usage``; callers cannot set those fields here.
     """
 
-    search_depth: TavilyDepth | None = None
+    search_depth: TavilySearchDepth | None = None
+    chunks_per_source: int | None = Field(default=None, ge=1, le=3)
     topic: Literal["general", "news", "finance"] | None = None
-    time_range: Literal["day", "week", "month", "year"] | None = None
+    time_range: Literal["day", "week", "month", "year", "d", "w", "m", "y"] | None = None
     start_date: str | None = Field(default=None, min_length=8, max_length=10)
     end_date: str | None = Field(default=None, min_length=8, max_length=10)
     days: int | None = Field(default=None, ge=1)
@@ -58,6 +60,13 @@ class TavilySearchParams(_TavilyParamsBase):
     include_answer: bool | Literal["basic", "advanced"] | None = None
     include_raw_content: bool | Literal["markdown", "text"] | None = None
     include_images: bool | None = None
+    include_image_descriptions: bool | None = None
+    include_published_date: bool | None = None
+    filter_by_published_date: bool | None = None
+    include_domains_mode: Literal["restrict", "prefer"] | None = None
+    language: str | None = Field(default=None, min_length=2, max_length=64)
+    filter_by_language: bool | None = None
+    safe_search: bool | None = None
     auto_parameters: bool | None = None
     include_favicon: bool | None = None
     exact_match: bool | None = None
@@ -87,9 +96,10 @@ class TavilyExtractParams(_TavilyParamsBase):
     chunks_per_source: int | None = Field(default=None, ge=1)
     include_images: bool | None = None
     include_favicon: bool | None = None
+    timeout: float | None = Field(default=None, ge=1, le=60)
 
 
-def tavily_search_depth(mode: str | None, params: TavilySearchParams | None) -> TavilyDepth:
+def tavily_search_depth(mode: str | None, params: TavilySearchParams | None) -> TavilySearchDepth:
     """Resolve the search depth from the routing mode and explicit parameters.
 
     An explicit parameter depth wins. A conflict between an explicit depth and

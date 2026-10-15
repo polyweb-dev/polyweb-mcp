@@ -4,13 +4,38 @@ import type { BackendRoutingPreference } from "@/domains/routing/api/wire"
 
 export type BackendUsageStatus = "success" | "failure"
 
+/** Provider names are validated by the backend's operation-specific schemas. */
+export interface BackendSearchProviderOptions {
+  brave?: Record<string, unknown> | null
+  exa?: Record<string, unknown> | null
+  firecrawl?: Record<string, unknown> | null
+  keenable?: Record<string, unknown> | null
+  parallel?: Record<string, unknown> | null
+  tavily?: Record<string, unknown> | null
+  tinyfish?: Record<string, unknown> | null
+  you?: Record<string, unknown> | null
+}
+
+export interface BackendFetchProviderOptions {
+  exa?: Record<string, unknown> | null
+  firecrawl?: Record<string, unknown> | null
+  keenable?: Record<string, unknown> | null
+  parallel?: Record<string, unknown> | null
+  tavily?: Record<string, unknown> | null
+  tinyfish?: Record<string, unknown> | null
+  you?: Record<string, unknown> | null
+}
+
 export interface BackendSearchRequest {
   query: string
   limit: number
+  mode?: "turbo" | "fast" | "basic" | "advanced" | null
+  extra_bundles?: number
   language: string | null
   country_code: string | null
   domains: string[]
   routing: BackendRoutingPreference
+  providerOptions?: BackendSearchProviderOptions | null
   fanout?: boolean
 }
 
@@ -55,12 +80,14 @@ export interface BackendSearchResponse {
   usage: BackendUsageEvent | null
   participating_providers?: string[]
   waterfall?: BackendProviderTraceItem[]
+  provider_metadata?: Record<string, unknown> | null
 }
 
 export interface BackendFetchRequest {
   url: string
   max_chars: number | null
   routing: BackendRoutingPreference
+  providerOptions?: BackendFetchProviderOptions | null
 }
 
 export interface BackendFetchedDocument {
@@ -76,4 +103,5 @@ export interface BackendFetchResponse {
   provider: string
   document: BackendFetchedDocument
   usage: BackendUsageEvent | null
+  provider_metadata?: Record<string, unknown> | null
 }

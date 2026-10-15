@@ -465,9 +465,8 @@ class _UsageFacts:
             else None
         )
         plan = (current_plan or "").strip().lower()
-        self.free_confirmed = (
-            plan in _FREE_PLAN_NAMES
-            or (plan_limit is not None and plan_limit == _FREE_PLAN_ALLOWANCE)
+        self.free_confirmed = plan in _FREE_PLAN_NAMES or (
+            plan_limit is not None and plan_limit == _FREE_PLAN_ALLOWANCE
         )
 
     @property
@@ -645,6 +644,9 @@ class TavilyAdapter(ProviderAdapter):
             results=results,
             total_results=len(results),
             usage=usage,
+            provider_metadata=self._provider_metadata(
+                response, excluded={"query", "results", "usage"}
+            ),
         )
 
     async def _search_sdk(self, request: SearchRequest) -> dict[str, Any]:
@@ -659,19 +661,17 @@ class TavilyAdapter(ProviderAdapter):
             self._clear_probe()
 
     def _search_kwargs(self, request: SearchRequest) -> dict[str, Any]:
-        """Build the SDK search call, rejecting reserved-override conflicts.
+        """Build SDK kwargs with nested options taking precedence over defaults.
 
-        The explicit parameter depth wins over the routing mode, and a
-        conflict between an explicit depth and a caller ``basic``/``advanced``
-        mode is rejected here, before any vendor I/O. Include and exclude
-        domain lists, the country name, and every optional SDK field ride
-        along identically on both auth rails.
+        The adapter retains ownership of usage metering, the request identity
+        and result cap, and the shared timeout policy.
         """
-        try:
-            depth = tavily_search_depth(request.mode, request.tavily)
-        except ValueError as exc:
-            raise self._error("bad_request", str(exc)) from None
-        params = request.tavily
+        params = None if request.provider_options is None else request.provider_options.tavily
+        depth = (
+            params.search_depth
+            if params is not None and params.search_depth is not None
+            else tavily_search_depth(request.mode, None)
+        )
         kwargs: dict[str, Any] = {
             "query": request.query,
             "max_results": min(request.limit, _MAX_SEARCH_RESULTS),
@@ -683,31 +683,22 @@ class TavilyAdapter(ProviderAdapter):
         # sub-second value; the borrowed transport reasserts the shared phase
         # policy at request time.
         kwargs["timeout"] = self._sdk_search_timeout
+        if request.language is not None:
+            kwargs["language"] = request.language
         if request.domains:
             kwargs.setdefault("include_domains", list(request.domains))
         self._derived_country(request, kwargs, params)
-        if params is None:
-            return kwargs
-        if params.include_domains is not None:
-            kwargs["include_domains"] = list(params.include_domains)
-        if params.exclude_domains is not None:
-            kwargs["exclude_domains"] = list(params.exclude_domains)
-        for name in (
-            "topic",
-            "time_range",
-            "start_date",
-            "end_date",
-            "days",
-            "include_answer",
-            "include_raw_content",
-            "include_images",
-            "auto_parameters",
-            "include_favicon",
-            "exact_match",
-        ):
-            value = getattr(params, name)
-            if value is not None:
-                kwargs[name] = value
+        if params is not None:
+            kwargs.update(params.model_dump(mode="json", exclude_none=True))
+        kwargs.update(
+            {
+                "query": request.query,
+                "max_results": min(request.limit, _MAX_SEARCH_RESULTS),
+                "include_usage": True,
+                "search_depth": depth,
+                "timeout": self._sdk_search_timeout,
+            }
+        )
         return kwargs
 
     def _derived_country(
@@ -731,7 +722,7 @@ class TavilyAdapter(ProviderAdapter):
         if not isinstance(score, (int, float)) or not 0 <= score <= 1:
             score = None
         metadata: dict[str, Any] = {}
-        for key in ("id", "favicon"):
+        for key in ("id", "favicon", "images"):
             if item.get(key) is not None:
                 metadata[key] = item[key]
         return SearchResult(
@@ -773,6 +764,7 @@ class TavilyAdapter(ProviderAdapter):
                     metadata={"truncated": True} if truncated else {},
                 ),
                 usage=self._usage_event(response, UsageOperation.FETCH),
+                provider_metadata=self._provider_metadata(response, excluded={"results", "usage"}),
             )
         except ProviderOperationError:
             raise
@@ -799,29 +791,39 @@ class TavilyAdapter(ProviderAdapter):
         the documented markdown default, and the optional query, chunk, and
         image fields ride along identically on both auth rails.
         """
-        params = request.tavily
+        params = None if request.provider_options is None else request.provider_options.tavily
+        depth = tavily_extract_depth(params)
         kwargs: dict[str, Any] = {
             "urls": [str(request.url)],
             "format": params.format if params is not None and params.format else "markdown",
             "include_usage": True,
-            "extract_depth": tavily_extract_depth(params),
+            "extract_depth": depth,
         }
         # Always forward a scalar clamped to the vendor's 1-60s extract range,
         # so the SDK never silently reverts to its 30s default or rejects a
         # sub-second value; the borrowed transport reasserts the shared phase
         # policy at request time.
         kwargs["timeout"] = self._sdk_extract_timeout
-        if params is None:
-            return kwargs
-        if params.query is not None:
-            kwargs["query"] = params.query
-        if params.chunks_per_source is not None:
-            kwargs["chunks_per_source"] = params.chunks_per_source
-        if params.include_images is not None:
-            kwargs["include_images"] = params.include_images
-        if params.include_favicon is not None:
-            kwargs["include_favicon"] = params.include_favicon
+        if params is not None:
+            kwargs.update(params.model_dump(mode="json", exclude_none=True))
+        kwargs.update(
+            {
+                "urls": [str(request.url)],
+                "include_usage": True,
+                "extract_depth": depth,
+                "timeout": self._sdk_extract_timeout,
+            }
+        )
         return kwargs
+
+    @staticmethod
+    def _provider_metadata(
+        response: dict[str, Any], *, excluded: set[str]
+    ) -> dict[str, Any] | None:
+        """Keep unnormalized Tavily response fields available to callers."""
+
+        metadata = {key: value for key, value in response.items() if key not in excluded}
+        return metadata or None
 
     # ------------------------------------------------- response observation
 
@@ -993,9 +995,8 @@ class TavilyAdapter(ProviderAdapter):
             return None
         async with self._usage_lock:
             now = datetime.now(UTC)
-            if (
-                self._usage_attempt_at is not None
-                and now - self._usage_attempt_at < timedelta(seconds=_USAGE_CADENCE_SECONDS)
+            if self._usage_attempt_at is not None and now - self._usage_attempt_at < timedelta(
+                seconds=_USAGE_CADENCE_SECONDS
             ):
                 return self._usage_cache
             self._usage_attempt_at = now
@@ -1305,24 +1306,25 @@ class TavilyAdapter(ProviderAdapter):
 
     async def estimate_cost(self, request: SearchRequest | FetchRequest) -> CostEstimate:
         if isinstance(request, SearchRequest):
-            try:
-                depth = tavily_search_depth(request.mode, request.tavily)
-            except ValueError as exc:
-                # A conflict between an explicit depth and a basic or
-                # advanced mode is a caller error, identical to the search
-                # path's pre-vendor rejection.
-                raise self._error("bad_request", str(exc)) from None
+            search_params = (
+                None if request.provider_options is None else request.provider_options.tavily
+            )
+            depth = (
+                search_params.search_depth
+                if search_params is not None and search_params.search_depth is not None
+                else tavily_search_depth(request.mode, None)
+            )
             return CostEstimate(
                 provider=self.name,
                 operation=UsageOperation.SEARCH,
                 units=Decimal("2") if depth == "advanced" else Decimal("1"),
                 currency="Credits",
-                notes=(
-                    "basic search costs 1 Credit per call and advanced search "
-                    "costs 2 Credits"
-                ),
+                notes=("basic search costs 1 Credit per call and advanced search costs 2 Credits"),
             )
-        depth = tavily_extract_depth(request.tavily)
+        extract_params = (
+            None if request.provider_options is None else request.provider_options.tavily
+        )
+        depth = tavily_extract_depth(extract_params)
         return CostEstimate(
             provider=self.name,
             operation=UsageOperation.FETCH,

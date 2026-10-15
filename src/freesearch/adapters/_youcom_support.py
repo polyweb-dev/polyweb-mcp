@@ -23,6 +23,7 @@ from freesearch.models.contracts import (
     SearchRequest,
     UnitKind,
 )
+from freesearch.models.provider_options import YouSearchOptions
 
 # Published unit prices in USD: Web Search at $5 per 1,000 calls and contents
 # fetch per URL. ``estimate_cost`` and quota mapping share the same constants.
@@ -34,28 +35,94 @@ _SEARCH_URL = "https://ydc-index.io/v1/search"
 _CONTENTS_URL = "https://ydc-index.io/v1/contents"
 
 
+def _search_domain_params(
+    request: SearchRequest, options: YouSearchOptions | None
+) -> dict[str, list[str]]:
+    include_domains = options.include_domains if options is not None else None
+    if include_domains is None:
+        include_domains = request.domains
+    params: dict[str, list[str]] = {}
+    if include_domains:
+        params["include_domains"] = list(include_domains)
+    if options is not None:
+        for key in ("exclude_domains", "boost_domains"):
+            value = getattr(options, key)
+            if value:
+                params[key] = list(value)
+    return params
+
+
 async def _search_request(client: httpx.AsyncClient, request: SearchRequest) -> httpx.Response:
     payload: dict[str, Any] = {
         "query": request.query,
         "count": min(request.limit, _MAX_SEARCH_RESULTS),
     }
-    if request.domains:
-        payload["include_domains"] = list(request.domains)
-    if request.country_code is not None:
-        payload["country"] = request.country_code
-    if request.language is not None:
-        payload["language"] = request.language
+
+    options = request.provider_options.you if request.provider_options is not None else None
+    payload.update(_search_domain_params(request, options))
+
+    country = (
+        options.country
+        if options is not None and options.country is not None
+        else request.country_code
+    )
+    language = (
+        options.language
+        if options is not None and options.language is not None
+        else request.language
+    )
+    if country is not None:
+        payload["country"] = country
+    if language is not None:
+        payload["language"] = language
+
+    if options is not None:
+        for key in (
+            "freshness",
+            "offset",
+            "safesearch",
+            "knowledge",
+            "strict_operators",
+            "crawl_timeout",
+            "livecrawl",
+        ):
+            value = getattr(options, key)
+            if value is not None:
+                payload[key] = value
+        if options.livecrawl_formats is not None:
+            payload["livecrawl_formats"] = list(options.livecrawl_formats)
+        if options.extraction is not None:
+            extraction: dict[str, Any] = {"extraction_mode": options.extraction.mode}
+            if options.extraction.source is not None:
+                extraction["extraction_source"] = options.extraction.source
+            if options.extraction.highlights is not None:
+                extraction["highlights"] = options.extraction.highlights.model_dump(
+                    exclude_none=True
+                )
+            if options.extraction.full_page is not None:
+                extraction["full_page"] = options.extraction.full_page.model_dump(exclude_none=True)
+            payload["extraction"] = extraction
     return await client.post(_SEARCH_URL, json=payload)
 
 
 async def _fetch_request(client: httpx.AsyncClient, request: FetchRequest) -> httpx.Response:
+    options = request.provider_options.you if request.provider_options is not None else None
+    payload: dict[str, Any] = {
+        "urls": [str(request.url)],
+        "formats": (
+            list(options.formats)
+            if options is not None and options.formats is not None
+            else ["markdown", "metadata"]
+        ),
+    }
+    payload["max_age"] = (
+        options.max_age if options is not None and options.max_age is not None else 0
+    )
+    if options is not None and options.crawl_timeout is not None:
+        payload["crawl_timeout"] = options.crawl_timeout
     return await client.post(
         _CONTENTS_URL,
-        json={
-            "urls": [str(request.url)],
-            "formats": ["markdown", "metadata"],
-            "max_age": 0,
-        },
+        json=payload,
     )
 
 

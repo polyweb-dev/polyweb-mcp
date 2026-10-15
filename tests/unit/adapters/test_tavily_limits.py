@@ -81,10 +81,9 @@ def test_tavily_search_debit_one_and_two_credits() -> None:
         if r.operation is LimitOperation.SEARCH and r.auth_mode is AuthMode.KEYED
     )
     assert cu.request_native_cost(search, SearchRequest(query="q", limit=2)) == Decimal("1")
-    assert (
-        cu.request_native_cost(search, SearchRequest(query="q", limit=2, mode="advanced"))
-        == Decimal("2")
-    )
+    assert cu.request_native_cost(
+        search, SearchRequest(query="q", limit=2, mode="advanced")
+    ) == Decimal("2")
 
 
 def test_tavily_extract_depth_rule_matches_adapter() -> None:
@@ -94,10 +93,12 @@ def test_tavily_extract_depth_rule_matches_adapter() -> None:
         if r.operation is LimitOperation.FETCH and r.auth_mode is AuthMode.KEYED
     )
     basic = FetchRequest(
-        url="https://example.com/a", tavily=TavilyExtractParams(extract_depth="basic")
+        url="https://example.com/a",
+        provider_options={"tavily": TavilyExtractParams(extract_depth="basic")},
     )
     advanced = FetchRequest(
-        url="https://example.com/a", tavily=TavilyExtractParams(extract_depth="advanced")
+        url="https://example.com/a",
+        provider_options={"tavily": TavilyExtractParams(extract_depth="advanced")},
     )
     assert cu.request_native_cost(fetch, basic) == Decimal("0.2")
     assert cu.request_native_cost(fetch, advanced) == Decimal("0.4")
@@ -158,7 +159,9 @@ def _keyed_adapter() -> tuple[object, httpx.AsyncClient]:
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(_noop), timeout=30.0)
     adapter = TavilyAdapter(
-        client, api_key=SecretStr("tvly-test-key"), sdk_client=_FakeSDK()  # type: ignore[arg-type]
+        client,
+        api_key=SecretStr("tvly-test-key"),
+        sdk_client=_FakeSDK(),  # type: ignore[arg-type]
     )
     return adapter, client
 

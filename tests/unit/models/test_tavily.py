@@ -44,9 +44,10 @@ def test_search_params_reject_reserved_auth_fields() -> None:
         TavilySearchParams(api_key="tvly-secret")  # type: ignore[call-arg]
 
 
-def test_extract_params_reject_reserved_auth_and_timeout() -> None:
+def test_extract_params_allow_timeout_but_reject_reserved_auth() -> None:
     with pytest.raises(ValidationError):
-        TavilyExtractParams(timeout=5)  # type: ignore[call-arg]
+        TavilyExtractParams(api_key="tvly-secret")  # type: ignore[call-arg]
+    assert TavilyExtractParams(timeout=5).timeout == 5
 
 
 def test_search_depth_explicit_wins_when_mode_absent() -> None:
@@ -70,8 +71,7 @@ def test_search_depth_conflict_rejected_before_io() -> None:
 
 def test_search_depth_matching_mode_passes() -> None:
     assert (
-        tavily_search_depth("advanced", TavilySearchParams(search_depth="advanced"))
-        == "advanced"
+        tavily_search_depth("advanced", TavilySearchParams(search_depth="advanced")) == "advanced"
     )
     assert tavily_search_depth("basic", TavilySearchParams(search_depth="basic")) == "basic"
 

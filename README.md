@@ -51,7 +51,7 @@ Copy-Item .env.example .env
 
 Keep `.env` for non-secret runtime settings. Store provider credentials in the encrypted vault through the settings dashboard (the same encrypted-vault API the dashboard itself uses). Keenable can remain keyless.
 
-Local accounts need one more entry in that file: `FREESEARCH_AUTH_JWT_SECRET`. Supply at least 32 random bytes. The API and the MCP server reject a missing secret at the first account check, so a real deployment must set it. The gitignored `.env` file holds the real value, and `.env.example` holds an empty placeholder. The operator account CLI does not need that value.
+Local account authentication needs one more entry in that file: `FREESEARCH_AUTH_JWT_SECRET`. Supply at least 32 random bytes. A secret is required to log in, access protected routes, and validate an optional Bearer token on Search/Fetch; anonymous Search/Fetch does not need one. The gitignored `.env` file holds the real value, and `.env.example` holds an empty placeholder. The operator account CLI does not need that value.
 
 Full account rules, limits, token lifetimes, and the rollback procedure: [docs/releases/local-users.md](docs/releases/local-users.md).
 
@@ -237,7 +237,7 @@ uv run freesearch-api
 
 ### Local accounts and access control
 
-Every API route except `POST /auth/register` and `POST /auth/jwt/login` needs a JWT Bearer credential. The MCP resource and the SDK metadata routes need the same credential.
+`POST /search` and `POST /fetch` are public on REST and MCP. A Bearer token is optional on these operations; if supplied, it must be valid and the account is attached to local trace records. Anonymous calls have no account attribution. All other REST routes, including provider controls, account management, and trace reads, require a JWT Bearer credential. The MCP transport exposes only the Search and Fetch tools; its other paths remain guarded.
 
 - **Register:** `POST /auth/register` with `{"email": ..., "password": ...}` creates an active Agent account and returns no token.
 - **Log in:** `POST /auth/jwt/login` with the OAuth2 form (`username` holds the email) returns `access_token`, `refresh_token`, `token_type`, `expires_in`, and `refresh_expires_in`.
@@ -245,6 +245,7 @@ Every API route except `POST /auth/register` and `POST /auth/jwt/login` needs a 
 - **Log out:** `POST /auth/jwt/logout` revokes the current family, so its access and refresh credentials stop at once.
 - **Current account:** `GET /users/me` returns the account record without the password hash.
 - **Roles:** Admin changes provider controls and provider OAuth, Developer reads the sanitized control views and statistics, and Agent searches and fetches. Every role reads only its own traces.
+- **Provider usage:** Search and Fetch still pass through provider quota and rate admission and use the server's configured provider credentials. These limits and provider budgets are shared across anonymous and authenticated requests; there is no per-caller spend cap.
 - **Public documentation:** `/docs`, `/redoc`, and `/openapi.json` are accessible anonymously without authentication.
 - **Limits:** 5 pair attempts and 20 peer-address attempts per 900 seconds for login, 5 peer-address attempts and 100 deployment attempts per 900 seconds for registration, and a 4096-byte cap on a public auth body.
 - **Token lifetime:** 900 seconds for an access JWT and 604800 seconds for the absolute refresh family. An ordinary API call and an ordinary MCP call never extend a token.
@@ -348,8 +349,8 @@ uv run freesearch-mcp --transport stdio
 ```
 
 - Exposes provider-neutral `search` and `fetch` tools with automatic route selection and quota tracking.
-- The HTTP transport needs an access JWT on every route, and the SDK metadata routes are guarded too.
-- The stdio transport needs `FREESEARCH_MCP_BEARER_TOKEN` in the child process environment. The parent renews that access JWT after expiry and restarts the child, and the child never receives a refresh credential.
+- The HTTP transport exposes Search and Fetch on `/mcp` without requiring a JWT. If a Bearer token is supplied, it is verified and can attribute traces; invalid tokens are rejected. Unknown paths remain guarded.
+- The stdio transport accepts anonymous Search and Fetch. `FREESEARCH_MCP_BEARER_TOKEN` is optional and adds account attribution; if configured, it is verified at each tool call. Do not give the child a refresh credential.
 - Transports and flags can also be configured via `FREESEARCH_MCP_TRANSPORT` (`stdio` or `streamable-http`) and `FREESEARCH_MCP_STATELESS` (`true`/`false`).
 
 ---

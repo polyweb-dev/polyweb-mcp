@@ -10,7 +10,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import SpanKind, StatusCode
-from pydantic import SecretStr
+from pydantic import SecretStr, ValidationError
 
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.adapters.keenable import KeenableAdapter
@@ -193,6 +193,75 @@ async def test_search_limit_is_capped_at_50_without_clamping_at_boundary(
 
 
 @pytest.mark.asyncio
+async def test_search_forwards_all_keenable_options_and_provider_site_overrides_common_domain() -> (
+    None
+):
+    transport = _Transport()
+    request = SearchRequest(
+        query="provider options",
+        limit=70,
+        domains=("common.example",),
+        provider_options={
+            "keenable": {
+                "mode": "pro",
+                "site": "nested.example",
+                "acquired_after": "2026-01-01T00:00:00Z",
+                "acquired_before": "2026-02-01T00:00:00Z",
+                "published_after": "2025-12-01T00:00:00Z",
+                "published_before": "2026-01-31T23:59:59Z",
+                "query_time": "2026-02-01T12:00:00Z",
+                "snippet_max_length": 1200,
+            }
+        },
+    )
+
+    await _adapter(transport).search(request)
+
+    assert json.loads(transport.requests[0].content) == {
+        "query": "provider options",
+        "max_results": 50,
+        "mode": "pro",
+        "site": "nested.example",
+        "acquired_after": "2026-01-01T00:00:00Z",
+        "acquired_before": "2026-02-01T00:00:00Z",
+        "published_after": "2025-12-01T00:00:00Z",
+        "published_before": "2026-01-31T23:59:59Z",
+        "query_time": "2026-02-01T12:00:00Z",
+        "snippet_max_length": 1200,
+    }
+
+
+@pytest.mark.asyncio
+async def test_search_maps_one_common_domain_and_preserves_top_level_metadata() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "results": [_GOOD_KEENABLE_ITEM],
+                "request_id": "search-42",
+                "search_time_ms": 19,
+            },
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    adapter = KeenableAdapter(client)
+
+    response = await adapter.search(SearchRequest(query="common domain", domains=("only.example",)))
+
+    assert json.loads(requests[0].content)["site"] == "only.example"
+    assert response.provider_metadata == {"request_id": "search-42", "search_time_ms": 19}
+
+
+@pytest.mark.asyncio
+async def test_search_provider_options_reject_invalid_mode() -> None:
+    with pytest.raises(ValidationError):
+        SearchRequest(query="bad", provider_options={"keenable": {"mode": "fast"}})
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("max_chars", "expected_content", "truncated"),
     [(None, "abcdef", False), (6, "abcdef", False), (5, "abcde", True)],
@@ -208,6 +277,68 @@ async def test_fetch_truncates_only_when_content_exceeds_max_chars(
 
     assert fetch.document.content == expected_content
     assert ("truncated" in fetch.document.metadata) is truncated
+
+
+@pytest.mark.asyncio
+async def test_fetch_live_and_prompt_options_override_common_enhanced_flag() -> None:
+    transport = _Transport()
+    request = FetchRequest(
+        url="https://example.com/document",
+        max_chars=20,
+        enhanced=True,
+        provider_options={"keenable": {"live": False, "prompt": "extract the abstract"}},
+    )
+
+    await _adapter(transport).fetch(request)
+
+    assert dict(transport.requests[0].url.params) == {
+        "url": "https://example.com/document",
+        "max_chars": "20",
+        "live": "false",
+        "prompt": "extract the abstract",
+    }
+
+
+@pytest.mark.asyncio
+async def test_fetch_maps_enhanced_to_live_and_preserves_response_metadata() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "content": "document body",
+                "title": "Doc",
+                "description": "A useful description.",
+                "published_at": "2026-01-01T00:00:00Z",
+                "request_id": "fetch-7",
+            },
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    adapter = KeenableAdapter(client)
+    response = await adapter.fetch(FetchRequest(url="https://example.com/document", enhanced=True))
+
+    assert dict(requests[0].url.params) == {
+        "url": "https://example.com/document",
+        "live": "true",
+    }
+    assert response.document.metadata == {
+        "description": "A useful description.",
+        "published_at": "2026-01-01T00:00:00Z",
+        "request_id": "fetch-7",
+    }
+    assert response.provider_metadata == {"request_id": "fetch-7"}
+
+
+@pytest.mark.asyncio
+async def test_fetch_provider_options_reject_overlong_prompt() -> None:
+    with pytest.raises(ValidationError):
+        FetchRequest(
+            url="https://example.com/document",
+            provider_options={"keenable": {"prompt": "x" * 2001}},
+        )
 
 
 @pytest.mark.asyncio

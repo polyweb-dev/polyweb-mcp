@@ -19,6 +19,7 @@ from tests.unit.adapters._youcom_test_support import (
     _TEST_KEY,
     _default_runner,
     _wire_caller,
+    _wired,
     _WireRecorder,
 )
 
@@ -256,3 +257,159 @@ async def test_search_parses_page_age_into_published_at() -> None:
     news = response.results[1]
     assert news.published_at is not None
     assert news.published_at.year == 2024
+
+
+async def test_search_forwards_you_options_and_preserves_extraction_contents() -> None:
+    contents = {
+        "markdown": "# Extracted report",
+        "html": "<main>Extracted report</main>",
+    }
+    recorder = _WireRecorder(
+        search={
+            "results": {
+                "web": [
+                    {
+                        "title": "Extracted report",
+                        "url": "https://example.com/report",
+                        "description": "Report summary",
+                        "snippets": ["A useful snippet"],
+                        "page_age": "2026-07-08T09:10:11Z",
+                        "thumbnail_url": "https://example.com/thumbnail.png",
+                        "favicon_url": "https://example.com/favicon.ico",
+                        "contents": contents,
+                    }
+                ]
+            },
+            "metadata": {
+                "search_uuid": "a442f19a-5ad7-44bb-a1d0-262b2a563657",
+                "query": "report",
+                "latency": 0.41,
+            },
+        }
+    )
+    async with _wired(recorder) as adapter:
+        response = await adapter.search(
+            SearchRequest(
+                query="report",
+                limit=3,
+                country_code="US",
+                language="EN",
+                domains=("common.example",),
+                provider_options={
+                    "you": {
+                        "country": "CA",
+                        "language": "FR",
+                        "freshness": "2026-01-01to2026-08-01",
+                        "offset": 2,
+                        "safesearch": "strict",
+                        "knowledge": "core",
+                        "include_domains": ["override.example"],
+                        "strict_operators": True,
+                        "extraction": {
+                            "mode": "full_page",
+                            "source": "cache",
+                            "full_page": {"extraction_formats": ["html", "markdown"]},
+                        },
+                        "crawl_timeout": 25,
+                    }
+                },
+            )
+        )
+
+    body = json.loads(recorder.requests[0].content)
+    assert body == {
+        "query": "report",
+        "count": 3,
+        "include_domains": ["override.example"],
+        "country": "CA",
+        "language": "FR",
+        "freshness": "2026-01-01to2026-08-01",
+        "offset": 2,
+        "safesearch": "strict",
+        "knowledge": "core",
+        "strict_operators": True,
+        "crawl_timeout": 25,
+        "extraction": {
+            "extraction_mode": "full_page",
+            "extraction_source": "cache",
+            "full_page": {"extraction_formats": ["html", "markdown"]},
+        },
+    }
+    assert response.provider_metadata == {
+        "search_uuid": "a442f19a-5ad7-44bb-a1d0-262b2a563657",
+        "query": "report",
+        "latency": 0.41,
+    }
+    result = response.results[0]
+    assert result.metadata == {
+        "thumbnail_url": "https://example.com/thumbnail.png",
+        "favicon_url": "https://example.com/favicon.ico",
+        "contents": contents,
+    }
+
+
+async def test_search_forwards_exclude_boost_and_legacy_crawl_options() -> None:
+    recorder = _WireRecorder(search={"results": {}})
+    async with _wired(recorder) as adapter:
+        await adapter.search(
+            SearchRequest(
+                query="vendors",
+                domains=("common.example",),
+                provider_options={
+                    "you": {
+                        "exclude_domains": ["blocked.example"],
+                        "boost_domains": ["preferred.example"],
+                        "livecrawl": "news",
+                        "livecrawl_formats": ["html", "markdown"],
+                    }
+                },
+            )
+        )
+
+    assert json.loads(recorder.requests[0].content) == {
+        "query": "vendors",
+        "count": 10,
+        "include_domains": ["common.example"],
+        "exclude_domains": ["blocked.example"],
+        "boost_domains": ["preferred.example"],
+        "livecrawl": "news",
+        "livecrawl_formats": ["html", "markdown"],
+    }
+
+
+async def test_search_highlight_extraction_is_forwarded_and_retained_in_metadata() -> None:
+    highlights = ["The passage most relevant to the query."]
+    recorder = _WireRecorder(
+        search={
+            "results": {
+                "web": [
+                    {
+                        "title": "Highlighted page",
+                        "url": "https://example.com/highlighted",
+                        "contents": {"highlights": highlights},
+                    }
+                ]
+            }
+        }
+    )
+    async with _wired(recorder) as adapter:
+        response = await adapter.search(
+            SearchRequest(
+                query="highlight query",
+                provider_options={
+                    "you": {
+                        "extraction": {
+                            "mode": "highlights",
+                            "highlights": {"total_max_tokens": 1024},
+                        },
+                    }
+                },
+            )
+        )
+
+    body = json.loads(recorder.requests[0].content)
+    assert body["extraction"] == {
+        "extraction_mode": "highlights",
+        "highlights": {"total_max_tokens": 1024},
+    }
+    assert response.results[0].metadata["contents"] == {"highlights": highlights}

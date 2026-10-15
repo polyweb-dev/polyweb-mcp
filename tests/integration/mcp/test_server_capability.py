@@ -47,6 +47,8 @@ class _CapabilityStub(ProviderAdapter):
         self._name = name
         self._capabilities = ProviderCapabilities(search=search, fetch=fetch, cost_estimate=True)
         self.calls: list[str] = []
+        self.search_requests: list[SearchRequest] = []
+        self.fetch_requests: list[FetchRequest] = []
 
     @property
     def name(self) -> str:
@@ -58,6 +60,7 @@ class _CapabilityStub(ProviderAdapter):
 
     async def search(self, request: SearchRequest) -> SearchResponse:
         self.calls.append("search")
+        self.search_requests.append(request)
         return SearchResponse(
             query=request.query,
             provider=self._name,
@@ -73,6 +76,7 @@ class _CapabilityStub(ProviderAdapter):
 
     async def fetch(self, request: FetchRequest) -> FetchResponse:
         self.calls.append("fetch")
+        self.fetch_requests.append(request)
         return FetchResponse(
             provider=self._name,
             document=FetchedDocument(
@@ -147,6 +151,65 @@ async def test_fetch_tool_accepts_request_schema(repository: SQLiteRepository) -
 
     assert payload["provider"] == "youcom"
     assert payload["document"]["content"] == "youcom content"
+
+
+async def test_search_tool_accepts_provider_options_and_preserves_vendor_metadata(
+    repository: SQLiteRepository,
+) -> None:
+    class _MetadataStub(_CapabilityStub):
+        async def search(self, request: SearchRequest) -> SearchResponse:
+            self.calls.append("search")
+            self.search_requests.append(request)
+            return SearchResponse(
+                query=request.query,
+                provider=self.name,
+                results=[],
+                provider_metadata={"search_id": "native-search-id"},
+            )
+
+    stub = _MetadataStub("brave")
+    server = await _authed_server(repository, [stub], "cap-search-provider-options")
+    payload = _payload(
+        await server.call_tool(
+            "search",
+            {
+                "request": {
+                    "query": "context",
+                    "providerOptions": {"exa": {"type": "deep-lite"}},
+                }
+            },
+        )
+    )
+
+    assert payload["provider"] == "brave"
+    assert payload["provider_metadata"] == {"search_id": "native-search-id"}
+    assert stub.search_requests[0].provider_options is not None
+    assert stub.search_requests[0].provider_options.exa is not None
+    assert stub.search_requests[0].provider_options.exa.type == "deep-lite"
+
+
+async def test_fetch_tool_accepts_operation_specific_provider_options(
+    repository: SQLiteRepository,
+) -> None:
+    stub = _CapabilityStub("youcom")
+    server = await _authed_server(repository, [stub], "cap-fetch-provider-options")
+
+    payload = _payload(
+        await server.call_tool(
+            "fetch",
+            {
+                "request": {
+                    "url": "https://example.com/page",
+                    "providerOptions": {"you": {"formats": ["html"]}},
+                }
+            },
+        )
+    )
+
+    assert payload["provider"] == "youcom"
+    assert stub.fetch_requests[0].provider_options is not None
+    assert stub.fetch_requests[0].provider_options.you is not None
+    assert stub.fetch_requests[0].provider_options.you.formats == ("html",)
 
 
 # --- (b) invalid payloads rejected without adapter call ---

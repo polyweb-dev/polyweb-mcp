@@ -1,24 +1,9 @@
-"""MCP transport authentication: SDK token verification and tool-call checks.
+"""MCP transport helpers for public Search/Fetch with optional account context.
 
-Auth policy stays in :mod:`freesearch.services.users`. This module composes that
-policy onto the MCP SDK seams:
-
-* :class:`LocalTokenVerifier` implements the SDK ``TokenVerifier`` protocol and
-  delegates every check to the shared service, so the API surface and the MCP
-  surfaces use one secret, one audience, one expiry rule, and one live session
-  family.
-* :func:`require_mcp_user` runs at the start of both tool bodies. It reads the
-  HTTP credential from the SDK request auth context, or the explicit stdio
-  environment credential, and it verifies the account and its family again.
-* :func:`build_http_app` composes the SDK Streamable HTTP application inside the
-  whole-application Bearer guard, so the SDK metadata routes and unknown paths
-  need a credential too.
-* :func:`run_http_server` and :func:`run_stdio_server` own the transport
-  lifecycle. The auth repository opens before the first request and closes after
-  the last session and its trace flush.
-
-Under Q1 this transport has no public exception. Under Q6 the server implements
-no OAuth authorization server and no anonymous discovery route.
+Search and Fetch are public operations. A supplied Bearer token is verified by
+the outer ASGI guard and can be attached to request-local traces; anonymous
+calls proceed without an account. This keeps MCP aligned with REST while the
+REST control plane remains protected.
 """
 
 from collections.abc import AsyncIterator
@@ -34,18 +19,29 @@ from starlette.middleware import Middleware
 from starlette.routing import Mount
 
 from freesearch.configuration.config import Settings, require_transport_port
-from freesearch.infrastructure.auth_asgi import BearerAuthMiddleware
+from freesearch.infrastructure.auth_asgi import (
+    BearerAuthMiddleware,
+    current_verified_principal,
+    has_auth_request_context,
+)
 from freesearch.models.users import UserPrincipal
 from freesearch.services.users import AuthService
 
 #: The SDK Streamable HTTP endpoint, and the resource path of its metadata URL.
 STREAMABLE_HTTP_PATH: str = "/mcp"
 
+#: Streamable HTTP uses POST for JSON-RPC, GET for an optional event stream,
+#: and DELETE to close a stateful session. Only this transport path is public.
+MCP_PUBLIC_ROUTES: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("POST", STREAMABLE_HTTP_PATH),
+        ("GET", STREAMABLE_HTTP_PATH),
+        ("DELETE", STREAMABLE_HTTP_PATH),
+    }
+)
+
 #: One fixed, secret-free message for every rejected tool call.
 MCP_AUTH_ERROR: str = "authentication is required"
-
-#: Startup error for a stdio process without its explicit credential.
-_STDIO_TOKEN_REQUIRED: str = "FREESEARCH_MCP_BEARER_TOKEN is required for the stdio transport"
 
 
 class McpAuthenticationError(RuntimeError):
@@ -120,21 +116,29 @@ async def require_mcp_user(
     return principal
 
 
+async def optional_mcp_user(
+    auth_service: AuthService | None, *, stdio_token: SecretStr | None = None
+) -> UserPrincipal | None:
+    """Return an optional verified account; anonymous tool calls return ``None``."""
+
+    if has_auth_request_context():
+        # The ASGI boundary allows an absent credential and rejects any invalid
+        # supplied Bearer token before dispatching the MCP request.
+        return current_verified_principal()
+    if stdio_token is None:
+        return None
+    if auth_service is None:
+        raise McpAuthenticationError(MCP_AUTH_ERROR)
+    principal = await auth_service.verify_token(stdio_token.get_secret_value())
+    if principal is None:
+        raise McpAuthenticationError(MCP_AUTH_ERROR)
+    return principal
+
+
 def build_http_app(server: FastMCP, *, auth_service: AuthService, settings: Settings) -> Starlette:
-    """Return the guarded Streamable HTTP application for ``server``.
+    """Return public Search/Fetch transport and own account-service lifespan."""
 
-    The SDK reads its auth settings when it builds the application, so the
-    effective settings decide the advertised issuer and resource URLs. The
-    returned application owns the auth lifecycle: the repository opens and
-    migrates before the first request, and the SDK session manager stops before
-    that repository closes.
-    """
-
-    if server.settings.auth is None:
-        # Fail at startup instead of denying every authenticated call later: the
-        # SDK arms its Bearer middleware only for a server that has a verifier.
-        raise McpAuthenticationError("the MCP server was created without account authentication")
-    server.settings.auth = build_auth_settings(settings)
+    del settings  # Auth metadata is not advertised by the public transport.
     inner = server.streamable_http_app()
 
     @asynccontextmanager
@@ -152,9 +156,8 @@ def build_http_app(server: FastMCP, *, auth_service: AuthService, settings: Sett
             Middleware(
                 BearerAuthMiddleware,
                 verify_token=auth_service.verify_token,
-                # This transport mounts no account route, so the two API
-                # exceptions stay closed here and every path needs a credential.
-                public_routes=frozenset(),
+                public_routes=MCP_PUBLIC_ROUTES,
+                optional_auth_routes=MCP_PUBLIC_ROUTES,
             )
         ],
         lifespan=lifespan,
@@ -183,10 +186,9 @@ async def run_http_server(
 async def run_stdio_server(
     server: FastMCP, *, auth_service: AuthService, settings: Settings
 ) -> None:
-    """Serve the stdio transport under the explicit process credential."""
+    """Serve public tools over stdio; a configured token is optional context."""
 
-    if settings.mcp_bearer_token is None:
-        raise McpAuthenticationError(_STDIO_TOKEN_REQUIRED)
+    del settings
     await auth_service.open()
     try:
         await server.run_stdio_async()
@@ -196,11 +198,13 @@ async def run_stdio_server(
 
 __all__ = [
     "MCP_AUTH_ERROR",
+    "MCP_PUBLIC_ROUTES",
     "STREAMABLE_HTTP_PATH",
     "LocalTokenVerifier",
     "McpAuthenticationError",
     "build_auth_settings",
     "build_http_app",
+    "optional_mcp_user",
     "require_mcp_user",
     "run_http_server",
     "run_stdio_server",

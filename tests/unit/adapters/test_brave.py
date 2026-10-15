@@ -11,7 +11,7 @@ from decimal import Decimal
 
 import httpx
 import pytest
-from pydantic import SecretStr
+from pydantic import SecretStr, ValidationError
 
 from freesearch.adapters.brave import BraveAdapter
 from freesearch.infrastructure.resilience import ProviderOperationError
@@ -101,6 +101,246 @@ async def test_search_maps_wire_request_and_normalized_response() -> None:
 
     _assert_wire_request(requests[0], client)
     _assert_normalized_response(response)
+
+
+async def test_search_forwards_brave_web_options_and_nested_locale_overrides() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json=_payload())
+
+    adapter, client = _adapter(handler)
+    try:
+        await adapter.search(
+            SearchRequest(
+                query="options",
+                limit=7,
+                country_code="de",
+                language="en",
+                domains=("common.example",),
+                provider_options={
+                    "brave": {
+                        "country": "fr",
+                        "search_lang": "fr",
+                        "api_version": "2026-10-01",
+                        "no_cache": True,
+                        "offset": 2,
+                        "location": {
+                            "latitude": 48.8566,
+                            "longitude": 2.3522,
+                            "timezone": "Europe/Paris",
+                            "city": "Paris",
+                            "state": "IDF",
+                            "state_name": "Ile-de-France",
+                            "country": "FR",
+                            "postal_code": "75001",
+                        },
+                        "ui_lang": "fr-FR",
+                        "freshness": "pw",
+                        "safesearch": "strict",
+                        "spellcheck": False,
+                        "text_decorations": False,
+                        "result_filter": ["web", "news"],
+                        "units": "metric",
+                        "goggles": ["https://example.com/a.goggle", "inline-rule"],
+                        "extra_snippets": True,
+                        "summary": True,
+                        "enable_rich_callback": False,
+                        "include_fetch_metadata": True,
+                        "operators": False,
+                    }
+                },
+            )
+        )
+    finally:
+        await client.aclose()
+
+    request = requests[0]
+    assert request.url.path == "/res/v1/web/search"
+    assert request.url.params["count"] == "7"
+    assert request.url.params["country"] == "FR"
+    assert request.url.params["search_lang"] == "fr"
+    assert request.url.params["ui_lang"] == "fr-FR"
+    assert request.url.params["freshness"] == "pw"
+    assert request.url.params["safesearch"] == "strict"
+    assert request.url.params["spellcheck"] == "false"
+    assert request.url.params["text_decorations"] == "false"
+    assert request.url.params["result_filter"] == "web,news"
+    assert request.url.params["units"] == "metric"
+    assert request.url.params.get_list("goggles") == [
+        "https://example.com/a.goggle",
+        "inline-rule",
+    ]
+    assert request.url.params["extra_snippets"] == "true"
+    assert request.url.params["summary"] == "true"
+    assert request.url.params["enable_rich_callback"] == "false"
+    assert request.url.params["include_fetch_metadata"] == "true"
+    assert request.url.params["operators"] == "false"
+    assert request.url.params["offset"] == "2"
+    assert request.headers["api-version"] == "2026-10-01"
+    assert request.headers["cache-control"] == "no-cache"
+    assert request.headers["x-loc-lat"] == "48.8566"
+    assert request.headers["x-loc-long"] == "2.3522"
+    assert request.headers["x-loc-timezone"] == "Europe/Paris"
+    assert request.headers["x-loc-city"] == "Paris"
+    assert request.headers["x-loc-state"] == "IDF"
+    assert request.headers["x-loc-state-name"] == "Ile-de-France"
+    assert request.headers["x-loc-country"] == "FR"
+    assert request.headers["x-loc-postal-code"] == "75001"
+    assert "common.example" not in str(request.url)
+
+
+async def test_llm_context_search_normalizes_extracted_context_and_metadata() -> None:
+    requests: list[httpx.Request] = []
+    payload = {
+        "grounding": {
+            "generic": [
+                {
+                    "url": "https://example.com/article",
+                    "title": "Context page",
+                    "snippets": ["First passage.", "Second passage."],
+                }
+            ],
+            "poi": {
+                "name": "Example Cafe",
+                "url": "https://example.com/cafe",
+                "title": "Cafe page",
+                "snippets": ["Cafe details."],
+            },
+            "map": [],
+        },
+        "sources": {
+            "https://example.com/article": {
+                "title": "Context page",
+                "hostname": "example.com",
+                "description": "Source description",
+            }
+        },
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json=payload)
+
+    adapter, client = _adapter(handler)
+    try:
+        response = await adapter.search(
+            SearchRequest(
+                query="grounded query",
+                limit=4,
+                country_code="us",
+                language="en",
+                provider_options={
+                    "brave": {
+                        "search_type": "llm_context",
+                        "country": "ca",
+                        "search_lang": "fr",
+                        "api_version": "2026-10-01",
+                        "no_cache": True,
+                        "location": {
+                            "latitude": 43.6532,
+                            "longitude": -79.3832,
+                            "city": "Toronto",
+                            "country": "CA",
+                        },
+                        "freshness": "pm",
+                        "spellcheck": False,
+                        "maximum_number_of_urls": 3,
+                        "maximum_number_of_tokens": 4096,
+                        "maximum_number_of_snippets": 12,
+                        "maximum_number_of_tokens_per_url": 2048,
+                        "maximum_number_of_snippets_per_url": 4,
+                        "context_threshold_mode": "balanced",
+                        "enable_local": True,
+                        "enable_source_metadata": True,
+                        "goggles": ["inline-rule", "https://example.com/a.goggle"],
+                    }
+                },
+            )
+        )
+    finally:
+        await client.aclose()
+
+    request = requests[0]
+    assert request.url.path == "/res/v1/llm/context"
+    assert request.url.params["count"] == "4"
+    assert request.url.params["country"] == "CA"
+    assert request.url.params["search_lang"] == "fr"
+    assert request.url.params["freshness"] == "pm"
+    assert request.url.params["spellcheck"] == "false"
+    assert request.url.params["maximum_number_of_urls"] == "3"
+    assert request.url.params["maximum_number_of_tokens"] == "4096"
+    assert request.url.params["maximum_number_of_snippets"] == "12"
+    assert request.url.params["maximum_number_of_tokens_per_url"] == "2048"
+    assert request.url.params["maximum_number_of_snippets_per_url"] == "4"
+    assert request.url.params["context_threshold_mode"] == "balanced"
+    assert request.url.params["enable_local"] == "true"
+    assert request.url.params["enable_source_metadata"] == "true"
+    assert request.url.params.get_list("goggles") == [
+        "inline-rule",
+        "https://example.com/a.goggle",
+    ]
+    assert request.headers["api-version"] == "2026-10-01"
+    assert request.headers["cache-control"] == "no-cache"
+    assert request.headers["x-loc-lat"] == "43.6532"
+    assert request.headers["x-loc-long"] == "-79.3832"
+    assert request.headers["x-loc-city"] == "Toronto"
+    assert request.headers["x-loc-country"] == "CA"
+    assert "ui_lang" not in request.url.params
+
+    assert response.total_results == 2
+    assert response.results[0].snippet == "First passage.\n\nSecond passage."
+    assert response.results[0].metadata == {
+        "context_type": "generic",
+        "snippets": ["First passage.", "Second passage."],
+        "source": payload["sources"]["https://example.com/article"],
+    }
+    assert response.results[1].title == "Cafe page"
+    assert response.results[1].metadata["context_type"] == "poi"
+    assert response.provider_metadata == {
+        "search_type": "llm_context",
+        "grounding": payload["grounding"],
+        "sources": payload["sources"],
+    }
+
+
+def test_brave_provider_options_validate_api_enums_and_context_constraints() -> None:
+    with pytest.raises(ValidationError):
+        SearchRequest(
+            query="bad enum",
+            provider_options={"brave": {"safesearch": "super-safe"}},
+        )
+    with pytest.raises(ValidationError):
+        SearchRequest(
+            query="bad context option",
+            provider_options={"brave": {"search_type": "llm_context", "summary": True}},
+        )
+    with pytest.raises(ValidationError):
+        SearchRequest(query="bad offset", provider_options={"brave": {"offset": 10}})
+
+
+async def test_llm_context_rejects_web_only_offset_without_sending_request() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={})
+
+    adapter, client = _adapter(handler)
+    try:
+        with pytest.raises(ProviderOperationError) as excinfo:
+            await adapter.search(
+                SearchRequest(
+                    query="context offset",
+                    provider_options={"brave": {"search_type": "llm_context", "offset": 1}},
+                )
+            )
+    finally:
+        await client.aclose()
+
+    assert excinfo.value.error.code == "bad_request"
+    assert requests == []
 
 
 async def test_missing_key_fails_closed_and_uses_planned_secret_name(monkeypatch) -> None:
