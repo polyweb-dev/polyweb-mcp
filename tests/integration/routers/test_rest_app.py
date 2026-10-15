@@ -416,3 +416,117 @@ async def test_search_with_search_bit_off_blocks_search_keeps_fetch(
     assert fetch.status_code == 200
     assert adapter.search_calls == 0
     assert adapter.fetch_calls == 1
+
+
+class _FailingFetchAdapter(_StubAdapter):
+    def __init__(self, name: str, *, error: ProviderError) -> None:
+        super().__init__(name)
+        self._error = error
+
+    async def fetch(self, request: FetchRequest) -> FetchResponse:
+        raise ProviderOperationError(self._error)
+
+
+async def test_fetch_endpoint_maps_bot_blocked_to_502(
+    repository: SQLiteRepository,
+    auth_secret: str,
+) -> None:
+    adapter = _FailingFetchAdapter(
+        "tinyfish",
+        error=ProviderError(
+            provider="tinyfish",
+            code="bot_blocked",
+            message="target site blocked automated bot access",
+            status_code=403,
+        ),
+    )
+    app = create_app([adapter], repository=repository)
+    with TestClient(app) as client:
+        pair = register_and_login(client, temp_email("rest-fetch-502"))
+        headers = raw_auth_headers(pair["access_token"])
+        resp = client.post("/fetch", json={"url": "https://example.com/blocked"}, headers=headers)
+    assert resp.status_code == 502
+    data = resp.json()
+    assert data["provider"] == "tinyfish"
+    assert data["code"] == "bot_blocked"
+    assert data["status_code"] == 403
+    assert "target site blocked" in data["detail"]
+
+
+async def test_fetch_endpoint_maps_rate_limited_to_429(
+    repository: SQLiteRepository,
+    auth_secret: str,
+) -> None:
+    adapter = _FailingFetchAdapter(
+        "tinyfish",
+        error=ProviderError(
+            provider="tinyfish",
+            code="rate_limited",
+            message="too many requests",
+            status_code=429,
+        ),
+    )
+    app = create_app([adapter], repository=repository)
+    with TestClient(app) as client:
+        pair = register_and_login(client, temp_email("rest-fetch-429"))
+        headers = raw_auth_headers(pair["access_token"])
+        resp = client.post("/fetch", json={"url": "https://example.com/page"}, headers=headers)
+    assert resp.status_code == 429
+    data = resp.json()
+    assert data["provider"] == "tinyfish"
+    assert data["code"] == "rate_limited"
+    assert data["status_code"] == 429
+
+
+async def test_fetch_endpoint_maps_terminal_quota_to_402(
+    repository: SQLiteRepository,
+    auth_secret: str,
+) -> None:
+    adapter = _FailingFetchAdapter(
+        "tavily",
+        error=ProviderError(
+            provider="tavily",
+            code="quota_exhausted",
+            message="out of credits",
+            status_code=402,
+        ),
+    )
+    app = create_app([adapter], repository=repository)
+    with TestClient(app) as client:
+        pair = register_and_login(client, temp_email("rest-fetch-402"))
+        headers = raw_auth_headers(pair["access_token"])
+        resp = client.post("/fetch", json={"url": "https://example.com/page"}, headers=headers)
+    assert resp.status_code == 402
+    data = resp.json()
+    assert data["provider"] == "tavily"
+    assert data["detail"] == "out of credits"
+
+
+async def test_fetch_chained_fallback_succeeds_on_second_candidate(
+    repository: SQLiteRepository,
+    auth_secret: str,
+) -> None:
+    await repository.set_runtime_setting("routing.policy", {"fallback_policy": "chained"})
+    failing = _FailingFetchAdapter(
+        "first",
+        error=ProviderError(
+            provider="first",
+            code="bot_blocked",
+            message="blocked",
+            status_code=403,
+        ),
+    )
+    succeeding = _StubAdapter("second")
+    app = create_app([failing, succeeding], repository=repository)
+    with TestClient(app) as client:
+        pair = register_and_login(client, temp_email("rest-fetch-fallback"))
+        headers = raw_auth_headers(pair["access_token"])
+        resp = client.post(
+            "/fetch",
+            json={"url": "https://example.com/page", "routing": {"allow_fallback": True}},
+            headers=headers,
+        )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["provider"] == "second"
+    assert data["document"]["content"] == "second content"

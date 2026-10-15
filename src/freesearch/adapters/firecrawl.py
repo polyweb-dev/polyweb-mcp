@@ -523,13 +523,50 @@ class FirecrawlAdapter(ProviderAdapter):
         # not implement Pydantic's model_dump method.
         markdown = getattr(response, "markdown", None)
         if isinstance(markdown, str):
-            return {"markdown": markdown}
+            payload: dict[str, Any] = {"markdown": markdown}
+            raw_metadata = getattr(response, "metadata", None)
+            metadata = _as_mapping(raw_metadata)
+            if not metadata and raw_metadata is not None:
+                status_code = getattr(raw_metadata, "statusCode", None)
+                error = getattr(raw_metadata, "error", None)
+                metadata = {}
+                if status_code is not None:
+                    metadata["statusCode"] = status_code
+                if error is not None:
+                    metadata["error"] = error
+            if metadata:
+                payload["metadata"] = metadata
+            return payload
         raise self._error("invalid_response", "malformed fetch response") from None
 
     def _document_data(self, response: Any, formats: Any = None) -> str:
         """Choose a requested textual format, falling back to returned content."""
 
         data = self._document_payload(response)
+        raw_metadata = data.get("metadata")
+        metadata = raw_metadata if isinstance(raw_metadata, dict) else {}
+        status_code = metadata.get("statusCode")
+        error = metadata.get("error")
+        if status_code == 403 or (
+            isinstance(error, str) and ("403" in error or "blocked" in error.lower())
+        ):
+            raise self._error(
+                "bot_blocked",
+                f"target site blocked automated access: {error or 'HTTP 403'}",
+                status=403,
+            )
+        if status_code == 404:
+            raise self._error(
+                "not_found",
+                f"target document not found: {error or 'HTTP 404'}",
+                status=404,
+            )
+        if isinstance(status_code, int) and status_code >= 400:
+            raise self._error(
+                "http_error",
+                f"target site returned HTTP {status_code}: {error or ''}",
+                status=status_code,
+            )
         format_names: list[str] = []
         if isinstance(formats, (list, tuple)):
             for format_option in formats:
@@ -820,12 +857,34 @@ class FirecrawlAdapter(ProviderAdapter):
                 retryable=False,
                 status=402,
             )
+        if status == 408:
+            return self._error(
+                "scrape_timeout",
+                "Firecrawl scrape request timed out.",
+                retryable=True,
+                status=408,
+            )
+        if status == 403:
+            return self._error(
+                "bot_blocked",
+                "target site blocked automated bot access (HTTP 403)",
+                retryable=False,
+                status=403,
+            )
         if status is not None:
             return self._error(
                 "http_error",
                 f"HTTP {status}",
                 retryable=status in RETRYABLE_STATUS_CODES,
                 status=status,
+            )
+        msg_str = str(exc).lower()
+        if "blocked" in msg_str or "forbidden" in msg_str or "403" in msg_str:
+            return self._error(
+                "bot_blocked",
+                "target site blocked automated bot access",
+                retryable=False,
+                status=403,
             )
         # The class name carries no payload or secret; raw exceptions are never
         # exposed.

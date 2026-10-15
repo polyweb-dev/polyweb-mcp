@@ -1558,7 +1558,7 @@ describe("PG-F1 AC-PG-F1-6 regressions: PG-S1..S5 + header + Simulator + logic u
     expect(contextSource).toContain("FreeSearchInner")
     // Playground fetch call contract untouched (markdown/4000 + trims).
     expect(playgroundSource).toContain('format: "markdown"')
-    expect(playgroundSource).toContain("timeoutMs: 4000")
+    expect(playgroundSource).toContain("timeoutMs: 15000")
     expect(playgroundSource).toContain("fetchUrl.trim()")
     expect(playgroundSource).toContain("setFetchUrl")
     expect(playgroundSource).toContain("runFetch")
@@ -3482,7 +3482,7 @@ describe("PG-S4 AC-PG-S4-6: eligible-inherit else auto + markdown/4000ms contrac
     ).toContain("Auto arbitration")
   })
 
-  it("calls runFetch directly with markdown + 4000ms inside handleFetchResult", () => {
+  it("calls runFetch directly with markdown + 15000ms inside handleFetchResult", () => {
     const idx = playgroundSource.indexOf("handleFetchResult")
     expect(idx).toBeGreaterThanOrEqual(0)
     const tail = playgroundSource.slice(idx, idx + 8000)
@@ -3492,7 +3492,7 @@ describe("PG-S4 AC-PG-S4-6: eligible-inherit else auto + markdown/4000ms contrac
     expect(tail).toContain("setFetchUrl")
     expect(tail).toContain("runFetch")
     expect(tail).toMatch(/format:\s*.*"markdown"/)
-    expect(tail).toMatch(/timeoutMs:\s*.*4000/)
+    expect(tail).toMatch(/timeoutMs:\s*.*15000/)
     // Mode switch is part of the same handler (navigates to Fetch tab).
     expect(tail).toMatch(/switchMode\s*\(.*["']fetch["']|setMode\s*\(.*["']fetch["']/)
   })
@@ -4210,7 +4210,7 @@ describe("PG-S5 AC-PG-S5-3: source number contract (playground/types/context)", 
     expect(executionStateSource).toContain("clampLimit")
   })
 
-  it("playground search uses a 5000ms timeout budget (fetch stays 4000ms)", () => {
+  it("playground search uses a 5000ms timeout budget (fetch uses 15000ms)", () => {
     const executeSource = readFileSync(
       path.resolve(testDir, "../model/playgroundExecuteAction.ts"),
       "utf8"
@@ -4222,7 +4222,7 @@ describe("PG-S5 AC-PG-S5-3: source number contract (playground/types/context)", 
     expect(searchBranch).toContain("timeoutMs: 5000")
     expect(searchBranch).not.toContain("timeoutMs: 3000")
     // Fetch contract untouched.
-    expect(executeSource).toContain("timeoutMs: 4000")
+    expect(executeSource).toContain("timeoutMs: 15000")
   })
 
   it("preserves the shared SegmentedControl.tsx file (no deletion)", () => {

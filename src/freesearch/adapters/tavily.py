@@ -738,12 +738,26 @@ class TavilyAdapter(ProviderAdapter):
         response = await self._runner.run(self.name, lambda: self._fetch_sdk(request))
         try:
             results = response.get("results") or []
+            failed_results = response.get("failed_results") or []
             target = str(request.url)
             match = next(
                 (r for r in results if _same_url(str(r.get("url") or ""), target)),
                 None,
             )
             if match is None:
+                failed_match = next(
+                    (f for f in failed_results if _same_url(str(f.get("url") or ""), target)),
+                    None,
+                )
+                if failed_match:
+                    err = str(failed_match.get("error", ""))
+                    if any(term in err.lower() for term in ("blocked", "forbidden", "403")):
+                        raise self._error(
+                            "bot_blocked",
+                            f"target site blocked automated access: {err}",
+                            status=403,
+                        )
+                    raise self._error("fetch_failed", f"target fetch failed: {err}")
                 raise self._error("fetch_failed", "no successful extraction result") from None
             # An explicit empty string is a valid (empty) document; a missing
             # or non-string raw_content means the payload is malformed.
@@ -869,7 +883,7 @@ class TavilyAdapter(ProviderAdapter):
         status = self._normalization_status(exc)
         if status == 429:
             return self._rate_limited(exc)
-        if status == 402:
+        if status in (402, 432, 433):
             # A Tavily 402 is the out-of-Credits rail: terminal, never
             # retried, and never classified as a rate outcome. The cached
             # balance never softens it.

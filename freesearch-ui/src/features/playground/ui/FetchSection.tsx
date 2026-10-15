@@ -1,5 +1,6 @@
 import type { PlaygroundController } from "../model/usePlaygroundController"
 import { FetchComposer } from "./FetchComposer"
+import { FetchErrorBanner } from "./FetchErrorBanner"
 import { FetchResult } from "./FetchResult"
 
 /** Fetch panel: hero/docked composer wrapper, error banner, document. */
@@ -16,9 +17,7 @@ export function FetchSection({ controller }: { controller: PlaygroundController 
         <FetchComposer controller={controller} />
       </div>
       {controller.fetchError && (
-        <p className="text-[13px]" style={{ color: "var(--status-danger)" }}>
-          {controller.fetchError}
-        </p>
+        <FetchErrorBanner error={controller.fetchError} />
       )}
 
       {/* Fetch result — Widescreen 2-column layout */}
