@@ -3,11 +3,11 @@ id: TASK-000009
 title: Integrate OpenAI Search
 status: To Do
 assignee: []
-created_date: '2026-10-15 22:19'
+created_date: 2026-10-15 22:19
 labels: []
 dependencies: []
 type: feature
-ordinal: 9000
+ordinal: 15000
 ---
 
 ## Description

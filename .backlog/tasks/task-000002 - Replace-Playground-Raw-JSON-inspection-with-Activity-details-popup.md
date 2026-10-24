@@ -3,11 +3,11 @@ id: TASK-000002
 title: Replace Playground Raw JSON inspection with Activity details popup
 status: To Do
 assignee: []
-created_date: '2026-10-15 22:19'
+created_date: 2026-10-15 22:19
 labels: []
 dependencies: []
 type: enhancement
-ordinal: 2000
+ordinal: 11000
 ---
 
 ## Description

@@ -3,11 +3,11 @@ id: TASK-000013
 title: Integrate Linkup
 status: To Do
 assignee: []
-created_date: '2026-10-15 22:20'
+created_date: 2026-10-15 22:20
 labels: []
 dependencies: []
 type: feature
-ordinal: 13000
+ordinal: 19000
 ---
 
 ## Description

@@ -3,11 +3,11 @@ id: TASK-000011
 title: Integrate Serper provider(s)
 status: To Do
 assignee: []
-created_date: '2026-10-15 22:20'
+created_date: 2026-10-15 22:20
 labels: []
 dependencies: []
 type: feature
-ordinal: 11000
+ordinal: 17000
 ---
 
 ## Description
