@@ -1,0 +1,814 @@
+"""Unit tests for projects domain models, contracts, and alpha bootstrap fixtures."""
+
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from uuid import uuid4
+
+import pytest
+from pydantic import ValidationError
+
+from freesearch.models.projects import (
+    ALLOWED_TOKEN_ACTIONS,
+    ALLOWED_TOKEN_SCOPES,
+    BUILTIN_ROLE_DEFINITIONS,
+    DEFAULT_TOKEN_LIFETIME_DAYS,
+    AccountRead,
+    AccountType,
+    AuthorizationDecision,
+    AuthorizationQuery,
+    AuthorizationService,
+    BuiltinRole,
+    CredentialInstanceRead,
+    CredentialOwnerScope,
+    CredentialProjectGrantRead,
+    ExecutionSettings,
+    HumanPrincipal,
+    MembershipStatus,
+    PermissionAction,
+    ProjectBindingRead,
+    ProjectContext,
+    ProjectCreate,
+    ProjectMemberAdd,
+    ProjectMemberRead,
+    ProjectMemberUpdate,
+    ProjectPoolAllocationRead,
+    ProjectRead,
+    ProjectRolloutState,
+    ProjectSettingsDocument,
+    ProjectStatus,
+    ProjectTokenCreate,
+    ProjectTokenIssueResponse,
+    ProjectTokenPrincipal,
+    ProjectTokenRead,
+    ProjectTokenRotate,
+    RoleAssignmentRead,
+    RoutingSettings,
+    ScopeType,
+    SettingsFieldResolution,
+    SettingsProvenance,
+    SettingsResolution,
+    UpstreamQuotaPoolRead,
+    evaluate_authorization,
+)
+from tests.fixtures.alpha_fixtures import (
+    alpha_test_db_context,
+    bootstrap_fresh_alpha,
+    build_alpha_project,
+    build_alpha_project_token,
+    create_alpha_test_db,
+)
+
+
+def test_project_rollout_states() -> None:
+    assert ProjectRolloutState.PROJECTS_PREVIEW.value == "preview"
+    assert ProjectRolloutState.PROJECTS_STRICT.value == "strict"
+    assert ProjectRolloutState.PROJECTS_FAIR.value == "fair"
+
+
+def test_builtin_role_definitions_integrity() -> None:
+    assert BuiltinRole.SYSTEM_ADMIN in BUILTIN_ROLE_DEFINITIONS
+    assert BuiltinRole.PROJECT_ADMIN in BUILTIN_ROLE_DEFINITIONS
+    assert BuiltinRole.PROJECT_MEMBER in BUILTIN_ROLE_DEFINITIONS
+    assert BuiltinRole.ROUTING_EDITOR in BUILTIN_ROLE_DEFINITIONS
+    assert BuiltinRole.PROVIDER_EDITOR in BUILTIN_ROLE_DEFINITIONS
+    assert BuiltinRole.TOKEN_MANAGER in BUILTIN_ROLE_DEFINITIONS
+
+    sys_admin = BUILTIN_ROLE_DEFINITIONS[BuiltinRole.SYSTEM_ADMIN]
+    assert sys_admin.scope_type == ScopeType.SYSTEM
+    assert PermissionAction.SYSTEM_SETTINGS_WRITE in sys_admin.permissions
+    # Invariant: system_admin has NO implicit project content permissions
+    assert PermissionAction.SEARCH_EXECUTE not in sys_admin.permissions
+    assert PermissionAction.FETCH_EXECUTE not in sys_admin.permissions
+    assert PermissionAction.TOKENS_MANAGE not in sys_admin.permissions
+
+    proj_admin = BUILTIN_ROLE_DEFINITIONS[BuiltinRole.PROJECT_ADMIN]
+    assert proj_admin.scope_type == ScopeType.PROJECT
+    assert PermissionAction.PROJECT_ARCHIVE in proj_admin.permissions
+    assert PermissionAction.MEMBERS_MANAGE in proj_admin.permissions
+
+    proj_member = BUILTIN_ROLE_DEFINITIONS[BuiltinRole.PROJECT_MEMBER]
+    assert proj_member.scope_type == ScopeType.PROJECT
+    assert PermissionAction.SEARCH_EXECUTE in proj_member.permissions
+    assert PermissionAction.PROJECT_ARCHIVE not in proj_member.permissions
+
+
+def test_target_account_model() -> None:
+    account_id = uuid4()
+    now = datetime.now(UTC)
+    account = AccountRead(id=account_id, account_type=AccountType.HUMAN, created_at=now)
+    assert account.id == account_id
+    assert account.account_type == AccountType.HUMAN
+    assert account.is_active is True
+
+    # Immutability
+    with pytest.raises(ValidationError):
+        account.is_active = False
+
+
+def test_principals_and_context_deep_immutability() -> None:
+    user_id = uuid4()
+    session_id = uuid4()
+    human = HumanPrincipal(user_id=user_id, session_id=session_id)
+    assert human.principal_type == "human"
+
+    # HumanPrincipal immutability
+    with pytest.raises(ValidationError):
+        human.user_id = uuid4()
+
+    proj_id = uuid4()
+    token_id = uuid4()
+    token_principal = ProjectTokenPrincipal(
+        token_id=token_id, project_id=proj_id, scopes=frozenset({"search.execute"})
+    )
+    assert token_principal.principal_type == "project_token"
+
+    # ProjectTokenPrincipal immutability
+    with pytest.raises(ValidationError):
+        token_principal.project_id = uuid4()
+
+    account_id = uuid4()
+    context = ProjectContext(
+        account_id=account_id,
+        project_id=proj_id,
+        principal=human,
+        effective_permissions=frozenset(
+            {PermissionAction.SEARCH_EXECUTE, PermissionAction.PROJECT_READ}
+        ),
+        policy_revision=1,
+    )
+    assert context.allows(PermissionAction.SEARCH_EXECUTE) is True
+    assert context.allows(PermissionAction.PROJECT_ARCHIVE) is False
+
+    # ProjectContext immutability
+    with pytest.raises(ValidationError):
+        context.policy_revision = 2
+
+    # Nested principal immutability through context
+    with pytest.raises(ValidationError):
+        context.principal.user_id = uuid4()  # type: ignore[union-attr]
+
+
+def test_token_principal_project_mismatch_rejected() -> None:
+    token_proj_id = uuid4()
+    context_proj_id = uuid4()
+    token_principal = ProjectTokenPrincipal(
+        token_id=uuid4(),
+        project_id=token_proj_id,
+        scopes=frozenset({"search.execute"}),
+    )
+
+    with pytest.raises(ValidationError, match="does not match ProjectContext project_id"):
+        ProjectContext(
+            account_id=uuid4(),
+            project_id=context_proj_id,
+            principal=token_principal,
+            effective_permissions=frozenset({PermissionAction.SEARCH_EXECUTE}),
+            policy_revision=1,
+        )
+
+    # Matching project_id succeeds
+    valid_context = ProjectContext(
+        account_id=uuid4(),
+        project_id=token_proj_id,
+        principal=token_principal,
+        effective_permissions=frozenset({PermissionAction.SEARCH_EXECUTE}),
+        policy_revision=1,
+    )
+    assert valid_context.project_id == token_proj_id
+
+
+def test_token_scopes_restricted_to_execution_only() -> None:
+    # Allowed token actions and scopes verification
+    assert PermissionAction.SEARCH_EXECUTE in ALLOWED_TOKEN_ACTIONS
+    assert PermissionAction.FETCH_EXECUTE in ALLOWED_TOKEN_ACTIONS
+    assert "search.execute" in ALLOWED_TOKEN_SCOPES
+    assert "fetch.execute" in ALLOWED_TOKEN_SCOPES
+
+    # Valid execution scopes
+    valid_token = ProjectTokenCreate(
+        label="Execution Token",
+        scopes=frozenset({PermissionAction.SEARCH_EXECUTE.value}),
+    )
+    assert PermissionAction.SEARCH_EXECUTE.value in valid_token.scopes
+
+    # Management scopes forbidden
+    forbidden_scopes = [
+        "project.archive",
+        "members.manage",
+        "tokens.manage",
+        "settings.write",
+        "system.settings.write",
+    ]
+    for scope in forbidden_scopes:
+        with pytest.raises(ValidationError, match="restricted to execution actions"):
+            ProjectTokenCreate(label="Bad Token", scopes=frozenset({scope}))
+
+        with pytest.raises(ValidationError, match="restricted to execution actions"):
+            ProjectTokenPrincipal(
+                token_id=uuid4(),
+                project_id=uuid4(),
+                scopes=frozenset({scope}),
+            )
+
+
+def test_role_assignment_and_member_add_scope_constraints() -> None:
+    user_id = uuid4()
+    scope_id = uuid4()
+    granter_id = uuid4()
+
+    # System role cannot be assigned at project scope
+    with pytest.raises(ValidationError, match="cannot be assigned at scope_type 'project'"):
+        RoleAssignmentRead(
+            scope_type=ScopeType.PROJECT,
+            scope_id=scope_id,
+            user_id=user_id,
+            role_key=BuiltinRole.SYSTEM_ADMIN,
+            granted_by=granter_id,
+            version=1,
+        )
+
+    # Project role cannot be assigned at system scope
+    with pytest.raises(ValidationError, match="cannot be assigned at scope_type 'system'"):
+        RoleAssignmentRead(
+            scope_type=ScopeType.SYSTEM,
+            scope_id=scope_id,
+            user_id=user_id,
+            role_key=BuiltinRole.PROJECT_ADMIN,
+            granted_by=granter_id,
+            version=1,
+        )
+
+    # Valid assignments succeed
+    valid_proj = RoleAssignmentRead(
+        scope_type=ScopeType.PROJECT,
+        scope_id=scope_id,
+        user_id=user_id,
+        role_key=BuiltinRole.PROJECT_MEMBER,
+        granted_by=granter_id,
+        version=1,
+    )
+    assert valid_proj.role_key == BuiltinRole.PROJECT_MEMBER
+
+    # ProjectMemberAdd cannot add system_admin
+    with pytest.raises(ValidationError, match="must have project scope"):
+        ProjectMemberAdd(user_id=user_id, initial_role=BuiltinRole.SYSTEM_ADMIN)
+
+    # Valid ProjectMemberAdd succeeds
+    member_add = ProjectMemberAdd(user_id=user_id, initial_role=BuiltinRole.PROJECT_ADMIN)
+    assert member_add.initial_role == BuiltinRole.PROJECT_ADMIN
+
+
+def test_credential_owner_scope_invariants() -> None:
+    cred_id = uuid4()
+    proj_id = uuid4()
+
+    # Project credential missing owner_project_id
+    with pytest.raises(ValidationError, match="Project-scoped credential must have non-null"):
+        CredentialInstanceRead(
+            id=cred_id,
+            provider_type="brave",
+            owner_scope=CredentialOwnerScope.PROJECT,
+            owner_project_id=None,
+            label="Project Brave",
+            auth_mode="api_key",
+        )
+
+    # System credential having owner_project_id
+    with pytest.raises(
+        ValidationError,
+        match="System-scoped credential must have owner_project_id=None",
+    ):
+        CredentialInstanceRead(
+            id=cred_id,
+            provider_type="brave",
+            owner_scope=CredentialOwnerScope.SYSTEM,
+            owner_project_id=proj_id,
+            label="System Brave",
+            auth_mode="api_key",
+        )
+
+    # Valid project credential
+    valid_proj_cred = CredentialInstanceRead(
+        id=cred_id,
+        provider_type="brave",
+        owner_scope=CredentialOwnerScope.PROJECT,
+        owner_project_id=proj_id,
+        label="Project Brave",
+        auth_mode="api_key",
+    )
+    assert valid_proj_cred.owner_project_id == proj_id
+
+    # Valid system credential
+    valid_sys_cred = CredentialInstanceRead(
+        id=cred_id,
+        provider_type="brave",
+        owner_scope=CredentialOwnerScope.SYSTEM,
+        owner_project_id=None,
+        label="Global Brave",
+        auth_mode="api_key",
+    )
+    assert valid_sys_cred.owner_project_id is None
+
+
+def test_token_issue_response_wire_boundary_and_leak_prevention() -> None:
+    raw_secret = "fs_live_supersecretstring123456789"
+    token_read = ProjectTokenRead(
+        id=uuid4(),
+        project_id=uuid4(),
+        label="Test Token",
+        prefix="fs_live_super",
+        scopes=frozenset({"search.execute"}),
+        created_by=uuid4(),
+        created_at=datetime.now(UTC),
+        expires_at=None,
+    )
+    response = ProjectTokenIssueResponse(
+        token=token_read,
+        secret=raw_secret,
+    )
+
+    # 1. Repr and str suppress the secret to prevent accidental logging leaks
+    repr_str = repr(response)
+    str_str = str(response)
+    assert raw_secret not in repr_str
+    assert "**********" in repr_str
+    assert raw_secret not in str_str
+    assert "**********" in str_str
+
+    # 2. Wire payload contains both secret and raw_token for client delivery
+    wire_payload = response.to_one_time_wire_payload()
+    assert wire_payload["raw_token"] == raw_secret
+    assert wire_payload["secret"] == raw_secret
+    assert wire_payload["token"]["id"] == str(token_read.id)
+
+    # 3. Dedicated wire payload validates cleanly against response model
+    validated = ProjectTokenIssueResponse.model_validate(wire_payload)
+    assert validated.secret == raw_secret
+    assert validated.raw_token == raw_secret
+    assert validated.token.id == token_read.id
+
+    # 4. Standard model_dump / model_dump_json preserves unmasked secret for FastAPI response
+    dumped = response.model_dump(mode="json")
+    assert dumped["secret"] == raw_secret
+    assert dumped["raw_token"] == raw_secret
+
+
+def test_project_create_requires_atomic_initial_admin() -> None:
+    admin_id = uuid4()
+    proj = ProjectCreate(
+        name="Workspace Alpha",
+        slug="workspace-alpha",
+        initial_admin_user_id=admin_id,
+    )
+    assert proj.initial_admin_user_id == admin_id
+
+    # Missing initial_admin_user_id is rejected
+    with pytest.raises(ValidationError):
+        ProjectCreate(name="Workspace Beta")  # type: ignore[call-arg]
+
+
+def test_authorization_protocol_and_evaluator() -> None:
+    user_id = uuid4()
+    principal = HumanPrincipal(user_id=user_id, session_id=uuid4())
+    proj_id = uuid4()
+
+    query = AuthorizationQuery(
+        principal=principal,
+        action=PermissionAction.SEARCH_EXECUTE,
+        scope_type=ScopeType.PROJECT,
+        scope_id=proj_id,
+    )
+
+    # 1. Deny by default when no permissions supplied
+    decision_none: AuthorizationDecision = evaluate_authorization(query, effective_permissions=None)
+    assert decision_none.allowed is False
+    assert "Deny by default" in (decision_none.reason or "")
+
+    # 2. Deny when action not in permissions
+    decision_unpermitted = evaluate_authorization(
+        query, effective_permissions=frozenset({PermissionAction.PROJECT_READ})
+    )
+    assert decision_unpermitted.allowed is False
+    assert "not permitted" in (decision_unpermitted.reason or "")
+
+    # 3. Deny when system action is invoked with project scope
+    sys_query = AuthorizationQuery(
+        principal=principal,
+        action=PermissionAction.SYSTEM_SETTINGS_WRITE,
+        scope_type=ScopeType.PROJECT,
+        scope_id=proj_id,
+    )
+    decision_sys_mismatch = evaluate_authorization(
+        sys_query, effective_permissions=frozenset({PermissionAction.SYSTEM_SETTINGS_WRITE})
+    )
+    assert decision_sys_mismatch.allowed is False
+    assert "requires system scope" in (decision_sys_mismatch.reason or "")
+
+    # 4. Permit when authorized
+    decision_allowed = evaluate_authorization(
+        query, effective_permissions=frozenset({PermissionAction.SEARCH_EXECUTE})
+    )
+    assert decision_allowed.allowed is True
+
+    # 5. Service Protocol compliance dummy check
+    class DummyAuthService:
+        def authorize(self, q: AuthorizationQuery) -> AuthorizationDecision:
+            return evaluate_authorization(q, effective_permissions=frozenset({q.action}))
+
+    assert isinstance(DummyAuthService(), AuthorizationService)
+
+
+def test_authorization_evaluator_token_scope_and_cross_project_boundaries() -> None:
+    p1 = uuid4()
+    p2 = uuid4()
+    token = ProjectTokenPrincipal(
+        token_id=uuid4(),
+        project_id=p1,
+        scopes=frozenset({"search.execute"}),
+    )
+
+    # 1. Token cannot execute action beyond its scopes (even if effective_permissions allows)
+    q1 = AuthorizationQuery(
+        principal=token,
+        action=PermissionAction.FETCH_EXECUTE,
+        scope_type=ScopeType.PROJECT,
+        scope_id=p1,
+    )
+    d1 = evaluate_authorization(
+        q1,
+        effective_permissions=frozenset(
+            {PermissionAction.FETCH_EXECUTE, PermissionAction.SEARCH_EXECUTE}
+        ),
+    )
+    assert d1.allowed is False
+    assert "not allowed by token scopes" in (d1.reason or "")
+
+    # 2. Token cannot execute across projects (scope_id != token.project_id)
+    q2 = AuthorizationQuery(
+        principal=token,
+        action=PermissionAction.SEARCH_EXECUTE,
+        scope_type=ScopeType.PROJECT,
+        scope_id=p2,
+    )
+    d2 = evaluate_authorization(
+        q2,
+        effective_permissions=frozenset({PermissionAction.SEARCH_EXECUTE}),
+    )
+    assert d2.allowed is False
+    assert "does not match target scope_id" in (d2.reason or "")
+
+    # 3. Token cannot execute at system scope
+    q3 = AuthorizationQuery(
+        principal=token,
+        action=PermissionAction.SEARCH_EXECUTE,
+        scope_type=ScopeType.SYSTEM,
+        scope_id=None,
+    )
+    d3 = evaluate_authorization(
+        q3,
+        effective_permissions=frozenset({PermissionAction.SEARCH_EXECUTE}),
+    )
+    assert d3.allowed is False
+    assert "Project token cannot execute at system scope" in (d3.reason or "")
+
+    # 4. Valid token execution succeeds
+    q4 = AuthorizationQuery(
+        principal=token,
+        action=PermissionAction.SEARCH_EXECUTE,
+        scope_type=ScopeType.PROJECT,
+        scope_id=p1,
+    )
+    d4 = evaluate_authorization(
+        q4,
+        effective_permissions=frozenset({PermissionAction.SEARCH_EXECUTE}),
+    )
+    assert d4.allowed is True
+    assert d4.reason == "Permitted"
+
+
+def test_authorization_evaluator_project_action_scope_boundaries() -> None:
+    user_id = uuid4()
+    human = HumanPrincipal(user_id=user_id, session_id=uuid4())
+    proj_id = uuid4()
+
+    # 1. Project action evaluated at system scope is rejected
+    q_sys_mismatch = AuthorizationQuery(
+        principal=human,
+        action=PermissionAction.PROJECT_ARCHIVE,
+        scope_type=ScopeType.SYSTEM,
+        scope_id=None,
+    )
+    d_sys_mismatch = evaluate_authorization(
+        q_sys_mismatch,
+        effective_permissions=frozenset({PermissionAction.PROJECT_ARCHIVE}),
+    )
+    assert d_sys_mismatch.allowed is False
+    assert "Project action requires project scope" in (d_sys_mismatch.reason or "")
+
+    # 2. Project action without a scope_id is rejected
+    q_no_scope_id = AuthorizationQuery(
+        principal=human,
+        action=PermissionAction.PROJECT_READ,
+        scope_type=ScopeType.PROJECT,
+        scope_id=None,
+    )
+    d_no_scope_id = evaluate_authorization(
+        q_no_scope_id,
+        effective_permissions=frozenset({PermissionAction.PROJECT_READ}),
+    )
+    assert d_no_scope_id.allowed is False
+    assert "requires a valid project scope_id" in (d_no_scope_id.reason or "")
+
+    # 3. System action evaluated at project scope is rejected
+    q_proj_mismatch = AuthorizationQuery(
+        principal=human,
+        action=PermissionAction.SYSTEM_SETTINGS_WRITE,
+        scope_type=ScopeType.PROJECT,
+        scope_id=proj_id,
+    )
+    d_proj_mismatch = evaluate_authorization(
+        q_proj_mismatch,
+        effective_permissions=frozenset({PermissionAction.SYSTEM_SETTINGS_WRITE}),
+    )
+    assert d_proj_mismatch.allowed is False
+    assert "System action requires system scope" in (d_proj_mismatch.reason or "")
+
+    # 4. Human principal with valid project action at project scope with scope_id succeeds
+    q_valid = AuthorizationQuery(
+        principal=human,
+        action=PermissionAction.PROJECT_READ,
+        scope_type=ScopeType.PROJECT,
+        scope_id=proj_id,
+    )
+    d_valid = evaluate_authorization(
+        q_valid,
+        effective_permissions=frozenset({PermissionAction.PROJECT_READ}),
+    )
+    assert d_valid.allowed is True
+
+
+def test_project_token_optional_expiry_semantics() -> None:
+    now = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
+
+    # 1. Omitted expires_at: defaults to 90 days from now (policy proposal)
+    token_create_omitted = ProjectTokenCreate(label="Default Expiry Token")
+    assert "expires_at" not in token_create_omitted.model_fields_set
+    resolved_default = token_create_omitted.resolve_expires_at(now=now)
+    assert resolved_default is not None
+    assert resolved_default == now + timedelta(days=DEFAULT_TOKEN_LIFETIME_DAYS)
+
+    # 2. Explicit null: No expiration (perpetual)
+    token_create_no_expiry = ProjectTokenCreate(label="Permanent Token", expires_at=None)
+    assert "expires_at" in token_create_no_expiry.model_fields_set
+    resolved_none = token_create_no_expiry.resolve_expires_at(now=now)
+    assert resolved_none is None
+
+    # 3. Explicit timestamp: Specific expiration
+    target_date = datetime(2026, 6, 1, 0, 0, 0, tzinfo=UTC)
+    token_create_custom = ProjectTokenCreate(label="Custom Token", expires_at=target_date)
+    assert "expires_at" in token_create_custom.model_fields_set
+    resolved_custom = token_create_custom.resolve_expires_at(now=now)
+    assert resolved_custom == target_date
+
+    # 4. Rotate contract
+    rotate = ProjectTokenRotate(overlap_seconds=600)
+    assert rotate.overlap_seconds == 600
+
+
+def test_project_token_create_json_roundtrip_preserves_omitted_vs_null_vs_timestamp() -> None:
+    now = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
+
+    # 1. Omitted expires_at roundtrip: stays omitted and resolves to 90 days
+    t_omitted = ProjectTokenCreate(label="Omitted Expiry Token")
+    assert "expires_at" not in t_omitted.model_fields_set
+    json_omitted = t_omitted.model_dump_json()
+    assert "expires_at" not in json_omitted
+    t_omitted_reloaded = ProjectTokenCreate.model_validate_json(json_omitted)
+    assert "expires_at" not in t_omitted_reloaded.model_fields_set
+    assert t_omitted_reloaded.resolve_expires_at(now=now) == now + timedelta(
+        days=DEFAULT_TOKEN_LIFETIME_DAYS
+    )
+
+    # 2. Explicit null expires_at roundtrip: stays null and resolves to None (perpetual)
+    t_null = ProjectTokenCreate(label="Permanent Token", expires_at=None)
+    assert "expires_at" in t_null.model_fields_set
+    json_null = t_null.model_dump_json()
+    assert "expires_at" in json_null
+    assert '"expires_at":null' in json_null.replace(" ", "")
+    t_null_reloaded = ProjectTokenCreate.model_validate_json(json_null)
+    assert "expires_at" in t_null_reloaded.model_fields_set
+    assert t_null_reloaded.resolve_expires_at(now=now) is None
+
+    # 3. Explicit timestamp roundtrip: stays timestamp and resolves to exact datetime
+    target_dt = datetime(2026, 8, 1, 0, 0, 0, tzinfo=UTC)
+    t_custom = ProjectTokenCreate(label="Custom Token", expires_at=target_dt)
+    assert "expires_at" in t_custom.model_fields_set
+    json_custom = t_custom.model_dump_json()
+    assert "expires_at" in json_custom
+    t_custom_reloaded = ProjectTokenCreate.model_validate_json(json_custom)
+    assert "expires_at" in t_custom_reloaded.model_fields_set
+    assert t_custom_reloaded.resolve_expires_at(now=now) == target_dt
+
+
+def test_typed_settings_document_and_field_resolution() -> None:
+    routing = RoutingSettings(max_attempts=3)
+    execution = ExecutionSettings(default_timeout_seconds=30.0, max_fanout_concurrency=5)
+    doc = ProjectSettingsDocument(routing=routing, execution=execution, revision=2)
+    assert doc.revision == 2
+    assert doc.routing.max_attempts == 3
+    assert doc.execution.default_timeout_seconds == 30.0
+
+    field_res = SettingsFieldResolution(
+        field_name="max_attempts",
+        effective_value=3,
+        provenance=SettingsProvenance.PROJECT_OVERRIDE,
+        is_null=False,
+        system_default=1,
+        project_override=3,
+    )
+    resolution = SettingsResolution(
+        namespace="routing",
+        fields={"max_attempts": field_res},
+        effective_settings={"max_attempts": 3},
+        provenance_by_field={"max_attempts": SettingsProvenance.PROJECT_OVERRIDE},
+        system_revision=1,
+        project_revision=2,
+    )
+    assert resolution.effective_settings["max_attempts"] == 3
+    assert resolution.fields["max_attempts"].provenance == SettingsProvenance.PROJECT_OVERRIDE
+
+
+def test_downstream_model_contracts_structure() -> None:
+    proj_id = uuid4()
+    user_id = uuid4()
+    cred_id = uuid4()
+
+    # ProjectRead
+    proj_read = ProjectRead(
+        id=proj_id,
+        account_id=uuid4(),
+        name="P00 Project",
+        slug="p00-project",
+        status=ProjectStatus.ACTIVE,
+        created_by=user_id,
+        created_at=datetime.now(UTC),
+        version=1,
+    )
+    assert proj_read.status == ProjectStatus.ACTIVE
+
+    # ProjectMemberRead & Update
+    member_read = ProjectMemberRead(
+        project_id=proj_id,
+        user_id=user_id,
+        status=MembershipStatus.ACTIVE,
+        roles=[BuiltinRole.PROJECT_MEMBER],
+        version=1,
+    )
+    assert member_read.status == MembershipStatus.ACTIVE
+    update = ProjectMemberUpdate(status=MembershipStatus.SUSPENDED)
+    assert update.status == MembershipStatus.SUSPENDED
+
+    # CredentialProjectGrantRead
+    grant = CredentialProjectGrantRead(
+        credential_id=cred_id,
+        project_id=proj_id,
+        permitted_operations=frozenset({"search"}),
+        version=1,
+    )
+    assert "search" in grant.permitted_operations
+
+    # ProjectBindingRead
+    binding = ProjectBindingRead(
+        id=uuid4(),
+        project_id=proj_id,
+        credential_id=cred_id,
+        route_label="primary",
+        enabled_operations=frozenset({"search"}),
+        priority=1,
+        version=1,
+    )
+    assert binding.priority == 1
+
+    # UpstreamQuotaPoolRead
+    pool = UpstreamQuotaPoolRead(
+        id=uuid4(),
+        provider_type="brave",
+        upstream_scope="tier_1",
+        version=1,
+    )
+    assert pool.provider_type == "brave"
+
+    # ProjectPoolAllocationRead
+    alloc = ProjectPoolAllocationRead(
+        project_id=proj_id,
+        pool_id=pool.id,
+        operation_scope="search",
+        base_rate=Decimal("10.0"),
+        max_rate=Decimal("20.0"),
+        version=1,
+    )
+    assert alloc.max_rate == Decimal("20.0")
+
+
+@pytest.mark.asyncio
+async def test_safe_alpha_test_db_refuses_existing_file() -> None:
+    with TemporaryDirectory() as temp_dir:
+        existing_path = Path(temp_dir) / "existing.db"
+        existing_path.write_text("dummy database content")
+
+        with pytest.raises(FileExistsError, match="Refusing to overwrite existing database"):
+            await create_alpha_test_db(existing_path)
+
+
+@pytest.mark.asyncio
+async def test_alpha_bootstrap_procedure() -> None:
+    async with alpha_test_db_context() as (db_path, _repo):
+        # Current schema has legacy user table
+        assert db_path.exists()
+
+        result = await bootstrap_fresh_alpha(
+            Path(db_path.parent) / "another_fresh.db",
+            admin_email="test_alpha_admin@freesearch.local",
+            project_name="Isolated Alpha Workspace",
+        )
+        try:
+            assert result.database_path.exists()
+            assert result.admin_user.email == "test_alpha_admin@freesearch.local"
+            assert result.admin_user.is_superuser is True
+            assert result.admin_user.role == "admin"
+            assert result.default_project.name == "Isolated Alpha Workspace"
+            assert result.system_role_assignment.role_key == BuiltinRole.SYSTEM_ADMIN
+            assert result.project_admin_context.allows(PermissionAction.PROJECT_ARCHIVE) is True
+            assert result.project_admin_context.allows(PermissionAction.SEARCH_EXECUTE) is True
+
+            # In-memory helpers check
+            project_model = build_alpha_project(
+                account_id=result.account_id,
+                created_by=result.admin_user.id,
+                initial_admin_user_id=result.admin_user.id,
+            )
+            assert project_model.status == ProjectStatus.ACTIVE
+
+            token_pair, _hash = build_alpha_project_token(
+                project_id=project_model.id,
+                created_by=result.admin_user.id,
+            )
+            assert token_pair.token.prefix.startswith("fs_live_")
+        finally:
+            await result.repository.close()
+
+
+@pytest.mark.asyncio
+async def test_alpha_bootstrap_runbook_clean_cleanup_on_windows() -> None:
+    # Verifies the runbook code snippet executes without leaking SQLite file handles,
+    # avoiding Windows PermissionError: [WinError 32] during TemporaryDirectory cleanup.
+    with TemporaryDirectory() as temp_dir:
+        db_path = Path(temp_dir) / "runbook_alpha.db"
+        result = await bootstrap_fresh_alpha(
+            db_path,
+            admin_email="runbook_admin@freesearch.local",
+            project_name="Runbook Alpha Project",
+        )
+        try:
+            assert result.database_path.exists()
+            assert result.admin_user.email == "runbook_admin@freesearch.local"
+            assert result.admin_user.is_superuser is True
+            assert result.admin_user.role == "admin"
+            assert result.default_project.name == "Runbook Alpha Project"
+            assert result.system_role_assignment.role_key == BuiltinRole.SYSTEM_ADMIN
+            assert result.project_admin_context.allows(PermissionAction.PROJECT_ARCHIVE) is True
+            assert result.project_admin_context.allows(PermissionAction.SEARCH_EXECUTE) is True
+        finally:
+            await result.repository.close()
+
+
+def test_project_token_rotate_json_roundtrip_preserves_omitted_vs_null_vs_timestamp() -> None:
+    # 1. Omitted expires_at: stays omitted
+    r_omitted = ProjectTokenRotate()
+    assert "expires_at" not in r_omitted.model_fields_set
+    json_omitted = r_omitted.model_dump_json()
+    assert "expires_at" not in json_omitted
+    r_omitted_reloaded = ProjectTokenRotate.model_validate_json(json_omitted)
+    assert "expires_at" not in r_omitted_reloaded.model_fields_set
+
+    # 2. Explicit null expires_at: stays null
+    r_null = ProjectTokenRotate(expires_at=None)
+    assert "expires_at" in r_null.model_fields_set
+    json_null = r_null.model_dump_json()
+    assert "expires_at" in json_null
+    assert '"expires_at":null' in json_null.replace(" ", "")
+    r_null_reloaded = ProjectTokenRotate.model_validate_json(json_null)
+    assert "expires_at" in r_null_reloaded.model_fields_set
+    assert r_null_reloaded.expires_at is None
+
+    # 3. Explicit timestamp: stays timestamp
+    target_dt = datetime(2026, 9, 1, 0, 0, 0, tzinfo=UTC)
+    r_custom = ProjectTokenRotate(expires_at=target_dt)
+    assert "expires_at" in r_custom.model_fields_set
+    json_custom = r_custom.model_dump_json()
+    assert "expires_at" in json_custom
+    r_custom_reloaded = ProjectTokenRotate.model_validate_json(json_custom)
+    assert "expires_at" in r_custom_reloaded.model_fields_set
+    assert r_custom_reloaded.expires_at == target_dt
