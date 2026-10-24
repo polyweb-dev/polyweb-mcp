@@ -1,13 +1,13 @@
 ---
 id: TASK-000001
-title: 'Collect username, first name, and last name during signup'
+title: Collect username, first name, and last name during signup
 status: To Do
 assignee: []
-created_date: '2026-10-15 22:19'
+created_date: 2026-10-15 22:19
 labels: []
 dependencies: []
 type: feature
-ordinal: 1000
+ordinal: 10000
 ---
 
 ## Description

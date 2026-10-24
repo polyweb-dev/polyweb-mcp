@@ -3,11 +3,11 @@ id: TASK-000008
 title: Modularize oversized UI components
 status: To Do
 assignee: []
-created_date: '2026-10-15 22:19'
+created_date: 2026-10-15 22:19
 labels: []
 dependencies: []
 type: enhancement
-ordinal: 8000
+ordinal: 14000
 ---
 
 ## Description

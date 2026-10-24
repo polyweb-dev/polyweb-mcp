@@ -3,7 +3,6 @@
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from uuid import uuid4
 
 import pytest
@@ -13,6 +12,7 @@ from freesearch.models.projects import (
     ALLOWED_TOKEN_ACTIONS,
     ALLOWED_TOKEN_SCOPES,
     BUILTIN_ROLE_DEFINITIONS,
+    DEFAULT_INSTALLATION_ACCOUNT_ID,
     DEFAULT_TOKEN_LIFETIME_DAYS,
     AccountRead,
     AccountType,
@@ -49,9 +49,12 @@ from freesearch.models.projects import (
     SettingsFieldResolution,
     SettingsProvenance,
     SettingsResolution,
+    TargetUserCreate,
+    TargetUserRead,
     UpstreamQuotaPoolRead,
     evaluate_authorization,
 )
+from freesearch.models.users import AuthProvider
 from tests.fixtures.alpha_fixtures import (
     alpha_test_db_context,
     bootstrap_fresh_alpha,
@@ -713,13 +716,12 @@ def test_downstream_model_contracts_structure() -> None:
 
 
 @pytest.mark.asyncio
-async def test_safe_alpha_test_db_refuses_existing_file() -> None:
-    with TemporaryDirectory() as temp_dir:
-        existing_path = Path(temp_dir) / "existing.db"
-        existing_path.write_text("dummy database content")
+async def test_safe_alpha_test_db_refuses_existing_file(tmp_path: Path) -> None:
+    existing_path = tmp_path / "existing.db"
+    existing_path.write_text("dummy database content")
 
-        with pytest.raises(FileExistsError, match="Refusing to overwrite existing database"):
-            await create_alpha_test_db(existing_path)
+    with pytest.raises(FileExistsError, match="Refusing to overwrite existing database"):
+        await create_alpha_test_db(existing_path)
 
 
 @pytest.mark.asyncio
@@ -735,9 +737,10 @@ async def test_alpha_bootstrap_procedure() -> None:
         )
         try:
             assert result.database_path.exists()
+            assert result.account_id == DEFAULT_INSTALLATION_ACCOUNT_ID
             assert result.admin_user.email == "test_alpha_admin@freesearch.local"
-            assert result.admin_user.is_superuser is True
-            assert result.admin_user.role == "admin"
+            assert result.admin_user.is_superuser is False
+            assert result.admin_user.role == "agent"
             assert result.default_project.name == "Isolated Alpha Workspace"
             assert result.system_role_assignment.role_key == BuiltinRole.SYSTEM_ADMIN
             assert result.project_admin_context.allows(PermissionAction.PROJECT_ARCHIVE) is True
@@ -761,27 +764,26 @@ async def test_alpha_bootstrap_procedure() -> None:
 
 
 @pytest.mark.asyncio
-async def test_alpha_bootstrap_runbook_clean_cleanup_on_windows() -> None:
-    # Verifies the runbook code snippet executes without leaking SQLite file handles,
-    # avoiding Windows PermissionError: [WinError 32] during TemporaryDirectory cleanup.
-    with TemporaryDirectory() as temp_dir:
-        db_path = Path(temp_dir) / "runbook_alpha.db"
-        result = await bootstrap_fresh_alpha(
-            db_path,
-            admin_email="runbook_admin@freesearch.local",
-            project_name="Runbook Alpha Project",
-        )
-        try:
-            assert result.database_path.exists()
-            assert result.admin_user.email == "runbook_admin@freesearch.local"
-            assert result.admin_user.is_superuser is True
-            assert result.admin_user.role == "admin"
-            assert result.default_project.name == "Runbook Alpha Project"
-            assert result.system_role_assignment.role_key == BuiltinRole.SYSTEM_ADMIN
-            assert result.project_admin_context.allows(PermissionAction.PROJECT_ARCHIVE) is True
-            assert result.project_admin_context.allows(PermissionAction.SEARCH_EXECUTE) is True
-        finally:
-            await result.repository.close()
+async def test_alpha_bootstrap_runbook_clean_cleanup_on_windows(tmp_path: Path) -> None:
+    # Verifies the runbook code snippet executes without leaking SQLite file handles.
+    db_path = tmp_path / "runbook_alpha.db"
+    result = await bootstrap_fresh_alpha(
+        db_path,
+        admin_email="runbook_admin@freesearch.local",
+        project_name="Runbook Alpha Project",
+    )
+    try:
+        assert result.database_path.exists()
+        assert result.account_id == DEFAULT_INSTALLATION_ACCOUNT_ID
+        assert result.admin_user.email == "runbook_admin@freesearch.local"
+        assert result.admin_user.is_superuser is False
+        assert result.admin_user.role == "agent"
+        assert result.default_project.name == "Runbook Alpha Project"
+        assert result.system_role_assignment.role_key == BuiltinRole.SYSTEM_ADMIN
+        assert result.project_admin_context.allows(PermissionAction.PROJECT_ARCHIVE) is True
+        assert result.project_admin_context.allows(PermissionAction.SEARCH_EXECUTE) is True
+    finally:
+        await result.repository.close()
 
 
 def test_project_token_rotate_json_roundtrip_preserves_omitted_vs_null_vs_timestamp() -> None:
@@ -812,3 +814,124 @@ def test_project_token_rotate_json_roundtrip_preserves_omitted_vs_null_vs_timest
     r_custom_reloaded = ProjectTokenRotate.model_validate_json(json_custom)
     assert "expires_at" in r_custom_reloaded.model_fields_set
     assert r_custom_reloaded.expires_at == target_dt
+
+
+def test_default_installation_account_id() -> None:
+    assert str(DEFAULT_INSTALLATION_ACCOUNT_ID) == "00000000-0000-4000-8000-000000000001"
+
+
+def test_target_user_create_local_valid() -> None:
+    user = TargetUserCreate(
+        email="User@Domain.COM",
+        auth_provider=AuthProvider.LOCAL,
+        hashed_password="secure_password_hash",
+    )
+    assert user.email == "user@domain.com"
+    assert user.auth_provider == AuthProvider.LOCAL
+    assert user.hashed_password == "secure_password_hash"
+    assert user.auth_provider_id is None
+    assert user.is_active is True
+    assert user.is_verified is False
+
+
+def test_target_user_create_workos_valid() -> None:
+    user = TargetUserCreate(
+        email="WorkOS.User@Domain.COM",
+        auth_provider=AuthProvider.WORKOS,
+        auth_provider_id="workos_usr_12345",
+    )
+    assert user.email == "workos.user@domain.com"
+    assert user.auth_provider == AuthProvider.WORKOS
+    assert user.auth_provider_id == "workos_usr_12345"
+    assert user.hashed_password is None
+
+
+def test_target_user_create_local_rejects_missing_or_empty_password() -> None:
+    with pytest.raises(ValidationError, match="Local user requires a non-empty hashed_password"):
+        TargetUserCreate(
+            email="test@local.com", auth_provider=AuthProvider.LOCAL, hashed_password=None
+        )
+
+    with pytest.raises(ValidationError, match="Local user requires a non-empty hashed_password"):
+        TargetUserCreate(
+            email="test@local.com", auth_provider=AuthProvider.LOCAL, hashed_password="   "
+        )
+
+
+def test_target_user_create_local_rejects_auth_provider_id() -> None:
+    with pytest.raises(ValidationError, match="Local user must not have auth_provider_id"):
+        TargetUserCreate(
+            email="test@local.com",
+            auth_provider=AuthProvider.LOCAL,
+            hashed_password="valid_hash",
+            auth_provider_id="some_id",
+        )
+
+
+def test_target_user_create_workos_rejects_password_or_missing_id() -> None:
+    with pytest.raises(ValidationError, match="WorkOS user must not have hashed_password"):
+        TargetUserCreate(
+            email="test@workos.com",
+            auth_provider=AuthProvider.WORKOS,
+            auth_provider_id="workos_123",
+            hashed_password="some_hash",
+        )
+
+    with pytest.raises(ValidationError, match="WorkOS user requires a non-empty auth_provider_id"):
+        TargetUserCreate(
+            email="test@workos.com",
+            auth_provider=AuthProvider.WORKOS,
+            auth_provider_id=None,
+        )
+
+
+def test_target_user_strictly_forbids_role_and_account_type_fields() -> None:
+    # Target human schema has NO role or account_type classifications
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        TargetUserCreate(
+            email="test@example.com",
+            hashed_password="hash",
+            role="admin",  # type: ignore[call-arg]
+        )
+
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        TargetUserCreate(
+            email="test@example.com",
+            hashed_password="hash",
+            is_superuser=True,  # type: ignore[call-arg]
+        )
+
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        TargetUserRead(
+            id=uuid4(),
+            email="test@example.com",
+            auth_provider=AuthProvider.LOCAL,
+            role="developer",  # type: ignore[call-arg]
+        )
+
+
+def test_target_user_read_validates_provider_invariants() -> None:
+    uid = uuid4()
+    local_read = TargetUserRead(
+        id=uid,
+        email="READ@Example.com",
+        auth_provider=AuthProvider.LOCAL,
+    )
+    assert local_read.email == "read@example.com"
+    assert local_read.auth_provider == AuthProvider.LOCAL
+
+    with pytest.raises(ValidationError, match="Local user must not have auth_provider_id"):
+        TargetUserRead(
+            id=uid,
+            email="read@example.com",
+            auth_provider=AuthProvider.LOCAL,
+            auth_provider_id="unexpected_id",
+        )
+
+    with pytest.raises(ValidationError, match="WorkOS user requires a non-empty auth_provider_id"):
+        TargetUserRead(
+            id=uid,
+            email="read@example.com",
+            auth_provider=AuthProvider.WORKOS,
+            auth_provider_id=None,
+        )

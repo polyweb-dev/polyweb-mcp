@@ -178,7 +178,7 @@ async def test_set_role_assigns_role_and_revokes_old_families(
                     "--user-id",
                     str(user_id),
                     "--role",
-                    "developer",
+                    "admin",
                     "--database",
                     str(database),
                 ]
@@ -188,14 +188,32 @@ async def test_set_role_assigns_role_and_revokes_old_families(
 
         captured = capsys.readouterr()
         assert f"Account: {user_id}" in captured.out
-        assert "Role: developer" in captured.out
+        assert "Role: admin" in captured.out
         assert access not in captured.out
 
         updated = await _account(repository, email)
         assert updated is not None
-        assert updated.role == UserRole.DEVELOPER.value
-        assert updated.is_superuser is False
+        assert updated.role == UserRole.ADMIN.value
+        assert updated.is_superuser is True
         assert await service.verify_token(access) is None
+
+        # Assert obsolete developer role is explicitly rejected
+        assert (
+            await _run(
+                [
+                    "set-role",
+                    "--user-id",
+                    str(user_id),
+                    "--role",
+                    "developer",
+                    "--database",
+                    str(database),
+                ]
+            )
+            == 1
+        )
+        err_out = capsys.readouterr().err
+        assert "obsolete" in err_out or "unsupported" in err_out
     finally:
         await repository.close()
 
@@ -226,7 +244,7 @@ async def test_set_role_to_the_same_role_revokes_again(
                     "--user-id",
                     str(check.id),
                     "--role",
-                    "developer",
+                    "admin",
                     "--database",
                     str(database),
                 ]
@@ -245,7 +263,7 @@ async def test_set_role_to_the_same_role_revokes_again(
                     "--user-id",
                     str(check.id),
                     "--role",
-                    "developer",
+                    "admin",
                     "--database",
                     str(database),
                 ]
@@ -325,7 +343,7 @@ async def test_set_role_preserves_account_owned_traces(
                     "--user-id",
                     str(check.id),
                     "--role",
-                    "developer",
+                    "admin",
                     "--database",
                     str(database),
                 ]

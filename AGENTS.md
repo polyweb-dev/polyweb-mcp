@@ -9,6 +9,12 @@ In repositories indexed by CodeGraph (a `.codegraph/` directory exists at the re
 If there is no `.codegraph/` directory, skip CodeGraph entirely — indexing is the user's decision.
 <!-- CODEGRAPH_END -->
 
+## Testing Strategy
+- **Write tests reasonably**: Do not always default or revert to BDD tests.
+- **BDD Tests**: Reserve BDD tests (`behave` on backend, `playwright-bdd` on frontend) strictly for end-to-end flows and scenarios critical to core functionality and user value. Do not write BDD tests for every obscure detail, minor permutation, or edge case.
+- **Unit Tests**: Use unit tests to lock down code behavior. They should be fast, isolated, and exercise domain models, calculations, components, and functions directly with proper mocking of external dependencies.
+- **Integration Tests**: Use integration tests to verify functionality through the layers, validating critical paths, cross-module communication, real database interactions, migrations, APIs, and edge cases.
+
 ## UI unit tests
 - We only support desktop view, not the mobile view.
 - In `freesearch-ui/src`, colocate each unit/component test with its source as `<basename>.test.ts` or `<basename>.test.tsx`; keep one canonical test file per source and never add suffix variants.
@@ -55,9 +61,3 @@ Do not edit Backlog task, draft, document, decision, or milestone markdown files
 
 </CRITICAL_INSTRUCTION>
 <!-- BACKLOG.MD GUIDELINES END -->
-
-<!-- groma:start -->
-## Groma
-
-This project uses Groma. Before you scan, inspect, or curate architecture, or change files for a Backlog task, run `groma agent-instructions` and read the guide it names for that job. When it reports a first scan, ask the user whether they want you to curate the architecture. Do not edit Groma-owned architecture files directly.
-<!-- groma:end -->

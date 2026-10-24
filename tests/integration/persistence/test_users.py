@@ -14,7 +14,6 @@ from sqlalchemy.exc import IntegrityError
 from freesearch.models.users import AuthProvider, UserRole, normalize_email
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.persistence.users import (
-    ROLE_VALUES_SQL,
     LoginThrottleRow,
     UserDatabase,
     UserRow,
@@ -47,10 +46,6 @@ async def _create(
         return await database.create({"email": email, "hashed_password": _HELPER.hash(password)})
 
 
-def test_role_values_sql_lists_three_roles() -> None:
-    assert ROLE_VALUES_SQL == "('admin', 'developer', 'agent')"
-
-
 async def test_create_normalizes_email_and_defaults_to_agent(
     repository: SQLiteRepository,
 ) -> None:
@@ -66,16 +61,12 @@ async def test_create_normalizes_email_and_defaults_to_agent(
     assert verified is True
 
 
-async def test_create_stores_each_role_with_consistent_superuser(
+async def test_create_enforces_ordinary_human_defaults_and_privilege_requires_set_role(
     repository: SQLiteRepository,
 ) -> None:
-    """T2-SIGNUP: create derives the role and the superuser flag together."""
+    """T2-SIGNUP: create creates ordinary human; privilege requires set_role."""
 
-    for role, superuser in (
-        (UserRole.ADMIN, True),
-        (UserRole.DEVELOPER, False),
-        (UserRole.AGENT, False),
-    ):
+    for role in (UserRole.ADMIN, UserRole.DEVELOPER, UserRole.AGENT):
         async with repository.session() as session:
             database = UserDatabase(session, UserRow)
             user = await database.create(
@@ -85,10 +76,29 @@ async def test_create_stores_each_role_with_consistent_superuser(
                     "role": role.value,
                 }
             )
-        assert user.role == role.value
-        assert user.is_superuser is superuser
+        # Safe public creation defaults to ordinary agent role
+        assert user.role == UserRole.AGENT.value
+        assert user.is_superuser is False
         assert user.is_active is True
         assert user.is_verified is False
+
+    # Promotion to admin via set_role persists admin privilege
+    async with repository.session() as session:
+        database = UserDatabase(session, UserRow)
+        admin_user = await database.create(
+            {
+                "email": temp_email("promoted-admin"),
+                "hashed_password": _HELPER.hash(TEMP_PASSWORD),
+            }
+        )
+        assert await database.set_role(admin_user.id, UserRole.ADMIN) is True
+        await session.commit()
+
+    async with repository.session() as session:
+        reloaded = await session.get(UserRow, admin_user.id)
+        assert reloaded is not None
+        assert reloaded.role == UserRole.ADMIN.value
+        assert reloaded.is_superuser is True
 
 
 async def test_create_ignores_privilege_flags_and_bad_roles(
@@ -189,7 +199,7 @@ async def test_local_password_hash_branches(repository: SQLiteRepository) -> Non
     assert local_password_hash(workos) is None
 
 
-async def test_database_rejects_seven_invalid_shapes(repository: SQLiteRepository) -> None:
+async def test_database_rejects_invalid_provider_shapes(repository: SQLiteRepository) -> None:
     base = {
         "id": uuid4(),
         "email": "shape@example.com",
@@ -241,15 +251,6 @@ async def test_database_rejects_seven_invalid_shapes(repository: SQLiteRepositor
             "auth_provider_id": "ext-2",
             "role": "agent",
             "email": "s5@example.com",
-            "id": uuid4(),
-        },
-        {
-            **base,
-            "hashed_password": "h",
-            "auth_provider": "local",
-            "auth_provider_id": None,
-            "role": "admin",
-            "email": "s6@example.com",
             "id": uuid4(),
         },
         {
@@ -348,3 +349,41 @@ async def test_two_explicit_accounts_stay_distinct(repository: SQLiteRepository)
         emails = {str(row.email) for row in rows}
     assert str(first.email) in emails
     assert str(second.email) in emails
+
+
+async def test_user_row_privilege_fails_closed_across_unloaded_and_rollback(
+    repository: SQLiteRepository,
+) -> None:
+    """Authority derives strictly from durable assignments; constructor and rollback fail closed."""
+    fake_admin = UserRow(email=temp_email("fake-admin"), role="admin", is_superuser=True)
+    assert fake_admin.role == UserRole.AGENT.value
+    assert fake_admin.is_superuser is False
+
+    fake_admin.role = "admin"
+    fake_admin.is_superuser = True
+    assert fake_admin.role == UserRole.AGENT.value
+    assert fake_admin.is_superuser is False
+
+    email = temp_email("rollback-priv")
+    user = await _create(repository, email)
+    assert user.role == UserRole.AGENT.value
+    assert user.is_superuser is False
+
+    async with repository.session() as session:
+        database = UserDatabase(session, UserRow)
+        assert await database.set_role(user.id, UserRole.ADMIN) is True
+        loaded = await session.get(UserRow, user.id)
+        assert loaded is not None
+        assert loaded.role == UserRole.ADMIN.value
+        assert loaded.is_superuser is True
+
+        await session.rollback()
+
+        assert loaded.role == UserRole.AGENT.value
+        assert loaded.is_superuser is False
+
+    async with repository.session() as session:
+        fresh = await session.get(UserRow, user.id)
+        assert fresh is not None
+        assert fresh.role == UserRole.AGENT.value
+        assert fresh.is_superuser is False

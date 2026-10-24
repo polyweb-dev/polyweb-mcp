@@ -7,6 +7,7 @@ import sqlite3
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 from alembic.config import Config
@@ -518,6 +519,27 @@ _LIMIT_INDEXES = frozenset(
         "provider_rate_attempts_expires_at",
     }
 )
+_PROJECT_TABLES = frozenset(
+    {
+        "accounts",
+        "projects",
+        "project_memberships",
+        "system_role_assignments",
+        "project_role_assignments",
+    }
+)
+_PROJECT_INDEXES = frozenset(
+    {
+        "ix_projects_account_id",
+        "ix_projects_slug",
+        "ix_projects_account_id_slug",
+        "ix_projects_created_by",
+        "ix_project_memberships_user_id",
+        "ix_system_role_assignments_user_id",
+        "ix_project_role_assignments_user_id",
+        "ix_project_role_assignments_project_user",
+    }
+)
 
 
 def test_validate_database_schema_rejects_missing_auth_foreign_keys(tmp_path: Path) -> None:
@@ -554,11 +576,11 @@ def test_fresh_database_at_head_has_no_cache_metadata(tmp_path: Path) -> None:
     result = upgrade_database(database)
 
     assert result.current_revision == migration_head()
-    assert result.current_revision == "0005_tinyfish_plan_label"
+    assert result.current_revision == "0006_projects_and_memberships"
     assert "cache_metadata" not in _tables(database)
     assert "cache_metadata_expires_at" not in _indexes(database)
-    assert _indexes(database) == set(_HEAD_INDEXES) | set(_LIMIT_INDEXES)
-    assert _tables(database) == set(_HEAD_TABLES) | set(_LIMIT_TABLES)
+    assert _indexes(database) == (set(_HEAD_INDEXES) | set(_LIMIT_INDEXES) | set(_PROJECT_INDEXES))
+    assert _tables(database) == set(_HEAD_TABLES) | set(_LIMIT_TABLES) | set(_PROJECT_TABLES)
     assert _tables(database) >= _AUTH_TABLES
     assert _indexes(database) >= _AUTH_INDEXES
     _assert_trace_spans_schema(database)
@@ -596,9 +618,14 @@ def test_upgrade_from_0002_drops_seeded_cache_rows_preserving_unrelated_data(
     assert _all_rows(database, "usage_events", "id")[0][3] == "12.50"
     assert _all_rows(database, "quota_snapshots", "id")[0][3] == "75.25"
     assert _all_rows(database, "quota_snapshots", "id")[0][4] == "100.00"
-    assert _indexes(database) == (indexes_before - {"cache_metadata_expires_at"}) | set(
-        _TRACE_INDEXES
-    ) | {_TRACE_USER_INDEX} | set(_AUTH_INDEXES) | set(_LIMIT_INDEXES)
+    assert _indexes(database) == (
+        (indexes_before - {"cache_metadata_expires_at"})
+        | set(_TRACE_INDEXES)
+        | {_TRACE_USER_INDEX}
+        | set(_AUTH_INDEXES)
+        | set(_LIMIT_INDEXES)
+        | set(_PROJECT_INDEXES)
+    )
     _assert_trace_spans_schema(database)
     assert _tables(database) >= _AUTH_TABLES
     # The 0002 database had no trace store: upgrade creates it empty.
@@ -705,13 +732,13 @@ def _seed_legacy_provider_rows(database: Path, *, enabled_on: set[str]) -> None:
         connection.commit()
 
 
-def _provider_config(database: Path, provider: str) -> dict:
+def _provider_config(database: Path, provider: str) -> dict[str, Any]:
     with sqlite3.connect(database) as connection:
         row = connection.execute(
             "SELECT value_json FROM runtime_settings WHERE key = ?", (f"provider.{provider}",)
         ).fetchone()
     assert row is not None
-    return json.loads(row[0])["config"]
+    return cast(dict[str, Any], json.loads(row[0])["config"])
 
 
 def test_upgrade_converts_legacy_on_off_to_masks(tmp_path: Path) -> None:

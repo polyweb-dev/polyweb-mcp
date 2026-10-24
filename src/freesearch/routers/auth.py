@@ -57,6 +57,7 @@ from freesearch.services.users import (
     AuthConfigurationError,
     AuthService,
     AuthStorageUnavailable,
+    AuthUnsupportedRole,
     LoginRateLimited,
     UserManager,
     has_role,
@@ -88,14 +89,14 @@ def _publish_bearer_scheme(app: FastAPI) -> None:
     ``fastapi-users`` publishes this scheme through ``BearerTransport``. The
     whole-application ASGI guard enforces the credential instead of a per-route
     dependency, so the scheme stays documentation and no operation gains a
-    security requirement.
+    second round of credential parsing.
     """
 
-    default_openapi = app.openapi
+    scheme = OAuth2PasswordBearer(tokenUrl=_OPENAPI_TOKEN_URL, auto_error=False)
+    original = app.openapi
 
     def openapi() -> dict[str, Any]:
-        schema = default_openapi()
-        scheme = OAuth2PasswordBearer(_OPENAPI_TOKEN_URL, auto_error=False)
+        schema = original()
         components = schema.setdefault("components", {})
         security_schemes = components.setdefault("securitySchemes", {})
         security_schemes[scheme.scheme_name] = jsonable_encoder(
@@ -143,7 +144,7 @@ class BrowserTokenResponse(BaseModel):
 
     The model has no ``refresh_token`` field, so the response body omits the key
     instead of sending a null value. :class:`TokenPairResponse` stays the
-    programmatic contract.
+    programmatic shape.
     """
 
     access_token: str = Field(repr=False)
@@ -537,8 +538,7 @@ def register_auth_routes(app: FastAPI) -> None:
         The route applies the same Origin, marker, cookie, and live-family checks
         as cookie refresh. It needs no valid access JWT, so a browser can log out
         after its access token expired. The path stays inside the cookie path, so
-        no broader cookie scope is necessary.
-        """
+        no broader cookie scope is necessary."""
 
         if not _require_browser_transport(request):
             raise _forbidden()
@@ -619,8 +619,18 @@ def _register_admin_account_routes(app: FastAPI) -> None:
                     "reason": invalid.reason,
                 },
             ) from invalid
+        except AuthUnsupportedRole as error:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(error),
+            ) from error
         except AuthStorageUnavailable as unavailable:
             raise _storage_unavailable() from unavailable
+        except AuthConfigurationError as unconfigured:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="account authentication is not configured",
+            ) from unconfigured
         return _account_read(account)
 
     @app.get("/api/v1/users/{user_id}", response_model=None)
