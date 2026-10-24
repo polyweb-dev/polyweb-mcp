@@ -12,6 +12,7 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from freesearch.infrastructure.browser_auth import normalize_origin
 from freesearch.infrastructure.cryptography import DEFAULT_KEY_FILE
+from freesearch.models.projects import ProjectRolloutState
 
 _MCP_BEARER_TOKEN_ENVIRONMENT_VARIABLE = "FREESEARCH_MCP_BEARER_TOKEN"
 
@@ -73,8 +74,7 @@ class Settings(BaseSettings):
 
     Environment variables use the ``FREESEARCH_`` prefix. Provider credentials
     are resolved by :mod:`freesearch.secrets`, so they do not get copied into
-    settings reprs, logs, or ordinary configuration dumps.
-    """
+    settings reprs, logs, or ordinary configuration dumps."""
 
     model_config = SettingsConfigDict(
         env_prefix="FREESEARCH_",
@@ -145,8 +145,7 @@ class Settings(BaseSettings):
 
         A plain HTTP override is permitted for loopback development only. An
         advertised issuer or resource URL outside loopback must use HTTPS, so a
-        proxy can never publish a cleartext credential endpoint.
-        """
+        proxy can never publish a cleartext credential endpoint."""
 
         if value is None:
             return None
@@ -198,6 +197,9 @@ class Settings(BaseSettings):
     # without touching any route, service, or adapter call site.
     otel_processor: Literal["database", "none"] = "database"
     otel_service_name: str = "freesearch"
+
+    # Projects architecture rollout gate. Defaults to preview mode.
+    projects_rollout_state: ProjectRolloutState = ProjectRolloutState.PROJECTS_PREVIEW
 
 
 def require_transport_port(settings: Settings, *, transport: str) -> int:
