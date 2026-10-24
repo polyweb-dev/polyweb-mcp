@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import BinaryIO
 
-from alembic import command
+from alembic import command as command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 
@@ -44,7 +44,17 @@ _LEGACY_APP_TABLES = frozenset(
     }
 )
 _AUTH_TABLES = frozenset({"user", "login_throttle", "auth_sessions", "refresh_tokens"})
-_APP_TABLES = _LEGACY_APP_TABLES | _AUTH_TABLES
+_PROJECT_TABLES = frozenset(
+    {
+        "accounts",
+        "projects",
+        "project_memberships",
+        "system_role_assignments",
+        "project_role_assignments",
+    }
+)
+_APP_TABLES = _LEGACY_APP_TABLES | _AUTH_TABLES | _PROJECT_TABLES
+
 _TRACE_SPAN_COLUMNS = frozenset(
     {
         "span_id",
@@ -197,6 +207,19 @@ _LIMIT_TABLE_COLUMNS: dict[str, frozenset[str]] = {
         }
     ),
 }
+_PROJECT_TABLE_COLUMNS: dict[str, frozenset[str]] = {
+    "accounts": frozenset({"id", "status"}),
+    "projects": frozenset(
+        {"id", "account_id", "name", "slug", "status", "created_by", "created_at", "version"}
+    ),
+    "project_memberships": frozenset({"project_id", "user_id", "status", "version"}),
+    "system_role_assignments": frozenset(
+        {"account_id", "user_id", "role_key", "granted_by", "version"}
+    ),
+    "project_role_assignments": frozenset(
+        {"project_id", "user_id", "role_key", "granted_by", "version"}
+    ),
+}
 _CORE_COLUMNS: dict[str, frozenset[str]] = {
     **_LIMIT_TABLE_COLUMNS,
     "usage_events": frozenset(
@@ -212,6 +235,7 @@ _CORE_COLUMNS: dict[str, frozenset[str]] = {
 _HEAD_COLUMNS: dict[str, frozenset[str]] = {
     **_CORE_COLUMNS,
     **_LIMIT_TABLE_COLUMNS,
+    **_PROJECT_TABLE_COLUMNS,
     "usage_events": _CORE_COLUMNS["usage_events"]
     | frozenset({"latency_ms", "status", "unit_kind"}),
     "quota_snapshots": _CORE_COLUMNS["quota_snapshots"]
@@ -223,11 +247,9 @@ _HEAD_COLUMNS: dict[str, frozenset[str]] = {
             "email",
             "hashed_password",
             "is_active",
-            "is_superuser",
             "is_verified",
             "auth_provider",
             "auth_provider_id",
-            "role",
         }
     ),
     "login_throttle": frozenset({"key", "attempts", "expires_at"}),
@@ -254,16 +276,36 @@ _HEAD_INDEXES = frozenset(
         "provider_limit_admissions_created_at",
         "provider_rate_attempts_bucket_attempted",
         "provider_rate_attempts_expires_at",
+        "ix_projects_account_id",
+        "ix_projects_slug",
+        "ix_projects_account_id_slug",
+        "ix_projects_created_by",
+        "ix_project_memberships_user_id",
+        "ix_system_role_assignments_user_id",
+        "ix_project_role_assignments_user_id",
+        "ix_project_role_assignments_project_user",
     }
 )
 _LOCK_TIMEOUT_SECONDS = 30.0
 _SQLITE_TIMEOUT_SECONDS = 30.0
 _ALEMBIC_THREAD_LOCK = threading.Lock()
 
-#: The foreign keys the auth tables must declare: table -> (local column, target).
+#: The foreign keys the tables must declare: table -> (local column, target).
 _HEAD_FOREIGN_KEYS: dict[str, frozenset[tuple[str, str]]] = {
     "auth_sessions": frozenset({("user_id", "user")}),
     "refresh_tokens": frozenset({("family_id", "auth_sessions")}),
+    "projects": frozenset({("account_id", "accounts"), ("created_by", "user")}),
+    "project_memberships": frozenset({("project_id", "projects"), ("user_id", "user")}),
+    "system_role_assignments": frozenset(
+        {("account_id", "accounts"), ("user_id", "user"), ("granted_by", "user")}
+    ),
+    "project_role_assignments": frozenset(
+        {
+            ("project_id", "project_memberships"),
+            ("user_id", "project_memberships"),
+            ("granted_by", "user"),
+        }
+    ),
 }
 
 
@@ -398,7 +440,8 @@ def _validate_foreign_keys(connection: sqlite3.Connection) -> None:
     """
 
     for table, expected in _HEAD_FOREIGN_KEYS.items():
-        missing = expected - _foreign_keys(connection, table)
+        declared = _foreign_keys(connection, table)
+        missing = expected - declared
         if missing:
             names = ", ".join(f"{column} -> {target}" for column, target in sorted(missing))
             raise DatabaseMigrationError(f"{table} is missing foreign keys: {names}")
@@ -536,7 +579,10 @@ def upgrade_database(database: str | Path) -> MigrationResult:
             logger.warning("Backed up database before migration: %s", backup)
 
         try:
-            command.upgrade(_config(path), head)
+            if previous_revision is None and _APP_TABLES.issubset(tables):
+                command.stamp(_config(path), head)
+            else:
+                command.upgrade(_config(path), head)
             _apply_wal_mode(path)
             validate_database_schema(path)
         except BaseException as error:

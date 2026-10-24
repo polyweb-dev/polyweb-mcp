@@ -38,6 +38,7 @@ from freesearch.services.users import (
     AuthRoleAssignmentFailed,
     AuthService,
     AuthServiceError,
+    AuthUnsupportedRole,
     AuthUserNotFound,
 )
 
@@ -156,6 +157,9 @@ def _report(error: Exception) -> int:
         print(f"Account: {error.user_id}")
         print("Role: agent (the admin role was not applied)")
         return 1
+    if isinstance(error, AuthUnsupportedRole):
+        print(str(error), file=sys.stderr)
+        return 1
     if isinstance(error, AuthServiceError):
         print("the account database is unavailable", file=sys.stderr)
         return 1
@@ -179,7 +183,8 @@ async def _execute(options: argparse.Namespace) -> int:
             print(f"Role: {UserRole.ADMIN.value}")
             return 0
         user_id = UUID(str(options.user_id))
-        await service.change_role(user_id, UserRole(str(options.role)))
+        target_role = UserRole(str(options.role))
+        await service.change_role(user_id, target_role)
         print(f"Account: {user_id}")
         print(f"Role: {options.role}")
         return 0

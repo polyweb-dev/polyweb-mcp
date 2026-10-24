@@ -6,6 +6,7 @@ Defines the core P00 contracts for:
 - Human principal, project token principal, and deeply immutable project context
 - Common authorization query, decision, protocol, and deny-by-default evaluator
 - Target account representation and preserved current legacy schema seam
+- Target human user schema contracts preserving local/WorkOS provider invariants
 - Project lifecycle and membership DTOs with atomic initial admin
 - Project token issue, read, and rotation contracts with optional expiry and one-time wire boundary
 - Provider credential instance, grant, binding, and quota pool DTOs with ownership invariants
@@ -29,12 +30,16 @@ from pydantic import (
 )
 
 from freesearch.models.contracts import ContractModel, CostPreset, FallbackPolicy
+from freesearch.models.users import AuthProvider, normalize_email
 
 #: Policy proposal for default token lifetime in days when omitted by caller.
 DEFAULT_TOKEN_LIFETIME_DAYS: Final[int] = 90
 
 #: Opaque project token prefix identifier.
 PROJECT_TOKEN_PREFIX: Final[str] = "fs_live_"
+
+#: Canonical single internal installation account identifier.
+DEFAULT_INSTALLATION_ACCOUNT_ID: Final[UUID] = UUID("00000000-0000-4000-8000-000000000001")
 
 
 class ProjectRolloutState(StrEnum):
@@ -239,6 +244,13 @@ BUILTIN_ROLE_DEFINITIONS: Final[dict[str, RoleDefinition]] = {
 }
 
 
+class AccountStatus(StrEnum):
+    """Lifecycle state of an account."""
+
+    ACTIVE = "active"
+    SUSPENDED = "suspended"
+
+
 class AccountType(StrEnum):
     """Target account type for the multi-tenant installation boundary."""
 
@@ -252,9 +264,79 @@ class AccountRead(ContractModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     id: UUID
-    account_type: AccountType = AccountType.HUMAN
+    account_type: AccountType = AccountType.INSTALLATION
+    status: AccountStatus = AccountStatus.ACTIVE
     is_active: bool = True
-    created_at: AwareDatetime
+    created_at: AwareDatetime | None = None
+
+
+class TargetUserCreate(ContractModel):
+    """Target schema representation for creating an ordinary human user.
+
+    Preserves internal UUID and local/WorkOS provider constraints without
+    admin/developer/agent account types. Extra fields are strictly forbidden.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    email: str
+    auth_provider: AuthProvider = AuthProvider.LOCAL
+    auth_provider_id: str | None = None
+    hashed_password: str | None = None
+    is_active: bool = True
+    is_verified: bool = False
+
+    @field_validator("email")
+    @classmethod
+    def _normalize_email(cls, email: str) -> str:
+        return normalize_email(email)
+
+    @model_validator(mode="after")
+    def _validate_provider_invariants(self) -> "TargetUserCreate":
+        if self.auth_provider == AuthProvider.LOCAL:
+            if not self.hashed_password or len(self.hashed_password.strip()) == 0:
+                raise ValueError("Local user requires a non-empty hashed_password")
+            if self.auth_provider_id is not None:
+                raise ValueError("Local user must not have auth_provider_id")
+        elif self.auth_provider == AuthProvider.WORKOS:
+            if self.hashed_password is not None:
+                raise ValueError("WorkOS user must not have hashed_password")
+            if not self.auth_provider_id or len(self.auth_provider_id.strip()) == 0:
+                raise ValueError("WorkOS user requires a non-empty auth_provider_id")
+        return self
+
+
+class TargetUserRead(ContractModel):
+    """Target schema projection of an ordinary human user.
+
+    Preserves internal UUID and local/WorkOS provider constraints without
+    admin/developer/agent account types. Extra fields are strictly forbidden.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    id: UUID
+    email: str
+    auth_provider: AuthProvider
+    auth_provider_id: str | None = None
+    is_active: bool = True
+    is_verified: bool = False
+
+    @field_validator("email")
+    @classmethod
+    def _normalize_email(cls, email: str) -> str:
+        return normalize_email(email)
+
+    @model_validator(mode="after")
+    def _validate_provider_invariants(self) -> "TargetUserRead":
+        if self.auth_provider == AuthProvider.LOCAL:
+            if self.auth_provider_id is not None:
+                raise ValueError("Local user must not have auth_provider_id")
+        elif self.auth_provider == AuthProvider.WORKOS and (
+            not self.auth_provider_id or len(self.auth_provider_id.strip()) == 0
+        ):
+            raise ValueError("WorkOS user requires a non-empty auth_provider_id")
+        return self
 
 
 class HumanPrincipal(ContractModel):

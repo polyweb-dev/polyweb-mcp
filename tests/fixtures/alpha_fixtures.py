@@ -1,19 +1,17 @@
-"""Fresh alpha database fixtures and isolated bootstrap helpers (P00 Baseline).
+"""Fresh alpha database fixtures and isolated bootstrap helpers (P01 Foundation).
 
 These fixtures support testing against a clean alpha database without touching
 the live database, without requiring legacy migrations or migrations of old
 accounts, settings, credentials, or history, and without real provider keys.
 
-Architecture & Scope Note (P00 Baseline):
+Architecture & Scope Note (P01 Foundation):
 - The physical database initialized by `create_alpha_test_db` conforms to the
-  current SQLite schema at Alembic head (`0005_tinyfish_plan_label`), where
-  accounts reside in the `user` table with a legacy `role` column (legacy seam).
-- Target contracts (`ProjectRead`, `RoleAssignmentRead`, `ProjectTokenRead`) are
-  in-memory P00 specifications. Persisted tables for projects, memberships,
-  scoped role assignments, and project tokens are planned for downstream phases
-  (P01, P02, P07).
-- This helper does NOT claim persisted project entities, valid multi-tenant project
-  sessions, or a usable project token endpoint in P00.
+  current SQLite schema at Alembic head (`0006_projects_and_memberships`), where
+  accounts, projects, project memberships, and system/project role assignments
+  are persisted in their dedicated tables.
+- `bootstrap_fresh_alpha` idempotently seeds the single internal installation account,
+  provisions an ordinary human administrator, assigns `system_admin`, and
+  atomically creates the default project with the administrator as `project_admin`.
 """
 
 from __future__ import annotations
@@ -34,6 +32,7 @@ from pydantic import AwareDatetime
 
 from freesearch.models.projects import (
     BUILTIN_ROLE_DEFINITIONS,
+    DEFAULT_INSTALLATION_ACCOUNT_ID,
     DEFAULT_TOKEN_LIFETIME_DAYS,
     PROJECT_TOKEN_PREFIX,
     BuiltinRole,
@@ -46,10 +45,12 @@ from freesearch.models.projects import (
     ProjectTokenIssueResponse,
     ProjectTokenRead,
     RoleAssignmentRead,
-    ScopeType,
 )
-from freesearch.models.users import UserRole
 from freesearch.persistence.database_migrations import upgrade_database, validate_database_schema
+from freesearch.persistence.projects import (
+    ProjectRepository,
+    bootstrap_fresh_installation,
+)
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.persistence.users import UserDatabase, UserRow
 
@@ -61,7 +62,8 @@ ALPHA_ADMIN_PASSWORD: Final[str] = "AlphaAdmin123!SecureKey"
 class AlphaBootstrapResult:
     """Outcome of an isolated fresh-alpha database bootstrap.
 
-    Distinguishes current-schema persisted user from in-memory target contracts.
+    Persists physical records for installation account, administrator, default project,
+    membership, and role assignments.
     """
 
     database_path: Path
@@ -97,7 +99,7 @@ async def create_alpha_test_db(db_path: Path) -> SQLiteRepository:
 @asynccontextmanager
 async def alpha_test_db_context() -> AsyncIterator[tuple[Path, SQLiteRepository]]:
     """Context manager providing an isolated temporary alpha database with safe cleanup."""
-    with TemporaryDirectory() as temp_dir:
+    with TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
         db_path = Path(temp_dir) / "fresh_alpha_test.db"
         repo = await create_alpha_test_db(db_path)
         try:
@@ -114,8 +116,9 @@ async def seed_alpha_system_admin(
 ) -> tuple[UserRow, HumanPrincipal]:
     """Seed the initial system administrator in a fresh alpha database.
 
-    Persists into current `user` table at migration head. In the current schema,
-    `role = 'admin'` serves as the legacy administrative seam until P15 cutover.
+    Persists into current `user` table at migration head as an ordinary human
+    account without legacy role/superuser flags. Authority is granted via
+    system_role_assignments.
     """
     helper = PasswordHelper()
     hashed = helper.hash(password)
@@ -127,11 +130,10 @@ async def seed_alpha_system_admin(
                 "email": email,
                 "hashed_password": hashed,
                 "is_active": True,
-                "is_superuser": True,
+                "is_superuser": False,
                 "is_verified": True,
             }
         )
-        await database.set_role(user.id, UserRole.ADMIN)
         await session.commit()
         await session.refresh(user)
 
@@ -224,31 +226,31 @@ async def bootstrap_fresh_alpha(
 
     1. Validates and initializes fresh SQLite database without unlinking.
     2. Seeds initial system admin user in the legacy `user` table.
-    3. Builds in-memory target contracts for account, project, role assignments, and context.
+    3. Idempotently provisions internal installation account and assigns system_admin.
+    4. Atomically creates default project and assigns admin as project_admin.
+    5. Returns AlphaBootstrapResult with persisted entities and project context.
     """
     repository = await create_alpha_test_db(db_path)
     admin_user, admin_principal = await seed_alpha_system_admin(
         repository, email=admin_email, password=admin_password
     )
 
-    account_id = uuid4()
-    default_project = build_alpha_project(
-        account_id=account_id,
-        created_by=admin_user.id,
-        name=project_name,
-        slug="default",
-        initial_admin_user_id=admin_user.id,
-    )
-
-    system_role = RoleAssignmentRead(
-        id=uuid4(),
-        scope_type=ScopeType.SYSTEM,
-        scope_id=account_id,
-        user_id=admin_user.id,
-        role_key=BuiltinRole.SYSTEM_ADMIN,
-        granted_by=admin_user.id,
-        version=1,
-    )
+    account_id = DEFAULT_INSTALLATION_ACCOUNT_ID
+    async with repository.session() as session:
+        system_role = await bootstrap_fresh_installation(
+            session, admin_user.id, account_id=account_id
+        )
+        repo = ProjectRepository(session)
+        default_project, _, _ = await repo.create_project_with_admin(
+            account_id=account_id,
+            created_by=admin_user.id,
+            project_create=ProjectCreate(
+                name=project_name,
+                slug="default",
+                initial_admin_user_id=admin_user.id,
+            ),
+        )
+        await session.commit()
 
     project_admin_context = ProjectContext(
         account_id=account_id,

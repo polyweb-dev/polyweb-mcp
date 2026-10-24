@@ -10,6 +10,7 @@ HTTP 403 and change no account and revoke no family).
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -56,51 +57,45 @@ async def admin_app(tmp_path: Path, auth_secret: str) -> tuple[TestClient, SQLit
 async def _accounts(
     client: TestClient, repository: SQLiteRepository
 ) -> dict[str, dict[str, object]]:
-    """Build Admin, Developer, and Agent accounts with one public registration.
+    """Build Admin and Agent accounts with trusted fixture seeding and login.
 
-    Only the Admin uses the public route, so the shared peer counter keeps room
-    for the provisioning calls of the same test. Developer and Agent rows come
-    from the repository directly and then log in over HTTP. Open signup for each
-    role is pinned separately in the BDD suite and in test_auth_api.
+    Admin and Agent rows are seeded through the trusted fixture path on SQLite
+    and then log in over HTTP.
     """
 
     from tests.fixtures.auth import create_temp_user
 
     pairs: dict[str, dict[str, object]] = {}
     admin_email = temp_email("role-admin")
-    registered = client.post(
-        "/auth/register",
-        json={"email": admin_email, "password": TEMP_PASSWORD, "role": "admin"},
-    )
-    assert registered.status_code == 201
-    assert registered.json()["role"] == "admin"
+    await create_temp_user(repository, admin_email, role=UserRole.ADMIN)
     logged_in = client.post(
         "/auth/jwt/login", data={"username": admin_email, "password": TEMP_PASSWORD}
     )
     assert logged_in.status_code == 200
     body = logged_in.json()
+    me = client.get("/users/me", headers=_headers(body["access_token"]))
+    assert me.status_code == 200
     pairs["admin"] = {
         "email": admin_email,
-        "id": registered.json()["id"],
+        "id": me.json()["id"],
         "access": body["access_token"],
         "refresh": body["refresh_token"],
     }
-    for role in (UserRole.DEVELOPER, UserRole.AGENT):
-        email = temp_email(f"role-{role.value}")
-        await create_temp_user(repository, email, role=role)
-        logged_in = client.post(
-            "/auth/jwt/login", data={"username": email, "password": TEMP_PASSWORD}
-        )
-        assert logged_in.status_code == 200
-        body = logged_in.json()
-        me = client.get("/users/me", headers=_headers(body["access_token"]))
-        assert me.status_code == 200
-        pairs[role.value] = {
-            "email": email,
-            "id": me.json()["id"],
-            "access": body["access_token"],
-            "refresh": body["refresh_token"],
-        }
+    agent_email = temp_email("role-agent")
+    await create_temp_user(repository, agent_email, role=UserRole.AGENT)
+    logged_in = client.post(
+        "/auth/jwt/login", data={"username": agent_email, "password": TEMP_PASSWORD}
+    )
+    assert logged_in.status_code == 200
+    body = logged_in.json()
+    me = client.get("/users/me", headers=_headers(body["access_token"]))
+    assert me.status_code == 200
+    pairs["agent"] = {
+        "email": agent_email,
+        "id": me.json()["id"],
+        "access": body["access_token"],
+        "refresh": body["refresh_token"],
+    }
     return pairs
 
 
@@ -120,7 +115,7 @@ def test_admin_provision_creates_each_role_with_safe_projection(
     pairs = asyncio.get_event_loop().run_until_complete(_accounts(client, repository))
     admin_headers = _headers(pairs["admin"]["access"])
 
-    for role, superuser in (("admin", True), ("developer", False), ("agent", False)):
+    for role, superuser in (("admin", True), ("agent", False)):
         email = temp_email(f"provision-{role}")
         created = client.post(
             "/api/v1/users",
@@ -147,6 +142,16 @@ def test_admin_provision_creates_each_role_with_safe_projection(
         me = client.get("/users/me", headers=_headers(logged_in.json()["access_token"]))
         assert me.status_code == 200
         assert me.json()["role"] == role
+
+    # Verify that attempting to provision the obsolete developer role returns 400 Bad Request
+    dev_email = temp_email("provision-dev")
+    rejected = client.post(
+        "/api/v1/users",
+        json={"email": dev_email, "password": TEMP_PASSWORD, "role": "developer"},
+        headers=admin_headers,
+    )
+    assert rejected.status_code == 400
+    assert "obsolete" in rejected.text or "unsupported" in rejected.text
 
 
 def test_provision_keeps_caller_session_and_identity(
@@ -177,14 +182,14 @@ def test_provision_keeps_caller_session_and_identity(
 def test_non_admin_and_anonymous_cannot_provision(
     admin_app: tuple[TestClient, SQLiteRepository],
 ) -> None:
-    """T2-PROVISION: Developer and Agent receive 403; anonymous receives 401."""
+    """T2-PROVISION: Agent receives 403; anonymous receives 401."""
 
     import asyncio
 
     client, repository = admin_app
     pairs = asyncio.get_event_loop().run_until_complete(_accounts(client, repository))
 
-    for role in ("developer", "agent"):
+    for role in ("agent",):
         denied = client.post(
             "/api/v1/users",
             json={
@@ -210,7 +215,7 @@ def test_non_admin_and_anonymous_cannot_provision(
 def test_legacy_lookup_and_role_change_deny_every_authenticated_caller(
     admin_app: tuple[TestClient, SQLiteRepository],
 ) -> None:
-    """T2-DENY-EDIT: legacy routes deny Admin, Developer, and Agent with 403."""
+    """T2-DENY-EDIT: legacy routes deny Admin and Agent with 403."""
 
     import asyncio
 
@@ -220,7 +225,7 @@ def test_legacy_lookup_and_role_change_deny_every_authenticated_caller(
     unknown = str(uuid4())
     own = str(pairs["admin"]["id"])
 
-    for role in ("admin", "developer", "agent"):
+    for role in ("admin", "agent"):
         headers = _headers(pairs[role]["access"])
         for target in (existing, unknown, own, "not-a-uuid"):
             denied_get = client.get(f"/api/v1/users/{target}", headers=headers)
@@ -238,7 +243,7 @@ def test_legacy_lookup_and_role_change_deny_every_authenticated_caller(
     me = client.get("/users/me", headers=_headers(pairs["agent"]["access"]))
     assert me.status_code == 200
     assert me.json()["role"] == "agent"
-    for role in ("admin", "developer", "agent"):
+    for role in ("admin", "agent"):
         assert client.get("/users/me", headers=_headers(pairs[role]["access"])).status_code == 200
         assert (
             client.post(
@@ -377,13 +382,44 @@ def test_provision_body_above_cap_returns_413(
 
     client, repository = admin_app
     pairs = asyncio.get_event_loop().run_until_complete(_accounts(client, repository))
-    headers = _headers(pairs["admin"]["access"])
+    admin_headers = _headers(pairs["admin"]["access"])
 
     big_email = f"{'a' * 5000}@example.com"
     oversize = client.post(
         "/api/v1/users",
         json={"email": big_email, "password": TEMP_PASSWORD, "role": "agent"},
-        headers=headers,
+        headers=admin_headers,
     )
     assert oversize.status_code == 413
     assert TEMP_PASSWORD not in oversize.text
+
+
+def test_provision_storage_unavailable_maps_to_503_sanitized(
+    admin_app: tuple[TestClient, SQLiteRepository],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Storage failure in provision_account maps to 503 without leaking raw details."""
+    import asyncio
+
+    from freesearch.services import users as users_service
+
+    client, repository = admin_app
+    pairs = asyncio.get_event_loop().run_until_complete(_accounts(client, repository))
+    admin_headers = _headers(pairs["admin"]["access"])
+
+    secret_leak = "secret_db_failure_detail_hidden"
+
+    async def _failing_provision(self: Any, *args: Any, **kwargs: Any) -> Any:
+        raise users_service.AuthStorageUnavailable(secret_leak)
+
+    monkeypatch.setattr(users_service.AuthService, "provision_account", _failing_provision)
+
+    res = client.post(
+        "/api/v1/users",
+        json={"email": temp_email("store-fail"), "password": TEMP_PASSWORD, "role": "agent"},
+        headers=admin_headers,
+    )
+    assert res.status_code == 503
+    assert secret_leak not in res.text
+    body = res.json()
+    assert body.get("detail") == "authentication is temporarily unavailable"

@@ -104,6 +104,15 @@ class AuthUserNotFound(AuthServiceError):
     """Raised when a trusted operation names an account that does not exist."""
 
 
+class AuthUnsupportedRole(AuthServiceError):
+    """Raised when an operation requests an obsolete or unsupported role."""
+
+    def __init__(self, role: UserRole | str) -> None:
+        val = role.value if isinstance(role, UserRole) else str(role)
+        super().__init__(f"the role '{val}' is obsolete and unsupported")
+        self.role = val
+
+
 class AuthRoleAssignmentFailed(AuthServiceError):
     """Raised when a new bootstrap account keeps the Agent role.
 
@@ -434,8 +443,7 @@ class AuthService:
 
         The API composition opens one operational database and shares it with the
         account services. A service that already owns a repository keeps it, so
-        an injected service is never retargeted.
-        """
+        an injected service is never retargeted."""
 
         if self._owns_repository and self._repository is None:
             self._repository = repository
@@ -646,8 +654,17 @@ class AuthService:
         gate, and the HTTP mapping.
         """
 
+        role_val = getattr(user_create, "role", UserRole.AGENT)
+        if isinstance(role_val, str):
+            role_val = UserRole(role_val)
+        if role_val is UserRole.DEVELOPER:
+            raise AuthUnsupportedRole(role_val)
+
         async with self.user_manager() as manager:
             created = await manager.create(user_create, safe=True)
+        if role_val is UserRole.ADMIN:
+            await self.change_role(created.id, UserRole.ADMIN)
+
         account = await self.get_account(created.id)
         if account is None:
             raise AuthStorageUnavailable("the created account is not readable")
@@ -661,9 +678,15 @@ class AuthService:
         the stored one, so no old credential keeps the previous authority.
         """
 
+        if role is UserRole.DEVELOPER:
+            raise AuthUnsupportedRole(role)
+
         now = datetime.now(UTC)
         async with self._session() as session:
-            updated = await UserDatabase(session, UserRow).set_role(user_id, role)
+            try:
+                updated = await UserDatabase(session, UserRow).set_role(user_id, role)
+            except ValueError as error:
+                raise AuthUnsupportedRole(role) from error
             if not updated:
                 raise AuthUserNotFound("no account has this id")
             await AuthSessionRepository(session).revoke_user_families(user_id, now=now)
@@ -726,6 +749,7 @@ __all__ = [
     "AuthServiceError",
     "AuthSessionInvalid",
     "AuthStorageUnavailable",
+    "AuthUnsupportedRole",
     "AuthUserNotFound",
     "LoginRateLimited",
     "SessionJWTStrategy",
