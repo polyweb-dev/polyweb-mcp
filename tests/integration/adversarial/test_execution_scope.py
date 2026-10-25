@@ -16,17 +16,6 @@ import pytest
 import pytest_asyncio
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
-from tests.fixtures.auth import (
-    account_id_from_pair,
-    register_and_login,
-    temp_email,
-)
-from tests.fixtures.execution import (
-    add_execution_member,
-    seed_execution_project,
-    seed_execution_user,
-    suspend_execution_member,
-)
 
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.mcp.server import create_server
@@ -45,6 +34,17 @@ from freesearch.models.contracts import (
 from freesearch.models.projects import BuiltinRole
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
+from tests.fixtures.auth import (
+    account_id_from_pair,
+    register_and_login,
+    temp_email,
+)
+from tests.fixtures.execution import (
+    add_execution_member,
+    seed_execution_project,
+    seed_execution_user,
+    suspend_execution_member,
+)
 
 
 class _CountingAdapter(ProviderAdapter):

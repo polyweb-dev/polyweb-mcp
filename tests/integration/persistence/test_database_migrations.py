@@ -577,6 +577,15 @@ _PROJECT_INDEXES = frozenset(
     }
 )
 _SETTINGS_TABLES = frozenset({"system_settings", "project_settings"})
+_CREDENTIAL_TABLES = frozenset({"provider_credentials", "credential_project_grants"})
+_CREDENTIAL_INDEXES = frozenset(
+    {
+        "provider_credentials_id_owner_scope_key",
+        "provider_credentials_live_label_key",
+        "ix_provider_credentials_owner_project_id",
+        "ix_credential_project_grants_project_id",
+    }
+)
 
 
 def test_validate_database_schema_rejects_missing_auth_foreign_keys(tmp_path: Path) -> None:
@@ -613,12 +622,18 @@ def test_fresh_database_at_head_has_no_cache_metadata(tmp_path: Path) -> None:
     result = upgrade_database(database)
 
     assert result.current_revision == migration_head()
-    assert result.current_revision == "0008_project_owned_telemetry"
+    assert result.current_revision == "0009_provider_credentials"
     assert "cache_metadata" not in _tables(database)
     assert "cache_metadata_expires_at" not in _indexes(database)
-    assert _indexes(database) == (set(_HEAD_INDEXES) | set(_LIMIT_INDEXES) | set(_PROJECT_INDEXES))
+    assert _indexes(database) == (
+        set(_HEAD_INDEXES) | set(_LIMIT_INDEXES) | set(_PROJECT_INDEXES) | set(_CREDENTIAL_INDEXES)
+    )
     assert _tables(database) == (
-        set(_HEAD_TABLES) | set(_LIMIT_TABLES) | set(_PROJECT_TABLES) | set(_SETTINGS_TABLES)
+        set(_HEAD_TABLES)
+        | set(_LIMIT_TABLES)
+        | set(_PROJECT_TABLES)
+        | set(_SETTINGS_TABLES)
+        | set(_CREDENTIAL_TABLES)
     )
     assert _tables(database) >= _AUTH_TABLES
     assert _indexes(database) >= _AUTH_INDEXES
@@ -669,6 +684,7 @@ def test_upgrade_from_0002_drops_seeded_cache_rows_preserving_unrelated_data(
         | set(_AUTH_INDEXES)
         | set(_LIMIT_INDEXES)
         | set(_PROJECT_INDEXES)
+        | set(_CREDENTIAL_INDEXES)
     )
     _assert_trace_spans_schema(database)
     assert _tables(database) >= _AUTH_TABLES

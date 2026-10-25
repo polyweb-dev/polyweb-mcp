@@ -54,7 +54,10 @@ _PROJECT_TABLES = frozenset(
     }
 )
 _SETTINGS_TABLES = frozenset({"system_settings", "project_settings"})
-_APP_TABLES = _LEGACY_APP_TABLES | _AUTH_TABLES | _PROJECT_TABLES | _SETTINGS_TABLES
+_CREDENTIAL_TABLES = frozenset({"provider_credentials", "credential_project_grants"})
+_APP_TABLES = (
+    _LEGACY_APP_TABLES | _AUTH_TABLES | _PROJECT_TABLES | _SETTINGS_TABLES | _CREDENTIAL_TABLES
+)
 
 _TRACE_SPAN_COLUMNS = frozenset(
     {
@@ -227,6 +230,36 @@ _SETTINGS_TABLE_COLUMNS: dict[str, frozenset[str]] = {
         {"project_id", "namespace", "schema_version", "overrides", "revision"}
     ),
 }
+_CREDENTIAL_TABLE_COLUMNS: dict[str, frozenset[str]] = {
+    "provider_credentials": frozenset(
+        {
+            "id",
+            "account_id",
+            "provider_type",
+            "owner_scope",
+            "owner_project_id",
+            "label",
+            "auth_mode",
+            "generation",
+            "status",
+            "created_by",
+            "created_at",
+            "updated_at",
+            "version",
+        }
+    ),
+    "credential_project_grants": frozenset(
+        {
+            "credential_id",
+            "owner_scope",
+            "project_id",
+            "permitted_operations",
+            "granted_by",
+            "created_at",
+            "version",
+        }
+    ),
+}
 _CORE_COLUMNS: dict[str, frozenset[str]] = {
     **_LIMIT_TABLE_COLUMNS,
     "usage_events": frozenset(
@@ -244,6 +277,7 @@ _HEAD_COLUMNS: dict[str, frozenset[str]] = {
     **_LIMIT_TABLE_COLUMNS,
     **_PROJECT_TABLE_COLUMNS,
     **_SETTINGS_TABLE_COLUMNS,
+    **_CREDENTIAL_TABLE_COLUMNS,
     "usage_events": _CORE_COLUMNS["usage_events"]
     | frozenset(
         {"latency_ms", "status", "unit_kind", "project_id", "actor_type", "actor_id", "trace_id"}
@@ -294,6 +328,10 @@ _HEAD_INDEXES = frozenset(
         "ix_system_role_assignments_user_id",
         "ix_project_role_assignments_user_id",
         "ix_project_role_assignments_project_user",
+        "provider_credentials_id_owner_scope_key",
+        "provider_credentials_live_label_key",
+        "ix_provider_credentials_owner_project_id",
+        "ix_credential_project_grants_project_id",
         "usage_events_project_observed_at",
         "trace_spans_project_root_started_at",
     }
@@ -319,6 +357,21 @@ _HEAD_FOREIGN_KEYS: dict[str, frozenset[tuple[str, str]]] = {
         }
     ),
     "project_settings": frozenset({("project_id", "projects")}),
+    "provider_credentials": frozenset(
+        {
+            ("account_id", "accounts"),
+            ("owner_project_id", "projects"),
+            ("created_by", "user"),
+        }
+    ),
+    "credential_project_grants": frozenset(
+        {
+            ("credential_id", "provider_credentials"),
+            ("owner_scope", "provider_credentials"),
+            ("project_id", "projects"),
+            ("granted_by", "user"),
+        }
+    ),
     "usage_events": frozenset({("project_id", "projects")}),
     "trace_spans": frozenset({("project_id", "projects")}),
 }

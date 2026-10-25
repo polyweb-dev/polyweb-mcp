@@ -33,9 +33,9 @@ from freesearch.infrastructure.auth_asgi import (
     BearerAuthMiddleware,
     current_verified_principal,
 )
-from freesearch.infrastructure.cryptography import SecretCodec, load_or_create_master_key
 from freesearch.infrastructure.encrypted_store import (
     EncryptedDbSecretStore,
+    load_secret_codec,
     migrate_legacy_secrets_to_encrypted_db,
 )
 from freesearch.infrastructure.http import create_async_client
@@ -101,6 +101,7 @@ from freesearch.routers.control import (
     register_control_routes,
     routing_policy,
 )
+from freesearch.routers.credentials import register_credential_routes
 from freesearch.routers.limits import limit_denial_response, register_limit_routes
 from freesearch.routers.observability import register_observability_routes
 from freesearch.routers.projects import register_project_routes
@@ -150,17 +151,9 @@ def _install_default_secret_store(app: FastAPI, repo: SQLiteRepository | None) -
 
     if not isinstance(repo, SQLiteRepository) or not app.state._uses_default_secret_store:
         return
-    settings = get_settings()
-    passphrase = (
-        settings.encryption_key.get_secret_value() if settings.encryption_key is not None else None
-    )
     app.state.secret_store = EncryptedDbSecretStore(
         repo,
-        SecretCodec(
-            load_or_create_master_key(
-                key_file=settings.encryption_key_file, passphrase_env=passphrase
-            )
-        ),
+        load_secret_codec(get_settings()),
     )
 
 
@@ -413,6 +406,7 @@ def create_app(
     register_auth_routes(app)
     register_project_routes(app)
     register_settings_routes(app)
+    register_credential_routes(app)
     register_control_routes(app)
     register_limit_routes(app)
     register_observability_routes(app)
