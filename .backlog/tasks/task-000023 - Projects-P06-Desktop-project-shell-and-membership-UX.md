@@ -1,10 +1,10 @@
 ---
 id: TASK-000023
 title: Projects P06 - Desktop project shell and membership UX
-status: To Do
+status: In Progress
 assignee: []
 created_date: '2026-10-24T15:54:00Z'
-updated_date: '2026-10-25T14:51:00Z'
+updated_date: '2026-10-25T15:41:00Z'
 labels:
   - projects-first
   - phase-p06
