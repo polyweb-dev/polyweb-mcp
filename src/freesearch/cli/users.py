@@ -34,6 +34,15 @@ from freesearch.configuration.config import get_settings
 from freesearch.models.users import UserRole
 from freesearch.persistence.database_migrations import absolute_database_path
 from freesearch.services.monitoring import resolve_database_path
+from freesearch.services.projects import (
+    LAST_PROJECT_ADMIN,
+    ProjectConflict,
+    ProjectNotFound,
+    ProjectService,
+    ProjectServiceError,
+    ProjectStorageUnavailable,
+    ProjectValidationError,
+)
 from freesearch.services.users import (
     AuthRoleAssignmentFailed,
     AuthService,
@@ -81,7 +90,10 @@ def _parser() -> argparse.ArgumentParser:
 
     parser = _SafeParser(
         prog="freesearch-users",
-        description="Create an Admin account or assign an account role (operator only).",
+        description=(
+            "Create an Admin account, assign an account role, or deactivate "
+            "accounts with the project administrator guard (operator only)."
+        ),
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
     create = subparsers.add_parser(
@@ -103,6 +115,23 @@ def _parser() -> argparse.ArgumentParser:
         help="role to assign: admin, developer, or agent",
     )
     role.add_argument(
+        "--database",
+        type=Path,
+        default=None,
+        help="existing database file; the shared FREESEARCH_DB precedence applies",
+    )
+    deactivate = subparsers.add_parser(
+        "deactivate",
+        help="deactivate one or more accounts after the last-project-admin guard",
+    )
+    deactivate.add_argument(
+        "--user-id",
+        action="append",
+        required=True,
+        dest="user_ids",
+        help="account UUID to deactivate; repeat to apply one guarded bulk change",
+    )
+    deactivate.add_argument(
         "--database",
         type=Path,
         default=None,
@@ -160,6 +189,24 @@ def _report(error: Exception) -> int:
     if isinstance(error, AuthUnsupportedRole):
         print(str(error), file=sys.stderr)
         return 1
+    if isinstance(error, ProjectConflict) and error.code == LAST_PROJECT_ADMIN:
+        print(
+            "cannot deactivate: a project would lose its last active administrator",
+            file=sys.stderr,
+        )
+        return 1
+    if isinstance(error, ProjectNotFound):
+        print("no account has this id", file=sys.stderr)
+        return 1
+    if isinstance(error, ProjectValidationError):
+        print(str(error), file=sys.stderr)
+        return 1
+    if isinstance(error, ProjectStorageUnavailable):
+        print("the account database is unavailable", file=sys.stderr)
+        return 1
+    if isinstance(error, ProjectServiceError):
+        print(_OPERATION_ERROR, file=sys.stderr)
+        return 1
     if isinstance(error, AuthServiceError):
         print("the account database is unavailable", file=sys.stderr)
         return 1
@@ -181,6 +228,19 @@ async def _execute(options: argparse.Namespace) -> int:
             account = await service.create_admin(options.email, _prompt_password())
             print(f"Account: {account}")
             print(f"Role: {UserRole.ADMIN.value}")
+            return 0
+        if options.command == "deactivate":
+            repository = service.repository
+            if repository is None:
+                raise CliError("the account database is unavailable")
+            target_ids = [UUID(str(value)) for value in options.user_ids]
+            accounts = await ProjectService(
+                repository,
+                rollout_state=service.settings.projects_rollout_state,
+            ).deactivate_accounts(target_ids, trusted=True)
+            for deactivated in accounts:
+                print(f"Account: {deactivated.id}")
+                print("Active: false")
             return 0
         user_id = UUID(str(options.user_id))
         target_role = UserRole(str(options.role))

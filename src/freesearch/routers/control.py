@@ -75,11 +75,12 @@ from freesearch.services.parallel_oauth import (
 
 SecretSource = Literal["encrypted_db", "none"]
 
-#: Role gates from the approved P1a matrix. ``require_admin`` guards every
-#: control mutation and every provider OAuth handler; ``require_control_reader``
-#: guards the sanitized reads. Both answer 401 before 403, and both run before
-#: any provider call or persistence write. Provider OAuth status follows its side
-#: effects, not its HTTP verb, so the GET requires Admin.
+#: Live system-scope gates. ``require_admin`` requires the common service's
+#: ``system.settings.write`` permission for every control mutation and provider
+#: OAuth handler; ``require_control_reader`` requires ``system.settings.read``
+#: for sanitized reads. Both answer 401 before 403, and both run before any
+#: provider call or persistence write. Provider OAuth status follows its side
+#: effects, not its HTTP verb, so the GET requires the write gate.
 _AdminPrincipal = Annotated[UserPrincipal, Depends(require_admin)]
 _ReaderPrincipal = Annotated[UserPrincipal, Depends(require_control_reader)]
 

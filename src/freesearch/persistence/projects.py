@@ -27,6 +27,9 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    cast,
+    delete,
+    func,
     select,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -569,6 +572,221 @@ class ProjectRepository:
             )
             for r in rows
         ]
+
+    async def get_membership(
+        self,
+        *,
+        project_id: UUID,
+        user_id: UUID,
+    ) -> ProjectMembershipRow | None:
+        """Return one membership row with strict project and user parameters."""
+
+        return await self._session.get(ProjectMembershipRow, (str(project_id), str(user_id)))
+
+    async def list_user_project_access(
+        self,
+        *,
+        account_id: UUID,
+        user_id: UUID,
+    ) -> list[tuple[ProjectRead, MembershipStatus, list[str]]]:
+        """List one user's project rows with membership status and role keys.
+
+        Only memberships of the requested account are returned. Project
+        authorization still decides whether each role set grants ``project.read``;
+        this repository method only supplies current rows.
+        """
+
+        stmt = (
+            select(ProjectRow, ProjectMembershipRow)
+            .join(ProjectMembershipRow, ProjectMembershipRow.project_id == ProjectRow.id)
+            .where(
+                ProjectRow.account_id == str(account_id),
+                ProjectMembershipRow.user_id == str(user_id),
+            )
+            .order_by(ProjectRow.created_at.desc())
+        )
+        rows = (await self._session.execute(stmt)).all()
+        project_ids = [row[0].id for row in rows]
+        roles_by_project: dict[str, list[str]] = {}
+        if project_ids:
+            role_stmt = select(ProjectRoleAssignmentRow).where(
+                ProjectRoleAssignmentRow.project_id.in_(project_ids),
+                ProjectRoleAssignmentRow.user_id == str(user_id),
+            )
+            for role_row in (await self._session.execute(role_stmt)).scalars():
+                roles_by_project.setdefault(role_row.project_id, []).append(role_row.role_key)
+        return [
+            (
+                _project_row_to_read(project_row),
+                MembershipStatus(membership_row.status),
+                sorted(roles_by_project.get(project_row.id, [])),
+            )
+            for project_row, membership_row in rows
+        ]
+
+    async def get_member(
+        self,
+        *,
+        project_id: UUID,
+        user_id: UUID,
+    ) -> ProjectMemberRead | None:
+        """Return one membership projection with its current role keys."""
+
+        row = await self.get_membership(project_id=project_id, user_id=user_id)
+        if row is None:
+            return None
+        return await self._membership_read(row)
+
+    async def update_membership_status(
+        self,
+        *,
+        project_id: UUID,
+        user_id: UUID,
+        status: MembershipStatus,
+    ) -> ProjectMemberRead:
+        """Update one membership status and bump its version."""
+
+        row = await self.get_membership(project_id=project_id, user_id=user_id)
+        if row is None:
+            raise ValueError(f"User {user_id} is not a member of project {project_id}")
+        row.status = status.value
+        row.version += 1
+        await self._session.flush()
+        return await self._membership_read(row)
+
+    async def delete_role_assignment(
+        self,
+        *,
+        project_id: UUID,
+        user_id: UUID,
+        role_key: str,
+    ) -> bool:
+        """Delete one project role assignment; return whether a row was removed."""
+
+        result = await self._session.execute(
+            delete(ProjectRoleAssignmentRow).where(
+                ProjectRoleAssignmentRow.project_id == str(project_id),
+                ProjectRoleAssignmentRow.user_id == str(user_id),
+                ProjectRoleAssignmentRow.role_key == role_key,
+            )
+        )
+        await self._session.flush()
+        return bool(result.rowcount)  # type: ignore[attr-defined]
+
+    async def delete_membership(
+        self,
+        *,
+        project_id: UUID,
+        user_id: UUID,
+    ) -> bool:
+        """Remove one membership and all of its project role assignments."""
+
+        row = await self.get_membership(project_id=project_id, user_id=user_id)
+        if row is None:
+            return False
+        await self._session.execute(
+            delete(ProjectRoleAssignmentRow).where(
+                ProjectRoleAssignmentRow.project_id == str(project_id),
+                ProjectRoleAssignmentRow.user_id == str(user_id),
+            )
+        )
+        await self._session.execute(
+            delete(ProjectMembershipRow).where(
+                ProjectMembershipRow.project_id == str(project_id),
+                ProjectMembershipRow.user_id == str(user_id),
+            )
+        )
+        await self._session.flush()
+        return True
+
+    async def set_project_status(
+        self,
+        *,
+        project_id: UUID,
+        status: ProjectStatus,
+    ) -> ProjectRead:
+        """Set one project's lifecycle state and bump its version."""
+
+        row = await self._session.get(ProjectRow, str(project_id))
+        if row is None:
+            raise ValueError(f"Project {project_id} does not exist")
+        row.status = status.value
+        row.version += 1
+        await self._session.flush()
+        return _project_row_to_read(row)
+
+    async def count_active_project_admins(self, *, project_id: UUID) -> int:
+        """Count active human project_admin assignments for one project.
+
+        An inactive user, a suspended membership, or a missing project_admin
+        assignment never satisfies the administrator invariant.
+        """
+
+        user_cls = _get_user_row()
+        stmt = (
+            select(func.count())
+            .select_from(ProjectRoleAssignmentRow)
+            .join(
+                ProjectMembershipRow,
+                (ProjectMembershipRow.project_id == ProjectRoleAssignmentRow.project_id)
+                & (ProjectMembershipRow.user_id == ProjectRoleAssignmentRow.user_id),
+            )
+            .join(user_cls, cast(user_cls.id, CHAR(36)) == ProjectMembershipRow.user_id)
+            .where(
+                ProjectRoleAssignmentRow.project_id == str(project_id),
+                ProjectRoleAssignmentRow.role_key == BuiltinRole.PROJECT_ADMIN.value,
+                ProjectMembershipRow.status == MembershipStatus.ACTIVE.value,
+                user_cls.__table__.c.is_active.is_(True),
+            )
+        )
+        return int((await self._session.execute(stmt)).scalar_one())
+
+    async def count_active_project_admins_for_projects(
+        self, project_ids: set[UUID]
+    ) -> dict[UUID, int]:
+        """Count active project administrators for each requested project."""
+
+        if not project_ids:
+            return {}
+        user_cls = _get_user_row()
+        stmt = (
+            select(
+                ProjectRoleAssignmentRow.project_id,
+                func.count(),
+            )
+            .select_from(ProjectRoleAssignmentRow)
+            .join(
+                ProjectMembershipRow,
+                (ProjectMembershipRow.project_id == ProjectRoleAssignmentRow.project_id)
+                & (ProjectMembershipRow.user_id == ProjectRoleAssignmentRow.user_id),
+            )
+            .join(user_cls, cast(user_cls.id, CHAR(36)) == ProjectMembershipRow.user_id)
+            .where(
+                ProjectRoleAssignmentRow.project_id.in_([str(item) for item in project_ids]),
+                ProjectRoleAssignmentRow.role_key == BuiltinRole.PROJECT_ADMIN.value,
+                ProjectMembershipRow.status == MembershipStatus.ACTIVE.value,
+                user_cls.__table__.c.is_active.is_(True),
+            )
+            .group_by(ProjectRoleAssignmentRow.project_id)
+        )
+        rows = (await self._session.execute(stmt)).all()
+        return {UUID(project_id): int(count) for project_id, count in rows}
+
+    async def _membership_read(self, row: ProjectMembershipRow) -> ProjectMemberRead:
+        """Project one membership row with its current role keys."""
+
+        role_stmt = select(ProjectRoleAssignmentRow).where(
+            ProjectRoleAssignmentRow.project_id == row.project_id,
+            ProjectRoleAssignmentRow.user_id == row.user_id,
+        )
+        role_rows = (await self._session.execute(role_stmt)).scalars().all()
+        return ProjectMemberRead(
+            project_id=UUID(row.project_id),
+            user_id=UUID(row.user_id),
+            status=MembershipStatus(row.status),
+            roles=sorted(role.role_key for role in role_rows),
+            version=row.version,
+        )
 
 
 async def bootstrap_fresh_installation(

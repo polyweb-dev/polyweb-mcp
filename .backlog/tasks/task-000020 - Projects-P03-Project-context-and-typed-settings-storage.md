@@ -1,10 +1,10 @@
 ---
 id: TASK-000020
 title: Projects P03 - Project context and typed settings storage
-status: To Do
+status: In Progress
 assignee: []
 created_date: '2026-10-24T15:54:00Z'
-updated_date: '2026-10-24T15:57:00Z'
+updated_date: '2026-10-25T10:24:00Z'
 labels:
   - projects-first
   - phase-p03
@@ -26,7 +26,7 @@ documentation:
   - .backlog/docs/doc-000005 - Projects-execution-index-start-here.md
 priority: high
 type: feature
-ordinal: 400
+ordinal: 1000
 ---
 
 ## Description

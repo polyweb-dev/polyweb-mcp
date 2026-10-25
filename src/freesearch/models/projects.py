@@ -101,6 +101,30 @@ class PermissionAction(StrEnum):
     SYSTEM_ROLES_ASSIGN = "system.roles.assign"
 
 
+#: Actions that execute at system scope even though their catalog name does not
+#: use the ``system.`` prefix. Project creation is the documented exception: a
+#: system administrator creates a project and names its first administrator.
+_SYSTEM_SCOPED_ACTIONS: Final[frozenset[PermissionAction]] = frozenset(
+    {
+        PermissionAction.PROJECT_CREATE,
+        PermissionAction.SYSTEM_SETTINGS_READ,
+        PermissionAction.SYSTEM_SETTINGS_WRITE,
+        PermissionAction.SYSTEM_CREDENTIALS_MANAGE,
+        PermissionAction.SYSTEM_POOLS_MANAGE,
+        PermissionAction.SYSTEM_ALLOCATIONS_MANAGE,
+        PermissionAction.SYSTEM_PROJECTS_CREATE,
+        PermissionAction.SYSTEM_AUDIT_READ,
+        PermissionAction.SYSTEM_ROLES_ASSIGN,
+    }
+)
+
+
+def action_scope(action: PermissionAction) -> ScopeType:
+    """Return the documented scope that must evaluate one catalog action."""
+
+    return ScopeType.SYSTEM if action in _SYSTEM_SCOPED_ACTIONS else ScopeType.PROJECT
+
+
 #: Permitted execution actions for project API tokens (strictly limited to runtime execution).
 ALLOWED_TOKEN_ACTIONS: Final[frozenset[PermissionAction]] = frozenset(
     {PermissionAction.SEARCH_EXECUTE, PermissionAction.FETCH_EXECUTE}
@@ -140,6 +164,9 @@ BUILTIN_ROLE_DEFINITIONS: Final[dict[str, RoleDefinition]] = {
         scope_type=ScopeType.SYSTEM,
         permissions=frozenset(
             {
+                # ``project.create`` is a system-scoped action in the documented
+                # API matrix even though it is named after the project resource.
+                PermissionAction.PROJECT_CREATE,
                 PermissionAction.SYSTEM_SETTINGS_READ,
                 PermissionAction.SYSTEM_SETTINGS_WRITE,
                 PermissionAction.SYSTEM_CREDENTIALS_MANAGE,
@@ -431,7 +458,7 @@ class AuthorizationDecision(ContractModel):
 
 @runtime_checkable
 class AuthorizationService(Protocol):
-    """Common authorization service interface across transports.
+    """Common live authorization service interface across transports.
 
     Contract invariants:
     1. Deny-by-default: Any unregistered action, missing scope, missing role,
@@ -440,6 +467,11 @@ class AuthorizationService(Protocol):
        project-level permissions (e.g. searching or fetching within a project or
        reading project tokens) unless explicitly granted a project-scoped role or
        operating strictly within system scope.
+    3. Live assignments: The runtime implementation reloads durable scoped role
+       assignments on every decision; token claims or account-type flags are not
+       an authority source. The async live implementation lives in
+       :mod:`freesearch.services.authorization`; this protocol keeps the pure
+       decision contract for policy consumers that already hold permissions.
     """
 
     def authorize(self, query: AuthorizationQuery) -> AuthorizationDecision: ...
@@ -496,8 +528,8 @@ def evaluate_authorization(
                 scope_id=query.scope_id,
             )
 
-    # Invariant: system action requires system scope
-    is_system_action = query.action.value.startswith("system.")
+    # Invariant: every action has one documented scope; a caller cannot widen it
+    is_system_action = action_scope(query.action) is ScopeType.SYSTEM
     if is_system_action and query.scope_type != ScopeType.SYSTEM:
         return AuthorizationDecision(
             allowed=False,
@@ -619,6 +651,50 @@ class ProjectMemberUpdate(ContractModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     status: MembershipStatus
+
+
+class ProjectMemberChange(ContractModel):
+    """One membership change in an atomic bulk update."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    user_id: UUID
+    status: MembershipStatus | None = None
+    add_roles: frozenset[str] = Field(default_factory=frozenset)
+    remove_roles: frozenset[str] = Field(default_factory=frozenset)
+
+    @field_validator("add_roles", "remove_roles")
+    @classmethod
+    def _validate_project_roles(cls, roles: frozenset[str]) -> frozenset[str]:
+        for role_key in roles:
+            if role_key not in BUILTIN_ROLE_DEFINITIONS:
+                raise ValueError(f"Unknown project role {role_key!r}")
+            if BUILTIN_ROLE_DEFINITIONS[role_key].scope_type is not ScopeType.PROJECT:
+                raise ValueError(f"Role {role_key!r} is not a project-scoped role")
+        return roles
+
+    @model_validator(mode="after")
+    def _validate_change_is_effective(self) -> "ProjectMemberChange":
+        if self.status is None and not self.add_roles and not self.remove_roles:
+            raise ValueError("A membership change must set status or change roles")
+        if self.add_roles & self.remove_roles:
+            raise ValueError("A role cannot be added and removed by the same change")
+        return self
+
+
+class ProjectMembersBulkUpdate(ContractModel):
+    """Atomic bulk membership update; every change is applied or none is."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    changes: list[ProjectMemberChange] = Field(min_length=1, max_length=100)
+
+    @model_validator(mode="after")
+    def _validate_unique_users(self) -> "ProjectMembersBulkUpdate":
+        user_ids = [change.user_id for change in self.changes]
+        if len(user_ids) != len(set(user_ids)):
+            raise ValueError("Each user may appear at most once in a bulk membership update")
+        return self
 
 
 class ProjectMemberRead(ContractModel):
