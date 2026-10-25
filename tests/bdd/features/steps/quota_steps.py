@@ -57,6 +57,7 @@ from freesearch.persistence.storage import LegacyUsageTotal, SQLiteRepository
 from freesearch.services import monitoring as monitoring_module
 from freesearch.services.monitoring import collect_stats, refresh_quotas, tracked_call
 from freesearch.services.routing import select_route
+from tests.fixtures.execution import scenario_attribution
 
 FIXED_AT = datetime(2026, 3, 10, 12, 0, 0, tzinfo=UTC)
 
@@ -465,7 +466,9 @@ def step_given_brave_stubbed_headers(context: Any, remaining: str, limit: str, r
 
 @when('I run a successful Brave search for "{query}" with limit {limit:d}')
 def step_when_brave_search(context: Any, query: str, limit: int) -> None:
-    request = SearchRequest(query=query, limit=limit)
+    request = SearchRequest(
+        project_id="00000000-0000-4000-8000-0000000000aa", query=query, limit=limit
+    )
     try:
         context.search_response = _run(
             context,
@@ -474,6 +477,7 @@ def step_when_brave_search(context: Any, query: str, limit: int) -> None:
                 context.adapter,
                 lambda adapter: adapter.search(request),
                 operation=UsageOperation.SEARCH,
+                attribution=scenario_attribution(context),
             ),
         )
     except Exception as exc:  # pragma: no cover - success path expected
@@ -625,7 +629,10 @@ def step_when_record_brave_successes(context: Any, count: int) -> None:
             unit_kind=_opt(unit_kind, "REQUEST"),
             display_unit="requests",
         )
-        _run(context, context.repository.record_usage(event))
+        _run(
+            context,
+            context.repository.record_usage(event, attribution=scenario_attribution(context)),
+        )
 
 
 @then(
@@ -700,7 +707,10 @@ def step_given_incompatible_usage(context: Any) -> None:
             unit_kind=_opt(unit_kind, str(spec["kind"])),
             display_unit=str(spec["kind"]).lower(),
         )
-        _run(context, context.repository.record_usage(event))
+        _run(
+            context,
+            context.repository.record_usage(event, attribution=scenario_attribution(context)),
+        )
     # Zero-unit FAILURE rows: observability only, never totals.
     _run(
         context,
@@ -713,7 +723,8 @@ def step_given_incompatible_usage(context: Any) -> None:
                 status=UsageStatus.FAILURE,
                 unit_kind=_opt(unit_kind, "REQUEST"),
                 display_unit="requests",
-            )
+            ),
+            attribution=scenario_attribution(context),
         ),
     )
 
@@ -805,7 +816,12 @@ def step_when_record_tavily(context: Any, remaining: int, limit: int) -> None:
         unit_kind=_opt(unit_kind, "CREDIT"),
         display_unit="credits",
     )
-    _run(context, context.repository.record_usage(context.tavily_usage))
+    _run(
+        context,
+        context.repository.record_usage(
+            context.tavily_usage, attribution=scenario_attribution(context)
+        ),
+    )
 
 
 @then(
@@ -895,7 +911,14 @@ def step_when_youcom_missing_usage(context: Any) -> None:
     adapter = YoucomAdapter(client, api_key=TEST_API_KEY)
     context.http_client = client
     context.you_adapter = adapter
-    response = _run(context, adapter.search(SearchRequest(query="gap probe", limit=3)))
+    response = _run(
+        context,
+        adapter.search(
+            SearchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", query="gap probe", limit=3
+            )
+        ),
+    )
     assert response.usage is None, (
         "AC-4 setup: expected the You.com response to omit usage "
         f"(saw {response.usage!r}); the gap scenario needs a usage-less response"
@@ -912,7 +935,12 @@ def step_then_youcom_gap_marked(context: Any) -> None:
     gap = _opt(response, "usage_gap", None)
     if gap is None:
         estimate = _run(
-            context, context.you_adapter.estimate_cost(SearchRequest(query="gap probe", limit=3))
+            context,
+            context.you_adapter.estimate_cost(
+                SearchRequest(
+                    project_id="00000000-0000-4000-8000-0000000000aa", query="gap probe", limit=3
+                )
+            ),
         )
         assert estimate.units == Decimal("0.005") and estimate.currency == "USD", (
             "AC-4 setup: You.com search estimate must be USD 0.005 "
@@ -976,8 +1004,15 @@ def step_when_keenable_paid_false(context: Any, count: int, allowance: int) -> N
             tracked_call(
                 context.repository,
                 context.keenable_adapter,
-                lambda adapter: adapter.search(SearchRequest(query="allowance", limit=3)),
+                lambda adapter: adapter.search(
+                    SearchRequest(
+                        project_id="00000000-0000-4000-8000-0000000000aa",
+                        query="allowance",
+                        limit=3,
+                    )
+                ),
                 operation=UsageOperation.SEARCH,
+                attribution=scenario_attribution(context),
             ),
         )
     context.keenable_allowance = Decimal(allowance)
@@ -1013,8 +1048,13 @@ def step_then_keenable_paid_true(context: Any) -> None:
         tracked_call(
             context.repository,
             adapter,
-            lambda running: running.search(SearchRequest(query="paid tier", limit=2)),
+            lambda running: running.search(
+                SearchRequest(
+                    project_id="00000000-0000-4000-8000-0000000000aa", query="paid tier", limit=2
+                )
+            ),
             operation=UsageOperation.SEARCH,
+            attribution=scenario_attribution(context),
         ),
     )
     assert response.usage is not None and response.usage.units == Decimal("2"), (
@@ -1055,7 +1095,14 @@ def step_then_keenable_keyless(context: Any) -> None:
     # the shared public pool path instead of the keyed allowance path.
     client = httpx.AsyncClient(transport=httpx.MockTransport(_keenable_handler), timeout=30.0)
     adapter = KeenableAdapter(client, api_key=None)
-    response = _run(context, adapter.search(SearchRequest(query="keyless", limit=2)))
+    response = _run(
+        context,
+        adapter.search(
+            SearchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", query="keyless", limit=2
+            )
+        ),
+    )
     assert response.usage is not None and response.usage.units == Decimal("1"), (
         f"AC-5: keyless usage must consume one hourly request unit, saw {response.usage!r}"
     )
@@ -1083,7 +1130,7 @@ def step_when_keenable_estimate(context: Any) -> None:
     context.keenable_estimate = _run(
         context,
         KeenableAdapter(client, api_key=TEST_API_KEY).estimate_cost(
-            SearchRequest(query="price", limit=3)
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="price", limit=3)
         ),
     )
 
@@ -1113,7 +1160,13 @@ def step_when_parallel_search_estimate(context: Any, mode: str, bundles: int) ->
     # cross-check against the documented pricing function directly, so the
     # estimate provably equals the executed-search price for these options.
     try:
-        request = SearchRequest(query="mode probe", limit=5, mode=mode, extra_bundles=bundles)
+        request = SearchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa",
+            query="mode probe",
+            limit=5,
+            mode=mode,
+            extra_bundles=bundles,
+        )
     except ValidationError as exc:
         raise AssertionError(
             "AC-PA-2: SearchRequest lacks the mode-aware estimate contract "
@@ -1173,7 +1226,13 @@ def step_when_parallel_omitted_mode(context: Any, bundles: int) -> None:
     context.parallel_bundles = bundles
     # Omitted mode defaults to advanced per the OpenAPI default.
     try:
-        request = SearchRequest(query="mode probe", limit=5, mode=None, extra_bundles=bundles)
+        request = SearchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa",
+            query="mode probe",
+            limit=5,
+            mode=None,
+            extra_bundles=bundles,
+        )
     except ValidationError as exc:
         raise AssertionError(
             "AC-PA-2: SearchRequest lacks the mode-aware estimate contract "
@@ -1198,7 +1257,11 @@ def step_when_parallel_extract_estimate(context: Any, urls: int) -> None:
     estimate = _run(
         context,
         context.parallel_adapter.estimate_cost(
-            FetchRequest(url="https://example.com/extract", url_count=urls)
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa",
+                url="https://example.com/extract",
+                url_count=urls,
+            )
         ),
     )
     context.parallel_extract_estimate = estimate
@@ -1230,7 +1293,11 @@ def step_then_parallel_extract_single(context: Any, amount: str) -> None:
     # Critic caveat: the only executable extract path prices exactly one URL.
     estimate = _run(
         context,
-        context.parallel_adapter.estimate_cost(FetchRequest(url="https://example.com/extract")),
+        context.parallel_adapter.estimate_cost(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/extract"
+            )
+        ),
     )
     assert estimate.units == Decimal(amount), (
         f"AC-PA-2: the executable single-URL extract must cost USD {amount}, saw {estimate.units!r}"
@@ -1246,7 +1313,9 @@ def step_then_parallel_extract_single(context: Any, amount: str) -> None:
 
 
 def _search_request() -> SearchRequest:
-    return SearchRequest(query="routing probe", limit=5)
+    return SearchRequest(
+        project_id="00000000-0000-4000-8000-0000000000aa", query="routing probe", limit=5
+    )
 
 
 def _route_names(candidates: Any) -> list[str]:
@@ -1319,7 +1388,8 @@ def step_when_parallel_soft_then_success(context: Any) -> None:
                 units=Decimal("2"),
                 observed_at=FIXED_AT + timedelta(seconds=60),
                 status=UsageStatus.SUCCESS,
-            )
+            ),
+            attribution=scenario_attribution(context),
         ),
     )
     context.parallel_effective = _run(context, effective(context.repository, "parallel"))
@@ -1362,6 +1432,7 @@ def step_when_429_signal(context: Any) -> None:
                 adapter,
                 lambda running: running.search(_search_request()),
                 operation=UsageOperation.SEARCH,
+                attribution=scenario_attribution(context),
             ),
         )
     except ProviderOperationError as exc:
@@ -1479,7 +1550,8 @@ def step_when_record_legacy(context: Any) -> None:
                 operation=UsageOperation.SEARCH,
                 units=Decimal("0.001"),
                 observed_at=FIXED_AT,
-            )
+            ),
+            attribution=scenario_attribution(context),
         ),
     )
     _run(
@@ -1534,7 +1606,8 @@ def step_when_record_credential_metadata(context: Any) -> None:
                     units=Decimal("1"),
                     observed_at=FIXED_AT,
                     metadata={"api_key": "sk-secret-should-never-persist"},
-                )
+                ),
+                attribution=scenario_attribution(context),
             ),
         )
     except ValueError as exc:
@@ -1578,7 +1651,8 @@ def step_given_mixed_usage(context: Any) -> None:
                     observed_at=FIXED_AT + timedelta(seconds=index),
                     unit_kind=_opt(unit_kind, kind),
                     display_unit=kind.lower(),
-                )
+                ),
+                attribution=scenario_attribution(context),
             ),
         )
     # Legacy row predating unit dimensions: raw value preserved, kind unknown.
@@ -1590,7 +1664,8 @@ def step_given_mixed_usage(context: Any) -> None:
                 operation=UsageOperation.SEARCH,
                 units=Decimal("5"),
                 observed_at=FIXED_AT + timedelta(seconds=90),
-            )
+            ),
+            attribution=scenario_attribution(context),
         ),
     )
 
@@ -1790,7 +1865,12 @@ def step_when_firecrawl_search_estimate(context: Any, limit: int) -> None:
     adapter = FirecrawlAdapter(client, sdk_client=object(), api_key=TEST_API_KEY)
     context.firecrawl_adapter = adapter
     context.firecrawl_estimate = _run(
-        context, adapter.estimate_cost(SearchRequest(query="credit probe", limit=limit))
+        context,
+        adapter.estimate_cost(
+            SearchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", query="credit probe", limit=limit
+            )
+        ),
     )
     context.firecrawl_limit = limit
 
@@ -1836,7 +1916,9 @@ def step_when_firecrawl_fetch_estimate(
         "enhanced": enhanced.strip().lower() == "true",
         "zero_data_retention": zdr.strip().lower() == "true",
     }
-    request = FetchRequest(url="https://example.com/doc", **flags)
+    request = FetchRequest(
+        project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc", **flags
+    )
     context.firecrawl_fetch_request = request
     context.firecrawl_fetch_estimate = _run(context, adapter.estimate_cost(request))
 
@@ -1892,7 +1974,12 @@ def step_when_parallel_sku_response(context: Any, first: int, second: int) -> No
     context.http_client = client
     adapter = ParallelAdapter(client, api_key=TEST_API_KEY)
     context.parallel_sku_response = _run(
-        context, adapter.search(SearchRequest(query="sku probe", limit=3))
+        context,
+        adapter.search(
+            SearchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", query="sku probe", limit=3
+            )
+        ),
     )
     context.parallel_sku_expected = Decimal(first + second)
     context.parallel_oauth_calls = [call for call in calls if "service/v1/balance" in str(call.url)]
@@ -1922,7 +2009,11 @@ def step_then_parallel_sku_units(context: Any, expected: int) -> None:
 def step_then_parallel_spend_decimal(context: Any) -> None:
     estimate = _run(
         context,
-        _parallel_adapter_for(context).estimate_cost(SearchRequest(query="spend probe", limit=5)),
+        _parallel_adapter_for(context).estimate_cost(
+            SearchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", query="spend probe", limit=5
+            )
+        ),
     )
     assert estimate.currency == "USD", (
         "AC-PA-1: Parallel spend projection must be Decimal USD, "
@@ -1962,7 +2053,8 @@ def step_when_parallel_seed(context: Any, seed: str, spend: str) -> None:
                 status=UsageStatus.SUCCESS,
                 unit_kind=_opt(unit_kind, "USD"),
                 display_unit="USD",
-            )
+            ),
+            attribution=scenario_attribution(context),
         ),
     )
     _run(
@@ -1974,7 +2066,8 @@ def step_when_parallel_seed(context: Any, seed: str, spend: str) -> None:
                 units=Decimal("0"),
                 observed_at=FIXED_AT + timedelta(seconds=10),
                 status=UsageStatus.FAILURE,
-            )
+            ),
+            attribution=scenario_attribution(context),
         ),
     )
     remaining = max(Decimal("0"), context.parallel_seed - context.parallel_spend)
@@ -2058,7 +2151,14 @@ def step_when_parallel_402(context: Any) -> None:
     context.http_client = client
     adapter = ParallelAdapter(client, api_key=TEST_API_KEY)
     try:
-        _run(context, adapter.search(SearchRequest(query="soft probe", limit=3)))
+        _run(
+            context,
+            adapter.search(
+                SearchRequest(
+                    project_id="00000000-0000-4000-8000-0000000000aa", query="soft probe", limit=3
+                )
+            ),
+        )
     except ProviderOperationError as exc:
         context.parallel_402_error = exc
     assert _opt(context, "parallel_402_error", None) is not None, (
@@ -2114,7 +2214,8 @@ def step_when_parallel_success_after_soft(context: Any) -> None:
                 units=Decimal("0.005"),
                 observed_at=FIXED_AT + timedelta(minutes=10),
                 **kwargs,
-            )
+            ),
+            attribution=scenario_attribution(context),
         ),
     )
 
@@ -2153,7 +2254,9 @@ def step_when_parallel_429(context: Any) -> None:
         _run(
             context,
             ParallelAdapter(client, api_key=TEST_API_KEY).search(
-                SearchRequest(query="transient", limit=2)
+                SearchRequest(
+                    project_id="00000000-0000-4000-8000-0000000000aa", query="transient", limit=2
+                )
             ),
         )
     except ProviderOperationError as exc:
@@ -2233,7 +2336,8 @@ def step_when_exa_budget(context: Any, budget: str, spend: str) -> None:
                 status=UsageStatus.SUCCESS,
                 unit_kind=_opt(unit_kind, "USD"),
                 display_unit="USD",
-            )
+            ),
+            attribution=scenario_attribution(context),
         ),
     )
     _run(
@@ -2245,7 +2349,8 @@ def step_when_exa_budget(context: Any, budget: str, spend: str) -> None:
                 units=Decimal("0"),
                 observed_at=FIXED_AT + timedelta(seconds=10),
                 status=UsageStatus.FAILURE,
-            )
+            ),
+            attribution=scenario_attribution(context),
         ),
     )
     remaining = max(Decimal("0"), context.exa_budget - context.exa_spend)
@@ -2321,7 +2426,12 @@ def step_when_exa_success_after_soft(context: Any) -> None:
     snapshot = adapter.quota_after_success(_DummyResponse(), operation=UsageOperation.SEARCH)
     assert snapshot is not None
     _run(context, context.repository.record_quota(snapshot))
-    _run(context, context.repository.record_usage(_DummyResponse.usage))
+    _run(
+        context,
+        context.repository.record_usage(
+            _DummyResponse.usage, attribution=scenario_attribution(context)
+        ),
+    )
 
 
 @then("the Exa exhaustion should be cleared")
@@ -2421,8 +2531,15 @@ def step_when_exa_fallback_search(context: Any, count: int) -> None:
         tracked_call(
             context.repository,
             adapter,
-            lambda running: running.search(SearchRequest(query="bdd-fallback", limit=count)),
+            lambda running: running.search(
+                SearchRequest(
+                    project_id="00000000-0000-4000-8000-0000000000aa",
+                    query="bdd-fallback",
+                    limit=count,
+                )
+            ),
             operation=UsageOperation.SEARCH,
+            attribution=scenario_attribution(context),
         ),
     )
 
@@ -2445,8 +2562,13 @@ def step_when_exa_metered_search(context: Any, amount: str) -> None:
         tracked_call(
             context.repository,
             context.exa_adapter,
-            lambda running: running.search(SearchRequest(query="bdd-metered", limit=1)),
+            lambda running: running.search(
+                SearchRequest(
+                    project_id="00000000-0000-4000-8000-0000000000aa", query="bdd-metered", limit=1
+                )
+            ),
             operation=UsageOperation.SEARCH,
+            attribution=scenario_attribution(context),
         ),
     )
 
@@ -2478,8 +2600,13 @@ def step_when_exa_manual_credits(context: Any, credits: str, spend: str) -> None
         tracked_call(
             context.repository,
             adapter,
-            lambda running: running.search(SearchRequest(query="bdd-credits", limit=1)),
+            lambda running: running.search(
+                SearchRequest(
+                    project_id="00000000-0000-4000-8000-0000000000aa", query="bdd-credits", limit=1
+                )
+            ),
             operation=UsageOperation.SEARCH,
+            attribution=scenario_attribution(context),
         ),
     )
 

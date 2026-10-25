@@ -33,11 +33,13 @@ from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
 from tests.fixtures.auth import (
     TEMP_PASSWORD,
+    account_id_from_pair,
     raw_auth_headers,
     register_and_login,
     register_promote_login,
     temp_email,
 )
+from tests.fixtures.execution import seed_execution_project
 
 
 class _StubAdapter(ProviderAdapter):
@@ -110,6 +112,11 @@ async def matrix_client(tmp_path: Path, auth_secret: str) -> TestClient:
         client.headers_admin = raw_auth_headers(admin["access_token"])  # type: ignore[attr-defined]
         client.headers_developer = raw_auth_headers(developer["access_token"])  # type: ignore[attr-defined]
         client.headers_agent = raw_auth_headers(agent["access_token"])  # type: ignore[attr-defined]
+        client.agent_pid = str(  # type: ignore[attr-defined]
+            (
+                await seed_execution_project(repository, user_id=account_id_from_pair(agent))
+            ).project_id
+        )
         yield client
     await repository.close()
 
@@ -189,9 +196,17 @@ def test_admin_only_surfaces_reject_developer_and_agent(matrix_client: TestClien
 
 def test_agent_keeps_execution_access(matrix_client: TestClient) -> None:
     agent = matrix_client.headers_agent  # type: ignore[attr-defined]
-    search = matrix_client.post("/search", json={"query": "matrix probe"}, headers=agent)
+    search = matrix_client.post(
+        "/search",
+        json={"project_id": matrix_client.agent_pid, "query": "matrix probe"},
+        headers=agent,
+    )
     assert search.status_code == 200
-    fetch = matrix_client.post("/fetch", json={"url": "https://example.com/x"}, headers=agent)
+    fetch = matrix_client.post(
+        "/fetch",
+        json={"project_id": matrix_client.agent_pid, "url": "https://example.com/x"},
+        headers=agent,
+    )
     assert fetch.status_code == 200
     assert matrix_client.get("/users/me", headers=agent).status_code == 200
 

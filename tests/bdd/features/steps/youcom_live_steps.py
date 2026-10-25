@@ -152,7 +152,9 @@ def step_given_live_vault_youcom(context: Any) -> None:
 
 @when('I run a live vault search for "{query}" with limit {limit:d}')
 def step_when_live_vault_search(context: Any, query: str, limit: int) -> None:
-    request = SearchRequest(query=query, limit=limit)
+    request = SearchRequest(
+        project_id="00000000-0000-4000-8000-0000000000aa", query=query, limit=limit
+    )
     context.live_query = query
     context.live_search = context.loop.run_until_complete(
         context.youcom_live_adapter.search(request)
@@ -165,7 +167,9 @@ def step_when_live_vault_fetch(context: Any) -> None:
     assert results, "live search returned no results to fetch"
     first_url = results[0].url
     context.live_fetch_url = str(first_url)
-    request = FetchRequest(url=first_url, max_chars=2000)
+    request = FetchRequest(
+        project_id="00000000-0000-4000-8000-0000000000aa", url=first_url, max_chars=2000
+    )
     context.live_fetch = context.loop.run_until_complete(context.youcom_live_adapter.fetch(request))
 
 

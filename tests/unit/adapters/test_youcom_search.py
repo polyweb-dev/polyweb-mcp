@@ -41,7 +41,9 @@ async def test_search_caps_count_at_one_hundred(limit: int, expected: int) -> No
             caller, runner=_default_runner(caller), api_key=SecretStr(_TEST_KEY)
         )
         request = (
-            SearchRequest(query="cap", limit=limit)
+            SearchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", query="cap", limit=limit
+            )
             if limit <= 100
             else SearchRequest.model_construct(query="cap", limit=limit)
         )
@@ -97,7 +99,9 @@ async def test_search_flattens_web_and_news_sections() -> None:
         adapter = YoucomAdapter(
             caller, runner=_default_runner(caller), api_key=SecretStr(_TEST_KEY)
         )
-        response = await adapter.search(SearchRequest(query="norm"))
+        response = await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="norm")
+        )
     finally:
         if adapter is not None:
             await adapter.aclose()
@@ -148,7 +152,9 @@ async def test_search_missing_or_typo_sections_yield_empty_response(results: obj
         adapter = YoucomAdapter(
             caller, runner=_default_runner(caller), api_key=SecretStr(_TEST_KEY)
         )
-        response = await adapter.search(SearchRequest(query="empty"))
+        response = await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="empty")
+        )
     finally:
         if adapter is not None:
             await adapter.aclose()
@@ -170,7 +176,9 @@ async def test_search_missing_or_null_results_yield_empty_success(
         adapter = YoucomAdapter(
             caller, runner=_default_runner(caller), api_key=SecretStr(_TEST_KEY)
         )
-        response = await adapter.search(SearchRequest(query="empty"))
+        response = await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="empty")
+        )
     finally:
         if adapter is not None:
             await adapter.aclose()
@@ -199,7 +207,9 @@ async def test_search_flattened_total_never_exceeds_requested_limit() -> None:
         adapter = YoucomAdapter(
             caller, runner=_default_runner(caller), api_key=SecretStr(_TEST_KEY)
         )
-        response = await adapter.search(SearchRequest(query="cap", limit=10))
+        response = await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="cap", limit=10)
+        )
     finally:
         if adapter is not None:
             await adapter.aclose()
@@ -244,7 +254,9 @@ async def test_search_parses_page_age_into_published_at() -> None:
         adapter = YoucomAdapter(
             caller, runner=_default_runner(caller), api_key=SecretStr(_TEST_KEY)
         )
-        response = await adapter.search(SearchRequest(query="age"))
+        response = await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="age")
+        )
     finally:
         if adapter is not None:
             await adapter.aclose()
@@ -290,6 +302,7 @@ async def test_search_forwards_you_options_and_preserves_extraction_contents() -
     async with _wired(recorder) as adapter:
         response = await adapter.search(
             SearchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa",
                 query="report",
                 limit=3,
                 country_code="US",
@@ -353,6 +366,7 @@ async def test_search_forwards_exclude_boost_and_legacy_crawl_options() -> None:
     async with _wired(recorder) as adapter:
         await adapter.search(
             SearchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa",
                 query="vendors",
                 domains=("common.example",),
                 provider_options={
@@ -395,6 +409,7 @@ async def test_search_highlight_extraction_is_forwarded_and_retained_in_metadata
     async with _wired(recorder) as adapter:
         response = await adapter.search(
             SearchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa",
                 query="highlight query",
                 provider_options={
                     "you": {

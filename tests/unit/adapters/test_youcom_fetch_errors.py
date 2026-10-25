@@ -30,7 +30,12 @@ async def test_fetch_path_and_query_case_differences_do_not_match() -> None:
     )
     async with _wired(recorder) as adapter:
         with pytest.raises(ProviderOperationError) as excinfo:
-            await adapter.fetch(FetchRequest(url="https://example.com/docs?query=alpha"))
+            await adapter.fetch(
+                FetchRequest(
+                    project_id="00000000-0000-4000-8000-0000000000aa",
+                    url="https://example.com/docs?query=alpha",
+                )
+            )
 
     assert excinfo.value.error.code == "fetch_failed"
 
@@ -45,7 +50,12 @@ async def test_fetch_path_trailing_slash_difference_does_not_match() -> None:
     )
     async with _wired(recorder) as adapter:
         with pytest.raises(ProviderOperationError) as excinfo:
-            await adapter.fetch(FetchRequest(url="https://example.com/docs"))
+            await adapter.fetch(
+                FetchRequest(
+                    project_id="00000000-0000-4000-8000-0000000000aa",
+                    url="https://example.com/docs",
+                )
+            )
 
     assert excinfo.value.error.code == "fetch_failed"
     assert excinfo.value.error.retryable is False
@@ -57,7 +67,11 @@ async def test_fetch_no_matching_page_raises_nonretryable_error() -> None:
     )
     async with _wired(recorder) as adapter:
         with pytest.raises(ProviderOperationError) as excinfo:
-            await adapter.fetch(FetchRequest(url="https://example.com/doc"))
+            await adapter.fetch(
+                FetchRequest(
+                    project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+                )
+            )
 
     assert excinfo.value.error.provider == "you"
     assert excinfo.value.error.code == "fetch_failed"
@@ -75,7 +89,11 @@ async def test_fetch_skips_non_dict_pages() -> None:
         )
     )
     async with _wired(recorder) as adapter:
-        response = await adapter.fetch(FetchRequest(url="https://example.com/doc"))
+        response = await adapter.fetch(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+            )
+        )
 
     assert response.document.content == "kept"
 
@@ -84,7 +102,11 @@ async def test_fetch_pages_not_a_list_is_invalid_response() -> None:
     recorder = _WireRecorder(fetch={"results": [{"url": "https://example.com/doc"}]})
     async with _wired(recorder) as adapter:
         with pytest.raises(ProviderOperationError) as excinfo:
-            await adapter.fetch(FetchRequest(url="https://example.com/doc"))
+            await adapter.fetch(
+                FetchRequest(
+                    project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+                )
+            )
 
     assert excinfo.value.error.code == "invalid_response"
     assert excinfo.value.error.retryable is False
@@ -95,7 +117,11 @@ async def test_fetch_non_json_body_is_invalid_response() -> None:
     recorder = _WireRecorder(responses=[httpx.Response(200, content=b"not json")])
     async with _wired(recorder) as adapter:
         with pytest.raises(ProviderOperationError) as excinfo:
-            await adapter.fetch(FetchRequest(url="https://example.com/doc"))
+            await adapter.fetch(
+                FetchRequest(
+                    project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+                )
+            )
 
     assert excinfo.value.error.code == "invalid_response"
     assert excinfo.value.error.retryable is False
@@ -116,7 +142,11 @@ async def test_fetch_matching_page_without_string_markdown_is_invalid_response(
     recorder = _WireRecorder(fetch=[page])
     async with _wired(recorder) as adapter:
         with pytest.raises(ProviderOperationError) as excinfo:
-            await adapter.fetch(FetchRequest(url="https://example.com/doc"))
+            await adapter.fetch(
+                FetchRequest(
+                    project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+                )
+            )
 
     assert excinfo.value.error.provider == "you"
     assert excinfo.value.error.code == "invalid_response"
@@ -132,7 +162,11 @@ async def test_fetch_without_max_chars_never_truncates() -> None:
         )
     )
     async with _wired(recorder) as adapter:
-        response = await adapter.fetch(FetchRequest(url="https://example.com/doc"))
+        response = await adapter.fetch(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+            )
+        )
 
     assert response.document.content == "y" * 5000
     assert response.document.metadata == {}
@@ -143,7 +177,11 @@ async def test_fetch_non_string_title_becomes_none() -> None:
         fetch=_fetch_payload({"url": "https://example.com/doc", "markdown": "body", "title": 42})
     )
     async with _wired(recorder) as adapter:
-        response = await adapter.fetch(FetchRequest(url="https://example.com/doc"))
+        response = await adapter.fetch(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+            )
+        )
 
     assert response.document.title is None
 

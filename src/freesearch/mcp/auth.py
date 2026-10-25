@@ -1,8 +1,9 @@
-"""MCP transport helpers for public Search/Fetch with optional account context.
+"""MCP transport helpers for authenticated Search/Fetch tool calls.
 
-Search and Fetch are public operations. A supplied Bearer token is verified by
-the outer ASGI guard and can be attached to request-local traces; anonymous
-calls proceed without an account. This keeps MCP aligned with REST while the
+Search and Fetch require a verified account: a supplied Bearer token is
+verified by the outer ASGI guard (or the explicit stdio credential), and the
+tool call resolves the caller's project scope before executing. Anonymous
+calls are rejected as tool errors. This keeps MCP aligned with REST while the
 REST control plane remains protected.
 """
 
@@ -186,7 +187,7 @@ async def run_http_server(
 async def run_stdio_server(
     server: FastMCP, *, auth_service: AuthService, settings: Settings
 ) -> None:
-    """Serve public tools over stdio; a configured token is optional context."""
+    """Serve the authenticated tools over stdio using the configured token."""
 
     del settings
     await auth_service.open()

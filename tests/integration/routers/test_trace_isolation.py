@@ -11,6 +11,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
+from uuid import UUID
 
 import pytest_asyncio
 from fastapi.testclient import TestClient
@@ -28,7 +29,12 @@ from freesearch.models.contracts import (
     UsageEvent,
     UsageOperation,
 )
-from freesearch.models.observability import TraceOperation, TraceSpanKind, TraceSpanRecord
+from freesearch.models.observability import (
+    ActorType,
+    TraceOperation,
+    TraceSpanKind,
+    TraceSpanRecord,
+)
 from freesearch.models.users import UserRole
 from freesearch.persistence.otel_exporter import write_trace_spans
 from freesearch.persistence.storage import SQLiteRepository
@@ -40,6 +46,7 @@ from tests.fixtures.auth import (
     register_promote_login,
     temp_email,
 )
+from tests.fixtures.execution import seed_execution_project
 
 
 class _StubAdapter(ProviderAdapter):
@@ -97,21 +104,28 @@ async def isolation_client(tmp_path: Path, auth_secret: str) -> TestClient:
     await repository.close()
 
 
-def _login(client: TestClient, prefix: str) -> tuple[dict[str, str], str]:
+async def _login(client: TestClient, prefix: str) -> tuple[dict[str, str], str, str]:
     pair = register_and_login(client, temp_email(prefix))
-    return raw_auth_headers(pair["access_token"]), str(account_id_from_pair(pair))
+    attribution = await seed_execution_project(
+        client.app.state.repository, user_id=account_id_from_pair(pair)
+    )
+    return (
+        raw_auth_headers(pair["access_token"]),
+        str(account_id_from_pair(pair)),
+        str(attribution.project_id),
+    )
 
 
 async def test_search_and_fetch_traces_carry_the_exact_account_uuid(
     isolation_client: TestClient,
 ) -> None:
-    headers, owner = _login(isolation_client, "trace-owner")
+    headers, owner, pid = await _login(isolation_client, "trace-owner")
 
     search_id = isolation_client.post(
-        "/search", json={"query": "owned search"}, headers=headers
+        "/search", json={"project_id": pid, "query": "owned search"}, headers=headers
     ).headers["x-trace-id"]
     fetch_id = isolation_client.post(
-        "/fetch", json={"url": "https://example.com/owned"}, headers=headers
+        "/fetch", json={"project_id": pid, "url": "https://example.com/owned"}, headers=headers
     ).headers["x-trace-id"]
 
     search = isolation_client.get(f"/api/v1/traces/{search_id}", headers=headers).json()
@@ -133,9 +147,11 @@ async def test_fanout_keeps_one_root_with_the_account_uuid(
     try:
         app = create_app([_StubAdapter("alpha"), _StubAdapter("beta")], repository=repository)
         with TestClient(app) as client:
-            headers, owner = _login(client, "trace-fanout")
+            headers, owner, pid = await _login(client, "trace-fanout")
             response = client.post(
-                "/search", json={"query": "fanout probe", "fanout": True}, headers=headers
+                "/search",
+                json={"project_id": pid, "query": "fanout probe", "fanout": True},
+                headers=headers,
             )
             assert response.status_code == 200
             items = client.get("/api/v1/traces", headers=headers).json()["items"]
@@ -148,16 +164,16 @@ async def test_fanout_keeps_one_root_with_the_account_uuid(
 
 
 async def test_each_account_lists_only_its_own_traces(isolation_client: TestClient) -> None:
-    headers_a, owner_a = _login(isolation_client, "trace-alice")
-    headers_b, owner_b = _login(isolation_client, "trace-bob")
+    headers_a, owner_a, headers_a_pid = await _login(isolation_client, "trace-alice")
+    headers_b, owner_b, headers_b_pid = await _login(isolation_client, "trace-bob")
     assert owner_a != owner_b
 
     id_a = isolation_client.post(
-        "/search", json={"query": "alice query"}, headers=headers_a
+        "/search", json={"project_id": headers_a_pid, "query": "alice query"}, headers=headers_a
     ).headers["x-trace-id"]
-    id_b = isolation_client.post("/search", json={"query": "bob query"}, headers=headers_b).headers[
-        "x-trace-id"
-    ]
+    id_b = isolation_client.post(
+        "/search", json={"project_id": headers_b_pid, "query": "bob query"}, headers=headers_b
+    ).headers["x-trace-id"]
 
     items_a = isolation_client.get("/api/v1/traces", headers=headers_a).json()["items"]
     items_b = isolation_client.get("/api/v1/traces", headers=headers_b).json()["items"]
@@ -170,11 +186,11 @@ async def test_each_account_lists_only_its_own_traces(isolation_client: TestClie
 async def test_foreign_unknown_and_unowned_share_one_404_shape(
     isolation_client: TestClient,
 ) -> None:
-    headers_a, _owner_a = _login(isolation_client, "trace-carol")
-    headers_b, _owner_b = _login(isolation_client, "trace-dave")
+    headers_a, _owner_a, headers_a_pid = await _login(isolation_client, "trace-carol")
+    headers_b, _owner_b, _headers_b_pid = await _login(isolation_client, "trace-dave")
 
     id_a = isolation_client.post(
-        "/search", json={"query": "carol query"}, headers=headers_a
+        "/search", json={"project_id": headers_a_pid, "query": "carol query"}, headers=headers_a
     ).headers["x-trace-id"]
 
     foreign = isolation_client.get(f"/api/v1/traces/{id_a}", headers=headers_b)
@@ -191,11 +207,17 @@ async def test_foreign_unknown_and_unowned_share_one_404_shape(
 async def test_owner_filters_and_query_params_stay_inside_the_account(
     isolation_client: TestClient,
 ) -> None:
-    headers_a, owner_a = _login(isolation_client, "trace-erin")
-    headers_b, owner_b = _login(isolation_client, "trace-frank")
+    headers_a, owner_a, headers_a_pid = await _login(isolation_client, "trace-erin")
+    headers_b, owner_b, headers_b_pid = await _login(isolation_client, "trace-frank")
 
-    isolation_client.post("/search", json={"query": "erin query"}, headers=headers_a)
-    isolation_client.post("/fetch", json={"url": "https://example.com/frank"}, headers=headers_b)
+    isolation_client.post(
+        "/search", json={"project_id": headers_a_pid, "query": "erin query"}, headers=headers_a
+    )
+    isolation_client.post(
+        "/fetch",
+        json={"project_id": headers_b_pid, "url": "https://example.com/frank"},
+        headers=headers_b,
+    )
 
     only_search = isolation_client.get(
         "/api/v1/traces", params={"operation": "search"}, headers=headers_a
@@ -220,9 +242,11 @@ async def test_admin_has_no_cross_account_trace_exception(tmp_path: Path, auth_s
     try:
         app = create_app([_StubAdapter("stubby")], repository=repository)
         with TestClient(app) as client:
-            headers_agent, _owner = _login(client, "trace-gail")
+            headers_agent, _owner, headers_agent_pid = await _login(client, "trace-gail")
             agent_id = client.post(
-                "/search", json={"query": "gail query"}, headers=headers_agent
+                "/search",
+                json={"project_id": headers_agent_pid, "query": "gail query"},
+                headers=headers_agent,
             ).headers["x-trace-id"]
 
             pair = await register_promote_login(
@@ -248,6 +272,9 @@ async def test_historical_unowned_rows_stay_outside_account_reads(
             repository.database_path,
             [
                 TraceSpanRecord(
+                    project_id=UUID("00000000-0000-4000-8000-0000000000aa"),
+                    actor_type=ActorType.HUMAN,
+                    actor_id=UUID("00000000-0000-4000-8000-0000000000bb"),
                     span_id="legacy-root",
                     trace_id="c" * 32,
                     name="POST /search",
@@ -262,7 +289,7 @@ async def test_historical_unowned_rows_stay_outside_account_reads(
         )
         app = create_app([_StubAdapter("stubby")], repository=repository)
         with TestClient(app) as client:
-            headers, _owner = _login(client, "trace-heidi")
+            headers, _owner, _pid = await _login(client, "trace-heidi")
             assert client.get("/api/v1/traces", headers=headers).json()["items"] == []
             assert client.get(f"/api/v1/traces/{'c' * 32}", headers=headers).status_code == 404
     finally:

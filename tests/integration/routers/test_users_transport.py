@@ -23,11 +23,13 @@ from freesearch.models.contracts import (
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
 from tests.fixtures.auth import (
+    account_id_from_pair,
     create_temp_user,
     raw_auth_headers,
     register_and_login,
     temp_email,
 )
+from tests.fixtures.execution import seed_execution_project
 
 
 class _StubAdapter(ProviderAdapter):
@@ -100,9 +102,14 @@ async def test_api_search_works_with_explicit_temp_accounts(
         assert anonymous.headers["www-authenticate"] == "Bearer"
 
         pair = register_and_login(client, temp_email("api-search"))
+        pid = str(
+            (
+                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+            ).project_id
+        )
         response = client.post(
             "/search",
-            json={"query": "explicit accounts"},
+            json={"project_id": pid, "query": "explicit accounts"},
             headers=raw_auth_headers(pair["access_token"]),
         )
         assert response.status_code == 200

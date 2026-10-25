@@ -32,10 +32,12 @@ from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
 from tests.fixtures.auth import (
     TEMP_PASSWORD,
+    account_id_from_pair,
     raw_auth_headers,
     register_and_login,
     temp_email,
 )
+from tests.fixtures.execution import seed_execution_project
 
 
 class _CountingAdapter(ProviderAdapter):
@@ -97,6 +99,7 @@ async def guard_client(tmp_path: Path, auth_secret: str) -> TestClient:
     app = create_app([adapter], repository=repository)
     app.state.counting_adapter = adapter
     with TestClient(app) as client:
+        client.execution_repository = repository
         yield client
     await repository.close()
 
@@ -125,16 +128,18 @@ def test_anonymous_calls_reach_no_protected_surface(guard_client: TestClient) ->
         assert response.headers["www-authenticate"] == "Bearer", path
 
 
-def test_search_and_fetch_allow_anonymous_calls_but_reject_bad_bearer(
+def test_search_and_fetch_reject_anonymous_and_bad_bearer(
     guard_client: TestClient,
 ) -> None:
     adapter = guard_client.app.state.counting_adapter
     search = guard_client.post("/search", json={"query": "anonymous search"})
     fetch = guard_client.post("/fetch", json={"url": "https://example.com/x"})
-    assert search.status_code == 200
-    assert fetch.status_code == 200
-    assert adapter.search_calls == 1
-    assert adapter.fetch_calls == 1
+    assert search.status_code == 401
+    assert fetch.status_code == 401
+    assert search.headers["www-authenticate"] == "Bearer"
+    assert fetch.headers["www-authenticate"] == "Bearer"
+    assert adapter.search_calls == 0
+    assert adapter.fetch_calls == 0
 
     invalid_headers = {"Authorization": "Bearer invalid-access-token"}
     rejected_search = guard_client.post(
@@ -147,11 +152,11 @@ def test_search_and_fetch_allow_anonymous_calls_but_reject_bad_bearer(
     assert rejected_fetch.status_code == 401
     assert rejected_search.headers["www-authenticate"] == "Bearer"
     assert rejected_fetch.headers["www-authenticate"] == "Bearer"
-    assert adapter.search_calls == 1
-    assert adapter.fetch_calls == 1
+    assert adapter.search_calls == 0
+    assert adapter.fetch_calls == 0
 
 
-def test_rejected_requests_create_no_trace_root(guard_client: TestClient) -> None:
+async def test_rejected_requests_create_no_trace_root(guard_client: TestClient) -> None:
     invalid = guard_client.post(
         "/search",
         json={"query": "ghost"},
@@ -161,11 +166,23 @@ def test_rejected_requests_create_no_trace_root(guard_client: TestClient) -> Non
 
     pair = register_and_login(guard_client, temp_email("guard-trace"))
     headers = raw_auth_headers(pair["access_token"])
+    pid = str(
+        (
+            await seed_execution_project(
+                guard_client.execution_repository, user_id=account_id_from_pair(pair)
+            )
+        ).project_id
+    )
     items = guard_client.get("/api/v1/traces", headers=headers).json()["items"]
     assert items == []
 
     assert (
-        guard_client.post("/search", json={"query": "visible"}, headers=headers).status_code == 200
+        guard_client.post(
+            "/search",
+            json={"project_id": pid, "query": "visible"},
+            headers=headers,
+        ).status_code
+        == 200
     )
     items = guard_client.get("/api/v1/traces", headers=headers).json()["items"]
     assert len(items) == 1

@@ -18,6 +18,7 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExporter, Sp
 from opentelemetry.trace import SpanKind, Status, StatusCode
 
 from freesearch.models.observability import (
+    ActorType,
     TraceAttribute,
     TraceOperation,
     TraceOutcome,
@@ -32,6 +33,7 @@ from freesearch.persistence.otel_exporter import (
     write_trace_spans,
 )
 from freesearch.persistence.storage import SQLiteRepository
+from tests.fixtures.execution import seed_execution_project
 
 _SEARCH_OUTPUT = TraceSearchOutput(
     query="distributed consensus",
@@ -92,6 +94,12 @@ async def test_exported_root_and_children_round_trip(
     from uuid import UUID
 
     owner = UUID("33333333-3333-4333-8333-333333333333")
+    attribution = await seed_execution_project(repository)
+    ownership = {
+        TraceAttribute.PROJECT_ID: str(attribution.project_id),
+        TraceAttribute.ACTOR_TYPE: attribution.actor_type.value,
+        TraceAttribute.ACTOR_ID: str(attribution.actor_id),
+    }
     database = repository.database_path
     _provider, tracer = _exporting_tracer(database)
     # Capture finished spans in-memory so the test can assert the
@@ -110,9 +118,12 @@ async def test_exported_root_and_children_round_trip(
             "freesearch.response.result_count": 2,
             "freesearch.response.output_json": _SEARCH_OUTPUT.model_dump_json(),
             TraceAttribute.USER_ID: str(owner),
+            **ownership,
         },
     ):
-        with tracer.start_as_current_span("freesearch.backend", kind=SpanKind.INTERNAL):
+        with tracer.start_as_current_span(
+            "freesearch.backend", kind=SpanKind.INTERNAL, attributes=dict(ownership)
+        ):
             pass
         with tracer.start_as_current_span(
             "freesearch.provider",
@@ -122,6 +133,7 @@ async def test_exported_root_and_children_round_trip(
                 # RED (PLAN §6.1 item 2): the child provider span carries its
                 # own identity, distinct from the root summary provider.
                 "freesearch.provider.name": "brave",
+                **ownership,
             },
         ) as failed:
             failed.record_exception(RuntimeError("HTTP 502"))
@@ -187,6 +199,7 @@ async def test_root_content_columns_stored_once_not_in_attributes_json(
     repository: SQLiteRepository,
 ) -> None:
     database = repository.database_path
+    attribution = await seed_execution_project(repository)
     _provider, tracer = _exporting_tracer(database)
 
     with tracer.start_as_current_span(
@@ -198,6 +211,9 @@ async def test_root_content_columns_stored_once_not_in_attributes_json(
             "freesearch.request.query": "stored-query",
             "freesearch.response.result_count": 1,
             "freesearch.response.output_json": _SEARCH_OUTPUT.model_dump_json(),
+            TraceAttribute.PROJECT_ID: str(attribution.project_id),
+            TraceAttribute.ACTOR_TYPE: attribution.actor_type.value,
+            TraceAttribute.ACTOR_ID: str(attribution.actor_id),
         },
     ):
         pass
@@ -226,6 +242,9 @@ async def test_span_upsert_is_idempotent(repository: SQLiteRepository) -> None:
     ended = datetime(2026, 9, 29, 9, 15, 0, 248000, tzinfo=UTC)
     records = [
         TraceSpanRecord(
+            project_id=UUID("00000000-0000-4000-8000-0000000000aa"),
+            actor_type=ActorType.HUMAN,
+            actor_id=UUID("00000000-0000-4000-8000-0000000000bb"),
             span_id="aa00000000000001",
             trace_id="e" * 32,
             name="POST /search",
@@ -240,6 +259,9 @@ async def test_span_upsert_is_idempotent(repository: SQLiteRepository) -> None:
             user_id=str(owner),
         ),
         TraceSpanRecord(
+            project_id=UUID("00000000-0000-4000-8000-0000000000aa"),
+            actor_type=ActorType.HUMAN,
+            actor_id=UUID("00000000-0000-4000-8000-0000000000bb"),
             span_id="bb00000000000002",
             trace_id="e" * 32,
             parent_span_id="aa00000000000001",
@@ -276,6 +298,9 @@ async def test_null_owner_rows_stay_intact_but_invisible(
         repository.database_path,
         [
             TraceSpanRecord(
+                project_id=UUID("00000000-0000-4000-8000-0000000000aa"),
+                actor_type=ActorType.HUMAN,
+                actor_id=UUID("00000000-0000-4000-8000-0000000000bb"),
                 span_id="cc00000000000003",
                 trace_id="d" * 32,
                 name="POST /search",
@@ -335,7 +360,14 @@ def test_export_failure_returns_failure_without_raising(tmp_path: Path) -> None:
     capture = _CapturingExporter()
     capture_provider = TracerProvider()
     capture_provider.add_span_processor(SimpleSpanProcessor(capture))
-    with capture_provider.get_tracer("failure-test").start_as_current_span("work"):
+    with capture_provider.get_tracer("failure-test").start_as_current_span(
+        "work",
+        attributes={
+            "freesearch.project.id": "00000000-0000-4000-8000-0000000000aa",
+            "freesearch.actor.type": "human",
+            "freesearch.actor.id": "00000000-0000-4000-8000-0000000000bb",
+        },
+    ):
         pass
 
     result = exporter.export(capture.spans)

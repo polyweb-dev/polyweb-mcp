@@ -31,7 +31,9 @@ def step_when_live_keenable_search(context: Any, query: str, limit: int) -> None
         context.live_request = request
 
     context.http_client.event_hooks["request"].append(capture)
-    request = SearchRequest(query=query, limit=limit)
+    request = SearchRequest(
+        project_id="00000000-0000-4000-8000-0000000000aa", query=query, limit=limit
+    )
     context.search_response = context.loop.run_until_complete(context.adapter.search(request))
 
 
@@ -114,7 +116,9 @@ def step_when_live_keenable_fetch(context: Any, url: str, max_chars: int) -> Non
         context.live_fetch_request = request
 
     context.http_client.event_hooks["request"].append(capture)
-    request = FetchRequest(url=HttpUrl(url), max_chars=max_chars)
+    request = FetchRequest(
+        project_id="00000000-0000-4000-8000-0000000000aa", url=HttpUrl(url), max_chars=max_chars
+    )
     context.fetch_url = str(request.url)
     context.fetch_max_chars = max_chars
     context.fetch_response = context.loop.run_until_complete(context.adapter.fetch(request))

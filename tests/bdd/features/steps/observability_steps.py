@@ -41,6 +41,7 @@ from tests.fixtures.auth import (
     promote_account,
     temp_email,
 )
+from tests.fixtures.execution import bdd_project_id
 
 _TRACE_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 _FAKE_API_KEY = "sk-test-obs-7f3a9c-not-a-real-secret"
@@ -213,7 +214,9 @@ def _post_search(context: Any, query: str, limit: int, *, fanout: bool = False) 
     with _client_for(context) as client:
         # Traced search needs any authenticated role.
         context.otel_response = client.post(
-            "/search", json=payload, headers=context.otel_auth_headers
+            "/search",
+            json={"project_id": bdd_project_id(context, context.otel_auth_headers), **payload},
+            headers=context.otel_auth_headers,
         )
     _capture_trace_header(context)
 
@@ -222,7 +225,9 @@ def _post_fetch(context: Any, url: str) -> None:
     with _client_for(context) as client:
         # Traced fetch needs any authenticated role.
         context.otel_response = client.post(
-            "/fetch", json={"url": url}, headers=context.otel_auth_headers
+            "/fetch",
+            json={"project_id": bdd_project_id(context, context.otel_auth_headers), "url": url},
+            headers=context.otel_auth_headers,
         )
     _capture_trace_header(context)
 
@@ -743,7 +748,11 @@ def step_when_second_search(context: Any, query: str, limit: int) -> None:
     with _client_for(context) as client:
         response = client.post(
             "/search",
-            json={"query": query, "limit": limit},
+            json={
+                "project_id": bdd_project_id(context, context.otel_second_headers),
+                "query": query,
+                "limit": limit,
+            },
             headers=context.otel_second_headers,
         )
     assert response.status_code == 200

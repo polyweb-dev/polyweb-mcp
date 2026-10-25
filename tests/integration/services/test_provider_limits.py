@@ -413,7 +413,9 @@ async def test_tavily_shared_pool_both_views_after_debit(repository) -> None:
     await svc.record_success(
         admission,
         SearchResponse(query="q", results=[], provider="tavily"),
-        request=SearchRequest(query="q", limit=2),
+        request=SearchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=2
+        ),
     )
     view = await svc.provider_view("tavily")
     auth = view.auth(AuthMode.KEYED)

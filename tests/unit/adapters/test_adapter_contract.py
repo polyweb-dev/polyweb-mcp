@@ -2,14 +2,18 @@ from freesearch.models.contracts import FetchRequest, SearchRequest, UsageOperat
 
 
 async def test_fake_adapter_implements_shared_contract(fake_adapter) -> None:
-    search_request = SearchRequest(query="contract test")
+    search_request = SearchRequest(
+        project_id="00000000-0000-4000-8000-0000000000aa", query="contract test"
+    )
     search_response = await fake_adapter.search(search_request)
     assert search_response.provider == fake_adapter.name
     assert str(search_response.results[0].url) == "https://example.com/result"
     assert search_response.usage is not None
     assert search_response.usage.operation is UsageOperation.SEARCH
 
-    fetch_request = FetchRequest(url="https://example.com/document")
+    fetch_request = FetchRequest(
+        project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/document"
+    )
     fetch_response = await fake_adapter.fetch(fetch_request)
     assert fetch_response.provider == fake_adapter.name
     assert fetch_response.document.url == fetch_request.url

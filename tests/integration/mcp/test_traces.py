@@ -36,6 +36,7 @@ from freesearch.models.contracts import (
 )
 from freesearch.persistence.storage import SQLiteRepository
 from tests.fixtures.auth import mcp_account_token
+from tests.fixtures.execution import seed_token_project
 
 
 class _StubAdapter(ProviderAdapter):
@@ -93,7 +94,7 @@ async def repository(tmp_path: Path) -> SQLiteRepository:
 
 async def _authed_server(
     repository: SQLiteRepository, adapters: list[ProviderAdapter], prefix: str
-) -> tuple[FastMCP, UUID]:
+) -> tuple[FastMCP, UUID, str]:
     service, token, _email = await mcp_account_token(repository, prefix)
     principal = await service.verify_token(token.get_secret_value())
     assert principal is not None
@@ -103,16 +104,19 @@ async def _authed_server(
         auth_service=service,
         stdio_token=SecretStr(token.get_secret_value()),
     )
-    return server, UUID(str(principal.id))
+    pid = str((await seed_token_project(repository, token)).project_id)
+    return server, UUID(str(principal.id)), pid
 
 
 async def test_mcp_search_and_fetch_roots_carry_the_exact_account_uuid(
     repository: SQLiteRepository,
 ) -> None:
-    server, owner = await _authed_server(repository, [_StubAdapter("stubby")], "mcp-trace-id")
+    server, owner, pid = await _authed_server(repository, [_StubAdapter("stubby")], "mcp-trace-id")
 
-    await server.call_tool("search", {"request": {"query": "mcp owned"}})
-    await server.call_tool("fetch", {"request": {"url": "https://example.com/mcp"}})
+    await server.call_tool("search", {"request": {"project_id": pid, "query": "mcp owned"}})
+    await server.call_tool(
+        "fetch", {"request": {"project_id": pid, "url": "https://example.com/mcp"}}
+    )
 
     items = await repository.list_trace_summaries(user_id=owner)
     assert len(items) == 2
@@ -131,11 +135,13 @@ async def test_mcp_search_and_fetch_roots_carry_the_exact_account_uuid(
 async def test_mcp_fanout_keeps_one_root_with_the_account_uuid(
     repository: SQLiteRepository,
 ) -> None:
-    server, owner = await _authed_server(
+    server, owner, pid = await _authed_server(
         repository, [_StubAdapter("alpha"), _StubAdapter("beta")], "mcp-trace-fanout"
     )
 
-    result = await server.call_tool("search", {"request": {"query": "fanout", "fanout": True}})
+    result = await server.call_tool(
+        "search", {"request": {"project_id": pid, "query": "fanout", "fanout": True}}
+    )
     assert result[1]["provider"] == "aggregated"
 
     items = await repository.list_trace_summaries(user_id=owner)
@@ -148,7 +154,15 @@ async def test_rejected_tool_call_writes_no_trace_root(repository: SQLiteReposit
     server = create_server([_StubAdapter("stubby")], repository=repository, auth_service=service)
 
     with pytest.raises(ToolError, match=MCP_AUTH_ERROR):
-        await server.call_tool("search", {"request": {"query": "quiet"}})
+        await server.call_tool(
+            "search",
+            {
+                "request": {
+                    "project_id": "00000000-0000-4000-8000-0000000000aa",
+                    "query": "quiet",
+                }
+            },
+        )
 
     service2, token2, _email2 = await mcp_account_token(repository, "mcp-quiet-two")
     principal = await service2.verify_token(token2.get_secret_value())
@@ -159,12 +173,14 @@ async def test_rejected_tool_call_writes_no_trace_root(repository: SQLiteReposit
 async def test_each_account_lists_only_its_own_mcp_traces(
     repository: SQLiteRepository,
 ) -> None:
-    server_a, owner_a = await _authed_server(repository, [_StubAdapter("stubby")], "mcp-alice")
-    server_b, owner_b = await _authed_server(repository, [_StubAdapter("stubby")], "mcp-bob")
+    server_a, owner_a, pid_a = await _authed_server(
+        repository, [_StubAdapter("stubby")], "mcp-alice"
+    )
+    server_b, owner_b, pid_b = await _authed_server(repository, [_StubAdapter("stubby")], "mcp-bob")
     assert owner_a != owner_b
 
-    await server_a.call_tool("search", {"request": {"query": "alice"}})
-    await server_b.call_tool("search", {"request": {"query": "bob"}})
+    await server_a.call_tool("search", {"request": {"project_id": pid_a, "query": "alice"}})
+    await server_b.call_tool("search", {"request": {"project_id": pid_b, "query": "bob"}})
 
     items_a = await repository.list_trace_summaries(user_id=owner_a)
     items_b = await repository.list_trace_summaries(user_id=owner_b)

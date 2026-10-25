@@ -44,6 +44,7 @@ from tests.fixtures.auth import (
     promote_account,
     temp_email,
 )
+from tests.fixtures.execution import bdd_project_id, bdd_token_project_id
 
 
 class _MemorySecretStore:
@@ -275,6 +276,7 @@ def _build_mcp_server(context: Any) -> Any:
     service, token, _email = context.loop.run_until_complete(
         mcp_account_token(context.repository, "control-mcp")
     )
+    context.mcp_pid = bdd_token_project_id(context, token)
     return create_server(
         context.adapters,
         repository=context.repository,
@@ -479,7 +481,12 @@ def step_then_routing_round_trip(context: Any) -> None:
 def step_when_control_search(context: Any) -> None:
     with _client(context) as client:
         context.search_response = client.post(
-            "/search", json={"query": "control activity"}, headers=context.developer_headers
+            "/search",
+            json={
+                "project_id": bdd_project_id(context, context.developer_headers),
+                "query": "control activity",
+            },
+            headers=context.developer_headers,
         )
         context.dashboard_response = client.get("/dashboard", headers=context.developer_headers)
 
@@ -499,7 +506,12 @@ def step_then_dashboard_latency_status(context: Any) -> None:
 def step_when_failing_control_search(context: Any) -> None:
     with _client(context, raise_server_exceptions=False) as client:
         context.failure_response = client.post(
-            "/search", json={"query": "control failure"}, headers=context.developer_headers
+            "/search",
+            json={
+                "project_id": bdd_project_id(context, context.developer_headers),
+                "query": "control failure",
+            },
+            headers=context.developer_headers,
         )
         context.stats_response = client.get("/stats", headers=context.developer_headers)
         context.dashboard_response = client.get("/dashboard", headers=context.developer_headers)
@@ -548,9 +560,7 @@ def step_then_provider_masks(
     context: Any, provider: str, enable_mask: int, support_mask: int
 ) -> None:
     with _client(context) as client:
-        response = client.get(
-            f"/api/v1/providers/{provider}", headers=_control_headers(context)
-        )
+        response = client.get(f"/api/v1/providers/{provider}", headers=_control_headers(context))
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["provider_id"] == provider
@@ -578,9 +588,15 @@ def _store_fanout(context: Any, status: int, body: Any) -> None:
 def step_when_rest_search_and_fetch(context: Any) -> None:
     headers = _control_headers(context)
     with _client(context) as client:
-        search = client.post("/search", json={"query": "offline mask probe"}, headers=headers)
+        search = client.post(
+            "/search",
+            json={"project_id": bdd_project_id(context, headers), "query": "offline mask probe"},
+            headers=headers,
+        )
         fetch = client.post(
-            "/fetch", json={"url": "https://example.com/doc"}, headers=headers
+            "/fetch",
+            json={"project_id": bdd_project_id(context, headers), "url": "https://example.com/doc"},
+            headers=headers,
         )
     _store_search(context, search.status_code, search.json() if search.content else None)
     _store_fetch(context, fetch.status_code, fetch.json() if fetch.content else None)
@@ -590,7 +606,12 @@ def step_when_rest_search_and_fetch(context: Any) -> None:
 def step_when_rest_search_only(context: Any) -> None:
     with _client(context) as client:
         search = client.post(
-            "/search", json={"query": "offline mask probe"}, headers=_control_headers(context)
+            "/search",
+            json={
+                "project_id": bdd_project_id(context, _control_headers(context)),
+                "query": "offline mask probe",
+            },
+            headers=_control_headers(context),
         )
     _store_search(context, search.status_code, search.json() if search.content else None)
 
@@ -602,7 +623,11 @@ def step_when_rest_fetch_require(context: Any, provider: str) -> None:
         "routing": {"mode": "require", "providers": [provider]},
     }
     with _client(context) as client:
-        fetch = client.post("/fetch", json=payload, headers=_control_headers(context))
+        fetch = client.post(
+            "/fetch",
+            json={"project_id": bdd_project_id(context, _control_headers(context)), **payload},
+            headers=_control_headers(context),
+        )
     _store_fetch(context, fetch.status_code, fetch.json() if fetch.content else None)
 
 
@@ -613,7 +638,11 @@ def step_when_rest_search_require(context: Any, provider: str) -> None:
         "routing": {"mode": "require", "providers": [provider]},
     }
     with _client(context) as client:
-        search = client.post("/search", json=payload, headers=_control_headers(context))
+        search = client.post(
+            "/search",
+            json={"project_id": bdd_project_id(context, _control_headers(context)), **payload},
+            headers=_control_headers(context),
+        )
     _store_search(context, search.status_code, search.json() if search.content else None)
 
 
@@ -624,7 +653,11 @@ def step_when_rest_search_prefer(context: Any, provider: str) -> None:
         "routing": {"mode": "prefer", "providers": [provider]},
     }
     with _client(context) as client:
-        search = client.post("/search", json=payload, headers=_control_headers(context))
+        search = client.post(
+            "/search",
+            json={"project_id": bdd_project_id(context, _control_headers(context)), **payload},
+            headers=_control_headers(context),
+        )
     _store_search(context, search.status_code, search.json() if search.content else None)
 
 
@@ -633,7 +666,11 @@ def step_when_rest_search_auto(context: Any) -> None:
     with _client(context) as client:
         search = client.post(
             "/search",
-            json={"query": "offline mask probe", "routing": {"mode": "auto"}},
+            json={
+                "project_id": bdd_project_id(context, _control_headers(context)),
+                "query": "offline mask probe",
+                "routing": {"mode": "auto"},
+            },
             headers=_control_headers(context),
         )
     _store_search(context, search.status_code, search.json() if search.content else None)
@@ -644,7 +681,11 @@ def step_when_rest_fanout(context: Any) -> None:
     with _client(context) as client:
         response = client.post(
             "/search",
-            json={"query": "offline mask probe", "fanout": True},
+            json={
+                "project_id": bdd_project_id(context, _control_headers(context)),
+                "query": "offline mask probe",
+                "fanout": True,
+            },
             headers=_control_headers(context),
         )
     _store_fanout(context, response.status_code, response.json() if response.content else None)
@@ -659,7 +700,11 @@ def step_when_rest_fanout_restricted(context: Any, allow_list: str) -> None:
         "routing": {"mode": "fanout", "providers": providers},
     }
     with _client(context) as client:
-        response = client.post("/search", json=payload, headers=_control_headers(context))
+        response = client.post(
+            "/search",
+            json={"project_id": bdd_project_id(context, _control_headers(context)), **payload},
+            headers=_control_headers(context),
+        )
     _store_fanout(context, response.status_code, response.json() if response.content else None)
 
 
@@ -673,7 +718,10 @@ def step_when_mcp_search(context: Any) -> None:
     assert getattr(context, "server", None) is not None, "MCP server is not configured"
     try:
         result = context.loop.run_until_complete(
-            context.server.call_tool("search", {"request": {"query": "offline mask probe"}})
+            context.server.call_tool(
+                "search",
+                {"request": {"project_id": context.mcp_pid, "query": "offline mask probe"}},
+            )
         )
         context.mcp_search_status = 200
         context.mcp_search_body = result[1]
@@ -689,7 +737,15 @@ def step_when_mcp_fetch(context: Any) -> None:
     assert getattr(context, "server", None) is not None, "MCP server is not configured"
     try:
         result = context.loop.run_until_complete(
-            context.server.call_tool("fetch", {"request": {"url": "https://example.com/doc"}})
+            context.server.call_tool(
+                "fetch",
+                {
+                    "request": {
+                        "project_id": context.mcp_pid,
+                        "url": "https://example.com/doc",
+                    }
+                },
+            )
         )
         context.mcp_fetch_status = 200
         context.mcp_fetch_body = result[1]
@@ -760,9 +816,7 @@ def step_then_call_counts(
 def step_then_fresh_masks(context: Any, provider: str, enable_mask: int) -> None:
     _reopen_control_repository(context)
     with _client(context) as client:
-        response = client.get(
-            f"/api/v1/providers/{provider}", headers=_control_headers(context)
-        )
+        response = client.get(f"/api/v1/providers/{provider}", headers=_control_headers(context))
     assert response.status_code == 200, response.text
     assert response.json()["enable_mask"] == enable_mask, response.json()
 

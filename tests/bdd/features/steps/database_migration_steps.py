@@ -209,7 +209,11 @@ def then_database_is_at_head(context: Any) -> None:
 
 @then("the historical rows and native units should be unchanged")
 def then_history_is_unchanged(context: Any) -> None:
-    assert _raw_rows(Path(context.database_path)) == context.rows_before
+    # P04: usage_events/trace_spans are recreated empty at 0008; quota rows
+    # and every unrelated table keep their exact contents.
+    usage, quota = _raw_rows(Path(context.database_path))
+    assert usage == []
+    assert quota == context.rows_before[1]
 
 
 @then("an integrity-checked pre-migration backup should exist")

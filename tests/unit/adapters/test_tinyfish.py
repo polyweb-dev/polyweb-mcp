@@ -25,7 +25,9 @@ _VALID_KEY = SecretStr("tin_mock_key_123456789abcdef")
 
 
 def _fetch_request(url: str, **kwargs: Any) -> FetchRequest:
-    return FetchRequest(url=cast(Any, url), **kwargs)
+    return FetchRequest(
+        project_id="00000000-0000-4000-8000-0000000000aa", url=cast(Any, url), **kwargs
+    )
 
 
 class _Runner:
@@ -125,7 +127,12 @@ async def test_search_constructs_query_and_normalizes_response() -> None:
     adapter = _adapter(transport, runner=runner)
 
     response = await adapter.search(
-        SearchRequest(query="open data", limit=5, domains=("example.com",))
+        SearchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa",
+            query="open data",
+            limit=5,
+            domains=("example.com",),
+        )
     )
 
     req = transport.requests[0]
@@ -162,6 +169,7 @@ async def test_search_params_encoding() -> None:
 
     await adapter.search(
         SearchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa",
             query="test",
             country_code="us",
             language="en",
@@ -184,7 +192,9 @@ async def test_search_handles_empty_results() -> None:
         )
     )
     adapter = _adapter(transport)
-    response = await adapter.search(SearchRequest(query="none"))
+    response = await adapter.search(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="none")
+    )
     assert response.results == []
     assert response.total_results == 0
 
@@ -212,7 +222,9 @@ async def test_search_respects_request_limit() -> None:
         )
 
     adapter = _adapter(_Transport(handler=handler))
-    response = await adapter.search(SearchRequest(query="multi", limit=2))
+    response = await adapter.search(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="multi", limit=2)
+    )
     assert len(response.results) == 2
     assert response.results[0].title == "Result 1"
     assert response.results[1].title == "Result 2"
@@ -407,7 +419,9 @@ async def test_401_maps_to_invalid_api_key_without_secret_leak() -> None:
     adapter = TinyfishAdapter(client, api_key=SecretStr(key_str))
 
     with pytest.raises(ProviderOperationError) as raised:
-        await adapter.search(SearchRequest(query="test"))
+        await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="test")
+        )
 
     error = raised.value.error
     assert error.code == "invalid_api_key"
@@ -437,7 +451,9 @@ async def test_http_status_error_mapping(
     adapter = _adapter(transport)
 
     with pytest.raises(ProviderOperationError) as raised:
-        await adapter.search(SearchRequest(query="test"))
+        await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="test")
+        )
 
     error = raised.value.error
     assert error.status_code == status
@@ -467,7 +483,9 @@ async def test_malformed_search_payloads_raise_invalid_response(payload: object)
     adapter = _adapter(_Transport(handler=handler))
 
     with pytest.raises(ProviderOperationError) as raised:
-        await adapter.search(SearchRequest(query="test"))
+        await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="test")
+        )
 
     assert raised.value.error.code == "invalid_response"
     assert raised.value.error.retryable is False
@@ -534,7 +552,9 @@ async def test_search_skips_invalid_items_and_records_errors(
 ) -> None:
     adapter = _search_adapter_for({"results": items})
 
-    response = await adapter.search(SearchRequest(query="test", limit=10))
+    response = await adapter.search(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="test", limit=10)
+    )
 
     assert [str(item.url) for item in response.results] == expected_urls
     assert response.query == "test"
@@ -568,7 +588,9 @@ async def test_search_all_invalid_items_returns_empty_success(
 ) -> None:
     adapter = _search_adapter_for({"results": items})
 
-    response = await adapter.search(SearchRequest(query="test", limit=10))
+    response = await adapter.search(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="test", limit=10)
+    )
 
     assert response.results == []
     assert response.total_results == 0
@@ -585,7 +607,9 @@ async def test_search_all_invalid_items_returns_empty_success(
 async def test_search_empty_list_returns_success_without_error_metadata() -> None:
     adapter = _search_adapter_for({"results": []})
 
-    response = await adapter.search(SearchRequest(query="test", limit=10))
+    response = await adapter.search(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="test", limit=10)
+    )
 
     assert response.results == []
     assert response.total_results == 0
@@ -644,7 +668,9 @@ async def test_search_limit_applies_after_invalid_item_filter(
         payload["total_results"] = payload_total
     adapter = _search_adapter_for(payload)
 
-    response = await adapter.search(SearchRequest(query="test", limit=limit))
+    response = await adapter.search(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="test", limit=limit)
+    )
 
     assert [str(item.url) for item in response.results] == expected_urls
     assert response.total_results == expected_total
@@ -670,7 +696,9 @@ async def test_search_parse_errors_do_not_expose_payload_or_key() -> None:
         }
     )
 
-    response = await adapter.search(SearchRequest(query="test", limit=10))
+    response = await adapter.search(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="test", limit=10)
+    )
 
     assert [str(item.url) for item in response.results] == ["https://example.com/item"]
     errors = _parse_errors_of(response)
@@ -709,7 +737,9 @@ async def test_malformed_fetch_payloads_raise_invalid_response(payload: object) 
 @pytest.mark.asyncio
 async def test_cost_estimates_return_zero() -> None:
     adapter = _adapter(_Transport())
-    search_est = await adapter.estimate_cost(SearchRequest(query="test"))
+    search_est = await adapter.estimate_cost(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="test")
+    )
     assert search_est.operation is UsageOperation.SEARCH
     assert search_est.units == Decimal("0")
     assert search_est.currency == "USD"
@@ -738,7 +768,9 @@ async def test_caller_client_credentials_do_not_leak() -> None:
     )
     adapter = TinyfishAdapter(client, api_key=_VALID_KEY)
 
-    await adapter.search(SearchRequest(query="test"))
+    await adapter.search(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="test")
+    )
     await adapter.fetch(_fetch_request("https://example.com"))
 
     for req in transport.requests:
@@ -773,7 +805,9 @@ async def test_redirects_never_forward_the_key(operation: str) -> None:
         adapter = TinyfishAdapter(client, api_key=_VALID_KEY)
         with pytest.raises(ProviderOperationError):
             if operation == "search":
-                await adapter.search(SearchRequest(query="test"))
+                await adapter.search(
+                    SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="test")
+                )
             else:
                 await adapter.fetch(_fetch_request("https://example.com/page"))
     assert len(transport.requests) == 1
@@ -956,6 +990,7 @@ async def test_search_forwards_tinyfish_options_and_keeps_academic_metadata() ->
 
     response = await adapter.search(
         SearchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa",
             query="papers",
             country_code="US",
             language="en",
@@ -1014,6 +1049,7 @@ async def test_search_forwards_tinyfish_recency_option() -> None:
 
     await adapter.search(
         SearchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa",
             query="recent pages",
             provider_options={"tinyfish": {"recency_minutes": 60}},
         )

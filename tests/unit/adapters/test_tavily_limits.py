@@ -80,9 +80,14 @@ def test_tavily_search_debit_one_and_two_credits() -> None:
         for r in _records()
         if r.operation is LimitOperation.SEARCH and r.auth_mode is AuthMode.KEYED
     )
-    assert cu.request_native_cost(search, SearchRequest(query="q", limit=2)) == Decimal("1")
     assert cu.request_native_cost(
-        search, SearchRequest(query="q", limit=2, mode="advanced")
+        search, SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=2)
+    ) == Decimal("1")
+    assert cu.request_native_cost(
+        search,
+        SearchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=2, mode="advanced"
+        ),
     ) == Decimal("2")
 
 
@@ -93,10 +98,12 @@ def test_tavily_extract_depth_rule_matches_adapter() -> None:
         if r.operation is LimitOperation.FETCH and r.auth_mode is AuthMode.KEYED
     )
     basic = FetchRequest(
+        project_id="00000000-0000-4000-8000-0000000000aa",
         url="https://example.com/a",
         provider_options={"tavily": TavilyExtractParams(extract_depth="basic")},
     )
     advanced = FetchRequest(
+        project_id="00000000-0000-4000-8000-0000000000aa",
         url="https://example.com/a",
         provider_options={"tavily": TavilyExtractParams(extract_depth="advanced")},
     )

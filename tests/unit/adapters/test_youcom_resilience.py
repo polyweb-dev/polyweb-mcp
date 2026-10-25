@@ -31,8 +31,14 @@ async def test_search_and_fetch_each_route_through_shared_runner_once() -> None:
     adapter: YoucomAdapter | None = None
     try:
         adapter = YoucomAdapter(caller, runner=runner, api_key=SecretStr(_TEST_KEY))
-        await adapter.search(SearchRequest(query="routed"))
-        await adapter.fetch(FetchRequest(url="https://example.com/doc"))
+        await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="routed")
+        )
+        await adapter.fetch(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+            )
+        )
     finally:
         if adapter is not None:
             await adapter.aclose()
@@ -65,7 +71,9 @@ async def test_two_concurrent_rate_limited_calls_share_the_shared_runner() -> No
     adapter: YoucomAdapter | None = None
     try:
         adapter = YoucomAdapter(caller, runner=runner, api_key=SecretStr(_TEST_KEY))
-        request = SearchRequest(query="concurrent")
+        request = SearchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa", query="concurrent"
+        )
         outcomes = await asyncio.gather(
             adapter.search(request), adapter.search(request), return_exceptions=True
         )

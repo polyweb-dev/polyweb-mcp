@@ -61,6 +61,7 @@ from freesearch.services import monitoring
 from freesearch.services.parallel_oauth import clear_oauth_poll_state
 from freesearch.services.provider_limits import ProviderLimitsService
 from tests.fixtures.auth import (
+    account_id_from_pair,
     http_jwt_service,
     mcp_account_token,
     raw_auth_headers,
@@ -68,6 +69,7 @@ from tests.fixtures.auth import (
     register_promote_login,
     temp_email,
 )
+from tests.fixtures.execution import seed_execution_project, seed_token_project
 
 
 class _StubAdapter(ProviderAdapter):
@@ -171,9 +173,25 @@ class _HydratingStubAdapter(_StubAdapter):
 
 
 class _FailingTelemetryRepository:
-    """Write-only repository double that makes telemetry persistence fail."""
+    """Repository double that makes only telemetry persistence fail.
 
-    async def record_usage(self, event: UsageEvent) -> None:
+    Everything else (scope resolution, routing reads) delegates to the real
+    repository swapped in by the test.
+    """
+
+    def __init__(self, inner: SQLiteRepository) -> None:
+        self._inner = inner
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+    async def record_usage(
+        self,
+        event: UsageEvent,
+        *,
+        attribution: Any = None,
+        trace_id: str | None = None,
+    ) -> None:
         raise OSError("telemetry database unavailable")
 
     async def record_health(self, health: ProviderHealth) -> None:
@@ -353,9 +371,14 @@ async def test_rest_search_persists_usage_and_healthy_health(
         assert anonymous.headers["www-authenticate"] == "Bearer"
         # Use one Agent account for the search call.
         pair = register_and_login(client, temp_email("monitor-search"))
+        pid = str(
+            (
+                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+            ).project_id
+        )
         response = client.post(
             "/search",
-            json={"query": "offline"},
+            json={"project_id": pid, "query": "offline"},
             headers=raw_auth_headers(pair["access_token"]),
         )
 
@@ -396,7 +419,9 @@ async def test_usage_write_rejection_does_not_skip_healthy_health(
         usage=usage,
     )
 
-    await monitoring.record_response_telemetry(repository, response)
+    await monitoring.record_response_telemetry(
+        repository, response, attribution=await seed_execution_project(repository)
+    )
 
     assert await repository.list_usage() == []
     assert await repository.latest_health("usage-rejected") == ProviderHealth(
@@ -420,7 +445,9 @@ async def test_numeric_exa_usage_persists_with_healthy_health(
     )
     response = SearchResponse(query="exa", results=[], provider="exa", usage=usage)
 
-    await monitoring.record_response_telemetry(repository, response)
+    await monitoring.record_response_telemetry(
+        repository, response, attribution=await seed_execution_project(repository)
+    )
 
     assert await repository.list_usage() == [usage]
     assert await repository.latest_health("exa") == ProviderHealth(
@@ -444,9 +471,14 @@ async def test_rest_fetch_and_mcp_search_fetch_persist_identical_usage(
         assert anonymous.headers["www-authenticate"] == "Bearer"
         # Use one Agent account for the fetch call.
         pair = register_and_login(client, temp_email("monitor-fetch"))
+        pid = str(
+            (
+                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+            ).project_id
+        )
         rest_response = client.post(
             "/fetch",
-            json={"url": "https://example.com/rest"},
+            json={"project_id": pid, "url": "https://example.com/rest"},
             headers=raw_auth_headers(pair["access_token"]),
         )
 
@@ -456,8 +488,10 @@ async def test_rest_fetch_and_mcp_search_fetch_persist_identical_usage(
         auth_service=http_jwt_service(repository),
         stdio_token=SecretStr(pair["access_token"]),
     )
-    mcp_search = await server.call_tool("search", {"request": {"query": "mcp"}})
-    mcp_fetch = await server.call_tool("fetch", {"request": {"url": "https://example.com/mcp"}})
+    mcp_search = await server.call_tool("search", {"request": {"project_id": pid, "query": "mcp"}})
+    mcp_fetch = await server.call_tool(
+        "fetch", {"request": {"project_id": pid, "url": "https://example.com/mcp"}}
+    )
 
     assert rest_response.status_code == 200
     assert isinstance(mcp_search[0], Sequence)
@@ -493,9 +527,14 @@ async def test_usage_none_still_records_healthy_health(
         assert anonymous.status_code == 401
         # Use one Agent account for the search call.
         pair = register_and_login(client, temp_email("monitor-health"))
+        pid = str(
+            (
+                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+            ).project_id
+        )
         response = client.post(
             "/search",
-            json={"query": "no usage"},
+            json={"project_id": pid, "query": "no usage"},
             headers=raw_auth_headers(pair["access_token"]),
         )
 
@@ -523,9 +562,14 @@ async def test_fetch_without_usage_uses_document_fetched_at_for_health(
         assert anonymous.status_code == 401
         # Use one Agent account for the fetch call.
         pair = register_and_login(client, temp_email("monitor-fetch-health"))
+        pid = str(
+            (
+                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+            ).project_id
+        )
         response = client.post(
             "/fetch",
-            json={"url": "https://example.com/no-usage"},
+            json={"project_id": pid, "url": "https://example.com/no-usage"},
             headers=raw_auth_headers(pair["access_token"]),
         )
 
@@ -554,9 +598,14 @@ async def test_adapter_failure_records_degraded_and_preserves_rest_and_mcp_error
         assert anonymous.status_code == 401
         # Use one Agent account for the search call.
         pair = register_and_login(client, temp_email("monitor-failure"))
+        pid = str(
+            (
+                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+            ).project_id
+        )
         rest_response = client.post(
             "/search",
-            json={"query": "failure"},
+            json={"project_id": pid, "query": "failure"},
             headers=raw_auth_headers(pair["access_token"]),
         )
 
@@ -574,7 +623,7 @@ async def test_adapter_failure_records_degraded_and_preserves_rest_and_mcp_error
         stdio_token=SecretStr(pair["access_token"]),
     )
     with pytest.raises(ToolError, match="adapter exploded"):
-        await mcp_server.call_tool("search", {"request": {"query": "failure"}})
+        await mcp_server.call_tool("search", {"request": {"project_id": pid, "query": "failure"}})
     mcp_health = await repository.latest_health("mcp-failure")
     assert mcp_health is not None
     assert mcp_health.provider == "mcp-failure"
@@ -598,8 +647,15 @@ async def test_telemetry_failure_never_breaks_rest_request(
         # Use one Agent account for the search call.
         pair = register_and_login(client, temp_email("monitor-telemetry"))
         headers = raw_auth_headers(pair["access_token"])
-        app.state.repository = _FailingTelemetryRepository()
-        response = client.post("/search", json={"query": "still works"}, headers=headers)
+        pid = str(
+            (
+                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+            ).project_id
+        )
+        app.state.repository = _FailingTelemetryRepository(repository)
+        response = client.post(
+            "/search", json={"project_id": pid, "query": "still works"}, headers=headers
+        )
 
     assert response.status_code == 200
     assert response.json()["provider"] == "telemetry-down"
@@ -626,7 +682,9 @@ async def test_privacy_gate_blocks_sensitive_keys_allows_benign_telemetry(
 
     for invalid_event in invalid_events:
         with pytest.raises(ValueError):
-            await repository.record_usage(invalid_event)
+            await repository.record_usage(
+                invalid_event, attribution=await seed_execution_project(repository)
+            )
         assert await repository.list_usage() == []
     benign = _event(
         "private",
@@ -635,7 +693,7 @@ async def test_privacy_gate_blocks_sensitive_keys_allows_benign_telemetry(
         observed_at,
         metadata={"note": "secret-free note", "url_count": 4},
     )
-    await repository.record_usage(benign)
+    await repository.record_usage(benign, attribution=await seed_execution_project(repository))
     assert await repository.list_usage() == [benign]
 
 
@@ -669,7 +727,8 @@ async def test_privacy_gate_rejects_credential_aliases(
     for metadata in invalid_metadatas:
         with pytest.raises(ValueError):
             await repository.record_usage(
-                _event("private", UsageOperation.SEARCH, "1", observed_at, metadata=metadata)
+                _event("private", UsageOperation.SEARCH, "1", observed_at, metadata=metadata),
+                attribution=await seed_execution_project(repository),
             )
         assert await repository.list_usage() == []
 
@@ -685,7 +744,7 @@ async def test_collect_stats_shape_ordering_grouping_and_quota_provenance(
         _event("beta", UsageOperation.SEARCH, "3", t0 + timedelta(seconds=3)),
     ]
     for event in events:
-        await repository.record_usage(event)
+        await repository.record_usage(event, attribution=await seed_execution_project(repository))
     await repository.record_quota(_quota("alpha", QuotaSource.AUTHORITATIVE, t0))
     await repository.record_quota(_quota("beta", QuotaSource.OBSERVED, t0 + timedelta(seconds=1)))
     await repository.record_health(_health("alpha", HealthStatus.HEALTHY, t0))
@@ -867,7 +926,8 @@ async def test_stats_endpoint_omits_sensitive_keys_end_to_end(
             observed_at=observed_at,
             request_id="r-9",
             metadata={"credits": 1},
-        )
+        ),
+        attribution=await seed_execution_project(repository),
     )
     app = create_app([], repository=repository)
 
@@ -912,7 +972,8 @@ async def test_stats_endpoint_clamps_recent_limit_and_returns_contract_shape(
                 UsageOperation.SEARCH,
                 "0.000001",
                 t0 + timedelta(seconds=index),
-            )
+            ),
+            attribution=await seed_execution_project(repository),
         )
     app = create_app([_StubAdapter("alpha")], repository=repository)
 
@@ -1086,9 +1147,13 @@ async def test_dashboard_endpoint_matches_stats_and_preserves_quota_provenance(
     auth_secret: str,
 ) -> None:
     observed_at = datetime(2026, 1, 1, tzinfo=UTC)
-    await repository.record_usage(_event("alpha", UsageOperation.SEARCH, "1.25", observed_at))
     await repository.record_usage(
-        _event("beta", UsageOperation.FETCH, "2.5", observed_at + timedelta(seconds=1))
+        _event("alpha", UsageOperation.SEARCH, "1.25", observed_at),
+        attribution=await seed_execution_project(repository),
+    )
+    await repository.record_usage(
+        _event("beta", UsageOperation.FETCH, "2.5", observed_at + timedelta(seconds=1)),
+        attribution=await seed_execution_project(repository),
     )
     await repository.record_quota(_quota("alpha", QuotaSource.AUTHORITATIVE, observed_at))
     await repository.record_quota(
@@ -1197,7 +1262,8 @@ async def test_dashboard_endpoint_clamps_recent_limit_and_orders_newest_first(
                 UsageOperation.SEARCH,
                 "0.000001",
                 observed_at + timedelta(seconds=index),
-            )
+            ),
+            attribution=await seed_execution_project(repository),
         )
     app = create_app([_StubAdapter("limit-provider")], repository=repository)
 
@@ -1246,7 +1312,8 @@ async def test_dashboard_endpoint_omits_sensitive_projection_fields_and_values(
             observed_at=observed_at,
             request_id=private_query,
             metadata={"credits": 1},
-        )
+        ),
+        attribution=await seed_execution_project(repository),
     )
     await repository.record_health(
         ProviderHealth(
@@ -1466,6 +1533,7 @@ async def test_server_owned_lifespan_refcounted_across_overlapping_sessions(
     # the server generation. The service repository stays open for the test.
     service_repository = await SQLiteRepository.open(database)
     service, token, _email = await mcp_account_token(service_repository, "mcp-overlap")
+    pid = str((await seed_token_project(service_repository, token)).project_id)
     stdio_credential = SecretStr(token.get_secret_value())
     monkeypatch.setattr(
         "freesearch.mcp.server.adapter_factory",
@@ -1508,8 +1576,12 @@ async def test_server_owned_lifespan_refcounted_across_overlapping_sessions(
 
         assert len(opened) == 1
         repository = opened[0]
-        first_result = await server.call_tool("search", {"request": {"query": "session a"}})
-        second_result = await server.call_tool("search", {"request": {"query": "session b"}})
+        first_result = await server.call_tool(
+            "search", {"request": {"project_id": pid, "query": "session a"}}
+        )
+        second_result = await server.call_tool(
+            "search", {"request": {"project_id": pid, "query": "session b"}}
+        )
         assert first_result[1]["provider"] == "x"
         assert second_result[1]["provider"] == "x"
         assert [
@@ -1530,7 +1602,9 @@ async def test_server_owned_lifespan_refcounted_across_overlapping_sessions(
             units=Decimal("2"),
             observed_at=datetime(2026, 1, 1, 12, 0, tzinfo=UTC),
         )
-        await repository.record_usage(between_event)
+        await repository.record_usage(
+            between_event, attribution=await seed_execution_project(repository)
+        )
         ledger = await repository.list_usage()
         assert len(ledger) == 3
         assert between_event in ledger
@@ -1595,13 +1669,16 @@ async def test_server_owned_lifespan_sequential_sessions_reuse_fresh_generation(
     database = tmp_path / "seq.db"
     service_repository = await real_open(database)
     service, token, _email = await mcp_account_token(service_repository, "mcp-sequential")
+    pid = str((await seed_token_project(service_repository, token)).project_id)
     stdio_credential = SecretStr(token.get_secret_value())
     server = create_server(
         None, database=database, auth_service=service, stdio_token=stdio_credential
     )
 
     async with server._mcp_server.lifespan(server):
-        first_result = await server.call_tool("search", {"request": {"query": "session one"}})
+        first_result = await server.call_tool(
+            "search", {"request": {"project_id": pid, "query": "session one"}}
+        )
         assert first_result[1]["provider"] == "x"
         assert first_result[1]["usage"]["provider"] == "x"
         assert first_result[1]["usage"]["operation"] == "search"
@@ -1611,7 +1688,9 @@ async def test_server_owned_lifespan_sequential_sessions_reuse_fresh_generation(
     assert len(closed) == 1
 
     async with server._mcp_server.lifespan(server):
-        second_result = await server.call_tool("search", {"request": {"query": "session two"}})
+        second_result = await server.call_tool(
+            "search", {"request": {"project_id": pid, "query": "session two"}}
+        )
         assert second_result[1]["provider"] == "x"
         assert second_result[1]["usage"]["provider"] == "x"
         assert second_result[1]["usage"]["operation"] == "search"
@@ -1685,6 +1764,7 @@ async def test_server_owned_lifespan_delayed_teardown_does_not_close_new_session
     database = tmp_path / "race.db"
     service_repository = await real_open(database)
     service, token, _email = await mcp_account_token(service_repository, "mcp-race")
+    pid = str((await seed_token_project(service_repository, token)).project_id)
     stdio_credential = SecretStr(token.get_secret_value())
     server = create_server(
         None, database=database, auth_service=service, stdio_token=stdio_credential
@@ -1700,7 +1780,9 @@ async def test_server_owned_lifespan_delayed_teardown_does_not_close_new_session
         await lifespans["b"].__aenter__()
         entered.add("b")
 
-        first_result = await server.call_tool("search", {"request": {"query": "session a"}})
+        first_result = await server.call_tool(
+            "search", {"request": {"project_id": pid, "query": "session a"}}
+        )
         assert first_result[1]["provider"] == "x"
         assert first_result[1]["usage"]["operation"] == "search"
         assert first_result[1]["usage"]["units"] == "1.25"
@@ -1721,7 +1803,9 @@ async def test_server_owned_lifespan_delayed_teardown_does_not_close_new_session
         await teardown_task
         exited.add("b")
 
-        second_result = await server.call_tool("search", {"request": {"query": "session c"}})
+        second_result = await server.call_tool(
+            "search", {"request": {"project_id": pid, "query": "session c"}}
+        )
         assert second_result[1]["provider"] == "x"
         assert second_result[1]["usage"]["operation"] == "search"
         assert second_result[1]["usage"]["units"] == "1.25"
@@ -1778,7 +1862,7 @@ async def test_injected_repository_remains_open_after_app_lifespan(
             units=Decimal("1"),
             observed_at=datetime(2026, 1, 1, tzinfo=UTC),
         )
-        await repository.record_usage(event)
+        await repository.record_usage(event, attribution=await seed_execution_project(repository))
         assert await repository.list_usage() == [event]
         assert closed == []
     finally:
@@ -1809,7 +1893,7 @@ async def test_injected_repository_remains_open_after_server_lifespan(
             units=Decimal("2"),
             observed_at=datetime(2026, 1, 1, tzinfo=UTC),
         )
-        await repository.record_usage(event)
+        await repository.record_usage(event, attribution=await seed_execution_project(repository))
         assert await repository.list_usage() == [event]
         assert closed == []
     finally:
@@ -1833,7 +1917,9 @@ async def test_telemetry_helpers_swallow_repository_exceptions(
     repository: SQLiteRepository,
 ) -> None:
     adapter = _StubAdapter("helper-provider")
-    response = await adapter.search(SearchRequest(query="helper"))
+    response = await adapter.search(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="helper")
+    )
     assert response.usage is not None
 
     class _BrokenRepository:
@@ -1844,7 +1930,9 @@ async def test_telemetry_helpers_swallow_repository_exceptions(
             raise RuntimeError("write failed")
 
     broken = _BrokenRepository()
-    await monitoring.record_response_telemetry(broken, response)
+    await monitoring.record_response_telemetry(
+        broken, response, attribution=await seed_execution_project(repository)
+    )
     await monitoring.record_failure_telemetry(broken, provider="helper-provider")
     assert await repository.list_usage() == []
 
@@ -1897,9 +1985,7 @@ async def test_cancelled_tracked_call_releases_admission(
         async def fetch(self, request: FetchRequest) -> FetchResponse:
             raise NotImplementedError
 
-        async def estimate_cost(
-            self, request: SearchRequest | FetchRequest
-        ) -> CostEstimate:
+        async def estimate_cost(self, request: SearchRequest | FetchRequest) -> CostEstimate:
             return CostEstimate(
                 provider="tavily", operation=UsageOperation.SEARCH, units=Decimal("1")
             )
@@ -1939,10 +2025,15 @@ async def test_cancelled_tracked_call_releases_admission(
         tracked_call(
             repository,
             adapter,
-            lambda running: running.search(SearchRequest(query="q", limit=1)),
+            lambda running: running.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=1)
+            ),
             operation=UsageOperation.SEARCH,
-            request=SearchRequest(query="q", limit=1),
+            request=SearchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=1
+            ),
             limits=service,
+            attribution=await seed_execution_project(repository),
         )
     )
     await asyncio.wait_for(entered.wait(), timeout=5)

@@ -21,7 +21,9 @@ from tests.unit.adapters._youcom_test_support import (
 async def test_estimate_cost_search_is_zero_point_five_cents_usd() -> None:
     adapter = YoucomAdapter(_FakeClient(), api_key=SecretStr(_TEST_KEY))
 
-    estimate = await adapter.estimate_cost(SearchRequest(query="cost"))
+    estimate = await adapter.estimate_cost(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="cost")
+    )
 
     assert estimate.provider == "you"
     assert estimate.operation is UsageOperation.SEARCH
@@ -33,7 +35,11 @@ async def test_estimate_cost_search_is_zero_point_five_cents_usd() -> None:
 async def test_estimate_cost_fetch_is_one_tenth_cent_usd() -> None:
     adapter = YoucomAdapter(_FakeClient(), api_key=SecretStr(_TEST_KEY))
 
-    estimate = await adapter.estimate_cost(FetchRequest(url="https://example.com/doc"))
+    estimate = await adapter.estimate_cost(
+        FetchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+        )
+    )
 
     assert estimate.operation is UsageOperation.FETCH
     assert estimate.units == Decimal("0.001")
@@ -45,8 +51,14 @@ async def test_estimate_cost_is_network_free() -> None:
     runner = _RecordingRunner()
     adapter = YoucomAdapter(_FakeClient(), runner=runner, api_key=SecretStr(_TEST_KEY))
 
-    await adapter.estimate_cost(SearchRequest(query="cost"))
-    await adapter.estimate_cost(FetchRequest(url="https://example.com/doc"))
+    await adapter.estimate_cost(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="cost")
+    )
+    await adapter.estimate_cost(
+        FetchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+        )
+    )
 
     assert runner.entries == []
 

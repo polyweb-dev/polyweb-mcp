@@ -176,7 +176,9 @@ async def test_funds_admission_reserves_search_and_fetch_costs(
             auth_mode=AuthMode.KEYED,
             attempt_id="s-10",
             requested_at=FIXED_AT,
-            request=SearchRequest(query="test", limit=10),
+            request=SearchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", query="test", limit=10
+            ),
         )
     )
     assert adm_s10.reserved_native == Decimal("2")
@@ -190,7 +192,9 @@ async def test_funds_admission_reserves_search_and_fetch_costs(
             auth_mode=AuthMode.KEYED,
             attempt_id="s-15",
             requested_at=FIXED_AT,
-            request=SearchRequest(query="test", limit=15),
+            request=SearchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", query="test", limit=15
+            ),
         )
     )
     assert adm_s15.reserved_native == Decimal("4")
@@ -204,7 +208,9 @@ async def test_funds_admission_reserves_search_and_fetch_costs(
             auth_mode=AuthMode.KEYED,
             attempt_id="f-def",
             requested_at=FIXED_AT,
-            request=FetchRequest(url="https://example.com/doc"),
+            request=FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+            ),
         )
     )
     assert adm_f_def.reserved_native == Decimal("1")
@@ -218,7 +224,12 @@ async def test_funds_admission_reserves_search_and_fetch_costs(
             auth_mode=AuthMode.KEYED,
             attempt_id="f-mod",
             requested_at=FIXED_AT,
-            request=FetchRequest(url="https://example.com/doc", pdf_pages=2, json_extract=True),
+            request=FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa",
+                url="https://example.com/doc",
+                pdf_pages=2,
+                json_extract=True,
+            ),
         )
     )
     assert adm_f_mod.reserved_native == Decimal("7")
@@ -255,7 +266,9 @@ async def test_terminal_402_recording_clamps_balance_and_denies(
                 auth_mode=AuthMode.KEYED,
                 attempt_id="denied-after-402",
                 requested_at=FIXED_AT,
-                request=SearchRequest(query="denied", limit=10),
+                request=SearchRequest(
+                    project_id="00000000-0000-4000-8000-0000000000aa", query="denied", limit=10
+                ),
             )
         )
     assert excinfo.value.status_code == 402

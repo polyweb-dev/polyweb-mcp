@@ -21,7 +21,7 @@ from freesearch.models.contracts import (
 
 
 def test_search_request_defaults_are_stable() -> None:
-    request = SearchRequest(query="free search")
+    request = SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="free search")
 
     assert request.limit == 10
     assert request.routing.mode is RoutingMode.AUTO
@@ -42,7 +42,11 @@ def test_provider_options_are_optional_ordered_after_routing_and_use_public_alia
 
 def test_provider_options_validate_per_operation_without_changing_routing() -> None:
     search = SearchRequest.model_validate(
-        {"query": "q", "providerOptions": {"tavily": {"search_depth": "fast"}}}
+        {
+            "project_id": "00000000-0000-4000-8000-0000000000aa",
+            "query": "q",
+            "providerOptions": {"tavily": {"search_depth": "fast"}},
+        }
     )
     assert search.provider_options is not None
     assert search.provider_options.tavily is not None
@@ -52,6 +56,7 @@ def test_provider_options_validate_per_operation_without_changing_routing() -> N
 
     fetch = FetchRequest.model_validate(
         {
+            "project_id": "00000000-0000-4000-8000-0000000000aa",
             "url": "https://example.com/page",
             "providerOptions": {"tavily": {"extract_depth": "advanced"}},
         }
@@ -61,21 +66,33 @@ def test_provider_options_validate_per_operation_without_changing_routing() -> N
     assert fetch.provider_options.tavily.extract_depth == "advanced"
 
     with pytest.raises(ValidationError):
-        SearchRequest.model_validate({"query": "q", "tavily": {"topic": "news"}})
+        SearchRequest.model_validate(
+            {
+                "project_id": "00000000-0000-4000-8000-0000000000aa",
+                "query": "q",
+                "tavily": {"topic": "news"},
+            }
+        )
     with pytest.raises(ValidationError):
         FetchRequest.model_validate(
-            {"url": "https://example.com/page", "providerOptions": {"tavily": {"topic": "news"}}}
+            {
+                "project_id": "00000000-0000-4000-8000-0000000000aa",
+                "url": "https://example.com/page",
+                "providerOptions": {"tavily": {"topic": "news"}},
+            }
         )
 
 
 def test_contract_models_reject_unknown_fields() -> None:
     with pytest.raises(ValidationError):
-        SearchRequest(query="query", provider="unexpected")  # type: ignore[call-arg]
+        SearchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa", query="query", provider="unexpected"
+        )  # type: ignore[call-arg]
 
 
 def test_fetch_request_requires_an_http_url() -> None:
     with pytest.raises(ValidationError):
-        FetchRequest(url="not-a-url")
+        FetchRequest(project_id="00000000-0000-4000-8000-0000000000aa", url="not-a-url")
 
 
 def test_quota_source_distinguishes_estimates_from_authoritative_data() -> None:

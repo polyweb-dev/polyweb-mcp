@@ -38,7 +38,9 @@ async def test_search_malformed_results_is_invalid_response(results: object) -> 
             caller, runner=_default_runner(caller), api_key=SecretStr(_TEST_KEY)
         )
         with pytest.raises(ProviderOperationError) as excinfo:
-            await adapter.search(SearchRequest(query="bad"))
+            await adapter.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="bad")
+            )
     finally:
         if adapter is not None:
             await adapter.aclose()
@@ -75,7 +77,9 @@ async def test_search_top_level_list_or_scalar_body_is_invalid_response(
             caller, runner=_default_runner(caller), api_key=SecretStr(_TEST_KEY)
         )
         with pytest.raises(ProviderOperationError) as excinfo:
-            await adapter.search(SearchRequest(query="bad"))
+            await adapter.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="bad")
+            )
     finally:
         if adapter is not None:
             await adapter.aclose()
@@ -106,7 +110,9 @@ async def test_search_top_level_non_object_payload_redacts_secret_echo(
     recorder = _WireRecorder(responses=[httpx.Response(200, content=json.dumps(payload).encode())])
     async with _wired(recorder) as adapter:
         with pytest.raises(ProviderOperationError) as excinfo:
-            await adapter.search(SearchRequest(query="bad"))
+            await adapter.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="bad")
+            )
 
     error = excinfo.value
     assert error.error.code == "invalid_response"
@@ -149,7 +155,9 @@ async def test_search_normalizes_thumbnail_and_favicon_url_metadata() -> None:
         adapter = YoucomAdapter(
             caller, runner=_default_runner(caller), api_key=SecretStr(_TEST_KEY)
         )
-        response = await adapter.search(SearchRequest(query="meta"))
+        response = await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="meta")
+        )
     finally:
         if adapter is not None:
             await adapter.aclose()
@@ -171,7 +179,9 @@ async def test_search_result_item_missing_url_returns_empty_success() -> None:
         adapter = YoucomAdapter(
             caller, runner=_default_runner(caller), api_key=SecretStr(_TEST_KEY)
         )
-        response = await adapter.search(SearchRequest(query="bad"))
+        response = await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="bad")
+        )
     finally:
         if adapter is not None:
             await adapter.aclose()
@@ -194,7 +204,9 @@ async def test_search_non_json_body_is_invalid_response() -> None:
             caller, runner=_default_runner(caller), api_key=SecretStr(_TEST_KEY)
         )
         with pytest.raises(ProviderOperationError) as excinfo:
-            await adapter.search(SearchRequest(query="bad"))
+            await adapter.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="bad")
+            )
     finally:
         if adapter is not None:
             await adapter.aclose()
@@ -217,7 +229,9 @@ async def test_search_malformed_item_records_redacted_error() -> None:
         adapter = YoucomAdapter(
             caller, runner=_default_runner(caller), api_key=SecretStr(_TEST_KEY)
         )
-        response = await adapter.search(SearchRequest(query="bad"))
+        response = await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="bad")
+        )
     finally:
         if adapter is not None:
             await adapter.aclose()
@@ -266,7 +280,11 @@ async def _search_with(search: object) -> object:
         adapter = YoucomAdapter(
             caller, runner=_default_runner(caller), api_key=SecretStr(_TEST_KEY)
         )
-        return await adapter.search(SearchRequest(query="mixed", limit=10))
+        return await adapter.search(
+            SearchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", query="mixed", limit=10
+            )
+        )
     finally:
         if adapter is not None:
             await adapter.aclose()
@@ -377,7 +395,11 @@ async def test_search_limit_applies_after_invalid_item_filter(
         adapter = YoucomAdapter(
             caller, runner=_default_runner(caller), api_key=SecretStr(_TEST_KEY)
         )
-        response = await adapter.search(SearchRequest(query="capped", limit=limit))
+        response = await adapter.search(
+            SearchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", query="capped", limit=limit
+            )
+        )
     finally:
         if adapter is not None:
             await adapter.aclose()
@@ -402,7 +424,11 @@ async def test_search_invalid_tail_item_does_not_fail_response() -> None:
         adapter = YoucomAdapter(
             caller, runner=_default_runner(caller), api_key=SecretStr(_TEST_KEY)
         )
-        response = await adapter.search(SearchRequest(query="tailed", limit=1))
+        response = await adapter.search(
+            SearchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", query="tailed", limit=1
+            )
+        )
     finally:
         if adapter is not None:
             await adapter.aclose()
@@ -436,7 +462,9 @@ async def test_search_parse_errors_do_not_expose_payload_or_key() -> None:
         adapter = YoucomAdapter(
             caller, runner=_default_runner(caller), api_key=SecretStr(_TEST_KEY)
         )
-        response = await adapter.search(SearchRequest(query="leak", limit=10))
+        response = await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="leak", limit=10)
+        )
     finally:
         if adapter is not None:
             await adapter.aclose()

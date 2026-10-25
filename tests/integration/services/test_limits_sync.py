@@ -277,9 +277,7 @@ async def test_tavily_same_owner_cannot_bypass_active_claim(repository) -> None:
     await svc.initialize()
     assert (await sync.sync_provider("tavily", FIXED_AT)).status == "synced"
     # Same owner, active lease: the atomic claim refuses.
-    claim = SyncClaim(
-        provider="tavily", owner="owner-a", now=FIXED_AT, lease_seconds=90
-    )
+    claim = SyncClaim(provider="tavily", owner="owner-a", now=FIXED_AT, lease_seconds=90)
     assert await repository.limits.claim_sync(claim) is False
 
 
