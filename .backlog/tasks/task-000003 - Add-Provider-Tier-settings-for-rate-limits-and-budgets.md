@@ -4,13 +4,14 @@ title: Add Provider Tier settings for rate limits and budgets
 status: To Do
 assignee: []
 created_date: 2026-10-15 22:19
-updated_date: '2026-10-24T15:55:00Z'
+updated_date: '2026-10-25T14:51:00Z'
 labels: []
 dependencies:
-  - TASK-000004
+  - TASK-000038
 references:
   - TASK-000027
   - TASK-000005
+  - TASK-000038
 documentation:
   - doc-000005
 type: feature

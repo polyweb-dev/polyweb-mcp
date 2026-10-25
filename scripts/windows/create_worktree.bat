@@ -4,17 +4,66 @@ setlocal enabledelayedexpansion
 REM ==============================================================================
 REM FreeSearch Generic Worktree Setup Script
 REM Usage:
-REM   create_worktree.bat <branch-name> [mode|folder-name] [mode]
+REM   create_worktree.bat <branch-name> [mode|folder-name] [mode] [options]
 REM ==============================================================================
 
 if "%~1"=="" goto :usage
 
 set "BRANCH=%~1"
-set "ARG2=%~2"
-set "ARG3=%~3"
+shift
 
 set "MODE=full"
 set "FOLDER="
+set "BASE=main"
+set "BASE_GIVEN=0"
+set "SLOT="
+set "COPY_DB=0"
+set "POS1="
+set "POS2="
+
+:parse_args
+if "%~1"=="" goto :args_done
+
+if /i "%~1"=="--base" (
+    if "%~2"=="" (
+        echo [ERROR] --base requires a git ref ^(branch, tag, or commit^).
+        goto :usage_exit
+    )
+    set "BASE=%~2"
+    set "BASE_GIVEN=1"
+    shift & shift
+    goto :parse_args
+)
+if /i "%~1"=="--slot" (
+    if "%~2"=="" (
+        echo [ERROR] --slot requires a worktree slot number 1-9.
+        goto :usage_exit
+    )
+    set "SLOT=%~2"
+    shift & shift
+    goto :parse_args
+)
+if /i "%~1"=="--copy-db" (
+    set "COPY_DB=1"
+    shift
+    goto :parse_args
+)
+set "ARG=%~1"
+if "!ARG:~0,2!"=="--" (
+    echo [ERROR] Unknown option '%~1'.
+    goto :usage_exit
+)
+if not defined POS1 (
+    set "POS1=%~1"
+) else if not defined POS2 (
+    set "POS2=%~1"
+)
+shift
+goto :parse_args
+:args_done
+
+set "ARG2=%POS1%"
+set "ARG3=%POS2%"
 
 REM Check if ARG2 is a known mode
 if /i "%ARG2%"=="backend" set "MODE=backend"
@@ -55,6 +104,58 @@ if "%FOLDER%"=="" (
     set "FOLDER=freesearch-!SAFE_NAME!"
 )
 
+REM ------------------------------------------------------------------------------
+REM Validate --slot: must be a single digit 1-9 (slot 0 is the main checkout)
+REM ------------------------------------------------------------------------------
+if defined SLOT (
+    set "SLOT_VALID="
+    for %%D in (1 2 3 4 5 6 7 8 9) do if "!SLOT!"=="%%D" set "SLOT_VALID=1"
+    if not defined SLOT_VALID (
+        echo [ERROR] Invalid --slot '!SLOT!': expected an integer 1-9 ^(slot 0 is the main checkout^).
+        exit /b 1
+    )
+)
+
+REM Detect the slot implied by a 'freesearch_wt_N' folder name (N = digit 1-9)
+set "FOLDER_SLOT="
+if /i "%FOLDER:~0,14%"=="freesearch_wt_" (
+    set "SLOT_REST=%FOLDER:~14%"
+    for %%D in (1 2 3 4 5 6 7 8 9) do if "!SLOT_REST!"=="%%D" set "FOLDER_SLOT=%%D"
+)
+
+if defined SLOT (
+    if defined FOLDER_SLOT (
+        if not "!SLOT!"=="!FOLDER_SLOT!" (
+            echo [ERROR] --slot !SLOT! conflicts with folder name '%FOLDER%' ^(implies slot !FOLDER_SLOT!^).
+            exit /b 1
+        )
+    )
+) else if defined FOLDER_SLOT (
+    set "SLOT=!FOLDER_SLOT!"
+    echo [INFO] Worktree slot !SLOT! inferred from folder name '%FOLDER%'.
+)
+
+REM ------------------------------------------------------------------------------
+REM Resolve the branch state and validate --base BEFORE creating anything
+REM ------------------------------------------------------------------------------
+set "BRANCH_STATE=new"
+git show-ref --verify --quiet "refs/heads/%BRANCH%"
+if not errorlevel 1 set "BRANCH_STATE=local"
+if "%BRANCH_STATE%"=="new" (
+    git show-ref --verify --quiet "refs/remotes/origin/%BRANCH%"
+    if not errorlevel 1 set "BRANCH_STATE=remote"
+)
+
+if "%BRANCH_STATE%"=="new" (
+    git rev-parse --verify --quiet "%BASE%^{commit}" >nul 2>&1
+    if errorlevel 1 (
+        echo [ERROR] --base ref '%BASE%' does not resolve to a commit.
+        exit /b 1
+    )
+) else if "%BASE_GIVEN%"=="1" (
+    echo [INFO] Branch '%BRANCH%' already exists; --base '%BASE%' is ignored.
+)
+
 call :setup_worktree "%BRANCH%" "%FOLDER%" "%MODE%"
 exit /b %ERRORLEVEL%
 
@@ -66,6 +167,9 @@ set "TARGET_BRANCH=%~1"
 set "TARGET_FOLDER=%~2"
 set "TARGET_MODE=%~3"
 set "TARGET_PATH=..\%TARGET_FOLDER%"
+set "BASE_USED=%BASE%"
+set "PORTS_USED=unchanged"
+set "DB_USED=fresh"
 
 echo.
 echo -------------------------------------------------------
@@ -74,20 +178,18 @@ echo Path: %TARGET_PATH%
 echo Target mode: [%TARGET_MODE%]
 echo -------------------------------------------------------
 
-REM 1. Create Git Worktree (checks local, then remote, else creates new from main)
-git show-ref --verify --quiet refs/heads/%TARGET_BRANCH%
-if not errorlevel 1 (
+REM 1. Create Git Worktree (checks local, then remote, else creates new from --base)
+if "%BRANCH_STATE%"=="local" (
+    set "BASE_USED=existing branch"
     echo [1/6] Checking out existing local branch '%TARGET_BRANCH%' in worktree '%TARGET_PATH%'...
     git worktree add "%TARGET_PATH%" "%TARGET_BRANCH%"
+) else if "%BRANCH_STATE%"=="remote" (
+    set "BASE_USED=existing branch"
+    echo [1/6] Checking out remote branch 'origin/%TARGET_BRANCH%' in worktree '%TARGET_PATH%'...
+    git worktree add --track -b "%TARGET_BRANCH%" "%TARGET_PATH%" "origin/%TARGET_BRANCH%"
 ) else (
-    git show-ref --verify --quiet refs/remotes/origin/%TARGET_BRANCH%
-    if not errorlevel 1 (
-        echo [1/6] Checking out remote branch 'origin/%TARGET_BRANCH%' in worktree '%TARGET_PATH%'...
-        git worktree add --track -b "%TARGET_BRANCH%" "%TARGET_PATH%" "origin/%TARGET_BRANCH%"
-    ) else (
-        echo [1/6] Branch not found locally or remotely. Creating new branch '%TARGET_BRANCH%' from main...
-        git worktree add -b "%TARGET_BRANCH%" "%TARGET_PATH%" main
-    )
+    echo [1/6] Branch not found locally or remotely. Creating new branch '%TARGET_BRANCH%' from '%BASE%'...
+    git worktree add -b "%TARGET_BRANCH%" "%TARGET_PATH%" "%BASE%"
 )
 
 if errorlevel 1 (
@@ -95,17 +197,62 @@ if errorlevel 1 (
     exit /b 1
 )
 
-REM 2. Copy .env and database file if present in main repo
+REM 2. Copy .env, assign slot ports, and optionally copy the database
 if exist ".env" (
     echo [2/6] Copying root .env file to '%TARGET_PATH%\.env'...
     copy /Y ".env" "%TARGET_PATH%\.env" >nul
+    if defined SLOT (
+        set /a "MCP_PORT=8000+SLOT*10"
+        set /a "API_PORT=8000+SLOT*10+1"
+        set /a "VITE_PORT=5174+SLOT"
+        echo [2/6] Assigning slot !SLOT! ports: FREESEARCH_MCP_PORT=!MCP_PORT!, FREESEARCH_API_PORT=!API_PORT!, VITE_PORT=!VITE_PORT!
+        powershell -NoProfile -Command ^
+            "$p = '!TARGET_PATH!\.env'; " ^
+            "$b = [IO.File]::ReadAllBytes($p); " ^
+            "$hasBom = ($b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF); " ^
+            "$t = [IO.File]::ReadAllText($p); " ^
+            "$nl = [Environment]::NewLine; " ^
+            "$caret = [char]94; " ^
+            "$map = [ordered]@{ FREESEARCH_MCP_PORT = '!MCP_PORT!'; FREESEARCH_API_PORT = '!API_PORT!'; VITE_PORT = '!VITE_PORT!' }; " ^
+            "foreach ($k in $map.Keys) { " ^
+            "  $pat = '(?m)' + $caret + $k + '=' + '[' + $caret + '\r\n]*'; " ^
+            "  if ([regex]::IsMatch($t, $pat)) { " ^
+            "    $t = [regex]::Replace($t, $pat, $k + '=' + $map[$k]) " ^
+            "  } else { " ^
+            "    if ($t.Length -gt 0 -and -not $t.EndsWith([string][char]10)) { $t += $nl } " ^
+            "    $t += $k + '=' + $map[$k] + $nl " ^
+            "  } " ^
+            "}; " ^
+            "$enc = New-Object System.Text.UTF8Encoding($hasBom); " ^
+            "[IO.File]::WriteAllText($p, $t, $enc)"
+        if errorlevel 1 (
+            echo [ERROR] Failed to write worktree ports into '%TARGET_PATH%\.env'.
+            exit /b 1
+        )
+        set "PORTS_USED=MCP=!MCP_PORT!, API=!API_PORT!, VITE=!VITE_PORT!"
+    ) else (
+        echo [WARNING] No slot resolved for folder '%TARGET_FOLDER%': .env ports were copied
+        echo           unchanged from the main checkout and will collide if both run at once.
+        echo           Re-run with '--slot N' or use a 'freesearch_wt_N' folder name.
+    )
 ) else (
     echo [2/6] Warning: No .env file found in root repository. Skipping copy.
+    echo [WARNING] No .env in the main checkout - worktree ports cannot be assigned.
 )
 
-if exist "freesearch.db" (
-    echo [2/6] Copying freesearch.db to '%TARGET_PATH%\freesearch.db'...
-    copy /Y "freesearch.db" "%TARGET_PATH%\freesearch.db" >nul
+if "%COPY_DB%"=="1" (
+    if exist "freesearch.db" (
+        echo [2/6] Copying freesearch.db to '%TARGET_PATH%\freesearch.db'...
+        copy /Y "freesearch.db" "%TARGET_PATH%\freesearch.db" >nul
+        set "DB_USED=copied"
+        echo [WARNING] The copied freesearch.db contains stored provider credentials
+        echo           and real request history - treat it as sensitive.
+    ) else (
+        echo [2/6] [INFO] --copy-db given but no freesearch.db found in main checkout. Skipping copy.
+    )
+) else (
+    echo [2/6] [INFO] freesearch.db is NOT copied - use --copy-db to opt in;
+    echo           a fresh database will be created by 'freesearch-db upgrade'.
 )
 
 REM 3. Backend Setup (uv sync + database migration)
@@ -174,25 +321,43 @@ if not errorlevel 1 (
 )
 
 echo.
-echo [OK] Worktree '%TARGET_BRANCH%' ready at '%TARGET_PATH%' for [%TARGET_MODE%] development.
+echo -------------------------------------------------------
+echo [OK] Worktree setup complete.
+echo   Branch : %TARGET_BRANCH%
+echo   Base   : %BASE_USED%
+echo   Path   : %TARGET_PATH%
+echo   Mode   : %TARGET_MODE%
+if defined SLOT (
+    echo   Slot   : !SLOT!
+) else (
+    echo   Slot   : none
+)
+echo   Ports  : %PORTS_USED%
+echo   DB     : %DB_USED%
+echo -------------------------------------------------------
 exit /b 0
 
 :usage
 echo [ERROR] Missing branch name argument.
+:usage_exit
 echo.
 echo Usage:
-echo   create_worktree.bat ^<branch-name^> [mode^|folder-name] [mode]
+echo   create_worktree.bat ^<branch-name^> [mode^|folder-name] [mode] [options]
 echo.
 echo Modes:
-echo   docker (or bare) - Fast passthrough: git checkout + .env only (skips uv & pnpm)
-echo   backend (or be)  - Setup backend only (uv sync)
-echo   ui (or frontend) - Setup UI only (pnpm install + bddgen)
-echo   full (default)   - Setup both backend and UI
+echo   docker (or bare, none)    - Fast passthrough: git checkout + .env only (skips uv ^& pnpm)
+echo   backend (or be)           - Setup backend only (uv sync + freesearch-db upgrade)
+echo   ui (or frontend, fe)      - Setup UI only (pnpm install + bddgen)
+echo   full (or fullstack)       - Setup both backend and UI [default]
+echo.
+echo Options:
+echo   --base ^<ref^>   Base ref for a NEW branch (default: main; ignored if the branch exists)
+echo   --slot ^<N^>     Worktree slot 1-9; sets .env ports MCP 80N0 / API 80N1 / VITE 5174+N
+echo   --copy-db      Copy the main checkout's freesearch.db (contains credentials/history)
 echo.
 echo Examples:
 echo   create_worktree.bat my-feature docker
-echo   create_worktree.bat my-feature ui
-echo   create_worktree.bat my-feature backend
-echo   create_worktree.bat my-feature full
-echo   create_worktree.bat my-feature custom-folder-name docker
+echo   create_worktree.bat my-feature backend --base develop
+echo   create_worktree.bat my-feature freesearch_wt_1 backend
+echo   create_worktree.bat my-feature custom-folder-name docker --slot 3
 exit /b 1

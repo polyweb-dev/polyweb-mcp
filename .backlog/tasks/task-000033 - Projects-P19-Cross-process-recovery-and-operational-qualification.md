@@ -4,7 +4,7 @@ title: Projects P19 - Cross-process recovery and operational qualification
 status: To Do
 assignee: []
 created_date: '2026-10-24T15:54:00Z'
-updated_date: '2026-10-24T15:57:00Z'
+updated_date: '2026-10-25T14:51:00Z'
 labels:
   - projects-first
   - phase-p19
@@ -12,6 +12,7 @@ labels:
 milestone: m-2
 dependencies:
   - TASK-000032
+  - TASK-000038
 references:
   - src/freesearch/routers/api.py
   - src/freesearch/mcp/server.py
@@ -37,7 +38,7 @@ Fair service and strict accounting need proof under runtime recovery and mixed-t
 
 Phase: P19. Execution lane: serial-fairness. Milestone: Projects 3 - Fair capacity.
 
-Dependency gate: P18 (TASK-000032)
+Dependency gate: P18 (TASK-000032), P15 (TASK-000038)
 Do not implement or mark In Progress until every dependency is Done, merged into the integration branch, and its acceptance evidence is available. Priority and phase numbers never override this gate. Parallel work is permitted only where the dependency graph and shared-file ownership allow it.
 
 Accepted scope from plan section 10 / P19:
@@ -45,6 +46,8 @@ Accepted scope from plan section 10 / P19:
 Exercise authority restart, native funds reconciliation, provider throttles, credential rotation, policy edits, and cancellation under load.
 Publish the supported deployment topology, scaling limits, failure responses, and rollback procedure.
 Define acceptance targets for queue latency and throughput from measured capacity.
+
+Restructure note (2026-10-25): Also waits for TASK-000038 so the fair-capacity milestone qualifies against the released strict project-first configuration.
 
 Cross-phase constraints:
 User-approved constraints: one human account type; one common scoped RBAC service; system/project roles are assignments, not account types. Preserve internal UUIDs and local/WorkOS storage constraints without implementing WorkOS/cloud features. Use one internal installation account. Project tokens can expire or have no expiration. Support private and explicitly shared credential instances. Strict pool/project caps are the default; fair loans require their later phase. Use a fresh alpha database; do not migrate/import old history, humans, settings or secrets. Never use the live database or real provider credentials for tests. Desktop UI only; local environment controls ports.

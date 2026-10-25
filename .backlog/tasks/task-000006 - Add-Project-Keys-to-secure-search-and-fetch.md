@@ -4,7 +4,7 @@ title: Projects P07 - Project tokens and authenticated machine execution
 status: To Do
 assignee: []
 created_date: 2026-10-15 22:19
-updated_date: '2026-10-24T15:57:00Z'
+updated_date: '2026-10-25T14:51:00Z'
 labels:
   - projects-first
   - phase-p07
@@ -48,6 +48,8 @@ Tasklet B adds token administration UI and REST/MCP authentication, including st
 Require project-token authentication for machine execution in preview mode. Keep human session authentication separate.
 Support dated tokens and tokens without expiration throughout storage, API contracts, rotation, and UI controls.
 
+Restructure note (2026-10-25): Dependencies unchanged. P06 no longer waits for P05, so it should normally finish first. Shares routers/api.py and mcp/server.py with P09 and P11, and allocates an Alembic revision: one owner per integration step and one schema head.
+
 Cross-phase constraints:
 User-approved constraints: one human account type; one common scoped RBAC service; system/project roles are assignments, not account types. Preserve internal UUIDs and local/WorkOS storage constraints without implementing WorkOS/cloud features. Use one internal installation account. Project tokens can expire or have no expiration. Support private and explicitly shared credential instances. Strict pool/project caps are the default; fair loans require their later phase. Use a fresh alpha database; do not migrate/import old history, humans, settings or secrets. Never use the live database or real provider credentials for tests. Desktop UI only; local environment controls ports.
 
@@ -58,8 +60,6 @@ Use the managed verification specification for required quality commands and tes
 Before code work, read AGENTS.md and applicable skills, use CodeGraph for indexed code, inspect current implementation and record the task implementation plan through Backlog. The referenced design is context; this future ticket intentionally has no speculative implementation-plan field.
 
 Documentation: local .agents/communication/projects-feature-plan.md, sections 4-10 for design and scope, section 11 for ordering. The managed specification documents are durable copies for checkouts where the gitignored local plan is absent. Use the execution-index document for exact phase-to-ticket IDs and ready-work commands.
-
-Origin: Reuses TASK-000006, originally "Add Project Keys to secure search and fetch". Its original outcome remains part of this phase.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria

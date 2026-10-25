@@ -3,7 +3,7 @@ id: doc-000001
 title: Projects specification - identity, RBAC and ownership
 type: specification
 created_date: '2026-10-24T15:49:00Z'
-updated_date: '2026-10-24T17:18:00Z'
+updated_date: '2026-10-25T15:05:00Z'
 tags:
   - projects-first
   - specification
@@ -103,9 +103,12 @@ CodeGraph supplied source and call paths. Groma reports an uncurated first scan,
 All twenty phases now have High-priority tickets with explicit dependency fields and phase labels.
 Start with `TASK-000017` for P00. The full ticket map is Backlog document `doc-000005`, Projects execution index - start here.
 
+On 2026-10-25, P04, P06, P11, P12, and P15 were split into tasklet tickets.
+Downstream work now depends only on the tasklet that it needs. Section 11 gives the revised order.
+
 The board reuses these original tickets rather than duplicating their work:
 
-- `TASK-000004`: P15, project-first cutover and removal of legacy account types.
+- `TASK-000004`: P15A, removal of agent accounts, anonymous execution, and legacy account types. `TASK-000038` contains the P15 strict cutover.
 - `TASK-000005`: P12, project provider, settings, and limits UX.
 - `TASK-000006`: P07, project tokens and authenticated machine execution.
 

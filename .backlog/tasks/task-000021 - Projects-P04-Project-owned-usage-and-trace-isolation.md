@@ -1,10 +1,10 @@
 ---
 id: TASK-000021
-title: Projects P04 - Project-owned usage and trace isolation
+title: Projects P04 - Project-owned usage and trace writers
 status: To Do
 assignee: []
 created_date: '2026-10-24T15:54:00Z'
-updated_date: '2026-10-24T15:57:00Z'
+updated_date: '2026-10-25T15:06:00Z'
 labels:
   - projects-first
   - phase-p04
@@ -43,14 +43,15 @@ Do not implement or mark In Progress until every dependency is Done, merged into
 Accepted scope from plan section 10 / P04:
 
 Tasklet A adds non-null project ownership to usage and execution traces, with corresponding writer changes.
-Tasklet B scopes dashboard, activity detail, pagination, and export reads.
 Keep actor attribution and distinguish system audit events. No historical data backfill is necessary.
+
+Restructure note (2026-10-25): Tasklet B (scoped dashboard, activity detail, pagination and export reads) moved to TASK-000034. P05 depends only on this card. Phase P04 is complete only when this card and TASK-000034 are Done. P08 and P11A run in parallel: allocate Alembic revisions serially and serialize edits to storage.py and database_migrations.py.
 
 Cross-phase constraints:
 User-approved constraints: one human account type; one common scoped RBAC service; system/project roles are assignments, not account types. Preserve internal UUIDs and local/WorkOS storage constraints without implementing WorkOS/cloud features. Use one internal installation account. Project tokens can expire or have no expiration. Support private and explicitly shared credential instances. Strict pool/project caps are the default; fair loans require their later phase. Use a fresh alpha database; do not migrate/import old history, humans, settings or secrets. Never use the live database or real provider credentials for tests. Desktop UI only; local environment controls ports.
 
 Verification expectations:
-Test scoped usage, trace lists/details, counts, cursors and exports with two projects and concurrent fake calls. Run relevant observability integration and adversarial suites.
+Test project ownership on usage and trace writes with two projects and concurrent and fanout fake calls, including root/child span attribution and system audit events. Run relevant observability integration and adversarial suites.
 Use the managed verification specification for required quality commands and test placement. Record objective evidence before completion.
 
 Before code work, read AGENTS.md and applicable skills, use CodeGraph for indexed code, inspect current implementation and record the task implementation plan through Backlog. The referenced design is context; this future ticket intentionally has no speculative implementation-plan field.
@@ -62,12 +63,23 @@ Documentation: local .agents/communication/projects-feature-plan.md, sections 4-
 <!-- AC:BEGIN -->
 - [ ] #1 New project usage and execution traces have non-null project ownership plus the required actor and request attribution.
 - [ ] #2 Root and child spans retain trusted project attribution during concurrent and fanout operations.
-- [ ] #3 Activity lists, detail reads, dashboard aggregates, exports and pagination are project-scoped.
-- [ ] #4 Guessed record IDs or a cursor from another project cannot disclose its data.
-- [ ] #5 System audit events remain explicitly system-scoped; no legacy-data backfill is introduced.
+- [ ] #3 System audit events remain explicitly system-scoped; no legacy-data backfill is introduced.
 <!-- AC:END -->
 
 ## Definition of Done
 <!-- DOD:BEGIN -->
 - [ ] #1 All phase acceptance criteria have objective test or review evidence recorded in Backlog before Done.
 <!-- DOD:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @devin
+created: 2026-10-25T15:06:00Z
+
+---
+
+Migration merge rule (2026-10-25): this card adds an Alembic revision while another lane also changes schema. Land the migration and its database_migrations.py schema-validation change as a small first pull request. P04 lands first when P04 and P08 are both ready; otherwise the first merged migration keeps the next number. The other branch rebases, renames its revision to the following number, sets down_revision to the new head, and updates the head literal in tests/integration/persistence/test_database_migrations.py, tests/integration/persistence/test_projects.py and tests/fixtures/alpha_fixtures.py. Keep one migration head. See doc-000005, Worktrees and merging.
+
+---
+<!-- COMMENTS:END -->

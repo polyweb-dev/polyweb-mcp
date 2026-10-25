@@ -4,7 +4,7 @@ title: Projects P09 - Binding-aware routing and account observations
 status: To Do
 assignee: []
 created_date: '2026-10-24T15:54:00Z'
-updated_date: '2026-10-24T15:57:00Z'
+updated_date: '2026-10-25T14:51:00Z'
 labels:
   - projects-first
   - phase-p09
@@ -13,6 +13,7 @@ milestone: m-1
 dependencies:
   - TASK-000022
   - TASK-000024
+  - TASK-000035
 references:
   - src/freesearch/adapters/registry.py
   - src/freesearch/services/routing.py
@@ -40,7 +41,7 @@ Credential instances are useful only if routing, health, quotas and breaker stat
 
 Phase: P09. Execution lane: parallel-b. Milestone: Projects 2 - Project-first release.
 
-Dependency gate: P05 (TASK-000022), P08 (TASK-000024)
+Dependency gate: P05 (TASK-000022), P08 (TASK-000024), P11A (TASK-000035)
 Do not implement or mark In Progress until every dependency is Done, merged into the integration branch, and its acceptance evidence is available. Priority and phase numbers never override this gate. Parallel work is permitted only where the dependency graph and shared-file ownership allow it.
 
 Accepted scope from plan section 10 / P09:
@@ -48,6 +49,8 @@ Accepted scope from plan section 10 / P09:
 Add multiple project bindings per provider and credential-aware adapter resolution.
 Migrate health, native quota observations, limit catalog links, and breaker keys to the correct credential or shared pool scope.
 Retain project attribution separately from upstream balance ownership.
+
+Restructure note (2026-10-25): Also waits for TASK-000035. Key shared health, native quota observations, limit catalog links and breaker state to the TASK-000035 pool identities where the upstream scope is shared, so P11 does not rekey them.
 
 Cross-phase constraints:
 User-approved constraints: one human account type; one common scoped RBAC service; system/project roles are assignments, not account types. Preserve internal UUIDs and local/WorkOS storage constraints without implementing WorkOS/cloud features. Use one internal installation account. Project tokens can expire or have no expiration. Support private and explicitly shared credential instances. Strict pool/project caps are the default; fair loans require their later phase. Use a fresh alpha database; do not migrate/import old history, humans, settings or secrets. Never use the live database or real provider credentials for tests. Desktop UI only; local environment controls ports.

@@ -1,10 +1,10 @@
 ---
 id: TASK-000027
-title: Projects P11 - Shared upstream pools and atomic strict caps
+title: Projects P11 - Atomic strict caps across projects and shared pools
 status: To Do
 assignee: []
 created_date: '2026-10-24T15:54:00Z'
-updated_date: '2026-10-24T15:57:00Z'
+updated_date: '2026-10-25T14:51:00Z'
 labels:
   - projects-first
   - phase-p11
@@ -12,9 +12,9 @@ labels:
 milestone: m-1
 dependencies:
   - TASK-000006
-  - TASK-000024
   - TASK-000025
   - TASK-000026
+  - TASK-000035
 references:
   - src/freesearch/services/provider_limits.py
   - src/freesearch/services/rate_limits.py
@@ -41,15 +41,15 @@ Multiple projects and multiple keys share real upstream capacity. Project limits
 
 Phase: P11. Execution lane: serial-join. Milestone: Projects 2 - Project-first release.
 
-Dependency gate: P07 (TASK-000006), P08 (TASK-000024), P09 (TASK-000025), P10 (TASK-000026)
+Dependency gate: P07 (TASK-000006), P09 (TASK-000025), P10 (TASK-000026), P11A (TASK-000035)
 Do not implement or mark In Progress until every dependency is Done, merged into the integration branch, and its acceptance evidence is available. Priority and phase numbers never override this gate. Parallel work is permitted only where the dependency graph and shared-file ownership allow it.
 
 Accepted scope from plan section 10 / P11:
 
-Add explicit upstream pools, credential links, and project allocations with loans disabled.
 Generalize atomic rate and native funds admission across project and upstream constraints.
 Replace process-local check-then-record paths for enforceable limits in both REST and MCP.
-Split pool schema and identity from atomic enforcement into separate tasklets.
+
+Restructure note (2026-10-25): Pool schema, credential links and allocations (Tasklet A) moved to TASK-000035. Phase P11 is complete only when TASK-000035 and this card are Done.
 
 Cross-phase constraints:
 User-approved constraints: one human account type; one common scoped RBAC service; system/project roles are assignments, not account types. Preserve internal UUIDs and local/WorkOS storage constraints without implementing WorkOS/cloud features. Use one internal installation account. Project tokens can expire or have no expiration. Support private and explicitly shared credential instances. Strict pool/project caps are the default; fair loans require their later phase. Use a fresh alpha database; do not migrate/import old history, humans, settings or secrets. Never use the live database or real provider credentials for tests. Desktop UI only; local environment controls ports.
@@ -65,14 +65,12 @@ Documentation: local .agents/communication/projects-feature-plan.md, sections 4-
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Explicit upstream pool identity follows the documented vendor account/project/key/IP scope, not an automatic one-pool-per-key assumption.
-- [ ] #2 Project allocations default to strict caps with capacity loans disabled.
-- [ ] #3 Project and all shared rate/funds constraints are checked and debited atomically immediately before actual provider dispatch.
-- [ ] #4 For a strict shared 10/s pool with A=4/s and B=6/s, A stops at 4/s even when B is idle, under the configured exact window semantics.
-- [ ] #5 Concurrent processes and multiple keys cannot multiply a shared pool allowance.
-- [ ] #6 Retrying one reservation is idempotent; a genuinely new upstream attempt is charged separately and retains its project.
-- [ ] #7 Unavailable authoritative storage rejects new constrained execution; uncertain upstream receipt does not refund rate units.
-- [ ] #8 Native balance/CRD precision, existing terminal quota errors and finalization semantics remain correct; reusable provider-tier presets in TASK-000003 remain separate follow-up work.
+- [ ] #1 Project and all shared rate/funds constraints are checked and debited atomically immediately before actual provider dispatch.
+- [ ] #2 For a strict shared 10/s pool with A=4/s and B=6/s, A stops at 4/s even when B is idle, under the configured exact window semantics.
+- [ ] #3 Concurrent processes and multiple keys cannot multiply a shared pool allowance.
+- [ ] #4 Retrying one reservation is idempotent; a genuinely new upstream attempt is charged separately and retains its project.
+- [ ] #5 Unavailable authoritative storage rejects new constrained execution; uncertain upstream receipt does not refund rate units.
+- [ ] #6 Native balance/CRD precision, existing terminal quota errors and finalization semantics remain correct; reusable provider-tier presets in TASK-000003 remain separate follow-up work.
 <!-- AC:END -->
 
 ## Definition of Done
