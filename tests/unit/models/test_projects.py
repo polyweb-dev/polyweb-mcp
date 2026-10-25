@@ -367,9 +367,54 @@ def test_project_create_requires_atomic_initial_admin() -> None:
     )
     assert proj.initial_admin_user_id == admin_id
 
-    # Missing initial_admin_user_id is rejected
+    # Missing an initial administrator identifier is rejected
     with pytest.raises(ValidationError):
-        ProjectCreate(name="Workspace Beta")  # type: ignore[call-arg]
+        ProjectCreate(name="Workspace Beta")
+
+
+def test_project_create_requires_exactly_one_admin_identifier() -> None:
+    admin_id = uuid4()
+
+    # The existing user_id payload stays valid
+    by_id = ProjectCreate(name="Workspace Alpha", initial_admin_user_id=admin_id)
+    assert by_id.initial_admin_user_id == admin_id
+    assert by_id.initial_admin_email is None
+
+    # The email payload is normalized to canonical storage form
+    by_email = ProjectCreate(name="Workspace Beta", initial_admin_email="  Admin@Example.COM ")
+    assert by_email.initial_admin_user_id is None
+    assert by_email.initial_admin_email == "admin@example.com"
+
+    # Both and neither are rejected
+    with pytest.raises(ValidationError, match="exactly one"):
+        ProjectCreate(name="Workspace Gamma")
+    with pytest.raises(ValidationError, match="exactly one"):
+        ProjectCreate(
+            name="Workspace Delta",
+            initial_admin_user_id=admin_id,
+            initial_admin_email="admin@example.com",
+        )
+
+
+def test_project_member_add_requires_exactly_one_identifier() -> None:
+    user_id = uuid4()
+
+    # The existing user_id payload stays valid
+    by_id = ProjectMemberAdd(user_id=user_id)
+    assert by_id.user_id == user_id
+    assert by_id.email is None
+    assert by_id.initial_role == BuiltinRole.PROJECT_MEMBER
+
+    # The email payload is normalized to canonical storage form
+    by_email = ProjectMemberAdd(email="  Alice@Example.COM  ")
+    assert by_email.user_id is None
+    assert by_email.email == "alice@example.com"
+
+    # Both and neither are rejected
+    with pytest.raises(ValidationError, match="exactly one"):
+        ProjectMemberAdd()
+    with pytest.raises(ValidationError, match="exactly one"):
+        ProjectMemberAdd(user_id=user_id, email="alice@example.com")
 
 
 def test_authorization_protocol_and_evaluator() -> None:
@@ -665,11 +710,13 @@ def test_downstream_model_contracts_structure() -> None:
     member_read = ProjectMemberRead(
         project_id=proj_id,
         user_id=user_id,
+        email="Member@Example.com",
         status=MembershipStatus.ACTIVE,
         roles=[BuiltinRole.PROJECT_MEMBER],
         version=1,
     )
     assert member_read.status == MembershipStatus.ACTIVE
+    assert member_read.email == "member@example.com"
     update = ProjectMemberUpdate(status=MembershipStatus.SUSPENDED)
     assert update.status == MembershipStatus.SUSPENDED
 

@@ -13,8 +13,8 @@ references ``provider_credentials(id, owner_scope)`` and the column carries a
 ``system`` check constraint plus default, so a project-private credential can
 never be granted at the database level.
 
-Revision ID: 0008_provider_credentials
-Revises: 0007_project_settings
+Revision ID: 0009_provider_credentials
+Revises: 0008_project_owned_telemetry
 """
 
 from collections.abc import Sequence
@@ -22,8 +22,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0008_provider_credentials"
-down_revision: str | None = "0007_project_settings"
+revision: str = "0009_provider_credentials"
+down_revision: str | None = "0008_project_owned_telemetry"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

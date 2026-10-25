@@ -177,7 +177,9 @@ def step_given_no_api_key(context: Any) -> None:
 
 @when('I perform a Tinyfish search for "{query}" with limit {limit:d}')
 def step_when_tinyfish_search(context: Any, query: str, limit: int) -> None:
-    request = SearchRequest(query=query, limit=limit)
+    request = SearchRequest(
+        project_id="00000000-0000-4000-8000-0000000000aa", query=query, limit=limit
+    )
     start_time = time.perf_counter()
     try:
         context.search_response = context.loop.run_until_complete(context.adapter.search(request))
@@ -191,7 +193,9 @@ def step_when_tinyfish_search(context: Any, query: str, limit: int) -> None:
 
 @when('I perform a Tinyfish fetch for "{url}" with max {max_chars:d} chars')
 def step_when_tinyfish_fetch(context: Any, url: str, max_chars: int) -> None:
-    request = FetchRequest(url=cast(Any, url), max_chars=max_chars)
+    request = FetchRequest(
+        project_id="00000000-0000-4000-8000-0000000000aa", url=cast(Any, url), max_chars=max_chars
+    )
     start_time = time.perf_counter()
     try:
         context.fetch_response = context.loop.run_until_complete(context.adapter.fetch(request))

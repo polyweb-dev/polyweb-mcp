@@ -44,7 +44,13 @@ from freesearch.models.users import UserRole
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
 from tests.encrypted_secrets_helpers import SENTINEL_PROVIDER_KEYS, assert_no_sentinels
-from tests.fixtures.auth import raw_auth_headers, register_promote_login, temp_email
+from tests.fixtures.auth import (
+    account_id_from_pair,
+    raw_auth_headers,
+    register_promote_login,
+    temp_email,
+)
+from tests.fixtures.execution import seed_execution_project
 from tests.integration.services.oauth.oauth_stubs import install_http_stub
 
 PASSPHRASE = "genuine-proof-passphrase-9f31"
@@ -272,7 +278,11 @@ async def test_canned_wire_shapes_satisfy_genuine_adapters(
                 client, api_key=SecretStr(SENTINEL_PROVIDER_KEYS[provider.value])
             )
             assert adapter.name == provider.value
-            response = await adapter.search(SearchRequest(query="wire proof", limit=3))
+            response = await adapter.search(
+                SearchRequest(
+                    project_id="00000000-0000-4000-8000-0000000000aa", query="wire proof", limit=3
+                )
+            )
             assert response.provider == provider.value
             assert len(response.results) == 1, f"{provider.value} returned no results"
             _assert_key_on_wire(wire, provider, SENTINEL_PROVIDER_KEYS[provider.value])
@@ -306,6 +316,11 @@ async def test_put_then_on_demand_test_constructs_genuine_adapter(
             client, repository, temp_email(f"proof-put-{provider.value}"), UserRole.ADMIN
         )
         headers = raw_auth_headers(pair["access_token"])
+        pid = str(
+            (
+                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+            ).project_id
+        )
         put = client.put(
             f"/api/v1/providers/{provider.value}/secret",
             json={"key": sentinel},
@@ -323,7 +338,9 @@ async def test_put_then_on_demand_test_constructs_genuine_adapter(
             assert disable_tavily.status_code == 200, disable_tavily.text
             # A bare 200 also passes silently keyless: prove keyed use on the wire.
             search = client.post(
-                "/search", json={"query": "keenable keyed proof", "limit": 3}, headers=headers
+                "/search",
+                json={"project_id": pid, "query": "keenable keyed proof", "limit": 3},
+                headers=headers,
             )
     assert probe.status_code == 200, (
         f"genuine {provider.value} on-demand construction failed: {probe.text[:500]}"
@@ -369,6 +386,9 @@ async def test_restart_routes_search_through_encrypted_key(
                 UserRole.ADMIN,
             )
             headers = raw_auth_headers(pair["access_token"])
+            pid = str(
+                (await seed_execution_project(first, user_id=account_id_from_pair(pair))).project_id
+            )
             put = client.put(
                 f"/api/v1/providers/{provider.value}/secret",
                 json={"key": sentinel},
@@ -396,7 +416,9 @@ async def test_restart_routes_search_through_encrypted_key(
         app = create_app(None, repository=second)
         with TestClient(app) as client:
             search = client.post(
-                "/search", json={"query": "restart routing proof", "limit": 3}, headers=headers
+                "/search",
+                json={"project_id": pid, "query": "restart routing proof", "limit": 3},
+                headers=headers,
             )
     finally:
         await second.close()
@@ -435,6 +457,11 @@ async def test_env_key_is_ignored_vault_key_reaches_wire(
             client, repository, temp_email(f"proof-env-{provider.value}"), UserRole.ADMIN
         )
         headers = raw_auth_headers(pair["access_token"])
+        pid = str(
+            (
+                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+            ).project_id
+        )
         put = client.put(
             f"/api/v1/providers/{provider.value}/secret",
             json={"key": vault_sentinel},
@@ -455,7 +482,9 @@ async def test_env_key_is_ignored_vault_key_reaches_wire(
             )
             assert disable.status_code == 200, disable.text
         search = client.post(
-            "/search", json={"query": "env ignored proof", "limit": 3}, headers=headers
+            "/search",
+            json={"project_id": pid, "query": "env ignored proof", "limit": 3},
+            headers=headers,
         )
 
     assert search.status_code == 200, (
@@ -616,10 +645,17 @@ async def test_tavily_402_single_attempt_zero_debit(
             await tracked_call(
                 repository,
                 adapter,
-                lambda running: running.search(SearchRequest(query="q", limit=1)),
+                lambda running: running.search(
+                    SearchRequest(
+                        project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=1
+                    )
+                ),
                 operation=UsageOperation.SEARCH,
-                request=SearchRequest(query="q", limit=1),
+                request=SearchRequest(
+                    project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=1
+                ),
                 limits=service,
+                attribution=await seed_execution_project(repository),
             )
     finally:
         await adapter.aclose()

@@ -32,7 +32,13 @@ from freesearch.models.contracts import (
 )
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
-from tests.fixtures.auth import raw_auth_headers, register_and_login, temp_email
+from tests.fixtures.auth import (
+    account_id_from_pair,
+    raw_auth_headers,
+    register_and_login,
+    temp_email,
+)
+from tests.fixtures.execution import seed_execution_project
 
 
 @pytest.fixture
@@ -140,10 +146,15 @@ async def test_fanout_search_runs_all_providers_in_parallel_and_fuses_results(
     with TestClient(app) as client:
         pair = register_and_login(client, temp_email("fanout-fuse"))
         headers = raw_auth_headers(pair["access_token"])
+        pid = str(
+            (
+                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+            ).project_id
+        )
         # Fanout search with fanout=True
         response = client.post(
             "/search",
-            json={"query": "test query", "fanout": True, "limit": 10},
+            json={"project_id": pid, "query": "test query", "fanout": True, "limit": 10},
             headers=headers,
         )
 
@@ -190,9 +201,14 @@ async def test_fanout_search_via_routing_mode_fanout(
     with TestClient(app) as client:
         pair = register_and_login(client, temp_email("fanout-mode"))
         headers = raw_auth_headers(pair["access_token"])
+        pid = str(
+            (
+                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+            ).project_id
+        )
         response = client.post(
             "/search",
-            json={"query": "query", "routing": {"mode": "fanout"}},
+            json={"project_id": pid, "query": "query", "routing": {"mode": "fanout"}},
             headers=headers,
         )
 
@@ -227,9 +243,14 @@ async def test_fanout_search_tolerates_individual_provider_failure(
     with TestClient(app) as client:
         pair = register_and_login(client, temp_email("fanout-tolerate"))
         headers = raw_auth_headers(pair["access_token"])
+        pid = str(
+            (
+                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+            ).project_id
+        )
         response = client.post(
             "/search",
-            json={"query": "test query", "fanout": True},
+            json={"project_id": pid, "query": "test query", "fanout": True},
             headers=headers,
         )
 
@@ -254,9 +275,14 @@ async def test_fanout_search_when_all_providers_fail_returns_500(
     with TestClient(app) as client:
         pair = register_and_login(client, temp_email("fanout-allfail"))
         headers = raw_auth_headers(pair["access_token"])
+        pid = str(
+            (
+                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+            ).project_id
+        )
         response = client.post(
             "/search",
-            json={"query": "test query", "fanout": True},
+            json={"project_id": pid, "query": "test query", "fanout": True},
             headers=headers,
         )
 
@@ -280,9 +306,14 @@ async def test_fanout_search_without_any_adapter_returns_503(
         )
         pair = register_and_login(client, temp_email("fanout-empty"))
         headers = raw_auth_headers(pair["access_token"])
+        pid = str(
+            (
+                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+            ).project_id
+        )
         response = client.post(
             "/search",
-            json={"query": "test query", "fanout": True},
+            json={"project_id": pid, "query": "test query", "fanout": True},
             headers=headers,
         )
 
@@ -309,9 +340,15 @@ async def test_fanout_search_honors_provider_allow_list(
     with TestClient(app) as client:
         pair = register_and_login(client, temp_email("fanout-allow"))
         headers = raw_auth_headers(pair["access_token"])
+        pid = str(
+            (
+                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+            ).project_id
+        )
         response = client.post(
             "/search",
             json={
+                "project_id": pid,
                 "query": "allow-list query",
                 "fanout": True,
                 "routing": {"mode": "fanout", "providers": ["p1"]},
@@ -346,9 +383,15 @@ async def test_single_provider_require_does_not_fanout(
     with TestClient(app) as client:
         pair = register_and_login(client, temp_email("fanout-require"))
         headers = raw_auth_headers(pair["access_token"])
+        pid = str(
+            (
+                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+            ).project_id
+        )
         response = client.post(
             "/search",
             json={
+                "project_id": pid,
                 "query": "explicit provider query",
                 "routing": {"mode": "require", "providers": ["p2"]},
             },
@@ -383,9 +426,14 @@ async def test_fanout_search_returns_waterfall_and_records_activity_telemetry(
     with TestClient(app) as client:
         pair = register_and_login(client, temp_email("fanout-water"))
         headers = raw_auth_headers(pair["access_token"])
+        pid = str(
+            (
+                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+            ).project_id
+        )
         response = client.post(
             "/search",
-            json={"query": "waterfall trace query", "fanout": True},
+            json={"project_id": pid, "query": "waterfall trace query", "fanout": True},
             headers=headers,
         )
 
@@ -439,8 +487,15 @@ async def test_fanout_trace_has_sibling_providers_and_partial_outcome(
     with TestClient(app) as client:
         pair = register_and_login(client, temp_email("fanout-partial"))
         headers = raw_auth_headers(pair["access_token"])
+        pid = str(
+            (
+                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+            ).project_id
+        )
         response = client.post(
-            "/search", json={"query": "partial query", "fanout": True}, headers=headers
+            "/search",
+            json={"project_id": pid, "query": "partial query", "fanout": True},
+            headers=headers,
         )
         assert response.status_code == 200
         trace_id = _trace_id_of(response)
@@ -483,8 +538,15 @@ async def test_fanout_success_trace_has_one_root_and_two_provider_children(
     with TestClient(app) as client:
         pair = register_and_login(client, temp_email("fanout-ok"))
         headers = raw_auth_headers(pair["access_token"])
+        pid = str(
+            (
+                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+            ).project_id
+        )
         response = client.post(
-            "/search", json={"query": "fanout query", "fanout": True}, headers=headers
+            "/search",
+            json={"project_id": pid, "query": "fanout query", "fanout": True},
+            headers=headers,
         )
         assert response.status_code == 200
         assert response.json()["provider"] == "aggregated"
@@ -510,8 +572,15 @@ async def test_fanout_all_fail_writes_error_trace_without_results(
     with TestClient(app) as client:
         pair = register_and_login(client, temp_email("fanout-doom"))
         headers = raw_auth_headers(pair["access_token"])
+        pid = str(
+            (
+                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+            ).project_id
+        )
         response = client.post(
-            "/search", json={"query": "doomed query", "fanout": True}, headers=headers
+            "/search",
+            json={"project_id": pid, "query": "doomed query", "fanout": True},
+            headers=headers,
         )
         assert response.status_code == 500
         trace_id = _trace_id_of(response)
@@ -545,8 +614,15 @@ async def test_fanout_excludes_search_off_provider_without_call(
     with TestClient(app) as client:
         pair = register_and_login(client, temp_email("fanout-scope"))
         headers = raw_auth_headers(pair["access_token"])
+        pid = str(
+            (
+                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+            ).project_id
+        )
         response = client.post(
-            "/search", json={"query": "fanout scope", "fanout": True}, headers=headers
+            "/search",
+            json={"project_id": pid, "query": "fanout scope", "fanout": True},
+            headers=headers,
         )
 
     assert response.status_code == 200
@@ -579,8 +655,15 @@ async def test_fanout_with_no_eligible_candidate_returns_503(
     with TestClient(app) as client:
         pair = register_and_login(client, temp_email("fanout-nocand"))
         headers = raw_auth_headers(pair["access_token"])
+        pid = str(
+            (
+                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+            ).project_id
+        )
         response = client.post(
-            "/search", json={"query": "no candidate", "fanout": True}, headers=headers
+            "/search",
+            json={"project_id": pid, "query": "no candidate", "fanout": True},
+            headers=headers,
         )
 
     assert response.status_code == 503
@@ -637,9 +720,15 @@ async def test_pinned_fanout_reads_only_subset(
             with TestClient(app) as client:
                 pair = register_and_login(client, temp_email("fanout-pinned"))
                 headers = raw_auth_headers(pair["access_token"])
+                pid = str(
+                    (
+                        await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+                    ).project_id
+                )
                 response = client.post(
                     "/search",
                     json={
+                        "project_id": pid,
                         "query": "pinned subset",
                         "fanout": True,
                         "routing": {"mode": "fanout", "providers": ["p1", "p2"]},
@@ -690,8 +779,15 @@ async def test_fanout_partial_failure_detailed_contract(
         with TestClient(app) as client:
             pair = register_and_login(client, temp_email("fanout-partial2"))
             headers = raw_auth_headers(pair["access_token"])
+            pid = str(
+                (
+                    await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+                ).project_id
+            )
             response = client.post(
-                "/search", json={"query": "partial query", "fanout": True}, headers=headers
+                "/search",
+                json={"project_id": pid, "query": "partial query", "fanout": True},
+                headers=headers,
             )
             assert response.status_code == 200
             data = response.json()
@@ -747,8 +843,15 @@ async def test_fanout_all_fail_first_error_deterministic(
         with TestClient(app) as client:
             pair = register_and_login(client, temp_email("fanout-doom2"))
             headers = raw_auth_headers(pair["access_token"])
+            pid = str(
+                (
+                    await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+                ).project_id
+            )
             response = client.post(
-                "/search", json={"query": "doomed query", "fanout": True}, headers=headers
+                "/search",
+                json={"project_id": pid, "query": "doomed query", "fanout": True},
+                headers=headers,
             )
             assert response.status_code == 500
             detail_text = response.json()["detail"]

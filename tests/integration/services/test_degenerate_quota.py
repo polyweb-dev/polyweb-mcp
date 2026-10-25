@@ -252,7 +252,10 @@ class TestDegenerateReadPaths:
             )
         }
         candidates = select_route(
-            SearchRequest(query="routing probe"), [_SearchAdapter()], health, {"brave": view}
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="routing probe"),
+            [_SearchAdapter()],
+            health,
+            {"brave": view},
         )
         names = [c.adapter.name for c in candidates]
         assert names == ["brave"], (
@@ -280,7 +283,10 @@ class TestDegenerateReadPaths:
             )
         }
         candidates = select_route(
-            SearchRequest(query="routing probe"), [_SearchAdapter()], health, {"brave": view}
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="routing probe"),
+            [_SearchAdapter()],
+            health,
+            {"brave": view},
         )
         assert [c.adapter.name for c in candidates] == [], (
             "S4/AC-6: genuine remaining=0 with limit>0 must steer routing away"

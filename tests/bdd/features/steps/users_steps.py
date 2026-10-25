@@ -45,6 +45,7 @@ from freesearch.persistence.storage import SQLiteRepository
 from freesearch.persistence.users import UserDatabase, UserRow, local_password_hash
 from freesearch.routers.api import create_app
 from tests.fixtures.auth import configure_bdd_secret
+from tests.fixtures.execution import bdd_project_id
 
 _TEST_PASSWORD = "StrongPass123!x-UsersBDD"
 
@@ -421,7 +422,10 @@ def step_when_users_search(context: Any) -> None:
         token = logged_in.json()["access_token"]
         context.search_response = client.post(
             "/search",
-            json={"query": "local accounts"},
+            json={
+                "project_id": bdd_project_id(context, {"Authorization": f"Bearer {token}"}),
+                "query": "local accounts",
+            },
             headers={"Authorization": f"Bearer {token}"},
         )
 
@@ -768,10 +772,10 @@ def step_when_auth_anonymous_provider_operations(context: Any) -> None:
         context.anonymous_fetch = client.post("/fetch", json={"url": "https://example.com/public"})
 
 
-@then("both provider operations should succeed")
+@then("both provider operations should be rejected with 401")
 def step_then_auth_anonymous_provider_operations(context: Any) -> None:
-    assert context.anonymous_search.status_code == 200
-    assert context.anonymous_fetch.status_code == 200
+    assert context.anonymous_search.status_code == 401
+    assert context.anonymous_fetch.status_code == 401
 
 
 @then("the call should fail with HTTP 401 and a Bearer challenge")
@@ -786,7 +790,10 @@ def step_when_auth_misplaced_credentials(context: Any) -> None:
     with _auth_client(context) as client:
         context.misplaced_search = client.post(
             "/search",
-            json={"query": "misplaced probe"},
+            json={
+                "project_id": "00000000-0000-4000-8000-0000000000aa",
+                "query": "misplaced probe",
+            },
             headers={"Authorization": f"Bearer {pair['refresh_token']}"},
         )
         context.misplaced_refresh = client.post(
@@ -882,7 +889,10 @@ def step_then_matrix_agent_search(context: Any) -> None:
     with _auth_client(context) as client:
         response = client.post(
             "/search",
-            json={"query": "matrix probe"},
+            json={
+                "project_id": bdd_project_id(context, _role_headers(context)),
+                "query": "matrix probe",
+            },
             headers=_role_headers(context, "agent"),
         )
         assert response.status_code == 200

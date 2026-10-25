@@ -279,10 +279,12 @@ _HEAD_COLUMNS: dict[str, frozenset[str]] = {
     **_SETTINGS_TABLE_COLUMNS,
     **_CREDENTIAL_TABLE_COLUMNS,
     "usage_events": _CORE_COLUMNS["usage_events"]
-    | frozenset({"latency_ms", "status", "unit_kind"}),
+    | frozenset(
+        {"latency_ms", "status", "unit_kind", "project_id", "actor_type", "actor_id", "trace_id"}
+    ),
     "quota_snapshots": _CORE_COLUMNS["quota_snapshots"]
     | frozenset({"unit_kind", "display_unit", "metadata"}),
-    "trace_spans": _TRACE_SPAN_COLUMNS,
+    "trace_spans": _TRACE_SPAN_COLUMNS | frozenset({"project_id", "actor_type", "actor_id"}),
     "user": frozenset(
         {
             "id",
@@ -330,6 +332,8 @@ _HEAD_INDEXES = frozenset(
         "provider_credentials_live_label_key",
         "ix_provider_credentials_owner_project_id",
         "ix_credential_project_grants_project_id",
+        "usage_events_project_observed_at",
+        "trace_spans_project_root_started_at",
     }
 )
 _LOCK_TIMEOUT_SECONDS = 30.0
@@ -368,6 +372,8 @@ _HEAD_FOREIGN_KEYS: dict[str, frozenset[tuple[str, str]]] = {
             ("granted_by", "user"),
         }
     ),
+    "usage_events": frozenset({("project_id", "projects")}),
+    "trace_spans": frozenset({("project_id", "projects")}),
 }
 
 

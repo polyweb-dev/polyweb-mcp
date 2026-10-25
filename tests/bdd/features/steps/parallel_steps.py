@@ -32,7 +32,9 @@ def step_given_parallel_adapter(context: Any) -> None:
 @when('I perform a live Parallel search for "{query}" with limit {limit:d}')
 def step_when_parallel_search(context: Any, query: str, limit: int) -> None:
     """Execute a live search request through the Parallel adapter."""
-    request = SearchRequest(query=query, limit=limit)
+    request = SearchRequest(
+        project_id="00000000-0000-4000-8000-0000000000aa", query=query, limit=limit
+    )
     context.search_response = context.loop.run_until_complete(context.adapter.search(request))
 
 
@@ -63,7 +65,9 @@ def step_then_parallel_search_usage(context: Any) -> None:
 @when('I perform a live Parallel fetch for "{url}" with max {max_chars:d} chars')
 def step_when_parallel_fetch(context: Any, url: str, max_chars: int) -> None:
     """Execute a live content extraction request through the Parallel adapter."""
-    request = FetchRequest(url=HttpUrl(url), max_chars=max_chars)
+    request = FetchRequest(
+        project_id="00000000-0000-4000-8000-0000000000aa", url=HttpUrl(url), max_chars=max_chars
+    )
     context.fetch_url = str(request.url)
     context.fetch_response = context.loop.run_until_complete(context.adapter.fetch(request))
 

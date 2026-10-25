@@ -43,7 +43,9 @@ async def test_capability_quota_enabled_and_price_matches_estimate() -> None:
     adapter = YoucomAdapter(caller, runner=runner, api_key=SecretStr(_TEST_KEY))
     try:
         assert adapter.capabilities.quota is True
-        estimate = await adapter.estimate_cost(SearchRequest(query="price"))
+        estimate = await adapter.estimate_cost(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="price")
+        )
         snapshot = await adapter.quota()
     finally:
         await adapter.aclose()

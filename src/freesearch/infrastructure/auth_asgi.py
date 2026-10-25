@@ -6,9 +6,8 @@ module never imports the service layer.
 
 Policy (PLAN P3):
 
-* Registration, login, documentation, Search, and Fetch are public exceptions.
-  Search and Fetch permit a missing credential but verify any supplied Bearer
-  token. Every other path, including unknown paths, requires a credential.
+* Registration, login, and documentation are public exceptions. Every other
+  path, including Search, Fetch, and unknown paths, requires a credential.
 * ``POST /auth/jwt/refresh`` is validated by the refresh-credential callback when
   one is injected. Every other protected surface uses the access verifier, so the
   refresh credential is rejected everywhere except that one route.
@@ -63,19 +62,21 @@ PUBLIC_ROUTES: frozenset[tuple[str, str]] = frozenset(
     {
         ("POST", "/auth/register"),
         ("POST", "/auth/jwt/login"),
-        ("POST", "/search"),
-        ("POST", "/fetch"),
         ("GET", "/docs"),
         ("GET", "/redoc"),
         ("GET", "/openapi.json"),
     }
 )
 
-#: Search and Fetch accept anonymous requests. When a Bearer token is present,
-#: it must be valid and its principal is made available to downstream tracing.
-OPTIONAL_AUTH_ROUTES: frozenset[tuple[str, str]] = frozenset(
-    {("POST", "/search"), ("POST", "/fetch")}
-)
+#: Authenticated provider-execution routes whose JSON bodies may carry the
+#: larger provider-options payload.
+OPERATION_ROUTES: frozenset[tuple[str, str]] = frozenset({("POST", "/search"), ("POST", "/fetch")})
+
+#: Routes that accept anonymous requests while still verifying any supplied
+#: Bearer credential. The API composition leaves this set empty; the MCP
+#: transport supplies its own Streamable HTTP routes so anonymous JSON-RPC
+#: dispatch reaches the tool-level principal check.
+OPTIONAL_AUTH_ROUTES: frozenset[tuple[str, str]] = frozenset()
 
 #: Streamable HTTP requests can carry the provider options object, which is
 #: larger than the small registration and login payloads.
@@ -259,9 +260,9 @@ async def _capped_body(receive: Receive, limit: int) -> Receive | None:
 class BearerAuthMiddleware:
     """Guard HTTP surfaces and allow anonymous calls on explicit public routes.
 
-    The default public set includes authentication/docs routes and provider
-    Search/Fetch. Search/Fetch accept an absent credential; a supplied Bearer
-    credential must still verify. The MCP composition supplies its own public
+    The default public set is authentication/docs routes only; provider
+    Search/Fetch require a verified Bearer credential and keep the larger
+    provider-options body cap. The MCP composition supplies its own public
     Streamable HTTP routes.
 
     ``browser_origins`` is empty by default, so this guard accepts no cookie
@@ -355,8 +356,13 @@ class BearerAuthMiddleware:
             await _reject_unauthorized(send)
             return
         store_principal(scope, principal)
+        body_limit: int | None = None
         if (method, path) == PROVISION_ROUTE:
-            replay = await _capped_body(receive, MAX_PUBLIC_AUTH_BODY_BYTES)
+            body_limit = MAX_PUBLIC_AUTH_BODY_BYTES
+        elif (method, path) in OPERATION_ROUTES:
+            body_limit = MAX_PUBLIC_OPERATION_BODY_BYTES
+        if body_limit is not None:
+            replay = await _capped_body(receive, body_limit)
             if replay is None:
                 await _reject_too_large(send)
                 return
@@ -497,6 +503,7 @@ class BearerAuthMiddleware:
 __all__ = [
     "MAX_PUBLIC_AUTH_BODY_BYTES",
     "MAX_PUBLIC_OPERATION_BODY_BYTES",
+    "OPERATION_ROUTES",
     "OPTIONAL_AUTH_ROUTES",
     "PROVISION_ROUTE",
     "PUBLIC_ROUTES",

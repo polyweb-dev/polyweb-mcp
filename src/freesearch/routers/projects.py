@@ -20,6 +20,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
 
 from freesearch.models.projects import (
+    ProjectAccessRead,
     ProjectCreate,
     ProjectMemberAdd,
     ProjectMemberRead,
@@ -27,6 +28,7 @@ from freesearch.models.projects import (
     ProjectMemberUpdate,
     ProjectRead,
     RoleAssignmentRead,
+    SystemAccessRead,
 )
 from freesearch.models.users import UserPrincipal
 from freesearch.routers.auth import UserRead, current_principal
@@ -140,6 +142,19 @@ def register_project_routes(app: FastAPI) -> None:
         return await _project_service(request).archive_project(principal, project_id)
 
     @app.get(
+        "/api/v1/projects/{project_id}/access",
+        response_model=ProjectAccessRead,
+    )
+    async def read_project_access(
+        request: Request,
+        principal: _Principal,
+        project_id: UUID,
+    ) -> ProjectAccessRead:
+        """Return the caller's live permissions and role keys for one project."""
+
+        return await _project_service(request).project_access(principal, project_id)
+
+    @app.get(
         "/api/v1/projects/{project_id}/members",
         response_model=list[ProjectMemberRead],
     )
@@ -241,6 +256,15 @@ def register_project_routes(app: FastAPI) -> None:
 
         await _project_service(request).remove_role(principal, project_id, user_id, role_key)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    @app.get("/api/v1/system/access", response_model=SystemAccessRead)
+    async def read_system_access(
+        request: Request,
+        principal: _Principal,
+    ) -> SystemAccessRead:
+        """Return the caller's live system-scope effective permissions."""
+
+        return await _project_service(request).system_access(principal)
 
     @app.post(
         "/api/v1/users/{user_id}/deactivate",

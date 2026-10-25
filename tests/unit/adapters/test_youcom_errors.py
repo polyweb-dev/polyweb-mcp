@@ -35,7 +35,9 @@ async def test_status_mapping_is_provider_neutral_and_nonretryable(status: int, 
     recorder = _WireRecorder(responses=[httpx.Response(status, json={"error": "x"})])
     async with _wired(recorder) as adapter:
         with pytest.raises(ProviderOperationError) as excinfo:
-            await adapter.search(SearchRequest(query="status"))
+            await adapter.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="status")
+            )
 
     assert len(recorder.requests) == 1  # non-retryable: no runner retries
     assert excinfo.value.error.provider == "you"
@@ -55,7 +57,9 @@ async def test_status_error_message_is_fixed_and_redacts_secret_payloads() -> No
     )
     async with _wired(recorder) as adapter:
         with pytest.raises(ProviderOperationError) as excinfo:
-            await adapter.search(SearchRequest(query="leak"))
+            await adapter.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="leak")
+            )
 
     error = excinfo.value
     assert error.error.code == "invalid_api_key"
@@ -68,7 +72,9 @@ async def test_retryable_5xx_retried_inside_runner_then_http_error() -> None:
     sleeper = _FakeSleeper()
     async with _wired(recorder, sleeper=sleeper) as adapter:
         with pytest.raises(ProviderOperationError) as excinfo:
-            await adapter.search(SearchRequest(query="retry"))
+            await adapter.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="retry")
+            )
 
     # Three attempts happen inside one runner.run, then the retryable error
     # surfaces unchanged (only 429 is remapped to rate_limited).
@@ -88,7 +94,9 @@ async def test_429_retry_after_backoff_then_success() -> None:
     )
     sleeper = _FakeSleeper()
     async with _wired(recorder, sleeper=sleeper) as adapter:
-        response = await adapter.search(SearchRequest(query="retry"))
+        response = await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="retry")
+        )
 
     assert response.query == "retry"
     assert len(recorder.requests) == 2
@@ -102,7 +110,9 @@ async def test_429_exhausting_retries_is_remapped_to_rate_limited() -> None:
     sleeper = _FakeSleeper()
     async with _wired(recorder, sleeper=sleeper) as adapter:
         with pytest.raises(ProviderOperationError) as excinfo:
-            await adapter.search(SearchRequest(query="retry"))
+            await adapter.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="retry")
+            )
 
     assert len(recorder.requests) == 3
     assert sleeper.sleeps == [7.0, 7.0]

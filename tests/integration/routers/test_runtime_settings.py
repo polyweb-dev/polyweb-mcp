@@ -22,7 +22,13 @@ from freesearch.models.users import UserRole
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
 from tests.conftest import FakeAdapter
-from tests.fixtures.auth import raw_auth_headers, register_promote_login, temp_email
+from tests.fixtures.auth import (
+    account_id_from_pair,
+    raw_auth_headers,
+    register_promote_login,
+    temp_email,
+)
+from tests.fixtures.execution import seed_execution_project
 
 CANONICAL_ALPHA_ORDER = [
     "brave",
@@ -190,7 +196,14 @@ async def test_locked_reconcile_write_keeps_strict_search_at_200(
                 client, repository, temp_email("runtime-locked"), UserRole.ADMIN
             )
             headers = raw_auth_headers(pair["access_token"])
-            search = client.post("/search", json={"query": "locked write"}, headers=headers)
+            pid = str(
+                (
+                    await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+                ).project_id
+            )
+            search = client.post(
+                "/search", json={"project_id": pid, "query": "locked write"}, headers=headers
+            )
             item = client.get("/api/v1/providers/exa", headers=headers)
 
         assert search.status_code == 200
@@ -273,9 +286,16 @@ async def test_corrupt_persisted_provider_config_falls_back_to_defaults_without_
                 client, repository, temp_email("runtime-corrupt"), UserRole.ADMIN
             )
             headers = raw_auth_headers(pair["access_token"])
+            pid = str(
+                (
+                    await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+                ).project_id
+            )
             item = client.get("/api/v1/providers/exa", headers=headers)
             listing = client.get("/api/v1/providers", headers=headers)
-            search = client.post("/search", json={"query": "corrupt settings"}, headers=headers)
+            search = client.post(
+                "/search", json={"project_id": pid, "query": "corrupt settings"}, headers=headers
+            )
 
         assert item.status_code == 200
         assert item.json()["enabled"] is True
@@ -319,7 +339,7 @@ async def test_invalid_non_access_field_preserves_valid_stored_access(
 
 @pytest.mark.asyncio
 async def test_legacy_usage_table_is_upgraded_additively_on_open(tmp_path: Path) -> None:
-    """AC-8/AC-10: opening a legacy usage table preserves rows and defaults fields."""
+    """AC-8/AC-10: a legacy usage table is recreated empty with project ownership columns."""
     database = tmp_path / "legacy.db"
     with sqlite3.connect(database) as connection:
         connection.execute(
@@ -346,24 +366,14 @@ async def test_legacy_usage_table_is_upgraded_additively_on_open(tmp_path: Path)
 
     repository = await SQLiteRepository.open(database)
     try:
-        events = await repository.list_usage()
-        assert events == [
-            UsageEvent(
-                provider="exa",
-                operation=UsageOperation.SEARCH,
-                units=Decimal("1"),
-                observed_at=datetime(2026, 1, 1, tzinfo=UTC),
-                request_id=None,
-                metadata={},
-                latency_ms=None,
-                status=UsageStatus.SUCCESS,
-            )
-        ]
+        # P04 alpha: the migration recreates usage_events empty — legacy rows
+        # are dropped rather than backfilled with synthetic ownership.
+        assert await repository.list_usage() == []
 
         async with repository._engine.connect() as connection:
             columns = await connection.exec_driver_sql("PRAGMA table_info(usage_events)")
             names = {row[1] for row in columns.fetchall()}
-        assert {"latency_ms", "status"} <= names
+        assert {"latency_ms", "status", "project_id", "actor_type", "actor_id", "trace_id"} <= names
     finally:
         await repository.close()
 
@@ -388,7 +398,8 @@ async def test_provider_latency_p95_uses_nearest_rank_over_last_100_non_null(
                     observed_at=start + timedelta(seconds=latency),
                     latency_ms=latency,
                     status=UsageStatus.SUCCESS,
-                )
+                ),
+                attribution=await seed_execution_project(repository),
             )
         # The newest row has no latency and must not displace a non-null sample.
         await repository.record_usage(
@@ -399,7 +410,8 @@ async def test_provider_latency_p95_uses_nearest_rank_over_last_100_non_null(
                 observed_at=start + timedelta(seconds=1_000),
                 latency_ms=None,
                 status=UsageStatus.SUCCESS,
-            )
+            ),
+            attribution=await seed_execution_project(repository),
         )
 
         app = create_app([], repository=repository)
@@ -456,7 +468,8 @@ async def test_legacy_recent_usage_projection_has_new_fields_with_compatibility_
                 observed_at=datetime(2026, 1, 1, tzinfo=UTC),
                 latency_ms=None,
                 status=UsageStatus.SUCCESS,
-            )
+            ),
+            attribution=await seed_execution_project(repository),
         )
         app = create_app([], repository=repository)
         with TestClient(app) as client:

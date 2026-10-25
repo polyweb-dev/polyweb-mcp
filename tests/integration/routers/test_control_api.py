@@ -53,6 +53,7 @@ from tests.fixtures.auth import (
     register_promote_login,
     temp_email,
 )
+from tests.fixtures.execution import seed_execution_project
 
 
 class AsyncVaultDouble:
@@ -868,10 +869,19 @@ async def test_secret_delete_ejects_adapter_and_disables_routing(
             client, repository, temp_email("control-eject"), UserRole.ADMIN
         )
         headers = raw_auth_headers(pair["access_token"])
+        pid = str(
+            (
+                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+            ).project_id
+        )
         assert any(r.name == "exa" for r in app.state._routes)
         search_res = client.post(
             "/search",
-            json={"query": "test query", "routing": {"mode": "require", "providers": ["exa"]}},
+            json={
+                "project_id": pid,
+                "query": "test query",
+                "routing": {"mode": "require", "providers": ["exa"]},
+            },
             headers=headers,
         )
         assert search_res.status_code == 200
@@ -884,7 +894,11 @@ async def test_secret_delete_ejects_adapter_and_disables_routing(
 
         post_delete_search = client.post(
             "/search",
-            json={"query": "test query", "routing": {"mode": "require", "providers": ["exa"]}},
+            json={
+                "project_id": pid,
+                "query": "test query",
+                "routing": {"mode": "require", "providers": ["exa"]},
+            },
             headers=headers,
         )
         assert post_delete_search.status_code == 503
@@ -1120,6 +1134,11 @@ async def test_free_first_pins_keenable_in_status_and_search_order(
             client, repository, temp_email("control-free"), UserRole.ADMIN
         )
         headers = raw_auth_headers(pair["access_token"])
+        pid = str(
+            (
+                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+            ).project_id
+        )
         configured = client.put(
             "/api/v1/routing/config",
             json={
@@ -1130,7 +1149,9 @@ async def test_free_first_pins_keenable_in_status_and_search_order(
             headers=headers,
         )
         providers = client.get("/api/v1/providers", headers=headers)
-        search = client.post("/search", json={"query": "free-first"}, headers=headers)
+        search = client.post(
+            "/search", json={"project_id": pid, "query": "free-first"}, headers=headers
+        )
 
     assert configured.status_code == 200
     assert providers.status_code == 200
@@ -1157,6 +1178,11 @@ async def test_first_only_does_not_fallback_after_primary_failure(
             client, repository, temp_email("control-first"), UserRole.ADMIN
         )
         headers = raw_auth_headers(pair["access_token"])
+        pid = str(
+            (
+                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+            ).project_id
+        )
         policy = client.put(
             "/api/v1/routing/config",
             json={
@@ -1166,7 +1192,9 @@ async def test_first_only_does_not_fallback_after_primary_failure(
             },
             headers=headers,
         )
-        response = client.post("/search", json={"query": "no fallback"}, headers=headers)
+        response = client.post(
+            "/search", json={"project_id": pid, "query": "no fallback"}, headers=headers
+        )
 
     assert policy.status_code == 200
     assert response.status_code == 500
@@ -1192,7 +1220,14 @@ async def test_search_filters_a_constructed_provider_persisted_disabled(
     with TestClient(app) as client:
         pair = register_and_login(client, temp_email("control-disabled"))
         headers = raw_auth_headers(pair["access_token"])
-        response = client.post("/search", json={"query": "skip disabled"}, headers=headers)
+        pid = str(
+            (
+                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+            ).project_id
+        )
+        response = client.post(
+            "/search", json={"project_id": pid, "query": "skip disabled"}, headers=headers
+        )
 
     assert response.status_code == 200
     assert response.json()["provider"] == "brave"
@@ -1219,7 +1254,14 @@ async def test_search_filters_provider_with_global_mask_off(
     with TestClient(app) as client:
         pair = register_and_login(client, temp_email("control-mask-off"))
         headers = raw_auth_headers(pair["access_token"])
-        response = client.post("/search", json={"query": "skip mask-off"}, headers=headers)
+        pid = str(
+            (
+                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+            ).project_id
+        )
+        response = client.post(
+            "/search", json={"project_id": pid, "query": "skip mask-off"}, headers=headers
+        )
 
     assert response.status_code == 200
     assert response.json()["provider"] == "brave"
@@ -1248,8 +1290,15 @@ async def test_search_filters_provider_with_search_bit_off_keeps_fetch_eligible(
             client, repository, temp_email("control-search-off"), UserRole.ADMIN
         )
         headers = raw_auth_headers(pair["access_token"])
+        pid = str(
+            (
+                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+            ).project_id
+        )
         status = client.get("/api/v1/providers/exa", headers=headers)
-        response = client.post("/search", json={"query": "search bit off"}, headers=headers)
+        response = client.post(
+            "/search", json={"project_id": pid, "query": "search bit off"}, headers=headers
+        )
 
     assert status.status_code == 200
     assert status.json()["enable_mask"] == 5
@@ -1274,7 +1323,14 @@ async def test_rest_and_mcp_success_record_latency_and_success_status(
     with TestClient(rest_app) as client:
         pair = register_and_login(client, temp_email("control-telemetry"))
         headers = raw_auth_headers(pair["access_token"])
-        rest_response = client.post("/search", json={"query": "telemetry"}, headers=headers)
+        pid = str(
+            (
+                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+            ).project_id
+        )
+        rest_response = client.post(
+            "/search", json={"project_id": pid, "query": "telemetry"}, headers=headers
+        )
     # The MCP tool reuses the same access JWT through the explicit stdio seam.
     server = create_server(
         [mcp_adapter],
@@ -1282,7 +1338,9 @@ async def test_rest_and_mcp_success_record_latency_and_success_status(
         auth_service=http_jwt_service(repository),
         stdio_token=SecretStr(pair["access_token"]),
     )
-    mcp_result = await server.call_tool("search", {"request": {"query": "telemetry"}})
+    mcp_result = await server.call_tool(
+        "search", {"request": {"project_id": pid, "query": "telemetry"}}
+    )
 
     assert rest_response.status_code == 200
     assert rest_response.json()["provider"] == "exa"
@@ -1307,7 +1365,14 @@ async def test_success_without_usage_writes_no_usage_row(
     with TestClient(app) as client:
         pair = register_and_login(client, temp_email("control-nousage"))
         headers = raw_auth_headers(pair["access_token"])
-        response = client.post("/search", json={"query": "no usage"}, headers=headers)
+        pid = str(
+            (
+                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+            ).project_id
+        )
+        response = client.post(
+            "/search", json={"project_id": pid, "query": "no usage"}, headers=headers
+        )
 
     assert response.status_code == 200
     assert await repository.list_usage() == []
@@ -1328,7 +1393,14 @@ async def test_failure_records_zero_unit_failure_usage_and_degraded_health(
             client, repository, temp_email("control-fail"), UserRole.ADMIN
         )
         headers = raw_auth_headers(pair["access_token"])
-        response = client.post("/search", json={"query": "failure"}, headers=headers)
+        pid = str(
+            (
+                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+            ).project_id
+        )
+        response = client.post(
+            "/search", json={"project_id": pid, "query": "failure"}, headers=headers
+        )
         stats = client.get("/stats", headers=headers)
         dashboard = client.get("/dashboard", headers=headers)
 

@@ -25,6 +25,7 @@ from typing import Any
 
 import httpx
 import pytest
+from pydantic import SecretStr
 from sqlalchemy import event as sa_event
 
 from freesearch.adapters.base import ProviderAdapter
@@ -52,6 +53,8 @@ from freesearch.routers.control import (
     routing_policy,
 )
 from freesearch.services.monitoring import clear_quota_poll_cache
+from tests.fixtures.auth import TEMP_PASSWORD, mcp_account_token, temp_email
+from tests.fixtures.execution import seed_member_project, seed_token_project
 
 SEVEN_PROVIDERS = ["exa", "firecrawl", "tavily", "parallel", "you", "brave", "keenable"]
 
@@ -222,8 +225,15 @@ def _attach_select_counter(
     return _detach
 
 
-def _search_payload(mode: str, providers: list[str] | None, fanout: bool = False) -> dict[str, Any]:
+def _search_payload(
+    mode: str,
+    providers: list[str] | None,
+    fanout: bool = False,
+    project_id: str | None = None,
+) -> dict[str, Any]:
     payload: dict[str, Any] = {"query": SEARCH_QUERY}
+    if project_id is not None:
+        payload["project_id"] = project_id
     if mode != "auto":
         payload["routing"] = {"mode": mode, "providers": providers or []}
     if fanout:
@@ -231,8 +241,12 @@ def _search_payload(mode: str, providers: list[str] | None, fanout: bool = False
     return payload
 
 
-def _fetch_payload(mode: str, providers: list[str] | None) -> dict[str, Any]:
+def _fetch_payload(
+    mode: str, providers: list[str] | None, project_id: str | None = None
+) -> dict[str, Any]:
     payload: dict[str, Any] = {"url": FETCH_URL}
+    if project_id is not None:
+        payload["project_id"] = project_id
     if mode != "auto":
         payload["routing"] = {"mode": mode, "providers": providers or []}
     return payload
@@ -655,19 +669,39 @@ async def test_rest_search_latency(tmp_path: Path, latency_rows: list[dict[str, 
         commit = _git_commit()
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            email = temp_email("latency-rest")
+            registered = await client.post(
+                "/auth/register", json={"email": email, "password": TEMP_PASSWORD}
+            )
+            assert registered.status_code == 201
+            logged_in = await client.post(
+                "/auth/jwt/login", data={"username": email, "password": TEMP_PASSWORD}
+            )
+            assert logged_in.status_code == 200
+            headers = {"Authorization": f"Bearer {logged_in.json()['access_token']}"}
+            pid = str((await seed_member_project(repository, headers)).project_id)
 
             async def _require_search() -> None:
-                response = await client.post("/search", json=_search_payload("require", ["exa"]))
+                response = await client.post(
+                    "/search",
+                    json=_search_payload("require", ["exa"], project_id=pid),
+                    headers=headers,
+                )
                 response.raise_for_status()
 
             async def _auto_search() -> None:
-                response = await client.post("/search", json=_search_payload("auto", None))
+                response = await client.post(
+                    "/search",
+                    json=_search_payload("auto", None, project_id=pid),
+                    headers=headers,
+                )
                 response.raise_for_status()
 
             async def _fanout_search() -> None:
                 response = await client.post(
                     "/search",
-                    json=_search_payload("fanout", ["exa", "tavily"], fanout=True),
+                    json=_search_payload("fanout", ["exa", "tavily"], fanout=True, project_id=pid),
+                    headers=headers,
                 )
                 response.raise_for_status()
 
@@ -727,19 +761,35 @@ async def test_mcp_search_latency(tmp_path: Path, latency_rows: list[dict[str, A
         detach = _attach_select_counter(repository, selects)
         measured_selects = selects if detach is not None else None
         adapters = [_OfflineAdapter(name) for name in SEVEN_PROVIDERS]
-        server = create_server(adapters, repository=repository)
+        service, token, _email = await mcp_account_token(repository, "latency-mcp")
+        server = create_server(
+            adapters,
+            repository=repository,
+            auth_service=service,
+            stdio_token=SecretStr(token.get_secret_value()),
+        )
+        pid = str((await seed_token_project(repository, token)).project_id)
         commit = _git_commit()
 
         async def _require_search() -> None:
-            await server.call_tool("search", {"request": _search_payload("require", ["exa"])})
+            await server.call_tool(
+                "search",
+                {"request": _search_payload("require", ["exa"], project_id=pid)},
+            )
 
         async def _auto_search() -> None:
-            await server.call_tool("search", {"request": _search_payload("auto", None)})
+            await server.call_tool(
+                "search", {"request": _search_payload("auto", None, project_id=pid)}
+            )
 
         async def _fanout_search() -> None:
             await server.call_tool(
                 "search",
-                {"request": _search_payload("fanout", ["exa", "tavily"], fanout=True)},
+                {
+                    "request": _search_payload(
+                        "fanout", ["exa", "tavily"], fanout=True, project_id=pid
+                    )
+                },
             )
 
         await _run_mix(
@@ -798,14 +848,26 @@ async def test_mcp_fetch_latency(tmp_path: Path, latency_rows: list[dict[str, An
         detach = _attach_select_counter(repository, selects)
         measured_selects = selects if detach is not None else None
         adapters = [_OfflineAdapter(name) for name in SEVEN_PROVIDERS]
-        server = create_server(adapters, repository=repository)
+        service, token, _email = await mcp_account_token(repository, "latency-mcp-fetch")
+        server = create_server(
+            adapters,
+            repository=repository,
+            auth_service=service,
+            stdio_token=SecretStr(token.get_secret_value()),
+        )
+        pid = str((await seed_token_project(repository, token)).project_id)
         commit = _git_commit()
 
         async def _require_fetch() -> None:
-            await server.call_tool("fetch", {"request": _fetch_payload("require", ["exa"])})
+            await server.call_tool(
+                "fetch",
+                {"request": _fetch_payload("require", ["exa"], project_id=pid)},
+            )
 
         async def _auto_fetch() -> None:
-            await server.call_tool("fetch", {"request": _fetch_payload("auto", None)})
+            await server.call_tool(
+                "fetch", {"request": _fetch_payload("auto", None, project_id=pid)}
+            )
 
         await _run_mix(
             latency_rows,

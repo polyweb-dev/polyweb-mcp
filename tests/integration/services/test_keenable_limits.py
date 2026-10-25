@@ -42,6 +42,7 @@ from freesearch.persistence.storage import SQLiteRepository
 from freesearch.services.limits_sync import LimitSyncService
 from freesearch.services.monitoring import tracked_call
 from freesearch.services.provider_limits import ProviderLimitsService
+from tests.fixtures.execution import seed_execution_project
 
 FIXED_AT = datetime(2026, 3, 10, 12, 0, 0, tzinfo=UTC)
 _KEY = SecretStr("keenable-test-secret")
@@ -190,16 +191,24 @@ async def test_search_and_fetch_reported_costs_debit_one_pool(
         search = await tracked_call(
             repository,
             adapter,
-            lambda running: running.search(SearchRequest(query="q", limit=2)),
+            lambda running: running.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=2)
+            ),
             operation=UsageOperation.SEARCH,
             limits=service,
+            attribution=await seed_execution_project(repository),
         )
         fetch = await tracked_call(
             repository,
             adapter,
-            lambda running: running.fetch(FetchRequest(url="https://example.com/k")),
+            lambda running: running.fetch(
+                FetchRequest(
+                    project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/k"
+                )
+            ),
             operation=UsageOperation.FETCH,
             limits=service,
+            attribution=await seed_execution_project(repository),
         )
     finally:
         await client.aclose()
@@ -233,16 +242,24 @@ async def test_sync_does_not_repeat_debit(repository: SQLiteRepository) -> None:
         await tracked_call(
             repository,
             adapter,
-            lambda running: running.search(SearchRequest(query="q", limit=2)),
+            lambda running: running.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=2)
+            ),
             operation=UsageOperation.SEARCH,
             limits=service,
+            attribution=await seed_execution_project(repository),
         )
         await tracked_call(
             repository,
             adapter,
-            lambda running: running.fetch(FetchRequest(url="https://example.com/k")),
+            lambda running: running.fetch(
+                FetchRequest(
+                    project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/k"
+                )
+            ),
             operation=UsageOperation.FETCH,
             limits=service,
+            attribution=await seed_execution_project(repository),
         )
         before = await repository.limits.get_pool(_pool_id())
         sync = LimitSyncService(
@@ -274,9 +291,12 @@ async def test_actual_sku_cost_does_not_consume_extra_rate(
         await tracked_call(
             repository,
             adapter,
-            lambda running: running.search(SearchRequest(query="q", limit=2)),
+            lambda running: running.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=2)
+            ),
             operation=UsageOperation.SEARCH,
             limits=service,
+            attribution=await seed_execution_project(repository),
         )
     finally:
         await client.aclose()
@@ -357,9 +377,14 @@ async def test_local_funds_denial_is_402_with_zero_vendor_calls(
             await tracked_call(
                 repository,
                 adapter,
-                lambda running: running.search(SearchRequest(query="q", limit=2)),
+                lambda running: running.search(
+                    SearchRequest(
+                        project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=2
+                    )
+                ),
                 operation=UsageOperation.SEARCH,
                 limits=service,
+                attribution=await seed_execution_project(repository),
             )
     finally:
         await client.aclose()
@@ -444,8 +469,13 @@ async def test_paid_402_survives_rebuild(repository: SQLiteRepository) -> None:
         await tracked_call(
             repository,
             first,
-            lambda running: running.search(SearchRequest(query="paid", limit=2)),
+            lambda running: running.search(
+                SearchRequest(
+                    project_id="00000000-0000-4000-8000-0000000000aa", query="paid", limit=2
+                )
+            ),
             operation=UsageOperation.SEARCH,
+            attribution=await seed_execution_project(repository),
         )
         assert first._paid_spend == Decimal("2")
         fail_client = httpx.AsyncClient(transport=httpx.MockTransport(denied), timeout=30.0)
@@ -458,8 +488,13 @@ async def test_paid_402_survives_rebuild(repository: SQLiteRepository) -> None:
                 await tracked_call(
                     repository,
                     failing,
-                    lambda running: running.search(SearchRequest(query="q", limit=2)),
+                    lambda running: running.search(
+                        SearchRequest(
+                            project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=2
+                        )
+                    ),
                     operation=UsageOperation.SEARCH,
+                    attribution=await seed_execution_project(repository),
                 )
                 raise AssertionError("402 must raise")
             except Exception:
@@ -570,7 +605,8 @@ async def test_rebuild_restores_counters_and_paid_before_402(
             observed_at=now,
             status=UsageStatus.SUCCESS,
             metadata={"paid": False},
-        )
+        ),
+        attribution=await seed_execution_project(repository),
     )
     await repository.record_usage(
         UsageEvent(
@@ -582,7 +618,8 @@ async def test_rebuild_restores_counters_and_paid_before_402(
             observed_at=now,
             status=UsageStatus.SUCCESS,
             metadata={"paid": True},
-        )
+        ),
+        attribution=await seed_execution_project(repository),
     )
     from freesearch.models.contracts import QuotaSnapshot, QuotaSource
 
@@ -655,8 +692,13 @@ async def test_vendor_429_preserves_budget_without_zero(
             await tracked_call(
                 repository,
                 adapter,
-                lambda running: running.search(SearchRequest(query="q", limit=2)),
+                lambda running: running.search(
+                    SearchRequest(
+                        project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=2
+                    )
+                ),
                 operation=UsageOperation.SEARCH,
+                attribution=await seed_execution_project(repository),
             )
     finally:
         await client.aclose()

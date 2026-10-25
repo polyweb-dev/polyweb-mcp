@@ -32,6 +32,18 @@ export const TAB_PATHS: Record<TabId, string> = {
 export const LOGIN_PATH = "/login"
 export const REGISTER_PATH = "/register"
 
+/** Projects overview route of the workspace. */
+export const PROJECTS_PATH = "/projects"
+
+const PROJECT_UUID_RE =
+  /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
+
+/** Return the workspace path of one project, optionally at one section. */
+export function projectPath(projectId: string, section?: "members"): string {
+  const base = `/p/${projectId}`
+  return section === "members" ? `${base}/members` : base
+}
+
 export interface WorkspaceRoute {
   id: TabId
   path: string
@@ -76,7 +88,10 @@ export function canAccessRoute(id: TabId, role: UserRole): boolean {
  */
 export function isInternalPath(value: string | null | undefined): value is string {
   if (!value || !value.startsWith("/") || value.startsWith("//")) return false
-  return Object.values(TAB_PATHS).includes(value)
+  if (Object.values(TAB_PATHS).includes(value)) return true
+  if (value === PROJECTS_PATH) return true
+  const projectMatch = /^\/p\/([^/]+)(\/members)?$/.exec(value)
+  return projectMatch !== null && PROJECT_UUID_RE.test(projectMatch[1] ?? "")
 }
 
 /** Return the login URL that remembers one internal destination, or login. */

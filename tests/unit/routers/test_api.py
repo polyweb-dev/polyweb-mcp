@@ -41,6 +41,7 @@ from freesearch.models.contracts import (
 from freesearch.routers.api import _dispatch, _plan_route, _routing_state
 from freesearch.routers.control import clear_config_cache
 from freesearch.services.monitoring import clear_quota_poll_cache
+from tests.fixtures.execution import test_attribution
 
 FIXED_AT = datetime(2026, 4, 2, 12, 0, 0, tzinfo=UTC)
 
@@ -105,7 +106,13 @@ class SpyBatchRepository:
     async def list_usage(self, **kwargs: Any) -> list[Any]:
         return []
 
-    async def record_usage(self, event: Any) -> None:
+    async def record_usage(
+        self,
+        event: Any,
+        *,
+        attribution: Any = None,
+        trace_id: str | None = None,
+    ) -> None:
         return None
 
     async def record_health(self, observation: Any) -> None:
@@ -169,6 +176,7 @@ def _install_plan_spies(
 
 def _search_require(names: tuple[str, ...]) -> SearchRequest:
     return SearchRequest(
+        project_id="00000000-0000-4000-8000-0000000000aa",
         query="narrow",
         routing=RoutingPreference(mode=RoutingMode.REQUIRE, providers=names),
     )
@@ -176,6 +184,7 @@ def _search_require(names: tuple[str, ...]) -> SearchRequest:
 
 def _fetch_require(names: tuple[str, ...]) -> FetchRequest:
     return FetchRequest(
+        project_id="00000000-0000-4000-8000-0000000000aa",
         url=AnyHttpUrl("https://example.com/doc"),
         routing=RoutingPreference(mode=RoutingMode.REQUIRE, providers=names),
     )
@@ -257,12 +266,14 @@ async def test_dispatch_uses_one_candidate(
 
     if operation == "search":
         request: SearchRequest | FetchRequest = SearchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa",
             query="single",
             routing=RoutingPreference(mode=RoutingMode.AUTO, allow_fallback=allow_fallback),
         )
         usage_operation = UsageOperation.SEARCH
     else:
         request = FetchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa",
             url=AnyHttpUrl("https://example.com/doc"),
             routing=RoutingPreference(mode=RoutingMode.AUTO, allow_fallback=allow_fallback),
         )
@@ -291,6 +302,7 @@ async def test_dispatch_uses_one_candidate(
             routes=adapters,
             repository=None,
             secret_store=None,
+            attribution=test_attribution(),
         )
 
     assert calls == {"alpha": 1, "beta": 0, "gamma": 0}
@@ -328,7 +340,12 @@ async def test_batchless_repository_fallback(
     assert state_quotas == quotas
     assert scheduled == [2]
 
-    plan = await _plan_route(SearchRequest(query="legacy"), adapters, legacy, None)
+    plan = await _plan_route(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="legacy"),
+        adapters,
+        legacy,
+        None,
+    )
 
     assert [adapter.name for adapter in plan] == ["alpha", "beta"]
 
@@ -349,7 +366,12 @@ async def test_batchless_repository_fallback(
     assert none_quotas == {}
 
     with pytest.raises(HTTPException) as exc_info:
-        await _plan_route(SearchRequest(query="empty"), [], legacy, None)
+        await _plan_route(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="empty"),
+            [],
+            legacy,
+            None,
+        )
 
     assert exc_info.value.status_code == 503
 
@@ -412,6 +434,7 @@ async def test_dispatch_chained_fallback_on_provider_error_succeeds_second(
     monkeypatch.setattr(api_module, "routing_policy", _fake_policy)
 
     request = FetchRequest(
+        project_id="00000000-0000-4000-8000-0000000000aa",
         url=AnyHttpUrl("https://example.com/doc"),
         routing=RoutingPreference(mode=RoutingMode.AUTO, allow_fallback=True),
     )
@@ -445,6 +468,7 @@ async def test_dispatch_chained_fallback_on_provider_error_succeeds_second(
         routes=adapters,
         repository=None,
         secret_store=None,
+        attribution=test_attribution(),
     )
 
     assert calls == {"alpha": 1, "beta": 1}
@@ -469,6 +493,7 @@ async def test_dispatch_chained_fallback_on_provider_error_all_fail(
     monkeypatch.setattr(api_module, "routing_policy", _fake_policy)
 
     request = FetchRequest(
+        project_id="00000000-0000-4000-8000-0000000000aa",
         url=AnyHttpUrl("https://example.com/doc"),
         routing=RoutingPreference(mode=RoutingMode.AUTO, allow_fallback=True),
     )
@@ -496,6 +521,7 @@ async def test_dispatch_chained_fallback_on_provider_error_all_fail(
             routes=adapters,
             repository=None,
             secret_store=None,
+            attribution=test_attribution(),
         )
 
     assert calls == {"alpha": 1, "beta": 1}

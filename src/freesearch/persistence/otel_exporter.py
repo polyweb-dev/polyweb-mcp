@@ -22,12 +22,15 @@ from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 from opentelemetry.trace import SpanKind, StatusCode
 
 from freesearch.models.observability import (
+    OWNERSHIP_ATTRIBUTES,
+    ActorType,
     TraceAttribute,
     TraceEventDetail,
     TraceOperation,
@@ -69,12 +72,14 @@ _CONTENT_ATTRIBUTES = frozenset(
 
 _INSERT = """
 INSERT OR REPLACE INTO trace_spans (
-    span_id, trace_id, parent_span_id, user_id, name, kind, started_at, ended_at,
+    span_id, trace_id, parent_span_id, user_id, project_id, actor_type,
+    actor_id, name, kind, started_at, ended_at,
     duration_ms, status_code, status_message, outcome, error_type, operation,
     provider, input_text, output_json, result_count, attributes_json,
     events_json, resource_json
 ) VALUES (
-    :span_id, :trace_id, :parent_span_id, :user_id, :name, :kind, :started_at,
+    :span_id, :trace_id, :parent_span_id, :user_id, :project_id, :actor_type,
+    :actor_id, :name, :kind, :started_at,
     :ended_at, :duration_ms, :status_code, :status_message, :outcome,
     :error_type, :operation, :provider, :input_text, :output_json,
     :result_count, :attributes_json, :events_json, :resource_json
@@ -208,6 +213,28 @@ def _summary_attributes(attributes: dict[str, Any], *, is_root: bool) -> dict[st
     }
 
 
+def _uuid_attribute(attributes: dict[str, Any], key: str) -> UUID | None:
+    """Parse one UUID ownership attribute defensively; invalid data is ``None``."""
+
+    raw = attributes.get(key)
+    if raw is None:
+        return None
+    try:
+        return UUID(str(raw))
+    except (ValueError, AttributeError, TypeError):
+        return None
+
+
+def _actor_type(attributes: dict[str, Any]) -> ActorType | None:
+    """Parse the actor-type ownership attribute, tolerating unknown values."""
+
+    raw = attributes.get(TraceAttribute.ACTOR_TYPE)
+    try:
+        return ActorType(str(raw)) if raw else None
+    except ValueError:
+        return None
+
+
 def _provider(attributes: dict[str, Any]) -> str | None:
     """Return the provider identity a span recorded, or ``None`` when absent.
 
@@ -245,6 +272,9 @@ def span_record(span: ReadableSpan) -> TraceSpanRecord:
         outcome=_outcome(status, attributes, is_root=is_root, http_status=_http_status(attributes)),
         error_type=_error_type(span),
         user_id=summary.get("user_id"),
+        project_id=_uuid_attribute(attributes, TraceAttribute.PROJECT_ID),
+        actor_type=_actor_type(attributes),
+        actor_id=_uuid_attribute(attributes, TraceAttribute.ACTOR_ID),
         operation=_operation(summary.get("operation")),
         provider=_provider(attributes),
         input_text=summary.get("input_text"),
@@ -253,7 +283,7 @@ def span_record(span: ReadableSpan) -> TraceSpanRecord:
         attributes={
             key: value
             for key, value in attributes.items()
-            if not (is_root and key in _CONTENT_ATTRIBUTES)
+            if key not in OWNERSHIP_ATTRIBUTES and not (is_root and key in _CONTENT_ATTRIBUTES)
         },
         events=_events(span),
         resource=_resource(span),
@@ -307,13 +337,20 @@ def _row(record: TraceSpanRecord) -> dict[str, Any]:
 def write_trace_spans(database: Path, records: Sequence[TraceSpanRecord]) -> None:
     """Upsert span rows in one short transaction (also the fixture seed path).
 
-    The connection is closed explicitly: exports run on the SDK's batch thread,
-    so a leaked handle would keep the database file locked (and on Windows block
-    its owner from removing it).
+    Every record must carry project ownership and actor attribution; an
+    unattributed record raises ``ValueError`` before any write. The connection
+    is closed explicitly: exports run on the SDK's batch thread, so a leaked
+    handle would keep the database file locked (and on Windows block its owner
+    from removing it).
     """
 
     if not records:
         return
+    for record in records:
+        if record.project_id is None or record.actor_type is None or record.actor_id is None:
+            raise ValueError(
+                "trace span records must carry project ownership and actor attribution"
+            )
     rows = [_row(record) for record in records]
     with closing(sqlite3.connect(database, timeout=_SQLITE_TIMEOUT_SECONDS)) as connection:
         connection.execute("PRAGMA busy_timeout = 30000")
@@ -331,10 +368,26 @@ class SQLiteSpanExporter(SpanExporter):
         self._database = absolute_database_path(database)
 
     def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
-        """Write one batch; failures are reported, never raised."""
+        """Write one batch; failures are reported, never raised.
+
+        Spans without trusted ownership (for example a root opened before the
+        handler bound its execution scope) are dropped from the batch and
+        logged by count only — never with payload.
+        """
 
         try:
-            write_trace_spans(self._database, [span_record(span) for span in spans])
+            records = [span_record(span) for span in spans]
+            attributed = [
+                record
+                for record in records
+                if record.project_id is not None
+                and record.actor_type is not None
+                and record.actor_id is not None
+            ]
+            skipped = len(records) - len(attributed)
+            if skipped:
+                logger.warning("trace export skipped %d unattributed span(s)", skipped)
+            write_trace_spans(self._database, attributed)
         except Exception as error:
             logger.warning(
                 "trace export failed for %d span(s): %s",

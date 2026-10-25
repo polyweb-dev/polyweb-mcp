@@ -28,6 +28,7 @@ from pydantic import AwareDatetime, Field, model_serializer
 
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.adapters.brave import COST_USD_PER_REQUEST, FREE_CREDITS_USD, brave_spend_usd
+from freesearch.infrastructure.observability import current_observability
 from freesearch.infrastructure.resilience import ProviderOperationError
 from freesearch.infrastructure.secrets import AsyncSecretStore, ProviderName
 from freesearch.models.contracts import (
@@ -46,6 +47,7 @@ from freesearch.models.contracts import (
     UsageStatus,
     is_soft_quota_zero,
 )
+from freesearch.models.observability import ExecutionAttribution
 from freesearch.models.provider_limits import (
     AuthMode,
     CRDUsageTotal,
@@ -293,6 +295,7 @@ async def record_response_telemetry(
     repository: SQLiteRepository | None,
     response: SearchResponse | FetchResponse,
     *,
+    attribution: ExecutionAttribution,
     latency_ms: int | None = None,
     status: UsageStatus = UsageStatus.SUCCESS,
 ) -> None:
@@ -303,7 +306,8 @@ async def record_response_telemetry(
     monitoring outage can never fail the user request being observed. Usage and
     health persistence are independent: a rejected usage write must never skip
     the healthy observation. When usage is present, the measured ``latency_ms``
-    and ``status`` are attached to the stored event.
+    and ``status`` are attached to the stored event, which is owned by the
+    execution ``attribution`` and linked to the request trace when one is live.
     """
 
     if repository is None:
@@ -312,7 +316,11 @@ async def record_response_telemetry(
         usage = response.usage or _estimated_gap_event(response)
         if usage is not None:
             measured = usage.model_copy(update={"latency_ms": latency_ms, "status": status})
-            await repository.record_usage(measured)
+            await repository.record_usage(
+                measured,
+                attribution=attribution,
+                trace_id=current_observability().current_trace_id(),
+            )
     except Exception:
         logger.warning("response telemetry could not be persisted")
     try:
@@ -355,6 +363,7 @@ async def record_failure_telemetry(
 async def _record_failure_usage(
     repository: SQLiteRepository | None,
     *,
+    attribution: ExecutionAttribution,
     provider: str,
     operation: UsageOperation,
     latency_ms: int | None,
@@ -372,7 +381,9 @@ async def _record_failure_usage(
                 observed_at=datetime.now(UTC),
                 latency_ms=latency_ms,
                 status=UsageStatus.FAILURE,
-            )
+            ),
+            attribution=attribution,
+            trace_id=current_observability().current_trace_id(),
         )
     except Exception:
         logger.warning("failure usage telemetry could not be persisted")
@@ -403,6 +414,7 @@ async def tracked_call[ResponseT: (SearchResponse, FetchResponse)](
     call: Callable[[ProviderAdapter], Awaitable[ResponseT]],
     *,
     operation: UsageOperation,
+    attribution: ExecutionAttribution,
     request: SearchRequest | FetchRequest | None = None,
     limits: "ProviderLimitsService | None" = None,
 ) -> ResponseT:
@@ -437,6 +449,7 @@ async def tracked_call[ResponseT: (SearchResponse, FetchResponse)](
         await _finalize_failure(limits, admission, exc, request=request)
         await _record_failure_usage(
             repository,
+            attribution=attribution,
             provider=adapter.name,
             operation=operation,
             latency_ms=_measured_latency_ms(adapter.name, _elapsed_ms(started_at)),
@@ -459,6 +472,7 @@ async def tracked_call[ResponseT: (SearchResponse, FetchResponse)](
     await record_response_telemetry(
         repository,
         response,
+        attribution=attribution,
         latency_ms=_measured_latency_ms(adapter.name, _elapsed_ms(started_at)),
     )
     await _record_adapter_quota(

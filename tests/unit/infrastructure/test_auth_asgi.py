@@ -152,12 +152,13 @@ def test_protected_surfaces_reject_anonymous_with_challenge() -> None:
         assert "state_user" not in seen
 
 
-def test_search_and_fetch_allow_anonymous_and_verify_optional_bearer() -> None:
+def test_search_and_fetch_require_a_verified_bearer() -> None:
     for path in ("/search", "/fetch"):
         guard, seen = _guard()
-        status, _, _ = _run(guard, method="POST", path=path)
-        assert status == 200
-        assert seen["state_user"] is None
+        status, headers, _ = _run(guard, method="POST", path=path)
+        assert status == 401
+        assert headers[b"www-authenticate"] == b"Bearer"
+        assert "state_user" not in seen
 
         guard, _ = _guard()
         status, headers, _ = _run(guard, method="POST", path=path, headers=_bearer("bad-access"))
@@ -173,13 +174,25 @@ def test_search_and_fetch_allow_anonymous_and_verify_optional_bearer() -> None:
 def test_search_fetch_body_cap_supports_large_provider_options() -> None:
     guard, seen = _guard()
     payload = b"x" * (MAX_PUBLIC_AUTH_BODY_BYTES + 1)
-    status, _, _ = _run(guard, method="POST", path="/search", body_chunks=[payload])
+    status, _, _ = _run(
+        guard,
+        method="POST",
+        path="/search",
+        headers=_bearer("good-access"),
+        body_chunks=[payload],
+    )
     assert status == 200
     assert seen["body"] == payload
 
     guard, seen = _guard()
     payload = b"x" * (MAX_PUBLIC_OPERATION_BODY_BYTES + 1)
-    status, _, body = _run(guard, method="POST", path="/fetch", body_chunks=[payload])
+    status, _, body = _run(
+        guard,
+        method="POST",
+        path="/fetch",
+        headers=_bearer("good-access"),
+        body_chunks=[payload],
+    )
     assert status == 413
     assert body == b'{"detail": "request body is too large"}'
     assert "state_user" not in seen
@@ -403,8 +416,8 @@ def test_cookie_never_authenticates_ordinary_routes() -> None:
 
     guard, seen = _guard(browser_origins=frozenset({_BROWSER_ORIGIN}))
     status, _, _ = _run(guard, method="POST", path="/search", headers=_browser_cookie_headers())
-    assert status == 200
-    assert seen["state_user"] is None
+    assert status == 401
+    assert "state_user" not in seen
 
 
 def test_provisioning_body_cap_applies_before_dispatch() -> None:

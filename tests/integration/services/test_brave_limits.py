@@ -38,6 +38,8 @@ from freesearch.services.limits_sync import LimitSyncService
 from freesearch.services.provider_limits import ProviderLimitsService
 
 FIXED_AT = datetime(2026, 3, 10, 12, 0, 0, tzinfo=UTC)
+
+
 def _unlink_with_retries(path: Path, *, attempts: int = 20) -> None:
     """Remove a test database after Windows releases delayed SQLite handles."""
 
@@ -128,7 +130,9 @@ async def test_sync_monthly_headers_update_budget_only(repository: SQLiteReposit
     try:
         service = _service(repository)
         await service.initialize()
-        await adapter.search(SearchRequest(query="q", limit=2))
+        await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=2)
+        )
         sync = LimitSyncService(
             repository.limits, service, lambda: [adapter], clock=lambda: FIXED_AT
         )
@@ -265,7 +269,9 @@ async def test_provider_view_search_finite_fetch_unavailable(
     try:
         service = _service(repository)
         await service.initialize()
-        await adapter.search(SearchRequest(query="q", limit=2))
+        await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=2)
+        )
         snapshot = await adapter.usage_snapshot(
             UsageSyncRequest(provider="brave", auth_mode=AuthMode.KEYED, observed_at=FIXED_AT)
         )

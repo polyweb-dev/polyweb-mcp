@@ -126,7 +126,9 @@ def test_usd_from_requests_rejects_partial_and_negative() -> None:
 async def test_usage_snapshot_monthly_pair_becomes_budget() -> None:
     adapter, client = _adapter(_ok_handler())
     try:
-        await adapter.search(SearchRequest(query="q", limit=2))
+        await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=2)
+        )
         snapshot = await adapter.usage_snapshot(
             UsageSyncRequest(
                 provider="brave",
@@ -149,7 +151,9 @@ async def test_usage_snapshot_monthly_pair_becomes_budget() -> None:
 async def test_usage_snapshot_without_headers_is_local_ledger() -> None:
     adapter, client = _adapter(lambda request: httpx.Response(200, json=_payload()))
     try:
-        await adapter.search(SearchRequest(query="q", limit=2))
+        await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=2)
+        )
         snapshot = await adapter.usage_snapshot(
             UsageSyncRequest(
                 provider="brave",

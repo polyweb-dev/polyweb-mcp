@@ -111,6 +111,7 @@ def search_request(
     allow_fallback: bool = True,
 ) -> SearchRequest:
     return SearchRequest(
+        project_id="00000000-0000-4000-8000-0000000000aa",
         query="routing",
         routing=RoutingPreference(mode=mode, providers=providers, allow_fallback=allow_fallback),
     )
@@ -131,7 +132,11 @@ def test_fetch_route_excludes_adapters_without_fetch_capability() -> None:
     adapters = [adapter("search-only"), adapter("fetch-only", search=False, fetch=True)]
 
     candidates = route(
-        FetchRequest(url=AnyHttpUrl("https://example.com/doc"), routing=RoutingPreference()),
+        FetchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa",
+            url=AnyHttpUrl("https://example.com/doc"),
+            routing=RoutingPreference(),
+        ),
         adapters,
     )
 
@@ -140,6 +145,7 @@ def test_fetch_route_excludes_adapters_without_fetch_capability() -> None:
 
 def test_provider_options_do_not_select_or_reorder_providers() -> None:
     request = SearchRequest(
+        project_id="00000000-0000-4000-8000-0000000000aa",
         query="routing",
         provider_options={"exa": {"type": "deep"}},
     )

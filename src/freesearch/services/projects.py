@@ -31,7 +31,7 @@ from datetime import UTC, datetime
 from typing import TypeVar
 from uuid import UUID
 
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -40,6 +40,7 @@ from freesearch.models.projects import (
     BuiltinRole,
     MembershipStatus,
     PermissionAction,
+    ProjectAccessRead,
     ProjectCreate,
     ProjectMemberAdd,
     ProjectMemberRead,
@@ -50,6 +51,7 @@ from freesearch.models.projects import (
     ProjectStatus,
     RoleAssignmentRead,
     ScopeType,
+    SystemAccessRead,
 )
 from freesearch.models.users import UserAccount, UserPrincipal, UserRole
 from freesearch.persistence.auth_sessions import AuthSessionRepository
@@ -181,6 +183,56 @@ class ProjectService:
         except OperationalError as error:
             raise ProjectStorageUnavailable("the project store is unavailable") from error
 
+    async def system_access(self, actor: UserPrincipal) -> SystemAccessRead:
+        """Return the caller's live system-scope effective permissions."""
+
+        self._rollout.require_management()
+        try:
+            permissions = await self._authorization.effective_permissions(
+                human_principal(actor),
+                scope_type=ScopeType.SYSTEM,
+                scope_id=self._account_id,
+            )
+        except OperationalError as error:
+            raise ProjectStorageUnavailable("the project store is unavailable") from error
+        return SystemAccessRead(
+            rollout_state=self._rollout.state,
+            permissions=sorted(action.value for action in permissions),
+        )
+
+    async def project_access(
+        self,
+        actor: UserPrincipal,
+        project_id: UUID,
+    ) -> ProjectAccessRead:
+        """Return the caller's live permissions and role keys for one project.
+
+        Unknown, cross-account, non-member, suspended, and inactive-user
+        lookups all resolve to :class:`ProjectNotFound` so transports cannot
+        distinguish them.
+        """
+
+        self._rollout.require_management()
+        try:
+            async with self._repository.session() as session:
+                context = await self._authorization.resolve_project_context_in_session(
+                    session, human_principal(actor), project_id
+                )
+                if context is None:
+                    raise ProjectNotFound(f"Project {project_id} does not exist")
+                member = await ProjectRepository(session).get_member(
+                    project_id=project_id,
+                    user_id=actor.id,
+                )
+                return ProjectAccessRead(
+                    project_id=project_id,
+                    permissions=sorted(action.value for action in context.effective_permissions),
+                    roles=[] if member is None else member.roles,
+                    policy_revision=context.policy_revision,
+                )
+        except OperationalError as error:
+            raise ProjectStorageUnavailable("the project store is unavailable") from error
+
     async def create_project(
         self,
         actor: UserPrincipal,
@@ -200,11 +252,19 @@ class ProjectService:
                 ),
             )
             repository = ProjectRepository(session)
+            resolved_create = project_create
+            if resolved_create.initial_admin_user_id is None:
+                admin = await self._require_active_user_by_email(
+                    session, resolved_create.initial_admin_email
+                )
+                resolved_create = resolved_create.model_copy(
+                    update={"initial_admin_user_id": admin.id}
+                )
             try:
                 project, _member, _role = await repository.create_project_with_admin(
                     account_id=self._account_id,
                     created_by=actor.id,
-                    project_create=project_create,
+                    project_create=resolved_create,
                 )
             except ValueError as error:
                 raise ProjectValidationError(str(error)) from error
@@ -267,7 +327,6 @@ class ProjectService:
         """Add one existing active human with an initial project role."""
 
         self._rollout.require_management()
-        user_id = member_add.user_id
         initial_role = member_add.initial_role
 
         async def operation(session: AsyncSession) -> ProjectMemberRead:
@@ -285,6 +344,10 @@ class ProjectService:
             )
             await self._authorize_delegation(session, actor, project_id, initial_role)
             self._reject_archived_expansion(project, expanding=True)
+            user_id = member_add.user_id
+            if user_id is None:
+                user = await self._require_active_user_by_email(session, member_add.email)
+                user_id = user.id
             try:
                 member, _role = await repository.add_project_member(
                     project_id=project_id,
@@ -657,6 +720,26 @@ class ProjectService:
         if user is None or not user.is_active:
             raise ProjectValidationError(f"User {user_id} is not an active human account")
         return membership
+
+    @staticmethod
+    async def _require_active_user_by_email(
+        session: AsyncSession,
+        email: str | None,
+    ) -> UserRow:
+        """Resolve a normalized email to one active human user or fail validation.
+
+        Unknown and inactive accounts raise the same validation error the
+        ``user_id`` path produces downstream, so an email lookup is no more of
+        an existence oracle than an id lookup.
+        """
+
+        if email is None:
+            raise ProjectValidationError("an email address is required")
+        stmt = select(UserRow).where(func.lower(UserRow.email) == email)
+        user = (await session.execute(stmt)).scalar_one_or_none()
+        if user is None or not user.is_active:
+            raise ProjectValidationError(f"User with email {email!r} does not exist or is inactive")
+        return user
 
     async def _authorize_delegation(
         self,

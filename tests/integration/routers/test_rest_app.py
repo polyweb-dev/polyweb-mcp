@@ -28,7 +28,13 @@ from freesearch.models.contracts import (
 )
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
-from tests.fixtures.auth import raw_auth_headers, register_and_login, temp_email
+from tests.fixtures.auth import (
+    account_id_from_pair,
+    raw_auth_headers,
+    register_and_login,
+    temp_email,
+)
+from tests.fixtures.execution import seed_execution_project
 
 
 class _StubAdapter(ProviderAdapter):
@@ -86,10 +92,20 @@ class _StubAdapter(ProviderAdapter):
 async def test_search_endpoint_routes_and_returns_contract_shape(
     repository: SQLiteRepository,
 ) -> None:
-    # Search is public; account credentials remain optional for browser callers.
+    # Search now requires a verified principal with project membership.
     app = create_app([_StubAdapter("brave", fetch=False)], repository=repository)
     with TestClient(app) as client:
-        response = client.post("/search", json={"query": "python asyncio"})
+        pair = register_and_login(client, temp_email("rest-search"))
+        pid = str(
+            (
+                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+            ).project_id
+        )
+        response = client.post(
+            "/search",
+            json={"project_id": pid, "query": "python asyncio"},
+            headers=raw_auth_headers(pair["access_token"]),
+        )
     assert response.status_code == 200
     assert response.json()["provider"] == "brave"
     assert response.json()["results"][0]["title"] == "brave result"
@@ -100,7 +116,17 @@ async def test_fetch_endpoint_returns_document(
 ) -> None:
     app = create_app([_StubAdapter("youcom")], repository=repository)
     with TestClient(app) as client:
-        response = client.post("/fetch", json={"url": "https://example.com/page"})
+        pair = register_and_login(client, temp_email("rest-fetch"))
+        pid = str(
+            (
+                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+            ).project_id
+        )
+        response = client.post(
+            "/fetch",
+            json={"project_id": pid, "url": "https://example.com/page"},
+            headers=raw_auth_headers(pair["access_token"]),
+        )
     assert response.status_code == 200
     assert response.json()["provider"] == "youcom"
     assert response.json()["document"]["content"] == "youcom content"
@@ -111,7 +137,17 @@ async def test_search_without_any_adapter_returns_503(
 ) -> None:
     app = create_app([], repository=repository)
     with TestClient(app) as client:
-        response = client.post("/search", json={"query": "anything"})
+        pair = register_and_login(client, temp_email("rest-empty"))
+        pid = str(
+            (
+                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+            ).project_id
+        )
+        response = client.post(
+            "/search",
+            json={"project_id": pid, "query": "anything"},
+            headers=raw_auth_headers(pair["access_token"]),
+        )
     assert response.status_code == 503
     assert "no provider is configured" in response.json()["detail"]
 
@@ -159,9 +195,15 @@ async def test_rest_accepts_provider_options_without_changing_route_or_dropping_
     with TestClient(app) as client:
         pair = register_and_login(client, temp_email("rest-provider-options"))
         headers = raw_auth_headers(pair["access_token"])
+        pid = str(
+            (
+                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+            ).project_id
+        )
         response = client.post(
             "/search",
             json={
+                "project_id": pid,
                 "query": "provider options",
                 "providerOptions": {"exa": {"type": "deep-lite"}},
             },
@@ -231,7 +273,14 @@ async def test_search_emits_trace_header_matching_detail_hierarchy(
     with TestClient(app) as client:
         pair = register_and_login(client, temp_email("trace-search"))
         headers = raw_auth_headers(pair["access_token"])
-        response = client.post("/search", json={"query": "consensus algorithms"}, headers=headers)
+        pid = str(
+            (
+                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+            ).project_id
+        )
+        response = client.post(
+            "/search", json={"project_id": pid, "query": "consensus algorithms"}, headers=headers
+        )
         assert response.status_code == 200
         trace_id = _trace_id_of(response)
         detail = client.get(f"/api/v1/traces/{trace_id}", headers=headers).json()
@@ -272,7 +321,14 @@ async def test_fetch_route_mirrors_search_tracing(
     with TestClient(app) as client:
         pair = register_and_login(client, temp_email("trace-fetch"))
         headers = raw_auth_headers(pair["access_token"])
-        response = client.post("/fetch", json={"url": "https://example.com/page"}, headers=headers)
+        pid = str(
+            (
+                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+            ).project_id
+        )
+        response = client.post(
+            "/fetch", json={"project_id": pid, "url": "https://example.com/page"}, headers=headers
+        )
         assert response.status_code == 200
         trace_id = _trace_id_of(response)
         detail = client.get(f"/api/v1/traces/{trace_id}", headers=headers).json()
@@ -295,7 +351,14 @@ async def test_unhandled_provider_error_writes_error_trace_without_header(
     with TestClient(app, raise_server_exceptions=False) as client:
         pair = register_and_login(client, temp_email("trace-error"))
         headers = raw_auth_headers(pair["access_token"])
-        response = client.post("/search", json={"query": "consensus"}, headers=headers)
+        pid = str(
+            (
+                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+            ).project_id
+        )
+        response = client.post(
+            "/search", json={"project_id": pid, "query": "consensus"}, headers=headers
+        )
         assert response.status_code == 500
         # Unhandled failures propagate above the tracing middleware, so the
         # 500 cannot carry the header — the trace is still persisted.
@@ -325,7 +388,14 @@ async def test_handled_routing_error_carries_header_and_error_outcome(
     with TestClient(app) as client:
         pair = register_and_login(client, temp_email("trace-routing"))
         headers = raw_auth_headers(pair["access_token"])
-        response = client.post("/search", json={"query": "consensus"}, headers=headers)
+        pid = str(
+            (
+                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+            ).project_id
+        )
+        response = client.post(
+            "/search", json={"project_id": pid, "query": "consensus"}, headers=headers
+        )
         assert response.status_code == 503
         trace_id = _trace_id_of(response)
         detail = client.get(f"/api/v1/traces/{trace_id}", headers=headers).json()
@@ -367,7 +437,14 @@ async def test_search_with_global_mask_off_returns_503_without_call(
     with TestClient(app) as client:
         pair = register_and_login(client, temp_email("rest-mask-off"))
         headers = raw_auth_headers(pair["access_token"])
-        response = client.post("/search", json={"query": "global off"}, headers=headers)
+        pid = str(
+            (
+                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+            ).project_id
+        )
+        response = client.post(
+            "/search", json={"project_id": pid, "query": "global off"}, headers=headers
+        )
 
     assert response.status_code == 503
     assert "no eligible provider" in response.json()["detail"]
@@ -387,8 +464,17 @@ async def test_fetch_with_fetch_bit_off_returns_503_without_call(
     with TestClient(app) as client:
         pair = register_and_login(client, temp_email("rest-fetch-off"))
         headers = raw_auth_headers(pair["access_token"])
-        search = client.post("/search", json={"query": "search on"}, headers=headers)
-        fetch = client.post("/fetch", json={"url": "https://example.com/page"}, headers=headers)
+        pid = str(
+            (
+                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+            ).project_id
+        )
+        search = client.post(
+            "/search", json={"project_id": pid, "query": "search on"}, headers=headers
+        )
+        fetch = client.post(
+            "/fetch", json={"project_id": pid, "url": "https://example.com/page"}, headers=headers
+        )
 
     assert search.status_code == 200
     assert fetch.status_code == 503
@@ -409,8 +495,17 @@ async def test_search_with_search_bit_off_blocks_search_keeps_fetch(
     with TestClient(app) as client:
         pair = register_and_login(client, temp_email("rest-search-off"))
         headers = raw_auth_headers(pair["access_token"])
-        search = client.post("/search", json={"query": "search off"}, headers=headers)
-        fetch = client.post("/fetch", json={"url": "https://example.com/page"}, headers=headers)
+        pid = str(
+            (
+                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+            ).project_id
+        )
+        search = client.post(
+            "/search", json={"project_id": pid, "query": "search off"}, headers=headers
+        )
+        fetch = client.post(
+            "/fetch", json={"project_id": pid, "url": "https://example.com/page"}, headers=headers
+        )
 
     assert search.status_code == 503
     assert fetch.status_code == 200
@@ -444,7 +539,16 @@ async def test_fetch_endpoint_maps_bot_blocked_to_502(
     with TestClient(app) as client:
         pair = register_and_login(client, temp_email("rest-fetch-502"))
         headers = raw_auth_headers(pair["access_token"])
-        resp = client.post("/fetch", json={"url": "https://example.com/blocked"}, headers=headers)
+        pid = str(
+            (
+                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+            ).project_id
+        )
+        resp = client.post(
+            "/fetch",
+            json={"project_id": pid, "url": "https://example.com/blocked"},
+            headers=headers,
+        )
     assert resp.status_code == 502
     data = resp.json()
     assert data["provider"] == "tinyfish"
@@ -470,7 +574,14 @@ async def test_fetch_endpoint_maps_rate_limited_to_429(
     with TestClient(app) as client:
         pair = register_and_login(client, temp_email("rest-fetch-429"))
         headers = raw_auth_headers(pair["access_token"])
-        resp = client.post("/fetch", json={"url": "https://example.com/page"}, headers=headers)
+        pid = str(
+            (
+                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+            ).project_id
+        )
+        resp = client.post(
+            "/fetch", json={"project_id": pid, "url": "https://example.com/page"}, headers=headers
+        )
     assert resp.status_code == 429
     data = resp.json()
     assert data["provider"] == "tinyfish"
@@ -495,7 +606,14 @@ async def test_fetch_endpoint_maps_terminal_quota_to_402(
     with TestClient(app) as client:
         pair = register_and_login(client, temp_email("rest-fetch-402"))
         headers = raw_auth_headers(pair["access_token"])
-        resp = client.post("/fetch", json={"url": "https://example.com/page"}, headers=headers)
+        pid = str(
+            (
+                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+            ).project_id
+        )
+        resp = client.post(
+            "/fetch", json={"project_id": pid, "url": "https://example.com/page"}, headers=headers
+        )
     assert resp.status_code == 402
     data = resp.json()
     assert data["provider"] == "tavily"
@@ -521,9 +639,18 @@ async def test_fetch_chained_fallback_succeeds_on_second_candidate(
     with TestClient(app) as client:
         pair = register_and_login(client, temp_email("rest-fetch-fallback"))
         headers = raw_auth_headers(pair["access_token"])
+        pid = str(
+            (
+                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+            ).project_id
+        )
         resp = client.post(
             "/fetch",
-            json={"url": "https://example.com/page", "routing": {"allow_fallback": True}},
+            json={
+                "project_id": pid,
+                "url": "https://example.com/page",
+                "routing": {"allow_fallback": True},
+            },
             headers=headers,
         )
     assert resp.status_code == 200

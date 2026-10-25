@@ -16,6 +16,7 @@ from pydantic import SecretStr
 from freesearch.mcp.server import create_server
 from freesearch.persistence.storage import SQLiteRepository
 from tests.fixtures.auth import mcp_account_token
+from tests.fixtures.execution import seed_token_project
 
 
 def _unlink_with_retries(path: Path, *, attempts: int = 20) -> None:
@@ -62,6 +63,7 @@ async def test_generation_lifecycle_closes_cleanly(
     service_repository = await SQLiteRepository.open(database)
     try:
         service, token, _email = await mcp_account_token(service_repository, "mcp-lifecycle")
+        pid = str((await seed_token_project(service_repository, token)).project_id)
         server = create_server(
             None,
             database=database,
@@ -69,7 +71,9 @@ async def test_generation_lifecycle_closes_cleanly(
             stdio_token=SecretStr(token.get_secret_value()),
         )
         async with server._mcp_server.lifespan(server):
-            result = await server.call_tool("search", {"request": {"query": "s0 probe"}})
+            result = await server.call_tool(
+                "search", {"request": {"project_id": pid, "query": "s0 probe"}}
+            )
             assert isinstance(result, tuple)
     finally:
         await service_repository.close()
@@ -83,6 +87,7 @@ async def test_overlapping_generations_share_one_repository(
     service_repository = await SQLiteRepository.open(database)
     try:
         service, token, _email = await mcp_account_token(service_repository, "mcp-overlap")
+        pid = str((await seed_token_project(service_repository, token)).project_id)
         server = create_server(
             None,
             database=database,
@@ -94,7 +99,9 @@ async def test_overlapping_generations_share_one_repository(
         await first.__aenter__()
         await second.__aenter__()
         try:
-            result = await server.call_tool("search", {"request": {"query": "s0"}})
+            result = await server.call_tool(
+                "search", {"request": {"project_id": pid, "query": "s0"}}
+            )
             assert isinstance(result, tuple)
         finally:
             await first.__aexit__(None, None, None)

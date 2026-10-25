@@ -70,7 +70,9 @@ async def test_rate_limit_header_normalization(
         lambda request: httpx.Response(200, json=_payload(), headers=headers)
     )
     try:
-        response = await adapter.search(SearchRequest(query="query"))
+        response = await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="query")
+        )
     finally:
         await client.aclose()
 
@@ -92,7 +94,9 @@ async def test_malformed_results_and_page_age_map_to_invalid_response(
     adapter, client = _adapter(lambda request: httpx.Response(200, json=payload))
     try:
         with pytest.raises(ProviderOperationError) as excinfo:
-            await adapter.search(SearchRequest(query="query"))
+            await adapter.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="query")
+            )
     finally:
         await client.aclose()
 
@@ -117,7 +121,9 @@ async def test_invalid_items_skip_with_error_records(
 ) -> None:
     adapter, client = _adapter(lambda request: httpx.Response(200, json=payload))
     try:
-        response = await adapter.search(SearchRequest(query="query"))
+        response = await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="query")
+        )
     finally:
         await client.aclose()
 
@@ -137,7 +143,9 @@ async def test_numeric_page_age_is_coerced_to_unix_datetime() -> None:
     payload = {"web": {"results": [{"url": "https://example.com/ts", "page_age": 123}]}}
     adapter, client = _adapter(lambda request: httpx.Response(200, json=payload))
     try:
-        response = await adapter.search(SearchRequest(query="query"))
+        response = await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="query")
+        )
     finally:
         await client.aclose()
 
@@ -148,7 +156,9 @@ async def test_non_json_success_body_maps_to_invalid_response() -> None:
     adapter, client = _adapter(lambda request: httpx.Response(200, text="<html>not json</html>"))
     try:
         with pytest.raises(ProviderOperationError) as excinfo:
-            await adapter.search(SearchRequest(query="query"))
+            await adapter.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="query")
+            )
     finally:
         await client.aclose()
 
@@ -185,7 +195,9 @@ async def test_sparse_result_normalizes_with_defaults_and_string_metadata_only()
     }
     adapter, client = _adapter(lambda request: httpx.Response(200, json=payload))
     try:
-        response = await adapter.search(SearchRequest(query="query"))
+        response = await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="query")
+        )
     finally:
         await client.aclose()
 
@@ -203,7 +215,12 @@ async def test_fetch_raises_without_any_network_call() -> None:
     adapter, client = _adapter(handler)
     try:
         with pytest.raises(ProviderOperationError) as excinfo:
-            await adapter.fetch(FetchRequest(url="https://example.com/page"))
+            await adapter.fetch(
+                FetchRequest(
+                    project_id="00000000-0000-4000-8000-0000000000aa",
+                    url="https://example.com/page",
+                )
+            )
     finally:
         await client.aclose()
 
@@ -215,7 +232,11 @@ async def test_fetch_raises_without_any_network_call() -> None:
 async def test_estimate_cost_for_fetch_is_zero_units() -> None:
     adapter, client = _adapter(lambda request: httpx.Response(200, json=_payload()))
     try:
-        estimate = await adapter.estimate_cost(FetchRequest(url="https://example.com"))
+        estimate = await adapter.estimate_cost(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com"
+            )
+        )
     finally:
         await client.aclose()
 

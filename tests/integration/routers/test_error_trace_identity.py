@@ -29,7 +29,13 @@ from freesearch.models.contracts import (
 )
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
-from tests.fixtures.auth import raw_auth_headers, register_and_login, temp_email
+from tests.fixtures.auth import (
+    account_id_from_pair,
+    raw_auth_headers,
+    register_and_login,
+    temp_email,
+)
+from tests.fixtures.execution import seed_execution_project
 
 
 @pytest.fixture
@@ -81,9 +87,15 @@ async def test_single_search_error_trace_keeps_query_and_provider(
     with TestClient(app, raise_server_exceptions=False) as client:
         pair = register_and_login(client, temp_email("error-identity"))
         headers = raw_auth_headers(pair["access_token"])
+        pid = str(
+            (
+                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+            ).project_id
+        )
         response = client.post(
             "/search",
             json={
+                "project_id": pid,
                 "query": "Number of timezones around the world?",
                 "routing": {"mode": "require", "providers": ["doomed-provider"]},
             },

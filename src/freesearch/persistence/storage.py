@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Self, cast, overload
 from uuid import UUID
 
-from sqlalchemy import CHAR, URL, Index, Integer, Text, event, func, insert, select
+from sqlalchemy import CHAR, URL, ForeignKey, Index, Integer, Text, event, func, insert, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Row
 from sqlalchemy.ext.asyncio import (
@@ -35,6 +35,7 @@ from freesearch.models.contracts import (
     UsageStatus,
 )
 from freesearch.models.observability import (
+    ExecutionAttribution,
     TraceDetail,
     TraceEventDetail,
     TraceOperation,
@@ -151,7 +152,10 @@ class UsageEventRow(Base):
     """Row model for provider usage events."""
 
     __tablename__ = "usage_events"
-    __table_args__ = (Index("usage_events_provider_observed_at", "provider", "observed_at"),)
+    __table_args__ = (
+        Index("usage_events_provider_observed_at", "provider", "observed_at"),
+        Index("usage_events_project_observed_at", "project_id", "observed_at"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True, nullable=True)
     provider: Mapped[str] = mapped_column(Text)
@@ -163,6 +167,11 @@ class UsageEventRow(Base):
     latency_ms: Mapped[int | None] = mapped_column(Integer)
     status: Mapped[str | None] = mapped_column(Text)
     unit_kind: Mapped[str | None] = mapped_column(Text)
+    # Non-null execution ownership: the verified project and acting principal.
+    project_id: Mapped[str] = mapped_column(CHAR(36), ForeignKey("projects.id"))
+    actor_type: Mapped[str] = mapped_column(Text)
+    actor_id: Mapped[str] = mapped_column(CHAR(36))
+    trace_id: Mapped[str | None] = mapped_column(Text)
 
 
 class RuntimeSettingRow(Base):
@@ -217,7 +226,15 @@ class TraceSpanRow(Base):
     """
 
     __tablename__ = "trace_spans"
-    __table_args__ = (Index("trace_spans_trace_started_at", "trace_id", "started_at"),)
+    __table_args__ = (
+        Index("trace_spans_trace_started_at", "trace_id", "started_at"),
+        Index(
+            "trace_spans_project_root_started_at",
+            "project_id",
+            "parent_span_id",
+            "started_at",
+        ),
+    )
 
     span_id: Mapped[str] = mapped_column(Text, primary_key=True, nullable=True)
     trace_id: Mapped[str] = mapped_column(Text)
@@ -225,6 +242,10 @@ class TraceSpanRow(Base):
     # Canonical account UUID of the trace root. Child rows and historical rows
     # keep ``None``; the root row is the only ownership authority.
     user_id: Mapped[str | None] = mapped_column(CHAR(36))
+    # Non-null execution ownership stamped by the trusted attribution binder.
+    project_id: Mapped[str] = mapped_column(CHAR(36), ForeignKey("projects.id"))
+    actor_type: Mapped[str] = mapped_column(Text)
+    actor_id: Mapped[str] = mapped_column(CHAR(36))
     name: Mapped[str] = mapped_column(Text)
     kind: Mapped[str] = mapped_column(Text)
     started_at: Mapped[str] = mapped_column(Text)
@@ -630,8 +651,14 @@ class SQLiteRepository:
             spans=[_trace_span_detail(row) for row in rows],
         )
 
-    async def record_usage(self, event: UsageEvent) -> None:
-        """Append a provider usage event."""
+    async def record_usage(
+        self,
+        event: UsageEvent,
+        *,
+        attribution: ExecutionAttribution,
+        trace_id: str | None = None,
+    ) -> None:
+        """Append a provider usage event owned by ``attribution``'s project."""
 
         async with self._session_factory() as session:
             await session.execute(
@@ -645,6 +672,10 @@ class SQLiteRepository:
                     latency_ms=event.latency_ms,
                     status=event.status.value,
                     unit_kind=event.unit_kind.value if event.unit_kind is not None else None,
+                    project_id=str(attribution.project_id),
+                    actor_type=attribution.actor_type.value,
+                    actor_id=str(attribution.actor_id),
+                    trace_id=trace_id,
                 )
             )
             await session.commit()

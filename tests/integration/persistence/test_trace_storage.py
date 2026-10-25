@@ -15,6 +15,7 @@ from uuid import UUID
 import pytest_asyncio
 
 from freesearch.models.observability import (
+    ActorType,
     TraceEventDetail,
     TraceFetchOutput,
     TraceOperation,
@@ -62,6 +63,9 @@ def _records_from_fixture(document: dict[str, Any], owner: UUID) -> list[TraceSp
         output = document.get("output")
         records.append(
             TraceSpanRecord(
+                project_id=UUID("00000000-0000-4000-8000-0000000000aa"),
+                actor_type=ActorType.HUMAN,
+                actor_id=UUID("00000000-0000-4000-8000-0000000000bb"),
                 span_id=span["span_id"],
                 trace_id=trace_id,
                 parent_span_id=span["parent_span_id"],
@@ -103,6 +107,9 @@ def _synthetic_root(
     result_count: int | None = 1,
 ) -> TraceSpanRecord:
     return TraceSpanRecord(
+        project_id=UUID("00000000-0000-4000-8000-0000000000aa"),
+        actor_type=ActorType.HUMAN,
+        actor_id=UUID("00000000-0000-4000-8000-0000000000bb"),
         span_id=f"root-{trace_id[-8:]}",
         trace_id=trace_id,
         name="POST /search",
@@ -261,6 +268,9 @@ async def test_detail_orders_concurrent_fanout_children_stably(
     moment = datetime(2026, 9, 29, 11, 0, tzinfo=UTC)
     trace_id = "f" * 32
     root = TraceSpanRecord(
+        project_id=UUID("00000000-0000-4000-8000-0000000000aa"),
+        actor_type=ActorType.HUMAN,
+        actor_id=UUID("00000000-0000-4000-8000-0000000000bb"),
         span_id="aa00000000000000",
         trace_id=trace_id,
         name="POST /search",
@@ -276,6 +286,9 @@ async def test_detail_orders_concurrent_fanout_children_stably(
     )
     children = [
         TraceSpanRecord(
+            project_id=UUID("00000000-0000-4000-8000-0000000000aa"),
+            actor_type=ActorType.HUMAN,
+            actor_id=UUID("00000000-0000-4000-8000-0000000000bb"),
             span_id=span_id,
             trace_id=trace_id,
             parent_span_id="aa00000000000000",
@@ -347,6 +360,9 @@ async def test_fetch_detail_output_shape(repository: SQLiteRepository) -> None:
         repository.database_path,
         [
             TraceSpanRecord(
+                project_id=UUID("00000000-0000-4000-8000-0000000000aa"),
+                actor_type=ActorType.HUMAN,
+                actor_id=UUID("00000000-0000-4000-8000-0000000000bb"),
                 span_id="ab00000000000001",
                 trace_id=trace_id,
                 name="POST /fetch",
@@ -418,6 +434,9 @@ async def test_foreign_unknown_and_unowned_detail_reads_return_none(
     )
     # One historical row keeps a null owner in the database.
     legacy = TraceSpanRecord(
+        project_id=UUID("00000000-0000-4000-8000-0000000000aa"),
+        actor_type=ActorType.HUMAN,
+        actor_id=UUID("00000000-0000-4000-8000-0000000000bb"),
         span_id="legacy-root",
         trace_id="c" * 32,
         name="POST /search",
@@ -452,6 +471,9 @@ async def test_limit_applies_after_the_owner_predicate(
                 repository.database_path,
                 [
                     TraceSpanRecord(
+                        project_id=UUID("00000000-0000-4000-8000-0000000000aa"),
+                        actor_type=ActorType.HUMAN,
+                        actor_id=UUID("00000000-0000-4000-8000-0000000000bb"),
                         span_id=f"{tag}{index:015x}",
                         trace_id=trace_id,
                         name="POST /search",

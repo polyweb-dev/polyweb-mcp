@@ -1,7 +1,7 @@
 """Provider credential instance and project grant persistence (P08).
 
 Rows follow the accepted schema shape owned by Alembic revision
-``0008_provider_credentials``::
+``0009_provider_credentials``::
 
     provider_credentials(id, account_id, provider_type, owner_scope,
         owner_project_id, label, auth_mode, generation, status,

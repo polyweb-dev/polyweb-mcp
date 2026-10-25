@@ -15,10 +15,33 @@ the storage schema.
 from enum import StrEnum
 from re import Pattern, compile
 from typing import Annotated, Any, Final, Literal
+from uuid import UUID
 
-from pydantic import AwareDatetime, Field, TypeAdapter, ValidationError
+from pydantic import AwareDatetime, ConfigDict, Field, TypeAdapter, ValidationError
 
 from freesearch.models.contracts import ContractModel
+
+
+class ActorType(StrEnum):
+    """Execution principal class recorded on usage and trace rows."""
+
+    HUMAN = "human"
+    PROJECT_TOKEN = "project_token"
+
+
+class ExecutionAttribution(ContractModel):
+    """Trusted project and actor identity stamped on execution telemetry.
+
+    Built only by the execution boundary from a verified principal and an
+    authorized project context; callers can never supply it through span
+    attributes or request payloads.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    project_id: UUID
+    actor_type: ActorType
+    actor_id: UUID
 
 
 class TraceOperation(StrEnum):
@@ -63,6 +86,9 @@ class TraceAttribute:
     SCHEMA_VERSION: Final[str] = "freesearch.trace.schema_version"
     OPERATION: Final[str] = "freesearch.operation.name"
     USER_ID: Final[str] = "freesearch.user.id"
+    PROJECT_ID: Final[str] = "freesearch.project.id"
+    ACTOR_TYPE: Final[str] = "freesearch.actor.type"
+    ACTOR_ID: Final[str] = "freesearch.actor.id"
     PROVIDER: Final[str] = "freesearch.provider.name"
     ROUTING_MODE: Final[str] = "freesearch.routing.mode"
     ROUTING_CANDIDATE_COUNT: Final[str] = "freesearch.routing.candidate_count"
@@ -82,6 +108,15 @@ class TraceAttribute:
     SERVER_ADDRESS: Final[str] = "server.address"
     SERVER_PORT: Final[str] = "server.port"
 
+
+OWNERSHIP_ATTRIBUTES: Final[frozenset[str]] = frozenset(
+    {
+        TraceAttribute.PROJECT_ID,
+        TraceAttribute.ACTOR_TYPE,
+        TraceAttribute.ACTOR_ID,
+    }
+)
+"""Ownership keys only the trusted attribution binder may stamp on a span."""
 
 TRACE_SCHEMA_VERSION: Final[int] = 1
 """Schema version stamped on every root span."""
@@ -284,6 +319,9 @@ class TraceSpanRecord(ContractModel):
     error_type: str | None = None
     parent_span_id: str | None = None
     user_id: str | None = None
+    project_id: UUID | None = None
+    actor_type: ActorType | None = None
+    actor_id: UUID | None = None
     operation: TraceOperation | None = None
     provider: str | None = None
     input_text: str | None = None

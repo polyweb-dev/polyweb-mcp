@@ -26,6 +26,7 @@ from freesearch.models.provider_limits import (
 )
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.services.provider_limits import ProviderLimitsService
+from tests.fixtures.execution import seed_execution_project
 
 FIXED_AT = datetime(2026, 3, 10, 12, 0, 0, tzinfo=UTC)
 
@@ -159,7 +160,9 @@ async def test_admission_and_ledger_debit_basic_then_advanced(
         await service.record_success(
             admission,
             SearchResponse(query="q", results=[], provider="tavily"),
-            request=SearchRequest(query="q", limit=2, mode=mode),  # type: ignore[arg-type]
+            request=SearchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=2, mode=mode
+            ),  # type: ignore[arg-type]
         )
         pool = await repository.limits.get_pool(TAVILY_POOL)
         assert pool is not None and pool.remaining == expected
@@ -242,9 +245,7 @@ async def test_refill_day1_dec_to_jan_restores_free_pool(
         _snapshot(Decimal("0"), source="vendor_402", observed_at=dec)
     )
     jan = datetime(2026, 1, 2, 12, 0, 0, tzinfo=UTC)
-    await repository.limits.apply_snapshot(
-        _snapshot(Decimal("1000"), observed_at=jan)
-    )
+    await repository.limits.apply_snapshot(_snapshot(Decimal("1000"), observed_at=jan))
     pool = await repository.limits.get_pool(TAVILY_POOL)
     assert pool is not None and pool.remaining == Decimal("1000")
 
@@ -333,16 +334,23 @@ async def test_held_usage_poll_adds_no_search_extract_delay(
     try:
         poll = asyncio.ensure_future(
             adapter.usage_snapshot(
-                UsageSyncRequest(
-                    provider="tavily", auth_mode=AuthMode.KEYED, observed_at=FIXED_AT
-                )
+                UsageSyncRequest(provider="tavily", auth_mode=AuthMode.KEYED, observed_at=FIXED_AT)
             )
         )
         await asyncio.sleep(0)
         search_result, fetch_result = await asyncio.wait_for(
             asyncio.gather(
-                adapter.search(SearchRequest(query="fast", limit=2)),
-                adapter.fetch(FetchRequest(url="https://example.com/a")),
+                adapter.search(
+                    SearchRequest(
+                        project_id="00000000-0000-4000-8000-0000000000aa", query="fast", limit=2
+                    )
+                ),
+                adapter.fetch(
+                    FetchRequest(
+                        project_id="00000000-0000-4000-8000-0000000000aa",
+                        url="https://example.com/a",
+                    )
+                ),
             ),
             timeout=5,
         )
@@ -385,8 +393,14 @@ async def test_zero_usage_gets_from_cost_quota_and_view(
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler), timeout=30.0)
     adapter = TavilyAdapter(client, api_key=SecretStr("tvly-cache"), sdk_client=_ImmediateSDK())  # type: ignore[arg-type]
     try:
-        await adapter.estimate_cost(SearchRequest(query="q", limit=2))
-        await adapter.estimate_cost(FetchRequest(url="https://example.com/a"))
+        await adapter.estimate_cost(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=2)
+        )
+        await adapter.estimate_cost(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/a"
+            )
+        )
         assert await adapter.quota() is None
         await service.provider_view("tavily")
     finally:
@@ -433,10 +447,17 @@ async def test_pinned_second_call_after_402_denies_locally(
             await tracked_call(
                 repository,
                 adapter,
-                lambda running: running.search(SearchRequest(query="q", limit=1)),
+                lambda running: running.search(
+                    SearchRequest(
+                        project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=1
+                    )
+                ),
                 operation=UsageOperation.SEARCH,
-                request=SearchRequest(query="q", limit=1),
+                request=SearchRequest(
+                    project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=1
+                ),
                 limits=service,
+                attribution=await seed_execution_project(repository),
             )
     finally:
         await adapter.aclose()
@@ -583,9 +604,7 @@ async def test_spent_key_with_funded_plan_denies_key_cap(
     await service.apply_tavily_config(
         ProviderConfig(tavily_paygo_enabled=True), auth_mode=AuthMode.KEYED
     )
-    snapshot = _snapshot(
-        Decimal("0"), allowance=Decimal("10000"), source="vendor_api"
-    ).model_copy(
+    snapshot = _snapshot(Decimal("0"), allowance=Decimal("10000"), source="vendor_api").model_copy(
         update={
             "tiers": [
                 TierBalance(

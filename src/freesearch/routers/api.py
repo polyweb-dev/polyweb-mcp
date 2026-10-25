@@ -29,7 +29,10 @@ from freesearch.adapters.base import ProviderAdapter
 from freesearch.adapters.registry import adapter_factory, build_adapters, close_adapters
 from freesearch.configuration.config import get_settings, require_transport_port
 from freesearch.configuration.provider_config import ProviderConfigError
-from freesearch.infrastructure.auth_asgi import BearerAuthMiddleware
+from freesearch.infrastructure.auth_asgi import (
+    BearerAuthMiddleware,
+    current_verified_principal,
+)
 from freesearch.infrastructure.encrypted_store import (
     EncryptedDbSecretStore,
     load_secret_codec,
@@ -41,6 +44,7 @@ from freesearch.infrastructure.observability import (
     ObservabilityRuntime,
     SpanHandle,
     SpanKindName,
+    bind_execution_attribution,
     build_observability,
     current_observability,
 )
@@ -73,11 +77,13 @@ from freesearch.models.contracts import (
 from freesearch.models.observability import (
     TRACE_EVENT_PROVIDER_REQUEST,
     TRACE_EVENT_PROVIDER_RESPONSE,
+    ExecutionAttribution,
     TraceAttribute,
     TraceOperation,
     TraceRootSpan,
     TraceSpanName,
 )
+from freesearch.models.projects import PermissionAction, ProjectContext
 from freesearch.models.provider_limits import (
     LimitDeniedError,
     LimitStoreUnavailable,
@@ -101,6 +107,15 @@ from freesearch.routers.observability import register_observability_routes
 from freesearch.routers.projects import register_project_routes
 from freesearch.routers.settings import register_settings_routes
 from freesearch.services.aggregation import reciprocal_rank_fusion
+from freesearch.services.execution_scope import (
+    ExecutionForbidden,
+    ExecutionProjectArchived,
+    ExecutionScopeError,
+    ExecutionStorageUnavailable,
+    ExecutionUnauthenticated,
+    execution_attribution,
+    resolve_execution_scope,
+)
 from freesearch.services.limits_sync import LimitSyncService
 from freesearch.services.monitoring import (
     MAX_RECENT_LIMIT,
@@ -415,6 +430,9 @@ def create_app(
     @app.post("/search", response_model=SearchResponse)
     async def search(request: SearchRequest) -> SearchResponse:
         """Search the web through the best available provider or all providers concurrently."""
+        attribution = await _execution_attribution(
+            app, request.project_id, PermissionAction.SEARCH_EXECUTE
+        )
         observability = current_observability()
         with observability.span(TraceSpanName.BACKEND, attributes=_request_attributes(request)):
             if request.fanout or request.routing.mode is RoutingMode.FANOUT:
@@ -424,6 +442,7 @@ def create_app(
                     repository=app.state.repository,
                     secret_store=app.state.secret_store,
                     limits=app.state.limits,
+                    attribution=attribution,
                 )
             return await _dispatch(
                 request,
@@ -433,12 +452,16 @@ def create_app(
                 repository=app.state.repository,
                 secret_store=app.state.secret_store,
                 limits=app.state.limits,
+                attribution=attribution,
             )
 
     @app.post("/fetch", response_model=FetchResponse)
     async def fetch(request: FetchRequest) -> FetchResponse | JSONResponse:
         """Fetch a URL's content through the best available provider."""
-        return await _execute_fetch(app, request)
+        attribution = await _execution_attribution(
+            app, request.project_id, PermissionAction.FETCH_EXECUTE
+        )
+        return await _execute_fetch(app, request, attribution=attribution)
 
     @app.get("/stats", response_model=StatsResponse)
     async def stats(
@@ -789,7 +812,51 @@ async def _plan_route(
     return (candidates[0].adapter,)
 
 
-async def _execute_fetch(app: FastAPI, request: FetchRequest) -> FetchResponse | JSONResponse:
+def _execution_scope_http_error(error: ExecutionScopeError) -> HTTPException:
+    """Map one scope failure onto its generic REST status without the reason."""
+
+    if isinstance(error, ExecutionUnauthenticated):
+        return HTTPException(
+            status_code=401,
+            detail="not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    if isinstance(error, ExecutionStorageUnavailable):
+        return HTTPException(status_code=503, detail="execution is temporarily unavailable")
+    if isinstance(error, ExecutionProjectArchived):
+        return HTTPException(status_code=409, detail="project is archived")
+    if isinstance(error, ExecutionForbidden):
+        return HTTPException(status_code=403, detail="execution is not permitted")
+    return HTTPException(status_code=404, detail="project is unavailable")
+
+
+async def _execution_attribution(
+    app: FastAPI, project_id: Any, action: PermissionAction
+) -> ExecutionAttribution:
+    """Resolve the request's execution scope and bind its trusted attribution.
+
+    This is the first step of every provider-executing route — before route
+    planning, admission, or provider I/O — so a rejected request leaves no
+    usage rows and no attributed trace spans.
+    """
+
+    try:
+        context: ProjectContext = await resolve_execution_scope(
+            app.state.repository,
+            current_verified_principal(),
+            project_id=project_id,
+            action=action,
+        )
+    except ExecutionScopeError as error:
+        raise _execution_scope_http_error(error) from error
+    attribution = execution_attribution(context)
+    bind_execution_attribution(attribution)
+    return attribution
+
+
+async def _execute_fetch(
+    app: FastAPI, request: FetchRequest, *, attribution: ExecutionAttribution
+) -> FetchResponse | JSONResponse:
     """Execute a fetch request through route planning, dispatch, and graceful error handling."""
 
     observability = current_observability()
@@ -804,6 +871,7 @@ async def _execute_fetch(app: FastAPI, request: FetchRequest) -> FetchResponse |
                 repository=app.state.repository,
                 secret_store=app.state.secret_store,
                 limits=app.state.limits,
+                attribution=attribution,
             )
         except ProviderOperationError as exc:
             return _fetch_provider_error_response(exc)
@@ -823,6 +891,7 @@ async def _dispatch[
     routes: Sequence[ProviderAdapter],
     repository: SQLiteRepository | None,
     secret_store: AsyncSecretStore,
+    attribution: ExecutionAttribution,
     limits: ProviderLimitsService | None = None,
 ) -> ResponseT:
     """Run the routed adapter call for the best policy-ordered candidate.
@@ -868,6 +937,7 @@ async def _dispatch[
                     provider,
                     lambda target: invoke(target, request),
                     operation=operation,
+                    attribution=attribution,
                     request=request,
                     limits=limits,
                 )
@@ -1090,6 +1160,7 @@ async def _dispatch_fanout_search(
     routes: Sequence[ProviderAdapter],
     repository: SQLiteRepository | None,
     secret_store: AsyncSecretStore,
+    attribution: ExecutionAttribution,
     limits: ProviderLimitsService | None = None,
 ) -> SearchResponse:
     """Execute search across all eligible configured providers concurrently and fuse results.
@@ -1175,6 +1246,7 @@ async def _dispatch_fanout_search(
                         candidate_adapter,
                         lambda target: target.search(request),
                         operation=UsageOperation.SEARCH,
+                        attribution=attribution,
                         request=request,
                         limits=limits,
                     )
@@ -1252,7 +1324,9 @@ async def _dispatch_fanout_search(
                             "participating_providers": participating,
                             "fused_count": len(fused_results),
                         },
-                    )
+                    ),
+                    attribution=attribution,
+                    trace_id=observability.current_trace_id(),
                 )
 
         response = SearchResponse(

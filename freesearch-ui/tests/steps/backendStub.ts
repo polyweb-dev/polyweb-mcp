@@ -2732,6 +2732,20 @@ export async function installBackendStub(page: Page): Promise<void> {
       return json(route, { detail: `unknown trace '${traceId}'` }, 404)
     }
   )
+
+  // Projects surface: absent by default, so every scenario keeps the hidden
+  // project UI (the selector renders nothing) unless a project stub overrides.
+  await page.route(
+    (url) => url.pathname === "/api/v1/system/access",
+    (route) => {
+      if (route.request().method() !== "GET") return route.fallback()
+      return json(route, { detail: "projects surface unavailable" }, 404)
+    }
+  )
+  await page.route(
+    (url) => url.pathname === "/api/v1/projects" || url.pathname.startsWith("/api/v1/projects/"),
+    (route) => json(route, { detail: "projects surface unavailable" }, 404)
+  )
 }
 
 /**
