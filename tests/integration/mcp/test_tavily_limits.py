@@ -36,9 +36,7 @@ def test_construction_keyless_without_key() -> None:
 
     client = httpx.AsyncClient(timeout=30.0)
     try:
-        adapter = _build_with_resolved_secret(
-            TavilyAdapter, client, None, config=ProviderConfig()
-        )
+        adapter = _build_with_resolved_secret(TavilyAdapter, client, None, config=ProviderConfig())
         assert isinstance(adapter, TavilyAdapter)
         assert adapter.limit_auth_mode is AuthMode.KEYLESS
     finally:
@@ -116,14 +114,12 @@ async def test_terminal_402_single_call_propagates() -> None:
     assert excinfo.value.error.code == "quota_exhausted"
     assert excinfo.value.error.status_code == 402
     assert excinfo.value.error.retryable is False
-    assert excinfo.value.error.message == (
-        "Tavily is out of Credits. Wait until reset or upgrade."
-    )
+    assert excinfo.value.error.message == ("Tavily is out of Credits. Wait until reset or upgrade.")
 
 
 def test_mcp_keyless_build_registers_tavily() -> None:
     namespace = SimpleNamespace(name="tavily", limit_auth_mode=AuthMode.KEYLESS)
     assert namespace.limit_auth_mode is AuthMode.KEYLESS
-    request = SearchRequest(query="q", limit=1)
+    request = SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=1)
     assert request.query == "q"
     assert LimitOperation.SEARCH is not None

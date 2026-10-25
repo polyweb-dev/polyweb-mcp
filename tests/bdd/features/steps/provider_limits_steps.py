@@ -45,6 +45,7 @@ from freesearch.models.provider_limits import (
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.services import credit_units as cu
 from freesearch.services.provider_limits import ProviderLimitsService
+from tests.fixtures.execution import bdd_project_id, scenario_attribution
 
 FIXED_AT = datetime(2026, 3, 10, 12, 0, 0, tzinfo=UTC)
 SYNTH = "synth"
@@ -226,7 +227,8 @@ def step_rows_preserved(context: Any) -> None:
     with sqlite3.connect(context.database_path) as conn:
         usage = conn.execute("SELECT units FROM usage_events WHERE id=7").fetchone()
         quota = conn.execute("SELECT remaining FROM quota_snapshots WHERE id=9").fetchone()
-    assert usage == ("12.50",)
+    # P04: usage_events is recreated empty at 0008; unrelated rows stay.
+    assert usage is None
     assert quota == ("75",)
 
 
@@ -657,7 +659,9 @@ def step_route_fixtures(context: Any) -> None:
 def step_routes_twice(context: Any) -> None:
     from freesearch.models.contracts import SearchRequest
 
-    req = SearchRequest(query="synthetic routing probe")
+    req = SearchRequest(
+        project_id="00000000-0000-4000-8000-0000000000aa", query="synthetic routing probe"
+    )
     context.first_order = [
         c.adapter.name for c in context.select_route(req, context.route_adapters, {}, {})
     ]
@@ -826,7 +830,13 @@ def step_batch(context: Any) -> None:
         )
         headers = raw_auth_headers(pair["access_token"])
         context.batch_response = client.post(
-            "/fetch", json={"url": "https://example.com/a", "url_count": 2}, headers=headers
+            "/fetch",
+            json={
+                "project_id": bdd_project_id(context, headers),
+                "url": "https://example.com/a",
+                "url_count": 2,
+            },
+            headers=headers,
         )
 
 
@@ -1365,7 +1375,12 @@ def step_brave_headers(context: Any) -> None:
     context.brave_client = client
     from freesearch.models.contracts import SearchRequest
 
-    context.brave_response = _run(context, adapter.search(SearchRequest(query="q", limit=2)))
+    context.brave_response = _run(
+        context,
+        adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=2)
+        ),
+    )
 
 
 @when("I read the Brave usage snapshot")
@@ -1476,7 +1491,12 @@ def step_brave_app(context: Any) -> None:
             ),
         )
         context.brave_admin_headers = raw_auth_headers(pair["access_token"])
-    _run(context, context.brave_adapter.search(SearchRequest(query="q", limit=2)))
+    _run(
+        context,
+        context.brave_adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=2)
+        ),
+    )
     snapshot = _run(
         context,
         context.brave_adapter.usage_snapshot(
@@ -1624,7 +1644,12 @@ def step_brave_quota_limited(context: Any) -> None:
     from freesearch.models.contracts import SearchRequest
 
     try:
-        _run(context, adapter.search(SearchRequest(query="q", limit=2)))
+        _run(
+            context,
+            adapter.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=2)
+            ),
+        )
         context.brave_error = None
     except Exception as exc:
         context.brave_error = exc
@@ -1654,7 +1679,12 @@ def step_brave_rate_limited(context: Any) -> None:
     from freesearch.models.contracts import SearchRequest
 
     try:
-        _run(context, adapter.search(SearchRequest(query="q", limit=2)))
+        _run(
+            context,
+            adapter.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=2)
+            ),
+        )
         context.brave_error = None
     except Exception as exc:
         context.brave_error = exc
@@ -1742,7 +1772,9 @@ def step_brave_route_fixtures(context: Any) -> None:
 def step_brave_routes_twice(context: Any) -> None:
     from freesearch.models.contracts import SearchRequest
 
-    req = SearchRequest(query="brave routing probe")
+    req = SearchRequest(
+        project_id="00000000-0000-4000-8000-0000000000aa", query="brave routing probe"
+    )
     context.first_order = [
         c.adapter.name for c in context.select_route(req, context.route_adapters, {}, {})
     ]
@@ -2257,13 +2289,29 @@ def step_tavily_both_rails_sdk(context: Any) -> None:
 
     keyless = context.tavily_keyless_adapter
     keyed = context.tavily_keyed_adapter
-    context.tavily_keyless_search = _run(context, keyless.search(SearchRequest(query="q")))
-    context.tavily_keyless_fetch = _run(
-        context, keyless.fetch(FetchRequest(url="https://example.com/doc"))
+    context.tavily_keyless_search = _run(
+        context,
+        keyless.search(SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="q")),
     )
-    context.tavily_keyed_search = _run(context, keyed.search(SearchRequest(query="q")))
+    context.tavily_keyless_fetch = _run(
+        context,
+        keyless.fetch(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+            )
+        ),
+    )
+    context.tavily_keyed_search = _run(
+        context,
+        keyed.search(SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="q")),
+    )
     context.tavily_keyed_fetch = _run(
-        context, keyed.fetch(FetchRequest(url="https://example.com/doc"))
+        context,
+        keyed.fetch(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+            )
+        ),
     )
     assert context.tavily_keyless_search.provider == "tavily"
     assert context.tavily_keyed_search.provider == "tavily"
@@ -2369,6 +2417,7 @@ def step_tavily_full_params(context: Any) -> None:
             context,
             adapter.search(
                 SearchRequest(
+                    project_id="00000000-0000-4000-8000-0000000000aa",
                     query="params probe",
                     limit=5,
                     mode="advanced",
@@ -2382,6 +2431,7 @@ def step_tavily_full_params(context: Any) -> None:
             context,
             adapter.fetch(
                 FetchRequest(
+                    project_id="00000000-0000-4000-8000-0000000000aa",
                     url="https://example.com/doc",
                     provider_options={"tavily": extract_params},
                 )
@@ -2440,6 +2490,7 @@ def step_tavily_depth_conflict(context: Any) -> None:
                 context,
                 adapter.search(
                     SearchRequest(
+                        project_id="00000000-0000-4000-8000-0000000000aa",
                         query="conflict",
                         mode="basic",
                         provider_options={"tavily": TavilySearchParams(search_depth="advanced")},
@@ -2468,20 +2519,32 @@ def step_tavily_estimate_search(context: Any) -> None:
     context.tavily_caller_clients = getattr(context, "tavily_caller_clients", [])
     context.tavily_caller_clients.append(cost_caller)
     context.tavily_basic_estimate = _run(
-        context, context.tavily_cost_adapter.estimate_cost(SearchRequest(query="q"))
+        context,
+        context.tavily_cost_adapter.estimate_cost(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="q")
+        ),
     )
     context.tavily_advanced_estimate = _run(
         context,
-        context.tavily_cost_adapter.estimate_cost(SearchRequest(query="q", mode="advanced")),
+        context.tavily_cost_adapter.estimate_cost(
+            SearchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", query="q", mode="advanced"
+            )
+        ),
     )
     context.tavily_basic_extract_estimate = _run(
         context,
-        context.tavily_cost_adapter.estimate_cost(FetchRequest(url="https://example.com/doc")),
+        context.tavily_cost_adapter.estimate_cost(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+            )
+        ),
     )
     context.tavily_advanced_extract_estimate = _run(
         context,
         context.tavily_cost_adapter.estimate_cost(
             FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa",
                 url="https://example.com/doc",
                 provider_options={"tavily": TavilyExtractParams(extract_depth="advanced")},
             )
@@ -3129,7 +3192,9 @@ def step_tavily_routes_twice(context: Any) -> None:
 
     context.tavily_select_route = select_route
     context.tavily_route_adapters = [_StubAdapter("tavily-b"), _StubAdapter("tavily-a")]
-    req = SearchRequest(query="tavily routing probe")
+    req = SearchRequest(
+        project_id="00000000-0000-4000-8000-0000000000aa", query="tavily routing probe"
+    )
     context.tavily_first_order = [
         c.adapter.name for c in select_route(req, context.tavily_route_adapters, {}, {})
     ]
@@ -3228,10 +3293,16 @@ def step_tavily_run_while_held(context: Any) -> None:
         )
 
     async def _search() -> Any:
-        return await context.tavily_held_adapter.search(SearchRequest(query="held-q"))
+        return await context.tavily_held_adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="held-q")
+        )
 
     async def _extract() -> Any:
-        return await context.tavily_held_adapter.fetch(FetchRequest(url="https://example.com/doc"))
+        return await context.tavily_held_adapter.fetch(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+            )
+        )
 
     async def _scenario() -> tuple[Any, Any, Any]:
         poll_task = asyncio.ensure_future(_held_poll())
@@ -3267,17 +3338,26 @@ def step_tavily_zero_gets(context: Any) -> None:
 
     assert context.tavily_usage_gets == ["https://api.tavily.com/usage"]
     before = list(context.tavily_usage_gets)
-    _run(context, context.tavily_held_adapter.estimate_cost(SearchRequest(query="q")))
     _run(
         context,
-        context.tavily_held_adapter.estimate_cost(FetchRequest(url="https://example.com/doc")),
+        context.tavily_held_adapter.estimate_cost(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="q")
+        ),
+    )
+    _run(
+        context,
+        context.tavily_held_adapter.estimate_cost(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+            )
+        ),
     )
     _run(context, context.tavily_held_adapter.quota())
     _run(context, context.service.provider_view("tavily"))
     from freesearch.services.routing import select_route
     from tests.integration.services.test_monitoring import _StubAdapter
 
-    req = SearchRequest(query="zero-get probe")
+    req = SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="zero-get probe")
     select_route(req, [_StubAdapter("tavily-a")], {}, {})
     assert context.tavily_usage_gets == before
 
@@ -3606,7 +3686,11 @@ def step_tavily_rest_search(context: Any) -> None:
     with TestClient(context.tavily_rest_app) as client:
         context.tavily_rest_response = client.post(
             "/search",
-            json={"query": "rest 402 probe", "limit": 3},
+            json={
+                "project_id": bdd_project_id(context, context.tavily_rest_headers),
+                "query": "rest 402 probe",
+                "limit": 3,
+            },
             headers=context.tavily_rest_headers,
         )
 
@@ -3646,7 +3730,12 @@ def step_tavily_mcp_402(context: Any) -> None:
     )
 
     async def _server() -> Any:
+        from tests.fixtures.execution import seed_token_project
+
         service, token, _email = await mcp_account_token(context.repository, "tav-mcp")
+        context.tavily_mcp_pid = str(
+            (await seed_token_project(context.repository, token)).project_id
+        )
         return create_server(
             [context.tavily_mcp_adapter],
             repository=context.repository,
@@ -3664,7 +3753,10 @@ def step_tavily_mcp_search(context: Any) -> None:
     try:
         _run(
             context,
-            context.tavily_mcp_server.call_tool("search", {"request": {"query": "mcp 402 probe"}}),
+            context.tavily_mcp_server.call_tool(
+                "search",
+                {"request": {"project_id": context.tavily_mcp_pid, "query": "mcp 402 probe"}},
+            ),
         )
         context.tavily_mcp_error = None
     except ToolError as exc:
@@ -3789,20 +3881,34 @@ def step_tavily_fanout_run(context: Any) -> None:
     with TestClient(context.tavily_fanout_app) as client:
         context.tavily_fanout_held = client.post(
             "/search",
-            json={"query": "fanout 402 probe", "limit": 3, "fanout": True},
+            json={
+                "project_id": bdd_project_id(context, context.tavily_fanout_headers),
+                "query": "fanout 402 probe",
+                "limit": 3,
+                "fanout": True,
+            },
             headers=context.tavily_fanout_headers,
         )
     context.tavily_other_released.set()
     with TestClient(context.tavily_fanout_app) as client:
         context.tavily_fanout_released = client.post(
             "/search",
-            json={"query": "fanout 402 probe", "limit": 3, "fanout": True},
+            json={
+                "project_id": bdd_project_id(context, context.tavily_fanout_headers),
+                "query": "fanout 402 probe",
+                "limit": 3,
+                "fanout": True,
+            },
             headers=context.tavily_fanout_headers,
         )
     with TestClient(context.tavily_single_app) as client:
         context.tavily_single_fallback = client.post(
             "/search",
-            json={"query": "fanout 402 probe", "limit": 3},
+            json={
+                "project_id": bdd_project_id(context, context.tavily_fanout_headers),
+                "query": "fanout 402 probe",
+                "limit": 3,
+            },
             headers=context.tavily_fanout_headers,
         )
 
@@ -3929,7 +4035,10 @@ def step_tavily_search_retry_7(context: Any) -> None:
     context.tavily_retry_sdk.search = _flaky  # type: ignore[assignment]
     context.tavily_sleeps.clear()
     context.tavily_search_retry = _run(
-        context, context.tavily_retry_adapter.search(SearchRequest(query="retry-7"))
+        context,
+        context.tavily_retry_adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="retry-7")
+        ),
     )
     context.tavily_search_calls = calls["count"]
 
@@ -3973,7 +4082,11 @@ def step_tavily_extract_retry_3(context: Any) -> None:
     context.tavily_sleeps.clear()
     context.tavily_extract_retry = _run(
         context,
-        context.tavily_retry_adapter.fetch(FetchRequest(url="https://example.com/doc")),
+        context.tavily_retry_adapter.fetch(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+            )
+        ),
     )
     context.tavily_extract_calls = calls["count"]
 
@@ -4113,12 +4226,22 @@ def step_tavily_retry_variant(context: Any, header: str) -> None:
         context.tavily_variant_adapter._normalize_error = _patched  # type: ignore[assignment]
     if header in ("zero", "http-date"):
         context.tavily_variant_result = _run(
-            context, context.tavily_variant_adapter.search(SearchRequest(query="variant"))
+            context,
+            context.tavily_variant_adapter.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="variant")
+            ),
         )
         context.tavily_variant_error = None
     else:
         try:
-            _run(context, context.tavily_variant_adapter.search(SearchRequest(query="variant")))
+            _run(
+                context,
+                context.tavily_variant_adapter.search(
+                    SearchRequest(
+                        project_id="00000000-0000-4000-8000-0000000000aa", query="variant"
+                    )
+                ),
+            )
             context.tavily_variant_error = None
         except Exception as exc:
             context.tavily_variant_error = exc
@@ -4480,7 +4603,10 @@ def step_keenable_paid_adapter(context: Any) -> None:
     from freesearch.models.contracts import SearchRequest
 
     context.keenable_paid_response = _run(
-        context, adapter.search(SearchRequest(query="paid", limit=2))
+        context,
+        adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="paid", limit=2)
+        ),
     )
     assert context.keenable_paid_response.usage is not None
     assert context.keenable_paid_response.usage.units == Decimal("2")
@@ -4497,7 +4623,8 @@ def step_keenable_paid_adapter(context: Any) -> None:
                 observed_at=now,
                 status=UsageStatus.SUCCESS,
                 metadata={"paid": True, "sku": "search.pro"},
-            )
+            ),
+            attribution=scenario_attribution(context),
         ),
     )
 
@@ -4627,7 +4754,12 @@ def step_keenable_429(context: Any) -> None:
     from freesearch.models.contracts import SearchRequest
 
     try:
-        _run(context, adapter.search(SearchRequest(query="q", limit=2)))
+        _run(
+            context,
+            adapter.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=2)
+            ),
+        )
         context.keenable_error = None
     except Exception as exc:
         context.keenable_error = exc
@@ -4663,7 +4795,12 @@ def step_keenable_402(context: Any) -> None:
     from freesearch.models.contracts import SearchRequest
 
     try:
-        _run(context, adapter.search(SearchRequest(query="q", limit=2)))
+        _run(
+            context,
+            adapter.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=2)
+            ),
+        )
         context.keenable_error = None
     except Exception as exc:
         context.keenable_error = exc

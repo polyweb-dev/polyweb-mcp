@@ -4,6 +4,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from enum import StrEnum
 from typing import Any, Literal, Self
+from uuid import UUID
 
 from pydantic import (
     AnyHttpUrl,
@@ -66,6 +67,7 @@ class RoutingPreference(ContractModel):
 
 
 class SearchRequest(ContractModel):
+    project_id: UUID
     query: str = Field(min_length=1, max_length=2_000)
     limit: int = Field(default=10, ge=1, le=100)
     mode: Literal["turbo", "fast", "basic", "advanced"] | None = None
@@ -121,6 +123,7 @@ class SearchResponse(ContractModel):
 
 
 class FetchRequest(ContractModel):
+    project_id: UUID
     url: AnyHttpUrl
     max_chars: int | None = Field(default=None, ge=1, le=2_000_000)
     url_count: int = Field(default=1, ge=1, le=10_000)

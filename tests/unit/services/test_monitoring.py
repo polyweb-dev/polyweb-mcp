@@ -37,6 +37,7 @@ from freesearch.services.monitoring import (
     effective_quotas_batch,
     refresh_quotas,
 )
+from tests.fixtures.execution import seed_execution_project
 
 FIXED_AT = datetime(2026, 4, 2, 12, 0, 0, tzinfo=UTC)
 
@@ -133,8 +134,14 @@ async def test_effective_quotas_batch_soft_zero(
             await repo.record_quota(
                 _soft_zero_snapshot(provider, FIXED_AT, metadata={"origin": "vendor-poll"})
             )
-            await repo.record_usage(_usage_event(provider, FIXED_AT + timedelta(minutes=30)))
-            await repo.record_usage(_usage_event(provider, FIXED_AT + timedelta(hours=1)))
+            await repo.record_usage(
+                _usage_event(provider, FIXED_AT + timedelta(minutes=30)),
+                attribution=await seed_execution_project(repo),
+            )
+            await repo.record_usage(
+                _usage_event(provider, FIXED_AT + timedelta(hours=1)),
+                attribution=await seed_execution_project(repo),
+            )
         writes.clear()
 
         result = await effective_quotas_batch(repo, providers)
@@ -158,20 +165,29 @@ async def test_effective_quotas_batch_soft_zero(
     provider = "parallel"
     if scenario == "earlier_success":
         await repo.record_quota(_soft_zero_snapshot(provider, FIXED_AT))
-        await repo.record_usage(_usage_event(provider, FIXED_AT - timedelta(hours=1)))
+        await repo.record_usage(
+            _usage_event(provider, FIXED_AT - timedelta(hours=1)),
+            attribution=await seed_execution_project(repo),
+        )
     elif scenario == "equal_timestamp":
         await repo.record_quota(_soft_zero_snapshot(provider, FIXED_AT))
-        await repo.record_usage(_usage_event(provider, FIXED_AT))
+        await repo.record_usage(
+            _usage_event(provider, FIXED_AT), attribution=await seed_execution_project(repo)
+        )
     elif scenario == "later_failure":
         await repo.record_quota(_soft_zero_snapshot(provider, FIXED_AT))
         await repo.record_usage(
-            _usage_event(provider, FIXED_AT + timedelta(hours=1), status=UsageStatus.FAILURE)
+            _usage_event(provider, FIXED_AT + timedelta(hours=1), status=UsageStatus.FAILURE),
+            attribution=await seed_execution_project(repo),
         )
     elif scenario == "hard_zero":
         await repo.record_quota(
             _soft_zero_snapshot(provider, FIXED_AT, source=QuotaSource.AUTHORITATIVE)
         )
-        await repo.record_usage(_usage_event(provider, FIXED_AT + timedelta(hours=1)))
+        await repo.record_usage(
+            _usage_event(provider, FIXED_AT + timedelta(hours=1)),
+            attribution=await seed_execution_project(repo),
+        )
     elif scenario == "degenerate_limit_zero":
         await repo.record_quota(_soft_zero_snapshot(provider, FIXED_AT, remaining="0", limit="0"))
     else:  # pragma: no cover - parametrized ids are fixed above
@@ -204,7 +220,10 @@ async def test_effective_quotas_batch_failures_preserve_snapshot(
     assert await effective_quotas_batch(repo, []) == {}
 
     await repo.record_quota(_soft_zero_snapshot("parallel", FIXED_AT))
-    await repo.record_usage(_usage_event("parallel", FIXED_AT + timedelta(hours=1)))
+    await repo.record_usage(
+        _usage_event("parallel", FIXED_AT + timedelta(hours=1)),
+        attribution=await seed_execution_project(repo),
+    )
 
     async def _failing_list_usage(*args: Any, **kwargs: Any) -> list[UsageEvent]:
         raise RuntimeError("usage store down")

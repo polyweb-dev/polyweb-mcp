@@ -41,6 +41,7 @@ from freesearch.routers.control import (
 )
 from freesearch.services.monitoring import clear_quota_poll_cache
 from tests.fixtures.auth import TEMP_PASSWORD, temp_email
+from tests.fixtures.execution import seed_member_project
 
 FIXED_AT = datetime(2026, 3, 10, 12, 0, 0, tzinfo=UTC)
 
@@ -187,9 +188,7 @@ async def _authed_headers(client: httpx.AsyncClient, prefix: str) -> dict[str, s
     return {"Authorization": f"Bearer {logged_in.json()['access_token']}"}
 
 
-async def test_request_does_not_wait_for_quota_poll(
-    tmp_path: Path, auth_secret: str
-) -> None:
+async def test_request_does_not_wait_for_quota_poll(tmp_path: Path, auth_secret: str) -> None:
     """M5: an expired TTL never delays the response; the poll lands afterwards."""
     clear_config_cache()
     clear_quota_poll_cache()
@@ -213,9 +212,12 @@ async def test_request_does_not_wait_for_quota_poll(
             transport = httpx.ASGITransport(app=app)
             async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
                 headers = await _authed_headers(client, "no-wait")
+                pid = str((await seed_member_project(repository, headers)).project_id)
                 try:
                     request_task = asyncio.create_task(
-                        client.post("/search", json={"query": "no wait"}, headers=headers)
+                        client.post(
+                            "/search", json={"project_id": pid, "query": "no wait"}, headers=headers
+                        )
                     )
                     await asyncio.wait_for(entered.wait(), timeout=5)
                     order.append("poll_entered")
@@ -233,7 +235,7 @@ async def test_request_does_not_wait_for_quota_poll(
                 assert stored.remaining == Decimal("5")
                 assert stored.limit == Decimal("10")
                 second = await client.post(
-                    "/search", json={"query": "after poll"}, headers=headers
+                    "/search", json={"project_id": pid, "query": "after poll"}, headers=headers
                 )
                 assert second.status_code == 200
                 assert second.json()["provider"] == "exa"
@@ -246,9 +248,7 @@ async def test_request_does_not_wait_for_quota_poll(
         await repository.close()
 
 
-async def test_stale_first_snapshot_then_new_snapshot(
-    tmp_path: Path, auth_secret: str
-) -> None:
+async def test_stale_first_snapshot_then_new_snapshot(tmp_path: Path, auth_secret: str) -> None:
     """E1: first expired-TTL request uses the old snapshot; later request excludes."""
     clear_config_cache()
     clear_quota_poll_cache()
@@ -278,11 +278,13 @@ async def test_stale_first_snapshot_then_new_snapshot(
             transport = httpx.ASGITransport(app=app)
             async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
                 headers = await _authed_headers(client, "stale-first")
+                pid = str((await seed_member_project(repository, headers)).project_id)
                 try:
                     first_task = asyncio.create_task(
                         client.post(
                             "/search",
                             json={
+                                "project_id": pid,
                                 "query": "stale first",
                                 "routing": {"mode": "require", "providers": ["exa"]},
                             },
@@ -304,6 +306,7 @@ async def test_stale_first_snapshot_then_new_snapshot(
                 second = await client.post(
                     "/search",
                     json={
+                        "project_id": pid,
                         "query": "after exhaustion",
                         "routing": {"mode": "require", "providers": ["exa"]},
                     },
@@ -320,9 +323,7 @@ async def test_stale_first_snapshot_then_new_snapshot(
         await repository.close()
 
 
-async def test_auto_route_plan_read_budget(
-    tmp_path: Path, auth_secret: str
-) -> None:
+async def test_auto_route_plan_read_budget(tmp_path: Path, auth_secret: str) -> None:
     """M6: one warm AUTO plan uses at most 4 foreground reads plus one batch pair."""
     clear_config_cache()
     clear_quota_poll_cache()
@@ -408,10 +409,13 @@ async def test_auto_route_plan_read_budget(
                 transport = httpx.ASGITransport(app=app)
                 async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
                     headers = await _authed_headers(client, "read-budget")
+                    pid = str((await seed_member_project(repository, headers)).project_id)
                     try:
                         first_task = asyncio.create_task(
                             client.post(
-                                "/search", json={"query": "cold plan"}, headers=headers
+                                "/search",
+                                json={"project_id": pid, "query": "cold plan"},
+                                headers=headers,
                             )
                         )
                         with suppress(asyncio.TimeoutError, TimeoutError):
@@ -443,7 +447,11 @@ async def test_auto_route_plan_read_budget(
                     quota_calls.clear()
                     select_counts[0] = 0
                     warm_task = asyncio.create_task(
-                        client.post("/search", json={"query": "warm plan"}, headers=headers)
+                        client.post(
+                            "/search",
+                            json={"project_id": pid, "query": "warm plan"},
+                            headers=headers,
+                        )
                     )
                     with suppress(asyncio.TimeoutError, TimeoutError):
                         await asyncio.wait_for(entered.wait(), timeout=5)

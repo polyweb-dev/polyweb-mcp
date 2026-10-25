@@ -442,11 +442,7 @@ def _tavily_minute_record() -> ProviderLimitRecord:
         supported=True,
         transport_available=True,
         rate=RateBlock(
-            windows=[
-                _window(
-                    "tavily:keyed:search:requests", "100", RateWindowName.MINUTE
-                )
-            ],
+            windows=[_window("tavily:keyed:search:requests", "100", RateWindowName.MINUTE)],
             published=True,
         ),
         budget=None,

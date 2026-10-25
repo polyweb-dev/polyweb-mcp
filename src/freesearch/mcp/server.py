@@ -40,6 +40,7 @@ from freesearch.infrastructure.observability import (
     NO_OP_OBSERVABILITY,
     ObservabilityRuntime,
     SpanKindName,
+    bind_execution_attribution,
     build_observability,
     use_observability,
 )
@@ -51,6 +52,8 @@ from freesearch.infrastructure.trace_payloads import (
     _request_attributes,
 )
 from freesearch.mcp.auth import (
+    MCP_AUTH_ERROR,
+    McpAuthenticationError,
     optional_mcp_user,
     run_http_server,
     run_stdio_server,
@@ -68,12 +71,23 @@ from freesearch.models.contracts import (
 )
 from freesearch.models.observability import (
     TRACE_SCHEMA_VERSION,
+    ExecutionAttribution,
     TraceAttribute,
     TraceRootSpan,
 )
+from freesearch.models.projects import PermissionAction
 from freesearch.models.users import UserPrincipal
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.services.aggregation import reciprocal_rank_fusion
+from freesearch.services.execution_scope import (
+    ExecutionForbidden,
+    ExecutionProjectArchived,
+    ExecutionScopeError,
+    ExecutionStorageUnavailable,
+    ExecutionUnauthenticated,
+    execution_attribution,
+    resolve_execution_scope,
+)
 from freesearch.services.limits_sync import LimitSyncService
 from freesearch.services.monitoring import (
     clear_quota_poll_cache,
@@ -166,10 +180,10 @@ def _trace_database(
 def _mcp_root_attributes(
     principal: UserPrincipal | None, request: SearchRequest | FetchRequest
 ) -> dict[str, object]:
-    """Root attributes for one MCP tool call, with identity when verified.
+    """Root attributes for one MCP tool call with its verified identity.
 
-    A project/account owner is absent for anonymous calls. The schema version
-    and operation are still present when a provider call fails.
+    The schema version and operation are still present when a provider call
+    fails.
     """
 
     attributes: dict[str, object] = {TraceAttribute.SCHEMA_VERSION: TRACE_SCHEMA_VERSION}
@@ -184,15 +198,20 @@ async def _tool_root(
     observability: ObservabilityRuntime,
     name: str,
     attributes: Mapping[str, object],
+    *,
+    attribution: ExecutionAttribution,
 ) -> AsyncIterator[None]:
     """Open one SERVER root around a tool body.
 
-    The runtime is bound for the call, a failure annotates the root before it
-    propagates, and one bounded flush runs after the root closes — the same
+    The runtime is bound for the call and the verified execution attribution is
+    bound before the root span starts, so the attribution processor stamps
+    ownership on the root and every child. A failure annotates the root before
+    it propagates, and one bounded flush runs after the root closes — the same
     contract the API trace middleware applies to a traced request.
     """
 
     with use_observability(observability):
+        bind_execution_attribution(attribution)
         with observability.span(name, kind=SpanKindName.SERVER, attributes=attributes):
             try:
                 yield
@@ -200,6 +219,20 @@ async def _tool_root(
                 _annotate_root_error(observability, error)
                 raise
         await flush_traces(observability)
+
+
+def _execution_tool_error(error: ExecutionScopeError) -> Exception:
+    """Map one scope failure onto a generic tool error without its reason."""
+
+    if isinstance(error, ExecutionUnauthenticated):
+        return McpAuthenticationError(MCP_AUTH_ERROR)
+    if isinstance(error, ExecutionStorageUnavailable):
+        return RuntimeError("execution is temporarily unavailable")
+    if isinstance(error, ExecutionProjectArchived):
+        return RuntimeError("project is archived")
+    if isinstance(error, ExecutionForbidden):
+        return RuntimeError("execution is not permitted")
+    return RuntimeError("project is unavailable")
 
 
 def _quota_state_changed(current: QuotaSnapshot | None, projected: QuotaSnapshot) -> bool:
@@ -478,6 +511,8 @@ async def _mcp_fanout_search(
     repository: SQLiteRepository | None,
     secret_store: AsyncSecretStore | None = None,
     limits: "ProviderLimitsService | None" = None,
+    *,
+    attribution: ExecutionAttribution,
 ) -> dict[str, Any]:
     """Execute concurrent fanout search across active adapters for MCP.
 
@@ -516,6 +551,7 @@ async def _mcp_fanout_search(
                     candidate_adapter,
                     lambda target: target.search(request),
                     operation=UsageOperation.SEARCH,
+                    attribution=attribution,
                     request=request,
                     limits=limits,
                 )
@@ -624,7 +660,11 @@ async def _route_adapter(
 
 
 async def _search_response(
-    request: SearchRequest, active: Sequence[ProviderAdapter], state: _ServerState
+    request: SearchRequest,
+    active: Sequence[ProviderAdapter],
+    state: _ServerState,
+    *,
+    attribution: ExecutionAttribution,
 ) -> SearchResponse:
     """Run one search call and return its typed response."""
 
@@ -635,6 +675,7 @@ async def _search_response(
             state["repository"],
             state["secret_store"],
             limits=state["limits"],
+            attribution=attribution,
         )
         return SearchResponse.model_validate(payload)
     adapter = await _route_adapter(request, active=active, state=state)
@@ -643,13 +684,18 @@ async def _search_response(
         adapter,
         lambda target: target.search(request),
         operation=UsageOperation.SEARCH,
+        attribution=attribution,
         request=request,
         limits=state["limits"],
     )
 
 
 async def _fetch_response(
-    request: FetchRequest, active: Sequence[ProviderAdapter], state: _ServerState
+    request: FetchRequest,
+    active: Sequence[ProviderAdapter],
+    state: _ServerState,
+    *,
+    attribution: ExecutionAttribution,
 ) -> FetchResponse:
     """Run one fetch call and return its typed response."""
 
@@ -660,6 +706,7 @@ async def _fetch_response(
         adapter,
         lambda target: target.fetch(request),
         operation=UsageOperation.FETCH,
+        attribution=attribution,
         request=request,
         limits=state["limits"],
     )
@@ -673,15 +720,30 @@ def _register_tools(
     routes: list[ProviderAdapter] | None,
     resolve_principal: Callable[[], Awaitable[UserPrincipal | None]],
 ) -> None:
-    """Register the public, traced Search and Fetch tools on ``server``."""
+    """Register the authenticated, traced Search and Fetch tools on ``server``."""
 
     def _active_routes() -> Sequence[ProviderAdapter] | None:
         return state["routes"] if owns_client else routes
 
+    async def _resolve_scope(
+        request: SearchRequest | FetchRequest, action: PermissionAction
+    ) -> tuple[UserPrincipal, ExecutionAttribution]:
+        """Verify the caller and resolve its project scope before any routing."""
+
+        principal = await resolve_principal()
+        try:
+            context = await resolve_execution_scope(
+                state["repository"], principal, project_id=request.project_id, action=action
+            )
+        except ExecutionScopeError as error:
+            raise _execution_tool_error(error) from error
+        assert principal is not None
+        return principal, execution_attribution(context)
+
     @server.tool()
     async def search(request: SearchRequest) -> dict[str, Any]:
         """Search the web through the best available provider or all providers concurrently."""
-        principal = await resolve_principal()
+        principal, attribution = await _resolve_scope(request, PermissionAction.SEARCH_EXECUTE)
         active = _active_routes()
         if not active:
             raise RuntimeError("no provider is configured: set a FREESEARCH_*_API_KEY")
@@ -690,15 +752,16 @@ def _register_tools(
             observability,
             TraceRootSpan.MCP_SEARCH.value,
             _mcp_root_attributes(principal, request),
+            attribution=attribution,
         ):
-            response = await _search_response(request, active, state)
+            response = await _search_response(request, active, state, attribution=attribution)
             _annotate_root(observability, request, response)
         return response.model_dump(mode="json")
 
     @server.tool()
     async def fetch(request: FetchRequest) -> dict[str, Any]:
         """Fetch a URL's content through the best available provider."""
-        principal = await resolve_principal()
+        principal, attribution = await _resolve_scope(request, PermissionAction.FETCH_EXECUTE)
         active = _active_routes()
         if not active:
             raise RuntimeError("no provider is configured: set a FREESEARCH_*_API_KEY")
@@ -707,8 +770,9 @@ def _register_tools(
             observability,
             TraceRootSpan.MCP_FETCH.value,
             _mcp_root_attributes(principal, request),
+            attribution=attribution,
         ):
-            response = await _fetch_response(request, active, state)
+            response = await _fetch_response(request, active, state, attribution=attribution)
             _annotate_root(observability, request, response)
         return response.model_dump(mode="json")
 
@@ -722,11 +786,12 @@ def create_server(
     auth_service: AuthService | None = None,
     stdio_token: SecretStr | None = None,
 ) -> FastMCP:
-    """Create public Search/Fetch tools over a configured adapter set.
+    """Create authenticated Search/Fetch tools over a configured adapter set.
 
-    HTTP Bearer credentials are optional and verified by the outer ASGI guard.
-    A configured stdio credential remains optional account context for local
-    calls; neither credential is required to invoke these provider operations.
+    HTTP Bearer credentials are verified by the outer ASGI guard and every tool
+    call resolves its project execution scope before routing. A configured
+    stdio credential supplies the account context for local calls; a call
+    without a verified principal is rejected as a tool error.
     """
 
     owns_client = adapters is None

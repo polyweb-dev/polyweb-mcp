@@ -407,9 +407,7 @@ async def test_tavily_reserve_rechecks_rate_and_funds_atomically(limits_repo) ->
         and r.operation is LimitOperation.SEARCH
         and r.auth_mode is AuthMode.KEYED
     )
-    await limits_repo.seed_records(
-        [r for r in provider_limit_defaults() if r.provider == "tavily"]
-    )
+    await limits_repo.seed_records([r for r in provider_limit_defaults() if r.provider == "tavily"])
     await limits_repo.ensure_pool(
         NativePool(
             pool_id="tavily:keyed:credit",

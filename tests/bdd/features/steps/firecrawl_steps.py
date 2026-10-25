@@ -35,7 +35,9 @@ def step_given_firecrawl_key(context: Any) -> None:
 @when('a live Firecrawl search runs for "{query}" with limit {limit:d}')
 def step_when_live_firecrawl_search(context: Any, query: str, limit: int) -> None:
     """Execute a live search request through the Firecrawl adapter."""
-    request = SearchRequest(query=query, limit=limit)
+    request = SearchRequest(
+        project_id="00000000-0000-4000-8000-0000000000aa", query=query, limit=limit
+    )
     context.search_response = context.loop.run_until_complete(context.adapter.search(request))
 
 
@@ -71,7 +73,9 @@ def step_then_firecrawl_search_total_matches(context: Any) -> None:
 @when('a live Firecrawl scrape fetches "{url}" with max {max_chars:d} chars')
 def step_when_live_firecrawl_fetch(context: Any, url: str, max_chars: int) -> None:
     """Execute a live content extraction request through the Firecrawl adapter."""
-    request = FetchRequest(url=HttpUrl(url), max_chars=max_chars)
+    request = FetchRequest(
+        project_id="00000000-0000-4000-8000-0000000000aa", url=HttpUrl(url), max_chars=max_chars
+    )
     context.fetch_response = context.loop.run_until_complete(context.adapter.fetch(request))
 
 

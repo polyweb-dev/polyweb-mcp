@@ -15,6 +15,7 @@ import pytest_asyncio
 from fastapi.testclient import TestClient
 
 from freesearch.models.observability import (
+    ActorType,
     TraceEventDetail,
     TraceOperation,
     TraceSpanKind,
@@ -56,6 +57,9 @@ def _seed(repository: SQLiteRepository, owner: UUID, *names: str) -> None:
             output = document.get("output")
             records.append(
                 TraceSpanRecord(
+                    project_id=UUID("00000000-0000-4000-8000-0000000000aa"),
+                    actor_type=ActorType.HUMAN,
+                    actor_id=UUID("00000000-0000-4000-8000-0000000000bb"),
                     span_id=span["span_id"],
                     trace_id=str(document["trace_id"]),
                     parent_span_id=span["parent_span_id"],

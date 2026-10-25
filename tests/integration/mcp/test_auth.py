@@ -47,6 +47,7 @@ from freesearch.persistence.storage import SQLiteRepository
 from freesearch.persistence.users import UserDatabase, UserRow
 from freesearch.routers.api import create_app
 from tests.fixtures.auth import (
+    account_id_from_pair,
     http_jwt_service,
     mcp_account_token,
     raw_auth_headers,
@@ -54,6 +55,7 @@ from tests.fixtures.auth import (
     temp_email,
     test_settings,
 )
+from tests.fixtures.execution import seed_execution_project, seed_token_project
 
 
 class _RecordingAdapter(ProviderAdapter):
@@ -159,7 +161,7 @@ def _direct_payload(result: Any) -> dict[str, Any]:
 
 async def _authed_direct(
     repository: SQLiteRepository, adapter: _RecordingAdapter, prefix: str
-) -> tuple[FastMCP, SecretStr, str]:
+) -> tuple[FastMCP, SecretStr, str, str]:
     service, token, email = await mcp_account_token(repository, prefix)
     server = create_server(
         [adapter],
@@ -167,7 +169,8 @@ async def _authed_direct(
         auth_service=service,
         stdio_token=SecretStr(token.get_secret_value()),
     )
-    return server, token, email
+    pid = str((await seed_token_project(repository, token)).project_id)
+    return server, token, email, pid
 
 
 async def test_same_jwt_permits_rest_and_direct_tool_calls(
@@ -178,7 +181,14 @@ async def test_same_jwt_permits_rest_and_direct_tool_calls(
     with TestClient(app) as client:
         pair = register_and_login(client, temp_email("mcp-same"))
         headers = raw_auth_headers(pair["access_token"])
-        rest = client.post("/search", json={"query": "same jwt"}, headers=headers)
+        pid = str(
+            (
+                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+            ).project_id
+        )
+        rest = client.post(
+            "/search", json={"project_id": pid, "query": "same jwt"}, headers=headers
+        )
         assert rest.status_code == 200
 
     server = create_server(
@@ -187,11 +197,13 @@ async def test_same_jwt_permits_rest_and_direct_tool_calls(
         auth_service=http_jwt_service(repository),
         stdio_token=SecretStr(pair["access_token"]),
     )
-    payload = _direct_payload(await server.call_tool("search", {"request": {"query": "same jwt"}}))
+    payload = _direct_payload(
+        await server.call_tool("search", {"request": {"project_id": pid, "query": "same jwt"}})
+    )
     assert payload["provider"] == "stubby"
 
 
-async def test_mcp_http_session_allows_anonymous_search_and_fetch(
+async def test_mcp_http_session_rejects_anonymous_search_and_fetch(
     repository: SQLiteRepository,
 ) -> None:
     adapter = _RecordingAdapter("stubby")
@@ -210,17 +222,28 @@ async def test_mcp_http_session_allows_anonymous_search_and_fetch(
         ):
             assert session_id is not None
             await session.initialize()
-            search = _tool_payload(
-                await session.call_tool("search", {"request": {"query": "http probe"}})
+            search = await session.call_tool(
+                "search",
+                {
+                    "request": {
+                        "project_id": "00000000-0000-4000-8000-0000000000aa",
+                        "query": "http probe",
+                    }
+                },
             )
-            fetch = _tool_payload(
-                await session.call_tool("fetch", {"request": {"url": "https://example.com/http"}})
+            fetch = await session.call_tool(
+                "fetch",
+                {
+                    "request": {
+                        "project_id": "00000000-0000-4000-8000-0000000000aa",
+                        "url": "https://example.com/http",
+                    }
+                },
             )
-    assert search["provider"] == "stubby"
-    assert search["query"] == "http probe"
-    assert fetch["provider"] == "stubby"
-    assert adapter.search_calls == 1
-    assert adapter.fetch_calls == 1
+    assert search.isError is True
+    assert fetch.isError is True
+    assert adapter.search_calls == 0
+    assert adapter.fetch_calls == 0
 
 
 async def test_mcp_http_keeps_invalid_bearer_and_unknown_paths_guarded(
@@ -290,7 +313,10 @@ async def test_bad_tool_credential_causes_no_provider_call(
         stdio_token=SecretStr("not-a-token"),
     )
     with pytest.raises(ToolError, match=MCP_AUTH_ERROR):
-        await server.call_tool("search", {"request": {"query": "quiet"}})
+        await server.call_tool(
+            "search",
+            {"request": {"project_id": "00000000-0000-4000-8000-0000000000aa", "query": "quiet"}},
+        )
 
     assert adapter.search_calls == 0
 
@@ -309,7 +335,10 @@ async def test_refresh_credential_cannot_serve_tools(
         stdio_token=SecretStr(pair["refresh_token"]),
     )
     with pytest.raises(ToolError, match=MCP_AUTH_ERROR):
-        await server.call_tool("search", {"request": {"query": "quiet"}})
+        await server.call_tool(
+            "search",
+            {"request": {"project_id": "00000000-0000-4000-8000-0000000000aa", "query": "quiet"}},
+        )
 
     assert adapter.search_calls == 0
 
@@ -322,6 +351,11 @@ async def test_stateful_session_rechecks_family_after_logout(
     with TestClient(rest_app) as client:
         pair = register_and_login(client, temp_email("mcp-stateful"))
         headers = raw_auth_headers(pair["access_token"])
+        pid = str(
+            (
+                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+            ).project_id
+        )
 
     service = http_jwt_service(repository)
     server = create_server([adapter], repository=repository, auth_service=service)
@@ -339,7 +373,9 @@ async def test_stateful_session_rechecks_family_after_logout(
         ):
             await session.initialize()
             first = _tool_payload(
-                await session.call_tool("search", {"request": {"query": "before logout"}})
+                await session.call_tool(
+                    "search", {"request": {"project_id": pid, "query": "before logout"}}
+                )
             )
             assert first["provider"] == "stubby"
             session_id = get_session_id()
@@ -368,8 +404,10 @@ async def test_deactivated_account_loses_tool_access_at_once(
     repository: SQLiteRepository,
 ) -> None:
     adapter = _RecordingAdapter("stubby")
-    server, _token, email = await _authed_direct(repository, adapter, "mcp-cutoff")
-    payload = _direct_payload(await server.call_tool("search", {"request": {"query": "before"}}))
+    server, _token, email, pid = await _authed_direct(repository, adapter, "mcp-cutoff")
+    payload = _direct_payload(
+        await server.call_tool("search", {"request": {"project_id": pid, "query": "before"}})
+    )
     assert payload["provider"] == "stubby"
 
     async with repository.session() as session:
@@ -380,7 +418,10 @@ async def test_deactivated_account_loses_tool_access_at_once(
         await session.commit()
 
     with pytest.raises(ToolError, match=MCP_AUTH_ERROR):
-        await server.call_tool("search", {"request": {"query": "after"}})
+        await server.call_tool(
+            "search",
+            {"request": {"project_id": "00000000-0000-4000-8000-0000000000aa", "query": "after"}},
+        )
 
     assert adapter.search_calls == 1
 
@@ -392,21 +433,27 @@ async def test_stdio_absent_credential_rejects_before_provider_call(
     service, _token, _email = await mcp_account_token(repository, "mcp-naked")
     server = create_server([adapter], repository=repository, auth_service=service)
 
-    payload = _direct_payload(
-        await server.call_tool("search", {"request": {"query": "anonymous stdio"}})
-    )
-    assert payload["provider"] == "stubby"
-    assert adapter.search_calls == 1
+    with pytest.raises(ToolError, match=MCP_AUTH_ERROR):
+        await server.call_tool(
+            "search",
+            {
+                "request": {
+                    "project_id": "00000000-0000-4000-8000-0000000000aa",
+                    "query": "anonymous stdio",
+                }
+            },
+        )
+    assert adapter.search_calls == 0
 
 
 async def test_stdio_handoff_serves_with_explicit_process_token(
     repository: SQLiteRepository,
 ) -> None:
     adapter = _RecordingAdapter("stubby")
-    server, _token, _email = await _authed_direct(repository, adapter, "mcp-stdio")
+    server, _token, _email, pid = await _authed_direct(repository, adapter, "mcp-stdio")
 
     payload = _direct_payload(
-        await server.call_tool("search", {"request": {"query": "stdio handoff"}})
+        await server.call_tool("search", {"request": {"project_id": pid, "query": "stdio handoff"}})
     )
     assert payload["provider"] == "stubby"
     assert adapter.search_calls == 1
@@ -439,7 +486,10 @@ async def test_stdio_expired_credential_causes_no_provider_call(
         stdio_token=SecretStr(stale),
     )
     with pytest.raises(ToolError, match=MCP_AUTH_ERROR):
-        await server.call_tool("search", {"request": {"query": "quiet"}})
+        await server.call_tool(
+            "search",
+            {"request": {"project_id": "00000000-0000-4000-8000-0000000000aa", "query": "quiet"}},
+        )
 
     assert adapter.search_calls == 0
 
@@ -449,20 +499,26 @@ async def test_stdio_revoked_family_causes_no_provider_call(
 ) -> None:
     adapter = _RecordingAdapter("stubby")
     service, token, _email = await mcp_account_token(repository, "mcp-revoked")
+    pid = str((await seed_token_project(repository, token)).project_id)
     server = create_server(
         [adapter],
         repository=repository,
         auth_service=service,
         stdio_token=SecretStr(token.get_secret_value()),
     )
-    assert _direct_payload(await server.call_tool("search", {"request": {"query": "before"}}))
+    assert _direct_payload(
+        await server.call_tool("search", {"request": {"project_id": pid, "query": "before"}})
+    )
 
     principal = await service.verify_token(token.get_secret_value())
     assert principal is not None
     await service.logout(principal)
 
     with pytest.raises(ToolError, match=MCP_AUTH_ERROR):
-        await server.call_tool("search", {"request": {"query": "after"}})
+        await server.call_tool(
+            "search",
+            {"request": {"project_id": "00000000-0000-4000-8000-0000000000aa", "query": "after"}},
+        )
 
     assert adapter.search_calls == 1
 
@@ -509,6 +565,7 @@ def test_main_stdio_dispatch_reads_process_token(
 async def test_admin_tool_role_keeps_search_access(repository: SQLiteRepository) -> None:
     adapter = _RecordingAdapter("stubby")
     service, token, _email = await mcp_account_token(repository, "mcp-admin", role=UserRole.ADMIN)
+    pid = str((await seed_token_project(repository, token)).project_id)
     server = create_server(
         [adapter],
         repository=repository,
@@ -516,6 +573,6 @@ async def test_admin_tool_role_keeps_search_access(repository: SQLiteRepository)
         stdio_token=SecretStr(token.get_secret_value()),
     )
     payload = _direct_payload(
-        await server.call_tool("search", {"request": {"query": "admin tool"}})
+        await server.call_tool("search", {"request": {"project_id": pid, "query": "admin tool"}})
     )
     assert payload["provider"] == "stubby"

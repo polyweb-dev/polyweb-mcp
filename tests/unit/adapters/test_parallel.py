@@ -227,7 +227,9 @@ async def test_search_posts_to_v1_search_through_shared_runner_with_scoped_key()
     runner = _RecordingRunner()
     try:
         adapter = make_adapter(caller, runner=runner, key="sk-parallel-secret-99")
-        response = await adapter.search(SearchRequest(query="python async"))
+        response = await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="python async")
+        )
     finally:
         await caller.aclose()
 
@@ -250,7 +252,12 @@ async def test_fetch_posts_to_v1_extract_through_shared_runner_with_scoped_key()
     runner = _RecordingRunner()
     try:
         adapter = make_adapter(caller, runner=runner, key="sk-parallel-secret-99")
-        await adapter.fetch(FetchRequest(url="https://www.example.com/guide"))
+        await adapter.fetch(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa",
+                url="https://www.example.com/guide",
+            )
+        )
     finally:
         await caller.aclose()
 
@@ -272,8 +279,15 @@ async def test_operations_never_mutate_caller_http_client() -> None:
     base_url_before = str(caller.base_url)
     try:
         adapter = make_adapter(caller, key="sk-parallel-secret-99")
-        await adapter.search(SearchRequest(query="mutate"))
-        await adapter.fetch(FetchRequest(url="https://www.example.com/guide"))
+        await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="mutate")
+        )
+        await adapter.fetch(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa",
+                url="https://www.example.com/guide",
+            )
+        )
     finally:
         await caller.aclose()
 
@@ -295,7 +309,9 @@ async def test_search_normalizes_results_with_joined_excerpts_and_publish_date()
     caller = make_client(wire)
     try:
         adapter = make_adapter(caller)
-        response = await adapter.search(SearchRequest(query="normalize"))
+        response = await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="normalize")
+        )
     finally:
         await caller.aclose()
 
@@ -355,7 +371,9 @@ async def test_search_usage_sums_sku_counts_and_maps_search_id(
     caller = make_client(wire)
     try:
         adapter = make_adapter(caller)
-        response = await adapter.search(SearchRequest(query="usage"))
+        response = await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="usage")
+        )
     finally:
         await caller.aclose()
 
@@ -371,7 +389,9 @@ async def test_search_drops_absent_usage() -> None:
     caller = make_client(wire)
     try:
         adapter = make_adapter(caller)
-        response = await adapter.search(SearchRequest(query="usage"))
+        response = await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="usage")
+        )
     finally:
         await caller.aclose()
 
@@ -389,7 +409,9 @@ async def test_search_malformed_usage_raises_invalid_response(usage: object) -> 
     try:
         adapter = make_adapter(caller)
         with pytest.raises(ProviderOperationError) as excinfo:
-            await adapter.search(SearchRequest(query="usage"))
+            await adapter.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="usage")
+            )
     finally:
         await caller.aclose()
 
@@ -408,7 +430,9 @@ async def test_search_item_missing_excerpts_records_redacted_error() -> None:
     caller = make_client(wire)
     try:
         adapter = make_adapter(caller)
-        response = await adapter.search(SearchRequest(query="bad"))
+        response = await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="bad")
+        )
     finally:
         await caller.aclose()
 
@@ -429,7 +453,9 @@ async def test_search_result_missing_url_returns_empty_success() -> None:
     caller = make_client(wire)
     try:
         adapter = make_adapter(caller)
-        response = await adapter.search(SearchRequest(query="bad"))
+        response = await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="bad")
+        )
     finally:
         await caller.aclose()
 
@@ -517,7 +543,11 @@ async def test_search_skips_invalid_items_and_records_errors(
     caller = make_client(wire)
     try:
         adapter = make_adapter(caller)
-        response = await adapter.search(SearchRequest(query="shape", limit=10))
+        response = await adapter.search(
+            SearchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", query="shape", limit=10
+            )
+        )
     finally:
         await caller.aclose()
 
@@ -554,7 +584,11 @@ async def test_search_all_invalid_items_returns_empty_success(
     caller = make_client(wire)
     try:
         adapter = make_adapter(caller)
-        response = await adapter.search(SearchRequest(query="shape", limit=10))
+        response = await adapter.search(
+            SearchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", query="shape", limit=10
+            )
+        )
     finally:
         await caller.aclose()
 
@@ -578,7 +612,11 @@ async def test_search_empty_list_has_no_parse_errors(usage: object) -> None:
     caller = make_client(wire)
     try:
         adapter = make_adapter(caller)
-        response = await adapter.search(SearchRequest(query="shape", limit=10))
+        response = await adapter.search(
+            SearchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", query="shape", limit=10
+            )
+        )
     finally:
         await caller.aclose()
 
@@ -616,7 +654,11 @@ async def test_search_limit_applies_after_invalid_item_filter(
     caller = make_client(wire)
     try:
         adapter = make_adapter(caller)
-        response = await adapter.search(SearchRequest(query="shape", limit=limit))
+        response = await adapter.search(
+            SearchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", query="shape", limit=limit
+            )
+        )
     finally:
         await caller.aclose()
 
@@ -639,7 +681,9 @@ async def test_search_invalid_tail_item_does_not_fail_response() -> None:
     caller = make_client(wire)
     try:
         adapter = make_adapter(caller)
-        response = await adapter.search(SearchRequest(query="shape", limit=1))
+        response = await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="shape", limit=1)
+        )
     finally:
         await caller.aclose()
 
@@ -669,7 +713,11 @@ async def test_search_parse_errors_do_not_expose_payload_or_key() -> None:
     caller = make_client(wire)
     try:
         adapter = make_adapter(caller, key="sk-parallel-test-1")
-        response = await adapter.search(SearchRequest(query="shape", limit=10))
+        response = await adapter.search(
+            SearchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", query="shape", limit=10
+            )
+        )
     finally:
         await caller.aclose()
 
@@ -689,7 +737,12 @@ async def test_fetch_normalizes_full_content_and_usage() -> None:
     caller = make_client(wire)
     try:
         adapter = make_adapter(caller)
-        response = await adapter.fetch(FetchRequest(url="https://www.example.com/guide"))
+        response = await adapter.fetch(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa",
+                url="https://www.example.com/guide",
+            )
+        )
     finally:
         await caller.aclose()
 
@@ -737,7 +790,11 @@ async def test_fetch_truncates_content_at_max_chars_deterministically(
     try:
         adapter = make_adapter(caller)
         response = await adapter.fetch(
-            FetchRequest(url="https://www.example.com/guide", max_chars=max_chars)
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa",
+                url="https://www.example.com/guide",
+                max_chars=max_chars,
+            )
         )
     finally:
         await caller.aclose()
@@ -755,7 +812,12 @@ async def test_fetch_missing_matching_result_raises_fetch_failed() -> None:
     try:
         adapter = make_adapter(caller)
         with pytest.raises(ProviderOperationError) as excinfo:
-            await adapter.fetch(FetchRequest(url="https://www.example.com/guide"))
+            await adapter.fetch(
+                FetchRequest(
+                    project_id="00000000-0000-4000-8000-0000000000aa",
+                    url="https://www.example.com/guide",
+                )
+            )
     finally:
         await caller.aclose()
 
@@ -782,7 +844,12 @@ async def test_fetch_null_or_non_string_full_content_raises_invalid_response(
     try:
         adapter = make_adapter(caller)
         with pytest.raises(ProviderOperationError) as excinfo:
-            await adapter.fetch(FetchRequest(url="https://www.example.com/guide"))
+            await adapter.fetch(
+                FetchRequest(
+                    project_id="00000000-0000-4000-8000-0000000000aa",
+                    url="https://www.example.com/guide",
+                )
+            )
     finally:
         await caller.aclose()
 
@@ -799,7 +866,9 @@ async def test_two_concurrent_rate_limited_calls_each_enter_shared_runner() -> N
     runner = _CountingRunner(ResilientRunner(caller, max_attempts=1))
     try:
         adapter = make_adapter(caller, runner=runner)
-        request = SearchRequest(query="concurrent")
+        request = SearchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa", query="concurrent"
+        )
         outcomes = await asyncio.gather(
             adapter.search(request), adapter.search(request), return_exceptions=True
         )
@@ -823,7 +892,9 @@ async def test_retryable_http_statuses_surface_as_retryable_errors(status: int) 
     try:
         adapter = make_adapter(caller, runner=runner)
         with pytest.raises(ProviderOperationError) as excinfo:
-            await adapter.search(SearchRequest(query="retry"))
+            await adapter.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="retry")
+            )
     finally:
         await caller.aclose()
 
@@ -851,7 +922,9 @@ async def test_client_error_statuses_map_to_typed_nonretryable_errors(
     try:
         adapter = make_adapter(caller)
         with pytest.raises(ProviderOperationError) as excinfo:
-            await adapter.search(SearchRequest(query="bad"))
+            await adapter.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="bad")
+            )
     finally:
         await caller.aclose()
 
@@ -886,7 +959,9 @@ async def test_estimate_cost_search_is_network_free() -> None:
     try:
         adapter = make_adapter(caller, runner=runner)
 
-        estimate = await adapter.estimate_cost(SearchRequest(query="cost"))
+        estimate = await adapter.estimate_cost(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="cost")
+        )
 
         assert estimate.provider == "parallel"
         assert estimate.operation is UsageOperation.SEARCH
@@ -902,7 +977,12 @@ async def test_estimate_cost_fetch_is_network_free() -> None:
     try:
         adapter = make_adapter(caller, runner=runner)
 
-        estimate = await adapter.estimate_cost(FetchRequest(url="https://www.example.com/guide"))
+        estimate = await adapter.estimate_cost(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa",
+                url="https://www.example.com/guide",
+            )
+        )
 
         assert estimate.provider == "parallel"
         assert estimate.operation is UsageOperation.FETCH
@@ -961,7 +1041,11 @@ async def test_fetch_truncation_boundary_equality_and_empty_content(
     try:
         adapter = make_adapter(caller)
         response = await adapter.fetch(
-            FetchRequest(url="https://www.example.com/guide", max_chars=max_chars)
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa",
+                url="https://www.example.com/guide",
+                max_chars=max_chars,
+            )
         )
     finally:
         await caller.aclose()
@@ -976,7 +1060,12 @@ async def test_fetch_float_usage_count_sums_exactly() -> None:
     caller = make_client(wire)
     try:
         adapter = make_adapter(caller)
-        response = await adapter.fetch(FetchRequest(url="https://www.example.com/guide"))
+        response = await adapter.fetch(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa",
+                url="https://www.example.com/guide",
+            )
+        )
     finally:
         await caller.aclose()
 
@@ -1001,7 +1090,9 @@ async def test_search_usage_bool_or_nonmapping_shapes_raise_invalid_response(usa
     try:
         adapter = make_adapter(caller)
         with pytest.raises(ProviderOperationError) as excinfo:
-            await adapter.search(SearchRequest(query="usage"))
+            await adapter.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="usage")
+            )
     finally:
         await caller.aclose()
 
@@ -1027,7 +1118,9 @@ async def test_search_nonfinite_usage_counts_raise_invalid_response(raw_body: st
     try:
         adapter = make_adapter(caller)
         with pytest.raises(ProviderOperationError) as excinfo:
-            await adapter.search(SearchRequest(query="usage"))
+            await adapter.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="usage")
+            )
     finally:
         await caller.aclose()
 
@@ -1050,7 +1143,9 @@ async def test_search_malformed_json_body_raises_invalid_response(response: http
     try:
         adapter = make_adapter(caller)
         with pytest.raises(ProviderOperationError) as excinfo:
-            await adapter.search(SearchRequest(query="bad"))
+            await adapter.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="bad")
+            )
     finally:
         await caller.aclose()
 
@@ -1067,7 +1162,12 @@ async def test_fetch_malformed_json_body_raises_invalid_response() -> None:
     try:
         adapter = make_adapter(caller)
         with pytest.raises(ProviderOperationError) as excinfo:
-            await adapter.fetch(FetchRequest(url="https://www.example.com/guide"))
+            await adapter.fetch(
+                FetchRequest(
+                    project_id="00000000-0000-4000-8000-0000000000aa",
+                    url="https://www.example.com/guide",
+                )
+            )
     finally:
         await caller.aclose()
 
@@ -1086,7 +1186,9 @@ async def test_http_error_body_secret_never_leaks_and_cause_is_suppressed(status
     try:
         adapter = make_adapter(caller, runner=runner)
         with pytest.raises(ProviderOperationError) as excinfo:
-            await adapter.search(SearchRequest(query="bad"))
+            await adapter.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="bad")
+            )
     finally:
         await caller.aclose()
 
@@ -1110,7 +1212,9 @@ async def test_retryable_status_retries_through_runner_then_succeeds() -> None:
     runner = ResilientRunner(caller, max_attempts=2, base_delay=0.0, random_source=lambda: 0.0)
     try:
         adapter = make_adapter(caller, runner=runner)
-        response = await adapter.search(SearchRequest(query="retry"))
+        response = await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="retry")
+        )
     finally:
         await caller.aclose()
 
@@ -1144,7 +1248,12 @@ async def test_fetch_url_match_is_exact_and_case_sensitive(result_url: str) -> N
     try:
         adapter = make_adapter(caller)
         with pytest.raises(ProviderOperationError) as excinfo:
-            await adapter.fetch(FetchRequest(url="https://www.example.com/guide"))
+            await adapter.fetch(
+                FetchRequest(
+                    project_id="00000000-0000-4000-8000-0000000000aa",
+                    url="https://www.example.com/guide",
+                )
+            )
     finally:
         await caller.aclose()
 
@@ -1162,6 +1271,7 @@ async def test_search_sends_advanced_settings_and_never_emits_language() -> None
         adapter = make_adapter(caller)
         await adapter.search(
             SearchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa",
                 query="geo",
                 limit=7,
                 domains=("example.com", "docs.example.org"),
@@ -1189,7 +1299,9 @@ async def test_search_default_limit_maps_to_max_results_ten() -> None:
     caller = make_client(wire)
     try:
         adapter = make_adapter(caller)
-        await adapter.search(SearchRequest(query="defaults"))
+        await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="defaults")
+        )
     finally:
         await caller.aclose()
 
@@ -1205,6 +1317,7 @@ async def test_nested_search_options_override_common_defaults_and_price_by_mode(
         adapter = make_adapter(caller, runner=runner)
         response = await adapter.search(
             SearchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa",
                 query="common query",
                 limit=12,
                 mode="advanced",
@@ -1240,6 +1353,7 @@ async def test_nested_search_options_override_common_defaults_and_price_by_mode(
         )
         estimate = await adapter.estimate_cost(
             SearchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa",
                 query="common query",
                 mode="advanced",
                 provider_options={"parallel": {"mode": "turbo"}},
@@ -1285,6 +1399,7 @@ async def test_fetch_forwards_nested_parallel_extract_options() -> None:
         adapter = make_adapter(caller)
         await adapter.fetch(
             FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa",
                 url="https://www.example.com/guide",
                 provider_options={
                     "parallel": {
@@ -1335,7 +1450,13 @@ async def test_search_rejects_unsupported_extra_bundles_before_runner_or_wire() 
     try:
         adapter = make_adapter(caller, runner=runner)
         with pytest.raises(ProviderOperationError) as excinfo:
-            await adapter.search(SearchRequest(query="legacy expansion", extra_bundles=1))
+            await adapter.search(
+                SearchRequest(
+                    project_id="00000000-0000-4000-8000-0000000000aa",
+                    query="legacy expansion",
+                    extra_bundles=1,
+                )
+            )
     finally:
         await caller.aclose()
 
@@ -1387,7 +1508,12 @@ async def test_fetch_posts_advanced_settings_requesting_full_content() -> None:
     caller = make_client(wire)
     try:
         adapter = make_adapter(caller)
-        await adapter.fetch(FetchRequest(url="https://www.example.com/guide"))
+        await adapter.fetch(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa",
+                url="https://www.example.com/guide",
+            )
+        )
     finally:
         await caller.aclose()
 
@@ -1412,7 +1538,11 @@ async def test_search_limit_above_documented_cap_is_clamped_to_twenty(
     caller = make_client(wire)
     try:
         adapter = make_adapter(caller)
-        await adapter.search(SearchRequest(query="cap", limit=limit))
+        await adapter.search(
+            SearchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", query="cap", limit=limit
+            )
+        )
     finally:
         await caller.aclose()
 
@@ -1432,7 +1562,9 @@ async def test_search_missing_results_key_raises_invalid_response() -> None:
     try:
         adapter = make_adapter(caller)
         with pytest.raises(ProviderOperationError) as excinfo:
-            await adapter.search(SearchRequest(query="shape"))
+            await adapter.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="shape")
+            )
     finally:
         await caller.aclose()
 
@@ -1449,7 +1581,9 @@ async def test_search_missing_search_id_raises_invalid_response() -> None:
     try:
         adapter = make_adapter(caller)
         with pytest.raises(ProviderOperationError) as excinfo:
-            await adapter.search(SearchRequest(query="shape"))
+            await adapter.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="shape")
+            )
     finally:
         await caller.aclose()
 
@@ -1468,7 +1602,9 @@ async def test_search_non_string_search_id_raises_invalid_response() -> None:
     try:
         adapter = make_adapter(caller)
         with pytest.raises(ProviderOperationError) as excinfo:
-            await adapter.search(SearchRequest(query="shape"))
+            await adapter.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="shape")
+            )
     finally:
         await caller.aclose()
 
@@ -1486,7 +1622,9 @@ async def test_search_non_list_results_raises_invalid_response(results: object) 
     try:
         adapter = make_adapter(caller)
         with pytest.raises(ProviderOperationError) as excinfo:
-            await adapter.search(SearchRequest(query="shape"))
+            await adapter.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="shape")
+            )
     finally:
         await caller.aclose()
 
@@ -1503,7 +1641,9 @@ async def test_search_empty_results_list_remains_valid_structure() -> None:
     caller = make_client(wire)
     try:
         adapter = make_adapter(caller)
-        response = await adapter.search(SearchRequest(query="empty"))
+        response = await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="empty")
+        )
     finally:
         await caller.aclose()
 
@@ -1525,7 +1665,12 @@ async def test_fetch_missing_results_key_raises_invalid_response() -> None:
     try:
         adapter = make_adapter(caller)
         with pytest.raises(ProviderOperationError) as excinfo:
-            await adapter.fetch(FetchRequest(url="https://www.example.com/guide"))
+            await adapter.fetch(
+                FetchRequest(
+                    project_id="00000000-0000-4000-8000-0000000000aa",
+                    url="https://www.example.com/guide",
+                )
+            )
     finally:
         await caller.aclose()
 
@@ -1542,7 +1687,12 @@ async def test_fetch_missing_extract_id_raises_invalid_response() -> None:
     try:
         adapter = make_adapter(caller)
         with pytest.raises(ProviderOperationError) as excinfo:
-            await adapter.fetch(FetchRequest(url="https://www.example.com/guide"))
+            await adapter.fetch(
+                FetchRequest(
+                    project_id="00000000-0000-4000-8000-0000000000aa",
+                    url="https://www.example.com/guide",
+                )
+            )
     finally:
         await caller.aclose()
 
@@ -1560,7 +1710,12 @@ async def test_fetch_non_string_extract_id_raises_invalid_response() -> None:
     try:
         adapter = make_adapter(caller)
         with pytest.raises(ProviderOperationError) as excinfo:
-            await adapter.fetch(FetchRequest(url="https://www.example.com/guide"))
+            await adapter.fetch(
+                FetchRequest(
+                    project_id="00000000-0000-4000-8000-0000000000aa",
+                    url="https://www.example.com/guide",
+                )
+            )
     finally:
         await caller.aclose()
 
@@ -1578,7 +1733,12 @@ async def test_fetch_non_list_results_raises_invalid_response(results: object) -
     try:
         adapter = make_adapter(caller)
         with pytest.raises(ProviderOperationError) as excinfo:
-            await adapter.fetch(FetchRequest(url="https://www.example.com/guide"))
+            await adapter.fetch(
+                FetchRequest(
+                    project_id="00000000-0000-4000-8000-0000000000aa",
+                    url="https://www.example.com/guide",
+                )
+            )
     finally:
         await caller.aclose()
 
@@ -1596,7 +1756,12 @@ async def test_fetch_empty_results_list_raises_fetch_failed() -> None:
     try:
         adapter = make_adapter(caller)
         with pytest.raises(ProviderOperationError) as excinfo:
-            await adapter.fetch(FetchRequest(url="https://www.example.com/guide"))
+            await adapter.fetch(
+                FetchRequest(
+                    project_id="00000000-0000-4000-8000-0000000000aa",
+                    url="https://www.example.com/guide",
+                )
+            )
     finally:
         await caller.aclose()
 
@@ -1614,7 +1779,9 @@ async def test_final_3xx_status_maps_to_nonretryable_http_error(status: int) -> 
     try:
         adapter = make_adapter(caller, runner=runner)
         with pytest.raises(ProviderOperationError) as excinfo:
-            await adapter.search(SearchRequest(query="redirect"))
+            await adapter.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="redirect")
+            )
     finally:
         await caller.aclose()
 

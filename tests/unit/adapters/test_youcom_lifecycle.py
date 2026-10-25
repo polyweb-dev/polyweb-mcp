@@ -160,6 +160,7 @@ async def test_search_wire_post_path_body_headers_and_timeout() -> None:
     async with _wired(recorder) as adapter:
         response = await adapter.search(
             SearchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa",
                 query="python async",
                 limit=7,
                 domains=("example.com", "docs.org"),
@@ -184,7 +185,11 @@ async def test_search_wire_post_path_body_headers_and_timeout() -> None:
 async def test_fetch_wire_post_path_body_headers_and_timeout() -> None:
     recorder = _WireRecorder()
     async with _wired(recorder) as adapter:
-        await adapter.fetch(FetchRequest(url="https://example.com/doc"))
+        await adapter.fetch(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+            )
+        )
 
     assert [request.method for request in recorder.requests] == ["POST"]
     assert [str(request.url) for request in recorder.requests] == [
@@ -201,7 +206,9 @@ async def test_fetch_wire_post_path_body_headers_and_timeout() -> None:
 async def test_search_omits_optionals_when_unset() -> None:
     recorder = _WireRecorder(search={"results": {}})
     async with _wired(recorder) as adapter:
-        await adapter.search(SearchRequest(query="bare"))
+        await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="bare")
+        )
 
     assert json.loads(recorder.requests[0].content) == {"query": "bare", "count": 10}
 
@@ -226,7 +233,9 @@ async def test_owned_client_never_follows_cross_origin_redirect() -> None:
     )
     async with _wired(handler, caller=caller) as adapter:
         with pytest.raises(ProviderOperationError) as excinfo:
-            await adapter.search(SearchRequest(query="redirect"))
+            await adapter.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="redirect")
+            )
 
     # Only the ydc search POST was sent; the cross-origin Location was never
     # followed, so the injected key never reached the evil destination.

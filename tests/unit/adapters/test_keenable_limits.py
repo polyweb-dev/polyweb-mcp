@@ -191,7 +191,9 @@ async def test_keyless_payload_without_usage_metadata() -> None:
 
     adapter, client = _adapter(handler, keyless=True)
     try:
-        response = await adapter.search(SearchRequest(query="q", limit=2))
+        response = await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=2)
+        )
     finally:
         await client.aclose()
     assert response.usage is not None
@@ -206,7 +208,9 @@ async def test_malformed_numeric_usage_gives_invalid_response_without_counter_ch
     )
     try:
         with pytest.raises(ProviderOperationError) as exc_info:
-            await adapter.search(SearchRequest(query="q", limit=2))
+            await adapter.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=2)
+            )
     finally:
         await client.aclose()
     assert exc_info.value.error.code == "invalid_response"
@@ -235,7 +239,9 @@ async def test_apply_usage_rejects_negative_and_nonfinite_before_counter_change(
 async def test_paid_then_402_has_zero_remaining() -> None:
     adapter, client = _adapter(_ok_handler(2, paid=True))
     try:
-        response = await adapter.search(SearchRequest(query="paid", limit=2))
+        response = await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="paid", limit=2)
+        )
         assert response.usage is not None
         assert response.usage.units == Decimal("2")
         assert adapter._paid_usage_seen is True
@@ -263,7 +269,9 @@ async def test_success_clears_hard_exhaustion() -> None:
     try:
         await adapter.quota_after_error(402)
         assert (await adapter.quota()).remaining == Decimal("0")  # type: ignore[union-attr]
-        await adapter.search(SearchRequest(query="q", limit=2))
+        await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=2)
+        )
         quota = await adapter.quota()
     finally:
         await client.aclose()
@@ -275,7 +283,9 @@ async def test_success_after_previous_402_debits_once() -> None:
     adapter, client = _adapter(_ok_handler(3))
     try:
         await adapter.quota_after_error(402)
-        response = await adapter.search(SearchRequest(query="q", limit=2))
+        response = await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=2)
+        )
         quota = await adapter.quota()
     finally:
         await client.aclose()
@@ -406,7 +416,9 @@ async def test_retry_429_uses_fake_sleeper_with_three_attempts() -> None:
         runner = ResilientRunner(client, sleeper=fake_sleeper, base_delay=0.01, max_delay=0.05)
         adapter = KeenableAdapter(client, api_key=_KEY, runner=runner)
         with pytest.raises(ProviderOperationError) as exc_info:
-            await adapter.search(SearchRequest(query="q", limit=2))
+            await adapter.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=2)
+            )
     finally:
         await client.aclose()
     assert exc_info.value.error.retryable is True
@@ -421,7 +433,9 @@ async def test_no_retry_402_with_single_attempt() -> None:
     )
     try:
         with pytest.raises(ProviderOperationError) as exc_info:
-            await adapter.search(SearchRequest(query="q", limit=2))
+            await adapter.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=2)
+            )
     finally:
         await client.aclose()
     assert exc_info.value.error.code == "quota_exhausted"

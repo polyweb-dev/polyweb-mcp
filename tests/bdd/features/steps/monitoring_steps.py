@@ -40,6 +40,7 @@ from tests.fixtures.auth import (
     promote_account,
     temp_email,
 )
+from tests.fixtures.execution import bdd_project_id, bdd_token_project_id
 
 
 class _MonitoringStubAdapter(ProviderAdapter):
@@ -218,10 +219,18 @@ def step_given_rest_monitoring(context: Any) -> None:
 def step_when_rest_search_and_fetch(context: Any, query: str, url: str) -> None:
     with _rest_client(context) as client:
         context.search_response = client.post(
-            "/search", json={"query": query, "limit": 1}, headers=context.auth_headers
+            "/search",
+            json={
+                "project_id": bdd_project_id(context, context.auth_headers),
+                "query": query,
+                "limit": 1,
+            },
+            headers=context.auth_headers,
         )
         context.fetch_response = client.post(
-            "/fetch", json={"url": url}, headers=context.auth_headers
+            "/fetch",
+            json={"project_id": bdd_project_id(context, context.auth_headers), "url": url},
+            headers=context.auth_headers,
         )
         context.stats_response = client.get("/stats", headers=context.auth_headers)
         context.dashboard_response = client.get("/dashboard", headers=context.auth_headers)
@@ -306,6 +315,7 @@ def step_given_mcp_monitoring(context: Any) -> None:
         return service, token.get_secret_value()
 
     service, raw_token = context.loop.run_until_complete(_authed_service())
+    context.mcp_pid = bdd_token_project_id(context, SecretStr(raw_token))
     context.server = create_server(
         context.adapters,
         repository=context.repository,
@@ -317,10 +327,14 @@ def step_given_mcp_monitoring(context: Any) -> None:
 @when("I call the MCP search and fetch tools")
 def step_when_mcp_search_and_fetch(context: Any) -> None:
     context.mcp_search_result = context.loop.run_until_complete(
-        context.server.call_tool("search", {"request": {"query": "mcp stage four"}})
+        context.server.call_tool(
+            "search", {"request": {"project_id": context.mcp_pid, "query": "mcp stage four"}}
+        )
     )
     context.mcp_fetch_result = context.loop.run_until_complete(
-        context.server.call_tool("fetch", {"request": {"url": "https://example.com/mcp"}})
+        context.server.call_tool(
+            "fetch", {"request": {"project_id": context.mcp_pid, "url": "https://example.com/mcp"}}
+        )
     )
 
 
@@ -362,10 +376,20 @@ def step_when_private_rest_requests(context: Any) -> None:
     context.private_url = "https://secret.example/private-document"
     with _rest_client(context) as client:
         context.private_search_response = client.post(
-            "/search", json={"query": context.private_query}, headers=context.auth_headers
+            "/search",
+            json={
+                "project_id": bdd_project_id(context, context.auth_headers),
+                "query": context.private_query,
+            },
+            headers=context.auth_headers,
         )
         context.private_fetch_response = client.post(
-            "/fetch", json={"url": context.private_url}, headers=context.auth_headers
+            "/fetch",
+            json={
+                "project_id": bdd_project_id(context, context.auth_headers),
+                "url": context.private_url,
+            },
+            headers=context.auth_headers,
         )
         context.private_stats_response = client.get("/stats", headers=context.auth_headers)
         context.private_dashboard_response = client.get("/dashboard", headers=context.auth_headers)
@@ -444,7 +468,12 @@ def step_given_failing_telemetry_app(context: Any) -> None:
 def step_when_resilient_rest_search(context: Any) -> None:
     with _rest_client(context) as client:
         context.resilient_response = client.post(
-            "/search", json={"query": "resilient"}, headers=context.auth_headers
+            "/search",
+            json={
+                "project_id": bdd_project_id(context, context.auth_headers),
+                "query": "resilient",
+            },
+            headers=context.auth_headers,
         )
 
 

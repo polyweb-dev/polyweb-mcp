@@ -141,6 +141,9 @@ _TRACE_SPAN_COLUMNS = frozenset(
         "operation",
         "provider",
         "user_id",
+        "project_id",
+        "actor_type",
+        "actor_id",
         "input_text",
         "output_json",
         "result_count",
@@ -152,6 +155,9 @@ _TRACE_SPAN_COLUMNS = frozenset(
 _TRACE_SPAN_NOTNULL = frozenset(
     {
         "trace_id",
+        "project_id",
+        "actor_type",
+        "actor_id",
         "name",
         "kind",
         "started_at",
@@ -199,6 +205,8 @@ _HEAD_INDEXES = frozenset(
         "trace_spans_trace_started_at",
         "trace_spans_root_started_at",
         "trace_spans_user_root_started_at",
+        "trace_spans_project_root_started_at",
+        "usage_events_project_observed_at",
         "ix_user_email",
         "user_email_lower_key",
         "user_provider_identity_key",
@@ -341,10 +349,12 @@ def test_upgrade_database_legacy_partial_schema_preserves_rows_and_backup(
     assert result.backup is not None
     assert result.backup.is_file()
     assert result.backup.name.startswith(f"{database.name}.pre-alembic-")
-    assert _usage_rows(database) == original_usage
+    # P04: usage_events is recreated empty at 0008; the backup keeps the rows.
+    assert _usage_rows(database) == []
     assert _usage_rows(result.backup) == original_usage
     assert _revision(database) == [migration_head()]
-    assert {"latency_ms", "status", "unit_kind"} <= _columns(database, "usage_events")
+    new_columns = {"project_id", "actor_type", "actor_id", "trace_id"}
+    assert {"latency_ms", "status", "unit_kind"} | new_columns <= _columns(database, "usage_events")
     assert {"unit_kind", "display_unit", "metadata"} <= _columns(database, "quota_snapshots")
     assert "latency_ms" not in _columns(result.backup, "usage_events")
     with sqlite3.connect(result.backup) as connection:
@@ -361,12 +371,38 @@ def test_upgrade_database_current_unversioned_schema_does_not_rewrite_rows(
         connection.execute("DROP TABLE alembic_version")
         connection.execute(
             """
+            INSERT INTO user (id, email, hashed_password, is_active, is_verified)
+            VALUES ('00000000-0000-4000-8000-000000000002',
+                    'seed@example.com', 'not-a-real-hash', 1, 0)
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO accounts (id, status)
+            VALUES ('00000000-0000-4000-8000-000000000002', 'active')
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO projects (id, account_id, name, slug, status, created_by, created_at)
+            VALUES ('00000000-0000-4000-8000-000000000001',
+                    '00000000-0000-4000-8000-000000000002',
+                    'seed', 'seed', 'active',
+                    '00000000-0000-4000-8000-000000000002',
+                    '2026-01-01T00:00:00+00:00')
+            """
+        )
+        connection.execute(
+            """
             INSERT INTO usage_events
                 (id, provider, operation, units, observed_at, request_id, metadata,
-                 latency_ms, status, unit_kind)
+                 latency_ms, status, unit_kind,
+                 project_id, actor_type, actor_id)
             VALUES
                 (11, 'exa', 'search', '0.007', '2026-01-01T00:00:00+00:00',
-                 NULL, '{}', 123, 'success', 'USD')
+                 NULL, '{}', 123, 'success', 'USD',
+                 '00000000-0000-4000-8000-000000000001', 'human',
+                 '00000000-0000-4000-8000-000000000002')
             """
         )
     rows_before = _usage_rows(database)
@@ -401,7 +437,6 @@ def test_upgrade_database_is_idempotent_at_head(tmp_path: Path) -> None:
 async def test_concurrent_upgrades_are_serialized(tmp_path: Path) -> None:
     database = tmp_path / "concurrent.db"
     _create_partial_legacy(database)
-    original_rows = _usage_rows(database)
 
     results = await asyncio.gather(
         *(asyncio.to_thread(upgrade_database, database) for _ in range(6))
@@ -409,7 +444,7 @@ async def test_concurrent_upgrades_are_serialized(tmp_path: Path) -> None:
 
     assert sum(result.changed for result in results) == 1
     assert sum(result.backup is not None for result in results) == 1
-    assert _usage_rows(database) == original_rows
+    assert _usage_rows(database) == []
     assert _revision(database) == [migration_head()]
     validate_database_schema(database)
 
@@ -478,7 +513,8 @@ async def test_repository_open_targets_only_selected_worktree_database(
         pass
 
     assert database_status(worktree_database).schema_valid is True
-    assert _usage_rows(worktree_database)[0][1] == "worktree-sentinel"
+    assert _usage_rows(worktree_database) == []
+    assert "projects" in _tables(worktree_database)
     assert hashlib.sha256(main_database.read_bytes()).digest() == main_hash
     assert main_database.stat().st_mtime_ns == main_mtime
     assert database_status(main_database).current_revision is None
@@ -577,7 +613,7 @@ def test_fresh_database_at_head_has_no_cache_metadata(tmp_path: Path) -> None:
     result = upgrade_database(database)
 
     assert result.current_revision == migration_head()
-    assert result.current_revision == "0007_project_settings"
+    assert result.current_revision == "0008_project_owned_telemetry"
     assert "cache_metadata" not in _tables(database)
     assert "cache_metadata_expires_at" not in _indexes(database)
     assert _indexes(database) == (set(_HEAD_INDEXES) | set(_LIMIT_INDEXES) | set(_PROJECT_INDEXES))
@@ -613,18 +649,23 @@ def test_upgrade_from_0002_drops_seeded_cache_rows_preserving_unrelated_data(
     assert _revision(database) == [migration_head()]
     assert "cache_metadata" not in _tables(database)
     assert "cache_metadata_expires_at" not in _indexes(database)
-    assert _all_rows(database, "usage_events", "id") == usage_before
+    # P04: usage_events/trace_spans are recreated empty; unrelated data stays.
+    assert _all_rows(database, "usage_events", "id") == []
     assert _all_rows(database, "quota_snapshots", "id") == quota_before
     assert _all_rows(database, "provider_health", "id") == health_before
     assert _all_rows(database, "runtime_settings", "key") == settings_before
-    # Exact decimals survive the destructive revision untouched.
-    assert _all_rows(database, "usage_events", "id")[0][3] == "12.50"
+    assert _all_rows(result.backup, "usage_events", "id") == usage_before
+    # Exact decimals survive in the rows that are preserved.
     assert _all_rows(database, "quota_snapshots", "id")[0][3] == "75.25"
     assert _all_rows(database, "quota_snapshots", "id")[0][4] == "100.00"
     assert _indexes(database) == (
         (indexes_before - {"cache_metadata_expires_at"})
         | set(_TRACE_INDEXES)
         | {_TRACE_USER_INDEX}
+        | {
+            "trace_spans_project_root_started_at",
+            "usage_events_project_observed_at",
+        }
         | set(_AUTH_INDEXES)
         | set(_LIMIT_INDEXES)
         | set(_PROJECT_INDEXES)

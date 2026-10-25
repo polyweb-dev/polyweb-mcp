@@ -17,6 +17,7 @@ from freesearch.infrastructure.resilience import ProviderOperationError
 from freesearch.models.contracts import FetchRequest, SearchRequest, UsageOperation, UsageStatus
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.services.monitoring import tracked_call
+from tests.fixtures.execution import scenario_attribution
 
 
 @given("a configured Brave search adapter")
@@ -32,7 +33,9 @@ def step_given_brave_adapter(context: Any) -> None:
 @when('I perform a live Brave search for "{query}" with limit {limit:d}')
 def step_when_live_brave_search(context: Any, query: str, limit: int) -> None:
     """Execute a live search request through the Brave adapter."""
-    request = SearchRequest(query=query, limit=limit)
+    request = SearchRequest(
+        project_id="00000000-0000-4000-8000-0000000000aa", query=query, limit=limit
+    )
     context.search_limit = limit
     context.search_response = context.loop.run_until_complete(context.adapter.search(request))
 
@@ -89,7 +92,11 @@ def step_when_brave_capabilities(context: Any) -> None:
     """Query the adapter capabilities and search cost estimate (no network)."""
     context.brave_capabilities = context.adapter.capabilities
     context.brave_cost_estimate = context.loop.run_until_complete(
-        context.adapter.estimate_cost(SearchRequest(query="cost check", limit=1))
+        context.adapter.estimate_cost(
+            SearchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", query="cost check", limit=1
+            )
+        )
     )
 
 
@@ -126,7 +133,9 @@ def step_when_live_brave_fetch(context: Any, url: str, max_chars: int) -> None:
         db_path = Path(context.temp_directory.name) / "brave-fetch-test.db"
         context.database_path = str(db_path)
         context.repository = context.loop.run_until_complete(SQLiteRepository.open(db_path))
-    request = FetchRequest(url=HttpUrl(url), max_chars=max_chars)
+    request = FetchRequest(
+        project_id="00000000-0000-4000-8000-0000000000aa", url=HttpUrl(url), max_chars=max_chars
+    )
     context.fetch_url = str(request.url)
     context.fetch_response = None
     context.fetch_error = None
@@ -137,6 +146,7 @@ def step_when_live_brave_fetch(context: Any, url: str, max_chars: int) -> None:
                 context.adapter,
                 lambda adapter: adapter.fetch(request),
                 operation=UsageOperation.FETCH,
+                attribution=scenario_attribution(context),
             )
         )
     except ProviderOperationError as exc:

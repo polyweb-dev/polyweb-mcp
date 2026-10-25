@@ -21,6 +21,7 @@ from freesearch.models.contracts import (
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
 from tests.fixtures.auth import TEMP_PASSWORD, configure_bdd_secret, temp_email
+from tests.fixtures.execution import bdd_project_id
 
 
 class _FanoutStubAdapter(ProviderAdapter):
@@ -135,7 +136,11 @@ def _post_fanout_search(
     with TestClient(app) as client:
         headers = _ensure_agent_headers(client, context)
         # Fanout search needs any authenticated role.
-        response = client.post("/search", json=payload, headers=headers)
+        response = client.post(
+            "/search",
+            json={"project_id": bdd_project_id(context, headers), **payload},
+            headers=headers,
+        )
     context.fanout_status = response.status_code
     context.fanout_response = response.json() if response.content else None
 

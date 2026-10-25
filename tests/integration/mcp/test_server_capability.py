@@ -38,6 +38,7 @@ from freesearch.models.contracts import (
 )
 from freesearch.persistence.storage import SQLiteRepository
 from tests.fixtures.auth import mcp_account_token
+from tests.fixtures.execution import seed_token_project
 
 
 class _CapabilityStub(ProviderAdapter):
@@ -118,35 +119,42 @@ async def repository(tmp_path: Path) -> SQLiteRepository:
 
 async def _authed_server(
     repository: SQLiteRepository, adapters: list[ProviderAdapter], prefix: str
-) -> FastMCP:
+) -> tuple[FastMCP, str]:
     """Build one tool server with a real account and its explicit stdio credential."""
 
     service, token, _email = await mcp_account_token(repository, prefix)
-    return create_server(
+    server = create_server(
         adapters,
         repository=repository,
         auth_service=service,
         stdio_token=SecretStr(token.get_secret_value()),
     )
+    return server, str((await seed_token_project(repository, token)).project_id)
 
 
 # --- (a) {"request": ...} schema works for both tools ---
 
 
 async def test_search_tool_accepts_request_schema(repository: SQLiteRepository) -> None:
-    server = await _authed_server(repository, [_CapabilityStub("brave")], "cap-search")
+    server, pid = await _authed_server(repository, [_CapabilityStub("brave")], "cap-search")
 
-    payload = _payload(await server.call_tool("search", {"request": {"query": "python asyncio"}}))
+    payload = _payload(
+        await server.call_tool(
+            "search", {"request": {"project_id": pid, "query": "python asyncio"}}
+        )
+    )
 
     assert payload["provider"] == "brave"
     assert payload["query"] == "python asyncio"
 
 
 async def test_fetch_tool_accepts_request_schema(repository: SQLiteRepository) -> None:
-    server = await _authed_server(repository, [_CapabilityStub("youcom")], "cap-fetch")
+    server, pid = await _authed_server(repository, [_CapabilityStub("youcom")], "cap-fetch")
 
     payload = _payload(
-        await server.call_tool("fetch", {"request": {"url": "https://example.com/page"}})
+        await server.call_tool(
+            "fetch", {"request": {"project_id": pid, "url": "https://example.com/page"}}
+        )
     )
 
     assert payload["provider"] == "youcom"
@@ -168,12 +176,13 @@ async def test_search_tool_accepts_provider_options_and_preserves_vendor_metadat
             )
 
     stub = _MetadataStub("brave")
-    server = await _authed_server(repository, [stub], "cap-search-provider-options")
+    server, pid = await _authed_server(repository, [stub], "cap-search-provider-options")
     payload = _payload(
         await server.call_tool(
             "search",
             {
                 "request": {
+                    "project_id": pid,
                     "query": "context",
                     "providerOptions": {"exa": {"type": "deep-lite"}},
                 }
@@ -192,13 +201,14 @@ async def test_fetch_tool_accepts_operation_specific_provider_options(
     repository: SQLiteRepository,
 ) -> None:
     stub = _CapabilityStub("youcom")
-    server = await _authed_server(repository, [stub], "cap-fetch-provider-options")
+    server, pid = await _authed_server(repository, [stub], "cap-fetch-provider-options")
 
     payload = _payload(
         await server.call_tool(
             "fetch",
             {
                 "request": {
+                    "project_id": pid,
                     "url": "https://example.com/page",
                     "providerOptions": {"you": {"formats": ["html"]}},
                 }
@@ -228,7 +238,7 @@ async def test_invalid_search_payload_rejected_without_adapter_call(
     payload: dict[str, Any],
 ) -> None:
     stub = _CapabilityStub("brave")
-    server = await _authed_server(repository, [stub], "cap-bad-search")
+    server, _pid = await _authed_server(repository, [stub], "cap-bad-search")
 
     with pytest.raises(ToolError):
         await server.call_tool("search", payload)
@@ -248,7 +258,7 @@ async def test_invalid_fetch_payload_rejected_without_adapter_call(
     payload: dict[str, Any],
 ) -> None:
     stub = _CapabilityStub("youcom")
-    server = await _authed_server(repository, [stub], "cap-bad-fetch")
+    server, _pid = await _authed_server(repository, [stub], "cap-bad-fetch")
 
     with pytest.raises(ToolError):
         await server.call_tool("fetch", payload)
@@ -261,20 +271,22 @@ async def test_invalid_fetch_payload_rejected_without_adapter_call(
 
 async def test_search_excludes_fetch_only_adapter(repository: SQLiteRepository) -> None:
     stub = _CapabilityStub("fetchonly", search=False, fetch=True)
-    server = await _authed_server(repository, [stub], "cap-exclude-search")
+    server, pid = await _authed_server(repository, [stub], "cap-exclude-search")
 
     with pytest.raises(ToolError):
-        await server.call_tool("search", {"request": {"query": "ok"}})
+        await server.call_tool("search", {"request": {"project_id": pid, "query": "ok"}})
 
     assert stub.calls == []
 
 
 async def test_fetch_excludes_search_only_adapter(repository: SQLiteRepository) -> None:
     stub = _CapabilityStub("searchonly", search=True, fetch=False)
-    server = await _authed_server(repository, [stub], "cap-exclude-fetch")
+    server, pid = await _authed_server(repository, [stub], "cap-exclude-fetch")
 
     with pytest.raises(ToolError):
-        await server.call_tool("fetch", {"request": {"url": "https://example.com"}})
+        await server.call_tool(
+            "fetch", {"request": {"project_id": pid, "url": "https://example.com"}}
+        )
 
     assert stub.calls == []
 
@@ -284,11 +296,15 @@ async def test_split_capabilities_route_to_capable_adapter(
 ) -> None:
     search_only = _CapabilityStub("searchonly", search=True, fetch=False)
     fetch_only = _CapabilityStub("fetchonly", search=False, fetch=True)
-    server = await _authed_server(repository, [search_only, fetch_only], "cap-split")
+    server, pid = await _authed_server(repository, [search_only, fetch_only], "cap-split")
 
-    search_payload = _payload(await server.call_tool("search", {"request": {"query": "hi"}}))
+    search_payload = _payload(
+        await server.call_tool("search", {"request": {"project_id": pid, "query": "hi"}})
+    )
     fetch_payload = _payload(
-        await server.call_tool("fetch", {"request": {"url": "https://example.com"}})
+        await server.call_tool(
+            "fetch", {"request": {"project_id": pid, "url": "https://example.com"}}
+        )
     )
 
     assert search_payload["provider"] == "searchonly"
@@ -303,9 +319,11 @@ async def test_split_capabilities_route_to_capable_adapter(
 async def test_search_output_is_json_stable_per_response_contract(
     repository: SQLiteRepository,
 ) -> None:
-    server = await _authed_server(repository, [_CapabilityStub("brave")], "cap-json-search")
+    server, pid = await _authed_server(repository, [_CapabilityStub("brave")], "cap-json-search")
 
-    payload = _payload(await server.call_tool("search", {"request": {"query": "json check"}}))
+    payload = _payload(
+        await server.call_tool("search", {"request": {"project_id": pid, "query": "json check"}})
+    )
 
     assert isinstance(payload, dict)
     json.dumps(payload)  # must serialize without error
@@ -319,10 +337,12 @@ async def test_search_output_is_json_stable_per_response_contract(
 async def test_fetch_output_is_json_stable_per_response_contract(
     repository: SQLiteRepository,
 ) -> None:
-    server = await _authed_server(repository, [_CapabilityStub("youcom")], "cap-json-fetch")
+    server, pid = await _authed_server(repository, [_CapabilityStub("youcom")], "cap-json-fetch")
 
     payload = _payload(
-        await server.call_tool("fetch", {"request": {"url": "https://example.com/document"}})
+        await server.call_tool(
+            "fetch", {"request": {"project_id": pid, "url": "https://example.com/document"}}
+        )
     )
 
     assert isinstance(payload, dict)
@@ -339,19 +359,21 @@ async def test_fetch_output_is_json_stable_per_response_contract(
 async def test_search_without_any_adapter_raises_no_provider(
     repository: SQLiteRepository,
 ) -> None:
-    server = await _authed_server(repository, [], "cap-empty-search")
+    server, pid = await _authed_server(repository, [], "cap-empty-search")
 
     with pytest.raises(ToolError, match="no provider is configured"):
-        await server.call_tool("search", {"request": {"query": "anything"}})
+        await server.call_tool("search", {"request": {"project_id": pid, "query": "anything"}})
 
 
 async def test_fetch_without_any_adapter_raises_no_provider(
     repository: SQLiteRepository,
 ) -> None:
-    server = await _authed_server(repository, [], "cap-empty-fetch")
+    server, pid = await _authed_server(repository, [], "cap-empty-fetch")
 
     with pytest.raises(ToolError, match="no provider is configured"):
-        await server.call_tool("fetch", {"request": {"url": "https://example.com"}})
+        await server.call_tool(
+            "fetch", {"request": {"project_id": pid, "url": "https://example.com"}}
+        )
 
 
 # --- (f) access masks and capability remain independent gates ---
@@ -361,10 +383,12 @@ async def test_capability_gate_blocks_without_call_even_when_masks_allow(
     repository: SQLiteRepository,
 ) -> None:
     search_only = _CapabilityStub("searchonly", search=True, fetch=False)
-    server = await _authed_server(repository, [search_only], "cap-gate")
+    server, pid = await _authed_server(repository, [search_only], "cap-gate")
 
     with pytest.raises(ToolError):
-        await server.call_tool("fetch", {"request": {"url": "https://example.com"}})
+        await server.call_tool(
+            "fetch", {"request": {"project_id": pid, "url": "https://example.com"}}
+        )
 
     assert search_only.calls == []
 
@@ -380,10 +404,10 @@ async def test_mask_gate_blocks_without_call_even_when_capability_allows(
             "provider.exa", {"config": {"enable_mask": 0, "support_mask": 7, "priority": 100}}
         )
         stub = _CapabilityStub("exa", search=True, fetch=True)
-        server = await _authed_server(repository, [stub], "cap-mask")
+        server, pid = await _authed_server(repository, [stub], "cap-mask")
 
         with pytest.raises(ToolError, match="no eligible provider"):
-            await server.call_tool("search", {"request": {"query": "mask off"}})
+            await server.call_tool("search", {"request": {"project_id": pid, "query": "mask off"}})
 
         assert stub.calls == []
     finally:
@@ -396,10 +420,12 @@ async def test_unsupported_brave_fetch_never_calls_adapter(tmp_path: Path) -> No
     repository = await SQLiteRepository.open(tmp_path / "brave-fetch.db")
     try:
         stub = _CapabilityStub("brave", search=True, fetch=False)
-        server = await _authed_server(repository, [stub], "cap-brave-fetch")
+        server, pid = await _authed_server(repository, [stub], "cap-brave-fetch")
 
         with pytest.raises(ToolError):
-            await server.call_tool("fetch", {"request": {"url": "https://example.com"}})
+            await server.call_tool(
+                "fetch", {"request": {"project_id": pid, "url": "https://example.com"}}
+            )
 
         assert stub.calls == []
     finally:

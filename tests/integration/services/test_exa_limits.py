@@ -150,7 +150,9 @@ async def test_rate_admission_search_and_fetch(repository: SQLiteRepository) -> 
                 auth_mode=AuthMode.KEYED,
                 attempt_id=f"rate-search-{i}",
                 requested_at=FIXED_AT,
-                request=SearchRequest(query="test", limit=10),
+                request=SearchRequest(
+                    project_id="00000000-0000-4000-8000-0000000000aa", query="test", limit=10
+                ),
             )
         )
         assert admission.attempt_id == f"rate-search-{i}"
@@ -164,7 +166,9 @@ async def test_rate_admission_search_and_fetch(repository: SQLiteRepository) -> 
                 auth_mode=AuthMode.KEYED,
                 attempt_id="rate-search-11",
                 requested_at=FIXED_AT,
-                request=SearchRequest(query="test", limit=10),
+                request=SearchRequest(
+                    project_id="00000000-0000-4000-8000-0000000000aa", query="test", limit=10
+                ),
             )
         )
     assert excinfo.value.status_code == 429
@@ -180,7 +184,10 @@ async def test_rate_admission_search_and_fetch(repository: SQLiteRepository) -> 
                 auth_mode=AuthMode.KEYED,
                 attempt_id=f"rate-fetch-{i}",
                 requested_at=FIXED_AT,
-                request=FetchRequest(url=AnyHttpUrl("https://example.com/doc")),
+                request=FetchRequest(
+                    project_id="00000000-0000-4000-8000-0000000000aa",
+                    url=AnyHttpUrl("https://example.com/doc"),
+                ),
             )
         )
         assert admission.attempt_id == f"rate-fetch-{i}"
@@ -194,7 +201,10 @@ async def test_rate_admission_search_and_fetch(repository: SQLiteRepository) -> 
                 auth_mode=AuthMode.KEYED,
                 attempt_id="rate-fetch-101",
                 requested_at=FIXED_AT,
-                request=FetchRequest(url=AnyHttpUrl("https://example.com/doc")),
+                request=FetchRequest(
+                    project_id="00000000-0000-4000-8000-0000000000aa",
+                    url=AnyHttpUrl("https://example.com/doc"),
+                ),
             )
         )
     assert excinfo.value.status_code == 429
@@ -215,7 +225,9 @@ async def test_dynamic_crd_request_cost(repository: SQLiteRepository) -> None:
             auth_mode=AuthMode.KEYED,
             attempt_id="cost-s10",
             requested_at=FIXED_AT,
-            request=SearchRequest(query="test", limit=10),
+            request=SearchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", query="test", limit=10
+            ),
         )
     )
     assert adm_s10.reserved_native == Decimal("0.007")
@@ -229,7 +241,9 @@ async def test_dynamic_crd_request_cost(repository: SQLiteRepository) -> None:
             auth_mode=AuthMode.KEYED,
             attempt_id="cost-s20",
             requested_at=FIXED_AT,
-            request=SearchRequest(query="test", limit=20),
+            request=SearchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", query="test", limit=20
+            ),
         )
     )
     assert adm_s20.reserved_native == Decimal("0.017")
@@ -243,7 +257,11 @@ async def test_dynamic_crd_request_cost(repository: SQLiteRepository) -> None:
             auth_mode=AuthMode.KEYED,
             attempt_id="cost-f1",
             requested_at=FIXED_AT,
-            request=FetchRequest(url=AnyHttpUrl("https://example.com/1"), url_count=1),
+            request=FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa",
+                url=AnyHttpUrl("https://example.com/1"),
+                url_count=1,
+            ),
         )
     )
     assert adm_f1.reserved_native == Decimal("0.001")
@@ -257,7 +275,11 @@ async def test_dynamic_crd_request_cost(repository: SQLiteRepository) -> None:
             auth_mode=AuthMode.KEYED,
             attempt_id="cost-f5",
             requested_at=FIXED_AT,
-            request=FetchRequest(url=AnyHttpUrl("https://example.com/1"), url_count=5),
+            request=FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa",
+                url=AnyHttpUrl("https://example.com/1"),
+                url_count=5,
+            ),
         )
     )
     assert adm_f5.reserved_native == Decimal("0.005")
@@ -277,7 +299,9 @@ async def test_funds_denial_on_zero_balance(repository: SQLiteRepository) -> Non
                 auth_mode=AuthMode.KEYED,
                 attempt_id="denied-zero-balance",
                 requested_at=FIXED_AT,
-                request=SearchRequest(query="test", limit=10),
+                request=SearchRequest(
+                    project_id="00000000-0000-4000-8000-0000000000aa", query="test", limit=10
+                ),
             )
         )
     assert excinfo.value.status_code == 402
@@ -313,7 +337,9 @@ async def test_terminal_402_records_zero_and_blocks_locally(
                 auth_mode=AuthMode.KEYED,
                 attempt_id="denied-after-terminal-402",
                 requested_at=FIXED_AT,
-                request=SearchRequest(query="test", limit=10),
+                request=SearchRequest(
+                    project_id="00000000-0000-4000-8000-0000000000aa", query="test", limit=10
+                ),
             )
         )
     assert excinfo.value.status_code == 402
@@ -335,7 +361,9 @@ async def test_debit_success_decrements_exact_usd_and_crd(
             auth_mode=AuthMode.KEYED,
             attempt_id="exa-debit-1",
             requested_at=FIXED_AT,
-            request=SearchRequest(query="test", limit=10),
+            request=SearchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", query="test", limit=10
+            ),
         )
     )
     assert admission.reserved_native == Decimal("0.007")
@@ -344,7 +372,9 @@ async def test_debit_success_decrements_exact_usd_and_crd(
     await service.record_success(
         admission,
         SearchResponse(query="test", results=[], provider="exa"),
-        request=SearchRequest(query="test", limit=10),
+        request=SearchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa", query="test", limit=10
+        ),
     )
 
     pool = await repository.limits.get_pool(EXA_POOL)

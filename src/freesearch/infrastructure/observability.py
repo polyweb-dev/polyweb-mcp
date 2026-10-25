@@ -48,7 +48,12 @@ from opentelemetry.trace import (
 )
 
 from freesearch.configuration.config import Settings
-from freesearch.models.observability import TRACE_SCHEMA_VERSION, TraceAttribute
+from freesearch.models.observability import (
+    OWNERSHIP_ATTRIBUTES,
+    TRACE_SCHEMA_VERSION,
+    ExecutionAttribution,
+    TraceAttribute,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -143,13 +148,32 @@ def trace_content_attributes(payload: Mapping[str, object]) -> dict[str, Attribu
 
 
 def _span_attributes(attributes: Mapping[str, object] | None) -> dict[str, AttributeValue]:
-    """Drop ``None`` values, then apply the shared content/redaction hook."""
+    """Drop ``None`` and ownership keys, then apply the content/redaction hook.
+
+    ``OWNERSHIP_ATTRIBUTES`` are stripped from every caller-supplied mapping so
+    only :func:`bind_execution_attribution` (and the span processor behind it)
+    can stamp project/actor identity on a span.
+    """
 
     if attributes is None:
         return {}
     return trace_content_attributes(
-        {key: value for key, value in attributes.items() if value is not None}
+        {
+            key: value
+            for key, value in attributes.items()
+            if value is not None and key not in OWNERSHIP_ATTRIBUTES
+        }
     )
+
+
+def _ownership_attributes(attribution: ExecutionAttribution) -> dict[str, str]:
+    """Render one attribution as the three trusted span ownership keys."""
+
+    return {
+        TraceAttribute.PROJECT_ID: str(attribution.project_id),
+        TraceAttribute.ACTOR_TYPE: attribution.actor_type.value,
+        TraceAttribute.ACTOR_ID: str(attribution.actor_id),
+    }
 
 
 class SpanHandle(Protocol):
@@ -278,6 +302,62 @@ _ROOT_SPAN: ContextVar[SpanHandle | None] = ContextVar("freesearch_root_span", d
 _EXCEPTION_RECORDED: ContextVar[bool] = ContextVar("freesearch_exception_recorded", default=False)
 
 
+class _AttributionCell:
+    """Per-request mutable holder for the bound execution attribution.
+
+    Fanout tasks inherit the same cell object through their context copy, so a
+    binding made by the request handler is visible to every child span started
+    afterwards, wherever it runs.
+    """
+
+    __slots__ = ("attribution",)
+
+    def __init__(self) -> None:
+        self.attribution: ExecutionAttribution | None = None
+
+
+_ATTRIBUTION_CELL: ContextVar[_AttributionCell | None] = ContextVar(
+    "freesearch_attribution_cell", default=None
+)
+
+
+class _AttributionSpanProcessor(SpanProcessor):
+    """Stamp bound ownership attributes on every span when it starts.
+
+    Registered before the exporter processors so each span carries the trusted
+    project/actor identity from its first instant; spans started before the
+    handler binds (or while no request is bound) stay unattributed.
+    """
+
+    def on_start(self, span: Span, parent_context: Any = None) -> None:
+        cell = _ATTRIBUTION_CELL.get()
+        if cell is None or cell.attribution is None:
+            return
+        span.set_attributes(cast("Mapping[str, Any]", _ownership_attributes(cell.attribution)))
+
+
+def bind_execution_attribution(attribution: ExecutionAttribution) -> None:
+    """Bind the verified execution identity to the current request's spans.
+
+    Without an active observability scope this is a no-op. Rebinding the same
+    attribution is idempotent; a different attribution fails closed. The live
+    root span is stamped through the trusted handle path so a REST root opened
+    before the handler resolved its scope still carries ownership.
+    """
+
+    cell = _ATTRIBUTION_CELL.get()
+    if cell is None:
+        return
+    if cell.attribution is not None:
+        if cell.attribution != attribution:
+            raise ValueError("execution attribution is already bound to a different identity")
+        return
+    cell.attribution = attribution
+    root = _ROOT_SPAN.get()
+    if isinstance(root, _OtelSpan):
+        root._stamp_ownership(attribution)
+
+
 class _OtelSpan:
     """Span handle backed by a live OpenTelemetry SDK span."""
 
@@ -294,6 +374,12 @@ class _OtelSpan:
     def set_attributes(self, attributes: Mapping[str, object]) -> None:
         with _swallow():
             self._span.set_attributes(cast("Mapping[str, Any]", _span_attributes(attributes)))
+
+    def _stamp_ownership(self, attribution: ExecutionAttribution) -> None:
+        """Set the three ownership keys verbatim; internal to the binder only."""
+
+        with _swallow():
+            self._span.set_attributes(cast("Mapping[str, Any]", _ownership_attributes(attribution)))
 
     def add_event(self, name: str, attributes: Mapping[str, object] | None = None) -> None:
         with _swallow():
@@ -399,9 +485,11 @@ def use_observability(runtime: ObservabilityRuntime) -> Iterator[None]:
 
     runtime_token = _CURRENT_RUNTIME.set(runtime)
     exception_token = _EXCEPTION_RECORDED.set(False)
+    attribution_token = _ATTRIBUTION_CELL.set(_AttributionCell())
     try:
         yield
     finally:
+        _ATTRIBUTION_CELL.reset(attribution_token)
         _EXCEPTION_RECORDED.reset(exception_token)
         _CURRENT_RUNTIME.reset(runtime_token)
 
@@ -443,6 +531,9 @@ def build_observability(settings: Settings, *, database: Path | None) -> Observa
     provider = TracerProvider(
         resource=Resource.create({"service.name": settings.otel_service_name})
     )
+    # The attribution processor runs first so ownership lands on every span at
+    # start, before any exporter ever sees the finished span.
+    provider.add_span_processor(_AttributionSpanProcessor())
     for processor in processors:
         provider.add_span_processor(processor)
     return OtelObservability(provider.get_tracer("freesearch"), provider)
@@ -458,6 +549,7 @@ __all__ = [
     "OtelObservability",
     "SpanHandle",
     "SpanKindName",
+    "bind_execution_attribution",
     "build_observability",
     "build_span_processors",
     "current_observability",

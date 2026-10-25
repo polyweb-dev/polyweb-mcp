@@ -17,10 +17,12 @@ from freesearch.models.users import UserRole
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
 from tests.fixtures.auth import (
+    account_id_from_pair,
     raw_auth_headers,
     register_promote_login,
     temp_email,
 )
+from tests.fixtures.execution import seed_execution_project
 
 
 def _unlink_with_retries(path: Path, *, attempts: int = 20) -> None:
@@ -122,8 +124,15 @@ async def test_batch_fetch_rejected_422_without_vendor_call(repository, auth_sec
             client, repository, temp_email("limit-reader"), UserRole.DEVELOPER
         )
         headers = raw_auth_headers(pair["access_token"])
+        pid = str(
+            (
+                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+            ).project_id
+        )
         response = client.post(
-            "/fetch", json={"url": "https://example.com/a", "url_count": 2}, headers=headers
+            "/fetch",
+            json={"project_id": pid, "url": "https://example.com/a", "url_count": 2},
+            headers=headers,
         )
     assert response.status_code == 422
     assert "exactly one URL" in response.text

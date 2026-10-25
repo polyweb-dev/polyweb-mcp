@@ -18,7 +18,12 @@ from fastapi_users.password import PasswordHelper
 from pydantic import SecretStr
 
 from freesearch.cli.users import _run
-from freesearch.models.observability import TraceOperation, TraceSpanKind, TraceSpanRecord
+from freesearch.models.observability import (
+    ActorType,
+    TraceOperation,
+    TraceSpanKind,
+    TraceSpanRecord,
+)
 from freesearch.models.projects import BuiltinRole, ProjectCreate, ProjectMemberAdd
 from freesearch.models.users import UserRole
 from freesearch.persistence.otel_exporter import write_trace_spans
@@ -34,6 +39,7 @@ from tests.fixtures.auth import (
     temp_email,
     temp_principal,
 )
+from tests.fixtures.execution import seed_execution_project
 
 _PASSWORD = "StrongPass123!x-CliBDD"
 
@@ -323,10 +329,14 @@ async def test_set_role_preserves_account_owned_traces(
         check = await _account(repository, email)
         assert check is not None
         moment = datetime(2026, 9, 29, 12, 0, tzinfo=UTC)
+        attribution = await seed_execution_project(repository, user_id=check.id)
         write_trace_spans(
             repository.database_path,
             [
                 TraceSpanRecord(
+                    project_id=attribution.project_id,
+                    actor_type=ActorType.HUMAN,
+                    actor_id=attribution.actor_id,
                     span_id="dd00000000000004",
                     trace_id="e" * 32,
                     name="POST /search",

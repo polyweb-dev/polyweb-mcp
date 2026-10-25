@@ -89,6 +89,7 @@ async def test_search_maps_wire_request_and_normalized_response() -> None:
     try:
         response = await adapter.search(
             SearchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa",
                 query="Brave Search",
                 limit=99,
                 country_code="us",
@@ -114,6 +115,7 @@ async def test_search_forwards_brave_web_options_and_nested_locale_overrides() -
     try:
         await adapter.search(
             SearchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa",
                 query="options",
                 limit=7,
                 country_code="de",
@@ -227,6 +229,7 @@ async def test_llm_context_search_normalizes_extracted_context_and_metadata() ->
     try:
         response = await adapter.search(
             SearchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa",
                 query="grounded query",
                 limit=4,
                 country_code="us",
@@ -308,16 +311,22 @@ async def test_llm_context_search_normalizes_extracted_context_and_metadata() ->
 def test_brave_provider_options_validate_api_enums_and_context_constraints() -> None:
     with pytest.raises(ValidationError):
         SearchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa",
             query="bad enum",
             provider_options={"brave": {"safesearch": "super-safe"}},
         )
     with pytest.raises(ValidationError):
         SearchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa",
             query="bad context option",
             provider_options={"brave": {"search_type": "llm_context", "summary": True}},
         )
     with pytest.raises(ValidationError):
-        SearchRequest(query="bad offset", provider_options={"brave": {"offset": 10}})
+        SearchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa",
+            query="bad offset",
+            provider_options={"brave": {"offset": 10}},
+        )
 
 
 async def test_llm_context_rejects_web_only_offset_without_sending_request() -> None:
@@ -332,6 +341,7 @@ async def test_llm_context_rejects_web_only_offset_without_sending_request() -> 
         with pytest.raises(ProviderOperationError) as excinfo:
             await adapter.search(
                 SearchRequest(
+                    project_id="00000000-0000-4000-8000-0000000000aa",
                     query="context offset",
                     provider_options={"brave": {"search_type": "llm_context", "offset": 1}},
                 )
@@ -375,7 +385,9 @@ async def test_search_normalizes_status_errors_without_key_leaks(
     )
     try:
         with pytest.raises(ProviderOperationError) as excinfo:
-            await adapter.search(SearchRequest(query="query"))
+            await adapter.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="query")
+            )
     finally:
         await client.aclose()
 
@@ -391,7 +403,9 @@ async def test_search_rejects_malformed_payloads(payload: dict[str, object]) -> 
     adapter, client = _adapter(lambda request: httpx.Response(200, json=payload))
     try:
         with pytest.raises(ProviderOperationError) as excinfo:
-            await adapter.search(SearchRequest(query="query"))
+            await adapter.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="query")
+            )
     finally:
         await client.aclose()
 
@@ -468,7 +482,11 @@ async def test_search_skips_invalid_items_and_records_errors(
 ) -> None:
     adapter, client = _brave_adapter_for(items)
     try:
-        response = await adapter.search(SearchRequest(query="query", limit=10))
+        response = await adapter.search(
+            SearchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", query="query", limit=10
+            )
+        )
     finally:
         await client.aclose()
 
@@ -497,7 +515,11 @@ async def test_search_all_invalid_items_returns_empty_success(
 ) -> None:
     adapter, client = _brave_adapter_for(items)
     try:
-        response = await adapter.search(SearchRequest(query="query", limit=10))
+        response = await adapter.search(
+            SearchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", query="query", limit=10
+            )
+        )
     finally:
         await client.aclose()
 
@@ -516,7 +538,11 @@ async def test_search_all_invalid_items_returns_empty_success(
 async def test_search_empty_list_has_no_parse_errors() -> None:
     adapter, client = _brave_adapter_for([])
     try:
-        response = await adapter.search(SearchRequest(query="query", limit=10))
+        response = await adapter.search(
+            SearchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", query="query", limit=10
+            )
+        )
     finally:
         await client.aclose()
 
@@ -548,7 +574,11 @@ async def test_search_limit_applies_after_invalid_item_filter(
 ) -> None:
     adapter, client = _brave_adapter_for(items)
     try:
-        response = await adapter.search(SearchRequest(query="query", limit=limit))
+        response = await adapter.search(
+            SearchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", query="query", limit=limit
+            )
+        )
     finally:
         await client.aclose()
 
@@ -562,7 +592,9 @@ async def test_search_limit_applies_after_invalid_item_filter(
 async def test_search_invalid_tail_item_does_not_fail_response() -> None:
     adapter, client = _brave_adapter_for([_GOOD_BRAVE_ITEM, _SECOND_GOOD_ITEM, _BAD_URL_ITEM])
     try:
-        response = await adapter.search(SearchRequest(query="query", limit=1))
+        response = await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="query", limit=1)
+        )
     finally:
         await client.aclose()
 
@@ -591,7 +623,11 @@ async def test_search_parse_errors_do_not_expose_payload_or_key() -> None:
         key="sentinel-key-abc123",
     )
     try:
-        response = await adapter.search(SearchRequest(query="query", limit=10))
+        response = await adapter.search(
+            SearchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", query="query", limit=10
+            )
+        )
     finally:
         await client.aclose()
 
@@ -610,7 +646,14 @@ async def test_every_concurrent_search_enters_shared_runner() -> None:
     )
     try:
         results = await asyncio.gather(
-            *(adapter.search(SearchRequest(query=str(index))) for index in range(3)),
+            *(
+                adapter.search(
+                    SearchRequest(
+                        project_id="00000000-0000-4000-8000-0000000000aa", query=str(index)
+                    )
+                )
+                for index in range(3)
+            ),
             return_exceptions=True,
         )
     finally:
@@ -626,7 +669,9 @@ async def test_capabilities_fetch_rejection_and_search_cost() -> None:
         assert adapter.capabilities.search is True
         assert adapter.capabilities.fetch is False
         assert adapter.capabilities.cost_estimate is True
-        estimate = await adapter.estimate_cost(SearchRequest(query="query"))
+        estimate = await adapter.estimate_cost(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="query")
+        )
     finally:
         await client.aclose()
 
@@ -648,7 +693,9 @@ class TestBraveMonthlyCounter:
     async def test_bare_headers_yield_implied_estimated_snapshot(self) -> None:
         adapter, client = _adapter(self._handler({"X-RateLimit-Remaining": "49"}))
         try:
-            response = await adapter.search(SearchRequest(query="q", limit=2))
+            response = await adapter.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=2)
+            )
         finally:
             await client.aclose()
         snapshot = response.quota_snapshot
@@ -664,8 +711,12 @@ class TestBraveMonthlyCounter:
     async def test_counter_ticks_down_per_search(self) -> None:
         adapter, client = _adapter(self._handler({}))
         try:
-            first = await adapter.search(SearchRequest(query="q", limit=2))
-            second = await adapter.search(SearchRequest(query="q", limit=2))
+            first = await adapter.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=2)
+            )
+            second = await adapter.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=2)
+            )
         finally:
             await client.aclose()
         assert first.quota_snapshot is not None and second.quota_snapshot is not None
@@ -677,7 +728,9 @@ class TestBraveMonthlyCounter:
     async def test_header_pair_reanchors_counter(self) -> None:
         adapter, client = _adapter(self._handler({}))
         try:
-            await adapter.search(SearchRequest(query="q", limit=2))
+            await adapter.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=2)
+            )
             # Drive the snapshot path directly with vendor-reported pairs.
             headers = {
                 "X-RateLimit-Remaining": "5, 900",
@@ -695,9 +748,13 @@ class TestBraveMonthlyCounter:
     async def test_month_rollover_resets_counter(self) -> None:
         adapter, client = _adapter(self._handler({}))
         try:
-            await adapter.search(SearchRequest(query="q", limit=2))
+            await adapter.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=2)
+            )
             adapter._ledger_month = datetime(2000, 1, 1, tzinfo=UTC)
-            response = await adapter.search(SearchRequest(query="q", limit=2))
+            response = await adapter.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=2)
+            )
         finally:
             await client.aclose()
         assert response.quota_snapshot is not None

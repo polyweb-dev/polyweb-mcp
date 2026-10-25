@@ -20,7 +20,11 @@ def step_given_exa_adapter(context: Any) -> None:
 def step_when_live_search(context: Any, query: str, limit: int) -> None:
     """Execute a live search request through the Exa adapter."""
     context.search_response = context.loop.run_until_complete(
-        context.adapter.search(SearchRequest(query=query, limit=limit))
+        context.adapter.search(
+            SearchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", query=query, limit=limit
+            )
+        )
     )
 
 
@@ -45,7 +49,13 @@ def step_then_search_results_valid(context: Any) -> None:
 def step_when_live_fetch(context: Any, url: str, max_chars: int) -> None:
     """Execute a live content request through the Exa adapter."""
     context.fetch_response = context.loop.run_until_complete(
-        context.adapter.fetch(FetchRequest(url=HttpUrl(url), max_chars=max_chars))
+        context.adapter.fetch(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa",
+                url=HttpUrl(url),
+                max_chars=max_chars,
+            )
+        )
     )
 
 
