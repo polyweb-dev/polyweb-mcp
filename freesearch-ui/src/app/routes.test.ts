@@ -91,6 +91,23 @@ describe("isInternalPath", () => {
     expect(isInternalPath(null)).toBe(false)
     expect(isInternalPath(undefined)).toBe(false)
   })
+
+  it.each([
+    "/projects",
+    "/p/11111111-1111-4111-8111-111111111111",
+    "/p/11111111-1111-4111-8111-111111111111/members",
+  ])("accepts the project path %s", (path) => {
+    expect(isInternalPath(path)).toBe(true)
+  })
+
+  it.each([
+    "/p/not-a-uuid",
+    "/p/11111111-1111-4111-8111-111111111111/usage",
+    "/p/11111111-1111-4111-8111-111111111111/members/extra",
+    "/projects/create",
+  ])("rejects the non-project path %s", (path) => {
+    expect(isInternalPath(path)).toBe(false)
+  })
 })
 
 describe("loginPathFor", () => {

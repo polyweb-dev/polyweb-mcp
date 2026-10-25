@@ -213,6 +213,10 @@ class ProjectRepository:
           in a single atomic transaction.
         - If any check fails or error occurs, transaction rolls back cleanly.
         """
+        admin_user_id = project_create.initial_admin_user_id
+        if admin_user_id is None:
+            raise ValueError("project creation requires a resolved initial_admin_user_id")
+
         # Validate account exists and is active
         account_stmt = select(AccountRow).where(AccountRow.id == str(account_id))
         account_row = (await self._session.execute(account_stmt)).scalar_one_or_none()
@@ -224,17 +228,13 @@ class ProjectRepository:
         # Validate initial admin exists and is an active human user
         user_cls = _get_user_row()
         user_stmt = select(user_cls).where(
-            user_cls.id == project_create.initial_admin_user_id  # type: ignore[arg-type]
+            user_cls.id == admin_user_id  # type: ignore[arg-type]
         )
         admin_user = (await self._session.execute(user_stmt)).scalar_one_or_none()
         if admin_user is None:
-            raise ValueError(
-                f"Initial admin user {project_create.initial_admin_user_id} does not exist"
-            )
+            raise ValueError(f"Initial admin user {admin_user_id} does not exist")
         if not admin_user.is_active:
-            raise ValueError(
-                f"Initial admin user {project_create.initial_admin_user_id} is not active"
-            )
+            raise ValueError(f"Initial admin user {admin_user_id} is not active")
 
         project_id = uuid4()
         slug = project_create.slug or _generate_slug(project_create.name)
@@ -266,7 +266,7 @@ class ProjectRepository:
         # 2. Initial membership (ACTIVE)
         membership_row = ProjectMembershipRow(
             project_id=str(project_id),
-            user_id=str(project_create.initial_admin_user_id),
+            user_id=str(admin_user_id),
             status=MembershipStatus.ACTIVE.value,
             version=1,
         )
@@ -276,7 +276,7 @@ class ProjectRepository:
         # 3. Initial project_admin assignment
         role_row = ProjectRoleAssignmentRow(
             project_id=str(project_id),
-            user_id=str(project_create.initial_admin_user_id),
+            user_id=str(admin_user_id),
             role_key=BuiltinRole.PROJECT_ADMIN.value,
             granted_by=str(created_by),
             version=1,
@@ -287,7 +287,8 @@ class ProjectRepository:
         project_read = _project_row_to_read(project_row)
         member_read = ProjectMemberRead(
             project_id=project_id,
-            user_id=project_create.initial_admin_user_id,
+            user_id=admin_user_id,
+            email=admin_user.email,
             status=MembershipStatus.ACTIVE,
             roles=[BuiltinRole.PROJECT_ADMIN.value],
             version=1,
@@ -295,7 +296,7 @@ class ProjectRepository:
         role_read = RoleAssignmentRead(
             scope_type=ScopeType.PROJECT,
             scope_id=project_id,
-            user_id=project_create.initial_admin_user_id,
+            user_id=admin_user_id,
             role_key=BuiltinRole.PROJECT_ADMIN.value,
             granted_by=created_by,
             version=1,
@@ -351,16 +352,31 @@ class ProjectRepository:
         for r in role_rows:
             roles_by_user.setdefault(r.user_id, []).append(r.role_key)
 
-        return [
-            ProjectMemberRead(
-                project_id=UUID(m.project_id),
-                user_id=UUID(m.user_id),
-                status=MembershipStatus(m.status),
-                roles=roles_by_user.get(m.user_id, []),
-                version=m.version,
+        user_cls = _get_user_row()
+        email_by_user: dict[str, str] = {}
+        if membership_rows:
+            user_stmt = select(user_cls).where(
+                cast(user_cls.id, CHAR(36)).in_([m.user_id for m in membership_rows])
             )
-            for m in membership_rows
-        ]
+            user_rows = (await self._session.execute(user_stmt)).scalars().all()
+            email_by_user = {str(user.id): user.email for user in user_rows}
+
+        members: list[ProjectMemberRead] = []
+        for m in membership_rows:
+            email = email_by_user.get(m.user_id)
+            if email is None:
+                raise ValueError(f"User {m.user_id} does not exist")
+            members.append(
+                ProjectMemberRead(
+                    project_id=UUID(m.project_id),
+                    user_id=UUID(m.user_id),
+                    email=email,
+                    status=MembershipStatus(m.status),
+                    roles=roles_by_user.get(m.user_id, []),
+                    version=m.version,
+                )
+            )
+        return members
 
     async def get_project_members(
         self,
@@ -428,6 +444,7 @@ class ProjectRepository:
         member_read = ProjectMemberRead(
             project_id=project_id,
             user_id=user_id,
+            email=user.email,
             status=MembershipStatus.ACTIVE,
             roles=[role_key],
             version=1,
@@ -773,8 +790,12 @@ class ProjectRepository:
         return {UUID(project_id): int(count) for project_id, count in rows}
 
     async def _membership_read(self, row: ProjectMembershipRow) -> ProjectMemberRead:
-        """Project one membership row with its current role keys."""
+        """Project one membership row with its current role keys and user email."""
 
+        user_cls = _get_user_row()
+        user = await self._session.get(user_cls, UUID(row.user_id))
+        if user is None:
+            raise ValueError(f"User {row.user_id} does not exist")
         role_stmt = select(ProjectRoleAssignmentRow).where(
             ProjectRoleAssignmentRow.project_id == row.project_id,
             ProjectRoleAssignmentRow.user_id == row.user_id,
@@ -783,6 +804,7 @@ class ProjectRepository:
         return ProjectMemberRead(
             project_id=UUID(row.project_id),
             user_id=UUID(row.user_id),
+            email=user.email,
             status=MembershipStatus(row.status),
             roles=sorted(role.role_key for role in role_rows),
             version=row.version,

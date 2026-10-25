@@ -575,13 +575,32 @@ class ProjectStatus(StrEnum):
 
 
 class ProjectCreate(ContractModel):
-    """Request to create a new project with an initial administrator."""
+    """Request to create a new project with an initial administrator.
+
+    The initial administrator is identified by exactly one of
+    ``initial_admin_user_id`` or ``initial_admin_email``; the service resolves
+    an email to a durable user id inside the creation transaction.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     name: str = Field(min_length=1, max_length=100)
     slug: str | None = Field(default=None, max_length=100)
-    initial_admin_user_id: UUID
+    initial_admin_user_id: UUID | None = None
+    initial_admin_email: str | None = None
+
+    @field_validator("initial_admin_email")
+    @classmethod
+    def _normalize_admin_email(cls, email: str | None) -> str | None:
+        return None if email is None else normalize_email(email)
+
+    @model_validator(mode="after")
+    def _validate_one_admin_identifier(self) -> "ProjectCreate":
+        if (self.initial_admin_user_id is None) == (self.initial_admin_email is None):
+            raise ValueError(
+                "exactly one of initial_admin_user_id or initial_admin_email must be set"
+            )
+        return self
 
 
 class ProjectUpdate(ContractModel):
@@ -624,12 +643,23 @@ class MembershipStatus(StrEnum):
 
 
 class ProjectMemberAdd(ContractModel):
-    """Request to add a user to a project with an initial role."""
+    """Request to add a user to a project with an initial role.
+
+    The new member is identified by exactly one of ``user_id`` or ``email``;
+    the service resolves an email to a durable user id inside the write
+    transaction after every authorization check has passed.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    user_id: UUID
+    user_id: UUID | None = None
+    email: str | None = None
     initial_role: str = BuiltinRole.PROJECT_MEMBER
+
+    @field_validator("email")
+    @classmethod
+    def _normalize_email(cls, email: str | None) -> str | None:
+        return None if email is None else normalize_email(email)
 
     @field_validator("initial_role")
     @classmethod
@@ -643,6 +673,12 @@ class ProjectMemberAdd(ContractModel):
                 f"Role {role!r} has scope {definition.scope_type.value!r}"
             )
         return role
+
+    @model_validator(mode="after")
+    def _validate_one_member_identifier(self) -> "ProjectMemberAdd":
+        if (self.user_id is None) == (self.email is None):
+            raise ValueError("exactly one of user_id or email must be set")
+        return self
 
 
 class ProjectMemberUpdate(ContractModel):
@@ -704,9 +740,15 @@ class ProjectMemberRead(ContractModel):
 
     project_id: UUID
     user_id: UUID
+    email: str
     status: MembershipStatus
     roles: list[str]
     version: int
+
+    @field_validator("email")
+    @classmethod
+    def _normalize_email(cls, email: str) -> str:
+        return normalize_email(email)
 
 
 class RoleAssignmentRead(ContractModel):
@@ -733,6 +775,26 @@ class RoleAssignmentRead(ContractModel):
                 f"cannot be assigned at scope_type {self.scope_type.value!r}"
             )
         return self
+
+
+class SystemAccessRead(ContractModel):
+    """Live system-scope access descriptor for the authenticated caller."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    rollout_state: ProjectRolloutState
+    permissions: list[str]
+
+
+class ProjectAccessRead(ContractModel):
+    """Live project-scope access descriptor for the authenticated caller."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    project_id: UUID
+    permissions: list[str]
+    roles: list[str]
+    policy_revision: int
 
 
 def _default_token_scopes() -> frozenset[str]:
