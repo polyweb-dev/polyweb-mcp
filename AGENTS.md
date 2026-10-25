@@ -37,6 +37,13 @@ Each workspace/worktree has fixed, isolated ports defined in its root `.env` to 
 - **Zero hardcoding**: Always launch servers without hardcoded ports (e.g. `uv run freesearch-api`, `uv run freesearch-mcp`, `pnpm dev`). They automatically read from the local `.env`.
 - **Zero merge conflicts**: Port configurations live in the local `.env` (gitignored), keeping committed files identical across all branches.
 
+### Creating worktrees
+
+- `scripts\windows\create_worktree.bat projects/p04-usage-trace-writers freesearch_wt_1 backend --base main`
+- Ports are set from `--slot N` or the `freesearch_wt_N` folder name; new branches start from `--base` (default `main`).
+- The live `freesearch.db` is not copied unless `--copy-db` (it holds provider credentials; tests must use fresh databases).
+- Remove worktrees with `scripts\windows\delete_worktree.bat <branch>`.
+
 
 <!-- BACKLOG.MD GUIDELINES START -->
 <!-- backlog.md-instructions-version: 1.53.0 -->
