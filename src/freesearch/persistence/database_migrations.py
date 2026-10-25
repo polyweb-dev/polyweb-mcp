@@ -53,7 +53,8 @@ _PROJECT_TABLES = frozenset(
         "project_role_assignments",
     }
 )
-_APP_TABLES = _LEGACY_APP_TABLES | _AUTH_TABLES | _PROJECT_TABLES
+_SETTINGS_TABLES = frozenset({"system_settings", "project_settings"})
+_APP_TABLES = _LEGACY_APP_TABLES | _AUTH_TABLES | _PROJECT_TABLES | _SETTINGS_TABLES
 
 _TRACE_SPAN_COLUMNS = frozenset(
     {
@@ -220,6 +221,12 @@ _PROJECT_TABLE_COLUMNS: dict[str, frozenset[str]] = {
         {"project_id", "user_id", "role_key", "granted_by", "version"}
     ),
 }
+_SETTINGS_TABLE_COLUMNS: dict[str, frozenset[str]] = {
+    "system_settings": frozenset({"namespace", "schema_version", "document", "revision"}),
+    "project_settings": frozenset(
+        {"project_id", "namespace", "schema_version", "overrides", "revision"}
+    ),
+}
 _CORE_COLUMNS: dict[str, frozenset[str]] = {
     **_LIMIT_TABLE_COLUMNS,
     "usage_events": frozenset(
@@ -236,6 +243,7 @@ _HEAD_COLUMNS: dict[str, frozenset[str]] = {
     **_CORE_COLUMNS,
     **_LIMIT_TABLE_COLUMNS,
     **_PROJECT_TABLE_COLUMNS,
+    **_SETTINGS_TABLE_COLUMNS,
     "usage_events": _CORE_COLUMNS["usage_events"]
     | frozenset({"latency_ms", "status", "unit_kind"}),
     "quota_snapshots": _CORE_COLUMNS["quota_snapshots"]
@@ -306,6 +314,7 @@ _HEAD_FOREIGN_KEYS: dict[str, frozenset[tuple[str, str]]] = {
             ("granted_by", "user"),
         }
     ),
+    "project_settings": frozenset({("project_id", "projects")}),
 }
 
 

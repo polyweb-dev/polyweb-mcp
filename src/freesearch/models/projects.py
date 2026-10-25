@@ -987,22 +987,70 @@ class SettingsProvenance(StrEnum):
     SYSTEM_CONSTRAINED = "system_constrained"
 
 
+def normalize_preferred_providers(value: Any) -> tuple[str, ...]:
+    """Return an ordered, unique tuple of lower-case provider identifiers.
+
+    An explicit empty tuple/list is a real project preference that clears the
+    preference order. It must never collapse into inheritance. Duplicates are
+    rejected rather than silently reordered so a caller cannot hide a routing
+    mistake.
+    """
+
+    if isinstance(value, str) or not isinstance(value, (list, tuple)):
+        raise ValueError("preferred_providers must be a list of provider names")
+    if len(value) > 8:
+        raise ValueError("preferred_providers accepts at most 8 entries")
+    normalized: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            raise ValueError("preferred_providers entries must be strings")
+        name = item.strip()
+        if (
+            not name
+            or name != name.lower()
+            or len(name) > 32
+            or not all(character.isalnum() or character in "_-" for character in name)
+        ):
+            raise ValueError(f"invalid provider name {item!r}")
+        if name in normalized:
+            raise ValueError(f"duplicate provider name {name!r}")
+        normalized.append(name)
+    return tuple(normalized)
+
+
 class RoutingSettings(ContractModel):
-    """Typed project routing preferences."""
+    """Typed project routing preferences.
+
+    ``None`` means inherit the system default. ``preferred_providers`` accepts
+    an explicit empty tuple to clear the preference order. A non-empty tuple is
+    a complete ordered replacement, never a merge with the system preference.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     fallback_policy: FallbackPolicy | None = None
     cost_optimization_preset: CostPreset | None = None
     max_attempts: int | None = Field(default=None, ge=1, le=10)
+    preferred_providers: tuple[str, ...] | None = None
+
+    @field_validator("preferred_providers")
+    @classmethod
+    def _ordered_provider_preferences(cls, value: tuple[str, ...] | None) -> tuple[str, ...] | None:
+        return None if value is None else normalize_preferred_providers(value)
 
 
 class ExecutionSettings(ContractModel):
-    """Typed execution limits and timeouts."""
+    """Typed execution limits and timeouts.
+
+    Every field distinguishes inheritance (``None``) from an explicit value.
+    ``False`` disables caching and ``0`` disables caching for zero seconds; both
+    are real project choices. Numeric safety ceilings are applied by resolution.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    default_timeout_seconds: float | None = Field(default=None, gt=0, le=300)
+    cache_enabled: bool | None = None
+    default_timeout_seconds: float | None = Field(default=None, ge=1.0, le=300)
     max_fanout_concurrency: int | None = Field(default=None, ge=1, le=20)
     cache_ttl_seconds: int | None = Field(default=None, ge=0, le=86400)
 
@@ -1018,7 +1066,7 @@ class ProjectSettingsDocument(ContractModel):
 
 
 class SettingsFieldResolution(ContractModel):
-    """Typed resolution of an individual settings field with inheritance metadata."""
+    """Typed resolution of one field with inheritance and safety metadata."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -1028,10 +1076,20 @@ class SettingsFieldResolution(ContractModel):
     is_null: bool = False
     system_default: Any = None
     project_override: Any = None
+    section: str = ""
+    source_scope: SettingsScope = SettingsScope.SYSTEM
+    override_allowed: bool = True
+    system_safety_limit: Any = None
+    constraint_applied: bool = False
 
 
 class SettingsResolution(ContractModel):
-    """Resolved settings payload with per-field origin provenance."""
+    """Resolved settings payload with per-field origin provenance.
+
+    ``system_revision`` and ``project_revision`` identify the exact durable
+    documents that produced this result. They are the cache identity: any
+    supported mutation increments one of them, including from another process.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -1041,3 +1099,6 @@ class SettingsResolution(ContractModel):
     provenance_by_field: dict[str, SettingsProvenance]
     system_revision: int
     project_revision: int | None = None
+    project_id: UUID | None = None
+    schema_version: int = 1
+    overrides: dict[str, Any] = Field(default_factory=dict)

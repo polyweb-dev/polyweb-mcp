@@ -35,6 +35,7 @@ from freesearch.models.projects import (
     AuthorizationQuery,
     HumanPrincipal,
     PermissionAction,
+    ProjectContext,
     ProjectTokenPrincipal,
     RoleDefinition,
     ScopeType,
@@ -167,6 +168,92 @@ class ScopedAuthorizationService:
             session, principal.user_id, scope_type=scope_type, scope_id=scope_id
         )
 
+    async def resolve_project_context(
+        self,
+        principal: HumanPrincipal | ProjectTokenPrincipal,
+        project_id: UUID,
+    ) -> ProjectContext | None:
+        """Return an immutable context for one live accessible project.
+
+        ``None`` means the project is unknown, outside the installation account,
+        or not accessible to this principal (missing/suspended membership or an
+        inactive account/user). That lets transport code answer unknown and
+        cross-project lookups with the same inaccessible-resource response. A
+        caller that needs a permission decision still evaluates it through
+        :meth:`authorize_in_session`; the context is never the sole check.
+        """
+
+        async with self._repository.session() as session:
+            return await self.resolve_project_context_in_session(session, principal, project_id)
+
+    async def resolve_project_context_in_session(
+        self,
+        session: AsyncSession,
+        principal: HumanPrincipal | ProjectTokenPrincipal,
+        project_id: UUID,
+    ) -> ProjectContext | None:
+        """Resolve one immutable context inside a caller-owned session."""
+
+        account = await session.get(AccountRow, str(self._account_id))
+        if account is None or account.status != "active":
+            return None
+        project = (
+            await session.execute(
+                select(ProjectRow).where(
+                    ProjectRow.id == str(project_id),
+                    ProjectRow.account_id == str(self._account_id),
+                )
+            )
+        ).scalar_one_or_none()
+        if project is None:
+            return None
+
+        if isinstance(principal, ProjectTokenPrincipal):
+            if principal.project_id != project_id:
+                return None
+            return ProjectContext(
+                account_id=self._account_id,
+                project_id=project_id,
+                principal=principal,
+                effective_permissions=self._token_permissions(
+                    principal, scope_type=ScopeType.PROJECT, scope_id=project_id
+                ),
+                policy_revision=1,
+            )
+
+        user = await session.get(UserRow, principal.user_id)
+        if user is None or not user.is_active:
+            return None
+        membership = (
+            await session.execute(
+                select(ProjectMembershipRow).where(
+                    ProjectMembershipRow.project_id == str(project_id),
+                    ProjectMembershipRow.user_id == str(principal.user_id),
+                )
+            )
+        ).scalar_one_or_none()
+        if membership is None or membership.status != "active":
+            return None
+        role_rows = list(
+            (
+                await session.execute(
+                    select(ProjectRoleAssignmentRow).where(
+                        ProjectRoleAssignmentRow.project_id == str(project_id),
+                        ProjectRoleAssignmentRow.user_id == str(principal.user_id),
+                    )
+                )
+            ).scalars()
+        )
+        permissions = self._permissions_from_project_roles(role_rows)
+        policy_revision = max([membership.version, *(row.version for row in role_rows), 1])
+        return ProjectContext(
+            account_id=self._account_id,
+            project_id=project_id,
+            principal=principal,
+            effective_permissions=permissions,
+            policy_revision=policy_revision,
+        )
+
     async def require_delegable_in_session(
         self,
         session: AsyncSession,
@@ -290,6 +377,14 @@ class ScopedAuthorizationService:
                 )
             )
         ).scalars()
+        return self._permissions_from_project_roles(list(role_rows))
+
+    @staticmethod
+    def _permissions_from_project_roles(
+        role_rows: list[ProjectRoleAssignmentRow],
+    ) -> frozenset[PermissionAction]:
+        """Map project role rows to live project-scope catalog permissions."""
+
         project_permissions: set[PermissionAction] = set()
         for role_row in role_rows:
             definition = BUILTIN_ROLE_DEFINITIONS.get(role_row.role_key)

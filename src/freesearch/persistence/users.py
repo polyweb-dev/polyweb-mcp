@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
 from fastapi_users import exceptions
-from fastapi_users.db import SQLAlchemyUserDatabase
+from fastapi_users_db_sqlalchemy import SQLAlchemyUserDatabase
 from fastapi_users_db_sqlalchemy.generics import GUID
 from sqlalchemy import CHAR, Boolean, CheckConstraint, Index, String, cast, select, text
 from sqlalchemy.exc import IntegrityError
