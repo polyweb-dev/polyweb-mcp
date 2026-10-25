@@ -1,10 +1,10 @@
 ---
 id: TASK-000021
 title: Projects P04 - Project-owned usage and trace writers
-status: To Do
+status: In Progress
 assignee: []
 created_date: '2026-10-24T15:54:00Z'
-updated_date: '2026-10-25T15:06:00Z'
+updated_date: '2026-10-25T15:41:00Z'
 labels:
   - projects-first
   - phase-p04
