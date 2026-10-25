@@ -4,7 +4,7 @@ title: Projects P13 - Safe settings copy
 status: To Do
 assignee: []
 created_date: '2026-10-24T15:54:00Z'
-updated_date: '2026-10-24T15:57:00Z'
+updated_date: '2026-10-25T14:51:00Z'
 labels:
   - projects-first
   - phase-p13
@@ -13,7 +13,8 @@ milestone: m-1
 dependencies:
   - TASK-000020
   - TASK-000025
-  - TASK-000005
+  - TASK-000035
+  - TASK-000037
 references:
   - src/freesearch/routers/control.py
   - src/freesearch/configuration/provider_config.py
@@ -38,13 +39,15 @@ Copying project setup should save repetitive configuration without copying secre
 
 Phase: P13. Execution lane: parallel-copy. Milestone: Projects 2 - Project-first release.
 
-Dependency gate: P03 (TASK-000020), P09 (TASK-000025), P12 (TASK-000005)
+Dependency gate: P03 (TASK-000020), P09 (TASK-000025), P11A (TASK-000035), P12A (TASK-000037)
 Do not implement or mark In Progress until every dependency is Done, merged into the integration branch, and its acceptance evidence is available. Priority and phase numbers never override this gate. Parallel work is permitted only where the dependency graph and shared-file ownership allow it.
 
 Accepted scope from plan section 10 / P13:
 
 Add preview/apply contracts, revision checks, copy modes, binding validation, and the project copy dialog.
 Make the operation transactional and auditable. Treat shared allocation changes as separate system-admin proposals.
+
+Restructure note (2026-10-25): No longer waits for all of P12: copy needs binding validation (P09), allocation identity to exclude capacity authority (TASK-000035), and the shared settings UI (TASK-000037). Coordinate settings schemas and settings UI composition with P14: one owner per integration step.
 
 Cross-phase constraints:
 User-approved constraints: one human account type; one common scoped RBAC service; system/project roles are assignments, not account types. Preserve internal UUIDs and local/WorkOS storage constraints without implementing WorkOS/cloud features. Use one internal installation account. Project tokens can expire or have no expiration. Support private and explicitly shared credential instances. Strict pool/project caps are the default; fair loans require their later phase. Use a fresh alpha database; do not migrate/import old history, humans, settings or secrets. Never use the live database or real provider credentials for tests. Desktop UI only; local environment controls ports.

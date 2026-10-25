@@ -4,17 +4,15 @@ title: Projects P06 - Desktop project shell and membership UX
 status: To Do
 assignee: []
 created_date: '2026-10-24T15:54:00Z'
-updated_date: '2026-10-24T15:57:00Z'
+updated_date: '2026-10-25T14:51:00Z'
 labels:
   - projects-first
   - phase-p06
-  - parallel-a
+  - parallel-ui
 milestone: m-0
 dependencies:
   - TASK-000019
   - TASK-000020
-  - TASK-000021
-  - TASK-000022
 references:
   - freesearch-ui/src/app/routes.ts
   - freesearch-ui/src/app/ProtectedWorkspace.tsx
@@ -39,9 +37,9 @@ ordinal: 700
 <!-- SECTION:DESCRIPTION:BEGIN -->
 The UI currently uses flat routes and account-only persisted state. Project switching must not expose stale results or the wrong project's settings and permissions.
 
-Phase: P06. Execution lane: parallel-a. Milestone: Projects 1 - Foundation.
+Phase: P06. Execution lane: parallel-ui. Milestone: Projects 1 - Foundation.
 
-Dependency gate: P02 (TASK-000019), P03 (TASK-000020), P04 (TASK-000021), P05 (TASK-000022)
+Dependency gate: P02 (TASK-000019), P03 (TASK-000020)
 Do not implement or mark In Progress until every dependency is Done, merged into the integration branch, and its acceptance evidence is available. Priority and phase numbers never override this gate. Parallel work is permitted only where the dependency graph and shared-file ownership allow it.
 
 Accepted scope from plan section 10 / P06:
@@ -49,6 +47,8 @@ Accepted scope from plan section 10 / P06:
 Tasklet A adds the project list, selector, URL routes, API scope, store keys, and request cancellation.
 Tasklet B adds project creation for permitted system users, member administration, and extra role assignment.
 Keep system navigation separate and expose no unsupported project execution mode.
+
+Restructure note (2026-10-25): P02 project/membership endpoints and P03 settings endpoints exist, so this card no longer waits for P04/P05. Project-scoped activity, usage and playground views moved to TASK-000036. Until TASK-000036 lands, do not present account-scoped activity, usage or playground results under /p/:projectId routes, and keep project navigation behind the PROJECTS_PREVIEW rollout state (plan P00: no UI-only tenant isolation). Phase P06 is complete only when this card and TASK-000036 are Done.
 
 Cross-phase constraints:
 User-approved constraints: one human account type; one common scoped RBAC service; system/project roles are assignments, not account types. Preserve internal UUIDs and local/WorkOS storage constraints without implementing WorkOS/cloud features. Use one internal installation account. Project tokens can expire or have no expiration. Support private and explicitly shared credential instances. Strict pool/project caps are the default; fair loans require their later phase. Use a fresh alpha database; do not migrate/import old history, humans, settings or secrets. Never use the live database or real provider credentials for tests. Desktop UI only; local environment controls ports.
@@ -68,8 +68,9 @@ Documentation: local .agents/communication/projects-feature-plan.md, sections 4-
 - [ ] #2 Pending requests and old polls stop or their late results are ignored on project change.
 - [ ] #3 Persisted drafts and domain state are isolated by account, project and schema version.
 - [ ] #4 System-authorized project creation and project membership/role administration use effective backend permissions.
-- [ ] #5 Two tabs can use different projects without leaking drafts, results or access rights.
+- [ ] #5 Two tabs can use different projects without leaking drafts or access rights; a role change in one project leaves the other project unchanged.
 - [ ] #6 Human session state remains independent from project state; no cloud login workflow is added.
+- [ ] #7 No account-scoped activity, usage or playground results appear under project routes before TASK-000036.
 <!-- AC:END -->
 
 ## Definition of Done

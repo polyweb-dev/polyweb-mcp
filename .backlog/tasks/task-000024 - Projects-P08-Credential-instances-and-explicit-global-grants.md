@@ -4,7 +4,7 @@ title: Projects P08 - Credential instances and explicit global grants
 status: To Do
 assignee: []
 created_date: '2026-10-24T15:54:00Z'
-updated_date: '2026-10-24T15:57:00Z'
+updated_date: '2026-10-25T15:06:00Z'
 labels:
   - projects-first
   - phase-p08
@@ -46,6 +46,8 @@ Add credential metadata, per-instance encrypted slots, generation numbers, owner
 Store newly entered provider secrets through the encrypted store. Preserve delete-wins tombstone behavior for the new per-instance slots.
 No old provider-secret import is necessary.
 
+Restructure note (2026-10-25): TASK-000035 (pool schema) now follows this card. P04, P07, P08 and TASK-000035 all add Alembic revisions: allocate them serially from the actual head and merge one schema head.
+
 Cross-phase constraints:
 User-approved constraints: one human account type; one common scoped RBAC service; system/project roles are assignments, not account types. Preserve internal UUIDs and local/WorkOS storage constraints without implementing WorkOS/cloud features. Use one internal installation account. Project tokens can expire or have no expiration. Support private and explicitly shared credential instances. Strict pool/project caps are the default; fair loans require their later phase. Use a fresh alpha database; do not migrate/import old history, humans, settings or secrets. Never use the live database or real provider credentials for tests. Desktop UI only; local environment controls ports.
 
@@ -72,3 +74,16 @@ Documentation: local .agents/communication/projects-feature-plan.md, sections 4-
 <!-- DOD:BEGIN -->
 - [ ] #1 All phase acceptance criteria have objective test or review evidence recorded in Backlog before Done.
 <!-- DOD:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @devin
+created: 2026-10-25T15:06:00Z
+
+---
+
+Migration merge rule (2026-10-25): this card adds an Alembic revision while another lane also changes schema. Land the migration and its database_migrations.py schema-validation change as a small first pull request. P04 lands first when P04 and P08 are both ready; otherwise the first merged migration keeps the next number. The other branch rebases, renames its revision to the following number, sets down_revision to the new head, and updates the head literal in tests/integration/persistence/test_database_migrations.py, tests/integration/persistence/test_projects.py and tests/fixtures/alpha_fixtures.py. Keep one migration head. See doc-000005, Worktrees and merging.
+
+---
+<!-- COMMENTS:END -->

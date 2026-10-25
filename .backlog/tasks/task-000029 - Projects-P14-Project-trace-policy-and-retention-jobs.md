@@ -4,7 +4,7 @@ title: Projects P14 - Project trace policy and retention jobs
 status: To Do
 assignee: []
 created_date: '2026-10-24T15:54:00Z'
-updated_date: '2026-10-24T15:57:00Z'
+updated_date: '2026-10-25T14:51:00Z'
 labels:
   - projects-first
   - phase-p14
@@ -12,7 +12,9 @@ labels:
 milestone: m-1
 dependencies:
   - TASK-000021
-  - TASK-000005
+  - TASK-000022
+  - TASK-000036
+  - TASK-000037
 references:
   - src/freesearch/persistence/otel_exporter.py
   - src/freesearch/infrastructure/observability.py
@@ -38,7 +40,7 @@ Trace detail, privacy and retention must be configurable per project without dis
 
 Phase: P14. Execution lane: parallel-retention. Milestone: Projects 2 - Project-first release.
 
-Dependency gate: P04 (TASK-000021), P12 (TASK-000005)
+Dependency gate: P04 (TASK-000021), P05 (TASK-000022), P06B (TASK-000036), P12A (TASK-000037)
 Do not implement or mark In Progress until every dependency is Done, merged into the integration branch, and its acceptance evidence is available. Priority and phase numbers never override this gate. Parallel work is permitted only where the dependency graph and shared-file ownership allow it.
 
 Accepted scope from plan section 10 / P14:
@@ -46,6 +48,8 @@ Accepted scope from plan section 10 / P14:
 Add project sampling, detail, redaction, retention resolution, and scoped cleanup jobs.
 Keep security audit retention and system export destinations under system policy.
 Add project policy controls and effective-policy summaries.
+
+Restructure note (2026-10-25): No longer waits for P12. Needs project-owned traces (P04), project context at trace creation (P05), the project activity views (TASK-000036, shares freesearch-ui/src/features/activity) and the shared settings UI (TASK-000037). Extend the P03 typed settings catalog for project sampling, detail, redaction and retention within system policy.
 
 Cross-phase constraints:
 User-approved constraints: one human account type; one common scoped RBAC service; system/project roles are assignments, not account types. Preserve internal UUIDs and local/WorkOS storage constraints without implementing WorkOS/cloud features. Use one internal installation account. Project tokens can expire or have no expiration. Support private and explicitly shared credential instances. Strict pool/project caps are the default; fair loans require their later phase. Use a fresh alpha database; do not migrate/import old history, humans, settings or secrets. Never use the live database or real provider credentials for tests. Desktop UI only; local environment controls ports.

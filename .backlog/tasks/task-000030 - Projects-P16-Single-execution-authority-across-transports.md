@@ -4,7 +4,7 @@ title: Projects P16 - Single execution authority across transports
 status: To Do
 assignee: []
 created_date: '2026-10-24T15:54:00Z'
-updated_date: '2026-10-24T15:57:00Z'
+updated_date: '2026-10-25T14:51:00Z'
 labels:
   - projects-first
   - phase-p16
@@ -12,6 +12,7 @@ labels:
 milestone: m-2
 dependencies:
   - TASK-000022
+  - TASK-000006
   - TASK-000027
   - TASK-000004
 references:
@@ -39,7 +40,7 @@ Atomic counters can cap multiple processes, but independent REST and MCP schedul
 
 Phase: P16. Execution lane: serial-fairness. Milestone: Projects 3 - Fair capacity.
 
-Dependency gate: P05 (TASK-000022), P11 (TASK-000027), P15 (TASK-000004)
+Dependency gate: P05 (TASK-000022), P07 (TASK-000006), P11 (TASK-000027), P15A (TASK-000004)
 Do not implement or mark In Progress until every dependency is Done, merged into the integration branch, and its acceptance evidence is available. Priority and phase numbers never override this gate. Parallel work is permitted only where the dependency graph and shared-file ownership allow it.
 
 Accepted scope from plan section 10 / P16:
@@ -47,6 +48,8 @@ Accepted scope from plan section 10 / P16:
 Host one authoritative execution runtime and make MCP forward to it in shared deployments.
 Preserve token checks, cancellation, end-to-end deadlines, and trace propagation at the authority.
 Support an explicit standalone MCP authority mode only for exclusive deployments.
+
+Restructure note (2026-10-25): Decoupled from the TASK-000038 strict cutover (user decision 2026-10-25): needs P05, P07 tokens, P11 atomic caps and P15A agent removal. Coordinate mcp/auth.py, routers/api.py and mcp/server.py with TASK-000038: one owner per integration step.
 
 Cross-phase constraints:
 User-approved constraints: one human account type; one common scoped RBAC service; system/project roles are assignments, not account types. Preserve internal UUIDs and local/WorkOS storage constraints without implementing WorkOS/cloud features. Use one internal installation account. Project tokens can expire or have no expiration. Support private and explicitly shared credential instances. Strict pool/project caps are the default; fair loans require their later phase. Use a fresh alpha database; do not migrate/import old history, humans, settings or secrets. Never use the live database or real provider credentials for tests. Desktop UI only; local environment controls ports.

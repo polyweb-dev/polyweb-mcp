@@ -3,7 +3,7 @@ id: doc-000006
 title: Projects P00 - Ownership inventory, bootstrap runbook, and baseline matrix
 type: specification
 created_date: '2026-10-24T16:18:00Z'
-updated_date: '2026-10-24T17:19:00Z'
+updated_date: '2026-10-25T15:06:00Z'
 ---
 # Projects P00 - Ownership Inventory, Bootstrap Runbook, and Baseline Matrix
 
@@ -201,7 +201,9 @@ The application runs asynchronous background mechanisms with the following prese
 
 ## 3. Authoritative Phase Lanes and Dependency Tree
 
-This phase breakdown strictly aligns with authoritative specification `doc-000005`.
+This phase breakdown agrees with the authoritative execution index `doc-000005`.
+The ticket map was revised on 2026-10-25. P04, P06, P11, P12, and P15 have tasklet tickets.
+A phase with more than one ticket is complete only when all of its tickets are Done.
 
 ### 3.1 Canonical Ticket Map
 
@@ -211,111 +213,131 @@ This phase breakdown strictly aligns with authoritative specification `doc-00000
 | P01 | TASK-000018 | Project and membership schema | TASK-000017 | serial-foundation |
 | P02 | TASK-000019 | Project lifecycle and authorization service | TASK-000018 | serial-foundation |
 | P03 | TASK-000020 | Project context and typed settings storage | TASK-000019 | serial-foundation |
-| P04 | TASK-000021 | Project-owned usage and trace isolation | TASK-000020 | parallel-a |
+| P04 | TASK-000021 | Project-owned usage and trace writers | TASK-000020 | parallel-a |
+| P04B | TASK-000034 | Project-scoped activity, dashboard and export reads | TASK-000021 | parallel-a |
 | P05 | TASK-000022 | Shared execution service and scoped REST/MCP paths | TASK-000020, TASK-000021 | parallel-a |
-| P06 | TASK-000023 | Desktop project shell and membership UX | TASK-000019, TASK-000020, TASK-000021, TASK-000022 | parallel-a |
+| P06 | TASK-000023 | Desktop project shell and membership UX | TASK-000019, TASK-000020 | parallel-ui |
+| P06B | TASK-000036 | Project-scoped activity, usage and playground views | TASK-000034, TASK-000022, TASK-000023 | parallel-ui |
 | P07 | TASK-000006 | Project tokens and authenticated machine execution | TASK-000022, TASK-000023 | parallel-a |
 | P08 | TASK-000024 | Credential instances and explicit global grants | TASK-000020 | parallel-b |
-| P09 | TASK-000025 | Binding-aware routing and account observations | TASK-000022, TASK-000024 | parallel-b |
+| P09 | TASK-000025 | Binding-aware routing and account observations | TASK-000022, TASK-000024, TASK-000035 | parallel-b |
 | P10 | TASK-000026 | Per-instance Parallel OAuth lifecycle | TASK-000024, TASK-000025 | parallel-b |
-| P11 | TASK-000027 | Shared upstream pools and atomic strict caps | TASK-000006, TASK-000024, TASK-000025, TASK-000026 | serial-join |
-| P12 | TASK-000005 | Project provider, settings, and limits UX | TASK-000023, TASK-000024, TASK-000025, TASK-000026, TASK-000027 | serial-join |
-| P13 | TASK-000028 | Safe settings copy | TASK-000020, TASK-000025, TASK-000005 | parallel-copy |
-| P14 | TASK-000029 | Project trace policy and retention jobs | TASK-000021, TASK-000005 | parallel-retention |
-| P15 | TASK-000004 | Project-first cutover and agent-account removal | TASK-000006, TASK-000027, TASK-000005, TASK-000028, TASK-000029 | serial-release |
-| P16 | TASK-000030 | Single execution authority across transports | TASK-000022, TASK-000027, TASK-000004 | serial-fairness |
+| P11A | TASK-000035 | Upstream pool, credential link and allocation schema | TASK-000024 | parallel-b |
+| P11 | TASK-000027 | Atomic strict caps across projects and shared pools | TASK-000006, TASK-000025, TASK-000026, TASK-000035 | serial-join |
+| P12A | TASK-000037 | Settings provenance and permission-aware settings UI | TASK-000020, TASK-000023 | parallel-ui |
+| P12 | TASK-000005 | Project provider, credential and limits UX | TASK-000006, TASK-000026, TASK-000027, TASK-000036, TASK-000037 | serial-join |
+| P13 | TASK-000028 | Safe settings copy | TASK-000020, TASK-000025, TASK-000035, TASK-000037 | parallel-copy |
+| P14 | TASK-000029 | Project trace policy and retention jobs | TASK-000021, TASK-000022, TASK-000036, TASK-000037 | parallel-retention |
+| P15A | TASK-000004 | Agent-account, anonymous-execution and account-type removal | TASK-000006, TASK-000023 | parallel-cleanup |
+| P15 | TASK-000038 | Project-first strict cutover and release | TASK-000027, TASK-000005, TASK-000028, TASK-000029, TASK-000004 | serial-release |
+| P16 | TASK-000030 | Single execution authority across transports | TASK-000022, TASK-000006, TASK-000027, TASK-000004 | serial-fairness |
 | P17 | TASK-000031 | Bounded queues with strict allocations | TASK-000030 | serial-fairness |
 | P18 | TASK-000032 | Fair capacity loans | TASK-000031 | serial-fairness |
-| P19 | TASK-000033 | Cross-process recovery and operational qualification | TASK-000032 | serial-fairness |
+| P19 | TASK-000033 | Cross-process recovery and operational qualification | TASK-000032, TASK-000038 | serial-fairness |
 
 ### 3.2 Canonical Dependency Graph
 
 > [!NOTE]
-> The diagram below is a transitive simplification for visual readability. Table 3.1 and `doc-000005` define the exact authoritative dependency prerequisites (including direct edges P08->P10 and P08/P09/P10->P12).
+> The diagram shows each direct dependency field in Backlog. Table 3.1 and `doc-000005` are the authoritative sources.
 
 ```mermaid
 flowchart TD
-    subgraph Foundation["Serial Foundation"]
-        P00["P00: Contract and alpha baseline"] --> P01["P01: Project and membership schema"]
-        P01 --> P02["P02: Project lifecycle and authorization service"]
-        P02 --> P03["P03: Project context and typed settings storage"]
-    end
-
-    subgraph LaneA["Lane A: Scope, Trace, and Tokens"]
-        P04["P04: Project-owned usage and trace isolation"]
-        P05["P05: Shared execution service and scoped REST/MCP paths"]
-        P06["P06: Desktop project shell and membership UX"]
-        P07["P07: Project tokens and authenticated machine execution"]
-        P04 --> P05
-        P05 --> P06
-        P06 --> P07
-    end
-
-    subgraph LaneB["Lane B: Credentials, Routing, and OAuth"]
-        P08["P08: Credential instances and explicit global grants"]
-        P09["P09: Binding-aware routing and account observations"]
-        P10["P10: Per-instance Parallel OAuth lifecycle"]
-        P08 --> P09
-        P09 --> P10
-    end
-
-    subgraph Joins["Serial Convergence and Cutover"]
-        P11["P11: Shared upstream pools and atomic strict caps"]
-        P12["P12: Project provider, settings, and limits UX"]
-        P13["P13: Safe settings copy"]
-        P14["P14: Project trace policy and retention jobs"]
-        P15["P15: Project-first cutover and agent-account removal"]
-    end
-
-    subgraph Fairness["Post-Release Dynamic Fairness"]
-        P16["P16: Single execution authority across transports"]
-        P17["P17: Bounded queues with strict allocations"]
-        P18["P18: Fair capacity loans"]
-        P19["P19: Cross-process recovery and operational qualification"]
-        P16 --> P17 --> P18 --> P19
-    end
-
-    %% Cross-lane prerequisites matching doc-000005 exactly
+    P00["P00: Contract and alpha baseline"]
+    P01["P01: Project and membership schema"]
+    P02["P02: Project lifecycle and authorization service"]
+    P03["P03: Project context and typed settings storage"]
+    P04["P04: Project-owned usage and trace writers"]
+    P04B["P04B: Project-scoped activity, dashboard and export reads"]
+    P05["P05: Shared execution service and scoped REST/MCP paths"]
+    P06["P06: Desktop project shell and membership UX"]
+    P06B["P06B: Project-scoped activity, usage and playground views"]
+    P07["P07: Project tokens and authenticated machine execution"]
+    P08["P08: Credential instances and explicit global grants"]
+    P09["P09: Binding-aware routing and account observations"]
+    P10["P10: Per-instance Parallel OAuth lifecycle"]
+    P11A["P11A: Upstream pool, credential link and allocation schema"]
+    P11["P11: Atomic strict caps across projects and shared pools"]
+    P12A["P12A: Settings provenance and permission-aware settings UI"]
+    P12["P12: Project provider, credential and limits UX"]
+    P13["P13: Safe settings copy"]
+    P14["P14: Project trace policy and retention jobs"]
+    P15A["P15A: Agent-account, anonymous-execution and account-type removal"]
+    P15["P15: Project-first strict cutover and release"]
+    P16["P16: Single execution authority across transports"]
+    P17["P17: Bounded queues with strict allocations"]
+    P18["P18: Fair capacity loans"]
+    P19["P19: Cross-process recovery and operational qualification"]
+    P00 --> P01
+    P01 --> P02
+    P02 --> P03
     P03 --> P04
+    P04 --> P04B
     P03 --> P05
-    P03 --> P08
+    P04 --> P05
     P02 --> P06
     P03 --> P06
-    P04 --> P06
+    P04B --> P06B
+    P05 --> P06B
+    P06 --> P06B
     P05 --> P07
+    P06 --> P07
+    P03 --> P08
     P05 --> P09
+    P08 --> P09
+    P11A --> P09
+    P08 --> P10
+    P09 --> P10
+    P08 --> P11A
     P07 --> P11
-    P08 --> P11
     P09 --> P11
     P10 --> P11
-    P06 --> P12
+    P11A --> P11
+    P03 --> P12A
+    P06 --> P12A
+    P07 --> P12
+    P10 --> P12
     P11 --> P12
+    P06B --> P12
+    P12A --> P12
     P03 --> P13
     P09 --> P13
-    P12 --> P13
+    P11A --> P13
+    P12A --> P13
     P04 --> P14
-    P12 --> P14
-    P07 --> P15
+    P05 --> P14
+    P06B --> P14
+    P12A --> P14
+    P07 --> P15A
+    P06 --> P15A
     P11 --> P15
     P12 --> P15
     P13 --> P15
     P14 --> P15
+    P15A --> P15
     P05 --> P16
+    P07 --> P16
     P11 --> P16
-    P15 --> P16
+    P15A --> P16
+    P16 --> P17
+    P17 --> P18
+    P18 --> P19
+    P15 --> P19
 ```
 
 ### 3.3 Parallel File Ownership and Collision Prevention Matrix
 
-Lane A (P04-P07) and Lane B (P08-P10) execute concurrently. To prevent git merge collisions and schema divergence, agents and developers must follow strict file ownership rules:
+Lane A (P04, P04B, P05, P07), Lane B (P08, P11A, P09, P10), and Lane UI (P06, P06B, P12A) run at the same time. To prevent merge collisions and schema divergence, obey these file ownership rules:
 
-| Shared File / Subsystem | Lane A Owner (Phase) | Lane B Owner (Phase) | Collision Prevention Rule / Serialization Order |
-|---|---|---|---|
-| `src/freesearch/persistence/storage.py`<br>`src/freesearch/persistence/database_migrations.py`<br>`alembic/versions/` | P04: Scopes `usage_events` and `trace_spans` to project/account. | P08: Adds `provider_credentials`, `credential_project_grants`, `project_bindings`. | **Serialized Alembic Revisions**: P04 merges first. P08 re-bases on the merged P04 migration head before adding credential tables. No parallel branch may generate conflicting migration version heads. |
-| `src/freesearch/models/projects.py`<br>`src/freesearch/models/contracts.py` | P05 / P06 / P07: Consumes project context and token models. | P08 / P09 / P10: Consumes credential instance and binding models. | **Immutable Contract Seam**: P00 defines shared contracts. If downstream adjustments are required, contract edits must be committed serially to main before lane work begins. |
-| `src/freesearch/services/execution.py`<br>Provider Adapters (`src/freesearch/adapters/`) | P05: Extracts common execution service and project context dispatch. | P09: Adds credential-aware binding resolution and multi-account dispatch. | **Dependency Ordering**: P09 explicitly depends on P05 (`TASK-000022`). Lane B does not touch execution dispatch until P05 completes and merges. |
-| `src/freesearch/main.py`<br>Application Lifespan Roots | P07: Wires project token authentication dependencies. | P10: Wires per-instance OAuth refresh background tasks. | **Serial Convergence Join**: DI registrations for tokens and OAuth remain isolated in respective routers (`auth.py`, `control.py`). Unified app-level composition is finalized at P11 convergence. |
-| `freesearch-ui/src/` (Settings & Configuration UI) | P14: Project trace policy and retention controls. | P13: Safe settings copy dialog. | **Route Isolation**: P13 owns the copy modal dialog (`ProjectSettingsCopyDialog.tsx`); P14 owns the trace policy tab (`ProjectTraceRetentionSettings.tsx`). Shared route definitions in `App.tsx` merge serially. |
+| Shared File / Subsystem | Owners | Collision Prevention Rule / Serialization Order |
+|---|---|---|
+| `src/freesearch/persistence/storage.py`<br>`src/freesearch/persistence/database_migrations.py`<br>`src/freesearch/persistence/migrations/versions/` | P04: adds project ownership to `usage_events` and `trace_spans`. P08: adds credential and grant tables. P11A: adds pool, link, and allocation tables. P07: adds `project_tokens`. | **Serialized Alembic Revisions**: Keep one migration head. P04 lands its migration first when P04 and P08 are both ready. Otherwise, the first merged migration keeps the next number. The other branch rebases, renumbers its revision, sets `down_revision` to the new head, and updates the head literals in the tests. |
+| `src/freesearch/services/monitoring.py`<br>`src/freesearch/persistence/storage.py` (reads) | P04B: scoped reads. P05: execution service. | **One owner per integration step**: P04B and P05 run at the same time. Merge one, then rebase the other. |
+| `src/freesearch/models/projects.py`<br>`src/freesearch/models/contracts.py` | P05 / P06 / P07: project context and token models. P08 / P11A / P09 / P10: credential, pool, and binding models. | **Immutable Contract Seam**: P00 defines shared contracts. Commit necessary contract changes serially to the integration branch before dependent lane work starts. |
+| `src/freesearch/services/execution.py`<br>Provider adapters (`src/freesearch/adapters/`) | P05: common execution service and project context dispatch. P09: credential-aware binding resolution. | **Dependency Ordering**: P09 depends on P05 (`TASK-000022`). Lane B does not change execution dispatch until P05 merges. |
+| `src/freesearch/routers/api.py`<br>`src/freesearch/mcp/server.py`<br>`src/freesearch/mcp/auth.py` | P07: token authentication. P09: binding-aware routing. P11: atomic admission. P15A: agent and anonymous removal. P16: execution authority. | **One owner per integration step**: Merge in dependency order and rebase before each pull request. |
+| Application lifespan and composition roots | P07: project token authentication dependencies. P10: per-instance OAuth refresh tasks. | **Serial Convergence Join**: Keep token and OAuth registrations in their own routers. Merge composition-root changes serially. |
+| `freesearch-ui/src/app/` (routes, store, permissions) | P06: shell, routes, and store composition. P06B: project-scoped views. P15A: account-type removal. | **Shell owner**: P06 owns route and store composition. Other tickets extend it after P06 merges. |
+| `freesearch-ui/src/` (settings UI) | P12A: shared settings UI composition. P12: provider and allocation screens. P13: copy dialog. P14: trace policy controls. | **Settings owner**: P12A owns the shared settings composition. P13 owns the copy dialog and P14 owns the trace policy controls. Merge shared route definitions serially. |
 
 ---
 

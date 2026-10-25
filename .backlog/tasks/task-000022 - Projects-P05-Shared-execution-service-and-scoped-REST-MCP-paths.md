@@ -4,7 +4,7 @@ title: Projects P05 - Shared execution service and scoped REST/MCP paths
 status: To Do
 assignee: []
 created_date: '2026-10-24T15:54:00Z'
-updated_date: '2026-10-24T15:57:00Z'
+updated_date: '2026-10-25T14:51:00Z'
 labels:
   - projects-first
   - phase-p05
@@ -46,6 +46,8 @@ Accepted scope from plan section 10 / P05:
 Extract common execution policy into `services/` without a general rewrite of adapters.
 Pass project context through route selection, dispatch, fanout, usage, and trace creation in both transports.
 Add explicit project execution routes and preserve current fallback behavior.
+
+Restructure note (2026-10-25): Depends on the P04 writer card only; TASK-000034 scoped reads can run in parallel. Give services/monitoring.py and storage.py one owner per integration step.
 
 Cross-phase constraints:
 User-approved constraints: one human account type; one common scoped RBAC service; system/project roles are assignments, not account types. Preserve internal UUIDs and local/WorkOS storage constraints without implementing WorkOS/cloud features. Use one internal installation account. Project tokens can expire or have no expiration. Support private and explicitly shared credential instances. Strict pool/project caps are the default; fair loans require their later phase. Use a fresh alpha database; do not migrate/import old history, humans, settings or secrets. Never use the live database or real provider credentials for tests. Desktop UI only; local environment controls ports.

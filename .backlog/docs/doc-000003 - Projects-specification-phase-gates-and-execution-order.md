@@ -3,14 +3,14 @@ id: doc-000003
 title: Projects specification - phase gates and execution order
 type: specification
 created_date: '2026-10-24T15:49:00Z'
-updated_date: '2026-10-24T17:18:00Z'
+updated_date: '2026-10-25T15:05:00Z'
 tags:
   - projects-first
   - specification
 ---
 # Projects specification - phase gates and execution order
 
-Snapshot of .agents/communication/projects-feature-plan.md on 2026-10-24.
+Snapshot of .agents/communication/projects-feature-plan.md on 2026-10-25 (sections 10-11 revised for the tasklet split).
 
 This Backlog-managed copy makes the accepted design available in other checkouts. All referenced sections retain their original numbers.
 
@@ -81,13 +81,14 @@ Two projects cannot read or mutate each other's settings. System constraints win
 Tasklet A adds non-null project ownership to usage and execution traces, with corresponding writer changes.
 Tasklet B scopes dashboard, activity detail, pagination, and export reads.
 Keep actor attribution and distinguish system audit events. No historical data backfill is necessary.
+**Tickets:** Tasklet A is `TASK-000021`. Tasklet B is P04B, `TASK-000034`, which depends on Tasklet A.
 
 **Gate:** A user in two projects sees only the selected project's activity.
 Guessed trace IDs and cursors cannot cross projects. Root and child spans retain correct attribution across concurrent calls.
 
 ### P05 — Shared execution service and scoped REST/MCP paths
 
-**Dependency:** P03 and P04.
+**Dependency:** P03 and P04 Tasklet A (`TASK-000021`). P04B can run in parallel with this phase.
 
 Extract common execution policy into `services/` without a general rewrite of adapters.
 Pass project context through route selection, dispatch, fanout, usage, and trace creation in both transports.
@@ -98,18 +99,20 @@ No provider side effect occurs before scope validation. Deployment remains in pr
 
 ### P06 — Desktop project shell and membership UX
 
-**Dependency:** P02–P05.
+**Dependency:** Shell and membership (`TASK-000023`): P02 and P03. Project-scoped activity, usage, and playground views (P06B, `TASK-000036`): P04B, P05, and `TASK-000023`.
 
 Tasklet A adds the project list, selector, URL routes, API scope, store keys, and request cancellation.
 Tasklet B adds project creation for permitted system users, member administration, and extra role assignment.
 Keep system navigation separate and expose no unsupported project execution mode.
+P06B connects the activity, usage, dashboard, and playground screens to the project-scoped APIs.
+Until P06B is complete, keep project navigation in preview mode. Do not show account-scoped results under project routes.
 
 **Gate:** Two tabs can use different projects without shared drafts or stale results.
 A role change in one project leaves the other project unchanged. Direct links and no-membership states behave predictably.
 
 ### P07 — Project tokens and authenticated machine execution
 
-**Dependency:** P05 and P06. **Backlog:** `TASK-000006`.
+**Dependency:** P05 and the P06 shell (`TASK-000023`). **Backlog:** `TASK-000006`.
 
 Tasklet A adds token schema, digest verification, issue, list, revoke, rotate, and expiry operations.
 Tasklet B adds token administration UI and REST/MCP authentication, including stdio and persistent tool sessions.
@@ -134,10 +137,11 @@ Deleting a credential cannot resurrect its old secret. Rotation invalidates the 
 
 ### P09 — Binding-aware routing and account observations
 
-**Dependency:** P05 and P08.
+**Dependency:** P05, P08, and P11A (`TASK-000035`).
 
 Add multiple project bindings per provider and credential-aware adapter resolution.
 Migrate health, native quota observations, limit catalog links, and breaker keys to the correct credential or shared pool scope.
+Use the P11A pool identities for shared scopes, so that P11 does not change these keys again.
 Retain project attribution separately from upstream balance ownership.
 
 **Gate:** Two projects can use different keys for one provider, or share one granted key without duplicate balance state.
@@ -156,12 +160,13 @@ Permission removal during a device flow prevents unauthorized completion and lea
 
 ### P11 — Shared upstream pools and atomic strict caps
 
-**Dependency:** P07–P10.
+**Dependency:** Tasklet A, pool schema and identity (P11A, `TASK-000035`): P08. Tasklet B, atomic enforcement (`TASK-000027`): P07, P09, P10, and P11A.
 
 Add explicit upstream pools, credential links, and project allocations with loans disabled.
 Generalize atomic rate and native funds admission across project and upstream constraints.
 Replace process-local check-then-record paths for enforceable limits in both REST and MCP.
 Split pool schema and identity from atomic enforcement into separate tasklets.
+P11A comes before P09, so that binding-aware routing uses real pool identities.
 
 **Gate:** Concurrent requests from multiple processes cannot exceed configured pool or project windows.
 Keys linked to the same pool share the same allowance. The 4/6 strict example stops A at four even when B is idle.
@@ -169,10 +174,11 @@ Store failure rejects new constrained execution. Retries do not duplicate one re
 
 ### P12 — Project provider, settings, and limits UX
 
-**Dependency:** P06 and P08–P11.
+**Dependency:** Setting provenance and read-only settings (P12A, `TASK-000037`): P03 and the P06 shell. Credential, binding, OAuth, and allocation UX (`TASK-000005`): P06B, P07, P10, P11, and P12A.
 
 Tasklet A adds global credential/grant administration and project binding, private key, and OAuth controls.
 Tasklet B adds setting provenance, allocation views, system allocation edits, and permission-based read-only behavior.
+P12A contains the setting provenance and read-only behavior. It owns the shared settings UI composition that P13 and P14 extend.
 Show credential labels and pool ownership without raw secrets or unrelated project usage.
 
 **Gate:** Users can create a project, assign members, select providers, issue a token, and inspect isolated activity.
@@ -180,7 +186,7 @@ All mutation controls follow effective project permissions. No project edit rais
 
 ### P13 — Safe settings copy
 
-**Dependency:** P03, P09, and P12.
+**Dependency:** P03, P09, P11A, and P12A.
 
 Add preview/apply contracts, revision checks, copy modes, binding validation, and the project copy dialog.
 Make the operation transactional and auditable. Treat shared allocation changes as separate system-admin proposals.
@@ -190,7 +196,7 @@ The operation never copies tokens, membership, secret material, balances, or ext
 
 ### P14 — Project trace policy and retention jobs
 
-**Dependency:** P04 and P12.
+**Dependency:** P04, P05, P06B, and P12A.
 
 Add project sampling, detail, redaction, retention resolution, and scoped cleanup jobs.
 Keep security audit retention and system export destinations under system policy.
@@ -201,7 +207,8 @@ One project's retention job cannot delete another project's spans. Mandatory aud
 
 ### P15 — Project-first cutover and agent-account removal
 
-**Dependency:** P07 and P11–P14. **Backlog:** Complete `TASK-000004` and remaining project-key requirements.
+**Dependency:** Agent, anonymous, and account-type removal (P15A, `TASK-000004`): the P06 shell and P07. Strict cutover and release (`TASK-000038`): P11, P12, P13, P14, and P15A.
+**Backlog:** `TASK-000004` and `TASK-000038`. The phase is complete only when both tickets are Done.
 
 Rehearse a fresh database bootstrap, project-token issue, provider setup, and client configuration with synthetic data.
 Enable strict project authentication and release multiple-project execution.
@@ -216,7 +223,7 @@ Human login, refresh, and project selection work after bootstrap. No unscoped ex
 
 ### P16 — Single execution authority across transports
 
-**Dependency:** P05, P11, and P15.
+**Dependency:** P05, P07, P11, and P15A. P16 does not wait for the P15 strict cutover.
 
 Host one authoritative execution runtime and make MCP forward to it in shared deployments.
 Preserve token checks, cancellation, end-to-end deadlines, and trace propagation at the authority.
@@ -250,7 +257,7 @@ The pool never exceeds its configured rate envelope. A returning project receive
 
 ### P19 — Cross-process recovery and operational qualification
 
-**Dependency:** P18.
+**Dependency:** P18 and the P15 strict cutover (`TASK-000038`).
 
 Exercise authority restart, native funds reconciliation, provider throttles, credential rotation, policy edits, and cancellation under load.
 Publish the supported deployment topology, scaling limits, failure responses, and rollback procedure.
@@ -270,50 +277,89 @@ This is a stable product release without capacity loans.
 
 **Fair-capacity release:** P16–P19 add one dispatch authority, bounded queues, and optional fair capacity loans.
 Do not enable loans before the authority and queue gates pass.
+P16 can start before the project-first release. P19 waits for P15, so the fair-capacity release follows the project-first release.
 
 ### Execution labels and start order
 
 Every phase starts only after its dependency gates pass on the integration branch.
 Phase numbers identify work. They do not require all phases to run in numeric order.
 
+The order below was revised on 2026-10-25. P04, P06, P11, P12, and P15 have tasklet tickets.
+Each downstream ticket depends only on the tasklet that it needs.
+A phase with more than one ticket is complete only when all of its tickets are Done.
+
+| Ticket | Work | Depends on |
+| --- | --- | --- |
+| P04 `TASK-000021` | Project ownership on usage and trace writes | P03 |
+| P04B `TASK-000034` | Project-scoped activity, dashboard, and export reads | P04 |
+| P05 `TASK-000022` | Shared execution service | P04 |
+| P06 `TASK-000023` | Desktop shell and membership UX | P02, P03 |
+| P06B `TASK-000036` | Project-scoped activity, usage, and playground views | P04B, P05, P06 |
+| P07 `TASK-000006` | Project tokens, including token UI | P05, P06 |
+| P08 `TASK-000024` | Credential instances and grants | P03 |
+| P11A `TASK-000035` | Pool, credential link, and allocation schema | P08 |
+| P09 `TASK-000025` | Binding-aware routing | P05, P08, P11A |
+| P10 `TASK-000026` | Per-instance Parallel OAuth | P08, P09 |
+| P11 `TASK-000027` | Atomic strict caps | P07, P09, P10, P11A |
+| P12A `TASK-000037` | Settings provenance and read-only settings UI | P03, P06 |
+| P12 `TASK-000005` | Credential, binding, OAuth, and allocation UX | P06B, P07, P10, P11, P12A |
+| P13 `TASK-000028` | Safe settings copy | P03, P09, P11A, P12A |
+| P14 `TASK-000029` | Trace policy and retention jobs | P04, P05, P06B, P12A |
+| P15A `TASK-000004` | Agent, anonymous, and account-type removal | P06, P07 |
+| P15 `TASK-000038` | Strict cutover and release | P11, P12, P13, P14, P15A |
+| P16 `TASK-000030` | Single execution authority | P05, P07, P11, P15A |
+| P17 `TASK-000031` | Bounded queues | P16 |
+| P18 `TASK-000032` | Fair capacity loans | P17 |
+| P19 `TASK-000033` | Recovery and qualification | P18, P15 |
+
 **FIRST / SERIAL FOUNDATION:** Complete `P00 -> P01 -> P02 -> P03` in that order.
 P00 is the first assignment. It fixes contracts and baseline evidence before schema and authorization implementation.
 
-**PARALLEL LANES AFTER P03:** Start these two lanes independently:
+**PARALLEL LANES AFTER P03:** Start these three lanes together:
 
 ```text
-Lane A: P04 -> P05 -> P06 -> P07
-Lane B: P08 -------> P09 -> P10
-                     ^
-                     |
-              also waits for P05
+Lane A (execution):  P04 -> P05 -> P07
+                       \-> P04B
+Lane B (providers):  P08 -> P11A -> P09 -> P10
+                                     ^
+                                     |  also waits for P05
+Lane UI (desktop):   P06 -> P12A
+                       \-> P06B  (also waits for P04B and P05)
 ```
 
-P04 and P08 can start together after P03.
-P05 can start after P04 without waiting for P08.
-P09 needs both P05 and P08. It can overlap P06, and later P07 if those phases remain active.
-P10 starts after P09 and can overlap P06 or P07. Neither lane waits for the other except at the stated dependencies.
+P04, P06, and P08 can start together after P03.
+P05 starts after P04 Tasklet A. P04B can run at the same time as P05.
+P11A starts after P08 and can run at the same time as P04 and P05.
+P07 needs P05 and the P06 shell. P15A starts after P07 and the P06 shell.
 
-**JOIN / SERIAL INTEGRATION:** P11 starts after both lanes finish, including P07 and P10.
-Complete P11's atomic cap gate before P12's provider/settings/limits UX integration.
-The sequence is `P11 -> P12`.
+**JOIN / SERIAL INTEGRATION:** P11 starts after P07, P09, P10, and P11A.
+P12 starts after P06B, P07, P10, P11, and P12A.
 
-**SECOND PARALLEL GROUP:** P13 and P14 can run together after P12.
-Their earlier dependencies must also remain satisfied. P15 waits for both phases.
+**SECOND PARALLEL GROUP:** P13 starts after P09, P11A, and P12A. P14 starts after P05, P06B, and P12A.
+P13 and P14 do not wait for P12.
 
-**RELEASE / SERIAL:** Complete P15 only after the project-first release gates pass.
-Then complete `P16 -> P17 -> P18 -> P19` in order for the fair-capacity milestone.
+**RELEASE:** P15 starts after P11, P12, P13, P14, and P15A.
+
+**FAIR CAPACITY / SERIAL:** P16 starts after P05, P07, P11, and P15A. It does not wait for P15.
+Then complete `P16 -> P17 -> P18 -> P19` in order. P19 also waits for P15.
 Do not implement fair loans before the authority, bounded queue, and atomic admission seams exist.
+
+The longest dependency chain is `P04 -> P05 -> P09 -> P10 -> P11 -> P16 -> P17 -> P18 -> P19`.
 
 ### Parallel work and file ownership
 
 Parallel eligibility describes dependencies. It does not authorize simultaneous edits to the same shared file.
 Assign each shared file to one owner per integration step.
 
-- **P04 and P08:** Both can touch storage models and schema validation. Serialize edits to `storage.py`, Alembic metadata, and `database_migrations.py`.
+- **P04, P08, P11A, and P07:** All add schema. Serialize edits to `storage.py`, Alembic metadata, and `database_migrations.py`. Allocate revisions serially.
+- **P04B and P05:** Give `services/monitoring.py` and `storage.py` one owner per integration step.
+- **P06, P12A, and P06B:** P06 owns routes and store composition. P12A owns the shared settings UI composition.
 - **P06 and P09:** Keep frontend shell work separate from backend routing. Give shared provider DTOs and API client changes one integration owner.
+- **P07, P09, and P11:** Give `routers/api.py` and `mcp/server.py` one owner per integration step.
 - **P07 and P10:** Keep project-token authentication separate from Parallel provider OAuth. Serialize composition-root and shared secret-interface changes.
-- **P13 and P14:** Keep copy workflows separate from trace policy. Give settings schemas and shared settings UI composition one owner.
+- **P13 and P14:** Keep copy workflows separate from trace policy. Both extend the P12A settings UI. Give settings schemas and shared settings UI composition one owner.
+- **P15A with P12A, P12, and P16:** Coordinate `mcp/auth.py`, `routers/auth.py`, and `freesearch-ui/src/app/permissions.ts`.
+- **P16 and P15:** Coordinate `mcp/auth.py`, `routers/api.py`, and `mcp/server.py`.
 
 Use separate worktrees for parallel coding agents. Keep each worktree's existing environment-based ports.
 Merge passing prerequisites before dependent implementation. Mocked contract prototypes can proceed earlier, but they do not satisfy dependency gates.
