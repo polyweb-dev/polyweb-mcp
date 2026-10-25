@@ -2,6 +2,7 @@ import type { ReactNode } from "react"
 import { Navigate, useLocation } from "react-router"
 import { FreeSearchProvider } from "@/context/FreeSearchContext"
 import { useAuth } from "@/domains/auth"
+import { ProjectsProvider } from "@/domains/projects"
 import { canEditControls, canReadControls } from "./permissions"
 import { RestoreStatusView } from "./RestoreStatusView"
 import { loginPathFor } from "./routes"
@@ -56,7 +57,7 @@ export function ProtectedWorkspace({ children }: { children: ReactNode }) {
       canReadControls={canReadControls(account.role)}
       canEditControls={canEditControls(account.role)}
     >
-      {children}
+      <ProjectsProvider accountId={account.id}>{children}</ProjectsProvider>
     </FreeSearchProvider>
   )
 }

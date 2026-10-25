@@ -1,6 +1,9 @@
 import type { ReactNode } from "react"
 import { Navigate, Route, Routes } from "react-router"
 import { Sidebar } from "@/app/layout/Sidebar"
+import { ProjectWorkspace } from "./ProjectWorkspace"
+import { ProjectsPage } from "@/features/projects/ui/ProjectsPage"
+import { PROJECTS_PATH } from "./routes"
 import { PlaygroundPage } from "@/features/playground/ui/PlaygroundPage"
 import { RoutingEngine } from "@/components/routing/RoutingEngine"
 import { QuotaAnalytics } from "@/components/quota/QuotaAnalytics"
@@ -47,6 +50,11 @@ export function DashboardShell() {
           <Routes>
             <Route path="/" element={<Navigate to="/playground" replace />} />
             <Route path="/providers" element={<Navigate to="/settings" replace />} />
+            <Route
+              path={PROJECTS_PATH}
+              element={<ProjectsPage defaultAdminEmail={account?.email ?? ""} />}
+            />
+            <Route path="/p/:projectId/*" element={<ProjectWorkspace />} />
             {workspaceRoutes.map(({ id, path }) => (
               <Route
                 key={id}

@@ -2,6 +2,7 @@ import { Menu, PanelLeftClose, X } from "lucide-react"
 import { useLocation } from "react-router"
 import { cn } from "cn"
 import { useAuth } from "@/domains/auth"
+import { ProjectSelector } from "@/features/projects/ui/ProjectSelector"
 import { Brand } from "./SidebarBrand"
 import { NavList } from "./SidebarNavList"
 import { SidebarAccountMenu } from "./SidebarAccountMenu"
@@ -90,6 +91,7 @@ function renderDrawer(
             <X aria-hidden="true" className="size-5" />
           </button>
         </div>
+        <ProjectSelector collapsed={false} onNavigate={() => onClose()} />
         <NavList collapsed={false} onNavigate={() => onClose()} />
         <div className="shrink-0 p-2">
           <SidebarAccountMenu key={`drawer|${drawerOpen}|${menuKey}`} collapsed={false} />
@@ -141,6 +143,8 @@ export function Sidebar({
         )}
       >
         {renderBrandRow(isCollapsed, toggleCollapsed)}
+
+        <ProjectSelector collapsed={isCollapsed} />
 
         <NavList collapsed={isCollapsed} />
 
