@@ -6,7 +6,7 @@ accounts, settings, credentials, or history, and without real provider keys.
 
 Architecture & Scope Note (P01 Foundation):
 - The physical database initialized by `create_alpha_test_db` conforms to the
-  current SQLite schema at Alembic head (`0007_project_settings`), where
+  current SQLite schema at Alembic head (`0008_provider_credentials`), where
   accounts, projects, project memberships, system/project role assignments, and
   typed system/project settings are persisted in their dedicated tables.
 - `bootstrap_fresh_alpha` idempotently seeds the single internal installation account,

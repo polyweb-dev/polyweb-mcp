@@ -93,6 +93,8 @@ class Settings(BaseSettings):
     user_agent: str = "FreeSearch/0.1"
     encryption_key: SecretStr | None = Field(default=None, repr=False)
     encryption_key_file: Path = DEFAULT_KEY_FILE
+    encryption_retired_key_files: list[Path] = Field(default_factory=list)
+    encryption_retired_keys: list[SecretStr] = Field(default_factory=list, repr=False)
 
     # Account and token settings. ``auth_jwt_secret`` is required at auth
     # composition, not at settings construction, so unrelated reads (monitoring,

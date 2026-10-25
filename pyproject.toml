@@ -27,6 +27,7 @@ freesearch-api = "freesearch.routers.api:main"
 freesearch-db = "freesearch.persistence.database_cli:main"
 freesearch-mcp = "freesearch.mcp.server:main"
 freesearch-users = "freesearch.cli.users:main"
+freesearch-secrets = "freesearch.cli.secrets:main"
 
 [dependency-groups]
 dev = [

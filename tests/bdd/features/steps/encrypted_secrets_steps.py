@@ -521,7 +521,7 @@ def step_then_ciphertext_row(context: Any, provider: str) -> None:
     raw = _run(context, context.repository.get_runtime_setting(f"secret.enc:{provider}"))
     assert isinstance(raw, str)
     assert_no_sentinels(raw, (sentinel,), f"secret.enc:{provider} row")
-    assert _codec(context).decrypt(raw).get_secret_value() == sentinel
+    assert _codec(context).decrypt(raw, context=provider).get_secret_value() == sentinel
 
 
 @then("a key file should exist with mode 0600 under a 0700 directory")
@@ -626,7 +626,7 @@ def step_then_nondeterministic_rows(context: Any) -> None:
         )
     second = _run(context, context.repository.get_runtime_setting(f"secret.enc:{provider}"))
     assert first != second, "fresh nonce required per encrypt call"
-    assert _codec(context).decrypt(second).get_secret_value() == sentinel
+    assert _codec(context).decrypt(second, context=provider).get_secret_value() == sentinel
 
 
 @then('the secret for "{provider}" should stay missing with a tombstone')

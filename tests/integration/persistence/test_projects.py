@@ -54,7 +54,7 @@ async def test_fresh_database_schema_validation_and_head_revision(tmp_path: Path
 
     result = upgrade_database(db_path)
     assert result.current_revision == migration_head()
-    assert result.current_revision == "0007_project_settings"
+    assert result.current_revision == "0008_provider_credentials"
 
     # Schema validator asserts tables, columns, indexes, and FKs
     validate_database_schema(db_path)

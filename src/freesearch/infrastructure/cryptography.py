@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import hmac
 import json
 import logging
 import os
 import secrets
+from collections.abc import Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -35,8 +38,14 @@ class MasterKey:
         if len(self.key) != _KEY_BYTES:
             raise ValueError("invalid master key")
 
+    @property
+    def key_id(self) -> str:
+        """Stable non-secret identifier of this key (16 hex chars)."""
+
+        return hmac.new(self.key, b"freesearch.master-key-id.v1", hashlib.sha256).hexdigest()[:16]
+
     def __repr__(self) -> str:
-        return "MasterKey(***)"
+        return f"MasterKey(***, key_id={self.key_id!r})"
 
 
 class SecretDecryptError(Exception):
@@ -128,39 +137,94 @@ def load_or_create_master_key(
     return MasterKey(_read_secret_file(path, _KEY_BYTES, "key"))
 
 
+def load_retired_master_keys(
+    *,
+    key_files: Sequence[Path],
+    passphrases: Sequence[str],
+    salt_key_file: Path,
+) -> list[MasterKey]:
+    """Load retired master keys for decrypting pre-rotation envelopes only.
+
+    Retired key files must already exist and be exactly 32 bytes; this function
+    never creates key material. Retired passphrases derive through PBKDF2 with
+    the installation salt that lives beside the primary key file.
+    """
+
+    retired: list[MasterKey] = []
+    for path in key_files:
+        retired.append(MasterKey(_read_secret_file(path, _KEY_BYTES, "key")))
+    if passphrases:
+        salt = _load_or_create_salt(salt_key_file)
+        for passphrase in passphrases:
+            retired.append(MasterKey(_derive_key_from_passphrase(passphrase, salt)))
+    return retired
+
+
+def _aad(key_id: str, context: str) -> bytes:
+    """Associated data binding one ciphertext to its slot and key id."""
+
+    return json.dumps(["freesearch-secret", 2, key_id, context], separators=(",", ":")).encode()
+
+
 class SecretCodec:
-    """Versioned AES-256-GCM envelope codec for text secrets."""
+    """Versioned AES-256-GCM envelope codec for text secrets.
 
-    def __init__(self, master: MasterKey) -> None:
-        self._cipher = AESGCM(master.key)
+    Every envelope written is version 2: it carries the primary key id and is
+    bound to its slot ``context`` through AES-GCM associated data, so a copied
+    ciphertext never decrypts under a different slot name. Version-1 envelopes
+    (no key id, no associated data) decrypt only when the caller opts in with
+    ``allow_legacy`` for slots written before context binding existed.
+    """
 
-    def encrypt(self, plaintext: str) -> str:
+    def __init__(self, master: MasterKey, *, retired: Sequence[MasterKey] = ()) -> None:
+        self._primary_key_id = master.key_id
+        self._ciphers: dict[str, AESGCM] = {master.key_id: AESGCM(master.key)}
+        for key in retired:
+            if key.key_id not in self._ciphers:
+                self._ciphers[key.key_id] = AESGCM(key.key)
+
+    @property
+    def primary_key_id(self) -> str:
+        """Return the key id that stamps every newly written envelope."""
+
+        return self._primary_key_id
+
+    def encrypt(self, plaintext: str, *, context: str) -> str:
+        """Return a v2 envelope bound to ``context`` under the primary key."""
+
+        if not context:
+            raise ValueError("envelope context must not be empty")
         nonce = secrets.token_bytes(_NONCE_BYTES)
-        ciphertext = self._cipher.encrypt(nonce, plaintext.encode(), None)
+        cipher = self._ciphers[self._primary_key_id]
+        ciphertext = cipher.encrypt(nonce, plaintext.encode(), _aad(self._primary_key_id, context))
         return json.dumps(
             {
-                "v": 1,
+                "v": 2,
                 "alg": "AES-256-GCM",
+                "kid": self._primary_key_id,
                 "nonce": base64.b64encode(nonce).decode(),
                 "ct": base64.b64encode(ciphertext).decode(),
             },
             separators=(",", ":"),
         )
 
-    def decrypt(self, envelope: str) -> SecretStr:
+    def decrypt(self, envelope: str, *, context: str, allow_legacy: bool = False) -> SecretStr:
+        """Decrypt one envelope bound to ``context``; fail closed otherwise."""
+
+        if not context:
+            raise ValueError("envelope context must not be empty")
         try:
             payload = json.loads(envelope)
-            if (
-                not isinstance(payload, dict)
-                or payload.get("v") != 1
-                or payload.get("alg") != "AES-256-GCM"
-            ):
+            if not isinstance(payload, dict) or payload.get("alg") != "AES-256-GCM":
                 raise ValueError
-            nonce = base64.b64decode(payload["nonce"], validate=True)
-            ciphertext = base64.b64decode(payload["ct"], validate=True)
-            if len(nonce) != _NONCE_BYTES:
-                raise ValueError
-            return SecretStr(self._cipher.decrypt(nonce, ciphertext, None).decode())
+            version = payload.get("v")
+            if version == 2:
+                return self._decrypt_v2(payload, context)
+            if version == 1:
+                if not allow_legacy:
+                    raise ValueError
+                return self._decrypt_v1(payload)
+            raise ValueError
         except (
             InvalidTag,
             KeyError,
@@ -170,3 +234,42 @@ class SecretCodec:
             json.JSONDecodeError,
         ):
             raise SecretDecryptError() from None
+
+    def needs_rekey(self, envelope: str) -> bool:
+        """Return whether an envelope predates the primary key or context binding."""
+
+        try:
+            payload = json.loads(envelope)
+            if not isinstance(payload, dict) or payload.get("alg") != "AES-256-GCM":
+                raise ValueError
+            version = payload.get("v")
+            if version == 1:
+                return True
+            if version != 2 or not isinstance(payload.get("kid"), str):
+                raise ValueError
+            return bool(payload["kid"] != self._primary_key_id)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            raise SecretDecryptError() from None
+
+    def _decrypt_v2(self, payload: dict[str, Any], context: str) -> SecretStr:
+        kid = payload.get("kid")
+        if not isinstance(kid, str):
+            raise ValueError
+        cipher = self._ciphers.get(kid)
+        if cipher is None:
+            raise ValueError
+        nonce = base64.b64decode(payload["nonce"], validate=True)
+        ciphertext = base64.b64decode(payload["ct"], validate=True)
+        if len(nonce) != _NONCE_BYTES:
+            raise ValueError
+        return SecretStr(cipher.decrypt(nonce, ciphertext, _aad(kid, context)).decode())
+
+    def _decrypt_v1(self, payload: dict[str, Any]) -> SecretStr:
+        nonce = base64.b64decode(payload["nonce"], validate=True)
+        ciphertext = base64.b64decode(payload["ct"], validate=True)
+        if len(nonce) != _NONCE_BYTES:
+            raise ValueError
+        for cipher in self._ciphers.values():
+            with suppress(InvalidTag):
+                return SecretStr(cipher.decrypt(nonce, ciphertext, None).decode())
+        raise InvalidTag

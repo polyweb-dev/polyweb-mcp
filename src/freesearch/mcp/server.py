@@ -32,8 +32,10 @@ from freesearch.adapters.registry import (
     close_adapters,
 )
 from freesearch.configuration.config import get_settings
-from freesearch.infrastructure.cryptography import SecretCodec, load_or_create_master_key
-from freesearch.infrastructure.encrypted_store import EncryptedDbSecretStore
+from freesearch.infrastructure.encrypted_store import (
+    EncryptedDbSecretStore,
+    load_secret_codec,
+)
 from freesearch.infrastructure.http import create_async_client
 from freesearch.infrastructure.observability import (
     DEFAULT_FLUSH_TIMEOUT_MILLIS,
@@ -280,17 +282,9 @@ async def _apply_tavily_config(
 def _encrypted_store(repository: SQLiteRepository) -> EncryptedDbSecretStore:
     """Build the local encrypted store used by OAuth balance polling."""
 
-    settings = get_settings()
-    passphrase = (
-        settings.encryption_key.get_secret_value() if settings.encryption_key is not None else None
-    )
     return EncryptedDbSecretStore(
         repository,
-        SecretCodec(
-            load_or_create_master_key(
-                key_file=settings.encryption_key_file, passphrase_env=passphrase
-            )
-        ),
+        load_secret_codec(get_settings()),
     )
 
 
