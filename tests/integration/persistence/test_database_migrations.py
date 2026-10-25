@@ -540,6 +540,7 @@ _PROJECT_INDEXES = frozenset(
         "ix_project_role_assignments_project_user",
     }
 )
+_SETTINGS_TABLES = frozenset({"system_settings", "project_settings"})
 
 
 def test_validate_database_schema_rejects_missing_auth_foreign_keys(tmp_path: Path) -> None:
@@ -576,11 +577,13 @@ def test_fresh_database_at_head_has_no_cache_metadata(tmp_path: Path) -> None:
     result = upgrade_database(database)
 
     assert result.current_revision == migration_head()
-    assert result.current_revision == "0006_projects_and_memberships"
+    assert result.current_revision == "0007_project_settings"
     assert "cache_metadata" not in _tables(database)
     assert "cache_metadata_expires_at" not in _indexes(database)
     assert _indexes(database) == (set(_HEAD_INDEXES) | set(_LIMIT_INDEXES) | set(_PROJECT_INDEXES))
-    assert _tables(database) == set(_HEAD_TABLES) | set(_LIMIT_TABLES) | set(_PROJECT_TABLES)
+    assert _tables(database) == (
+        set(_HEAD_TABLES) | set(_LIMIT_TABLES) | set(_PROJECT_TABLES) | set(_SETTINGS_TABLES)
+    )
     assert _tables(database) >= _AUTH_TABLES
     assert _indexes(database) >= _AUTH_INDEXES
     _assert_trace_spans_schema(database)
@@ -671,6 +674,7 @@ def test_downgrade_recreates_cache_metadata_table_and_index(tmp_path: Path) -> N
     assert not (_AUTH_INDEXES & _indexes(database))
     assert not (_LIMIT_TABLES & _tables(database))
     assert not (_LIMIT_INDEXES & _indexes(database))
+    assert not (_SETTINGS_TABLES & _tables(database))
 
     result = upgrade_database(database)
 

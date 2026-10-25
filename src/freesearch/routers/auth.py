@@ -52,7 +52,9 @@ from freesearch.infrastructure.browser_auth import (
     set_refresh_cookie,
     validate_browser_request,
 )
+from freesearch.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID, PermissionAction
 from freesearch.models.users import AuthTokens, UserAccount, UserPrincipal, UserRole
+from freesearch.services.authorization import ScopedAuthorizationService, system_query
 from freesearch.services.users import (
     AuthConfigurationError,
     AuthService,
@@ -60,7 +62,6 @@ from freesearch.services.users import (
     AuthUnsupportedRole,
     LoginRateLimited,
     UserManager,
-    has_role,
 )
 
 #: Auth routes whose validation failures must not echo submitted credentials.
@@ -318,30 +319,45 @@ def current_principal(request: Request) -> UserPrincipal:
     return principal
 
 
-def _require_role(request: Request, allowed: frozenset[UserRole]) -> UserPrincipal:
-    """Return the principal only when its current database role is permitted.
+def _system_authorization(request: Request) -> ScopedAuthorizationService:
+    """Return the common live authorization service for one system operation."""
 
-    A missing or invalid credential stays HTTP 401. A valid credential with an
-    insufficient role is HTTP 403, and the caller runs before any provider or
-    persistence side effect.
+    account_service = _auth_service(request)
+    repository = account_service.repository
+    if repository is None:
+        raise _storage_unavailable()
+    return ScopedAuthorizationService(
+        repository,
+        account_id=DEFAULT_INSTALLATION_ACCOUNT_ID,
+    )
+
+
+async def _require_system_permission(request: Request, action: PermissionAction) -> UserPrincipal:
+    """Return the principal only when live system scope grants ``action``.
+
+    A missing or invalid credential stays HTTP 401. A valid credential without
+    the scoped assignment is HTTP 403, and this check runs before any provider
+    or persistence side effect. Account-type labels and a stored superuser flag
+    are never consulted; the common service reloads durable assignments.
     """
 
     principal = current_principal(request)
-    if not has_role(principal, allowed):
+    decision = await _system_authorization(request).authorize(system_query(principal, action))
+    if not decision.allowed:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="insufficient role")
     return principal
 
 
 async def require_admin(request: Request) -> UserPrincipal:
-    """Require an active Admin account for a control mutation or OAuth handler."""
+    """Require the live system settings-write assignment for a control mutation."""
 
-    return _require_role(request, ADMIN_ROLES)
+    return await _require_system_permission(request, PermissionAction.SYSTEM_SETTINGS_WRITE)
 
 
 async def require_control_reader(request: Request) -> UserPrincipal:
-    """Require an Admin or Developer account for a sanitized control read."""
+    """Require the live system settings-read assignment for a sanitized read."""
 
-    return _require_role(request, CONTROL_READ_ROLES)
+    return await _require_system_permission(request, PermissionAction.SYSTEM_SETTINGS_READ)
 
 
 async def get_user_manager(request: Request) -> AsyncIterator[UserManager]:

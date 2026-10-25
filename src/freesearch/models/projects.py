@@ -101,6 +101,30 @@ class PermissionAction(StrEnum):
     SYSTEM_ROLES_ASSIGN = "system.roles.assign"
 
 
+#: Actions that execute at system scope even though their catalog name does not
+#: use the ``system.`` prefix. Project creation is the documented exception: a
+#: system administrator creates a project and names its first administrator.
+_SYSTEM_SCOPED_ACTIONS: Final[frozenset[PermissionAction]] = frozenset(
+    {
+        PermissionAction.PROJECT_CREATE,
+        PermissionAction.SYSTEM_SETTINGS_READ,
+        PermissionAction.SYSTEM_SETTINGS_WRITE,
+        PermissionAction.SYSTEM_CREDENTIALS_MANAGE,
+        PermissionAction.SYSTEM_POOLS_MANAGE,
+        PermissionAction.SYSTEM_ALLOCATIONS_MANAGE,
+        PermissionAction.SYSTEM_PROJECTS_CREATE,
+        PermissionAction.SYSTEM_AUDIT_READ,
+        PermissionAction.SYSTEM_ROLES_ASSIGN,
+    }
+)
+
+
+def action_scope(action: PermissionAction) -> ScopeType:
+    """Return the documented scope that must evaluate one catalog action."""
+
+    return ScopeType.SYSTEM if action in _SYSTEM_SCOPED_ACTIONS else ScopeType.PROJECT
+
+
 #: Permitted execution actions for project API tokens (strictly limited to runtime execution).
 ALLOWED_TOKEN_ACTIONS: Final[frozenset[PermissionAction]] = frozenset(
     {PermissionAction.SEARCH_EXECUTE, PermissionAction.FETCH_EXECUTE}
@@ -140,6 +164,9 @@ BUILTIN_ROLE_DEFINITIONS: Final[dict[str, RoleDefinition]] = {
         scope_type=ScopeType.SYSTEM,
         permissions=frozenset(
             {
+                # ``project.create`` is a system-scoped action in the documented
+                # API matrix even though it is named after the project resource.
+                PermissionAction.PROJECT_CREATE,
                 PermissionAction.SYSTEM_SETTINGS_READ,
                 PermissionAction.SYSTEM_SETTINGS_WRITE,
                 PermissionAction.SYSTEM_CREDENTIALS_MANAGE,
@@ -431,7 +458,7 @@ class AuthorizationDecision(ContractModel):
 
 @runtime_checkable
 class AuthorizationService(Protocol):
-    """Common authorization service interface across transports.
+    """Common live authorization service interface across transports.
 
     Contract invariants:
     1. Deny-by-default: Any unregistered action, missing scope, missing role,
@@ -440,6 +467,11 @@ class AuthorizationService(Protocol):
        project-level permissions (e.g. searching or fetching within a project or
        reading project tokens) unless explicitly granted a project-scoped role or
        operating strictly within system scope.
+    3. Live assignments: The runtime implementation reloads durable scoped role
+       assignments on every decision; token claims or account-type flags are not
+       an authority source. The async live implementation lives in
+       :mod:`freesearch.services.authorization`; this protocol keeps the pure
+       decision contract for policy consumers that already hold permissions.
     """
 
     def authorize(self, query: AuthorizationQuery) -> AuthorizationDecision: ...
@@ -496,8 +528,8 @@ def evaluate_authorization(
                 scope_id=query.scope_id,
             )
 
-    # Invariant: system action requires system scope
-    is_system_action = query.action.value.startswith("system.")
+    # Invariant: every action has one documented scope; a caller cannot widen it
+    is_system_action = action_scope(query.action) is ScopeType.SYSTEM
     if is_system_action and query.scope_type != ScopeType.SYSTEM:
         return AuthorizationDecision(
             allowed=False,
@@ -619,6 +651,50 @@ class ProjectMemberUpdate(ContractModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     status: MembershipStatus
+
+
+class ProjectMemberChange(ContractModel):
+    """One membership change in an atomic bulk update."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    user_id: UUID
+    status: MembershipStatus | None = None
+    add_roles: frozenset[str] = Field(default_factory=frozenset)
+    remove_roles: frozenset[str] = Field(default_factory=frozenset)
+
+    @field_validator("add_roles", "remove_roles")
+    @classmethod
+    def _validate_project_roles(cls, roles: frozenset[str]) -> frozenset[str]:
+        for role_key in roles:
+            if role_key not in BUILTIN_ROLE_DEFINITIONS:
+                raise ValueError(f"Unknown project role {role_key!r}")
+            if BUILTIN_ROLE_DEFINITIONS[role_key].scope_type is not ScopeType.PROJECT:
+                raise ValueError(f"Role {role_key!r} is not a project-scoped role")
+        return roles
+
+    @model_validator(mode="after")
+    def _validate_change_is_effective(self) -> "ProjectMemberChange":
+        if self.status is None and not self.add_roles and not self.remove_roles:
+            raise ValueError("A membership change must set status or change roles")
+        if self.add_roles & self.remove_roles:
+            raise ValueError("A role cannot be added and removed by the same change")
+        return self
+
+
+class ProjectMembersBulkUpdate(ContractModel):
+    """Atomic bulk membership update; every change is applied or none is."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    changes: list[ProjectMemberChange] = Field(min_length=1, max_length=100)
+
+    @model_validator(mode="after")
+    def _validate_unique_users(self) -> "ProjectMembersBulkUpdate":
+        user_ids = [change.user_id for change in self.changes]
+        if len(user_ids) != len(set(user_ids)):
+            raise ValueError("Each user may appear at most once in a bulk membership update")
+        return self
 
 
 class ProjectMemberRead(ContractModel):
@@ -911,22 +987,70 @@ class SettingsProvenance(StrEnum):
     SYSTEM_CONSTRAINED = "system_constrained"
 
 
+def normalize_preferred_providers(value: Any) -> tuple[str, ...]:
+    """Return an ordered, unique tuple of lower-case provider identifiers.
+
+    An explicit empty tuple/list is a real project preference that clears the
+    preference order. It must never collapse into inheritance. Duplicates are
+    rejected rather than silently reordered so a caller cannot hide a routing
+    mistake.
+    """
+
+    if isinstance(value, str) or not isinstance(value, (list, tuple)):
+        raise ValueError("preferred_providers must be a list of provider names")
+    if len(value) > 8:
+        raise ValueError("preferred_providers accepts at most 8 entries")
+    normalized: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            raise ValueError("preferred_providers entries must be strings")
+        name = item.strip()
+        if (
+            not name
+            or name != name.lower()
+            or len(name) > 32
+            or not all(character.isalnum() or character in "_-" for character in name)
+        ):
+            raise ValueError(f"invalid provider name {item!r}")
+        if name in normalized:
+            raise ValueError(f"duplicate provider name {name!r}")
+        normalized.append(name)
+    return tuple(normalized)
+
+
 class RoutingSettings(ContractModel):
-    """Typed project routing preferences."""
+    """Typed project routing preferences.
+
+    ``None`` means inherit the system default. ``preferred_providers`` accepts
+    an explicit empty tuple to clear the preference order. A non-empty tuple is
+    a complete ordered replacement, never a merge with the system preference.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     fallback_policy: FallbackPolicy | None = None
     cost_optimization_preset: CostPreset | None = None
     max_attempts: int | None = Field(default=None, ge=1, le=10)
+    preferred_providers: tuple[str, ...] | None = None
+
+    @field_validator("preferred_providers")
+    @classmethod
+    def _ordered_provider_preferences(cls, value: tuple[str, ...] | None) -> tuple[str, ...] | None:
+        return None if value is None else normalize_preferred_providers(value)
 
 
 class ExecutionSettings(ContractModel):
-    """Typed execution limits and timeouts."""
+    """Typed execution limits and timeouts.
+
+    Every field distinguishes inheritance (``None``) from an explicit value.
+    ``False`` disables caching and ``0`` disables caching for zero seconds; both
+    are real project choices. Numeric safety ceilings are applied by resolution.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    default_timeout_seconds: float | None = Field(default=None, gt=0, le=300)
+    cache_enabled: bool | None = None
+    default_timeout_seconds: float | None = Field(default=None, ge=1.0, le=300)
     max_fanout_concurrency: int | None = Field(default=None, ge=1, le=20)
     cache_ttl_seconds: int | None = Field(default=None, ge=0, le=86400)
 
@@ -942,7 +1066,7 @@ class ProjectSettingsDocument(ContractModel):
 
 
 class SettingsFieldResolution(ContractModel):
-    """Typed resolution of an individual settings field with inheritance metadata."""
+    """Typed resolution of one field with inheritance and safety metadata."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -952,10 +1076,20 @@ class SettingsFieldResolution(ContractModel):
     is_null: bool = False
     system_default: Any = None
     project_override: Any = None
+    section: str = ""
+    source_scope: SettingsScope = SettingsScope.SYSTEM
+    override_allowed: bool = True
+    system_safety_limit: Any = None
+    constraint_applied: bool = False
 
 
 class SettingsResolution(ContractModel):
-    """Resolved settings payload with per-field origin provenance."""
+    """Resolved settings payload with per-field origin provenance.
+
+    ``system_revision`` and ``project_revision`` identify the exact durable
+    documents that produced this result. They are the cache identity: any
+    supported mutation increments one of them, including from another process.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -965,3 +1099,6 @@ class SettingsResolution(ContractModel):
     provenance_by_field: dict[str, SettingsProvenance]
     system_revision: int
     project_revision: int | None = None
+    project_id: UUID | None = None
+    schema_version: int = 1
+    overrides: dict[str, Any] = Field(default_factory=dict)

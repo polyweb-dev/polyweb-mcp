@@ -97,6 +97,8 @@ from freesearch.routers.control import (
 )
 from freesearch.routers.limits import limit_denial_response, register_limit_routes
 from freesearch.routers.observability import register_observability_routes
+from freesearch.routers.projects import register_project_routes
+from freesearch.routers.settings import register_settings_routes
 from freesearch.services.aggregation import reciprocal_rank_fusion
 from freesearch.services.limits_sync import LimitSyncService
 from freesearch.services.monitoring import (
@@ -394,6 +396,8 @@ def create_app(
         registration_limit=lambda peer: _reserve_registration(app, peer),
     )
     register_auth_routes(app)
+    register_project_routes(app)
+    register_settings_routes(app)
     register_control_routes(app)
     register_limit_routes(app)
     register_observability_routes(app)

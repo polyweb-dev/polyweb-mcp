@@ -19,15 +19,20 @@ from pydantic import SecretStr
 
 from freesearch.cli.users import _run
 from freesearch.models.observability import TraceOperation, TraceSpanKind, TraceSpanRecord
+from freesearch.models.projects import BuiltinRole, ProjectCreate, ProjectMemberAdd
 from freesearch.models.users import UserRole
 from freesearch.persistence.otel_exporter import write_trace_spans
+from freesearch.persistence.projects import ProjectRepository
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.persistence.users import UserDatabase, UserRow
+from freesearch.services.projects import ProjectService
+from tests.fixtures.alpha_fixtures import create_alpha_test_db
 from tests.fixtures.auth import (
     TEMP_PASSWORD,
     create_temp_user,
     http_jwt_service,
     temp_email,
+    temp_principal,
 )
 
 _PASSWORD = "StrongPass123!x-CliBDD"
@@ -353,5 +358,98 @@ async def test_set_role_preserves_account_owned_traces(
 
         rows = await repository.list_trace_summaries(user_id=check.id)
         assert [item.trace_id for item in rows] == ["e" * 32]
+    finally:
+        await repository.close()
+
+
+async def test_deactivate_uses_the_same_last_admin_guard(
+    tmp_path: Path,
+    auth_secret: str,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The operator CLI cannot deactivate an account that is the last admin."""
+
+    database = tmp_path / "cli-deactivate.db"
+    repository = await create_alpha_test_db(database)
+    try:
+        system_row = await create_temp_user(
+            repository, temp_email("cli-deactivate-sys"), role=UserRole.ADMIN
+        )
+        admin_row = await create_temp_user(repository, temp_email("cli-deactivate-admin"))
+        peer_row = await create_temp_user(repository, temp_email("cli-deactivate-peer"))
+        system = temp_principal(system_row)
+        admin = temp_principal(admin_row)
+        peer = temp_principal(peer_row)
+        project = await ProjectService(repository).create_project(
+            system,
+            ProjectCreate(
+                name="CLI Deactivate",
+                slug="cli-deactivate",
+                initial_admin_user_id=admin.id,
+            ),
+        )
+
+        async def stored_active(email: str) -> bool:
+            async with repository.session() as session:
+                record = await UserDatabase(session, UserRow).get_by_email(email)
+                assert record is not None
+                return bool(record.is_active)
+
+        command = [
+            "deactivate",
+            "--user-id",
+            str(admin.id),
+            "--database",
+            str(database),
+        ]
+        assert await _run(command) == 1
+        refused = capsys.readouterr()
+        assert "last active administrator" in refused.err
+        assert await stored_active(admin_row.email) is True
+
+        service = ProjectService(repository)
+        await service.add_member(
+            admin,
+            project.id,
+            ProjectMemberAdd(
+                user_id=peer.id,
+                initial_role=BuiltinRole.PROJECT_ADMIN.value,
+            ),
+        )
+        assert await _run(command) == 0
+        completed = capsys.readouterr()
+        assert f"Account: {admin.id}" in completed.out
+        assert "Active: false" in completed.out
+        assert TEMP_PASSWORD not in completed.out
+        assert TEMP_PASSWORD not in completed.err
+
+        async with repository.session() as session:
+            assert (
+                await ProjectRepository(session).count_active_project_admins(project_id=project.id)
+                == 1
+            )
+
+        # A mixed bulk request that would leave no active administrator is
+        # rejected as one transaction, including for the already-inactive ID.
+        refused_bulk = await _run(
+            [
+                "deactivate",
+                "--user-id",
+                str(admin.id),
+                "--user-id",
+                str(peer.id),
+                "--database",
+                str(database),
+            ]
+        )
+        assert refused_bulk == 1
+        assert "last active administrator" in capsys.readouterr().err
+        assert await stored_active(admin_row.email) is False
+        assert await stored_active(peer_row.email) is True
+        async with repository.session() as session:
+            assert (
+                await ProjectRepository(session).count_active_project_admins(project_id=project.id)
+                == 1
+            )
     finally:
         await repository.close()
