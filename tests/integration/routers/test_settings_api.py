@@ -16,7 +16,7 @@ from freesearch.models.projects import (
     ProjectRead,
     ProjectRolloutState,
 )
-from freesearch.models.users import UserPrincipal, UserRole
+from freesearch.models.users import UserPrincipal
 from freesearch.routers.api import create_app
 from freesearch.services.projects import ProjectService
 from tests.fixtures.alpha_fixtures import (
@@ -73,7 +73,7 @@ async def _build_fixture(tmp_path: Path) -> _HttpSettingsFixture:
     project_service = ProjectService(boot.repository)
 
     system_row = await create_temp_user(
-        boot.repository, temp_email("p03-http-system"), role=UserRole.ADMIN
+        boot.repository, temp_email("p03-http-system"), system_admin=True
     )
     system_admin = temp_principal(system_row)
 

@@ -31,6 +31,7 @@ from freesearch.adapters.registry import adapter_factory, build_adapters, close_
 from freesearch.configuration.config import get_settings, require_transport_port
 from freesearch.configuration.provider_config import ProviderConfigError
 from freesearch.infrastructure.auth_asgi import (
+    OPERATION_ROUTES,
     BearerAuthMiddleware,
     current_verified_principal,
 )
@@ -84,7 +85,7 @@ from freesearch.models.observability import (
     TraceRootSpan,
     TraceSpanName,
 )
-from freesearch.models.projects import PermissionAction, ProjectContext
+from freesearch.models.projects import PermissionAction, ProjectApiKeyPrincipal, ProjectContext
 from freesearch.models.provider_limits import (
     LimitDeniedError,
     LimitStoreUnavailable,
@@ -96,6 +97,7 @@ from freesearch.persistence.database_migrations import (
     upgrade_database,
 )
 from freesearch.persistence.storage import SQLiteRepository
+from freesearch.routers.api_keys import register_api_key_routes
 from freesearch.routers.auth import register_auth_routes, require_control_reader
 from freesearch.routers.control import (
     _build_with_resolved_secret,
@@ -112,9 +114,12 @@ from freesearch.routers.observability import register_observability_routes
 from freesearch.routers.projects import register_project_routes
 from freesearch.routers.settings import register_settings_routes
 from freesearch.services.aggregation import reciprocal_rank_fusion
+from freesearch.services.api_keys import DEFAULT_USE_RECORDER, ApiKeyVerifier
+from freesearch.services.authorization import human_principal
 from freesearch.services.execution_scope import (
     ExecutionForbidden,
     ExecutionProjectArchived,
+    ExecutionProjectRequired,
     ExecutionScopeError,
     ExecutionStorageUnavailable,
     ExecutionUnauthenticated,
@@ -214,6 +219,22 @@ async def _verify_refresh_token(app: FastAPI, token: str) -> UserPrincipal | Non
     return await service.verify_refresh_token(token)
 
 
+def _execution_repository(app: FastAPI) -> SQLiteRepository | None:
+    """Return the repository that owns projects, keys and execution scope."""
+
+    repository: SQLiteRepository | None = app.state.repository
+    return repository
+
+
+async def _verify_api_key(app: FastAPI, token: str) -> ProjectApiKeyPrincipal | None:
+    """Verify one project API key on an execution route; nothing is cached."""
+
+    repository = _execution_repository(app)
+    if repository is None:
+        return None
+    return await ApiKeyVerifier(repository).verify(token)
+
+
 async def _reserve_registration(app: FastAPI, peer_address: str) -> int | None:
     """Reserve public-registration capacity before the endpoint runs."""
 
@@ -262,6 +283,9 @@ async def _teardown_app_lifespan(
     runtime: ObservabilityRuntime = app.state.observability
     app.state.observability = NO_OP_OBSERVABILITY
     await asyncio.to_thread(runtime.shutdown)
+    # Queued API key bookkeeping (use stamps, denial events) finishes before
+    # any repository closes, injected or owned.
+    await DEFAULT_USE_RECORDER.drain()
     # The schedule task stops and is awaited before the repository and
     # adapters close, so no poll can race a closing database.
     await _stop_limits(app, stop_limits)
@@ -408,10 +432,13 @@ def create_app(
         browser_origins=browser_origins,
         verify_token=lambda token: _verify_access_token(app, token),
         verify_refresh_token=lambda token: _verify_refresh_token(app, token),
+        verify_api_key=lambda token: _verify_api_key(app, token),
+        api_key_routes=OPERATION_ROUTES,
         registration_limit=lambda peer: _reserve_registration(app, peer),
     )
     register_auth_routes(app)
     register_project_routes(app)
+    register_api_key_routes(app)
     register_settings_routes(app)
     register_credential_routes(app)
     register_control_routes(app)
@@ -840,6 +867,8 @@ def _execution_scope_http_error(error: ExecutionScopeError) -> HTTPException:
         )
     if isinstance(error, ExecutionStorageUnavailable):
         return HTTPException(status_code=503, detail="execution is temporarily unavailable")
+    if isinstance(error, ExecutionProjectRequired):
+        return HTTPException(status_code=422, detail="project_id is required")
     if isinstance(error, ExecutionProjectArchived):
         return HTTPException(status_code=409, detail="project is archived")
     if isinstance(error, ExecutionForbidden):
@@ -854,13 +883,17 @@ async def _execution_attribution(
 
     This is the first step of every provider-executing route — before route
     planning, admission, or provider I/O — so a rejected request leaves no
-    usage rows and no attributed trace spans.
+    usage rows and no attributed trace spans. A human session executes through
+    its live project membership; a project API key executes only in its own
+    project with its own scopes.
     """
 
+    verified = current_verified_principal()
+    principal = human_principal(verified) if isinstance(verified, UserPrincipal) else verified
     try:
         context: ProjectContext = await resolve_execution_scope(
-            app.state.repository,
-            current_verified_principal(),
+            _execution_repository(app),
+            principal,
             project_id=project_id,
             action=action,
         )

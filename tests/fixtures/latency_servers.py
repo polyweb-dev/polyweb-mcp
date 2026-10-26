@@ -52,13 +52,13 @@ from mcp.server.fastmcp import FastMCP
 from mcp.shared._httpx_utils import create_mcp_http_client
 from mcp.types import CallToolResult
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
+from tests.fixtures.api_keys import mcp_project_key
 from tests.fixtures.auth import (
     TEMP_PASSWORD,
     install_process_auth_secret,
-    mcp_account_token,
     temp_email,
 )
-from tests.fixtures.execution import seed_member_project, seed_token_project
+from tests.fixtures.execution import seed_member_project
 from tests.fixtures.latency import (
     FETCH_URL,
     attach_select_counter,
@@ -511,8 +511,8 @@ class RoutingLatencyHarness:
 
     async def _start_mcp(self, target: _Target, database: Path) -> str:
         repository = await self._open_repository(target, database)
-        service, token, _email = await mcp_account_token(repository, "latency-mcp")
-        target.project_id = str((await seed_token_project(repository, token)).project_id)
+        service, project_key = await mcp_project_key(repository, "latency-mcp")
+        target.project_id = str(project_key.project_id)
         server = create_server(
             self._build_adapters(target), repository=repository, auth_service=service
         )
@@ -520,7 +520,7 @@ class RoutingLatencyHarness:
         await self._serve(
             target, build_http_app(server, auth_service=service, settings=service.settings)
         )
-        return token.get_secret_value()
+        return project_key.raw
 
     def _open_mcp_session(self, target: _Target, token: str) -> None:
         loop = self._loop()

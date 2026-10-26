@@ -30,17 +30,16 @@ from freesearch.models.contracts import (
     UsageEvent,
     UsageOperation,
 )
-from freesearch.models.users import UserRole
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
+from tests.fixtures.api_keys import mcp_key_credentials
 from tests.fixtures.auth import (
     TEMP_PASSWORD,
     configure_bdd_secret,
-    mcp_account_token,
-    promote_account,
+    promote_to_system_admin,
     temp_email,
 )
-from tests.fixtures.execution import bdd_project_id, bdd_token_project_id
+from tests.fixtures.execution import bdd_project_id
 from tests.fixtures.usage_ledger import all_usage_events
 
 
@@ -175,14 +174,16 @@ def _parse_utc_timestamp(value: Any) -> datetime:
     return timestamp
 
 
-def _login_headers(context: Any, role: UserRole, prefix: str) -> dict[str, str]:
-    # Register one account, assign one role, and return one access header.
+def _login_headers(context: Any, prefix: str, *, system_admin: bool = False) -> dict[str, str]:
+    # Register one ordinary account; grant system_admin (trusted) only when the
+    # scenario reads system-scoped stats/dashboard (A1). Execution uses the
+    # account's own project membership.
     email = temp_email(prefix)
     with _rest_client(context) as client:
         registered = client.post("/auth/register", json={"email": email, "password": TEMP_PASSWORD})
         assert registered.status_code == 201
-        if role is not UserRole.AGENT:
-            context.loop.run_until_complete(promote_account(context.repository, email, role))
+        if system_admin:
+            context.loop.run_until_complete(promote_to_system_admin(context.repository, email))
         logged_in = client.post(
             "/auth/jwt/login", data={"username": email, "password": TEMP_PASSWORD}
         )
@@ -213,7 +214,7 @@ def step_given_rest_monitoring(context: Any) -> None:
     _seed_quota(context, "rest-fetch", QuotaSource.OBSERVED)
     context.app = create_app(context.adapters, repository=context.repository)
     # Stats and dashboard need the Reader role, search and fetch need any role.
-    context.auth_headers = _login_headers(context, UserRole.DEVELOPER, "monitor-dev")
+    context.auth_headers = _login_headers(context, "monitor-reader", system_admin=True)
 
 
 @when('I submit REST search query "{query}" and fetch URL "{url}"')
@@ -311,12 +312,11 @@ def step_given_mcp_monitoring(context: Any) -> None:
         ),
     ]
 
-    async def _authed_service() -> tuple[Any, str]:
-        service, token, _email = await mcp_account_token(context.repository, "monitor-mcp")
-        return service, token.get_secret_value()
+    async def _authed_service() -> tuple[Any, str, str]:
+        service, token, pid = await mcp_key_credentials(context.repository, "monitor-mcp")
+        return service, token.get_secret_value(), pid
 
-    service, raw_token = context.loop.run_until_complete(_authed_service())
-    context.mcp_pid = bdd_token_project_id(context, SecretStr(raw_token))
+    service, raw_token, context.mcp_pid = context.loop.run_until_complete(_authed_service())
     context.server = create_server(
         context.adapters,
         repository=context.repository,
@@ -368,7 +368,7 @@ def step_given_privacy_safe_monitoring(context: Any) -> None:
     context.adapters = [_MonitoringStubAdapter("privacy-provider")]
     context.app = create_app(context.adapters, repository=context.repository)
     # Stats and dashboard need the Reader role, search and fetch need any role.
-    context.auth_headers = _login_headers(context, UserRole.DEVELOPER, "monitor-dev")
+    context.auth_headers = _login_headers(context, "monitor-reader", system_admin=True)
 
 
 @when("I submit a private REST search and fetch request")
@@ -462,7 +462,7 @@ def step_given_failing_telemetry_app(context: Any) -> None:
     context.repository.record_usage = _fail_usage  # type: ignore[method-assign]
     context.repository.record_health = _fail_health  # type: ignore[method-assign]
     # Search needs any authenticated role.
-    context.auth_headers = _login_headers(context, UserRole.AGENT, "monitor-agent")
+    context.auth_headers = _login_headers(context, "monitor-agent")
 
 
 @when("I submit a resilient REST search request")

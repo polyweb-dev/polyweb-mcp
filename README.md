@@ -90,14 +90,16 @@ FreeSearch includes a dedicated database management CLI tool (`freesearch-db`):
 
 #### Local account bootstrap
 
-Public registration creates Agent accounts only. Create the first Admin account with the operator CLI, and assign a later role by explicit account UUID:
+Accounts have no role or account type. Public registration creates an ordinary human account with no system role and no project membership. System authority comes only from an explicit `system_admin` assignment, which the operator CLI creates and removes by explicit account UUID:
 
 ```bash
 uv run freesearch-users create-admin --email admin@example.com
-uv run freesearch-users set-role --user-id <account-uuid> --role developer
+uv run freesearch-users grant-system-admin --user-id <account-uuid>
+uv run freesearch-users revoke-system-admin --user-id <account-uuid>
+uv run freesearch-users deactivate --user-id <account-uuid>
 ```
 
-The command reads the password from a masked terminal prompt, refuses a password argument, and prints only the account UUID and the role. It requires a database file that is present, so run `freesearch-db upgrade` first. A failed promotion leaves an Agent account, and the command reports that state.
+`create-admin` reads the password from a masked terminal prompt, refuses a password argument, and prints only the account UUID and the system role outcome. The commands require a database file that is present, so run `freesearch-db upgrade` first. A failed grant leaves an ordinary account, and the command reports that state. `revoke-system-admin` and `deactivate` refuse to remove the last active system administrator, and `deactivate` (CLI and `POST /api/v1/users/{id}/deactivate`, which answers `409 LAST_SYSTEM_ADMIN`) refuses to leave any project (archived ones included) without an active project administrator. Every system role change and deactivation writes a system audit event.
 
 ---
 
@@ -237,20 +239,33 @@ uv run freesearch-api
 
 ### Local accounts and access control
 
-`POST /search` and `POST /fetch` are public on REST and MCP. A Bearer token is optional on these operations; if supplied, it must be valid and the account is attached to local trace records. Anonymous calls have no account attribution. All other REST routes, including provider controls, account management, and trace reads, require a JWT Bearer credential. The MCP transport exposes only the Search and Fetch tools; its other paths remain guarded.
+`POST /search` and `POST /fetch` always require a credential; there is no anonymous execution. They accept either a human access JWT (the browser session; the request must name a `project_id` where the account is an active member) or a project API key (see [Project API keys](#project-api-keys)). All other REST routes, including projects, members, API key management, provider controls, account management, and trace reads, accept only a human access JWT; a project API key is rejected there with HTTP 401. The MCP transport exposes only the Search and Fetch tools and accepts only project API keys.
 
-- **Register:** `POST /auth/register` with `{"email": ..., "password": ...}` creates an active Agent account and returns no token.
+- **Register:** `POST /auth/register` with `{"email": ..., "password": ...}` creates an active ordinary account with no role and returns no token. A request that also sends a role, privilege, or status field is rejected with HTTP 422.
 - **Log in:** `POST /auth/jwt/login` with the OAuth2 form (`username` holds the email) returns `access_token`, `refresh_token`, `token_type`, `expires_in`, and `refresh_expires_in`.
 - **Refresh:** `POST /auth/jwt/refresh` takes the opaque refresh credential in the Bearer header and rotates it once. A second use of a consumed credential revokes that family.
 - **Log out:** `POST /auth/jwt/logout` revokes the current family, so its access and refresh credentials stop at once.
-- **Current account:** `GET /users/me` returns the account record without the password hash.
-- **Roles:** Admin changes provider controls and provider OAuth, Developer reads the sanitized control views and statistics, and Agent searches and fetches. Every role reads only its own traces.
-- **Provider usage:** Search and Fetch still pass through provider quota and rate admission and use the server's configured provider credentials. These limits and provider budgets are shared across anonymous and authenticated requests; there is no per-caller spend cap.
+- **Current account:** `GET /users/me` returns the account record (identity, provider, profile and status fields) without the password hash and without any role or privilege flag.
+- **Authority:** every decision reloads scoped role assignments. A `system_admin` assignment governs installation-wide controls (provider controls, provider OAuth, account provisioning, project creation) and confers no project membership. Project authority comes only from an active project membership and its project roles (`project_admin`, `project_member`, and the extra `routing_editor`, `provider_editor` and `token_manager` roles). Every project keeps at least one active human `project_admin`; removals, demotions, suspensions and account deactivations that would break this fail with `409 LAST_PROJECT_ADMIN`. On project-scoped routes (project, members, roles, API keys) an unknown project and a caller who is not an active member get the same `404`; a member without the needed permission gets `403`.
+- **Provider usage:** Search and Fetch still pass through provider quota and rate admission and use the server's configured provider credentials. These limits and provider budgets are shared across callers; there is no per-caller spend cap.
 - **Public documentation:** `/docs`, `/redoc`, and `/openapi.json` are accessible anonymously without authentication.
 - **Limits:** 5 pair attempts and 20 peer-address attempts per 900 seconds for login, 5 peer-address attempts and 100 deployment attempts per 900 seconds for registration, and a 4096-byte cap on a public auth body.
 - **Token lifetime:** 900 seconds for an access JWT and 604800 seconds for the absolute refresh family. An ordinary API call and an ordinary MCP call never extend a token.
 
 The API and the MCP transports read `FREESEARCH_API_PORT` and `FREESEARCH_MCP_PORT` from the gitignored `.env` file, so a launch command never hardcodes a port. The full account rules and the release procedure are in [docs/releases/local-users.md](docs/releases/local-users.md).
+
+### Project API keys
+
+REST machine clients and MCP clients authenticate with a project API key instead of a user account. A key belongs to one project, holds only the `search.execute` and/or `fetch.execute` scopes, and never inherits any role of the person who created it. Browser and playground calls use the human session and project membership and never need a key.
+
+- **Format:** `fs_live_<prefix>_<secret>`. The 12-character `prefix` is public and identifies the key in lists and audit records; the secret has 256 bits. Only a SHA-256 verifier of the secret is stored. Send the key only in `Authorization: Bearer <key>`, never in a URL.
+- **Issue:** `POST /api/v1/projects/{project_id}/api-keys` with `{"label": ..., "scopes": [...], "expires_at": ...}` returns `201` with the key metadata and the raw `key`. The raw key appears only in this response and in a rotation response. Omitted `scopes` grants both scopes; an empty or unknown scope is `422`. **Omitted `expires_at` means the default lifetime of 90 days from issue; an explicit `"expires_at": null` means no expiration;** a past timestamp is `422`.
+- **List:** `GET /api/v1/projects/{project_id}/api-keys` returns `id`, `label`, `prefix`, `scopes`, `created_by`, `created_at`, `expires_at` (`null` = no expiration), `revoked_at`, `last_used_at`, `rotated_from_id` and `status` (`active`, `expired` or `revoked`).
+- **Rotate:** `POST /api/v1/projects/{project_id}/api-keys/{key_id}/rotate` with optional `{"overlap_seconds": 0..604800, "expires_at": ...}` returns `201` with a new key of the same label and scopes. Omitted `expires_at` keeps the old key's lifetime (no expiration stays no expiration); `null` means no expiration. The old key stays valid for `overlap_seconds` (default 86400, never beyond its own expiry); `0` revokes it at once. Rotating a revoked, expired or already rotated key is `409 API_KEY_INACTIVE`.
+- **Revoke:** `DELETE /api/v1/projects/{project_id}/api-keys/{key_id}` returns `204`, also when the key is already revoked.
+- **Permissions:** managing keys needs `tokens.manage` in the project (`project_admin` or `token_manager`) and a human session; a non-member gets `404`, a member without `tokens.manage` `403`. A key cannot carry authority its issuer lacks: every requested scope must be among the issuer's own live project permissions, and rotation requires the rotating person to hold every scope of the key (`403` otherwise). `token_manager` grants no execution, so pair it with `project_member` (or hold `project_admin`) to issue keys. A key id of another project is `404`. An archived project cannot issue or rotate keys (`409 PROJECT_ARCHIVED`).
+- **Execution:** with a key, `project_id` in a Search or Fetch request is optional; when given it must name the key's project, otherwise the call is `404`. An unknown, malformed, expired or revoked key is a generic `401`; a missing scope is `403`; an archived project is `409`. Every rejection happens before any provider access, and the key, its revocation, expiry and scope are checked again on every REST request and every MCP tool call.
+- **Audit:** issue, rotation and revocation write project audit events, and a rejected use of an existing key writes a system security event identified by its prefix. Security events and `last_used_at` stamps are written off the request path by one background writer (at most one event per key and reason per 60 seconds per process; a full queue of 1024 drops the write with a prefix-only warning). No raw key or verifier is ever logged, traced or audited.
 
 ### Start the Frontend Dashboard
 
@@ -349,8 +364,9 @@ uv run freesearch-mcp --transport stdio
 ```
 
 - Exposes provider-neutral `search` and `fetch` tools with automatic route selection and quota tracking.
-- The HTTP transport exposes Search and Fetch on `/mcp` without requiring a JWT. If a Bearer token is supplied, it is verified and can attribute traces; invalid tokens are rejected. Unknown paths remain guarded.
-- The stdio transport accepts anonymous Search and Fetch. `FREESEARCH_MCP_BEARER_TOKEN` is optional and adds account attribution; if configured, it is verified at each tool call. Do not give the child a refresh credential.
+- MCP accepts only [project API keys](#project-api-keys); human JWTs and anonymous calls are rejected. The tools' `project_id` is optional and, when given, must name the key's project.
+- The HTTP transport requires `Authorization: Bearer fs_live_...` on every `/mcp` request (HTTP 401 otherwise), and every tool call uses the key principal verified on the HTTP request that carried it, then re-reads the key at the execution boundary, so revocation, expiry, archive and scope changes stop a persistent session at its next call. Unknown paths remain guarded.
+- The stdio transport reads the project API key from `FREESEARCH_MCP_BEARER_TOKEN` (the process credential channel) and verifies it at each tool call; without it every tool call is rejected. The HTTP transport never reads this variable. Do not give the child a human or refresh credential.
 - Transports and flags can also be configured via `FREESEARCH_MCP_TRANSPORT` (`stdio` or `streamable-http`) and `FREESEARCH_MCP_STATELESS` (`true`/`false`).
 
 ---

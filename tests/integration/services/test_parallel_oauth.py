@@ -24,7 +24,6 @@ from fastapi.testclient import TestClient
 from pydantic import SecretStr, ValidationError
 
 from freesearch.models.contracts import QuotaSnapshot, QuotaSource, UnitKind, UsageOperation
-from freesearch.models.users import UserRole
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
 from freesearch.services.monitoring import _record_adapter_quota, refresh_quotas
@@ -54,7 +53,7 @@ from freesearch.services.parallel_oauth import (
     set_oauth_test_seams,
     start_device_flow,
 )
-from tests.fixtures.auth import raw_auth_headers, register_promote_login, temp_email
+from tests.fixtures.auth import raw_auth_headers, register_system_admin_login, temp_email
 
 FIXED_NOW = datetime(2026, 9, 10, 12, 0, 0, tzinfo=UTC)
 
@@ -1045,9 +1044,7 @@ async def test_control_device_code_shape_and_presence(
         anonymous = client.post("/api/v1/providers/parallel/oauth/device-code")
         assert anonymous.status_code == 401
         # Use one Admin account for the OAuth route.
-        pair = await register_promote_login(
-            client, repository, temp_email("oauth-admin"), UserRole.ADMIN
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("oauth-admin"))
         headers = raw_auth_headers(pair["access_token"])
         response = client.post("/api/v1/providers/parallel/oauth/device-code", headers=headers)
     assert response.status_code == 200
@@ -1074,9 +1071,7 @@ async def test_control_status_shape_and_terminal_views(
         anonymous = client.get("/api/v1/providers/parallel/oauth/status")
         assert anonymous.status_code == 401
         # Use one Admin account for the OAuth routes.
-        pair = await register_promote_login(
-            client, repository, temp_email("oauth-admin"), UserRole.ADMIN
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("oauth-admin"))
         headers = raw_auth_headers(pair["access_token"])
         assert client.get("/api/v1/providers/parallel/oauth/status", headers=headers).json() == {
             "provider": "parallel",
@@ -1104,9 +1099,7 @@ async def test_control_rejects_other_and_unknown_providers(
         anonymous = client.get("/api/v1/providers/exa/oauth/status")
         assert anonymous.status_code == 401
         # Use one Admin account for the OAuth routes.
-        pair = await register_promote_login(
-            client, repository, temp_email("oauth-admin"), UserRole.ADMIN
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("oauth-admin"))
         headers = raw_auth_headers(pair["access_token"])
         for method, path in (
             ("post", "/api/v1/providers/exa/oauth/device-code"),
@@ -1133,9 +1126,7 @@ async def test_control_disconnect_is_idempotent_204(
         anonymous = client.delete("/api/v1/providers/parallel/oauth")
         assert anonymous.status_code == 401
         # Use one Admin account for the OAuth route.
-        pair = await register_promote_login(
-            client, repository, temp_email("oauth-admin"), UserRole.ADMIN
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("oauth-admin"))
         headers = raw_auth_headers(pair["access_token"])
         assert client.delete("/api/v1/providers/parallel/oauth", headers=headers).status_code == 204
         assert client.delete("/api/v1/providers/parallel/oauth", headers=headers).status_code == 204
@@ -1200,9 +1191,7 @@ async def test_control_device_code_409_when_paired(
         anonymous = client.post("/api/v1/providers/parallel/oauth/device-code")
         assert anonymous.status_code == 401
         # Use one Admin account for the OAuth routes.
-        pair = await register_promote_login(
-            client, repository, temp_email("oauth-admin"), UserRole.ADMIN
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("oauth-admin"))
         headers = raw_auth_headers(pair["access_token"])
         assert (
             client.post("/api/v1/providers/parallel/oauth/device-code", headers=headers).status_code

@@ -16,34 +16,26 @@ Architecture & Scope Note (P01 Foundation):
 
 from __future__ import annotations
 
-import hashlib
-import secrets
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Final
 from uuid import UUID, uuid4
 
 from fastapi_users.password import PasswordHelper
-from pydantic import AwareDatetime
 
 from freesearch.models.projects import (
     BUILTIN_ROLE_DEFINITIONS,
     DEFAULT_INSTALLATION_ACCOUNT_ID,
-    DEFAULT_TOKEN_LIFETIME_DAYS,
-    PROJECT_TOKEN_PREFIX,
     BuiltinRole,
     HumanPrincipal,
-    PermissionAction,
     ProjectContext,
     ProjectCreate,
     ProjectRead,
     ProjectStatus,
-    ProjectTokenIssueResponse,
-    ProjectTokenRead,
     RoleAssignmentRead,
 )
 from freesearch.persistence.database_migrations import upgrade_database, validate_database_schema
@@ -167,52 +159,6 @@ def build_alpha_project(
         created_at=datetime.now(UTC),
         version=1,
     )
-
-
-def build_alpha_project_token(
-    *,
-    project_id: UUID,
-    created_by: UUID,
-    label: str = "Default Alpha Token",
-    scopes: frozenset[str] = frozenset(
-        {PermissionAction.SEARCH_EXECUTE.value, PermissionAction.FETCH_EXECUTE.value}
-    ),
-    expires_at: AwareDatetime | None = None,
-    no_expiration: bool = False,
-) -> tuple[ProjectTokenIssueResponse, str]:
-    """Generate an in-memory project token pair: plaintext secret and hashed verifier.
-
-    Returns the (ProjectTokenIssueResponse, sha256_hash).
-    """
-    raw_secret_suffix = secrets.token_urlsafe(32)
-    token_secret = f"{PROJECT_TOKEN_PREFIX}{raw_secret_suffix}"
-    secret_hash = hashlib.sha256(token_secret.encode("utf-8")).hexdigest()
-
-    effective_expires_at: AwareDatetime | None
-    if not no_expiration and expires_at is None:
-        effective_expires_at = datetime.now(UTC) + timedelta(days=DEFAULT_TOKEN_LIFETIME_DAYS)
-    else:
-        effective_expires_at = expires_at
-
-    prefix_segment = token_secret[len(PROJECT_TOKEN_PREFIX) : len(PROJECT_TOKEN_PREFIX) + 6]
-    token_read = ProjectTokenRead(
-        id=uuid4(),
-        project_id=project_id,
-        label=label,
-        prefix=f"{PROJECT_TOKEN_PREFIX}{prefix_segment}",
-        scopes=scopes,
-        created_by=created_by,
-        created_at=datetime.now(UTC),
-        expires_at=effective_expires_at,
-        revoked_at=None,
-        last_used_at=None,
-    )
-
-    issue_response = ProjectTokenIssueResponse(
-        token=token_read,
-        secret=token_secret,
-    )
-    return issue_response, secret_hash
 
 
 async def bootstrap_fresh_alpha(

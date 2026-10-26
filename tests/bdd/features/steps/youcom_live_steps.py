@@ -23,7 +23,6 @@ from fastapi.testclient import TestClient
 from freesearch.configuration.config import get_settings
 from freesearch.infrastructure.secrets import ProviderName
 from freesearch.models.contracts import FetchRequest, SearchRequest
-from freesearch.models.users import UserRole
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
 from freesearch.routers.control import _build_with_resolved_secret, _resolve_secret
@@ -31,7 +30,7 @@ from tests.encrypted_secrets_helpers import assert_no_sentinels
 from tests.fixtures.auth import (
     TEMP_PASSWORD,
     configure_bdd_secret,
-    promote_account,
+    promote_to_system_admin,
     temp_email,
 )
 from tests.integration.services.oauth.oauth_stubs import collect_sqlite_texts
@@ -121,7 +120,7 @@ def step_given_live_vault_youcom(context: Any) -> None:
     with TestClient(context.app) as client:
         registered = client.post("/auth/register", json={"email": email, "password": TEMP_PASSWORD})
         assert registered.status_code == 201, registered.text
-        context.loop.run_until_complete(promote_account(context.repository, email, UserRole.ADMIN))
+        context.loop.run_until_complete(promote_to_system_admin(context.repository, email))
         logged_in = client.post(
             "/auth/jwt/login", data={"username": email, "password": TEMP_PASSWORD}
         )

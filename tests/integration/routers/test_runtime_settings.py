@@ -18,7 +18,6 @@ from freesearch.configuration.provider_config import (
 )
 from freesearch.infrastructure.secrets import PROVIDER_ENV_VARS, ProviderName
 from freesearch.models.contracts import UsageEvent, UsageOperation, UsageStatus
-from freesearch.models.users import UserRole
 from freesearch.persistence.database_migrations import DatabaseResetRequired
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
@@ -26,7 +25,7 @@ from tests.conftest import FakeAdapter
 from tests.fixtures.auth import (
     account_id_from_pair,
     raw_auth_headers,
-    register_promote_login,
+    register_system_admin_login,
     temp_email,
 )
 from tests.fixtures.execution import seed_execution_project
@@ -54,8 +53,8 @@ async def test_fresh_database_has_today_defaults_and_alphabetical_tie_break(
     try:
         app = create_app([], repository=repository)
         with TestClient(app) as client:
-            pair = await register_promote_login(
-                client, repository, temp_email("runtime-fresh"), UserRole.ADMIN
+            pair = await register_system_admin_login(
+                client, repository, temp_email("runtime-fresh")
             )
             headers = raw_auth_headers(pair["access_token"])
             providers = client.get("/api/v1/providers", headers=headers)
@@ -121,8 +120,8 @@ async def test_partial_legacy_record_decodes_before_persisted_merge(
         app = create_app([adapter], repository=repository)
 
         with TestClient(app) as client:
-            pair = await register_promote_login(
-                client, repository, temp_email("runtime-legacy"), UserRole.ADMIN
+            pair = await register_system_admin_login(
+                client, repository, temp_email("runtime-legacy")
             )
             headers = raw_auth_headers(pair["access_token"])
             item = client.get("/api/v1/providers/exa", headers=headers)
@@ -149,8 +148,8 @@ async def test_stale_support_mask_is_reconciled_to_system_map(
         app = create_app([], repository=repository)
 
         with TestClient(app) as client:
-            pair = await register_promote_login(
-                client, repository, temp_email("runtime-reconcile"), UserRole.ADMIN
+            pair = await register_system_admin_login(
+                client, repository, temp_email("runtime-reconcile")
             )
             headers = raw_auth_headers(pair["access_token"])
             item = client.get("/api/v1/providers/brave", headers=headers)
@@ -193,8 +192,8 @@ async def test_locked_reconcile_write_keeps_strict_search_at_200(
         app = create_app([adapter], repository=repository)
 
         with TestClient(app) as client:
-            pair = await register_promote_login(
-                client, repository, temp_email("runtime-locked"), UserRole.ADMIN
+            pair = await register_system_admin_login(
+                client, repository, temp_email("runtime-locked")
             )
             headers = raw_auth_headers(pair["access_token"])
             pid = str(
@@ -242,8 +241,8 @@ async def test_released_lock_persists_reconciled_support_mask(
         app = create_app([], repository=repository)
 
         with TestClient(app) as client:
-            pair = await register_promote_login(
-                client, repository, temp_email("runtime-released"), UserRole.ADMIN
+            pair = await register_system_admin_login(
+                client, repository, temp_email("runtime-released")
             )
             headers = raw_auth_headers(pair["access_token"])
             first = client.get("/api/v1/providers/exa", headers=headers)
@@ -283,8 +282,8 @@ async def test_corrupt_persisted_provider_config_falls_back_to_defaults_without_
         app = create_app([adapter], repository=repository)
 
         with TestClient(app, raise_server_exceptions=False) as client:
-            pair = await register_promote_login(
-                client, repository, temp_email("runtime-corrupt"), UserRole.ADMIN
+            pair = await register_system_admin_login(
+                client, repository, temp_email("runtime-corrupt")
             )
             headers = raw_auth_headers(pair["access_token"])
             pid = str(
@@ -417,9 +416,7 @@ async def test_provider_latency_p95_uses_nearest_rank_over_last_100_non_null(
 
         app = create_app([], repository=repository)
         with TestClient(app) as client:
-            pair = await register_promote_login(
-                client, repository, temp_email("runtime-p95b"), UserRole.ADMIN
-            )
+            pair = await register_system_admin_login(client, repository, temp_email("runtime-p95b"))
             headers = raw_auth_headers(pair["access_token"])
             providers = client.get("/api/v1/providers", headers=headers)
 
@@ -440,8 +437,8 @@ async def test_empty_latency_sample_reports_none(tmp_path: Path, auth_secret: st
     try:
         app = create_app([], repository=repository)
         with TestClient(app) as client:
-            pair = await register_promote_login(
-                client, repository, temp_email("runtime-empty"), UserRole.ADMIN
+            pair = await register_system_admin_login(
+                client, repository, temp_email("runtime-empty")
             )
             headers = raw_auth_headers(pair["access_token"])
             providers = client.get("/api/v1/providers", headers=headers)
@@ -474,9 +471,7 @@ async def test_legacy_recent_usage_projection_has_new_fields_with_compatibility_
         )
         app = create_app([], repository=repository)
         with TestClient(app) as client:
-            pair = await register_promote_login(
-                client, repository, temp_email("runtime-proj"), UserRole.ADMIN
-            )
+            pair = await register_system_admin_login(client, repository, temp_email("runtime-proj"))
             headers = raw_auth_headers(pair["access_token"])
             stats = client.get("/stats", headers=headers)
             dashboard = client.get("/dashboard", headers=headers)

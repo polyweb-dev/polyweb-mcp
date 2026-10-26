@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, TypedDict
 
 import httpx
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import Context, FastMCP
 from pydantic import SecretStr
 
 from freesearch.adapters.base import ProviderAdapter
@@ -57,7 +57,7 @@ from freesearch.infrastructure.trace_payloads import (
 from freesearch.mcp.auth import (
     MCP_AUTH_ERROR,
     McpAuthenticationError,
-    optional_mcp_user,
+    resolve_tool_principal,
     run_http_server,
     run_stdio_server,
 )
@@ -79,13 +79,14 @@ from freesearch.models.observability import (
     TraceRootSpan,
 )
 from freesearch.models.projects import PermissionAction
-from freesearch.models.users import UserPrincipal
 from freesearch.persistence.database_migrations import exit_if_database_reset_required
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.services.aggregation import reciprocal_rank_fusion
+from freesearch.services.api_keys import DEFAULT_USE_RECORDER
 from freesearch.services.execution_scope import (
     ExecutionForbidden,
     ExecutionProjectArchived,
+    ExecutionProjectRequired,
     ExecutionScopeError,
     ExecutionStorageUnavailable,
     ExecutionUnauthenticated,
@@ -214,18 +215,15 @@ def _trace_database(
     return resolve_database_path(database)
 
 
-def _mcp_root_attributes(
-    principal: UserPrincipal | None, request: SearchRequest | FetchRequest
-) -> dict[str, object]:
-    """Root attributes for one MCP tool call with its verified identity.
+def _mcp_root_attributes(request: SearchRequest | FetchRequest) -> dict[str, object]:
+    """Root attributes for one MCP tool call.
 
-    The schema version and operation are still present when a provider call
-    fails.
+    The verified project and API key identity are stamped by the bound
+    execution attribution. The schema version and operation are still present
+    when a provider call fails.
     """
 
     attributes: dict[str, object] = {TraceAttribute.SCHEMA_VERSION: TRACE_SCHEMA_VERSION}
-    if principal is not None:
-        attributes[TraceAttribute.USER_ID] = str(principal.id)
     attributes.update(_request_attributes(request))
     return attributes
 
@@ -265,6 +263,8 @@ def _execution_tool_error(error: ExecutionScopeError) -> Exception:
         return McpAuthenticationError(MCP_AUTH_ERROR)
     if isinstance(error, ExecutionStorageUnavailable):
         return RuntimeError("execution is temporarily unavailable")
+    if isinstance(error, ExecutionProjectRequired):
+        return RuntimeError("project_id is required")
     if isinstance(error, ExecutionProjectArchived):
         return RuntimeError("project is archived")
     if isinstance(error, ExecutionForbidden):
@@ -484,6 +484,8 @@ async def _detach_generation(state: _ServerState, *, owns_repository: bool) -> N
     state["routes"] = None
     state["secret_store"] = None
     await _close_traces(state)
+    # Queued API key bookkeeping finishes before any repository can close.
+    await DEFAULT_USE_RECORDER.drain()
     if owned_repo is not None:
         from freesearch.routers.control import clear_config_cache
 
@@ -771,32 +773,44 @@ def _register_tools(
     state: _ServerState,
     owns_client: bool,
     routes: list[ProviderAdapter] | None,
-    resolve_principal: Callable[[], Awaitable[UserPrincipal | None]],
+    stdio_key: SecretStr | None,
 ) -> None:
-    """Register the authenticated, traced Search and Fetch tools on ``server``."""
+    """Register the key-authenticated, traced Search and Fetch tools on ``server``."""
 
     def _active_routes() -> Sequence[ProviderAdapter] | None:
         return state["routes"] if owns_client else routes
 
     async def _resolve_scope(
-        request: SearchRequest | FetchRequest, action: PermissionAction
-    ) -> tuple[UserPrincipal, ExecutionAttribution]:
-        """Verify the caller and resolve its project scope before any routing."""
+        request: SearchRequest | FetchRequest,
+        action: PermissionAction,
+        ctx: Context | None,  # type: ignore[type-arg]
+    ) -> ExecutionAttribution:
+        """Take this call's verified key principal and resolve its scope before routing.
 
-        principal = await resolve_principal()
+        Runs on every tool call, so a persistent session is rechecked each time:
+        over HTTP from the guard's verification of the call's own request, over
+        stdio by verifying the process key again.
+        """
+
+        repository = state["repository"]
+        principal = await resolve_tool_principal(ctx, stdio_key=stdio_key, repository=repository)
+        if repository is None:
+            raise RuntimeError("execution is temporarily unavailable")
         try:
             context = await resolve_execution_scope(
-                state["repository"], principal, project_id=request.project_id, action=action
+                repository, principal, project_id=request.project_id, action=action
             )
         except ExecutionScopeError as error:
             raise _execution_tool_error(error) from error
-        assert principal is not None
-        return principal, execution_attribution(context)
+        return execution_attribution(context)
 
     @server.tool()
-    async def search(request: SearchRequest) -> dict[str, Any]:
+    async def search(
+        request: SearchRequest,
+        ctx: Context,  # type: ignore[type-arg]
+    ) -> dict[str, Any]:
         """Search the web through the best available provider or all providers concurrently."""
-        principal, attribution = await _resolve_scope(request, PermissionAction.SEARCH_EXECUTE)
+        attribution = await _resolve_scope(request, PermissionAction.SEARCH_EXECUTE, ctx)
         active = _active_routes()
         if not active:
             raise RuntimeError("no provider is configured: set a FREESEARCH_*_API_KEY")
@@ -804,7 +818,7 @@ def _register_tools(
         async with _tool_root(
             observability,
             TraceRootSpan.MCP_SEARCH.value,
-            _mcp_root_attributes(principal, request),
+            _mcp_root_attributes(request),
             attribution=attribution,
         ):
             response = await _search_response(request, active, state, attribution=attribution)
@@ -812,9 +826,12 @@ def _register_tools(
         return response.model_dump(mode="json")
 
     @server.tool()
-    async def fetch(request: FetchRequest) -> dict[str, Any]:
+    async def fetch(
+        request: FetchRequest,
+        ctx: Context,  # type: ignore[type-arg]
+    ) -> dict[str, Any]:
         """Fetch a URL's content through the best available provider."""
-        principal, attribution = await _resolve_scope(request, PermissionAction.FETCH_EXECUTE)
+        attribution = await _resolve_scope(request, PermissionAction.FETCH_EXECUTE, ctx)
         active = _active_routes()
         if not active:
             raise RuntimeError("no provider is configured: set a FREESEARCH_*_API_KEY")
@@ -822,7 +839,7 @@ def _register_tools(
         async with _tool_root(
             observability,
             TraceRootSpan.MCP_FETCH.value,
-            _mcp_root_attributes(principal, request),
+            _mcp_root_attributes(request),
             attribution=attribution,
         ):
             response = await _fetch_response(request, active, state, attribution=attribution)
@@ -839,12 +856,14 @@ def create_server(
     auth_service: AuthService | None = None,
     stdio_token: SecretStr | None = None,
 ) -> FastMCP:
-    """Create authenticated Search/Fetch tools over a configured adapter set.
+    """Create project-API-key Search/Fetch tools over a configured adapter set.
 
-    HTTP Bearer credentials are verified by the outer ASGI guard and every tool
-    call resolves its project execution scope before routing. A configured
-    stdio credential supplies the account context for local calls; a call
-    without a verified principal is rejected as a tool error.
+    Every tool call verifies its project API key and resolves the key's project
+    scope before routing: over HTTP the key comes from that call's own
+    ``Authorization`` header, over stdio from ``stdio_token`` (the process
+    credential channel). ``auth_service`` only supplies the account store's
+    lifecycle to the HTTP transport. A call without a valid key is rejected as
+    a tool error before any provider access.
     """
 
     owns_client = adapters is None
@@ -930,8 +949,10 @@ def create_server(
                     clear_config_cache(repository)
                     await close_adapters(routes or [], None)
                 # The injected repository stays open for its owner, so the
-                # runtime is flushed (never closed) at each session exit.
+                # runtime is flushed (never closed) and queued API key
+                # bookkeeping is drained at each session exit.
                 await flush_traces(state["observability"])
+                await DEFAULT_USE_RECORDER.drain()
 
     server = FastMCP(
         "freesearch",
@@ -939,15 +960,13 @@ def create_server(
         stateless_http=stateless_http,
     )
 
-    async def _resolve_principal() -> UserPrincipal | None:
-        return await optional_mcp_user(auth_service, stdio_token=stdio_token)
-
+    del auth_service  # The transports own the account-store lifecycle.
     _register_tools(
         server,
         state=state,
         owns_client=owns_client,
         routes=routes,
-        resolve_principal=_resolve_principal,
+        stdio_key=stdio_token,
     )
     if not owns_client:
         _INJECTED_TRACE_CLOSERS[server] = lambda: _close_traces(state)
@@ -963,7 +982,7 @@ def _require_single_url(request: FetchRequest) -> None:
 
 
 def main(argv: Sequence[str] | None = None) -> None:
-    """Run the MCP server over stdio or HTTP under the configured account guard."""
+    """Run the MCP server over stdio or HTTP; every tool call needs a project API key."""
     import argparse
     import asyncio
     import os
@@ -1010,10 +1029,13 @@ def main(argv: Sequence[str] | None = None) -> None:
     exit_if_database_reset_required(resolve_database_path(None))
 
     auth_service = AuthService(effective)
+    # Only stdio reads the process credential channel; an HTTP server never
+    # holds a process key, so no HTTP call can fall back to one.
+    stdio = args.transport == "stdio"
     server = create_server(
         stateless_http=args.stateless,
         auth_service=auth_service,
-        stdio_token=effective.mcp_bearer_token,
+        stdio_token=effective.mcp_bearer_token if stdio else None,
     )
     if args.transport == "stdio":
         asyncio.run(run_stdio_server(server, auth_service=auth_service, settings=effective))

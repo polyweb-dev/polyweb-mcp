@@ -7,7 +7,14 @@ module never imports the service layer.
 Policy (PLAN P3):
 
 * Registration, login, and documentation are public exceptions. Every other
-  path, including Search, Fetch, and unknown paths, requires a credential.
+  path, including Search, Fetch, and unknown paths, requires a credential;
+  there is no anonymous execution.
+* A Bearer credential that starts with ``fs_live_`` is a project API key. It is
+  verified by the injected API key verifier only on the configured API key
+  routes (REST Search and Fetch, the MCP transport) and is rejected with HTTP
+  401 everywhere else, without ever reaching the human verifier. Every other
+  Bearer credential is verified as a human access token, and a composition
+  without a human verifier (MCP) rejects it.
 * ``POST /auth/jwt/refresh`` is validated by the refresh-credential callback when
   one is injected. Every other protected surface uses the access verifier, so the
   refresh credential is rejected everywhere except that one route.
@@ -44,6 +51,7 @@ from freesearch.infrastructure.browser_auth import (
     refresh_credential_from_scope,
     validate_browser_request,
 )
+from freesearch.models.projects import PROJECT_API_KEY_PREFIX, ProjectApiKeyPrincipal
 from freesearch.models.users import UserPrincipal
 
 logger = logging.getLogger(__name__)
@@ -54,7 +62,11 @@ Receive = Callable[[], Awaitable[Message]]
 Send = Callable[[Message], Awaitable[None]]
 ASGIApp = Callable[[Scope, Receive, Send], Awaitable[None]]
 
+#: A principal the guard verified: a human session or a project API key.
+VerifiedPrincipal = UserPrincipal | ProjectApiKeyPrincipal
+
 VerifyToken = Callable[[str], Awaitable[UserPrincipal | None]]
+VerifyApiKey = Callable[[str], Awaitable[ProjectApiKeyPrincipal | None]]
 RegistrationLimit = Callable[[str], Awaitable[int | None]]
 
 #: Explicit public API operations and documentation routes.
@@ -72,14 +84,8 @@ PUBLIC_ROUTES: frozenset[tuple[str, str]] = frozenset(
 #: larger provider-options payload.
 OPERATION_ROUTES: frozenset[tuple[str, str]] = frozenset({("POST", "/search"), ("POST", "/fetch")})
 
-#: Routes that accept anonymous requests while still verifying any supplied
-#: Bearer credential. The API composition leaves this set empty; the MCP
-#: transport supplies its own Streamable HTTP routes so anonymous JSON-RPC
-#: dispatch reaches the tool-level principal check.
-OPTIONAL_AUTH_ROUTES: frozenset[tuple[str, str]] = frozenset()
-
-#: Streamable HTTP requests can carry the provider options object, which is
-#: larger than the small registration and login payloads.
+#: Search, Fetch and MCP requests can carry the provider options object, which
+#: is larger than the small registration and login payloads.
 MAX_PUBLIC_OPERATION_BODY_BYTES: int = 1_048_576
 
 #: The one route whose credential is an opaque refresh token.
@@ -104,22 +110,15 @@ PROVISION_ROUTE: tuple[str, str] = ("POST", "/api/v1/users")
 MAX_PUBLIC_AUTH_BODY_BYTES: int = 4096
 
 _CHALLENGE = [(b"www-authenticate", b"Bearer")]
-_CURRENT_PRINCIPAL: ContextVar[UserPrincipal | None] = ContextVar(
+_CURRENT_PRINCIPAL: ContextVar[VerifiedPrincipal | None] = ContextVar(
     "freesearch_verified_principal", default=None
 )
-_AUTH_REQUEST_ACTIVE: ContextVar[bool] = ContextVar("freesearch_auth_request_active", default=False)
 
 
-def current_verified_principal() -> UserPrincipal | None:
+def current_verified_principal() -> VerifiedPrincipal | None:
     """Return the verified principal for the active ASGI request, if any."""
 
     return _CURRENT_PRINCIPAL.get()
-
-
-def has_auth_request_context() -> bool:
-    """Return whether the current call is inside the auth ASGI boundary."""
-
-    return _AUTH_REQUEST_ACTIVE.get()
 
 
 async def _send_json(
@@ -211,7 +210,7 @@ def peer_address_from_scope(scope: Scope) -> str:
     return "unknown"
 
 
-def store_principal(scope: Scope, principal: UserPrincipal) -> None:
+def store_principal(scope: Scope, principal: VerifiedPrincipal) -> None:
     """Publish the verified principal for downstream transport layers."""
 
     state = scope.get("state")
@@ -258,12 +257,13 @@ async def _capped_body(receive: Receive, limit: int) -> Receive | None:
 
 
 class BearerAuthMiddleware:
-    """Guard HTTP surfaces and allow anonymous calls on explicit public routes.
+    """Guard HTTP surfaces and allow anonymous calls on explicit public routes only.
 
     The default public set is authentication/docs routes only; provider
     Search/Fetch require a verified Bearer credential and keep the larger
-    provider-options body cap. The MCP composition supplies its own public
-    Streamable HTTP routes.
+    provider-options body cap. ``api_key_routes`` names the routes where a
+    project API key is accepted; ``verify_api_key`` verifies it there.
+    ``verify_token`` verifies human access tokens; ``None`` accepts none.
 
     ``browser_origins`` is empty by default, so this guard accepts no cookie
     unless API composition supplies the operator origin allowlist. The MCP
@@ -274,19 +274,23 @@ class BearerAuthMiddleware:
         self,
         app: ASGIApp,
         *,
-        verify_token: VerifyToken,
+        verify_token: VerifyToken | None,
         verify_refresh_token: VerifyToken | None = None,
+        verify_api_key: VerifyApiKey | None = None,
+        api_key_routes: frozenset[tuple[str, str]] = frozenset(),
         registration_limit: RegistrationLimit | None = None,
         public_routes: frozenset[tuple[str, str]] = PUBLIC_ROUTES,
-        optional_auth_routes: frozenset[tuple[str, str]] = OPTIONAL_AUTH_ROUTES,
+        operation_routes: frozenset[tuple[str, str]] = OPERATION_ROUTES,
         browser_origins: frozenset[str] = frozenset(),
     ) -> None:
         self.app = app
         self._verify_token = verify_token
         self._verify_refresh_token = verify_refresh_token
+        self._verify_api_key = verify_api_key
+        self._api_key_routes = api_key_routes
         self._registration_limit = registration_limit
         self._public_routes = public_routes
-        self._optional_auth_routes = optional_auth_routes
+        self._operation_routes = operation_routes
         self._browser_origins = browser_origins
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
@@ -297,10 +301,7 @@ class BearerAuthMiddleware:
         path = str(scope.get("path", ""))
         route = (method, path)
         if route in self._public_routes:
-            if route in self._optional_auth_routes:
-                await self._optional_bearer_request(scope, receive, send, method, path)
-            else:
-                await self._public_request(scope, receive, send, method, path)
+            await self._public_request(scope, receive, send, method, path)
             return
         if self._cookie_transport(method, path, scope):
             await self._cookie_request(scope, receive, send)
@@ -333,7 +334,8 @@ class BearerAuthMiddleware:
             await _reject_forbidden(send)
             return
         token = refresh_credential_from_scope(scope, self._browser_origins)
-        principal = await self._verified_principal(self._refresh_verifier(), token)
+        verifier = self._refresh_verifier()
+        principal = None if verifier is None else await self._verified(verifier, token)
         if principal is None:
             await _reject_unauthorized(send, clear_refresh_cookie=True)
             return
@@ -349,9 +351,8 @@ class BearerAuthMiddleware:
         is bounded before the endpoint can read it.
         """
 
-        verifier = self._verifier_for(method, path)
         token = bearer_credential_from_scope(scope)
-        principal = await self._verified_principal(verifier, token)
+        principal = await self._authenticate(method, path, token)
         if principal is None:
             await _reject_unauthorized(send)
             return
@@ -359,7 +360,7 @@ class BearerAuthMiddleware:
         body_limit: int | None = None
         if (method, path) == PROVISION_ROUTE:
             body_limit = MAX_PUBLIC_AUTH_BODY_BYTES
-        elif (method, path) in OPERATION_ROUTES:
+        elif (method, path) in self._operation_routes:
             body_limit = MAX_PUBLIC_OPERATION_BODY_BYTES
         if body_limit is not None:
             replay = await _capped_body(receive, body_limit)
@@ -369,9 +370,30 @@ class BearerAuthMiddleware:
             receive = replay
         await self._call_app(scope, receive, send, principal)
 
-    async def _verified_principal(
-        self, verifier: VerifyToken, token: str | None
-    ) -> UserPrincipal | None:
+    async def _authenticate(
+        self, method: str, path: str, token: str | None
+    ) -> VerifiedPrincipal | None:
+        """Verify one Bearer credential with the one verifier its kind and route allow.
+
+        A project API key is verified only on an API key route and never by the
+        human verifier; a human credential never reaches the API key verifier.
+        """
+
+        if token is None:
+            return None
+        if token.startswith(PROJECT_API_KEY_PREFIX):
+            if (method, path) not in self._api_key_routes or self._verify_api_key is None:
+                return None
+            return await self._verified(self._verify_api_key, token)
+        verifier = self._verifier_for(method, path)
+        if verifier is None:
+            return None
+        return await self._verified(verifier, token)
+
+    @staticmethod
+    async def _verified[P: (UserPrincipal, ProjectApiKeyPrincipal)](
+        verifier: Callable[[str], Awaitable[P | None]], token: str | None
+    ) -> P | None:
         """Return the verified principal, or ``None`` for any failure.
 
         A verifier failure must fail closed instead of becoming a server error
@@ -386,13 +408,13 @@ class BearerAuthMiddleware:
             logger.warning("credential verification failed", exc_info=False)
             return None
 
-    def _refresh_verifier(self) -> VerifyToken:
+    def _refresh_verifier(self) -> VerifyToken | None:
         """Return the verifier for the opaque refresh credential."""
 
         return self._verify_refresh_token or self._verify_token
 
-    def _verifier_for(self, method: str, path: str) -> VerifyToken:
-        """Select the credential verifier for one protected route."""
+    def _verifier_for(self, method: str, path: str) -> VerifyToken | None:
+        """Select the human credential verifier for one protected route."""
 
         if (method, path) == REFRESH_ROUTE and self._verify_refresh_token is not None:
             return self._verify_refresh_token
@@ -405,8 +427,6 @@ class BearerAuthMiddleware:
         send: Send,
         method: str,
         path: str,
-        *,
-        principal: UserPrincipal | None = None,
     ) -> None:
         """Serve a public route with its route-specific body bound."""
 
@@ -418,56 +438,28 @@ class BearerAuthMiddleware:
             and not await self._reserve_registration(scope, send)
         ):
             return
-        if route in self._optional_auth_routes:
-            body_limit = MAX_PUBLIC_OPERATION_BODY_BYTES
-        elif route in PUBLIC_ROUTES:
-            body_limit = MAX_PUBLIC_AUTH_BODY_BYTES
-        else:
-            body_limit = None
+        body_limit = MAX_PUBLIC_AUTH_BODY_BYTES if route in PUBLIC_ROUTES else None
         if body_limit is not None:
             replay = await _capped_body(receive, body_limit)
             if replay is None:
                 await _reject_too_large(send)
                 return
             receive = replay
-        await self._call_app(scope, receive, send, principal)
-
-    async def _optional_bearer_request(
-        self, scope: Scope, receive: Receive, send: Send, method: str, path: str
-    ) -> None:
-        """Allow an anonymous public call and verify any supplied credential."""
-
-        authorization = [
-            value for name, value in scope.get("headers") or [] if name.lower() == b"authorization"
-        ]
-        principal: UserPrincipal | None = None
-        if authorization:
-            token = bearer_credential_from_scope(scope)
-            if token is None:
-                await _reject_unauthorized(send)
-                return
-            principal = await self._verified_principal(self._verify_token, token)
-            if principal is None:
-                await _reject_unauthorized(send)
-                return
-            store_principal(scope, principal)
-        await self._public_request(scope, receive, send, method, path, principal=principal)
+        await self._call_app(scope, receive, send, None)
 
     async def _call_app(
         self,
         scope: Scope,
         receive: Receive,
         send: Send,
-        principal: UserPrincipal | None,
+        principal: VerifiedPrincipal | None,
     ) -> None:
         """Run the downstream app with request-local verified identity."""
 
         principal_marker = _CURRENT_PRINCIPAL.set(principal)
-        request_marker = _AUTH_REQUEST_ACTIVE.set(True)
         try:
             await self.app(scope, receive, send)
         finally:
-            _AUTH_REQUEST_ACTIVE.reset(request_marker)
             _CURRENT_PRINCIPAL.reset(principal_marker)
 
     async def _reserve_registration(self, scope: Scope, send: Send) -> bool:
@@ -504,15 +496,16 @@ __all__ = [
     "MAX_PUBLIC_AUTH_BODY_BYTES",
     "MAX_PUBLIC_OPERATION_BODY_BYTES",
     "OPERATION_ROUTES",
-    "OPTIONAL_AUTH_ROUTES",
     "PROVISION_ROUTE",
     "PUBLIC_ROUTES",
     "REFRESH_COOKIE_ROUTES",
     "REFRESH_ROUTE",
     "BearerAuthMiddleware",
+    "VerifiedPrincipal",
+    "VerifyApiKey",
+    "VerifyToken",
     "bearer_credential_from_scope",
     "current_verified_principal",
-    "has_auth_request_context",
     "peer_address_from_scope",
     "store_principal",
 ]

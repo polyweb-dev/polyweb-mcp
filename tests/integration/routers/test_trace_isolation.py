@@ -35,7 +35,6 @@ from freesearch.models.observability import (
     TraceSpanKind,
     TraceSpanRecord,
 )
-from freesearch.models.users import UserRole
 from freesearch.persistence.otel_exporter import write_trace_spans
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
@@ -43,7 +42,7 @@ from tests.fixtures.auth import (
     account_id_from_pair,
     raw_auth_headers,
     register_and_login,
-    register_promote_login,
+    register_system_admin_login,
     temp_email,
 )
 from tests.fixtures.execution import seed_execution_project
@@ -249,9 +248,7 @@ async def test_admin_has_no_cross_account_trace_exception(tmp_path: Path, auth_s
                 headers=headers_agent,
             ).headers["x-trace-id"]
 
-            pair = await register_promote_login(
-                client, repository, temp_email("trace-root"), UserRole.ADMIN
-            )
+            pair = await register_system_admin_login(client, repository, temp_email("trace-root"))
             admin_headers = raw_auth_headers(pair["access_token"])
 
             assert (

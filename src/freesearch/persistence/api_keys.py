@@ -233,6 +233,37 @@ class ProjectApiKeyRepository:
         await self._session.flush()
         return bool(getattr(result, "rowcount", 0))
 
+    async def set_expiry(self, *, project_id: UUID, api_key_id: UUID, expires_at: datetime) -> bool:
+        """Set the expiry of one live key of this project; ``False`` when absent or revoked."""
+
+        result = await self._session.execute(
+            update(ProjectApiKeyRow)
+            .where(
+                ProjectApiKeyRow.id == str(api_key_id),
+                ProjectApiKeyRow.project_id == str(project_id),
+                ProjectApiKeyRow.revoked_at.is_(None),
+            )
+            .values(
+                expires_at=stored_timestamp(expires_at),
+                version=ProjectApiKeyRow.version + 1,
+            )
+        )
+        await self._session.flush()
+        return bool(getattr(result, "rowcount", 0))
+
+    async def has_successor(self, *, project_id: UUID, api_key_id: UUID) -> bool:
+        """Return whether a key of this project was rotated from this key."""
+
+        found = await self._session.scalar(
+            select(ProjectApiKeyRow.id)
+            .where(
+                ProjectApiKeyRow.project_id == str(project_id),
+                ProjectApiKeyRow.rotated_from_id == str(api_key_id),
+            )
+            .limit(1)
+        )
+        return found is not None
+
     async def record_use(self, *, project_id: UUID, api_key_id: UUID, used_at: datetime) -> bool:
         """Stamp the last use of one key of this project; it never moves backwards."""
 

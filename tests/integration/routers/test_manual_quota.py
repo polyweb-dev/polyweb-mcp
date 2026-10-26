@@ -21,11 +21,10 @@ from freesearch.models.contracts import (
     manual_quota_remaining,
     manual_quota_remaining_percent,
 )
-from freesearch.models.users import UserRole
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
 from freesearch.services.monitoring import effective_quota
-from tests.fixtures.auth import raw_auth_headers, register_promote_login, temp_email
+from tests.fixtures.auth import raw_auth_headers, register_system_admin_login, temp_email
 
 
 def _unlink_with_retries(path: Path, *, attempts: int = 20) -> None:
@@ -171,9 +170,7 @@ async def test_brave_manual_quota_roundtrip_estimated(
     # Use one Admin account for write and read. Admin also reads.
     app = create_app([], repository=repository)
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("quota-round"), UserRole.ADMIN
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("quota-round"))
         headers = raw_auth_headers(pair["access_token"])
         put = client.put("/api/v1/providers/brave/manual-quota", json=_payload(), headers=headers)
         assert put.status_code == 200
@@ -203,9 +200,7 @@ async def test_manual_quota_update_adjusts_percent(
     # Use one Admin account for both writes.
     app = create_app([], repository=repository)
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("quota-update"), UserRole.ADMIN
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("quota-update"))
         headers = raw_auth_headers(pair["access_token"])
         first = client.put(
             "/api/v1/providers/brave/manual-quota",
@@ -232,9 +227,7 @@ async def test_manual_quota_clear_returns_to_none(
     # Use one Admin account for all calls. Admin also reads.
     app = create_app([], repository=repository)
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("quota-clear"), UserRole.ADMIN
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("quota-clear"))
         headers = raw_auth_headers(pair["access_token"])
         assert (
             client.put(
@@ -261,9 +254,7 @@ async def test_manual_quota_get_missing_is_404(
     app = create_app([], repository=repository)
     with TestClient(app) as client:
         assert client.get("/api/v1/providers/brave/manual-quota").status_code == 401
-        pair = await register_promote_login(
-            client, repository, temp_email("quota-miss"), UserRole.DEVELOPER
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("quota-miss"))
         headers = raw_auth_headers(pair["access_token"])
         response = client.get("/api/v1/providers/brave/manual-quota", headers=headers)
         assert response.status_code == 404
@@ -276,9 +267,7 @@ async def test_manual_quota_unknown_provider_is_404(
     # Use one Admin account for all verbs. Admin also reads.
     app = create_app([], repository=repository)
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("quota-nope"), UserRole.ADMIN
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("quota-nope"))
         headers = raw_auth_headers(pair["access_token"])
         assert client.get("/api/v1/providers/nope/manual-quota", headers=headers).status_code == 404
         assert (
@@ -299,9 +288,7 @@ async def test_manual_quota_validation_is_422(
     # Use one Admin account for the writes.
     app = create_app([], repository=repository)
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("quota-bad"), UserRole.ADMIN
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("quota-bad"))
         headers = raw_auth_headers(pair["access_token"])
         bad_usage = _payload(usage="-1.00")
         assert (
@@ -346,9 +333,7 @@ async def test_manual_quota_zero_allowance_percent_is_none(
     # Use one Admin account for the write.
     app = create_app([], repository=repository)
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("quota-zero"), UserRole.ADMIN
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("quota-zero"))
         headers = raw_auth_headers(pair["access_token"])
         response = client.put(
             "/api/v1/providers/exa/manual-quota",
@@ -370,9 +355,7 @@ async def test_manual_overlay_never_touches_vendor_quota_or_routing(
     # Use one Admin account for write, stats, and dashboard.
     app = create_app([], repository=repository)
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("quota-overlay"), UserRole.ADMIN
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("quota-overlay"))
         headers = raw_auth_headers(pair["access_token"])
         assert (
             client.put(

@@ -31,8 +31,9 @@ from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
 from freesearch.routers.control import clear_config_cache
 from freesearch.services.monitoring import clear_quota_poll_cache
-from tests.fixtures.auth import TEMP_PASSWORD, mcp_account_token, temp_email
-from tests.fixtures.execution import seed_member_project, seed_token_project
+from tests.fixtures.api_keys import mcp_key_credentials
+from tests.fixtures.auth import TEMP_PASSWORD, temp_email
+from tests.fixtures.execution import seed_member_project
 from tests.fixtures.latency import (
     REPO_ROOT,
     OfflineAdapter,
@@ -582,14 +583,13 @@ async def test_mcp_search_latency(tmp_path: Path, latency_rows: list[dict[str, A
         detach = attach_select_counter(repository, selects, _READS_UNAVAILABLE_REASONS)
         measured_selects = selects if detach is not None else None
         adapters = [OfflineAdapter(name) for name in SEVEN_PROVIDERS]
-        service, token, _email = await mcp_account_token(repository, "latency-mcp")
+        service, token, pid = await mcp_key_credentials(repository, "latency-mcp")
         server = create_server(
             adapters,
             repository=repository,
             auth_service=service,
             stdio_token=SecretStr(token.get_secret_value()),
         )
-        pid = str((await seed_token_project(repository, token)).project_id)
         commit = git_commit()
 
         async def _require_search() -> None:
@@ -669,14 +669,13 @@ async def test_mcp_fetch_latency(tmp_path: Path, latency_rows: list[dict[str, An
         detach = attach_select_counter(repository, selects, _READS_UNAVAILABLE_REASONS)
         measured_selects = selects if detach is not None else None
         adapters = [OfflineAdapter(name) for name in SEVEN_PROVIDERS]
-        service, token, _email = await mcp_account_token(repository, "latency-mcp-fetch")
+        service, token, pid = await mcp_key_credentials(repository, "latency-mcp-fetch")
         server = create_server(
             adapters,
             repository=repository,
             auth_service=service,
             stdio_token=SecretStr(token.get_secret_value()),
         )
-        pid = str((await seed_token_project(repository, token)).project_id)
         commit = git_commit()
 
         async def _require_fetch() -> None:

@@ -1,10 +1,16 @@
-"""Temporary account helpers for explicit auth fixtures (PLAN Section 11).
+"""Temporary account helpers for explicit auth fixtures (PLAN Section 11, A1).
 
 Every protected HTTP call uses a real verified JWT from ``POST
 /auth/jwt/login`` on an isolated temporary database. No helper disables the
 guard and no helper installs a global principal override. Each test sets
 ``FREESEARCH_AUTH_JWT_SECRET`` before the first settings read and clears the
 settings cache, so the signing secret never lands in code.
+
+Authority follows the A1 model (TASK-000041): every account starts ordinary.
+System authority exists only through an explicit trusted ``system_admin``
+assignment (:func:`grant_system_admin`), and project authority only through
+project membership. A test asks for system authority explicitly, and only when
+it exercises a system-scoped operation.
 """
 
 from __future__ import annotations
@@ -21,7 +27,8 @@ from httpx import Response
 from pydantic import SecretStr
 
 from freesearch.configuration.config import Settings
-from freesearch.models.users import UserPrincipal, UserRole
+from freesearch.models.users import UserPrincipal
+from freesearch.persistence.projects import bootstrap_fresh_installation
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.persistence.users import UserDatabase, UserRow
 from freesearch.services.users import AuthService
@@ -54,36 +61,44 @@ def auth_headers(token: SecretStr) -> dict[str, str]:
     return {"Authorization": f"Bearer {token.get_secret_value()}"}
 
 
+async def grant_system_admin(repository: SQLiteRepository, user_id: UUID) -> None:
+    """Grant ``system_admin`` to one account through the trusted bootstrap path.
+
+    This is the operator path (``bootstrap_fresh_installation``), never a
+    request field, so tests exercise the same authority source as production.
+    """
+
+    async with repository.session() as session:
+        await bootstrap_fresh_installation(session, user_id)
+        await session.commit()
+
+
 async def create_temp_user(
     repository: SQLiteRepository,
     email: str,
     *,
-    role: UserRole = UserRole.AGENT,
+    system_admin: bool = False,
     password: str = TEMP_PASSWORD,
 ) -> UserRow:
-    """Create one temporary local account on a test repository."""
+    """Create one ordinary local account; grant ``system_admin`` only when asked."""
 
     helper = PasswordHelper()
     async with repository.session() as session:
         database = UserDatabase(session, UserRow)
         user = await database.create({"email": email, "hashed_password": helper.hash(password)})
-        if role is not UserRole.AGENT:
-            await database.set_role(user.id, role)
-            await session.commit()
-            await session.refresh(user)
-        return user
+    if system_admin:
+        await grant_system_admin(repository, user.id)
+    return user
 
 
 def temp_principal(user: UserRow, *, session_id: UUID | None = None) -> UserPrincipal:
-    """Build an explicit principal for one fixture account."""
+    """Build an explicit principal for one fixture account (no role, no privilege flag)."""
 
     return UserPrincipal(
         id=user.id,
         email=user.email,
-        role=UserRole(user.role),
         session_id=session_id or uuid4(),
         is_active=bool(user.is_active),
-        is_superuser=bool(user.is_superuser),
         is_verified=bool(user.is_verified),
     )
 
@@ -92,11 +107,11 @@ async def temp_account_token(
     repository: SQLiteRepository,
     email: str,
     *,
-    role: UserRole = UserRole.AGENT,
+    system_admin: bool = False,
 ) -> tuple[UserPrincipal, SecretStr]:
     """Create one account and return its explicit principal and token."""
 
-    user = await create_temp_user(repository, email, role=role)
+    user = await create_temp_user(repository, email, system_admin=system_admin)
     return temp_principal(user), temp_token()
 
 
@@ -170,31 +185,28 @@ def register_and_login(
     return pair
 
 
-async def promote_account(repository: SQLiteRepository, email: str, role: UserRole) -> None:
-    """Assign one explicit role to an account looked up by email."""
+async def promote_to_system_admin(repository: SQLiteRepository, email: str) -> UUID:
+    """Grant ``system_admin`` to an account looked up by email; return its id."""
 
-    normalized = email.lower()
     async with repository.session() as session:
-        database = UserDatabase(session, UserRow)
-        account = await database.get_by_email(normalized)
+        account = await UserDatabase(session, UserRow).get_by_email(email)
         assert account is not None
-        changed = await database.set_role(account.id, role)
-        assert changed is True
-        await session.commit()
+        user_id = account.id
+    await grant_system_admin(repository, user_id)
+    return user_id
 
 
-async def register_promote_login(
+async def register_system_admin_login(
     client: TestClient,
     repository: SQLiteRepository,
     email: str,
-    role: UserRole,
     password: str = TEMP_PASSWORD,
 ) -> dict[str, Any]:
-    """Register, assign one explicit role, then log in; return the pair."""
+    """Register an ordinary account, grant it ``system_admin`` (trusted), then log in."""
 
     registered = register_http(client, email, password)
     assert registered.status_code == 201
-    await promote_account(repository, email, role)
+    await promote_to_system_admin(repository, email)
     logged_in = login_http(client, email, password)
     assert logged_in.status_code == 200
     return logged_in.json()
@@ -204,16 +216,17 @@ async def auth_headers_for(
     client: TestClient,
     repository: SQLiteRepository,
     prefix: str,
-    role: UserRole = UserRole.AGENT,
+    *,
+    system_admin: bool = False,
     password: str = TEMP_PASSWORD,
 ) -> dict[str, str]:
     """Run the full temp-account flow and return one access header."""
 
     email = temp_email(prefix)
-    if role is UserRole.AGENT:
-        pair = register_and_login(client, email, password)
+    if system_admin:
+        pair = await register_system_admin_login(client, repository, email, password)
     else:
-        pair = await register_promote_login(client, repository, email, role, password)
+        pair = register_and_login(client, email, password)
     return raw_auth_headers(pair["access_token"])
 
 
@@ -254,31 +267,19 @@ def configure_bdd_secret(context: Any) -> str:
     return secret
 
 
-async def mcp_account_token(
-    repository: SQLiteRepository,
-    prefix: str = "mcp",
-    role: UserRole = UserRole.AGENT,
-    password: str = TEMP_PASSWORD,
-) -> tuple[AuthService, SecretStr, str]:
-    """Create one temp account and log in through the service.
-
-    Return the service, one access JWT, and the account email. The service
-    carries its own generated signing secret, so this helper serves direct MCP
-    tool compositions without an HTTP app. Tests beside a REST app must use
-    :func:`http_jwt_service` instead, so one JWT spans both transports.
-    """
+async def login_service(
+    service: AuthService, email: str, password: str = TEMP_PASSWORD
+) -> SecretStr:
+    """Log one existing account in through the service; return its access JWT."""
 
     from fastapi.security import OAuth2PasswordRequestForm
 
-    service = auth_service_for(repository)
-    email = temp_email(prefix)
-    await create_temp_user(repository, email, role=role, password=password)
     tokens = await service.login(
         OAuth2PasswordRequestForm(username=email, password=password),
-        peer_address=f"{prefix}-probe",
+        peer_address="fixture-probe",
     )
     assert tokens is not None
-    return service, tokens.access_token, email
+    return tokens.access_token
 
 
 def http_jwt_service(repository: SQLiteRepository) -> AuthService:

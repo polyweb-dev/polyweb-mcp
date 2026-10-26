@@ -23,7 +23,6 @@ from freesearch.models.observability import (
     TraceStatusCode,
 )
 from freesearch.models.observability import TraceOutcome as _Outcome
-from freesearch.models.users import UserRole
 from freesearch.persistence.otel_exporter import write_trace_spans
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
@@ -31,7 +30,7 @@ from tests.fixtures.auth import (
     account_id_from_pair,
     raw_auth_headers,
     register_and_login,
-    register_promote_login,
+    register_system_admin_login,
     temp_email,
 )
 
@@ -331,9 +330,7 @@ async def test_trace_reads_and_monitoring_add_no_traces(
             "search_success.json",
             "provider_error.json",
         )
-        dev_pair = await register_promote_login(
-            client, repository, temp_email("obs-dev"), UserRole.DEVELOPER
-        )
+        dev_pair = await register_system_admin_login(client, repository, temp_email("obs-dev"))
         dev_headers = raw_auth_headers(dev_pair["access_token"])
         before = _trace_ids(client, agent_headers)
         assert client.get("/api/v1/traces", headers=agent_headers).status_code == 200

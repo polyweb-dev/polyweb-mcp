@@ -1,4 +1,10 @@
-"""Account persistence row and adapter for fastapi-users (P1, PLAN T1)."""
+"""Account persistence row and adapter for fastapi-users (P1, PLAN T1).
+
+The ``user`` row stores one human identity type: identity, provider, profile
+and account status. It has no role, account-type or superuser column. System
+authority lives only in ``system_role_assignments`` and project authority only
+in project memberships and role assignments.
+"""
 
 from __future__ import annotations
 
@@ -8,23 +14,12 @@ from uuid import UUID, uuid4
 from fastapi_users import exceptions
 from fastapi_users_db_sqlalchemy import SQLAlchemyUserDatabase
 from fastapi_users_db_sqlalchemy.generics import GUID
-from sqlalchemy import CHAR, Boolean, CheckConstraint, Index, String, Text, cast, select, text
+from sqlalchemy import Boolean, CheckConstraint, Index, String, Text, select, text
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Mapped, foreign, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column
 
-from freesearch.models.projects import (
-    DEFAULT_INSTALLATION_ACCOUNT_ID,
-    BuiltinRole,
-)
-from freesearch.models.users import (
-    AuthProvider,
-    UserRole,
-    normalize_email,
-)
-from freesearch.persistence.projects import SystemRoleAssignmentRow
+from freesearch.models.users import AuthProvider, normalize_email
 from freesearch.persistence.storage import Base
-
-DEFAULT_REGISTRATION_ROLE = UserRole.AGENT
 
 # Check constraints for the account row.
 _LOCAL_HASH_REQUIRED = (
@@ -100,8 +95,6 @@ class UserRow(Base):
         username: str | None
         first_name: str | None
         last_name: str | None
-        role: str
-        system_role_assignments: list[SystemRoleAssignmentRow]
     else:
         id: Mapped[UUID] = mapped_column(GUID, primary_key=True, default=uuid4)
         email: Mapped[str] = mapped_column(
@@ -122,47 +115,15 @@ class UserRow(Base):
         first_name: Mapped[str | None] = mapped_column(String(length=100), nullable=True)
         last_name: Mapped[str | None] = mapped_column(String(length=100), nullable=True)
 
-        system_role_assignments: Mapped[list[SystemRoleAssignmentRow]] = relationship(
-            SystemRoleAssignmentRow,
-            primaryjoin=foreign(SystemRoleAssignmentRow.user_id) == cast(id, CHAR(36)),
-            lazy="selectin",
-            viewonly=True,
-        )
-
         @property
         def is_superuser(self) -> bool:
-            assignments = self.__dict__.get("system_role_assignments")
-            if assignments:
-                return any(
-                    getattr(a, "role_key", None) == BuiltinRole.SYSTEM_ADMIN.value
-                    and str(getattr(a, "account_id", "")) == str(DEFAULT_INSTALLATION_ACCOUNT_ID)
-                    for a in assignments
-                )
+            """Library-adapter constant: fastapi-users declares this attribute.
+
+            It is always ``False`` and nothing reads it as authority; system
+            authority comes only from live system role assignments.
+            """
+
             return False
-
-        @is_superuser.setter
-        def is_superuser(self, val: bool) -> None:
-            pass
-
-        @property
-        def role(self) -> str:
-            assignments = self.__dict__.get("system_role_assignments")
-            if assignments and any(
-                getattr(a, "role_key", None) == BuiltinRole.SYSTEM_ADMIN.value
-                and str(getattr(a, "account_id", "")) == str(DEFAULT_INSTALLATION_ACCOUNT_ID)
-                for a in assignments
-            ):
-                return UserRole.ADMIN.value
-            return UserRole.AGENT.value
-
-        @role.setter
-        def role(self, val: str) -> None:
-            pass
-
-    def __init__(self, **kw: Any) -> None:
-        kw.pop("role", None)
-        kw.pop("is_superuser", None)
-        super().__init__(**kw)
 
 
 def local_password_hash(user: UserRow) -> str | None:
@@ -185,13 +146,18 @@ class UserDatabase(SQLAlchemyUserDatabase[UserRow, UUID]):
         return result.scalars().first()
 
     async def create(self, create_dict: dict[str, Any]) -> UserRow:
-        """Insert one new account with normalized email, defaulting to Agent."""
+        """Insert one ordinary local account with a normalized email.
 
-        clean: dict[str, Any] = dict(create_dict)
+        Only identity and password fields are taken from the library dict;
+        status defaults are server-side, so registration cannot widen anything.
+        """
+
+        clean: dict[str, Any] = {
+            key: value
+            for key, value in create_dict.items()
+            if key in {"email", "hashed_password", "username", "first_name", "last_name"}
+        }
         clean["email"] = normalize_email(str(clean["email"]))
-        # Enforce server-side defaults: safe public registration cannot escalate privilege
-        clean["role"] = DEFAULT_REGISTRATION_ROLE.value
-        clean["is_superuser"] = False
         clean["is_active"] = True
         clean["is_verified"] = False
         clean["auth_provider"] = AuthProvider.LOCAL.value
@@ -233,8 +199,6 @@ class UserDatabase(SQLAlchemyUserDatabase[UserRow, UUID]):
             "username": username,
             "first_name": first_name,
             "last_name": last_name,
-            "is_superuser": False,
-            "role": DEFAULT_REGISTRATION_ROLE.value,
         }
         user = self.user_table(**clean)
         self.session.add(user)
@@ -247,71 +211,3 @@ class UserDatabase(SQLAlchemyUserDatabase[UserRow, UUID]):
             raise
         await self.session.refresh(user)
         return user
-
-    async def set_role(self, user_id: UUID, role: UserRole) -> bool:
-        """Update privilege by inserting or removing durable system role assignments.
-
-        Flushes changes to the session without committing, honoring the caller's
-        transaction ownership.
-        """
-
-        if role is UserRole.DEVELOPER:
-            raise ValueError(
-                "Unsupported obsolete role: 'developer'. "
-                "System privileges are administered via system role assignments."
-            )
-
-        user = await self.get(user_id)
-        if user is None:
-            return False
-
-        if role is UserRole.ADMIN:
-            from freesearch.persistence.projects import AccountRow, SystemRoleAssignmentRow
-
-            acc = await self.session.get(AccountRow, str(DEFAULT_INSTALLATION_ACCOUNT_ID))
-            if acc is None:
-                self.session.add(
-                    AccountRow(
-                        id=str(DEFAULT_INSTALLATION_ACCOUNT_ID),
-                        status="active",
-                    )
-                )
-                await self.session.flush()
-
-            stmt = select(SystemRoleAssignmentRow).where(
-                SystemRoleAssignmentRow.account_id == str(DEFAULT_INSTALLATION_ACCOUNT_ID),
-                SystemRoleAssignmentRow.user_id == str(user_id),
-                SystemRoleAssignmentRow.role_key == BuiltinRole.SYSTEM_ADMIN.value,
-            )
-            existing = (await self.session.execute(stmt)).scalar_one_or_none()
-            if existing is None:
-                assignment = SystemRoleAssignmentRow(
-                    account_id=str(DEFAULT_INSTALLATION_ACCOUNT_ID),
-                    user_id=str(user_id),
-                    role_key=BuiltinRole.SYSTEM_ADMIN.value,
-                    granted_by=str(user_id),
-                    version=1,
-                )
-                self.session.add(assignment)
-                await self.session.flush()
-
-            await self.session.refresh(user, ["system_role_assignments"])
-            return True
-
-        if role is UserRole.AGENT:
-            from freesearch.persistence.projects import SystemRoleAssignmentRow
-
-            stmt = select(SystemRoleAssignmentRow).where(
-                SystemRoleAssignmentRow.account_id == str(DEFAULT_INSTALLATION_ACCOUNT_ID),
-                SystemRoleAssignmentRow.user_id == str(user_id),
-                SystemRoleAssignmentRow.role_key == BuiltinRole.SYSTEM_ADMIN.value,
-            )
-            existing = (await self.session.execute(stmt)).scalar_one_or_none()
-            if existing is not None:
-                await self.session.delete(existing)
-                await self.session.flush()
-
-            await self.session.refresh(user, ["system_role_assignments"])
-            return True
-
-        return False

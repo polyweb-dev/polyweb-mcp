@@ -63,7 +63,7 @@ from freesearch.models.observability import (
     parse_trace_output,
     trace_error,
 )
-from freesearch.models.projects import PROJECT_TOKEN_PREFIX
+from freesearch.models.projects import PROJECT_API_KEY_PREFIX
 from freesearch.persistence.database_migrations import (
     absolute_database_path,
     upgrade_database,
@@ -153,7 +153,7 @@ _STRICT_ALLOWED_KEYS = frozenset(
 #: They exempt a key from the substring rule only, never from the exact denylist.
 _STRICT_ALLOWED_KEY_SUFFIXES = ("id", "ids", "count", "label", "generation", "scope", "status")
 #: Value prefixes (case-insensitive) of credentials that strict mode rejects.
-_STRICT_FORBIDDEN_VALUE_PREFIXES = (PROJECT_TOKEN_PREFIX.lower(), "bearer ")
+_STRICT_FORBIDDEN_VALUE_PREFIXES = (PROJECT_API_KEY_PREFIX.lower(), "bearer ")
 _SENSITIVE_KEY_ERROR = "metadata must not contain sensitive or request-content fields"
 
 

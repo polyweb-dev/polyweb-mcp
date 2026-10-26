@@ -30,8 +30,7 @@ from freesearch.models.contracts import (
     UsageOperation,
 )
 from freesearch.persistence.storage import SQLiteRepository
-from tests.fixtures.auth import mcp_account_token
-from tests.fixtures.execution import seed_token_project
+from tests.fixtures.api_keys import mcp_key_credentials
 
 
 class _StubAdapter(ProviderAdapter):
@@ -96,16 +95,16 @@ async def repository(tmp_path: Path) -> SQLiteRepository:
 async def _authed_server(
     repository: SQLiteRepository, adapters: list[ProviderAdapter], prefix: str
 ) -> tuple[FastMCP, str]:
-    """Build one tool server with a real account and its explicit stdio credential."""
+    """Build one tool server with a real project API key as its stdio credential."""
 
-    service, token, _email = await mcp_account_token(repository, prefix)
+    service, key, pid = await mcp_key_credentials(repository, prefix)
     server = create_server(
         adapters,
         repository=repository,
         auth_service=service,
-        stdio_token=SecretStr(token.get_secret_value()),
+        stdio_token=SecretStr(key.get_secret_value()),
     )
-    return server, str((await seed_token_project(repository, token)).project_id)
+    return server, pid
 
 
 async def test_search_routes_to_only_search_adapter(repository: SQLiteRepository) -> None:
@@ -219,9 +218,14 @@ def test_create_server_stateless_http_flag() -> None:
     assert server_stateless.settings.stateless_http is True
 
 
-def test_main_cli_dispatch(monkeypatch: pytest.MonkeyPatch, auth_secret: str) -> None:
+def test_main_cli_dispatch(
+    monkeypatch: pytest.MonkeyPatch, auth_secret: str, tmp_path: Path
+) -> None:
     import freesearch.mcp.server as server_module
     from freesearch.mcp.server import main
+
+    # main() runs the pre-start database check: never against the checkout DB.
+    monkeypatch.setenv("FREESEARCH_DB", str(tmp_path / "main-dispatch.db"))
 
     calls: list[tuple[str, bool, int | None]] = []
 

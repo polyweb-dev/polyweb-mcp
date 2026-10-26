@@ -12,12 +12,16 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+import pytest
+
 from freesearch.infrastructure.auth_asgi import (
     MAX_PUBLIC_AUTH_BODY_BYTES,
     MAX_PUBLIC_OPERATION_BODY_BYTES,
+    OPERATION_ROUTES,
     BearerAuthMiddleware,
 )
-from freesearch.models.users import UserPrincipal, UserRole
+from freesearch.models.projects import ProjectApiKeyPrincipal
+from freesearch.models.users import UserPrincipal
 
 
 def _principal() -> UserPrincipal:
@@ -26,10 +30,8 @@ def _principal() -> UserPrincipal:
     return UserPrincipal(
         id=uuid4(),
         email="guard@example.com",
-        role=UserRole.AGENT,
         session_id=uuid4(),
         is_active=True,
-        is_superuser=False,
         is_verified=False,
     )
 
@@ -449,3 +451,142 @@ def test_provisioning_body_cap_applies_before_dispatch() -> None:
     guard, _ = _guard()
     status, _, _ = _run(guard, method="POST", path="/api/v1/users", headers=_bearer("bad-access"))
     assert status == 401
+
+
+# --- A1 (TASK-000041): project API keys at the guard ------------------------
+
+_GOOD_KEY = "fs_live_goodgoodgood_" + "k" * 43
+_KEY_PRINCIPAL = ProjectApiKeyPrincipal(
+    api_key_id=_PRINCIPAL.id,
+    project_id=_PRINCIPAL.session_id,
+    scopes=frozenset({"search.execute", "fetch.execute"}),
+)
+
+
+class _Recorder:
+    """Records which verifier saw which credential."""
+
+    def __init__(self) -> None:
+        self.human: list[str] = []
+        self.keys: list[str] = []
+
+    async def verify_human(self, token: str) -> UserPrincipal | None:
+        self.human.append(token)
+        return _PRINCIPAL if token == "good-access" else None
+
+    async def verify_key(self, token: str) -> ProjectApiKeyPrincipal | None:
+        self.keys.append(token)
+        return _KEY_PRINCIPAL if token == _GOOD_KEY else None
+
+
+def _key_guard(recorder: _Recorder, **overrides: Any) -> tuple[BearerAuthMiddleware, dict]:
+    params: dict[str, Any] = {
+        "verify_token": recorder.verify_human,
+        "verify_api_key": recorder.verify_key,
+        "api_key_routes": OPERATION_ROUTES,
+    }
+    params.update(overrides)
+    return _guard(**params)
+
+
+@pytest.mark.parametrize("path", ["/search", "/fetch"])
+def test_api_key_is_verified_only_by_the_key_verifier_on_execution_routes(path: str) -> None:
+    recorder = _Recorder()
+    guard, seen = _key_guard(recorder)
+    status, _, _ = _run(guard, method="POST", path=path, headers=_bearer(_GOOD_KEY))
+    assert status == 200
+    assert seen["state_user"] == _KEY_PRINCIPAL
+    assert recorder.keys == [_GOOD_KEY]
+    assert recorder.human == []
+
+
+@pytest.mark.parametrize(
+    "method,path",
+    [
+        ("GET", "/users/me"),
+        ("POST", "/auth/jwt/logout"),
+        ("POST", "/auth/jwt/refresh"),
+        ("GET", "/stats"),
+        ("GET", "/dashboard"),
+        ("GET", "/api/v1/providers"),
+        ("PUT", "/api/v1/providers/exa/secret"),
+        ("GET", "/api/v1/traces"),
+        ("GET", "/api/v1/projects"),
+        ("POST", "/api/v1/projects/abc/api-keys"),
+        ("POST", "/api/v1/users"),
+        ("GET", "/no-such-route"),
+        ("GET", "/search"),
+    ],
+)
+def test_valid_api_key_is_rejected_on_every_non_execution_route(method: str, path: str) -> None:
+    recorder = _Recorder()
+    guard, seen = _key_guard(recorder)
+    status, headers, body = _run(guard, method=method, path=path, headers=_bearer(_GOOD_KEY))
+    assert status == 401
+    assert headers[b"www-authenticate"] == b"Bearer"
+    assert b"not authenticated" in body
+    assert "state_user" not in seen
+    # The key never reaches either verifier off its own routes.
+    assert recorder.human == []
+    assert recorder.keys == []
+
+
+@pytest.mark.parametrize(
+    "token",
+    [
+        "fs_live_",
+        "fs_live_short",
+        "fs_live_UPPERCASEPREF_" + "k" * 43,
+        "fs_live_goodgoodgood_" + "k" * 42,
+        "fs_live_goodgoodgood_" + "!" * 43,
+        "fs_live_goodgoodgood_" + "x" * 43,
+    ],
+)
+def test_malformed_or_unknown_api_key_gets_the_generic_401(token: str) -> None:
+    recorder = _Recorder()
+    guard, seen = _key_guard(recorder)
+    status, headers, body = _run(guard, method="POST", path="/search", headers=_bearer(token))
+    assert status == 401
+    assert headers[b"www-authenticate"] == b"Bearer"
+    assert body == b'{"detail": "not authenticated"}'
+    assert token.encode() not in body
+    assert "state_user" not in seen
+    assert recorder.human == []
+
+
+def test_human_token_on_execution_route_never_reaches_the_key_verifier() -> None:
+    recorder = _Recorder()
+    guard, seen = _key_guard(recorder)
+    status, _, _ = _run(guard, method="POST", path="/search", headers=_bearer("good-access"))
+    assert status == 200
+    assert seen["state_user"] == _PRINCIPAL
+    assert recorder.keys == []
+
+
+def test_composition_without_human_verifier_rejects_human_tokens() -> None:
+    recorder = _Recorder()
+    guard, seen = _key_guard(recorder, verify_token=None)
+    status, _, _ = _run(guard, method="POST", path="/search", headers=_bearer("good-access"))
+    assert status == 401
+    assert "state_user" not in seen
+    assert recorder.human == []
+
+
+async def _exploding_key_verifier(token: str) -> ProjectApiKeyPrincipal | None:
+    raise RuntimeError(f"key store exploded for {token}")
+
+
+def test_api_key_verifier_failure_fails_closed_without_echo() -> None:
+    guard, seen = _guard(verify_api_key=_exploding_key_verifier, api_key_routes=OPERATION_ROUTES)
+    status, headers, body = _run(guard, method="POST", path="/search", headers=_bearer(_GOOD_KEY))
+    assert status == 401
+    assert headers[b"www-authenticate"] == b"Bearer"
+    assert _GOOD_KEY.encode() not in body
+    assert "state_user" not in seen
+
+
+def test_api_key_without_configured_key_verifier_is_rejected() -> None:
+    guard, seen = _guard(api_key_routes=OPERATION_ROUTES)
+    status, _, _ = _run(guard, method="POST", path="/search", headers=_bearer(_GOOD_KEY))
+    assert status == 401
+    assert "state_user" not in seen

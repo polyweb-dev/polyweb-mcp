@@ -196,7 +196,9 @@ def test_public_exceptions_need_no_credential(guard_client: TestClient) -> None:
         "/auth/register", json={"email": email, "password": TEMP_PASSWORD}
     )
     assert registered.status_code == 201
-    assert registered.json()["role"] == "agent"
+    # A1: public signup returns the safe account projection with no role.
+    assert "role" not in registered.json()
+    assert "is_superuser" not in registered.json()
 
     logged_in = guard_client.post(
         "/auth/jwt/login", data={"username": email, "password": TEMP_PASSWORD}

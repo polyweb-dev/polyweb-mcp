@@ -41,7 +41,7 @@ from freesearch.services.projects import (
     ProjectStorageUnavailable,
     ProjectValidationError,
 )
-from freesearch.services.users import AuthService
+from freesearch.services.users import AuthLastSystemAdmin, AuthService
 
 _Principal = Annotated[UserPrincipal, Depends(current_principal)]
 
@@ -82,6 +82,13 @@ def _register_error_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(ProjectConflict)
     async def _project_conflict(_: Request, exc: ProjectConflict) -> Response:
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content={"detail": {"code": exc.code, "message": str(exc)}},
+        )
+
+    @app.exception_handler(AuthLastSystemAdmin)
+    async def _last_system_admin(_: Request, exc: AuthLastSystemAdmin) -> Response:
         return JSONResponse(
             status_code=status.HTTP_409_CONFLICT,
             content={"detail": {"code": exc.code, "message": str(exc)}},

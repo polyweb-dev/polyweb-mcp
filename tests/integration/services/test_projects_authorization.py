@@ -27,7 +27,7 @@ from freesearch.models.projects import (
     ProjectStatus,
     ScopeType,
 )
-from freesearch.models.users import UserPrincipal, UserRole
+from freesearch.models.users import UserPrincipal
 from freesearch.persistence.projects import (
     ProjectMembershipRow,
     ProjectRepository,
@@ -44,6 +44,7 @@ from freesearch.services.projects import (
     LAST_PROJECT_ADMIN,
     PROJECT_ARCHIVED,
     ProjectConflict,
+    ProjectNotFound,
     ProjectService,
     ProjectValidationError,
 )
@@ -60,6 +61,9 @@ from tests.fixtures.auth import (
 #: revoked first. It is not accepted as a generic error: each test below names
 #: exactly which operation may return it and in which interleaving.
 _AUTHORIZATION_DENIED_OUTCOME = "AUTHORIZATION_DENIED"
+#: R5: an actor whose own membership or account the other writer removed first
+#: is no longer a member, so it gets the project's not-found outcome.
+_NOT_FOUND_OUTCOME = "NOT_FOUND"
 
 
 async def _seed_installation_admin(
@@ -126,7 +130,8 @@ async def test_project_lifecycle_scope_and_system_admin_non_membership(
             scope_id=project.id,
         )
         assert system_project_permissions == frozenset()
-        with pytest.raises(AuthorizationDenied):
+        # R5: a non-member gets the inaccessible-project not-found, not 403.
+        with pytest.raises(ProjectNotFound):
             await service.list_members(system, project.id)
 
         # A project administrator can add a member and delegate a bounded role.
@@ -283,7 +288,7 @@ async def test_legacy_admin_and_superuser_claims_do_not_grant_live_scope(
         human_row = await create_temp_user(repository, temp_email("p02-legacy"))
         forged = temp_principal(human_row).model_copy(
             update={
-                "role": UserRole.ADMIN,
+                "role": "admin",
                 "is_superuser": True,
                 "is_active": True,
             }
@@ -614,6 +619,8 @@ async def test_concurrent_demotion_and_account_deactivation_preserve_admin(
                 return error.code
             except AuthorizationDenied:
                 return _AUTHORIZATION_DENIED_OUTCOME
+            except ProjectNotFound:
+                return _NOT_FOUND_OUTCOME
             return None
 
         async def deactivate(service: ProjectService) -> str | None:
@@ -634,7 +641,7 @@ async def test_concurrent_demotion_and_account_deactivation_preserve_admin(
         # outcome or partial change is accepted.
         demote_result, deactivate_result = results
         if deactivate_result is None:
-            assert demote_result == _AUTHORIZATION_DENIED_OUTCOME
+            assert demote_result in (_AUTHORIZATION_DENIED_OUTCOME, _NOT_FOUND_OUTCOME)
         else:
             assert deactivate_result == LAST_PROJECT_ADMIN
             assert demote_result is None
@@ -678,6 +685,8 @@ async def test_concurrent_bulk_demotion_and_removal_preserve_admin(
                 return error.code
             except AuthorizationDenied:
                 return _AUTHORIZATION_DENIED_OUTCOME
+            except ProjectNotFound:
+                return _NOT_FOUND_OUTCOME
             return None
 
         async def remove_peer(service: ProjectService) -> str | None:
@@ -697,11 +706,257 @@ async def test_concurrent_bulk_demotion_and_removal_preserve_admin(
         # only administrator and self-removal must roll back with LAST_PROJECT_ADMIN.
         bulk_result, remove_result = results
         if remove_result is None:
-            assert bulk_result == _AUTHORIZATION_DENIED_OUTCOME
+            assert bulk_result in (_AUTHORIZATION_DENIED_OUTCOME, _NOT_FOUND_OUTCOME)
         else:
             assert remove_result == LAST_PROJECT_ADMIN
             assert bulk_result is None
         assert await _count_admins(first, project_id) == 1
+    finally:
+        await second.close()
+        await first.close()
+
+
+# --- A1 (TASK-000041) AC3: more last-active-admin races -------------------------
+
+
+async def _independent_admin_count(repository: SQLiteRepository, project_id: UUID) -> int:
+    """Count active admins with raw SQL, independent of the repository helper."""
+
+    from sqlalchemy import text
+
+    async with repository.session() as session:
+        value = await session.scalar(
+            text(
+                "SELECT count(*) FROM project_role_assignments r "
+                "JOIN project_memberships m ON m.project_id = r.project_id "
+                "AND m.user_id = r.user_id "
+                'JOIN "user" u ON u.id = r.user_id '
+                "WHERE r.project_id = :pid AND r.role_key = 'project_admin' "
+                "AND m.status = 'active' AND u.is_active = 1"
+            ).bindparams(pid=str(project_id))
+        )
+    return int(value or 0)
+
+
+async def _archive(repository: SQLiteRepository, project_id: UUID) -> None:
+    async with repository.session() as session:
+        await ProjectRepository(session).set_project_status(
+            project_id=project_id, status=ProjectStatus.ARCHIVED
+        )
+        await session.commit()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("archived", [False, True])
+async def test_three_way_removal_demotion_and_deactivation_keep_one_admin(
+    tmp_path: Path, archived: bool
+) -> None:
+    """Removal, demotion and deactivation race on three connections; one admin survives."""
+
+    first, second, _setup, admin, peer, project_id = await _prepare_race(
+        tmp_path, f"race-three-{archived}"
+    )
+    third = await SQLiteRepository.open(first.database_path)
+    try:
+        system = await _seed_installation_admin(first)
+        if archived:
+            await _archive(first, project_id)
+        barrier = asyncio.Barrier(3)
+
+        async def guarded(operation: object) -> str | None:
+            await barrier.wait()
+            try:
+                await operation  # type: ignore[misc]
+            except ProjectConflict as error:
+                return error.code
+            except AuthorizationDenied:
+                return _AUTHORIZATION_DENIED_OUTCOME
+            except ProjectNotFound:
+                return _NOT_FOUND_OUTCOME
+            return None
+
+        results = await asyncio.gather(
+            guarded(ProjectService(first).remove_member(admin, project_id, peer.id)),
+            guarded(
+                ProjectService(second).remove_role(
+                    peer, project_id, admin.id, BuiltinRole.PROJECT_ADMIN.value
+                )
+            ),
+            guarded(ProjectService(third).deactivate_accounts([admin.id], actor=system)),
+        )
+        assert all(
+            item in (None, LAST_PROJECT_ADMIN, _AUTHORIZATION_DENIED_OUTCOME, _NOT_FOUND_OUTCOME)
+            for item in results
+        ), results
+        assert results.count(None) >= 1, results
+        assert await _independent_admin_count(first, project_id) >= 1
+        assert await _count_admins(first, project_id) >= 1
+    finally:
+        await third.close()
+        await second.close()
+        await first.close()
+
+
+@pytest.mark.asyncio
+async def test_archived_project_keeps_its_last_admin_under_concurrent_self_removal(
+    tmp_path: Path,
+) -> None:
+    first, second, _setup, admin, peer, project_id = await _prepare_race(
+        tmp_path, "race-archived-removal"
+    )
+    try:
+        await _archive(first, project_id)
+        barrier = asyncio.Barrier(2)
+
+        async def remove_self(service: ProjectService, actor: UserPrincipal) -> str | None:
+            await barrier.wait()
+            try:
+                await service.remove_member(actor, project_id, actor.id)
+            except ProjectConflict as error:
+                return error.code
+            return None
+
+        results = await asyncio.gather(
+            remove_self(ProjectService(first), admin),
+            remove_self(ProjectService(second), peer),
+        )
+        assert sorted(results, key=str) == sorted([None, LAST_PROJECT_ADMIN], key=str), results
+        assert await _independent_admin_count(first, project_id) == 1
+    finally:
+        await second.close()
+        await first.close()
+
+
+@pytest.mark.asyncio
+async def test_cli_deactivation_races_service_self_removal_and_keeps_one_admin(
+    tmp_path: Path, auth_secret: str
+) -> None:
+    """The operator CLI uses its own connection; it cannot bypass the invariant."""
+
+    from freesearch.cli.users import _run
+
+    first, second, _setup, admin, peer, project_id = await _prepare_race(
+        tmp_path, "race-cli-deactivate"
+    )
+    try:
+        await _archive(first, project_id)
+        barrier = asyncio.Barrier(2)
+
+        async def cli_deactivate() -> int:
+            await barrier.wait()
+            return await _run(
+                [
+                    "deactivate",
+                    "--user-id",
+                    str(admin.id),
+                    "--database",
+                    str(first.database_path),
+                ]
+            )
+
+        async def remove_peer() -> str | None:
+            await barrier.wait()
+            try:
+                await ProjectService(second).remove_member(peer, project_id, peer.id)
+            except ProjectConflict as error:
+                return error.code
+            return None
+
+        cli_status, removal = await asyncio.gather(cli_deactivate(), remove_peer())
+        # Exactly one side wins; the loser is refused by the invariant.
+        assert (cli_status == 0) != (removal is None), (cli_status, removal)
+        if cli_status != 0:
+            assert removal is None
+        else:
+            assert removal == LAST_PROJECT_ADMIN
+        assert await _independent_admin_count(first, project_id) == 1
+    finally:
+        await second.close()
+        await first.close()
+
+
+@pytest.mark.asyncio
+async def test_deactivation_checks_every_affected_project_atomically(tmp_path: Path) -> None:
+    """One account that is the sole admin of one project and co-admin of another."""
+
+    repository = await create_alpha_test_db(tmp_path / "multi-project-deactivate.db")
+    try:
+        system = await _seed_installation_admin(repository)
+        shared_row = await create_temp_user(repository, temp_email("multi-shared"))
+        peer_row = await create_temp_user(repository, temp_email("multi-peer"))
+        shared = temp_principal(shared_row)
+        peer = temp_principal(peer_row)
+        service = ProjectService(repository)
+        co_admin = await service.create_project(
+            system, ProjectCreate(name="Co", slug="co-admin", initial_admin_user_id=shared.id)
+        )
+        await service.add_member(
+            shared,
+            co_admin.id,
+            ProjectMemberAdd(user_id=peer.id, initial_role=BuiltinRole.PROJECT_ADMIN.value),
+        )
+        sole = await service.create_project(
+            system, ProjectCreate(name="Sole", slug="sole-admin", initial_admin_user_id=shared.id)
+        )
+        await _archive(repository, sole.id)
+
+        with pytest.raises(ProjectConflict) as refused:
+            await service.deactivate_accounts([shared.id], actor=system)
+        assert refused.value.code == LAST_PROJECT_ADMIN
+        async with repository.session() as session:
+            stored = await session.get(UserRow, shared.id)
+            assert stored is not None and stored.is_active is True
+        assert await _independent_admin_count(repository, co_admin.id) == 2
+        assert await _independent_admin_count(repository, sole.id) == 1
+    finally:
+        await repository.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("trusted", [True, False])
+async def test_concurrent_deactivation_of_the_last_two_system_admins_keeps_one(
+    tmp_path: Path, trusted: bool
+) -> None:
+    """R2: two connections each deactivate a different one of the last two system admins."""
+
+    from freesearch.services.users import AuthLastSystemAdmin
+
+    first = await create_alpha_test_db(tmp_path / f"r2-race-{trusted}.db")
+    second = await SQLiteRepository.open(first.database_path)
+    try:
+        one = temp_principal(
+            await create_temp_user(first, temp_email("r2-race-one"), system_admin=True)
+        )
+        two = temp_principal(
+            await create_temp_user(first, temp_email("r2-race-two"), system_admin=True)
+        )
+        barrier = asyncio.Barrier(2)
+
+        async def deactivate(
+            repo: SQLiteRepository, target: UserPrincipal, actor: UserPrincipal
+        ) -> str | None:
+            await barrier.wait()
+            try:
+                if trusted:
+                    await ProjectService(repo).deactivate_accounts([target.id], trusted=True)
+                else:
+                    await ProjectService(repo).deactivate_accounts([target.id], actor=actor)
+            except AuthLastSystemAdmin as error:
+                return error.code
+            except AuthorizationDenied:
+                return _AUTHORIZATION_DENIED_OUTCOME
+            return None
+
+        # Each admin deactivates the other (REST shape) or the operator does both (CLI shape).
+        results = await asyncio.gather(deactivate(first, one, two), deactivate(second, two, one))
+        assert results.count(None) == 1, results
+        loser = next(item for item in results if item is not None)
+        assert loser in ("LAST_SYSTEM_ADMIN", _AUTHORIZATION_DENIED_OUTCOME), results
+        async with first.session() as session:
+            remaining = await ProjectRepository(session).count_active_system_admins(
+                account_id=DEFAULT_INSTALLATION_ACCOUNT_ID
+            )
+        assert remaining == 1
     finally:
         await second.close()
         await first.close()

@@ -25,9 +25,9 @@ from freesearch.models.observability import (
     TraceSpanRecord,
 )
 from freesearch.models.projects import BuiltinRole, ProjectCreate, ProjectMemberAdd
-from freesearch.models.users import UserRole
+from freesearch.persistence.audit import SystemAuditEventRow
 from freesearch.persistence.otel_exporter import write_trace_spans
-from freesearch.persistence.projects import ProjectRepository
+from freesearch.persistence.projects import ProjectRepository, SystemRoleAssignmentRow
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.persistence.users import UserDatabase, UserRow
 from freesearch.services.projects import ProjectService
@@ -53,6 +53,28 @@ async def _account(repository: SQLiteRepository, email: str) -> object:
         return await UserDatabase(session, UserRow).get_by_email(email)
 
 
+async def _system_roles(repository: SQLiteRepository, user_id: object) -> set[str]:
+    from sqlalchemy import select
+
+    async with repository.session() as session:
+        rows = await session.execute(
+            select(SystemRoleAssignmentRow.role_key).where(
+                SystemRoleAssignmentRow.user_id == str(user_id)
+            )
+        )
+        return set(rows.scalars())
+
+
+async def _system_audit(repository: SQLiteRepository, action: str) -> list[object]:
+    from sqlalchemy import select
+
+    async with repository.session() as session:
+        rows = await session.execute(
+            select(SystemAuditEventRow).where(SystemAuditEventRow.action == action)
+        )
+        return list(rows.scalars())
+
+
 async def test_create_admin_prints_uuid_and_admin_role(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -75,10 +97,13 @@ async def test_create_admin_prints_uuid_and_admin_role(
     try:
         account = await _account(check, email)
         assert account is not None
-        assert account.role == UserRole.ADMIN.value
-        assert account.is_superuser is True
+        # A1: the bootstrap grants an explicit system_admin assignment, no flag.
+        assert await _system_roles(check, account.id) == {"system_admin"}
+        assert account.is_superuser is False
         assert f"Account: {account.id}" in captured.out
-        assert "Role: admin" in captured.out
+        assert "System role: system_admin" in captured.out
+        granted = await _system_audit(check, "system_role.granted")
+        assert len(granted) == 1
         verified, _ = PasswordHelper().verify_and_update(_PASSWORD, str(account.hashed_password))
         assert verified is True
     finally:
@@ -143,11 +168,9 @@ async def test_commands_refuse_a_missing_database_file(
     assert (
         await _run(
             [
-                "set-role",
+                "grant-system-admin",
                 "--user-id",
                 str(__import__("uuid").uuid4()),
-                "--role",
-                "admin",
                 "--database",
                 str(missing),
             ]
@@ -165,11 +188,14 @@ async def test_set_role_assigns_role_and_revokes_old_families(
     auth_secret: str,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    """A1: grant adds a live assignment; revoke removes it and ends the old sessions."""
+
     database = tmp_path / "cli-role.db"
     repository = await SQLiteRepository.open(database)
     try:
         email = temp_email("cli-role")
         await create_temp_user(repository, email, password=TEMP_PASSWORD)
+        await create_temp_user(repository, temp_email("cli-role-peer"), system_admin=True)
         service = http_jwt_service(repository)
         tokens = await service.login(
             OAuth2PasswordRequestForm(username=email, password=TEMP_PASSWORD),
@@ -181,34 +207,26 @@ async def test_set_role_assigns_role_and_revokes_old_families(
         check = await _account(repository, email)
         assert check is not None
         user_id = check.id
+        grant = ["grant-system-admin", "--user-id", str(user_id), "--database", str(database)]
+        revoke = ["revoke-system-admin", "--user-id", str(user_id), "--database", str(database)]
 
-        assert (
-            await _run(
-                [
-                    "set-role",
-                    "--user-id",
-                    str(user_id),
-                    "--role",
-                    "admin",
-                    "--database",
-                    str(database),
-                ]
-            )
-            == 0
-        )
-
+        assert await _run(grant) == 0
         captured = capsys.readouterr()
         assert f"Account: {user_id}" in captured.out
-        assert "Role: admin" in captured.out
+        assert "System role: system_admin granted" in captured.out
         assert access not in captured.out
+        assert await _system_roles(repository, user_id) == {"system_admin"}
+        # Authority is live, so a grant needs no session revocation.
+        assert await service.verify_token(access) is not None
 
-        updated = await _account(repository, email)
-        assert updated is not None
-        assert updated.role == UserRole.ADMIN.value
-        assert updated.is_superuser is True
+        assert await _run(revoke) == 0
+        captured = capsys.readouterr()
+        assert "System role: system_admin revoked" in captured.out
+        assert await _system_roles(repository, user_id) == set()
         assert await service.verify_token(access) is None
+        assert len(await _system_audit(repository, "system_role.revoked")) == 1
 
-        # Assert obsolete developer role is explicitly rejected
+        # The obsolete role command is gone.
         assert (
             await _run(
                 [
@@ -221,10 +239,9 @@ async def test_set_role_assigns_role_and_revokes_old_families(
                     str(database),
                 ]
             )
-            == 1
+            == 2
         )
-        err_out = capsys.readouterr().err
-        assert "obsolete" in err_out or "unsupported" in err_out
+        assert "invalid command arguments" in capsys.readouterr().err
     finally:
         await repository.close()
 
@@ -233,55 +250,74 @@ async def test_set_role_to_the_same_role_revokes_again(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     auth_secret: str,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
+    """A1: repeated grant/revoke are idempotent no-ops without a second audit event."""
+
     database = tmp_path / "cli-rerole.db"
     repository = await SQLiteRepository.open(database)
     try:
         email = temp_email("cli-rerole")
         await create_temp_user(repository, email, password=TEMP_PASSWORD)
-        service = http_jwt_service(repository)
-        first = await service.login(
-            OAuth2PasswordRequestForm(username=email, password=TEMP_PASSWORD),
-            peer_address="cli-rerole-one",
-        )
-        assert first is not None
+        await create_temp_user(repository, temp_email("cli-rerole-peer"), system_admin=True)
         check = await _account(repository, email)
         assert check is not None
+        grant = ["grant-system-admin", "--user-id", str(check.id), "--database", str(database)]
+        revoke = ["revoke-system-admin", "--user-id", str(check.id), "--database", str(database)]
 
-        assert (
-            await _run(
-                [
-                    "set-role",
-                    "--user-id",
-                    str(check.id),
-                    "--role",
-                    "admin",
-                    "--database",
-                    str(database),
-                ]
-            )
-            == 0
-        )
-        second = await service.login(
-            OAuth2PasswordRequestForm(username=email, password=TEMP_PASSWORD),
-            peer_address="cli-rerole-two",
-        )
-        assert second is not None
-        assert (
-            await _run(
-                [
-                    "set-role",
-                    "--user-id",
-                    str(check.id),
-                    "--role",
-                    "admin",
-                    "--database",
-                    str(database),
-                ]
-            )
-            == 0
-        )
-        assert await service.verify_token(second.access_token.get_secret_value()) is None
+        assert await _run(grant) == 0
+        assert await _run(grant) == 0
+        assert "already held" in capsys.readouterr().out
+        # The fixture peer was seeded directly; only the CLI grant is audited, once.
+        assert len(await _system_audit(repository, "system_role.granted")) == 1
+
+        assert await _run(revoke) == 0
+        assert await _run(revoke) == 0
+        assert "not held" in capsys.readouterr().out
+        assert len(await _system_audit(repository, "system_role.revoked")) == 1
+    finally:
+        await repository.close()
+
+
+async def test_revoke_refuses_the_last_active_system_admin(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    auth_secret: str,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    database = tmp_path / "cli-last-sysadmin.db"
+    repository = await SQLiteRepository.open(database)
+    try:
+        only = await create_temp_user(repository, temp_email("cli-only"), system_admin=True)
+        command = ["revoke-system-admin", "--user-id", str(only.id), "--database", str(database)]
+        assert await _run(command) == 1
+        assert "last active system administrator" in capsys.readouterr().err
+        assert await _system_roles(repository, only.id) == {"system_admin"}
+        assert await _system_audit(repository, "system_role.revoked") == []
+    finally:
+        await repository.close()
+
+
+async def test_grant_refuses_an_inactive_account(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    auth_secret: str,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    database = tmp_path / "cli-inactive-grant.db"
+    repository = await SQLiteRepository.open(database)
+    try:
+        email = temp_email("cli-inactive")
+        row = await create_temp_user(repository, email)
+        async with repository.session() as session:
+            stored = await session.get(UserRow, row.id)
+            assert stored is not None
+            stored.is_active = False
+            await session.commit()
+        command = ["grant-system-admin", "--user-id", str(row.id), "--database", str(database)]
+        assert await _run(command) == 1
+        assert capsys.readouterr().err.strip()
+        assert await _system_roles(repository, row.id) == set()
     finally:
         await repository.close()
 
@@ -298,18 +334,9 @@ async def test_set_role_rejects_unknown_and_malformed_ids(
     repository = await SQLiteRepository.open(database)
     await repository.close()
 
-    assert (
-        await _run(
-            ["set-role", "--user-id", str(uuid4()), "--role", "admin", "--database", str(database)]
-        )
-        == 1
-    )
-    assert (
-        await _run(
-            ["set-role", "--user-id", "not-a-uuid", "--role", "admin", "--database", str(database)]
-        )
-        == 1
-    )
+    for command in ("grant-system-admin", "revoke-system-admin"):
+        assert await _run([command, "--user-id", str(uuid4()), "--database", str(database)]) == 1
+        assert await _run([command, "--user-id", "not-a-uuid", "--database", str(database)]) == 1
 
     captured = capsys.readouterr()
     assert "no account has this id" in captured.err
@@ -354,11 +381,9 @@ async def test_set_role_preserves_account_owned_traces(
         assert (
             await _run(
                 [
-                    "set-role",
+                    "grant-system-admin",
                     "--user-id",
                     str(check.id),
-                    "--role",
-                    "admin",
                     "--database",
                     str(database),
                 ]
@@ -383,7 +408,7 @@ async def test_deactivate_uses_the_same_last_admin_guard(
     repository = await create_alpha_test_db(database)
     try:
         system_row = await create_temp_user(
-            repository, temp_email("cli-deactivate-sys"), role=UserRole.ADMIN
+            repository, temp_email("cli-deactivate-sys"), system_admin=True
         )
         admin_row = await create_temp_user(repository, temp_email("cli-deactivate-admin"))
         peer_row = await create_temp_user(repository, temp_email("cli-deactivate-peer"))
@@ -461,5 +486,40 @@ async def test_deactivate_uses_the_same_last_admin_guard(
                 await ProjectRepository(session).count_active_project_admins(project_id=project.id)
                 == 1
             )
+    finally:
+        await repository.close()
+
+
+async def test_cli_deactivate_refuses_the_last_active_system_admin(
+    tmp_path: Path,
+    auth_secret: str,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """R2: the operator CLI cannot leave the installation without a system admin."""
+
+    database = tmp_path / "cli-last-sysadmin-deactivate.db"
+    repository = await create_alpha_test_db(database)
+    try:
+        only = await create_temp_user(repository, temp_email("cli-r2-only"), system_admin=True)
+        command = ["deactivate", "--user-id", str(only.id), "--database", str(database)]
+        assert await _run(command) == 1
+        refused = capsys.readouterr()
+        assert "last active system administrator" in refused.err
+        assert refused.out == ""
+        async with repository.session() as session:
+            stored = await session.get(UserRow, only.id)
+            assert stored is not None and stored.is_active is True
+        assert await _system_audit(repository, "account.deactivated") == []
+
+        second = await create_temp_user(repository, temp_email("cli-r2-second"), system_admin=True)
+        assert await _run(command) == 0
+        assert f"Account: {only.id}" in capsys.readouterr().out
+        assert (
+            await _run(["deactivate", "--user-id", str(second.id), "--database", str(database)])
+            == 1
+        )
+        async with repository.session() as session:
+            kept = await session.get(UserRow, second.id)
+            assert kept is not None and kept.is_active is True
     finally:
         await repository.close()

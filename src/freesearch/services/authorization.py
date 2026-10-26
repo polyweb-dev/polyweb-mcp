@@ -29,14 +29,15 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from freesearch.models.projects import (
+    API_KEY_ACTIONS,
     BUILTIN_ROLE_DEFINITIONS,
     DEFAULT_INSTALLATION_ACCOUNT_ID,
     AuthorizationDecision,
     AuthorizationQuery,
     HumanPrincipal,
     PermissionAction,
+    ProjectApiKeyPrincipal,
     ProjectContext,
-    ProjectTokenPrincipal,
     RoleDefinition,
     ScopeType,
     action_scope,
@@ -140,7 +141,7 @@ class ScopedAuthorizationService:
 
     async def effective_permissions(
         self,
-        principal: HumanPrincipal | ProjectTokenPrincipal,
+        principal: HumanPrincipal | ProjectApiKeyPrincipal,
         *,
         scope_type: ScopeType,
         scope_id: UUID | None,
@@ -155,22 +156,22 @@ class ScopedAuthorizationService:
     async def effective_permissions_in_session(
         self,
         session: AsyncSession,
-        principal: HumanPrincipal | ProjectTokenPrincipal,
+        principal: HumanPrincipal | ProjectApiKeyPrincipal,
         *,
         scope_type: ScopeType,
         scope_id: UUID | None,
     ) -> frozenset[PermissionAction]:
         """Resolve the current assignments of one principal in the given session."""
 
-        if isinstance(principal, ProjectTokenPrincipal):
-            return self._token_permissions(principal, scope_type=scope_type, scope_id=scope_id)
+        if isinstance(principal, ProjectApiKeyPrincipal):
+            return self._api_key_permissions(principal, scope_type=scope_type, scope_id=scope_id)
         return await self._human_permissions(
             session, principal.user_id, scope_type=scope_type, scope_id=scope_id
         )
 
     async def resolve_project_context(
         self,
-        principal: HumanPrincipal | ProjectTokenPrincipal,
+        principal: HumanPrincipal | ProjectApiKeyPrincipal,
         project_id: UUID,
     ) -> ProjectContext | None:
         """Return an immutable context for one live accessible project.
@@ -189,7 +190,7 @@ class ScopedAuthorizationService:
     async def resolve_project_context_in_session(
         self,
         session: AsyncSession,
-        principal: HumanPrincipal | ProjectTokenPrincipal,
+        principal: HumanPrincipal | ProjectApiKeyPrincipal,
         project_id: UUID,
     ) -> ProjectContext | None:
         """Resolve one immutable context inside a caller-owned session."""
@@ -208,14 +209,14 @@ class ScopedAuthorizationService:
         if project is None:
             return None
 
-        if isinstance(principal, ProjectTokenPrincipal):
+        if isinstance(principal, ProjectApiKeyPrincipal):
             if principal.project_id != project_id:
                 return None
             return ProjectContext(
                 account_id=self._account_id,
                 project_id=project_id,
                 principal=principal,
-                effective_permissions=self._token_permissions(
+                effective_permissions=self._api_key_permissions(
                     principal, scope_type=ScopeType.PROJECT, scope_id=project_id
                 ),
                 policy_revision=1,
@@ -270,11 +271,33 @@ class ScopedAuthorizationService:
         """
 
         definition = _project_role_definition(role_key)
-        granted = definition.permissions
+        await self.require_delegable_permissions_in_session(
+            session,
+            actor,
+            project_id=project_id,
+            permissions=definition.permissions,
+            required_permission=PermissionAction.ROLES_ASSIGN,
+        )
+
+    async def require_delegable_permissions_in_session(
+        self,
+        session: AsyncSession,
+        actor: HumanPrincipal,
+        *,
+        project_id: UUID,
+        permissions: frozenset[PermissionAction],
+        required_permission: PermissionAction,
+    ) -> None:
+        """Require the actor to hold every permission it delegates in this project.
+
+        The same delegation limit bounds project roles and project API key
+        scopes: nobody can hand out authority they do not currently hold.
+        """
+
         held = await self._human_permissions(
             session, actor.user_id, scope_type=ScopeType.PROJECT, scope_id=project_id
         )
-        missing = granted - held
+        missing = permissions - held
         if missing:
             raise AuthorizationDenied(
                 AuthorizationDecision(
@@ -283,20 +306,20 @@ class ScopedAuthorizationService:
                         "Delegation limit: the actor does not hold "
                         f"{', '.join(sorted(action.value for action in missing))}"
                     ),
-                    required_permission=PermissionAction.ROLES_ASSIGN,
+                    required_permission=required_permission,
                     scope_type=ScopeType.PROJECT,
                     scope_id=project_id,
                 )
             )
 
-    def _token_permissions(
+    def _api_key_permissions(
         self,
-        principal: ProjectTokenPrincipal,
+        principal: ProjectApiKeyPrincipal,
         *,
         scope_type: ScopeType,
         scope_id: UUID | None,
     ) -> frozenset[PermissionAction]:
-        """Return execution-only token scopes for the token's own project."""
+        """Return a key's execution scopes for its own project, never more."""
 
         if scope_type is not ScopeType.PROJECT or scope_id != principal.project_id:
             return frozenset()
@@ -306,7 +329,7 @@ class ScopedAuthorizationService:
                 action = PermissionAction(scope)
             except ValueError:
                 continue
-            if action_scope(action) is ScopeType.PROJECT:
+            if action in API_KEY_ACTIONS:
                 actions.add(action)
         return frozenset(actions)
 

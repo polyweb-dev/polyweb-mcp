@@ -9,10 +9,15 @@ Under Q1 the public endpoints are exactly ``POST /auth/register`` and
 opaque refresh credential in the Bearer header and by nothing else. The access
 JWT gates ``POST /auth/jwt/logout`` and ``GET /users/me``.
 
-``POST /api/v1/users`` requires the access JWT and the Admin role, and it creates
-one standalone account in the requested role. The account model is a provisioning
-model: an Admin creates accounts and holds no authority over an existing account,
-so the legacy lookup and role-change paths deny every authenticated caller.
+Public registration and ``POST /api/v1/users`` create one ordinary human
+account: no role, account type or privilege field exists in either request, and
+a request that sends one is rejected with HTTP 422. Provisioning requires the
+access JWT and a live system administrator assignment. The legacy account
+lookup path denies every authenticated caller.
+
+Every human dependency here accepts only a verified human session principal. A
+project API key never satisfies one: the guard rejects keys outside execution
+routes, and :func:`static_principal` ignores any non-human principal.
 
 Two transports answer the same routes. A request with no browser evidence keeps
 the programmatic contract: one JSON credential pair and an opaque Bearer refresh
@@ -28,8 +33,7 @@ message, so no raw input, hash, or token value can leak through a 422 body.
 """
 
 from collections.abc import AsyncIterator
-from typing import Annotated, Any, Literal, NoReturn
-from uuid import UUID
+from typing import Annotated, Any, Literal, NoReturn, cast
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
 from fastapi.encoders import jsonable_encoder
@@ -41,7 +45,7 @@ from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi_users import exceptions, schemas
 from fastapi_users.router.common import ErrorCode
 from fastapi_users.router.register import get_register_router
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, SecretStr
 
 from freesearch.infrastructure.browser_auth import (
     REFRESH_COOKIE_PATH,
@@ -53,25 +57,18 @@ from freesearch.infrastructure.browser_auth import (
     validate_browser_request,
 )
 from freesearch.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID, PermissionAction
-from freesearch.models.users import AuthTokens, UserAccount, UserPrincipal, UserRole
+from freesearch.models.users import AuthTokens, UserAccount, UserPrincipal
 from freesearch.services.authorization import ScopedAuthorizationService, system_query
 from freesearch.services.users import (
     AuthConfigurationError,
     AuthService,
     AuthStorageUnavailable,
-    AuthUnsupportedRole,
     LoginRateLimited,
     UserManager,
 )
 
 #: Auth routes whose validation failures must not echo submitted credentials.
 _AUTH_VALIDATION_PREFIXES = ("/auth/", "/users/me", "/api/v1/users")
-
-#: Roles allowed to mutate provider controls and to start provider OAuth flows.
-ADMIN_ROLES: frozenset[UserRole] = frozenset({UserRole.ADMIN})
-
-#: Roles allowed to read sanitized control views, statistics, and dashboard data.
-CONTROL_READ_ROLES: frozenset[UserRole] = frozenset({UserRole.ADMIN, UserRole.DEVELOPER})
 
 _SAFE_VALIDATION_DETAIL = "invalid authentication request"
 
@@ -108,26 +105,24 @@ def _publish_bearer_scheme(app: FastAPI) -> None:
     app.openapi = openapi  # type: ignore[method-assign]
 
 
-class UserCreate(schemas.BaseUserCreate):
-    """Registration body: email, password, and the requested role.
+class UserCreate(schemas.CreateUpdateDictModel):
+    """Registration and provisioning body: email and password only.
 
-    ``extra="forbid"`` rejects client-supplied provider fields, privilege flags,
-    and any other field. The role is a validated role value, and it defaults to
-    Agent, so a caller that omits the field keeps the current contract. The
-    password is hidden from the model representation, and the accepted rule is
-    enforced by the user manager with a clear message.
+    ``extra="forbid"`` rejects a role, a privilege or status flag, provider
+    fields and any other field with HTTP 422, so no request can ask for
+    authority. The password is hidden from the model representation, and the
+    accepted rule is enforced by the user manager with a clear message.
     """
 
     model_config = ConfigDict(extra="forbid")
 
+    email: EmailStr
     password: str = Field(repr=False)
-    role: UserRole = UserRole.AGENT
 
 
-class UserRead(schemas.BaseUser[UUID]):
-    """Account projection returned by registration and ``GET /users/me``."""
-
-    role: UserRole
+#: Account projection returned by registration, ``GET /users/me``, provisioning
+#: and deactivation: the one safe human account contract.
+UserRead = UserAccount
 
 
 class TokenPairResponse(BaseModel):
@@ -229,12 +224,6 @@ def _account_management_denied() -> HTTPException:
     )
 
 
-def _account_read(account: UserAccount) -> UserRead:
-    """Project one safe account contract onto the wire shape."""
-
-    return UserRead.model_validate(account)
-
-
 def peer_address(request: Request) -> str:
     """Return the actual peer address of the request.
 
@@ -262,7 +251,11 @@ def bearer_credential(request: Request) -> str | None:
 
 
 def static_principal(request: Request) -> UserPrincipal | None:
-    """Return the principal a transport guard already verified, else ``None``."""
+    """Return the human principal a transport guard already verified, else ``None``.
+
+    A verified project API key principal is not a human principal, so every
+    human or control-plane dependency rejects it instead of falling through.
+    """
 
     principal = getattr(request.state, "user", None)
     return principal if isinstance(principal, UserPrincipal) else None
@@ -448,10 +441,12 @@ def _library_register_route() -> APIRoute:
 
     The route carries the library's request schema, response schema, status code,
     documented errors, and handler, so registration keeps the standard error
-    contract without a hand-written copy.
+    contract without a hand-written copy. The library types its schemas against
+    its own base classes, which declare privilege flags; the account contracts
+    here deliberately declare none, so both cross this adapter boundary untyped.
     """
 
-    router = get_register_router(get_user_manager, UserRead, UserCreate)
+    router = get_register_router(get_user_manager, cast(Any, UserRead), cast(Any, UserCreate))
     for route in router.routes:
         if isinstance(route, APIRoute):
             return route
@@ -591,22 +586,21 @@ def register_auth_routes(app: FastAPI) -> None:
 
 
 def _register_admin_account_routes(app: FastAPI) -> None:
-    """Register account provisioning and deny the legacy account routes.
+    """Register account provisioning and deny the legacy account lookup.
 
-    ``POST /api/v1/users`` needs Bearer access and the Admin role. It reserves one
-    provisioning attempt, creates one standalone account in the requested role,
-    and returns the safe projection of that new account. The response holds no
-    credential and sets no cookie.
+    ``POST /api/v1/users`` needs Bearer access and a live system administrator
+    assignment. It reserves one provisioning attempt, creates one ordinary
+    account with no role, and returns the safe projection of that new account.
+    The response holds no credential and sets no cookie.
 
-    The legacy lookup and role-change paths stay registered as explicit
-    compatibility boundaries, and every authenticated caller receives HTTP 403.
-    This cycle grants an Admin the authority to create accounts, not to change an
-    existing account or another account's role.
+    The legacy lookup path stays registered as an explicit compatibility
+    boundary, and every authenticated caller receives HTTP 403. System roles
+    change only through the trusted operator CLI.
     """
 
     @app.post("/api/v1/users", response_model=UserRead, status_code=status.HTTP_201_CREATED)
     async def provision_user(body: UserCreate, request: Request) -> UserRead:
-        """Create one standalone account in the requested role for an Admin caller."""
+        """Create one ordinary standalone account for a system administrator caller."""
 
         await require_admin(request)
         service = _auth_service(request)
@@ -621,7 +615,7 @@ def _register_admin_account_routes(app: FastAPI) -> None:
                 headers={"Retry-After": str(retry)},
             )
         try:
-            account = await service.provision_account(body)
+            account = await service.provision_account(str(body.email), SecretStr(body.password))
         except exceptions.UserAlreadyExists as exists:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -635,11 +629,6 @@ def _register_admin_account_routes(app: FastAPI) -> None:
                     "reason": invalid.reason,
                 },
             ) from invalid
-        except AuthUnsupportedRole as error:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=str(error),
-            ) from error
         except AuthStorageUnavailable as unavailable:
             raise _storage_unavailable() from unavailable
         except AuthConfigurationError as unconfigured:
@@ -647,7 +636,7 @@ def _register_admin_account_routes(app: FastAPI) -> None:
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="account authentication is not configured",
             ) from unconfigured
-        return _account_read(account)
+        return account
 
     @app.get("/api/v1/users/{user_id}", response_model=None)
     async def get_user(user_id: str, request: Request) -> NoReturn:
@@ -661,21 +650,8 @@ def _register_admin_account_routes(app: FastAPI) -> None:
         await _access_principal(request)
         raise _account_management_denied()
 
-    @app.patch("/api/v1/users/{user_id}/role", response_model=None)
-    async def patch_user_role(user_id: str, request: Request) -> NoReturn:
-        """Deny the legacy role change for every authenticated caller.
-
-        No role body is parsed, no target account is read, and no session family
-        is revoked, so the denial cannot change an account or end a session.
-        """
-
-        await _access_principal(request)
-        raise _account_management_denied()
-
 
 __all__ = [
-    "ADMIN_ROLES",
-    "CONTROL_READ_ROLES",
     "BrowserTokenResponse",
     "TokenPairResponse",
     "UserCreate",

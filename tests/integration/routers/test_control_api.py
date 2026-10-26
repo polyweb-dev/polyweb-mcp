@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 import pytest
 import pytest_asyncio
@@ -41,16 +42,16 @@ from freesearch.models.contracts import (
     UsageStatus,
 )
 from freesearch.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID, ProjectCreate
-from freesearch.models.users import UserRole
 from freesearch.persistence.projects import ProjectRepository
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
+from tests.fixtures.api_keys import key_for_account
 from tests.fixtures.auth import (
     account_id_from_pair,
     http_jwt_service,
     raw_auth_headers,
     register_and_login,
-    register_promote_login,
+    register_system_admin_login,
     temp_email,
 )
 from tests.fixtures.execution import seed_execution_project
@@ -213,9 +214,7 @@ async def test_get_providers_enumerates_canonical_status_contract(
         assert anonymous.status_code == 401
         assert anonymous.headers["www-authenticate"] == "Bearer"
 
-        pair = await register_promote_login(
-            client, repository, temp_email("control-list"), UserRole.ADMIN
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("control-list"))
         headers = raw_auth_headers(pair["access_token"])
         response = client.get("/api/v1/providers", headers=headers)
 
@@ -296,9 +295,7 @@ async def test_unknown_provider_item_routes_return_404(
         anonymous = client.request(method.upper(), path, json=payload)
         assert anonymous.status_code == 401
 
-        pair = await register_promote_login(
-            client, repository, temp_email("control-ghost"), UserRole.ADMIN
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("control-ghost"))
         headers = raw_auth_headers(pair["access_token"])
         response = client.request(method.upper(), path, json=payload, headers=headers)
 
@@ -343,8 +340,8 @@ async def test_provider_patch_rejects_non_strict_or_unknown_fields(
         anonymous = client.patch("/api/v1/providers/exa", json=payload)
         assert anonymous.status_code == 401
 
-        pair = await register_promote_login(
-            client, repository, temp_email("control-patch-bad"), UserRole.ADMIN
+        pair = await register_system_admin_login(
+            client, repository, temp_email("control-patch-bad")
         )
         headers = raw_auth_headers(pair["access_token"])
         response = client.patch("/api/v1/providers/exa", json=payload, headers=headers)
@@ -362,9 +359,7 @@ async def test_provider_patch_rejects_read_only_support_mask(
     app = create_app([ControlAdapter("exa")], repository=repository)
 
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("control-readonly"), UserRole.ADMIN
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("control-readonly"))
         headers = raw_auth_headers(pair["access_token"])
         before = client.get("/api/v1/providers/exa", headers=headers)
         rejected = client.patch("/api/v1/providers/exa", json={"support_mask": 7}, headers=headers)
@@ -387,9 +382,7 @@ async def test_provider_patch_merges_estimates_and_returns_updated_status(
     app = create_app([ControlAdapter("exa")], repository=repository)
 
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("control-patch"), UserRole.ADMIN
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("control-patch"))
         headers = raw_auth_headers(pair["access_token"])
         before = client.get("/api/v1/providers/exa", headers=headers)
         response = client.patch(
@@ -429,8 +422,8 @@ async def test_provider_patch_global_toggle_preserves_tool_bits(
     app = create_app([ControlAdapter("exa")], repository=repository)
 
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("control-global-bits"), UserRole.ADMIN
+        pair = await register_system_admin_login(
+            client, repository, temp_email("control-global-bits")
         )
         headers = raw_auth_headers(pair["access_token"])
         off = client.patch("/api/v1/providers/exa", json={"enabled": False}, headers=headers)
@@ -453,8 +446,8 @@ async def test_provider_patch_search_toggle_changes_only_search_bit(
     app = create_app([ControlAdapter("exa")], repository=repository)
 
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("control-search-bit"), UserRole.ADMIN
+        pair = await register_system_admin_login(
+            client, repository, temp_email("control-search-bit")
         )
         headers = raw_auth_headers(pair["access_token"])
         before = client.get("/api/v1/providers/exa", headers=headers)
@@ -481,8 +474,8 @@ async def test_provider_patch_fetch_toggle_changes_only_fetch_bit(
     app = create_app([ControlAdapter("exa")], repository=repository)
 
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("control-fetch-bit"), UserRole.ADMIN
+        pair = await register_system_admin_login(
+            client, repository, temp_email("control-fetch-bit")
         )
         headers = raw_auth_headers(pair["access_token"])
         off = client.patch("/api/v1/providers/exa", json={"fetch_enabled": False}, headers=headers)
@@ -504,8 +497,8 @@ async def test_provider_patch_enable_mask_replaces_all_bits(
     app = create_app([ControlAdapter("exa")], repository=repository)
 
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("control-mask-replace"), UserRole.ADMIN
+        pair = await register_system_admin_login(
+            client, repository, temp_email("control-mask-replace")
         )
         headers = raw_auth_headers(pair["access_token"])
         replaced = client.patch("/api/v1/providers/exa", json={"enable_mask": 3}, headers=headers)
@@ -527,8 +520,8 @@ async def test_provider_patch_empty_body_is_allowed(
     app = create_app([ControlAdapter("exa")], repository=repository)
 
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("control-empty-body"), UserRole.ADMIN
+        pair = await register_system_admin_login(
+            client, repository, temp_email("control-empty-body")
         )
         headers = raw_auth_headers(pair["access_token"])
         before = client.get("/api/v1/providers/exa", headers=headers)
@@ -557,9 +550,7 @@ async def test_provider_patch_persists_across_repository_reopen(
     try:
         app = create_app([ControlAdapter("exa")], repository=first)
         with TestClient(app) as client:
-            pair = await register_promote_login(
-                client, first, temp_email("control-reopen"), UserRole.ADMIN
-            )
+            pair = await register_system_admin_login(client, first, temp_email("control-reopen"))
             headers = raw_auth_headers(pair["access_token"])
             response = client.patch(
                 "/api/v1/providers/exa",
@@ -596,8 +587,8 @@ async def test_provider_patch_mask_persists_across_repository_reopen(
     try:
         app = create_app([ControlAdapter("exa")], repository=first)
         with TestClient(app) as client:
-            pair = await register_promote_login(
-                client, first, temp_email("control-mask-reopen"), UserRole.ADMIN
+            pair = await register_system_admin_login(
+                client, first, temp_email("control-mask-reopen")
             )
             headers = raw_auth_headers(pair["access_token"])
             response = client.patch(
@@ -633,9 +624,7 @@ async def test_provider_test_unknown_health_is_ok_and_has_exact_shape(
     )
 
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("control-probe"), UserRole.ADMIN
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("control-probe"))
         headers = raw_auth_headers(pair["access_token"])
         response = client.post("/api/v1/providers/exa/test", headers=headers)
 
@@ -662,9 +651,7 @@ async def test_provider_test_unavailable_is_not_ok(
     )
 
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("control-unavail"), UserRole.ADMIN
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("control-unavail"))
         headers = raw_auth_headers(pair["access_token"])
         response = client.post("/api/v1/providers/exa/test", headers=headers)
 
@@ -697,8 +684,8 @@ async def test_provider_test_without_constructed_adapter_returns_503(
 
     with TestClient(app) as client:
         assert client.post("/api/v1/providers/exa/test").status_code == 401
-        pair = await register_promote_login(
-            client, repository, temp_email("control-no-adapter"), UserRole.ADMIN
+        pair = await register_system_admin_login(
+            client, repository, temp_email("control-no-adapter")
         )
         headers = raw_auth_headers(pair["access_token"])
         response = client.post("/api/v1/providers/exa/test", headers=headers)
@@ -717,9 +704,7 @@ async def test_circuit_breaker_reset_returns_closed_persisted_state(
     app = create_app([ControlAdapter("exa")], repository=repository)
 
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("control-reset"), UserRole.ADMIN
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("control-reset"))
         headers = raw_auth_headers(pair["access_token"])
         response = client.post("/api/v1/providers/exa/circuit-breaker/reset", headers=headers)
         status = client.get("/api/v1/providers/exa", headers=headers)
@@ -747,9 +732,7 @@ async def test_secret_put_writes_vault_and_never_exposes_raw_key(
     app = create_app([ControlAdapter("exa")], repository=repository)
 
     with caplog.at_level("INFO"), TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("control-put"), UserRole.ADMIN
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("control-put"))
         headers = raw_auth_headers(pair["access_token"])
         response = client.put(
             "/api/v1/providers/exa/secret", json={"key": raw_key}, headers=headers
@@ -801,9 +784,7 @@ async def test_secret_put_rejects_empty_key(repository: SQLiteRepository, auth_s
     )
 
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("control-empty"), UserRole.ADMIN
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("control-empty"))
         headers = raw_auth_headers(pair["access_token"])
         response = client.put("/api/v1/providers/exa/secret", json={"key": ""}, headers=headers)
 
@@ -830,9 +811,7 @@ async def test_secret_delete_is_idempotent_and_removes_stored_value(
     )
 
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("control-del"), UserRole.ADMIN
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("control-del"))
         headers = raw_auth_headers(pair["access_token"])
         first = client.delete("/api/v1/providers/exa/secret", headers=headers)
         second = client.delete("/api/v1/providers/exa/secret", headers=headers)
@@ -866,9 +845,7 @@ async def test_secret_delete_ejects_adapter_and_disables_routing(
     )
 
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("control-eject"), UserRole.ADMIN
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("control-eject"))
         headers = raw_auth_headers(pair["access_token"])
         pid = str(
             (
@@ -927,7 +904,6 @@ async def test_secret_delete_keenable_reverts_to_keyless_mode(
     """Deleting Keenable secret downgrades the adapter to keyless public tier."""
     # Use one Admin account for the delete.
     import httpx
-    from pydantic import SecretStr
 
     from freesearch.adapters.keenable import KeenableAdapter
 
@@ -945,9 +921,7 @@ async def test_secret_delete_keenable_reverts_to_keyless_mode(
     )
 
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("control-keen"), UserRole.ADMIN
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("control-keen"))
         headers = raw_auth_headers(pair["access_token"])
         initial_limits = client.get("/api/v1/providers/keenable/limits", headers=headers)
         assert initial_limits.status_code == 200
@@ -1003,9 +977,7 @@ async def test_env_key_is_ignored_empty_vault_reports_missing_and_503(
     app = create_app([], repository=repository)
 
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("control-env"), UserRole.ADMIN
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("control-env"))
         headers = raw_auth_headers(pair["access_token"])
         status = client.get("/api/v1/providers/exa", headers=headers)
         probe = client.post("/api/v1/providers/exa/test", headers=headers)
@@ -1041,9 +1013,7 @@ async def test_secret_write_constructs_missing_adapter_on_demand(
     app = create_app(repository=repository, secret_store=store)  # type: ignore[call-arg]
 
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("control-demand"), UserRole.ADMIN
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("control-demand"))
         headers = raw_auth_headers(pair["access_token"])
         initial = client.get("/api/v1/providers/exa", headers=headers)
         write = client.put(
@@ -1072,9 +1042,7 @@ async def test_routing_config_defaults_validate_and_persist(
     app = create_app([ControlAdapter("exa")], repository=repository)
 
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("control-routing"), UserRole.ADMIN
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("control-routing"))
         headers = raw_auth_headers(pair["access_token"])
         initial = client.get("/api/v1/routing/config", headers=headers)
         invalid_extra = client.put(
@@ -1131,9 +1099,7 @@ async def test_free_first_pins_keenable_in_status_and_search_order(
     app = create_app([brave, keenable], repository=repository)
 
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("control-free"), UserRole.ADMIN
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("control-free"))
         headers = raw_auth_headers(pair["access_token"])
         pid = str(
             (
@@ -1175,9 +1141,7 @@ async def test_first_only_does_not_fallback_after_primary_failure(
     app = create_app([primary, fallback], repository=repository)
 
     with TestClient(app, raise_server_exceptions=False) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("control-first"), UserRole.ADMIN
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("control-first"))
         headers = raw_auth_headers(pair["access_token"])
         pid = str(
             (
@@ -1287,8 +1251,8 @@ async def test_search_filters_provider_with_search_bit_off_keeps_fetch_eligible(
     app = create_app([search_off, fallback], repository=repository)
 
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("control-search-off"), UserRole.ADMIN
+        pair = await register_system_admin_login(
+            client, repository, temp_email("control-search-off")
         )
         headers = raw_auth_headers(pair["access_token"])
         pid = str(
@@ -1337,7 +1301,8 @@ async def test_rest_and_mcp_success_record_latency_and_success_status(
         [mcp_adapter],
         repository=repository,
         auth_service=http_jwt_service(repository),
-        stdio_token=SecretStr(pair["access_token"]),
+        # A1: MCP takes a project key, issued by the human project admin.
+        stdio_token=(await key_for_account(repository, account_id_from_pair(pair), UUID(pid))).key,
     )
     mcp_result = await server.call_tool(
         "search", {"request": {"project_id": pid, "query": "telemetry"}}
@@ -1390,9 +1355,7 @@ async def test_failure_records_zero_unit_failure_usage_and_degraded_health(
     app = create_app([adapter], repository=repository)
 
     with TestClient(app, raise_server_exceptions=False) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("control-fail"), UserRole.ADMIN
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("control-fail"))
         headers = raw_auth_headers(pair["access_token"])
         pid = str(
             (
@@ -1664,9 +1627,7 @@ async def test_supported_admin_writes_invalidate_warm_cache(
 
         app = create_app([ControlAdapter("exa")], repository=repository)
         with TestClient(app) as client:
-            pair = await register_promote_login(
-                client, repository, temp_email("control-warm"), UserRole.ADMIN
-            )
+            pair = await register_system_admin_login(client, repository, temp_email("control-warm"))
             headers = raw_auth_headers(pair["access_token"])
             patched_rest = client.patch(
                 "/api/v1/providers/exa", json={"priority": 51}, headers=headers
@@ -1810,8 +1771,8 @@ async def test_tavily_patch_persists_key_environment_and_paygo(
 
     app = create_app([], repository=repository)
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("control-tavily-patch"), UserRole.ADMIN
+        pair = await register_system_admin_login(
+            client, repository, temp_email("control-tavily-patch")
         )
         headers = raw_auth_headers(pair["access_token"])
         response = client.patch(
@@ -1838,8 +1799,8 @@ async def test_tavily_patch_survives_repository_reopen(
     try:
         app = create_app([], repository=first)
         with TestClient(app) as client:
-            pair = await register_promote_login(
-                client, first, temp_email("control-tavily-reopen"), UserRole.ADMIN
+            pair = await register_system_admin_login(
+                client, first, temp_email("control-tavily-reopen")
             )
             headers = raw_auth_headers(pair["access_token"])
             response = client.patch(
@@ -1873,8 +1834,8 @@ async def test_tavily_keyless_secret_presence_and_rebuild(
 
     app = create_app([], repository=repository)
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("control-tavily-rebuild"), UserRole.ADMIN
+        pair = await register_system_admin_login(
+            client, repository, temp_email("control-tavily-rebuild")
         )
         headers = raw_auth_headers(pair["access_token"])
         listing = client.get("/api/v1/providers", headers=headers)
@@ -1907,8 +1868,8 @@ async def test_tavily_env_patch_list_get_readback_dev_prod(
 
     app = create_app([], repository=repository)
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("control-tavily-readback"), UserRole.ADMIN
+        pair = await register_system_admin_login(
+            client, repository, temp_email("control-tavily-readback")
         )
         headers = raw_auth_headers(pair["access_token"])
 
@@ -1942,8 +1903,8 @@ async def test_tavily_env_patch_list_get_readback_dev_prod(
     # Restart with the same repository keeps the confirmed stored value.
     restarted = create_app([], repository=repository)
     with TestClient(restarted) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("control-tavily-restart"), UserRole.ADMIN
+        pair = await register_system_admin_login(
+            client, repository, temp_email("control-tavily-restart")
         )
         headers = raw_auth_headers(pair["access_token"])
         assert (
@@ -1960,12 +1921,10 @@ async def test_tavily_env_patch_denied_for_project_scoped_admin(
 
     app = create_app([], repository=repository)
     with TestClient(app) as client:
-        system_pair = await register_promote_login(
-            client, repository, temp_email("control-tavily-system"), UserRole.ADMIN
+        system_pair = await register_system_admin_login(
+            client, repository, temp_email("control-tavily-system")
         )
-        project_admin_pair = await register_promote_login(
-            client, repository, temp_email("control-tavily-project"), UserRole.AGENT
-        )
+        project_admin_pair = register_and_login(client, temp_email("control-tavily-project"))
         async with repository.session() as session:
             await ProjectRepository(session).create_project_with_admin(
                 account_id=DEFAULT_INSTALLATION_ACCOUNT_ID,
@@ -2010,8 +1969,8 @@ async def test_tavily_env_patch_rejects_invalid_value(
 
     app = create_app([], repository=repository)
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("control-tavily-invalid"), UserRole.ADMIN
+        pair = await register_system_admin_login(
+            client, repository, temp_email("control-tavily-invalid")
         )
         headers = raw_auth_headers(pair["access_token"])
         rejected = client.patch(
@@ -2155,8 +2114,8 @@ async def test_tavily_env_switch_keeps_shared_bucket_with_zero_vendor_calls(
 
     app = create_app([], repository=repository)
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("control-tavily-bucket"), UserRole.ADMIN
+        pair = await register_system_admin_login(
+            client, repository, temp_email("control-tavily-bucket")
         )
         headers = raw_auth_headers(pair["access_token"])
 
@@ -2202,8 +2161,8 @@ async def test_tavily_env_switch_keeps_shared_bucket_with_zero_vendor_calls(
     # Restart with the same repository keeps the confirmed stored value.
     restarted = create_app([], repository=repository)
     with TestClient(restarted) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("control-tavily-bucket-restart"), UserRole.ADMIN
+        pair = await register_system_admin_login(
+            client, repository, temp_email("control-tavily-bucket-restart")
         )
         headers = raw_auth_headers(pair["access_token"])
         assert (

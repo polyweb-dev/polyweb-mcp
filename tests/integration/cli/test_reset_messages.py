@@ -78,11 +78,9 @@ async def test_users_cli_prints_the_reset_message(
 
     exit_code = await _run(
         [
-            "set-role",
+            "grant-system-admin",
             "--user-id",
             str(uuid4()),
-            "--role",
-            "agent",
             "--database",
             str(older_database),
         ]
