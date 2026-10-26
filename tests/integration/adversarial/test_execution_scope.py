@@ -268,9 +268,10 @@ async def test_mcp_tool_rejects_non_member_project(
     adapter = _CountingAdapter()
     owner_attr = await seed_execution_project(repository, name="B")
     await seed_execution_user(repository, "adv-mcp")
-    from tests.fixtures.auth import mcp_account_token
+    from tests.fixtures.api_keys import mcp_key_credentials
 
-    svc, token, _email = await mcp_account_token(repository, "adv-mcp-tool")
+    # A1: MCP authenticates with a project key; naming another project fails.
+    svc, token, _own_pid = await mcp_key_credentials(repository, "adv-mcp-tool")
     server = create_server(
         [adapter],
         repository=repository,
@@ -515,62 +516,62 @@ async def test_rejections_leave_no_side_effects(
 async def test_mcp_rejections_leave_no_side_effects(
     repository: SQLiteRepository, auth_secret: str, tool: str
 ) -> None:
-    """MCP tool rejections produce generic errors and zero side effects."""
+    """MCP tool rejections produce generic errors and zero side effects (A1 key model)."""
     from mcp.server.fastmcp.exceptions import ToolError
+
+    from tests.fixtures.api_keys import (
+        archive_project,
+        expire_key,
+        issue_project_key,
+    )
+    from tests.fixtures.auth import auth_service_for
 
     adapter = _CountingAdapter()
     await _arm_limits(repository, adapter.name)
-    from tests.fixtures.auth import mcp_account_token
-    from tests.fixtures.execution import account_id_from_token
-
-    svc, token, _email = await mcp_account_token(repository, f"adv-mcp-{tool}")
+    svc = auth_service_for(repository)
+    other_scope = "search.execute" if tool == "fetch" else "fetch.execute"
+    live = await issue_project_key(repository, prefix=f"adv-mcp-{tool}")
     foreign = await seed_execution_project(repository, name="Foreign")
-    limited = await seed_execution_project(repository, name="Limited")
-    user_id = account_id_from_token(token)
-    await add_execution_member(
-        repository,
-        project_id=limited.project_id,
-        user_id=user_id,
-        role_key=BuiltinRole.TOKEN_MANAGER,
-    )
-    archived = await seed_execution_project(repository, user_id=user_id, name="Archived")
-    async with repository.session() as session:
-        from sqlalchemy import text
+    limited = await issue_project_key(repository, prefix=f"adv-lim-{tool}", scopes={other_scope})
+    archived = await issue_project_key(repository, prefix=f"adv-arch-{tool}")
+    await archive_project(repository, archived.project_id)
+    revoked = await issue_project_key(repository, prefix=f"adv-rev-{tool}")
+    from freesearch.services.api_keys import ApiKeyService
 
-        await session.execute(
-            text("UPDATE projects SET status = 'archived' WHERE id = :pid").bindparams(
-                pid=str(archived.project_id)
-            )
+    await ApiKeyService(repository).revoke(revoked.owner, revoked.project_id, revoked.api_key_id)
+    expired = await issue_project_key(repository, prefix=f"adv-exp-{tool}")
+    await expire_key(repository, expired)
+
+    def args(pid: str | None) -> dict[str, dict[str, object]]:
+        request: dict[str, object] = (
+            {"url": "https://example.com/x"} if tool == "fetch" else {"query": "probe"}
         )
-        await session.commit()
+        if pid is not None:
+            request["project_id"] = pid
+        return {"request": request}
 
-    server = create_server(
-        [adapter],
-        repository=repository,
-        auth_service=svc,
-        stdio_token=SecretStr(token.get_secret_value()),
-    )
-
-    def args(pid: str) -> dict[str, dict[str, object]]:
-        if tool == "fetch":
-            return {"request": {"project_id": pid, "url": "https://example.com/x"}}
-        return {"request": {"project_id": pid, "query": "probe"}}
+    def server_for(raw: str | None) -> object:
+        return create_server(
+            [adapter],
+            repository=repository,
+            auth_service=svc,
+            stdio_token=None if raw is None else SecretStr(raw),
+        )
 
     ghost = "00000000-0000-4000-8000-0000000000ee"
     cases = [
-        (args(ghost), "project is unavailable"),
-        (args(str(foreign.project_id)), "project is unavailable"),
-        (args(str(limited.project_id)), "execution is not permitted"),
-        (args(str(archived.project_id)), "project is archived"),
+        (live.raw, args(ghost), "project is unavailable"),
+        (live.raw, args(str(foreign.project_id)), "project is unavailable"),
+        (limited.raw, args(str(limited.project_id)), "execution is not permitted"),
+        (limited.raw, args(None), "execution is not permitted"),
+        (archived.raw, args(str(archived.project_id)), "project is archived"),
+        (revoked.raw, args(str(revoked.project_id)), "authentication is required"),
+        (expired.raw, args(str(expired.project_id)), "authentication is required"),
+        (None, args(str(live.project_id)), "authentication is required"),
     ]
-    for call_args, message in cases:
+    for raw, call_args, message in cases:
         with pytest.raises(ToolError, match=message):
-            await server.call_tool(tool, call_args)
-
-    # Anonymous: a server without a stdio credential rejects before anything.
-    anon = create_server([adapter], repository=repository, auth_service=svc)
-    with pytest.raises(ToolError):
-        await anon.call_tool(tool, args(str(foreign.project_id)))
+            await server_for(raw).call_tool(tool, call_args)  # type: ignore[attr-defined]
 
     assert adapter.search_calls == 0
     assert adapter.fetch_calls == 0

@@ -4,10 +4,10 @@ Feature: Local user accounts, migration, and settings
   I want local accounts, safe migration, and explicit settings
   So that later turns can guard API and MCP tools
 
-  Scenario: Local account creation normalizes email and defaults to Agent
+  Scenario: Local account creation normalizes email and creates an ordinary account
     Given an offline users repository with a temporary database
     When I create a local account with email "Ops@Example.COM"
-    Then the stored account should use email "ops@example.com" and role "agent"
+    Then the stored account should use email "ops@example.com" and hold no system role
     And the stored password hash should verify with the password helper
 
   Scenario: Provider seam rejects invalid rows and WorkOS cannot use local login
@@ -16,11 +16,11 @@ Feature: Local user accounts, migration, and settings
     Then the database should reject each invalid account row
     And a WorkOS account with a null hash should have no local password hash
 
-  Scenario: Role column defaults to Agent with superuser consistency
+  Scenario: A new account holds no system role and no superuser flag
     Given an offline users repository with a temporary database
     When I create a local account with email "agent@example.com"
-    Then the stored account should use email "agent@example.com" and role "agent"
-    And the Agent account should not carry the superuser flag
+    Then the stored account should use email "agent@example.com" and hold no system role
+    And the ordinary account should not carry the superuser flag
 
   Scenario: A pre-alpha users database is refused with a reset message and intact data
     Given a pre-Alembic users database with historical usage rows
@@ -40,10 +40,10 @@ Feature: Local user accounts, migration, and settings
     When I submit an offline users search
     Then the offline users search should succeed with the stub provider
 
-  Scenario: Registration creates an Agent and login returns a Bearer pair
+  Scenario: Registration creates an ordinary account and login returns a Bearer pair
     Given an offline users API with account auth and stub adapters
     When I register account "auth-bdd@example.com"
-    Then the registration should create an Agent account without tokens
+    Then the registration should create an ordinary account without tokens
     When I log in as the registered account
     Then the login should return a Bearer pair with a 900-second access token
     When I read my account with the access token
@@ -52,7 +52,7 @@ Feature: Local user accounts, migration, and settings
   Scenario: Wrong credentials and tokens fail closed
     Given an offline users API with account auth and stub adapters
     When I register account "closed-bdd@example.com"
-    Then the registration should create an Agent account without tokens
+    Then the registration should create an ordinary account without tokens
     When I log in with a wrong password
     Then the login should fail with bad credentials
     When I read my account without a token
@@ -75,7 +75,7 @@ Feature: Local user accounts, migration, and settings
   Scenario: Repeated failed logins return HTTP 429
     Given an offline users API with account auth and stub adapters
     When I register account "limit-bdd@example.com"
-    Then the registration should create an Agent account without tokens
+    Then the registration should create an ordinary account without tokens
     When I fail login five times and then once more
     Then the sixth login should fail with HTTP 429 and a retry delay
 
@@ -87,7 +87,7 @@ Feature: Local user accounts, migration, and settings
   Scenario: Refresh rotates once and logout revokes the family
     Given an offline users API with account auth and stub adapters
     When I register account "cycle-bdd@example.com"
-    Then the registration should create an Agent account without tokens
+    Then the registration should create an ordinary account without tokens
     When I log in as the registered account
     Then the login should return a Bearer pair with a 900-second access token
     When I refresh with the refresh token
@@ -98,7 +98,7 @@ Feature: Local user accounts, migration, and settings
   Scenario: Consumed-token reuse revokes the whole family
     Given an offline users API with account auth and stub adapters
     When I register account "replay-bdd@example.com"
-    Then the registration should create an Agent account without tokens
+    Then the registration should create an ordinary account without tokens
     When I log in as the registered account
     Then the login should return a Bearer pair with a 900-second access token
     When I refresh with the refresh token
@@ -110,7 +110,7 @@ Feature: Local user accounts, migration, and settings
   Scenario: Successful login clears only the pair limit
     Given an offline users API with account auth and stub adapters
     When I register account "pair-clear-bdd@example.com"
-    Then the registration should create an Agent account without tokens
+    Then the registration should create an ordinary account without tokens
     When I fail login four times
     And I log in as the registered account
     Then the login should return a Bearer pair with a 900-second access token
@@ -145,31 +145,31 @@ Feature: Local user accounts, migration, and settings
   Scenario: Credentials work only on their own routes
     Given an offline users API with account auth and stub adapters
     When I register account "separate-bdd@example.com"
-    Then the registration should create an Agent account without tokens
+    Then the registration should create an ordinary account without tokens
     When I log in as the registered account
     Then the login should return a Bearer pair with a 900-second access token
     When I use the refresh token on search and the access token on refresh
     Then both misplaced credentials should fail with HTTP 401
 
-  Scenario: Provider controls follow the Admin Developer Agent matrix
+  Scenario: Provider controls follow scoped system and project authority
     Given an offline users API with account auth and stub adapters
-    When I prepare Admin, Developer, and Agent accounts
+    When I prepare system admin, project admin, and member accounts
     Then anonymous control calls should fail with HTTP 401
-    And provider reads should allow Admin and Developer but deny Agent
-    And provider mutations should allow Admin but deny Developer and Agent
-    And Agent search should succeed
+    And provider reads should allow only the system admin
+    And provider mutations should allow only the system admin
+    And the member should search its project but the system admin should not
 
   Scenario: Browser login issues a strict cookie without a JSON refresh credential
     Given an offline users API with browser cookie transport
     When I register account "browser-bdd@example.com"
-    Then the registration should create an Agent account without tokens
+    Then the registration should create an ordinary account without tokens
     When I log in through the browser
     Then the browser login should issue a strict cookie without a JSON refresh credential
 
   Scenario: Non-browser clients keep JSON pairs without cookies
     Given an offline users API with browser cookie transport
     When I register account "programmatic-bdd@example.com"
-    Then the registration should create an Agent account without tokens
+    Then the registration should create an ordinary account without tokens
     When I log in as the registered account
     Then the login should return a Bearer pair with a 900-second access token
     And the programmatic login should set no cookie
@@ -177,7 +177,7 @@ Feature: Local user accounts, migration, and settings
   Scenario: Browser refresh rotates the cookie and reuse revokes the family
     Given an offline users API with browser cookie transport
     When I register account "browser-rotate-bdd@example.com"
-    Then the registration should create an Agent account without tokens
+    Then the registration should create an ordinary account without tokens
     When I log in through the browser
     Then the browser login should issue a strict cookie without a JSON refresh credential
     When I refresh through the browser cookie
@@ -189,7 +189,7 @@ Feature: Local user accounts, migration, and settings
   Scenario: Browser logout deletes the cookie and invalid Origin keeps the family
     Given an offline users API with browser cookie transport
     When I register account "browser-logout-bdd@example.com"
-    Then the registration should create an Agent account without tokens
+    Then the registration should create an ordinary account without tokens
     When I log in through the browser
     Then the browser login should issue a strict cookie without a JSON refresh credential
     When I refresh with an invalid Origin
@@ -197,53 +197,47 @@ Feature: Local user accounts, migration, and settings
     When I log out through the browser cookie
     Then the browser logout should revoke the family and expire the cookie
 
-  Scenario: Each role signs up and logs in with its own role
+  Scenario: Signup cannot request a role
     Given an offline users API with account auth and stub adapters
     When I register with role "admin" as "t2-admin-bdd@example.com"
-    Then the role signup should create "admin" without tokens
+    Then the role signup should be refused with HTTP 422
     When I register with role "developer" as "t2-developer-bdd@example.com"
-    Then the role signup should create "developer" without tokens
+    Then the role signup should be refused with HTTP 422
     When I register with role "agent" as "t2-agent-bdd@example.com"
-    Then the role signup should create "agent" without tokens
-    When I log in with role "admin" as "t2-admin-bdd@example.com"
-    Then the role login should report "admin" with a 900-second access token
+    Then the role signup should be refused with HTTP 422
 
-  Scenario: Old callers omit the role and still create Agent
+  Scenario: Signup without a role creates an ordinary account
     Given an offline users API with account auth and stub adapters
     When I register account "t2-omitted-bdd@example.com"
-    Then the registration should create an Agent account without tokens
+    Then the registration should create an ordinary account without tokens
 
-  Scenario: Admin creates each role without project association
+  Scenario: A system admin provisions one ordinary account
     Given an offline users API with account auth and stub adapters
-    When I prepare Admin, Developer, and Agent accounts
-    And the Admin provisions an "admin" account
-    Then the provisioning should create "admin" without credentials and keep the caller live
-    When the Admin provisions a "developer" account
-    Then the provisioning should create "developer" without credentials and keep the caller live
-    When the Admin provisions an "agent" account
-    Then the provisioning should create "agent" without credentials and keep the caller live
+    When I prepare system admin, project admin, and member accounts
+    And the system admin provisions an account
+    Then the provisioning should create an ordinary account without credentials
 
-  Scenario: Other roles cannot provision accounts
+  Scenario: Accounts without system authority cannot provision accounts
     Given an offline users API with account auth and stub adapters
-    When I prepare Admin, Developer, and Agent accounts
-    Then a Developer provisioning should fail with HTTP 403
-    And an Agent provisioning should fail with HTTP 403
+    When I prepare system admin, project admin, and member accounts
+    Then a project admin provisioning should fail with HTTP 403
+    And a member provisioning should fail with HTTP 403
     And an anonymous provisioning should fail with HTTP 401
 
   Scenario: Legacy account lookup and role change deny every caller
     Given an offline users API with account auth and stub adapters
-    When I prepare Admin, Developer, and Agent accounts
+    When I prepare system admin, project admin, and member accounts
     Then legacy account routes should deny every role with HTTP 403 and keep sessions live
 
   Scenario: Public and provisioning creation share one limit
     Given an offline users API with account auth and stub adapters
-    When I prepare one Admin account
+    When I prepare one system admin account
     And I consume the shared creation limit
     Then the sixth creation should fail with HTTP 429 and a retry delay
 
   Scenario: Creation input stays safe
     Given an offline users API with account auth and stub adapters
-    When I prepare one Admin account
+    When I prepare one system admin account
     Then invalid creation roles should fail with safe HTTP 422
     And privileged creation fields should fail with safe HTTP 422
     And weak provisioned passwords and duplicate email should fail safely

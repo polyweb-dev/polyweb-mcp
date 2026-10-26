@@ -15,6 +15,14 @@ If there is no `.codegraph/` directory, skip CodeGraph entirely — indexing is 
 - **Unit Tests**: Use unit tests to lock down code behavior. They should be fast, isolated, and exercise domain models, calculations, components, and functions directly with proper mocking of external dependencies.
 - **Integration Tests**: Use integration tests to verify functionality through the layers, validating critical paths, cross-module communication, real database interactions, migrations, APIs, and edge cases.
 
+## Multi-agent workflow efficiency
+These rules are distilled from prior agent runs. Following them can save hours: most of the lost time came from strictly sequential agent runs and repeated full-suite runs.
+- **Settle decisions up front.** Before asking the user, read the relevant spec, schema and code. Then ask each decision once, with the criterion, the current state and the concrete options. Do not ask follow-up rounds for missing context.
+- **Overlap independent work.** Once the contracts are settled, test fixture and model migration work can run alongside implementation, because it depends on the contracts, not the finished code. Run strictly in sequence only when the user asks for it. Run independent checks in the background instead of blocking on each one.
+- **Test narrowly while iterating.** Agents run only the test files that cover their change. Run the full `tests/unit tests/integration` suite at most once per agent round. Do not run a baseline full suite unless a regression comparison needs one.
+- **Run Behave only when it matters.** Run it when BDD features or steps change, or at the final gate. Leave out the `@latency` scenarios in routine runs: `uv run --no-sync behave --tags="not @live and not @latency"`. Passing `--tags` replaces the default `not @live`, so keep it in the expression. Run them only when the request path changes and at the card's latency gate.
+- **Batch feedback.** Review a whole agent round, then send all defects and rulings in one handoff. Ask agents for exact failing test IDs so the next round can run only those tests first.
+
 ## UI unit tests
 - We only support desktop view, not the mobile view.
 - In `freesearch-ui/src`, colocate each unit/component test with its source as `<basename>.test.ts` or `<basename>.test.tsx`; keep one canonical test file per source and never add suffix variants.

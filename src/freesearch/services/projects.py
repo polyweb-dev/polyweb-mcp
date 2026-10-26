@@ -17,6 +17,9 @@ changes (TASK-000019):
   transaction, including bulk deactivation.
 * An archived project remains protected by the same administrator invariant;
   membership and role changes still run through this live guarded path.
+* Every effective membership, role and project lifecycle change appends one
+  project audit event in the same transaction; account deactivation appends a
+  system audit event. Details carry identifiers and role keys only.
 
 The operator CLI can request the trusted deactivation path because it runs under
 filesystem/operator privilege. That path still executes the identical
@@ -43,6 +46,7 @@ from freesearch.models.projects import (
     ProjectAccessRead,
     ProjectCreate,
     ProjectMemberAdd,
+    ProjectMemberChange,
     ProjectMemberRead,
     ProjectMembersBulkUpdate,
     ProjectMemberUpdate,
@@ -53,7 +57,9 @@ from freesearch.models.projects import (
     ScopeType,
     SystemAccessRead,
 )
-from freesearch.models.users import UserAccount, UserPrincipal, UserRole
+from freesearch.models.schema_enums import AuditActorType, AuditCategory, AuditOutcome
+from freesearch.models.users import UserAccount, UserPrincipal
+from freesearch.persistence.audit import AuditRepository
 from freesearch.persistence.auth_sessions import AuthSessionRepository
 from freesearch.persistence.projects import (
     ProjectMembershipRow,
@@ -70,11 +76,22 @@ from freesearch.services.authorization import (
     project_role_permissions,
     system_query,
 )
+from freesearch.services.users import AuthLastSystemAdmin
 
 #: Stable conflict code returned when a write would leave a project admin-free.
 LAST_PROJECT_ADMIN: str = "LAST_PROJECT_ADMIN"
 #: Conflict code for a mutation that targets an archived project.
 PROJECT_ARCHIVED: str = "PROJECT_ARCHIVED"
+
+#: Audit action names of project, membership, role and account changes.
+PROJECT_CREATED: str = "project.created"
+PROJECT_ARCHIVED_EVENT: str = "project.archived"
+MEMBER_ADDED: str = "member.added"
+MEMBER_STATUS_CHANGED: str = "member.status_changed"
+MEMBER_REMOVED: str = "member.removed"
+ROLE_ASSIGNED: str = "role.assigned"
+ROLE_REMOVED: str = "role.removed"
+ACCOUNT_DEACTIVATED: str = "account.deactivated"
 
 _T = TypeVar("_T")
 
@@ -261,13 +278,25 @@ class ProjectService:
                     update={"initial_admin_user_id": admin.id}
                 )
             try:
-                project, _member, _role = await repository.create_project_with_admin(
+                project, member, _role = await repository.create_project_with_admin(
                     account_id=self._account_id,
                     created_by=actor.id,
                     project_create=resolved_create,
                 )
             except ValueError as error:
                 raise ProjectValidationError(str(error)) from error
+            await _project_event(
+                session,
+                project.id,
+                PROJECT_CREATED,
+                actor,
+                target_type="project",
+                target_id=project.id,
+                detail={
+                    "initial_admin_user_id": str(member.user_id),
+                    "role_key": BuiltinRole.PROJECT_ADMIN.value,
+                },
+            )
             return project
 
         return await self._write(operation)
@@ -283,7 +312,7 @@ class ProjectService:
 
         async def operation(session: AsyncSession) -> ProjectRead:
             repository = ProjectRepository(session)
-            project = await self._require_project(repository, project_id)
+            project = await self._require_project(session, repository, actor, project_id)
             await self._authorization.require_in_session(
                 session,
                 project_query(actor, PermissionAction.PROJECT_ARCHIVE, project_id=project_id),
@@ -291,10 +320,20 @@ class ProjectService:
             if project.status is ProjectStatus.ARCHIVED:
                 return project
             await self._require_active_admin(session, repository, {project_id})
-            return await repository.set_project_status(
+            archived = await repository.set_project_status(
                 project_id=project_id,
                 status=ProjectStatus.ARCHIVED,
             )
+            await _project_event(
+                session,
+                project_id,
+                PROJECT_ARCHIVED_EVENT,
+                actor,
+                target_type="project",
+                target_id=project_id,
+                detail={"status": ProjectStatus.ARCHIVED.value},
+            )
+            return archived
 
         return await self._write(operation)
 
@@ -309,7 +348,7 @@ class ProjectService:
         try:
             async with self._repository.session() as session:
                 repository = ProjectRepository(session)
-                await self._require_project(repository, project_id)
+                await self._require_project(session, repository, actor, project_id)
                 await self._authorization.require_in_session(
                     session,
                     project_query(actor, PermissionAction.MEMBERS_READ, project_id=project_id),
@@ -331,7 +370,7 @@ class ProjectService:
 
         async def operation(session: AsyncSession) -> ProjectMemberRead:
             repository = ProjectRepository(session)
-            project = await self._require_project(repository, project_id)
+            project = await self._require_project(session, repository, actor, project_id)
             await self._authorization.require_in_session(
                 session,
                 project_query(actor, PermissionAction.MEMBERS_MANAGE, project_id=project_id),
@@ -357,6 +396,9 @@ class ProjectService:
                 )
             except ValueError as error:
                 raise ProjectValidationError(str(error)) from error
+            await _member_event(
+                session, project_id, MEMBER_ADDED, actor, user_id, {"role_key": initial_role}
+            )
             return member
 
         return await self._write(operation)
@@ -374,7 +416,7 @@ class ProjectService:
 
         async def operation(session: AsyncSession) -> ProjectMemberRead:
             repository = ProjectRepository(session)
-            project = await self._require_project(repository, project_id)
+            project = await self._require_project(session, repository, actor, project_id)
             await self._authorization.require_in_session(
                 session,
                 project_query(actor, PermissionAction.MEMBERS_MANAGE, project_id=project_id),
@@ -398,12 +440,22 @@ class ProjectService:
                 for role_key in member.roles:
                     await self._authorize_delegation(session, actor, project_id, role_key)
             self._reject_archived_expansion(project, expanding=reactivating)
+            previous_status = membership.status
             updated = await repository.update_membership_status(
                 project_id=project_id,
                 user_id=user_id,
                 status=member_update.status,
             )
             await self._require_active_admin(session, repository, {project_id})
+            if previous_status != member_update.status.value:
+                await _member_event(
+                    session,
+                    project_id,
+                    MEMBER_STATUS_CHANGED,
+                    actor,
+                    user_id,
+                    {"status": member_update.status.value, "previous_status": previous_status},
+                )
             return updated
 
         return await self._write(operation)
@@ -420,14 +472,20 @@ class ProjectService:
 
         async def operation(session: AsyncSession) -> None:
             repository = ProjectRepository(session)
-            await self._require_project(repository, project_id)
+            await self._require_project(session, repository, actor, project_id)
             await self._authorization.require_in_session(
                 session,
                 project_query(actor, PermissionAction.MEMBERS_MANAGE, project_id=project_id),
             )
-            if not await repository.delete_membership(project_id=project_id, user_id=user_id):
+            existing = await repository.get_member(project_id=project_id, user_id=user_id)
+            if existing is None or not await repository.delete_membership(
+                project_id=project_id, user_id=user_id
+            ):
                 raise ProjectNotFound(f"User {user_id} is not a member of project {project_id}")
             await self._require_active_admin(session, repository, {project_id})
+            await _member_event(
+                session, project_id, MEMBER_REMOVED, actor, user_id, {"role_keys": existing.roles}
+            )
 
         await self._write(operation)
 
@@ -444,7 +502,7 @@ class ProjectService:
 
         async def operation(session: AsyncSession) -> RoleAssignmentRead:
             repository = ProjectRepository(session)
-            project = await self._require_project(repository, project_id)
+            project = await self._require_project(session, repository, actor, project_id)
             await self._authorization.require_in_session(
                 session,
                 project_query(actor, PermissionAction.ROLES_ASSIGN, project_id=project_id),
@@ -452,8 +510,9 @@ class ProjectService:
             await self._require_active_member(session, repository, project_id, user_id)
             await self._authorize_delegation(session, actor, project_id, role_key)
             self._reject_archived_expansion(project, expanding=True)
+            before = await repository.get_member(project_id=project_id, user_id=user_id)
             try:
-                return await repository.assign_project_role(
+                assignment = await repository.assign_project_role(
                     project_id=project_id,
                     user_id=user_id,
                     role_key=role_key,
@@ -461,6 +520,11 @@ class ProjectService:
                 )
             except ValueError as error:
                 raise ProjectValidationError(str(error)) from error
+            if before is None or role_key not in before.roles:
+                await _member_event(
+                    session, project_id, ROLE_ASSIGNED, actor, user_id, {"role_key": role_key}
+                )
+            return assignment
 
         return await self._write(operation)
 
@@ -477,7 +541,7 @@ class ProjectService:
 
         async def operation(session: AsyncSession) -> None:
             repository = ProjectRepository(session)
-            await self._require_project(repository, project_id)
+            await self._require_project(session, repository, actor, project_id)
             await self._authorization.require_in_session(
                 session,
                 project_query(actor, PermissionAction.ROLES_ASSIGN, project_id=project_id),
@@ -493,6 +557,9 @@ class ProjectService:
             ):
                 raise ProjectNotFound(f"User {user_id} has no {role_key!r} role in this project")
             await self._require_active_admin(session, repository, {project_id})
+            await _member_event(
+                session, project_id, ROLE_REMOVED, actor, user_id, {"role_key": role_key}
+            )
 
         await self._write(operation)
 
@@ -508,7 +575,7 @@ class ProjectService:
 
         async def operation(session: AsyncSession) -> list[ProjectMemberRead]:
             repository = ProjectRepository(session)
-            project = await self._require_project(repository, project_id)
+            project = await self._require_project(session, repository, actor, project_id)
             await self._authorization.require_in_session(
                 session,
                 project_query(actor, PermissionAction.MEMBERS_MANAGE, project_id=project_id),
@@ -558,35 +625,60 @@ class ProjectService:
 
             updated: list[ProjectMemberRead] = []
             for change in bulk_update.changes:
-                if change.status is not None:
-                    await repository.update_membership_status(
-                        project_id=project_id,
-                        user_id=change.user_id,
-                        status=change.status,
-                    )
-                for role_key in sorted(change.add_roles):
-                    await repository.assign_project_role(
-                        project_id=project_id,
-                        user_id=change.user_id,
-                        role_key=role_key,
-                        granted_by=actor.id,
-                    )
-                for role_key in sorted(change.remove_roles):
-                    await repository.delete_role_assignment(
-                        project_id=project_id,
-                        user_id=change.user_id,
-                        role_key=role_key,
-                    )
-                member = await repository.get_member(project_id=project_id, user_id=change.user_id)
-                if member is None:
-                    raise ProjectNotFound(
-                        f"User {change.user_id} is not a member of project {project_id}"
-                    )
-                updated.append(member)
+                updated.append(
+                    await self._apply_member_change(session, repository, actor, project_id, change)
+                )
             await self._require_active_admin(session, repository, {project_id})
             return updated
 
         return await self._write(operation)
+
+    async def _apply_member_change(
+        self,
+        session: AsyncSession,
+        repository: ProjectRepository,
+        actor: UserPrincipal,
+        project_id: UUID,
+        change: ProjectMemberChange,
+    ) -> ProjectMemberRead:
+        """Apply one bulk change and audit each effective status and role change."""
+
+        before = await repository.get_member(project_id=project_id, user_id=change.user_id)
+        if before is None:
+            raise ProjectNotFound(f"User {change.user_id} is not a member of project {project_id}")
+        user_id = change.user_id
+        if change.status is not None:
+            await repository.update_membership_status(
+                project_id=project_id, user_id=user_id, status=change.status
+            )
+            if change.status is not before.status:
+                await _member_event(
+                    session,
+                    project_id,
+                    MEMBER_STATUS_CHANGED,
+                    actor,
+                    user_id,
+                    {"status": change.status.value, "previous_status": before.status.value},
+                )
+        for role_key in sorted(change.add_roles):
+            await repository.assign_project_role(
+                project_id=project_id, user_id=user_id, role_key=role_key, granted_by=actor.id
+            )
+            if role_key not in before.roles:
+                await _member_event(
+                    session, project_id, ROLE_ASSIGNED, actor, user_id, {"role_key": role_key}
+                )
+        for role_key in sorted(change.remove_roles):
+            if await repository.delete_role_assignment(
+                project_id=project_id, user_id=user_id, role_key=role_key
+            ):
+                await _member_event(
+                    session, project_id, ROLE_REMOVED, actor, user_id, {"role_key": role_key}
+                )
+        member = await repository.get_member(project_id=project_id, user_id=user_id)
+        if member is None:
+            raise ProjectNotFound(f"User {user_id} is not a member of project {project_id}")
+        return member
 
     async def deactivate_accounts(
         self,
@@ -601,6 +693,8 @@ class ProjectService:
         authorization service checks ``system.roles.assign`` at system scope.
         The operator CLI uses ``trusted=True`` because it already runs under
         operator filesystem privilege; the project invariant still applies.
+        Both paths refuse to deactivate the last active system administrator
+        with :class:`~freesearch.services.users.AuthLastSystemAdmin`.
         """
 
         self._rollout.require_management()
@@ -631,12 +725,29 @@ class ProjectService:
             admin_project_ids = await self._admin_project_ids(session, set(unique_ids))
             now = datetime.now(UTC)
             sessions = AuthSessionRepository(session)
+            changed: list[UUID] = []
             for user in users:
+                if user.is_active:
+                    changed.append(user.id)
                 user.is_active = False
                 await sessions.revoke_user_families(user.id, now=now)
             await session.flush()
             await self._require_active_admin(session, repository, admin_project_ids)
-            return [_user_account(user) for user in users]
+            await self._require_active_system_admin(repository, changed)
+            audit = AuditRepository(session)
+            for user_id in changed:
+                await audit.append_system_event(
+                    account_id=self._account_id,
+                    category=AuditCategory.AUDIT,
+                    action=ACCOUNT_DEACTIVATED,
+                    actor_type=AuditActorType.HUMAN if actor is not None else AuditActorType.SYSTEM,
+                    actor_id=actor.id if actor is not None else None,
+                    outcome=AuditOutcome.SUCCESS,
+                    target_type="user",
+                    target_id=str(user_id),
+                    detail={"admin_project_count": len(admin_project_ids)},
+                )
+            return [UserAccount.model_validate(user) for user in users]
 
         return await self._write(operation)
 
@@ -676,11 +787,28 @@ class ProjectService:
 
     async def _require_project(
         self,
+        session: AsyncSession,
         repository: ProjectRepository,
+        actor: UserPrincipal,
         project_id: UUID,
     ) -> ProjectRead:
+        """Return a project the actor can reach, else the inaccessible-resource 404.
+
+        An unknown project and a caller without active membership (or an
+        inactive account) get the same :class:`ProjectNotFound`, so a
+        project-scoped route never reveals that a project exists. A member who
+        lacks the operation's permission is then denied by the caller's check.
+        """
+
         project = await repository.get_project(project_id=project_id, account_id=self._account_id)
-        if project is None:
+        context = (
+            None
+            if project is None
+            else await self._authorization.resolve_project_context_in_session(
+                session, human_principal(actor), project_id
+            )
+        )
+        if project is None or context is None:
             raise ProjectNotFound(f"Project {project_id} does not exist")
         return project
 
@@ -775,6 +903,25 @@ class ProjectService:
                 "the change would leave a project without an active administrator",
             )
 
+    async def _require_active_system_admin(
+        self, repository: ProjectRepository, deactivated: Sequence[UUID]
+    ) -> None:
+        """Refuse a deactivation that leaves the installation without a system admin."""
+
+        if not deactivated:
+            return
+        holders = {
+            assignment.user_id
+            for assignment in await repository.get_system_role_assignments(
+                account_id=self._account_id
+            )
+            if assignment.role_key == BuiltinRole.SYSTEM_ADMIN.value
+        }
+        if not holders & set(deactivated):
+            return
+        if await repository.count_active_system_admins(account_id=self._account_id) == 0:
+            raise AuthLastSystemAdmin("the change would leave no active system administrator")
+
     async def _admin_project_ids(
         self,
         session: AsyncSession,
@@ -802,26 +949,56 @@ class ProjectService:
         return {UUID(project_id) for project_id in rows}
 
 
-def _user_account(user: UserRow) -> UserAccount:
-    """Project one account row onto the safe account contract."""
+async def _project_event(
+    session: AsyncSession,
+    project_id: UUID,
+    action: str,
+    actor: UserPrincipal,
+    *,
+    target_type: str,
+    target_id: UUID,
+    detail: dict[str, object],
+) -> None:
+    """Append one human-attributed project audit event in the caller's transaction."""
 
-    try:
-        role = UserRole(user.role)
-    except ValueError:
-        role = UserRole.AGENT
-    return UserAccount(
-        id=user.id,
-        email=user.email,
-        role=role,
-        is_active=bool(user.is_active),
-        is_superuser=bool(user.is_superuser),
-        is_verified=bool(user.is_verified),
+    await AuditRepository(session).append_project_event(
+        project_id=project_id,
+        action=action,
+        actor_type=AuditActorType.HUMAN,
+        actor_id=actor.id,
+        outcome=AuditOutcome.SUCCESS,
+        target_type=target_type,
+        target_id=str(target_id),
+        detail=detail,
+    )
+
+
+async def _member_event(
+    session: AsyncSession,
+    project_id: UUID,
+    action: str,
+    actor: UserPrincipal,
+    user_id: UUID,
+    detail: dict[str, object],
+) -> None:
+    """Append one membership or role audit event targeting ``user_id``."""
+
+    await _project_event(
+        session, project_id, action, actor, target_type="user", target_id=user_id, detail=detail
     )
 
 
 __all__ = [
+    "ACCOUNT_DEACTIVATED",
     "LAST_PROJECT_ADMIN",
+    "MEMBER_ADDED",
+    "MEMBER_REMOVED",
+    "MEMBER_STATUS_CHANGED",
     "PROJECT_ARCHIVED",
+    "PROJECT_ARCHIVED_EVENT",
+    "PROJECT_CREATED",
+    "ROLE_ASSIGNED",
+    "ROLE_REMOVED",
     "ProjectConflict",
     "ProjectNotFound",
     "ProjectService",

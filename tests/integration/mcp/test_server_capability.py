@@ -37,8 +37,7 @@ from freesearch.models.contracts import (
     UsageOperation,
 )
 from freesearch.persistence.storage import SQLiteRepository
-from tests.fixtures.auth import mcp_account_token
-from tests.fixtures.execution import seed_token_project
+from tests.fixtures.api_keys import mcp_key_credentials
 
 
 class _CapabilityStub(ProviderAdapter):
@@ -120,16 +119,16 @@ async def repository(tmp_path: Path) -> SQLiteRepository:
 async def _authed_server(
     repository: SQLiteRepository, adapters: list[ProviderAdapter], prefix: str
 ) -> tuple[FastMCP, str]:
-    """Build one tool server with a real account and its explicit stdio credential."""
+    """Build one tool server with a real project API key as its stdio credential."""
 
-    service, token, _email = await mcp_account_token(repository, prefix)
+    service, key, pid = await mcp_key_credentials(repository, prefix)
     server = create_server(
         adapters,
         repository=repository,
         auth_service=service,
-        stdio_token=SecretStr(token.get_secret_value()),
+        stdio_token=SecretStr(key.get_secret_value()),
     )
-    return server, str((await seed_token_project(repository, token)).project_id)
+    return server, pid
 
 
 # --- (a) {"request": ...} schema works for both tools ---

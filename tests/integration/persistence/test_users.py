@@ -11,7 +11,9 @@ from fastapi_users.password import PasswordHelper
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from freesearch.models.users import AuthProvider, UserRole, normalize_email
+from freesearch.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID, BuiltinRole
+from freesearch.models.users import AuthProvider, normalize_email
+from freesearch.persistence.projects import ProjectRepository, SystemRoleAssignmentRow
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.persistence.users import (
     LoginThrottleRow,
@@ -23,6 +25,7 @@ from tests.fixtures.auth import (
     TEMP_PASSWORD,
     auth_headers,
     create_temp_user,
+    grant_system_admin,
     temp_email,
     temp_principal,
     temp_token,
@@ -36,6 +39,20 @@ async def repository(tmp_path: Path) -> SQLiteRepository:
     repo = await SQLiteRepository.open(tmp_path / "users.db")
     yield repo
     await repo.close()
+
+
+async def _system_roles(repository: SQLiteRepository, user_id: object) -> set[str]:
+    """Return the durable system role keys of one account (the only authority source)."""
+
+    async with repository.session() as session:
+        rows = (
+            await session.execute(
+                select(SystemRoleAssignmentRow.role_key).where(
+                    SystemRoleAssignmentRow.user_id == str(user_id)
+                )
+            )
+        ).scalars()
+        return set(rows)
 
 
 async def _create(
@@ -52,7 +69,8 @@ async def test_create_normalizes_email_and_defaults_to_agent(
     user = await _create(repository, "Ops@Example.COM")
 
     assert user.email == "ops@example.com"
-    assert user.role == UserRole.AGENT.value
+    assert not hasattr(user, "role")
+    assert await _system_roles(repository, user.id) == set()
     assert user.auth_provider == AuthProvider.LOCAL.value
     assert user.auth_provider_id is None
     assert user.is_active is True
@@ -64,25 +82,24 @@ async def test_create_normalizes_email_and_defaults_to_agent(
 async def test_create_enforces_ordinary_human_defaults_and_privilege_requires_set_role(
     repository: SQLiteRepository,
 ) -> None:
-    """T2-SIGNUP: create creates ordinary human; privilege requires set_role."""
+    """T2-SIGNUP (A1): create makes an ordinary human; only a trusted grant adds authority."""
 
-    for role in (UserRole.ADMIN, UserRole.DEVELOPER, UserRole.AGENT):
+    for requested in ("admin", "developer", "agent", "system_admin"):
         async with repository.session() as session:
             database = UserDatabase(session, UserRow)
             user = await database.create(
                 {
-                    "email": temp_email(f"persist-{role.value}"),
+                    "email": temp_email(f"persist-{requested}"),
                     "hashed_password": _HELPER.hash(TEMP_PASSWORD),
-                    "role": role.value,
+                    "role": requested,
                 }
             )
-        # Safe public creation defaults to ordinary agent role
-        assert user.role == UserRole.AGENT.value
+        assert await _system_roles(repository, user.id) == set()
         assert user.is_superuser is False
         assert user.is_active is True
         assert user.is_verified is False
 
-    # Promotion to admin via set_role persists admin privilege
+    # Only the trusted bootstrap/operator path creates system authority.
     async with repository.session() as session:
         database = UserDatabase(session, UserRow)
         admin_user = await database.create(
@@ -91,20 +108,20 @@ async def test_create_enforces_ordinary_human_defaults_and_privilege_requires_se
                 "hashed_password": _HELPER.hash(TEMP_PASSWORD),
             }
         )
-        assert await database.set_role(admin_user.id, UserRole.ADMIN) is True
-        await session.commit()
+    await grant_system_admin(repository, admin_user.id)
 
+    assert await _system_roles(repository, admin_user.id) == {BuiltinRole.SYSTEM_ADMIN.value}
     async with repository.session() as session:
         reloaded = await session.get(UserRow, admin_user.id)
         assert reloaded is not None
-        assert reloaded.role == UserRole.ADMIN.value
-        assert reloaded.is_superuser is True
+        # The library flag never mirrors the assignment.
+        assert reloaded.is_superuser is False
 
 
 async def test_create_ignores_privilege_flags_and_bad_roles(
     repository: SQLiteRepository,
 ) -> None:
-    """T2-SIGNUP: client flags cannot widen authority; bad roles fall back to Agent."""
+    """T2-SIGNUP (A1): client status/privilege/provider fields never reach the row."""
 
     async with repository.session() as session:
         database = UserDatabase(session, UserRow)
@@ -112,12 +129,21 @@ async def test_create_ignores_privilege_flags_and_bad_roles(
             {
                 "email": temp_email("flagged"),
                 "hashed_password": _HELPER.hash(TEMP_PASSWORD),
-                "role": "agent",
+                "role": "admin",
                 "is_superuser": True,
+                "is_active": False,
+                "is_verified": True,
+                "auth_provider": "workos",
+                "auth_provider_id": "forged",
+                "system_role_assignments": ["system_admin"],
             }
         )
-    assert flagged.role == UserRole.AGENT.value
     assert flagged.is_superuser is False
+    assert flagged.is_active is True
+    assert flagged.is_verified is False
+    assert flagged.auth_provider == AuthProvider.LOCAL.value
+    assert flagged.auth_provider_id is None
+    assert await _system_roles(repository, flagged.id) == set()
 
     for bad in ("superadmin", "ADMIN", None):
         async with repository.session() as session:
@@ -129,7 +155,7 @@ async def test_create_ignores_privilege_flags_and_bad_roles(
                     "role": bad,
                 }
             )
-        assert fallback.role == UserRole.AGENT.value
+        assert await _system_roles(repository, fallback.id) == set()
         assert fallback.is_superuser is False
 
 
@@ -190,11 +216,9 @@ async def test_local_password_hash_branches(repository: SQLiteRepository) -> Non
         email=temp_email("workos"),
         hashed_password=None,
         is_active=True,
-        is_superuser=False,
         is_verified=False,
         auth_provider=AuthProvider.WORKOS.value,
         auth_provider_id="ext-1",
-        role=UserRole.AGENT.value,
     )
     assert local_password_hash(workos) is None
 
@@ -204,7 +228,6 @@ async def test_database_rejects_invalid_provider_shapes(repository: SQLiteReposi
         "id": uuid4(),
         "email": "shape@example.com",
         "is_active": True,
-        "is_superuser": False,
         "is_verified": False,
     }
     shapes = [
@@ -213,7 +236,6 @@ async def test_database_rejects_invalid_provider_shapes(repository: SQLiteReposi
             "hashed_password": None,
             "auth_provider": "local",
             "auth_provider_id": None,
-            "role": "agent",
             "email": "s1@example.com",
             "id": uuid4(),
         },
@@ -222,7 +244,6 @@ async def test_database_rejects_invalid_provider_shapes(repository: SQLiteReposi
             "hashed_password": "",
             "auth_provider": "local",
             "auth_provider_id": None,
-            "role": "agent",
             "email": "s2@example.com",
             "id": uuid4(),
         },
@@ -231,7 +252,6 @@ async def test_database_rejects_invalid_provider_shapes(repository: SQLiteReposi
             "hashed_password": "h",
             "auth_provider": "workos",
             "auth_provider_id": "ext-1",
-            "role": "agent",
             "email": "s3@example.com",
             "id": uuid4(),
         },
@@ -240,7 +260,6 @@ async def test_database_rejects_invalid_provider_shapes(repository: SQLiteReposi
             "hashed_password": None,
             "auth_provider": "workos",
             "auth_provider_id": None,
-            "role": "agent",
             "email": "s4@example.com",
             "id": uuid4(),
         },
@@ -249,7 +268,6 @@ async def test_database_rejects_invalid_provider_shapes(repository: SQLiteReposi
             "hashed_password": "h",
             "auth_provider": "local",
             "auth_provider_id": "ext-2",
-            "role": "agent",
             "email": "s5@example.com",
             "id": uuid4(),
         },
@@ -260,7 +278,6 @@ async def test_database_rejects_invalid_provider_shapes(repository: SQLiteReposi
             "hashed_password": None,
             "auth_provider": "github",
             "auth_provider_id": None,
-            "role": "agent",
             "email": "s7@example.com",
             "id": uuid4(),
         },
@@ -276,22 +293,55 @@ async def test_database_rejects_invalid_provider_shapes(repository: SQLiteReposi
 async def test_set_role_updates_privilege_without_commit(
     repository: SQLiteRepository,
 ) -> None:
+    """A1: the system role repository flushes in the caller's transaction, never commits."""
+
     user = await create_temp_user(repository, temp_email("role"))
+    await create_temp_user(repository, temp_email("installation-seed"), system_admin=True)
 
     async with repository.session() as session:
-        database = UserDatabase(session, UserRow)
-        assert await database.set_role(user.id, UserRole.ADMIN) is True
+        projects = ProjectRepository(session)
+        await projects.assign_system_role(
+            account_id=DEFAULT_INSTALLATION_ACCOUNT_ID,
+            user_id=user.id,
+            role_key=BuiltinRole.SYSTEM_ADMIN.value,
+            granted_by=user.id,
+        )
+        await session.rollback()
+    assert await _system_roles(repository, user.id) == set()
+
+    async with repository.session() as session:
+        projects = ProjectRepository(session)
+        await projects.assign_system_role(
+            account_id=DEFAULT_INSTALLATION_ACCOUNT_ID,
+            user_id=user.id,
+            role_key=BuiltinRole.SYSTEM_ADMIN.value,
+            granted_by=user.id,
+        )
         await session.commit()
+    assert await _system_roles(repository, user.id) == {BuiltinRole.SYSTEM_ADMIN.value}
 
     async with repository.session() as session:
-        updated = await session.get(UserRow, user.id)
-        assert updated is not None
-        assert updated.role == "admin"
-        assert updated.is_superuser is True
+        projects = ProjectRepository(session)
+        assert (
+            await projects.delete_system_role(
+                account_id=DEFAULT_INSTALLATION_ACCOUNT_ID,
+                user_id=user.id,
+                role_key=BuiltinRole.SYSTEM_ADMIN.value,
+            )
+            is True
+        )
+        await session.rollback()
+    assert await _system_roles(repository, user.id) == {BuiltinRole.SYSTEM_ADMIN.value}
 
     async with repository.session() as session:
-        database = UserDatabase(session, UserRow)
-        assert await database.set_role(uuid4(), UserRole.AGENT) is False
+        assert (
+            await ProjectRepository(session).delete_system_role(
+                account_id=DEFAULT_INSTALLATION_ACCOUNT_ID,
+                user_id=uuid4(),
+                role_key=BuiltinRole.SYSTEM_ADMIN.value,
+            )
+            is False
+        )
 
 
 async def test_login_throttle_row_persists_digest_key(repository: SQLiteRepository) -> None:
@@ -330,7 +380,8 @@ async def test_temp_fixture_helpers_use_explicit_accounts(
     token = temp_token()
 
     assert principal.email == normalize_email(email)
-    assert principal.role is UserRole.AGENT
+    assert "role" not in principal.model_dump()
+    assert await _system_roles(repository, user.id) == set()
     headers = auth_headers(token)
     assert headers["Authorization"].startswith("Bearer ")
     assert token.get_secret_value() not in repr(token)
@@ -355,35 +406,32 @@ async def test_user_row_privilege_fails_closed_across_unloaded_and_rollback(
     repository: SQLiteRepository,
 ) -> None:
     """Authority derives strictly from durable assignments; constructor and rollback fail closed."""
-    fake_admin = UserRow(email=temp_email("fake-admin"), role="admin", is_superuser=True)
-    assert fake_admin.role == UserRole.AGENT.value
-    assert fake_admin.is_superuser is False
 
-    fake_admin.role = "admin"
-    fake_admin.is_superuser = True
-    assert fake_admin.role == UserRole.AGENT.value
-    assert fake_admin.is_superuser is False
+    with pytest.raises(TypeError):
+        UserRow(email=temp_email("fake-admin"), role="admin")
+    with pytest.raises((TypeError, AttributeError)):
+        UserRow(email=temp_email("fake-admin"), is_superuser=True)
+    plain = UserRow(email=temp_email("plain"))
+    assert plain.is_superuser is False
+    with pytest.raises(AttributeError):
+        plain.is_superuser = True  # type: ignore[misc]
 
-    email = temp_email("rollback-priv")
-    user = await _create(repository, email)
-    assert user.role == UserRole.AGENT.value
-    assert user.is_superuser is False
-
+    await create_temp_user(repository, temp_email("installation-seed"), system_admin=True)
+    user = await _create(repository, temp_email("rollback-priv"))
     async with repository.session() as session:
-        database = UserDatabase(session, UserRow)
-        assert await database.set_role(user.id, UserRole.ADMIN) is True
+        await ProjectRepository(session).assign_system_role(
+            account_id=DEFAULT_INSTALLATION_ACCOUNT_ID,
+            user_id=user.id,
+            role_key=BuiltinRole.SYSTEM_ADMIN.value,
+            granted_by=user.id,
+        )
         loaded = await session.get(UserRow, user.id)
         assert loaded is not None
-        assert loaded.role == UserRole.ADMIN.value
-        assert loaded.is_superuser is True
-
+        assert loaded.is_superuser is False
         await session.rollback()
 
-        assert loaded.role == UserRole.AGENT.value
-        assert loaded.is_superuser is False
-
+    assert await _system_roles(repository, user.id) == set()
     async with repository.session() as session:
         fresh = await session.get(UserRow, user.id)
         assert fresh is not None
-        assert fresh.role == UserRole.AGENT.value
         assert fresh.is_superuser is False

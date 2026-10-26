@@ -1,9 +1,10 @@
 """P04 AC2: concurrent two-project MCP calls keep project/actor ownership.
 
-Two authenticated principals, each a member of exactly one project, issue
-concurrent single-path search, fanout search, and fetch tool calls on real
-FastMCP servers backed by one temp database and fake adapters. Every persisted
-span row and usage row must carry the caller's project and actor.
+Two project API keys (A1: MCP authenticates only with project keys), each
+bound to exactly one project, issue concurrent single-path search, fanout
+search, and fetch tool calls on real FastMCP servers backed by one temp
+database and fake adapters. Every persisted span row and usage row must carry
+the key's project and the key itself as the actor.
 """
 
 from __future__ import annotations
@@ -32,8 +33,8 @@ from freesearch.models.contracts import (
     UsageOperation,
 )
 from freesearch.persistence.storage import SQLiteRepository
-from tests.fixtures.auth import mcp_account_token
-from tests.fixtures.execution import seed_token_project
+from tests.fixtures.api_keys import issue_project_key
+from tests.fixtures.auth import auth_service_for
 
 
 class _StubAdapter(ProviderAdapter):
@@ -104,14 +105,12 @@ async def test_concurrent_two_project_tool_calls_keep_full_ownership(
     repository: SQLiteRepository, auth_secret: str
 ) -> None:
     adapters = [_StubAdapter("alpha"), _StubAdapter("beta", fail_query="fail-me")]
-    service_a, token_a, _email_a = await mcp_account_token(repository, "mcp-alice")
-    service_b, token_b, _email_b = await mcp_account_token(repository, "mcp-bob")
-    principal_a = await service_a.verify_token(token_a.get_secret_value())
-    principal_b = await service_b.verify_token(token_b.get_secret_value())
-    assert principal_a is not None and principal_b is not None
-    attr_a = await seed_token_project(repository, token_a)
-    attr_b = await seed_token_project(repository, token_b)
-    pid_a, pid_b = str(attr_a.project_id), str(attr_b.project_id)
+    key_a = await issue_project_key(repository, prefix="mcp-alice")
+    key_b = await issue_project_key(repository, prefix="mcp-bob")
+    service_a = auth_service_for(repository)
+    service_b = auth_service_for(repository)
+    token_a, token_b = key_a.key, key_b.key
+    pid_a, pid_b = str(key_a.project_id), str(key_b.project_id)
 
     server_a = create_server(
         adapters,
@@ -167,10 +166,10 @@ async def test_concurrent_two_project_tool_calls_keep_full_ownership(
         projects = {row[3] for row in rows}
         assert len(projects) == 1, f"trace {trace_id} mixes projects: {projects}"
         project_id = next(iter(projects))
-        expected_actor = str(principal_a.id) if project_id == pid_a else str(principal_b.id)
+        expected_actor = str(key_a.api_key_id) if project_id == pid_a else str(key_b.api_key_id)
         per_project[project_id] += 1
         for row in rows:
-            assert row[4] == "human"
+            assert row[4] == "project_api_key"
             assert row[5] == expected_actor, f"trace {trace_id} actor mismatch: {row[5]}"
         roots = [row for row in rows if row[1] is None]
         assert len(roots) == 1
@@ -183,8 +182,8 @@ async def test_concurrent_two_project_tool_calls_keep_full_ownership(
     for trace_id, project_id, actor_type, actor_id, _provider, _status in usage:
         assert trace_id in trace_project, f"usage row points at unknown trace {trace_id}"
         assert project_id == trace_project[trace_id]
-        assert actor_type == "human"
-        expected_actor = str(principal_a.id) if project_id == pid_a else str(principal_b.id)
+        assert actor_type == "project_api_key"
+        expected_actor = str(key_a.api_key_id) if project_id == pid_a else str(key_b.api_key_id)
         assert actor_id == expected_actor
 
     # The failing fanout run wrote one failure row plus a sibling success row

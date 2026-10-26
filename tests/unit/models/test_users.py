@@ -6,15 +6,16 @@ from uuid import uuid4
 import pytest
 from pydantic import SecretStr, ValidationError
 
+import freesearch.models.users as users_module
 from freesearch.models.users import (
-    DEFAULT_REGISTRATION_ROLE,
     REFRESH_TOKEN_BYTES,
     REFRESH_TOKEN_LENGTH,
     AuthFamily,
     AuthProvider,
     AuthTokens,
+    UserAccount,
+    UserAccountCreate,
     UserPrincipal,
-    UserRole,
     family_is_live,
     normalize_email,
 )
@@ -27,10 +28,48 @@ def test_auth_provider_values() -> None:
 
 
 def test_user_roles_and_default() -> None:
-    assert UserRole.ADMIN.value == "admin"
-    assert UserRole.DEVELOPER.value == "developer"
-    assert UserRole.AGENT.value == "agent"
-    assert DEFAULT_REGISTRATION_ROLE is UserRole.AGENT
+    # A1 replacement: the legacy admin/developer/agent vocabulary and its
+    # registration default are gone from the account contracts.
+    assert not hasattr(users_module, "UserRole")
+    assert not hasattr(users_module, "DEFAULT_REGISTRATION_ROLE")
+    for model in (UserPrincipal, UserAccount, UserAccountCreate):
+        assert "role" not in model.model_fields
+        assert "is_superuser" not in model.model_fields
+
+
+@pytest.mark.parametrize("field", ["role", "is_superuser", "account_type", "system_role"])
+def test_account_contracts_reject_privilege_fields(field: str) -> None:
+    with pytest.raises(ValidationError):
+        UserPrincipal.model_validate(
+            {
+                "id": uuid4(),
+                "email": "agent@example.com",
+                "session_id": uuid4(),
+                "is_active": True,
+                "is_verified": False,
+                field: "admin",
+            }
+        )
+    with pytest.raises(ValidationError):
+        UserAccount.model_validate(
+            {
+                "id": uuid4(),
+                "email": "agent@example.com",
+                "is_active": True,
+                "is_verified": False,
+                field: True,
+            }
+        )
+    with pytest.raises(ValidationError):
+        UserAccountCreate.model_validate(
+            {"email": "agent@example.com", "hashed_password": "hash", field: "admin"}
+        )
+
+
+def test_user_account_create_hides_password_hash_in_repr() -> None:
+    create = UserAccountCreate(email="Agent@Example.com", hashed_password="secret-hash-value")
+    assert create.email == "agent@example.com"
+    assert "secret-hash-value" not in repr(create)
 
 
 def test_refresh_constants() -> None:
@@ -49,15 +88,14 @@ def test_user_principal_carries_session_identity() -> None:
     principal = UserPrincipal(
         id=user_id,
         email="agent@example.com",
-        role=UserRole.AGENT,
         session_id=session_id,
         is_active=True,
-        is_superuser=False,
         is_verified=False,
     )
     assert principal.id == user_id
     assert principal.session_id == session_id
-    assert principal.role is UserRole.AGENT
+    assert "role" not in principal.model_dump()
+    assert "is_superuser" not in principal.model_dump()
     assert principal.model_dump()["id"] == user_id
 
 

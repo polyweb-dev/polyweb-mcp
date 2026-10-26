@@ -28,7 +28,6 @@ from freesearch.models.contracts import (
     SearchResponse,
     UsageOperation,
 )
-from freesearch.models.users import UserRole
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
 from freesearch.services.parallel_oauth import (
@@ -40,7 +39,7 @@ from freesearch.services.parallel_oauth import (
     clear_oauth_poll_state,
     poll_oauth_balance_snapshot,
 )
-from tests.fixtures.auth import raw_auth_headers, register_promote_login, temp_email
+from tests.fixtures.auth import raw_auth_headers, register_system_admin_login, temp_email
 from tests.integration.services.oauth.oauth_stubs import (
     StubOAuthServer,
     install_http_stub,
@@ -208,9 +207,7 @@ async def admin_auth_headers(client: TestClient, repository: Any) -> dict[str, s
     """Register one Admin account and return its access headers."""
 
     # Use one Admin account per test for all OAuth and dashboard reads.
-    pair = await register_promote_login(
-        client, repository, temp_email("oauth-admin"), UserRole.ADMIN
-    )
+    pair = await register_system_admin_login(client, repository, temp_email("oauth-admin"))
     return raw_auth_headers(pair["access_token"])
 
 

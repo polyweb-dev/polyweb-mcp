@@ -40,14 +40,13 @@ from freesearch.adapters.youcom import YoucomAdapter
 from freesearch.configuration.config import get_settings
 from freesearch.infrastructure.secrets import PROVIDER_ENV_VARS, ProviderName
 from freesearch.models.contracts import SearchRequest
-from freesearch.models.users import UserRole
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
 from tests.encrypted_secrets_helpers import SENTINEL_PROVIDER_KEYS, assert_no_sentinels
 from tests.fixtures.auth import (
     account_id_from_pair,
     raw_auth_headers,
-    register_promote_login,
+    register_system_admin_login,
     temp_email,
 )
 from tests.fixtures.execution import seed_execution_project
@@ -312,8 +311,8 @@ async def test_put_then_on_demand_test_constructs_genuine_adapter(
     # One TestClient session: exiting the block runs lifespan shutdown, which
     # closes the app-owned shared client, so PUT/probe/search must share it.
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email(f"proof-put-{provider.value}"), UserRole.ADMIN
+        pair = await register_system_admin_login(
+            client, repository, temp_email(f"proof-put-{provider.value}")
         )
         headers = raw_auth_headers(pair["access_token"])
         pid = str(
@@ -379,11 +378,10 @@ async def test_restart_routes_search_through_encrypted_key(
     try:
         app = create_app(None, repository=first)
         with TestClient(app) as client:
-            pair = await register_promote_login(
+            pair = await register_system_admin_login(
                 client,
                 first,
                 temp_email(f"proof-restart-{provider.value}"),
-                UserRole.ADMIN,
             )
             headers = raw_auth_headers(pair["access_token"])
             pid = str(
@@ -453,8 +451,8 @@ async def test_env_key_is_ignored_vault_key_reaches_wire(
 
     app = create_app(None, repository=repository)
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email(f"proof-env-{provider.value}"), UserRole.ADMIN
+        pair = await register_system_admin_login(
+            client, repository, temp_email(f"proof-env-{provider.value}")
         )
         headers = raw_auth_headers(pair["access_token"])
         pid = str(

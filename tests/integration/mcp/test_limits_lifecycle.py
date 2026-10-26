@@ -30,8 +30,9 @@ from freesearch.models.provider_limits import (
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
 from freesearch.services.provider_limits import ProviderLimitsService
-from tests.fixtures.auth import TEMP_PASSWORD, mcp_account_token, raw_auth_headers, temp_email
-from tests.fixtures.execution import seed_member_project, seed_token_project
+from tests.fixtures.api_keys import mcp_key_credentials
+from tests.fixtures.auth import TEMP_PASSWORD, raw_auth_headers, temp_email
+from tests.fixtures.execution import seed_member_project
 from tests.fixtures.latency import OfflineAdapter
 
 
@@ -78,8 +79,7 @@ async def test_generation_lifecycle_closes_cleanly(
     _stub_only(monkeypatch)
     service_repository = await SQLiteRepository.open(database)
     try:
-        service, token, _email = await mcp_account_token(service_repository, "mcp-lifecycle")
-        pid = str((await seed_token_project(service_repository, token)).project_id)
+        service, token, pid = await mcp_key_credentials(service_repository, "mcp-lifecycle")
         server = create_server(
             None,
             database=database,
@@ -102,8 +102,7 @@ async def test_overlapping_generations_share_one_repository(
     _stub_only(monkeypatch)
     service_repository = await SQLiteRepository.open(database)
     try:
-        service, token, _email = await mcp_account_token(service_repository, "mcp-overlap")
-        pid = str((await seed_token_project(service_repository, token)).project_id)
+        service, token, pid = await mcp_key_credentials(service_repository, "mcp-overlap")
         server = create_server(
             None,
             database=database,
@@ -224,8 +223,7 @@ async def test_injected_repository_mcp_runs_admission_like_rest(
         assert rest_adapter.search_calls == 1
 
         mcp_adapter = _CountingAdapter()
-        service, token, _email = await mcp_account_token(mcp_repository, "mcp-admission")
-        mcp_pid = str((await seed_token_project(mcp_repository, token)).project_id)
+        service, token, mcp_pid = await mcp_key_credentials(mcp_repository, "mcp-admission")
         server = create_server(
             [mcp_adapter],
             repository=mcp_repository,

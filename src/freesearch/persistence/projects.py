@@ -590,6 +590,41 @@ class ProjectRepository:
             for r in rows
         ]
 
+    async def delete_system_role(
+        self,
+        *,
+        account_id: UUID,
+        user_id: UUID,
+        role_key: str,
+    ) -> bool:
+        """Delete one system role assignment; return whether a row was removed."""
+
+        result = await self._session.execute(
+            delete(SystemRoleAssignmentRow).where(
+                SystemRoleAssignmentRow.account_id == str(account_id),
+                SystemRoleAssignmentRow.user_id == str(user_id),
+                SystemRoleAssignmentRow.role_key == role_key,
+            )
+        )
+        await self._session.flush()
+        return bool(result.rowcount)  # type: ignore[attr-defined]
+
+    async def count_active_system_admins(self, *, account_id: UUID) -> int:
+        """Count active human accounts holding ``system_admin`` in one account."""
+
+        user_cls = _get_user_row()
+        stmt = (
+            select(func.count())
+            .select_from(SystemRoleAssignmentRow)
+            .join(user_cls, cast(user_cls.id, CHAR(36)) == SystemRoleAssignmentRow.user_id)
+            .where(
+                SystemRoleAssignmentRow.account_id == str(account_id),
+                SystemRoleAssignmentRow.role_key == BuiltinRole.SYSTEM_ADMIN.value,
+                user_cls.__table__.c.is_active.is_(True),
+            )
+        )
+        return int((await self._session.execute(stmt)).scalar_one())
+
     async def get_membership(
         self,
         *,

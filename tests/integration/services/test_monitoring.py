@@ -15,6 +15,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, cast
+from uuid import UUID
 
 import pytest
 import pytest_asyncio
@@ -54,22 +55,21 @@ from freesearch.models.provider_limits import (
     ProviderLimitRecord,
     RateBlock,
 )
-from freesearch.models.users import UserRole
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
 from freesearch.services import monitoring
 from freesearch.services.parallel_oauth import clear_oauth_poll_state
 from freesearch.services.provider_limits import ProviderLimitsService
+from tests.fixtures.api_keys import key_for_account, mcp_key_credentials
 from tests.fixtures.auth import (
     account_id_from_pair,
     http_jwt_service,
-    mcp_account_token,
     raw_auth_headers,
     register_and_login,
-    register_promote_login,
+    register_system_admin_login,
     temp_email,
 )
-from tests.fixtures.execution import seed_execution_project, seed_token_project
+from tests.fixtures.execution import seed_execution_project
 from tests.fixtures.usage_ledger import all_usage_events
 
 
@@ -487,7 +487,8 @@ async def test_rest_fetch_and_mcp_search_fetch_persist_identical_usage(
         [adapter],
         repository=repository,
         auth_service=http_jwt_service(repository),
-        stdio_token=SecretStr(pair["access_token"]),
+        # A1: MCP takes a project key, issued by the human project admin.
+        stdio_token=(await key_for_account(repository, account_id_from_pair(pair), UUID(pid))).key,
     )
     mcp_search = await server.call_tool("search", {"request": {"project_id": pid, "query": "mcp"}})
     mcp_fetch = await server.call_tool(
@@ -623,7 +624,8 @@ async def test_adapter_failure_records_degraded_and_preserves_rest_and_mcp_error
         [_StubAdapter("mcp-failure", fail_search=True)],
         repository=repository,
         auth_service=http_jwt_service(repository),
-        stdio_token=SecretStr(pair["access_token"]),
+        # A1: MCP takes a project key, issued by the human project admin.
+        stdio_token=(await key_for_account(repository, account_id_from_pair(pair), UUID(pid))).key,
     )
     with pytest.raises(ToolError, match="adapter exploded"):
         await mcp_server.call_tool("search", {"request": {"project_id": pid, "query": "failure"}})
@@ -939,9 +941,7 @@ async def test_stats_endpoint_omits_sensitive_keys_end_to_end(
         anonymous = client.get("/stats")
         assert anonymous.status_code == 401
         # Use one Developer account for the stats read.
-        pair = await register_promote_login(
-            client, repository, temp_email("monitor-stats"), UserRole.DEVELOPER
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("monitor-stats"))
         headers = raw_auth_headers(pair["access_token"])
         response = client.get("/stats", headers=headers)
 
@@ -985,9 +985,7 @@ async def test_stats_endpoint_clamps_recent_limit_and_returns_contract_shape(
         anonymous = client.get("/stats?limit=0")
         assert anonymous.status_code == 401
         # Use one Developer account for the stats reads.
-        pair = await register_promote_login(
-            client, repository, temp_email("monitor-clamp"), UserRole.DEVELOPER
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("monitor-clamp"))
         headers = raw_auth_headers(pair["access_token"])
         low = client.get("/stats?limit=0", headers=headers)
         high = client.get("/stats?limit=1000", headers=headers)
@@ -1051,8 +1049,8 @@ async def test_monitoring_read_failures_return_empty_stats_and_json_dashboard(
         anonymous = client.get("/stats")
         assert anonymous.status_code == 401
         # Use one Developer account for the stats reads.
-        pair = await register_promote_login(
-            client, repository, temp_email("monitor-read-fail"), UserRole.DEVELOPER
+        pair = await register_system_admin_login(
+            client, repository, temp_email("monitor-read-fail")
         )
         headers = raw_auth_headers(pair["access_token"])
         app.state.repository = failing
@@ -1177,9 +1175,7 @@ async def test_dashboard_endpoint_matches_stats_and_preserves_quota_provenance(
         anonymous = client.get("/stats")
         assert anonymous.status_code == 401
         # Use one Developer account for the stats reads.
-        pair = await register_promote_login(
-            client, repository, temp_email("monitor-match"), UserRole.DEVELOPER
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("monitor-match"))
         headers = raw_auth_headers(pair["access_token"])
         stats_response = client.get("/stats", headers=headers)
         dashboard_response = client.get("/dashboard", headers=headers)
@@ -1240,8 +1236,8 @@ async def test_dashboard_endpoint_accepts_canonical_quota_computed_fields(
         anonymous = client.get("/dashboard")
         assert anonymous.status_code == 401
         # Use one Developer account for the dashboard read.
-        pair = await register_promote_login(
-            client, repository, temp_email("monitor-canonical"), UserRole.DEVELOPER
+        pair = await register_system_admin_login(
+            client, repository, temp_email("monitor-canonical")
         )
         headers = raw_auth_headers(pair["access_token"])
         response = client.get("/dashboard", headers=headers)
@@ -1275,9 +1271,7 @@ async def test_dashboard_endpoint_clamps_recent_limit_and_orders_newest_first(
         anonymous = client.get("/dashboard?limit=0")
         assert anonymous.status_code == 401
         # Use one Developer account for the dashboard reads.
-        pair = await register_promote_login(
-            client, repository, temp_email("monitor-limit"), UserRole.DEVELOPER
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("monitor-limit"))
         headers = raw_auth_headers(pair["access_token"])
         low = client.get("/dashboard?limit=0", headers=headers)
         high = client.get("/dashboard?limit=1000", headers=headers)
@@ -1337,9 +1331,7 @@ async def test_dashboard_endpoint_omits_sensitive_projection_fields_and_values(
         anonymous = client.get("/stats")
         assert anonymous.status_code == 401
         # Use one Developer account for the stats reads.
-        pair = await register_promote_login(
-            client, repository, temp_email("monitor-privacy"), UserRole.DEVELOPER
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("monitor-privacy"))
         headers = raw_auth_headers(pair["access_token"])
         stats_response = client.get("/stats", headers=headers)
         dashboard_response = client.get("/dashboard", headers=headers)
@@ -1457,9 +1449,7 @@ async def test_app_lifespan_hydrates_local_quota_before_first_dashboard_read(
         anonymous = client.get("/dashboard")
         assert anonymous.status_code == 401
         # Use one Developer account for the dashboard read.
-        pair = await register_promote_login(
-            client, repository, temp_email("monitor-hydrate"), UserRole.DEVELOPER
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("monitor-hydrate"))
         headers = raw_auth_headers(pair["access_token"])
         response = client.get("/dashboard", headers=headers)
 
@@ -1535,8 +1525,7 @@ async def test_server_owned_lifespan_refcounted_across_overlapping_sessions(
     # Seed one account before the open spy goes in, so the spy counts only
     # the server generation. The service repository stays open for the test.
     service_repository = await SQLiteRepository.open(database)
-    service, token, _email = await mcp_account_token(service_repository, "mcp-overlap")
-    pid = str((await seed_token_project(service_repository, token)).project_id)
+    service, token, pid = await mcp_key_credentials(service_repository, "mcp-overlap")
     stdio_credential = SecretStr(token.get_secret_value())
     monkeypatch.setattr(
         "freesearch.mcp.server.adapter_factory",
@@ -1671,8 +1660,7 @@ async def test_server_owned_lifespan_sequential_sessions_reuse_fresh_generation(
     monkeypatch.setattr(SQLiteRepository, "close", close_spy)
     database = tmp_path / "seq.db"
     service_repository = await real_open(database)
-    service, token, _email = await mcp_account_token(service_repository, "mcp-sequential")
-    pid = str((await seed_token_project(service_repository, token)).project_id)
+    service, token, pid = await mcp_key_credentials(service_repository, "mcp-sequential")
     stdio_credential = SecretStr(token.get_secret_value())
     server = create_server(
         None, database=database, auth_service=service, stdio_token=stdio_credential
@@ -1766,8 +1754,7 @@ async def test_server_owned_lifespan_delayed_teardown_does_not_close_new_session
     monkeypatch.setattr("freesearch.mcp.server.close_adapters", close_adapters_spy)
     database = tmp_path / "race.db"
     service_repository = await real_open(database)
-    service, token, _email = await mcp_account_token(service_repository, "mcp-race")
-    pid = str((await seed_token_project(service_repository, token)).project_id)
+    service, token, pid = await mcp_key_credentials(service_repository, "mcp-race")
     stdio_credential = SecretStr(token.get_secret_value())
     server = create_server(
         None, database=database, auth_service=service, stdio_token=stdio_credential

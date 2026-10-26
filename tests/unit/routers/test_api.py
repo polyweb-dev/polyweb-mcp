@@ -377,8 +377,24 @@ async def test_batchless_repository_fallback(
 
 
 # --- Merged from release/wt_3: API launch path (port handling) ---
+def _isolate_database(monkeypatch: pytest.MonkeyPatch) -> None:
+    """main() runs the pre-start database check: point it at a fresh temp path."""
+
+    import tempfile
+    from pathlib import Path
+    from uuid import uuid4
+
+    from freesearch.configuration.config import get_settings
+
+    target = Path(tempfile.gettempdir()) / f"freesearch-main-{uuid4().hex}" / "main.db"
+    monkeypatch.setenv("FREESEARCH_DB", str(target))
+    get_settings.cache_clear()
+
+
 def _run_main(monkeypatch: pytest.MonkeyPatch, argv: list[str], settings: Settings) -> object:
     import freesearch.routers.api as api_module
+
+    _isolate_database(monkeypatch)
 
     calls: list[dict[str, object]] = []
 
@@ -393,6 +409,8 @@ def _run_main(monkeypatch: pytest.MonkeyPatch, argv: list[str], settings: Settin
 
 def test_main_stops_launch_when_port_is_unset(monkeypatch: pytest.MonkeyPatch) -> None:
     import freesearch.routers.api as api_module
+
+    _isolate_database(monkeypatch)
 
     monkeypatch.setattr(api_module, "get_settings", lambda: Settings(api_port=None, mcp_port=None))
     monkeypatch.setattr("uvicorn.run", lambda *args, **kwargs: None)

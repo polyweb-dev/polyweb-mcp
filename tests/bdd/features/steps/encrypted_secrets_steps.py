@@ -41,7 +41,6 @@ from freesearch.models.contracts import (
     UsageEvent,
     UsageOperation,
 )
-from freesearch.models.users import UserRole
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
 from freesearch.services.parallel_oauth import (
@@ -65,7 +64,7 @@ from tests.encrypted_secrets_helpers import (
 from tests.fixtures.auth import (
     TEMP_PASSWORD,
     configure_bdd_secret,
-    promote_account,
+    promote_to_system_admin,
     temp_email,
 )
 from tests.integration.services.oauth.oauth_stubs import (
@@ -249,7 +248,7 @@ def _login_admin(context: Any) -> dict[str, str]:
     with _client(context) as client:
         registered = client.post("/auth/register", json={"email": email, "password": TEMP_PASSWORD})
         assert registered.status_code == 201
-        context.loop.run_until_complete(promote_account(context.repository, email, UserRole.ADMIN))
+        context.loop.run_until_complete(promote_to_system_admin(context.repository, email))
         logged_in = client.post(
             "/auth/jwt/login", data={"username": email, "password": TEMP_PASSWORD}
         )

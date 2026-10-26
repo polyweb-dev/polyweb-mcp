@@ -1,39 +1,44 @@
-"""MCP transport helpers for authenticated Search/Fetch tool calls.
+"""MCP transport credentials: project API keys only (TASK-000041).
 
-Search and Fetch require a verified account: a supplied Bearer token is
-verified by the outer ASGI guard (or the explicit stdio credential), and the
-tool call resolves the caller's project scope before executing. Anonymous
-calls are rejected as tool errors. This keeps MCP aligned with REST while the
-REST control plane remains protected.
+MCP clients authenticate with a project API key, exactly like REST machine
+clients. There is no anonymous tool call and no human-session MCP access.
+
+* Streamable HTTP: the outer ASGI guard verifies a project API key on every
+  ``/mcp`` request and rejects anything else with HTTP 401. Each tool call uses
+  the principal the guard stored on the HTTP request that carried that call,
+  so a persistent session is checked again on every call, and the execution
+  boundary re-reads the key before any provider access.
+* Stdio: the key arrives through the process credential channel
+  ``FREESEARCH_MCP_BEARER_TOKEN`` and is verified again on every tool call.
+
+The raw key is only ever held as a :class:`~pydantic.SecretStr` and is never
+logged or put in a trace.
 """
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Any
 
-from mcp.server.auth.middleware.auth_context import get_access_token
-from mcp.server.auth.provider import AccessToken, TokenVerifier
 from mcp.server.auth.settings import AuthSettings
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import Context, FastMCP
 from pydantic import AnyHttpUrl, SecretStr
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.routing import Mount
 
 from freesearch.configuration.config import Settings, require_transport_port
-from freesearch.infrastructure.auth_asgi import (
-    BearerAuthMiddleware,
-    current_verified_principal,
-    has_auth_request_context,
-)
-from freesearch.models.users import UserPrincipal
+from freesearch.infrastructure.auth_asgi import BearerAuthMiddleware, bearer_credential_from_scope
+from freesearch.models.projects import ProjectApiKeyPrincipal
+from freesearch.persistence.storage import SQLiteRepository
+from freesearch.services.api_keys import DEFAULT_USE_RECORDER, ApiKeyVerifier
 from freesearch.services.users import AuthService
 
 #: The SDK Streamable HTTP endpoint, and the resource path of its metadata URL.
 STREAMABLE_HTTP_PATH: str = "/mcp"
 
 #: Streamable HTTP uses POST for JSON-RPC, GET for an optional event stream,
-#: and DELETE to close a stateful session. Only this transport path is public.
-MCP_PUBLIC_ROUTES: frozenset[tuple[str, str]] = frozenset(
+#: and DELETE to close a stateful session. Every one needs a project API key.
+MCP_ROUTES: frozenset[tuple[str, str]] = frozenset(
     {
         ("POST", STREAMABLE_HTTP_PATH),
         ("GET", STREAMABLE_HTTP_PATH),
@@ -46,27 +51,7 @@ MCP_AUTH_ERROR: str = "authentication is required"
 
 
 class McpAuthenticationError(RuntimeError):
-    """Raised when a tool call carries no verified account credential."""
-
-
-class LocalTokenVerifier(TokenVerifier):
-    """SDK Bearer verifier backed by the shared account service.
-
-    The raw token stays in the SDK request auth object. Only the canonical
-    account UUID leaves this method, as both ``client_id`` and ``subject``.
-    """
-
-    def __init__(self, auth_service: AuthService) -> None:
-        self._auth_service = auth_service
-
-    async def verify_token(self, token: str) -> AccessToken | None:
-        """Return SDK access info for a live account, else ``None``."""
-
-        principal = await self._auth_service.verify_token(token)
-        if principal is None:
-            return None
-        account = str(principal.id)
-        return AccessToken(token=token, client_id=account, scopes=[], subject=account)
+    """Raised when a tool call carries no valid project API key."""
 
 
 def build_auth_settings(settings: Settings) -> AuthSettings:
@@ -89,57 +74,110 @@ def build_auth_settings(settings: Settings) -> AuthSettings:
     )
 
 
-async def require_mcp_user(
-    auth_service: AuthService, *, stdio_token: SecretStr | None = None
-) -> UserPrincipal:
-    """Return the verified account of one tool call, or reject that call.
+def _transport_request(ctx: Any) -> Any | None:
+    """Return the HTTP request that carried this tool call, else ``None``."""
 
-    A call over HTTP must carry the SDK request auth context. A stdio call must
-    carry the explicit process credential. The account, its active flag, its
-    role, and its session family are checked again on every call, so a stateful
-    session cannot keep access after expiry, logout, or deactivation.
+    if ctx is None:
+        return None
+    try:
+        return ctx.request_context.request
+    except (AttributeError, LookupError, ValueError):
+        return None
+
+
+def tool_credential(
+    ctx: Context | None,  # type: ignore[type-arg]
+    *,
+    stdio_key: SecretStr | None,
+) -> SecretStr | None:
+    """Return the raw key presented for this one tool call, else ``None``.
+
+    A call that arrived over HTTP uses only the ``Authorization`` header of its
+    own HTTP request; the process key can never authenticate an HTTP call. A
+    call without an HTTP request (stdio) uses the process credential channel.
     """
 
-    access = get_access_token()
-    if access is not None:
-        token = access.token
-    elif stdio_token is not None:
-        token = stdio_token.get_secret_value()
-    else:
+    request = _transport_request(ctx)
+    if request is not None:
+        scope = getattr(request, "scope", None)
+        token = bearer_credential_from_scope(scope) if isinstance(scope, dict) else None
+        return SecretStr(token) if token else None
+    return stdio_key
+
+
+async def require_mcp_api_key(
+    repository: SQLiteRepository, credential: SecretStr | None
+) -> ProjectApiKeyPrincipal:
+    """Verify one tool call's project API key, or reject that call.
+
+    Runs the shared :class:`ApiKeyVerifier` on every call. Every failure,
+    including a storage failure, is the same generic authentication error.
+    """
+
+    if credential is None:
         raise McpAuthenticationError(MCP_AUTH_ERROR)
-    principal = await auth_service.verify_token(token)
+    try:
+        principal = await ApiKeyVerifier(repository).verify(credential)
+    except Exception as error:
+        raise McpAuthenticationError(MCP_AUTH_ERROR) from error
     if principal is None:
-        raise McpAuthenticationError(MCP_AUTH_ERROR)
-    if access is not None and access.subject not in (None, str(principal.id)):
-        # The SDK subject is a consistency check only. It can reject a call and
-        # can never grant one, so client metadata cannot select another account.
         raise McpAuthenticationError(MCP_AUTH_ERROR)
     return principal
 
 
-async def optional_mcp_user(
-    auth_service: AuthService | None, *, stdio_token: SecretStr | None = None
-) -> UserPrincipal | None:
-    """Return an optional verified account; anonymous tool calls return ``None``."""
+def guard_principal(ctx: Context | None) -> ProjectApiKeyPrincipal | None:  # type: ignore[type-arg]
+    """Return the key principal the guard verified for this call's own HTTP request.
 
-    if has_auth_request_context():
-        # The ASGI boundary allows an absent credential and rejects any invalid
-        # supplied Bearer token before dispatching the MCP request.
-        return current_verified_principal()
-    if stdio_token is None:
+    Only the ASGI scope of the HTTP request that carried this tool call counts;
+    no context variable or session-level state is read, because the SDK can run
+    a tool in a session task created by an earlier request.
+    """
+
+    request = _transport_request(ctx)
+    scope = getattr(request, "scope", None) if request is not None else None
+    state = scope.get("state") if isinstance(scope, dict) else None
+    principal = state.get("user") if isinstance(state, dict) else None
+    return principal if isinstance(principal, ProjectApiKeyPrincipal) else None
+
+
+async def resolve_tool_principal(
+    ctx: Context | None,  # type: ignore[type-arg]
+    *,
+    stdio_key: SecretStr | None,
+    repository: SQLiteRepository | None,
+) -> ProjectApiKeyPrincipal:
+    """Return the verified project API key principal of one tool call, or reject it.
+
+    Over HTTP the guard verified the key on the very request that carried this
+    call, so that principal is used and the key is not verified twice; a call
+    whose request carries none is rejected. Over stdio the process key is
+    verified again on every call.
+    """
+
+    if _transport_request(ctx) is not None:
+        principal = guard_principal(ctx)
+        if principal is None:
+            raise McpAuthenticationError(MCP_AUTH_ERROR)
+        return principal
+    credential = tool_credential(ctx, stdio_key=stdio_key)
+    if credential is None:
+        raise McpAuthenticationError(MCP_AUTH_ERROR)
+    if repository is None:
+        raise RuntimeError("execution is temporarily unavailable")
+    return await require_mcp_api_key(repository, credential)
+
+
+async def _verify_guard_key(auth_service: AuthService, token: str) -> ProjectApiKeyPrincipal | None:
+    repository = auth_service.repository
+    if repository is None:
         return None
-    if auth_service is None:
-        raise McpAuthenticationError(MCP_AUTH_ERROR)
-    principal = await auth_service.verify_token(stdio_token.get_secret_value())
-    if principal is None:
-        raise McpAuthenticationError(MCP_AUTH_ERROR)
-    return principal
+    return await ApiKeyVerifier(repository).verify(token)
 
 
 def build_http_app(server: FastMCP, *, auth_service: AuthService, settings: Settings) -> Starlette:
-    """Return public Search/Fetch transport and own account-service lifespan."""
+    """Return the key-guarded Search/Fetch transport; own the account-store lifespan."""
 
-    del settings  # Auth metadata is not advertised by the public transport.
+    del settings  # Auth metadata is not advertised by the transport.
     inner = server.streamable_http_app()
 
     @asynccontextmanager
@@ -149,6 +187,7 @@ def build_http_app(server: FastMCP, *, auth_service: AuthService, settings: Sett
             async with inner.router.lifespan_context(inner):
                 yield
         finally:
+            await DEFAULT_USE_RECORDER.drain()
             await auth_service.close()
 
     return Starlette(
@@ -156,9 +195,11 @@ def build_http_app(server: FastMCP, *, auth_service: AuthService, settings: Sett
         middleware=[
             Middleware(
                 BearerAuthMiddleware,
-                verify_token=auth_service.verify_token,
-                public_routes=MCP_PUBLIC_ROUTES,
-                optional_auth_routes=MCP_PUBLIC_ROUTES,
+                verify_token=None,
+                verify_api_key=lambda token: _verify_guard_key(auth_service, token),
+                api_key_routes=MCP_ROUTES,
+                public_routes=frozenset(),
+                operation_routes=MCP_ROUTES,
             )
         ],
         lifespan=lifespan,
@@ -187,26 +228,28 @@ async def run_http_server(
 async def run_stdio_server(
     server: FastMCP, *, auth_service: AuthService, settings: Settings
 ) -> None:
-    """Serve the authenticated tools over stdio using the configured token."""
+    """Serve the key-authenticated tools over stdio."""
 
     del settings
     await auth_service.open()
     try:
         await server.run_stdio_async()
     finally:
+        await DEFAULT_USE_RECORDER.drain()
         await auth_service.close()
 
 
 __all__ = [
     "MCP_AUTH_ERROR",
-    "MCP_PUBLIC_ROUTES",
+    "MCP_ROUTES",
     "STREAMABLE_HTTP_PATH",
-    "LocalTokenVerifier",
     "McpAuthenticationError",
     "build_auth_settings",
     "build_http_app",
-    "optional_mcp_user",
-    "require_mcp_user",
+    "guard_principal",
+    "require_mcp_api_key",
+    "resolve_tool_principal",
     "run_http_server",
     "run_stdio_server",
+    "tool_credential",
 ]

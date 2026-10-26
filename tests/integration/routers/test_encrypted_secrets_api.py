@@ -38,14 +38,13 @@ from freesearch.models.contracts import (
     UsageEvent,
     UsageOperation,
 )
-from freesearch.models.users import UserRole
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
 from tests.encrypted_secrets_helpers import (
     SENTINEL_PROVIDER_KEYS,
     assert_no_sentinels,
 )
-from tests.fixtures.auth import raw_auth_headers, register_promote_login, temp_email
+from tests.fixtures.auth import raw_auth_headers, register_system_admin_login, temp_email
 from tests.integration.services.oauth.oauth_stubs import collect_sqlite_texts
 
 PASSPHRASE = "enc-api-acceptance-passphrase-9f31"
@@ -168,9 +167,7 @@ async def test_put_secret_reports_encrypted_db_fingerprint_only(
     app = create_app([ControlAdapter("exa")], repository=repository)
 
     with caplog.at_level("INFO"), TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("enc-put"), UserRole.ADMIN
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("enc-put"))
         headers = raw_auth_headers(pair["access_token"])
         response = _put_secret(client, "exa", sentinel, headers)
 
@@ -194,9 +191,7 @@ async def test_unknown_provider_secret_routes_stay_404(
     app = create_app([], repository=repository)
 
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("enc-ghost"), UserRole.ADMIN
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("enc-ghost"))
         headers = raw_auth_headers(pair["access_token"])
         put = client.put("/api/v1/providers/ghost/secret", json={"key": "unused"}, headers=headers)
         delete = client.delete("/api/v1/providers/ghost/secret", headers=headers)
@@ -213,9 +208,7 @@ async def test_keenable_reports_keyless_public(
     app = create_app([], repository=repository)
 
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("enc-keen"), UserRole.DEVELOPER
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("enc-keen"))
         headers = raw_auth_headers(pair["access_token"])
         response = client.get("/api/v1/providers/keenable", headers=headers)
 
@@ -240,9 +233,7 @@ async def test_put_secret_persists_ciphertext_only_rows(
     app = create_app([ControlAdapter("exa")], repository=repository)
 
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("enc-persist"), UserRole.ADMIN
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("enc-persist"))
         headers = raw_auth_headers(pair["access_token"])
         response = _put_secret(client, "exa", sentinel, headers)
         status = client.get("/api/v1/providers/exa", headers=headers)
@@ -287,9 +278,7 @@ async def test_put_key_makes_missing_adapter_testable(
     app = create_app(repository=repository)
 
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("enc-demand"), UserRole.ADMIN
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("enc-demand"))
         headers = raw_auth_headers(pair["access_token"])
         write = _put_secret(client, "exa", SENTINEL_PROVIDER_KEYS["exa"], headers)
         probe = client.post("/api/v1/providers/exa/test", headers=headers)
@@ -318,9 +307,7 @@ async def test_delete_secret_is_idempotent_and_clears_encrypted_row(
     app = create_app([ControlAdapter("exa")], repository=repository)
 
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("enc-del"), UserRole.ADMIN
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("enc-del"))
         headers = raw_auth_headers(pair["access_token"])
         assert _put_secret(client, "exa", sentinel, headers).status_code == 200
         first = client.delete("/api/v1/providers/exa/secret", headers=headers)
@@ -354,9 +341,7 @@ async def test_wrong_passphrase_degrades_reads_without_crash_or_leak(
     try:
         app = create_app([ControlAdapter("exa")], repository=first)
         with TestClient(app) as client:
-            pair = await register_promote_login(
-                client, first, temp_email("enc-wrong"), UserRole.ADMIN
-            )
+            pair = await register_system_admin_login(client, first, temp_email("enc-wrong"))
             headers = raw_auth_headers(pair["access_token"])
             assert _put_secret(client, "exa", sentinel, headers).status_code == 200
     finally:

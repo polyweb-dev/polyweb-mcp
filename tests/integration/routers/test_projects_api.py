@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from freesearch.models.projects import (
     BUILTIN_ROLE_DEFINITIONS,
+    DEFAULT_INSTALLATION_ACCOUNT_ID,
     BuiltinRole,
     MembershipStatus,
     PermissionAction,
@@ -17,10 +18,9 @@ from freesearch.models.projects import (
     ProjectMemberAdd,
     ProjectMemberUpdate,
 )
-from freesearch.models.users import UserRole
 from freesearch.persistence.projects import ProjectRepository
 from freesearch.persistence.storage import SQLiteRepository
-from freesearch.persistence.users import UserDatabase, UserRow
+from freesearch.persistence.users import UserRow
 from freesearch.routers.api import create_app
 from freesearch.services.projects import LAST_PROJECT_ADMIN, ProjectService
 from tests.fixtures.alpha_fixtures import create_alpha_test_db
@@ -65,7 +65,7 @@ async def _count_admins(repository: SQLiteRepository, project_id: UUID) -> int:
 async def _seed_users(
     repository: SQLiteRepository,
 ) -> tuple[UserRow, UserRow, UserRow]:
-    system = await create_temp_user(repository, temp_email("p02-http-system"), role=UserRole.ADMIN)
+    system = await create_temp_user(repository, temp_email("p02-http-system"), system_admin=True)
     admin = await create_temp_user(repository, temp_email("p02-http-admin"))
     peer = await create_temp_user(repository, temp_email("p02-http-peer"))
     return system, admin, peer
@@ -103,12 +103,13 @@ async def test_system_admin_has_no_membership_and_live_revocation_is_effective(
             # Creating a project does not create a membership for the system
             # administrator, and project content remains inaccessible.
             assert client.get("/api/v1/projects", headers=system_headers).json() == []
+            # R5: a non-member gets the same 404 as an unknown project.
             assert (
                 client.get(
                     f"/api/v1/projects/{project_id}/members",
                     headers=system_headers,
                 ).status_code
-                == 403
+                == 404
             )
 
             # The project administrator has project scope, not system scope.
@@ -140,9 +141,13 @@ async def test_system_admin_has_no_membership_and_live_revocation_is_effective(
 
             # The same access JWT stays authenticated, but the removed system
             # assignment immediately closes both system-scoped surfaces.
+            # (A1: the assignment row itself is removed; no role column exists.)
             async with repository.session() as session:
-                database = UserDatabase(session, UserRow)
-                assert await database.set_role(system_row.id, UserRole.AGENT) is True
+                assert await ProjectRepository(session).delete_system_role(
+                    account_id=DEFAULT_INSTALLATION_ACCOUNT_ID,
+                    user_id=system_row.id,
+                    role_key=BuiltinRole.SYSTEM_ADMIN.value,
+                )
                 await session.commit()
 
             assert client.get("/users/me", headers=system_headers).status_code == 200
@@ -633,5 +638,174 @@ async def test_create_project_with_initial_admin_email(
                 json={"name": "Denied", "initial_admin_email": temp_email("p06-ghost")},
             )
             assert denied.status_code == 403
+    finally:
+        await repository.close()
+
+
+# --- R5 (TASK-000041 ruling): non-member and unknown project are the same 404 ---
+
+
+def _project_scoped_routes(app: object) -> list[tuple[str, str]]:
+    from fastapi.routing import APIRoute
+
+    found: list[tuple[str, str]] = []
+    for route in app.routes:  # type: ignore[attr-defined]
+        if not isinstance(route, APIRoute) or "{project_id}" not in route.path:
+            continue
+        module = getattr(route.endpoint, "__module__", "")
+        if module not in {"freesearch.routers.projects", "freesearch.routers.api_keys"}:
+            continue
+        for method in sorted(route.methods - {"HEAD", "OPTIONS"}):
+            found.append((method, route.path))
+    return found
+
+
+def _route_body(method: str, path: str, user_id: UUID) -> dict[str, object] | None:
+    if path.endswith("/api-keys") and method == "POST":
+        return {"label": "probe"}
+    if path.endswith("/members") and method == "POST":
+        return {"user_id": str(user_id)}
+    if path.endswith("/members/bulk"):
+        return {"changes": [{"user_id": str(user_id), "status": "suspended"}]}
+    if path.endswith("/members/{user_id}") and method == "PATCH":
+        return {"status": "suspended"}
+    if path.endswith("/rotate"):
+        return {}
+    return None
+
+
+@pytest.mark.asyncio
+async def test_project_scoped_routes_hide_existence_from_non_members(
+    tmp_path: Path, auth_secret: str
+) -> None:
+    repository = await create_alpha_test_db(tmp_path / "r5-visibility.db")
+    try:
+        system_row, admin_row, peer_row = await _seed_users(repository)
+        stranger_row = await create_temp_user(repository, temp_email("r5-stranger"))
+        member_row = await create_temp_user(repository, temp_email("r5-member"))
+        service = ProjectService(repository)
+        project = await service.create_project(
+            temp_principal(system_row),
+            ProjectCreate(name="R5", slug="r5-visibility", initial_admin_user_id=admin_row.id),
+        )
+        await service.add_member(
+            temp_principal(admin_row), project.id, ProjectMemberAdd(user_id=member_row.id)
+        )
+        app = create_app([], repository=repository, secret_store=_MemorySecretStore())
+        with TestClient(app) as client:
+            admin_headers = _login(client, admin_row.email)
+            issued = client.post(
+                f"/api/v1/projects/{project.id}/api-keys",
+                json={"label": "r5"},
+                headers=admin_headers,
+            )
+            assert issued.status_code == 201
+            key_id = issued.json()["id"]
+            outsiders = {
+                "stranger": _login(client, stranger_row.email),
+                "system admin": _login(client, system_row.email),
+            }
+            member_headers = _login(client, member_row.email)
+
+            routes = _project_scoped_routes(app)
+            assert len(routes) >= 12, routes
+            for method, template in routes:
+                concrete = (
+                    template.replace("{user_id}", str(member_row.id))
+                    .replace("{key_id}", key_id)
+                    .replace("{role_key}", BuiltinRole.ROUTING_EDITOR.value)
+                )
+                body = _route_body(method, template, peer_row.id)
+                unknown = client.request(
+                    method,
+                    concrete.replace("{project_id}", str(uuid4())),
+                    headers=admin_headers,
+                    json=body,
+                )
+                assert unknown.status_code == 404, (method, template, unknown.status_code)
+                for who, headers in outsiders.items():
+                    hidden = client.request(
+                        method,
+                        concrete.replace("{project_id}", str(project.id)),
+                        headers=headers,
+                        json=body,
+                    )
+                    assert hidden.status_code == 404, (who, method, template, hidden.status_code)
+                    assert hidden.content == unknown.content, (who, method, template)
+                    assert dict(hidden.headers).get("content-type") == dict(unknown.headers).get(
+                        "content-type"
+                    )
+
+            # A member without the permission is told 403, not 404.
+            for method, path, body in (
+                ("GET", f"/api/v1/projects/{project.id}/api-keys", None),
+                ("POST", f"/api/v1/projects/{project.id}/api-keys", {"label": "x"}),
+                ("DELETE", f"/api/v1/projects/{project.id}/api-keys/{key_id}", None),
+                ("POST", f"/api/v1/projects/{project.id}/archive", None),
+                ("POST", f"/api/v1/projects/{project.id}/members", {"user_id": str(peer_row.id)}),
+                (
+                    "DELETE",
+                    f"/api/v1/projects/{project.id}/members/{admin_row.id}",
+                    None,
+                ),
+            ):
+                denied = client.request(method, path, headers=member_headers, json=body)
+                assert denied.status_code == 403, (method, path, denied.status_code)
+            assert (
+                client.get(f"/api/v1/projects/{project.id}/members", headers=member_headers)
+            ).status_code == 200
+
+            # Nothing the outsiders attempted changed the project.
+            listed = client.get(f"/api/v1/projects/{project.id}/api-keys", headers=admin_headers)
+            assert [(item["id"], item["status"]) for item in listed.json()] == [(key_id, "active")]
+            members = client.get(f"/api/v1/projects/{project.id}/members", headers=admin_headers)
+            assert {item["user_id"] for item in members.json()} == {
+                str(admin_row.id),
+                str(member_row.id),
+            }
+    finally:
+        await repository.close()
+
+
+# --- R2: deactivation never removes the last active system administrator ---------
+
+
+async def _active(repository: SQLiteRepository, user_id: UUID) -> bool:
+    async with repository.session() as session:
+        row = await session.get(UserRow, user_id)
+        assert row is not None
+        return bool(row.is_active)
+
+
+@pytest.mark.asyncio
+async def test_rest_deactivation_refuses_the_last_active_system_admin(
+    tmp_path: Path, auth_secret: str
+) -> None:
+    repository = await create_alpha_test_db(tmp_path / "r2-rest.db")
+    try:
+        only = await create_temp_user(repository, temp_email("r2-only"), system_admin=True)
+        app = create_app([], repository=repository, secret_store=_MemorySecretStore())
+        with TestClient(app) as client:
+            only_headers = _login(client, only.email)
+            refused = client.post(f"/api/v1/users/{only.id}/deactivate", headers=only_headers)
+            assert refused.status_code == 409
+            assert refused.json()["detail"]["code"] == "LAST_SYSTEM_ADMIN"
+            assert TEMP_PASSWORD not in refused.text
+            assert await _active(repository, only.id) is True
+            # No state change: the same session still works with system authority.
+            assert client.get("/api/v1/system/access", headers=only_headers).status_code == 200
+            assert client.get("/api/v1/routing/config", headers=only_headers).status_code == 200
+
+            second = await create_temp_user(repository, temp_email("r2-second"), system_admin=True)
+            second_headers = _login(client, second.email)
+            done = client.post(f"/api/v1/users/{only.id}/deactivate", headers=second_headers)
+            assert done.status_code == 200
+            assert done.json()["is_active"] is False
+            assert await _active(repository, only.id) is False
+            # Now the second is the last one and cannot deactivate itself.
+            last = client.post(f"/api/v1/users/{second.id}/deactivate", headers=second_headers)
+            assert last.status_code == 409
+            assert last.json()["detail"]["code"] == "LAST_SYSTEM_ADMIN"
+            assert await _active(repository, second.id) is True
     finally:
         await repository.close()

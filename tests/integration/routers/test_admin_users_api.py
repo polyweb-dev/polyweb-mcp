@@ -18,7 +18,6 @@ import pytest_asyncio
 from fastapi.testclient import TestClient
 
 from freesearch.configuration.config import get_settings
-from freesearch.models.users import UserRole
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
 from tests.fixtures.auth import (
@@ -28,7 +27,18 @@ from tests.fixtures.auth import (
 )
 from tests.integration.routers.test_users_transport import _StubAdapter
 
-_SAFE_FIELDS = {"id", "email", "role", "is_active", "is_superuser", "is_verified"}
+#: A1: the one safe account projection; no role and no superuser flag.
+_SAFE_FIELDS = {
+    "id",
+    "email",
+    "auth_provider",
+    "auth_provider_id",
+    "username",
+    "first_name",
+    "last_name",
+    "is_active",
+    "is_verified",
+}
 _DENIED_DETAIL = "account management is not available before project association"
 
 
@@ -67,7 +77,7 @@ async def _accounts(
 
     pairs: dict[str, dict[str, object]] = {}
     admin_email = temp_email("role-admin")
-    await create_temp_user(repository, admin_email, role=UserRole.ADMIN)
+    await create_temp_user(repository, admin_email, system_admin=True)
     logged_in = client.post(
         "/auth/jwt/login", data={"username": admin_email, "password": TEMP_PASSWORD}
     )
@@ -82,7 +92,7 @@ async def _accounts(
         "refresh": body["refresh_token"],
     }
     agent_email = temp_email("role-agent")
-    await create_temp_user(repository, agent_email, role=UserRole.AGENT)
+    await create_temp_user(repository, agent_email)
     logged_in = client.post(
         "/auth/jwt/login", data={"username": agent_email, "password": TEMP_PASSWORD}
     )
@@ -104,54 +114,72 @@ def _headers(token: object) -> dict[str, str]:
     return raw_auth_headers(token)
 
 
+async def _system_roles(repository: SQLiteRepository, user_id: str) -> set[str]:
+    from sqlalchemy import select
+
+    from freesearch.persistence.projects import SystemRoleAssignmentRow
+
+    async with repository.session() as session:
+        rows = await session.execute(
+            select(SystemRoleAssignmentRow.role_key).where(
+                SystemRoleAssignmentRow.user_id == user_id
+            )
+        )
+        return set(rows.scalars())
+
+
 def test_admin_provision_creates_each_role_with_safe_projection(
     admin_app: tuple[TestClient, SQLiteRepository],
 ) -> None:
-    """T2-PROVISION: Admin creates each role; response holds only safe fields."""
+    """T2-PROVISION (A1): a system admin provisions one ordinary account only."""
 
     import asyncio
 
     client, repository = admin_app
-    pairs = asyncio.get_event_loop().run_until_complete(_accounts(client, repository))
+    loop = asyncio.get_event_loop()
+    pairs = loop.run_until_complete(_accounts(client, repository))
     admin_headers = _headers(pairs["admin"]["access"])
 
-    for role, superuser in (("admin", True), ("agent", False)):
-        email = temp_email(f"provision-{role}")
-        created = client.post(
-            "/api/v1/users",
-            json={"email": email, "password": TEMP_PASSWORD, "role": role},
-            headers=admin_headers,
-        )
-        assert created.status_code == 201
-        body = created.json()
-        assert set(body.keys()) == _SAFE_FIELDS
-        assert body["email"] == email.lower()
-        assert body["role"] == role
-        assert body["is_active"] is True
-        assert body["is_superuser"] is superuser
-        assert body["is_verified"] is False
-        assert "hashed_password" not in created.text
-        assert "access_token" not in created.text
-        assert "refresh_token" not in created.text
-        assert "set-cookie" not in created.headers
-        # The new account signs in with its own role and no project link.
-        logged_in = client.post(
-            "/auth/jwt/login", data={"username": email, "password": TEMP_PASSWORD}
-        )
-        assert logged_in.status_code == 200
-        me = client.get("/users/me", headers=_headers(logged_in.json()["access_token"]))
-        assert me.status_code == 200
-        assert me.json()["role"] == role
-
-    # Verify that attempting to provision the obsolete developer role returns 400 Bad Request
-    dev_email = temp_email("provision-dev")
-    rejected = client.post(
+    email = temp_email("provision-ordinary")
+    created = client.post(
         "/api/v1/users",
-        json={"email": dev_email, "password": TEMP_PASSWORD, "role": "developer"},
+        json={"email": email, "password": TEMP_PASSWORD},
         headers=admin_headers,
     )
-    assert rejected.status_code == 400
-    assert "obsolete" in rejected.text or "unsupported" in rejected.text
+    assert created.status_code == 201
+    body = created.json()
+    assert set(body.keys()) == _SAFE_FIELDS
+    assert body["email"] == email.lower()
+    assert body["is_active"] is True
+    assert body["is_verified"] is False
+    assert "hashed_password" not in created.text
+    assert "access_token" not in created.text
+    assert "refresh_token" not in created.text
+    assert "set-cookie" not in created.headers
+    # The new account holds no system role and no project membership.
+    assert loop.run_until_complete(_system_roles(repository, body["id"])) == set()
+    logged_in = client.post("/auth/jwt/login", data={"username": email, "password": TEMP_PASSWORD})
+    assert logged_in.status_code == 200
+    new_headers = _headers(logged_in.json()["access_token"])
+    me = client.get("/users/me", headers=new_headers)
+    assert me.status_code == 200
+    assert set(me.json()) == _SAFE_FIELDS
+    assert client.get("/stats", headers=new_headers).status_code == 403
+    assert client.get("/api/v1/projects", headers=new_headers).json() == []
+
+    # A requested role, including the old ones, is a 422 and creates nothing.
+    for role in ("admin", "developer", "agent", "system_admin"):
+        rejected = client.post(
+            "/api/v1/users",
+            json={
+                "email": temp_email(f"provision-{role}"),
+                "password": TEMP_PASSWORD,
+                "role": role,
+            },
+            headers=admin_headers,
+        )
+        assert rejected.status_code == 422
+        assert rejected.json() == {"detail": "invalid authentication request"}
 
 
 def test_provision_keeps_caller_session_and_identity(
@@ -168,7 +196,7 @@ def test_provision_keeps_caller_session_and_identity(
 
     created = client.post(
         "/api/v1/users",
-        json={"email": temp_email("provision-self"), "password": TEMP_PASSWORD, "role": "agent"},
+        json={"email": temp_email("provision-self"), "password": TEMP_PASSWORD},
         headers=admin_headers,
     )
     assert created.status_code == 201
@@ -195,7 +223,6 @@ def test_non_admin_and_anonymous_cannot_provision(
             json={
                 "email": temp_email(f"blocked-{role}"),
                 "password": TEMP_PASSWORD,
-                "role": "agent",
             },
             headers=_headers(pairs[role]["access"]),
         )
@@ -206,7 +233,7 @@ def test_non_admin_and_anonymous_cannot_provision(
     assert (
         client.post(
             "/api/v1/users",
-            json={"email": temp_email("blocked-anon"), "password": TEMP_PASSWORD, "role": "agent"},
+            json={"email": temp_email("blocked-anon"), "password": TEMP_PASSWORD},
         ).status_code
         == 401
     )
@@ -231,18 +258,18 @@ def test_legacy_lookup_and_role_change_deny_every_authenticated_caller(
             denied_get = client.get(f"/api/v1/users/{target}", headers=headers)
             assert denied_get.status_code == 403
             assert denied_get.json() == {"detail": _DENIED_DETAIL}
-            denied_patch = client.patch(
+            # A1: the legacy role-change route is gone; it can never succeed.
+            removed = client.patch(
                 f"/api/v1/users/{target}/role",
-                json={"role": "agent"},
+                json={"role": "admin"},
                 headers=headers,
             )
-            assert denied_patch.status_code == 403
-            assert denied_patch.json() == {"detail": _DENIED_DETAIL}
+            assert removed.status_code in {403, 404, 405}
 
-    # No denial changed a stored role and no denial revoked a family.
-    me = client.get("/users/me", headers=_headers(pairs["agent"]["access"]))
-    assert me.status_code == 200
-    assert me.json()["role"] == "agent"
+    # No request changed a system role and no denial revoked a family.
+    loop = asyncio.get_event_loop()
+    assert loop.run_until_complete(_system_roles(repository, existing)) == set()
+    assert loop.run_until_complete(_system_roles(repository, own)) == {"system_admin"}
     for role in ("admin", "agent"):
         assert client.get("/users/me", headers=_headers(pairs[role]["access"])).status_code == 200
         assert (
@@ -272,7 +299,7 @@ def test_anonymous_and_malformed_credentials_receive_401(
     assert (
         client.patch(
             f"/api/v1/users/{target}/role",
-            json={"role": "agent"},
+            json={"role": "admin"},
             headers=raw_auth_headers("not-a-token"),
         ).status_code
         == 401
@@ -283,7 +310,6 @@ def test_anonymous_and_malformed_credentials_receive_401(
             json={
                 "email": temp_email("anon-provision"),
                 "password": TEMP_PASSWORD,
-                "role": "agent",
             },
         ).status_code
         == 401
@@ -301,10 +327,18 @@ def test_provision_rejects_bad_roles_and_unknown_fields(
     pairs = asyncio.get_event_loop().run_until_complete(_accounts(client, repository))
     headers = _headers(pairs["admin"]["access"])
 
-    for bad in ("superadmin", "ADMIN", None):
+    for field, bad in (
+        ("role", "superadmin"),
+        ("role", "ADMIN"),
+        ("role", None),
+        ("is_superuser", True),
+        ("is_active", False),
+        ("is_verified", True),
+        ("auth_provider", "workos"),
+    ):
         rejected = client.post(
             "/api/v1/users",
-            json={"email": temp_email("bad-role"), "password": TEMP_PASSWORD, "role": bad},
+            json={"email": temp_email("bad-role"), "password": TEMP_PASSWORD, field: bad},
             headers=headers,
         )
         assert rejected.status_code == 422
@@ -316,7 +350,6 @@ def test_provision_rejects_bad_roles_and_unknown_fields(
         json={
             "email": temp_email("widen"),
             "password": TEMP_PASSWORD,
-            "role": "agent",
             "extra": "agent",
         },
         headers=headers,
@@ -336,23 +369,21 @@ def test_provision_ignores_privilege_flags_but_fails_weak_and_duplicate(
     pairs = asyncio.get_event_loop().run_until_complete(_accounts(client, repository))
     headers = _headers(pairs["admin"]["access"])
 
+    # A1: a privilege flag is now rejected outright instead of silently ignored.
     flagged = client.post(
         "/api/v1/users",
         json={
             "email": temp_email("flagged"),
             "password": TEMP_PASSWORD,
-            "role": "agent",
             "is_superuser": True,
         },
         headers=headers,
     )
-    assert flagged.status_code == 201
-    assert flagged.json()["role"] == "agent"
-    assert flagged.json()["is_superuser"] is False
+    assert flagged.status_code == 422
 
     weak = client.post(
         "/api/v1/users",
-        json={"email": temp_email("weak"), "password": "short", "role": "agent"},
+        json={"email": temp_email("weak"), "password": "short"},
         headers=headers,
     )
     assert weak.status_code == 400
@@ -361,13 +392,13 @@ def test_provision_ignores_privilege_flags_but_fails_weak_and_duplicate(
     email = temp_email("dup-provision")
     first = client.post(
         "/api/v1/users",
-        json={"email": email, "password": TEMP_PASSWORD, "role": "agent"},
+        json={"email": email, "password": TEMP_PASSWORD},
         headers=headers,
     )
     assert first.status_code == 201
     second = client.post(
         "/api/v1/users",
-        json={"email": email, "password": TEMP_PASSWORD, "role": "agent"},
+        json={"email": email, "password": TEMP_PASSWORD},
         headers=headers,
     )
     assert second.status_code == 400
@@ -387,7 +418,7 @@ def test_provision_body_above_cap_returns_413(
     big_email = f"{'a' * 5000}@example.com"
     oversize = client.post(
         "/api/v1/users",
-        json={"email": big_email, "password": TEMP_PASSWORD, "role": "agent"},
+        json={"email": big_email, "password": TEMP_PASSWORD},
         headers=admin_headers,
     )
     assert oversize.status_code == 413
@@ -416,7 +447,7 @@ def test_provision_storage_unavailable_maps_to_503_sanitized(
 
     res = client.post(
         "/api/v1/users",
-        json={"email": temp_email("store-fail"), "password": TEMP_PASSWORD, "role": "agent"},
+        json={"email": temp_email("store-fail"), "password": TEMP_PASSWORD},
         headers=admin_headers,
     )
     assert res.status_code == 503

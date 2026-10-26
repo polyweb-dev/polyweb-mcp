@@ -809,12 +809,11 @@ def step_task_clean(context: Any) -> None:
 def step_batch(context: Any) -> None:
     from fastapi.testclient import TestClient
 
-    from freesearch.models.users import UserRole
     from freesearch.routers.api import create_app
     from tests.fixtures.auth import (
         configure_bdd_secret,
         raw_auth_headers,
-        register_promote_login,
+        register_and_login,
         temp_email,
     )
     from tests.integration.services.test_monitoring import _StubAdapter
@@ -822,12 +821,8 @@ def step_batch(context: Any) -> None:
     configure_bdd_secret(context)
     app = create_app([_StubAdapter("synth-gate")], repository=context.repository)
     with TestClient(app) as client:
-        pair = _run(
-            context,
-            register_promote_login(
-                client, context.repository, temp_email("s0-batch"), UserRole.DEVELOPER
-            ),
-        )
+        # Batch fetch is execution: project membership only, no system role.
+        pair = register_and_login(client, temp_email("s0-batch"))
         headers = raw_auth_headers(pair["access_token"])
         context.batch_response = client.post(
             "/fetch",
@@ -1457,12 +1452,11 @@ def step_brave_app(context: Any) -> None:
 
     from freesearch.models.contracts import SearchRequest
     from freesearch.models.provider_limits import UsageSyncRequest
-    from freesearch.models.users import UserRole
     from freesearch.routers.api import create_app
     from tests.fixtures.auth import (
         configure_bdd_secret,
         raw_auth_headers,
-        register_promote_login,
+        register_system_admin_login,
         temp_email,
     )
 
@@ -1486,9 +1480,7 @@ def step_brave_app(context: Any) -> None:
     with TestClient(context.brave_app) as http_client:
         pair = _run(
             context,
-            register_promote_login(
-                http_client, context.repository, temp_email("s1-brave"), UserRole.ADMIN
-            ),
+            register_system_admin_login(http_client, context.repository, temp_email("s1-brave")),
         )
         context.brave_admin_headers = raw_auth_headers(pair["access_token"])
     _run(
@@ -3082,12 +3074,11 @@ def step_tavily_gate_decision(context: Any, decision: str, status: int) -> None:
 def step_tavily_app(context: Any) -> None:
     from fastapi.testclient import TestClient
 
-    from freesearch.models.users import UserRole
     from freesearch.routers.api import create_app
     from tests.fixtures.auth import (
         configure_bdd_secret,
         raw_auth_headers,
-        register_promote_login,
+        register_system_admin_login,
         temp_email,
     )
     from tests.integration.services.test_monitoring import _StubAdapter
@@ -3103,9 +3094,7 @@ def step_tavily_app(context: Any) -> None:
     with TestClient(context.tavily_app) as http_client:
         pair = _run(
             context,
-            register_promote_login(
-                http_client, context.repository, temp_email("tav-app"), UserRole.ADMIN
-            ),
+            register_system_admin_login(http_client, context.repository, temp_email("tav-app")),
         )
         context.tavily_admin_headers = raw_auth_headers(pair["access_token"])
 
@@ -3643,12 +3632,11 @@ def step_tavily_rest_402(context: Any) -> None:
     from pydantic import SecretStr
 
     from freesearch.adapters.tavily import TavilyAdapter
-    from freesearch.models.users import UserRole
     from freesearch.routers.api import create_app
     from tests.fixtures.auth import (
         configure_bdd_secret,
         raw_auth_headers,
-        register_promote_login,
+        register_and_login,
         temp_email,
     )
 
@@ -3670,12 +3658,7 @@ def step_tavily_rest_402(context: Any) -> None:
         [context.tavily_rest_adapter], repository=context.repository
     )
     with TestClient(context.tavily_rest_app) as http_client:
-        pair = _run(
-            context,
-            register_promote_login(
-                http_client, context.repository, temp_email("tav-rest"), UserRole.AGENT
-            ),
-        )
+        pair = register_and_login(http_client, temp_email("tav-rest"))
         context.tavily_rest_headers = raw_auth_headers(pair["access_token"])
 
 
@@ -3713,7 +3696,7 @@ def step_tavily_mcp_402(context: Any) -> None:
 
     from freesearch.adapters.tavily import TavilyAdapter
     from freesearch.mcp.server import create_server
-    from tests.fixtures.auth import mcp_account_token
+    from tests.fixtures.api_keys import mcp_key_credentials
 
     _open_repo(context)
     context.service = _service(context, _tavily_records())
@@ -3730,11 +3713,8 @@ def step_tavily_mcp_402(context: Any) -> None:
     )
 
     async def _server() -> Any:
-        from tests.fixtures.execution import seed_token_project
-
-        service, token, _email = await mcp_account_token(context.repository, "tav-mcp")
-        context.tavily_mcp_pid = str(
-            (await seed_token_project(context.repository, token)).project_id
+        service, token, context.tavily_mcp_pid = await mcp_key_credentials(
+            context.repository, "tav-mcp"
         )
         return create_server(
             [context.tavily_mcp_adapter],
@@ -3790,12 +3770,11 @@ def step_tavily_fanout_app(context: Any) -> None:
     from pydantic import SecretStr
 
     from freesearch.adapters.tavily import TavilyAdapter
-    from freesearch.models.users import UserRole
     from freesearch.routers.api import create_app
     from tests.fixtures.auth import (
         configure_bdd_secret,
         raw_auth_headers,
-        register_promote_login,
+        register_and_login,
         temp_email,
     )
 
@@ -3865,12 +3844,7 @@ def step_tavily_fanout_app(context: Any) -> None:
         [context.tavily_fanout_adapter], repository=context.repository
     )
     with TestClient(context.tavily_fanout_app) as http_client:
-        pair = _run(
-            context,
-            register_promote_login(
-                http_client, context.repository, temp_email("tav-fanout"), UserRole.AGENT
-            ),
-        )
+        pair = register_and_login(http_client, temp_email("tav-fanout"))
         context.tavily_fanout_headers = raw_auth_headers(pair["access_token"])
 
 

@@ -91,9 +91,10 @@ def test_register_creates_agent_and_login_returns_verified_pair(
     assert registered.status_code == 201
     body = registered.json()
     assert body["email"] == email.lower()
-    assert body["role"] == "agent"
+    # A1: an ordinary account; the projection carries no role or superuser flag.
+    assert "role" not in body
+    assert "is_superuser" not in body
     assert body["is_active"] is True
-    assert body["is_superuser"] is False
     assert "access_token" not in body
     assert "refresh_token" not in body
     assert "hashed_password" not in body
@@ -131,14 +132,13 @@ def test_login_accepts_caseblind_email(auth_client: TestClient) -> None:
 
 
 def test_registration_rejects_extra_fields_and_bad_email(auth_client: TestClient) -> None:
-    """T2-SIGNUP: unknown fields stay rejected while each role is accepted."""
+    """T2-SIGNUP (A1): unknown, role and privilege fields are all rejected."""
 
     extra = auth_client.post(
         "/auth/register",
         json={
             "email": temp_email("extra"),
             "password": TEMP_PASSWORD,
-            "role": "agent",
             "extra": "agent",
         },
     )
@@ -150,13 +150,11 @@ def test_registration_rejects_extra_fields_and_bad_email(auth_client: TestClient
         json={
             "email": temp_email("flagged"),
             "password": TEMP_PASSWORD,
-            "role": "agent",
             "is_superuser": True,
         },
     )
-    assert flagged.status_code == 201
-    assert flagged.json()["role"] == "agent"
-    assert flagged.json()["is_superuser"] is False
+    assert flagged.status_code == 422
+    assert flagged.json() == {"detail": "invalid authentication request"}
 
     bad_email = auth_client.post(
         "/auth/register", json={"email": "not-an-email", "password": TEMP_PASSWORD}
@@ -165,37 +163,67 @@ def test_registration_rejects_extra_fields_and_bad_email(auth_client: TestClient
     assert bad_email.json() == {"detail": "invalid authentication request"}
 
 
-def test_public_registration_creates_each_role_with_safe_projection(
-    auth_client: TestClient,
+async def test_public_registration_creates_each_role_with_safe_projection(
+    tmp_path: Path, auth_secret: str
 ) -> None:
-    """T2-SIGNUP: public signup creates the selected role with safe flags."""
+    """T2-SIGNUP (A1): public signup creates an ordinary account with no system role.
 
-    for role, superuser in (("admin", True), ("developer", False), ("agent", False)):
-        email = temp_email(f"public-{role}")
-        created = auth_client.post(
-            "/auth/register",
-            json={"email": email, "password": TEMP_PASSWORD, "role": role},
-        )
-        assert created.status_code == 201
-        body = created.json()
-        assert body["email"] == email.lower()
-        assert body["role"] == role
-        assert body["is_superuser"] is superuser
-        assert body["is_active"] is True
-        assert body["is_verified"] is False
-        assert "access_token" not in body
-        assert "refresh_token" not in body
-        assert "hashed_password" not in body
-        logged_in = auth_client.post(
-            "/auth/jwt/login", data={"username": email, "password": TEMP_PASSWORD}
-        )
-        assert logged_in.status_code == 200
-        me = auth_client.get(
-            "/users/me",
-            headers=raw_auth_headers(logged_in.json()["access_token"]),
-        )
-        assert me.status_code == 200
-        assert me.json()["role"] == role
+    The old contract let a signup request choose admin/developer/agent. Now a
+    role request is refused, and the ordinary account that signup does create
+    has no system assignment, no project, and no control-plane access.
+    """
+
+    from sqlalchemy import func, select
+
+    from freesearch.persistence.projects import ProjectMembershipRow, SystemRoleAssignmentRow
+
+    repository = await SQLiteRepository.open(tmp_path / "auth-signup.db")
+    try:
+        app = create_app([_StubAdapter("stubby")], repository=repository)
+        with TestClient(app) as client:
+            for role in ("admin", "developer", "agent", "system_admin"):
+                email = temp_email(f"public-{role}")
+                refused = client.post(
+                    "/auth/register",
+                    json={"email": email, "password": TEMP_PASSWORD, "role": role},
+                )
+                assert refused.status_code == 422
+                assert _login(client, email).status_code == 400
+
+            email = temp_email("public-ordinary")
+            created = client.post(
+                "/auth/register", json={"email": email, "password": TEMP_PASSWORD}
+            )
+            assert created.status_code == 201
+            body = created.json()
+            assert body["email"] == email.lower()
+            assert "role" not in body
+            assert "is_superuser" not in body
+            assert body["is_active"] is True
+            assert body["is_verified"] is False
+            assert "access_token" not in body
+            assert "refresh_token" not in body
+            assert "hashed_password" not in body
+            logged_in = _login(client, email)
+            assert logged_in.status_code == 200
+            headers = raw_auth_headers(logged_in.json()["access_token"])
+            me = client.get("/users/me", headers=headers)
+            assert me.status_code == 200
+            assert "role" not in me.json()
+            assert client.get("/stats", headers=headers).status_code == 403
+            assert client.get("/api/v1/projects", headers=headers).json() == []
+
+        async with repository.session() as session:
+            assignments = await session.scalar(
+                select(func.count()).select_from(SystemRoleAssignmentRow)
+            )
+            memberships = await session.scalar(
+                select(func.count()).select_from(ProjectMembershipRow)
+            )
+        assert assignments == 0
+        assert memberships == 0
+    finally:
+        await repository.close()
 
 
 def test_public_registration_rejects_invalid_roles_safely(auth_client: TestClient) -> None:
@@ -447,11 +475,9 @@ async def test_inactive_and_workos_accounts_fail_closed(tmp_path: Path, auth_sec
                         email=workos_email,
                         hashed_password=None,
                         is_active=True,
-                        is_superuser=False,
                         is_verified=False,
                         auth_provider="workos",
                         auth_provider_id="ext-closed-1",
-                        role="agent",
                     )
                 )
                 await session.commit()

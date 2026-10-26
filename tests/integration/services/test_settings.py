@@ -35,7 +35,7 @@ from freesearch.models.settings import (
     SystemSafetyLimits,
     SystemSettingsUpdate,
 )
-from freesearch.models.users import UserPrincipal, UserRole
+from freesearch.models.users import UserPrincipal
 from freesearch.persistence.projects import (
     AccountRow,
     ProjectMembershipRow,
@@ -64,7 +64,7 @@ from tests.fixtures.auth import create_temp_user, temp_email, temp_principal
 
 
 async def _create_system_admin(repository: SQLiteRepository) -> UserPrincipal:
-    row = await create_temp_user(repository, temp_email("p03-system"), role=UserRole.ADMIN)
+    row = await create_temp_user(repository, temp_email("p03-system"), system_admin=True)
     return temp_principal(row)
 
 
@@ -831,7 +831,7 @@ _CHILD_SETTINGS_WRITER = textwrap.dedent(
         SystemSafetyLimits,
         SystemSettingsUpdate,
     )
-    from freesearch.models.users import UserPrincipal, UserRole
+    from freesearch.models.users import UserPrincipal
     from freesearch.persistence.storage import SQLiteRepository
     from freesearch.services.settings import SettingsService
 
@@ -844,10 +844,8 @@ _CHILD_SETTINGS_WRITER = textwrap.dedent(
             actor = UserPrincipal(
                 id=UUID(user_id),
                 email="child-writer@example.com",
-                role=UserRole.AGENT,
                 session_id=UUID("00000000-0000-4000-8000-000000000099"),
                 is_active=True,
-                is_superuser=False,
                 is_verified=True,
             )
             if action == "system":

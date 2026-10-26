@@ -23,8 +23,10 @@ from freesearch.cli.users import (
     main,
 )
 from freesearch.services.users import (
+    AuthLastSystemAdmin,
     AuthRoleAssignmentFailed,
     AuthServiceError,
+    AuthStorageUnavailable,
     AuthUserNotFound,
 )
 
@@ -32,7 +34,14 @@ from freesearch.services.users import (
 def test_password_flags_are_refused_without_echo() -> None:
     for flag in ("-p", "--pass", "--passwd", "--password", "--secret", "--password=x"):
         assert _is_password_argument(flag) is True
-    for benign in ("--email", "--database", "--role", "--user-id", "create-admin", "set-role"):
+    for benign in (
+        "--email",
+        "--database",
+        "--user-id",
+        "create-admin",
+        "grant-system-admin",
+        "revoke-system-admin",
+    ):
         assert _is_password_argument(benign) is False
 
 
@@ -42,7 +51,7 @@ async def test_run_refuses_password_arguments_with_exit_2(
     secret = "Sup3rSecret!x-NoEcho"
 
     assert await _run(["create-admin", "--email", "ops@example.com", "--password", secret]) == 2
-    assert await _run(["set-role", "--user-id", "x", "--role", "admin", "-p", secret]) == 2
+    assert await _run(["grant-system-admin", "--user-id", "x", "-p", secret]) == 2
 
     captured = capsys.readouterr()
     assert secret not in captured.err
@@ -55,7 +64,10 @@ async def test_run_rejects_bad_arguments_with_one_fixed_message(
 ) -> None:
     assert await _run(["create-admin"]) == 2
     assert await _run(["unknown-command"]) == 2
-    assert await _run(["set-role", "--user-id", "x", "--role", "owner"]) == 2
+    # A1: the legacy role command and any role argument are gone.
+    assert await _run(["set-role", "--user-id", "x", "--role", "admin"]) == 2
+    assert await _run(["grant-system-admin", "--user-id", "x", "--role", "admin"]) == 2
+    assert await _run(["grant-system-admin"]) == 2
 
     captured = capsys.readouterr()
     assert captured.out == ""
@@ -69,9 +81,13 @@ def test_parser_accepts_both_commands() -> None:
     assert create.command == "create-admin"
     assert create.email == "ops@example.com"
 
-    role = _parser().parse_args(["set-role", "--user-id", "u", "--role", "developer"])
-    assert role.command == "set-role"
-    assert role.role == "developer"
+    for command in ("grant-system-admin", "revoke-system-admin"):
+        role = _parser().parse_args([command, "--user-id", "u"])
+        assert role.command == command
+        assert role.user_id == "u"
+        assert not hasattr(role, "role")
+    with pytest.raises(CliError):
+        _parser().parse_args(["set-role", "--user-id", "u", "--role", "developer"])
 
 
 def test_parser_never_echoes_raw_text() -> None:
@@ -137,14 +153,20 @@ def test_report_maps_each_failure_to_a_fixed_message(
     assert _report(exceptions.UserAlreadyExists()) == 1
     assert _report(AuthUserNotFound()) == 1
     assert _report(AuthRoleAssignmentFailed(uuid4())) == 1
-    assert _report(AuthServiceError("down")) == 1
+    # A1: a bare service error carries one of the service's fixed messages.
+    assert _report(AuthServiceError("an inactive account cannot hold a system role")) == 1
+    assert _report(AuthStorageUnavailable("sqlite path C:/secret/db is locked")) == 1
+    assert _report(AuthLastSystemAdmin("x")) == 1
     assert _report(RuntimeError("boom")) == 1
 
     captured = capsys.readouterr()
     assert "boom" not in captured.err
+    assert "C:/secret/db" not in captured.err
     assert "an account with this email address already exists" in captured.err
     assert "no account has this id" in captured.err
+    assert "an inactive account cannot hold a system role" in captured.err
     assert "the account database is unavailable" in captured.err
+    assert "last active system administrator" in captured.err
     assert "the account operation failed" in captured.err
 
 
@@ -159,7 +181,9 @@ def test_report_role_failure_prints_agent_fallback_to_stdout(
     captured = capsys.readouterr()
     assert captured.err == ""
     assert f"Account: {account}" in captured.out
-    assert "agent" in captured.out
+    # A1: the honest fallback is an ordinary account with no system role.
+    assert "System role: none" in captured.out
+    assert "agent" not in captured.out
 
 
 def test_main_returns_the_run_status_as_system_exit(monkeypatch: pytest.MonkeyPatch) -> None:

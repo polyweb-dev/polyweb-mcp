@@ -9,11 +9,11 @@ import pytest
 from pydantic import ValidationError
 
 from freesearch.models.projects import (
-    ALLOWED_TOKEN_ACTIONS,
-    ALLOWED_TOKEN_SCOPES,
+    API_KEY_ACTIONS,
+    API_KEY_SCOPES,
     BUILTIN_ROLE_DEFINITIONS,
+    DEFAULT_API_KEY_LIFETIME_DAYS,
     DEFAULT_INSTALLATION_ACCOUNT_ID,
-    DEFAULT_TOKEN_LIFETIME_DAYS,
     AccountRead,
     AccountType,
     AuthorizationDecision,
@@ -27,6 +27,11 @@ from freesearch.models.projects import (
     HumanPrincipal,
     MembershipStatus,
     PermissionAction,
+    ProjectApiKeyCreate,
+    ProjectApiKeyIssued,
+    ProjectApiKeyPrincipal,
+    ProjectApiKeyRead,
+    ProjectApiKeyRotate,
     ProjectBindingRead,
     ProjectContext,
     ProjectCreate,
@@ -38,28 +43,20 @@ from freesearch.models.projects import (
     ProjectRolloutState,
     ProjectSettingsDocument,
     ProjectStatus,
-    ProjectTokenCreate,
-    ProjectTokenIssueResponse,
-    ProjectTokenPrincipal,
-    ProjectTokenRead,
-    ProjectTokenRotate,
     RoleAssignmentRead,
     RoutingSettings,
     ScopeType,
     SettingsFieldResolution,
     SettingsProvenance,
     SettingsResolution,
-    TargetUserCreate,
-    TargetUserRead,
     UpstreamQuotaPoolRead,
     evaluate_authorization,
 )
-from freesearch.models.users import AuthProvider
+from freesearch.models.users import AuthProvider, UserAccount, UserAccountCreate
 from tests.fixtures.alpha_fixtures import (
     alpha_test_db_context,
     bootstrap_fresh_alpha,
     build_alpha_project,
-    build_alpha_project_token,
     create_alpha_test_db,
 )
 
@@ -122,12 +119,12 @@ def test_principals_and_context_deep_immutability() -> None:
 
     proj_id = uuid4()
     token_id = uuid4()
-    token_principal = ProjectTokenPrincipal(
-        token_id=token_id, project_id=proj_id, scopes=frozenset({"search.execute"})
+    token_principal = ProjectApiKeyPrincipal(
+        api_key_id=token_id, project_id=proj_id, scopes=frozenset({"search.execute"})
     )
-    assert token_principal.principal_type == "project_token"
+    assert token_principal.principal_type == "project_api_key"
 
-    # ProjectTokenPrincipal immutability
+    # ProjectApiKeyPrincipal immutability
     with pytest.raises(ValidationError):
         token_principal.project_id = uuid4()
 
@@ -156,8 +153,8 @@ def test_principals_and_context_deep_immutability() -> None:
 def test_token_principal_project_mismatch_rejected() -> None:
     token_proj_id = uuid4()
     context_proj_id = uuid4()
-    token_principal = ProjectTokenPrincipal(
-        token_id=uuid4(),
+    token_principal = ProjectApiKeyPrincipal(
+        api_key_id=uuid4(),
         project_id=token_proj_id,
         scopes=frozenset({"search.execute"}),
     )
@@ -184,13 +181,13 @@ def test_token_principal_project_mismatch_rejected() -> None:
 
 def test_token_scopes_restricted_to_execution_only() -> None:
     # Allowed token actions and scopes verification
-    assert PermissionAction.SEARCH_EXECUTE in ALLOWED_TOKEN_ACTIONS
-    assert PermissionAction.FETCH_EXECUTE in ALLOWED_TOKEN_ACTIONS
-    assert "search.execute" in ALLOWED_TOKEN_SCOPES
-    assert "fetch.execute" in ALLOWED_TOKEN_SCOPES
+    assert PermissionAction.SEARCH_EXECUTE in API_KEY_ACTIONS
+    assert PermissionAction.FETCH_EXECUTE in API_KEY_ACTIONS
+    assert "search.execute" in API_KEY_SCOPES
+    assert "fetch.execute" in API_KEY_SCOPES
 
     # Valid execution scopes
-    valid_token = ProjectTokenCreate(
+    valid_token = ProjectApiKeyCreate(
         label="Execution Token",
         scopes=frozenset({PermissionAction.SEARCH_EXECUTE.value}),
     )
@@ -205,12 +202,12 @@ def test_token_scopes_restricted_to_execution_only() -> None:
         "system.settings.write",
     ]
     for scope in forbidden_scopes:
-        with pytest.raises(ValidationError, match="restricted to execution actions"):
-            ProjectTokenCreate(label="Bad Token", scopes=frozenset({scope}))
+        with pytest.raises(ValidationError, match="must be execution scopes"):
+            ProjectApiKeyCreate(label="Bad Token", scopes=frozenset({scope}))
 
-        with pytest.raises(ValidationError, match="restricted to execution actions"):
-            ProjectTokenPrincipal(
-                token_id=uuid4(),
+        with pytest.raises(ValidationError, match="must be execution scopes"):
+            ProjectApiKeyPrincipal(
+                api_key_id=uuid4(),
                 project_id=uuid4(),
                 scopes=frozenset({scope}),
             )
@@ -316,46 +313,37 @@ def test_credential_owner_scope_invariants() -> None:
 
 
 def test_token_issue_response_wire_boundary_and_leak_prevention() -> None:
-    raw_secret = "fs_live_supersecretstring123456789"
-    token_read = ProjectTokenRead(
+    raw_key = "fs_live_abcdefghijkl_" + "S" * 43
+    issued = ProjectApiKeyIssued(
         id=uuid4(),
         project_id=uuid4(),
-        label="Test Token",
-        prefix="fs_live_super",
-        scopes=frozenset({"search.execute"}),
+        label="Test Key",
+        prefix="abcdefghijkl",
+        scopes=["search.execute"],
         created_by=uuid4(),
         created_at=datetime.now(UTC),
         expires_at=None,
-    )
-    response = ProjectTokenIssueResponse(
-        token=token_read,
-        secret=raw_secret,
+        status="active",
+        key=raw_key,
     )
 
-    # 1. Repr and str suppress the secret to prevent accidental logging leaks
-    repr_str = repr(response)
-    str_str = str(response)
-    assert raw_secret not in repr_str
-    assert "**********" in repr_str
-    assert raw_secret not in str_str
-    assert "**********" in str_str
+    # 1. Repr, str and a Python-mode dump never reveal the raw key.
+    assert raw_key not in repr(issued)
+    assert raw_key not in str(issued)
+    assert raw_key not in str(issued.model_dump())
+    assert raw_key not in str(issued.model_dump(mode="python"))
 
-    # 2. Wire payload contains both secret and raw_token for client delivery
-    wire_payload = response.to_one_time_wire_payload()
-    assert wire_payload["raw_token"] == raw_secret
-    assert wire_payload["secret"] == raw_secret
-    assert wire_payload["token"]["id"] == str(token_read.id)
+    # 2. Only the JSON wire serialization (the one-time response) carries it.
+    wire = issued.model_dump(mode="json")
+    assert wire["key"] == raw_key
+    assert wire["id"] == str(issued.id)
+    assert raw_key in issued.model_dump_json()
 
-    # 3. Dedicated wire payload validates cleanly against response model
-    validated = ProjectTokenIssueResponse.model_validate(wire_payload)
-    assert validated.secret == raw_secret
-    assert validated.raw_token == raw_secret
-    assert validated.token.id == token_read.id
-
-    # 4. Standard model_dump / model_dump_json preserves unmasked secret for FastAPI response
-    dumped = response.model_dump(mode="json")
-    assert dumped["secret"] == raw_secret
-    assert dumped["raw_token"] == raw_secret
+    # 3. The read model has no field that could carry the key or its verifier.
+    for forbidden in ("key", "secret", "raw_token", "verifier_digest", "digest"):
+        assert forbidden not in ProjectApiKeyRead.model_fields
+    with pytest.raises(ValidationError):
+        ProjectApiKeyRead.model_validate({**wire, "status": "active"})
 
 
 def test_project_create_requires_atomic_initial_admin() -> None:
@@ -471,8 +459,8 @@ def test_authorization_protocol_and_evaluator() -> None:
 def test_authorization_evaluator_token_scope_and_cross_project_boundaries() -> None:
     p1 = uuid4()
     p2 = uuid4()
-    token = ProjectTokenPrincipal(
-        token_id=uuid4(),
+    token = ProjectApiKeyPrincipal(
+        api_key_id=uuid4(),
         project_id=p1,
         scopes=frozenset({"search.execute"}),
     )
@@ -491,7 +479,7 @@ def test_authorization_evaluator_token_scope_and_cross_project_boundaries() -> N
         ),
     )
     assert d1.allowed is False
-    assert "not allowed by token scopes" in (d1.reason or "")
+    assert "not allowed by API key scopes" in (d1.reason or "")
 
     # 2. Token cannot execute across projects (scope_id != token.project_id)
     q2 = AuthorizationQuery(
@@ -519,7 +507,7 @@ def test_authorization_evaluator_token_scope_and_cross_project_boundaries() -> N
         effective_permissions=frozenset({PermissionAction.SEARCH_EXECUTE}),
     )
     assert d3.allowed is False
-    assert "Project token cannot execute at system scope" in (d3.reason or "")
+    assert "Project API key cannot execute at system scope" in (d3.reason or "")
 
     # 4. Valid token execution succeeds
     q4 = AuthorizationQuery(
@@ -601,27 +589,27 @@ def test_project_token_optional_expiry_semantics() -> None:
     now = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
 
     # 1. Omitted expires_at: defaults to 90 days from now (policy proposal)
-    token_create_omitted = ProjectTokenCreate(label="Default Expiry Token")
+    token_create_omitted = ProjectApiKeyCreate(label="Default Expiry Token")
     assert "expires_at" not in token_create_omitted.model_fields_set
     resolved_default = token_create_omitted.resolve_expires_at(now=now)
     assert resolved_default is not None
-    assert resolved_default == now + timedelta(days=DEFAULT_TOKEN_LIFETIME_DAYS)
+    assert resolved_default == now + timedelta(days=DEFAULT_API_KEY_LIFETIME_DAYS)
 
     # 2. Explicit null: No expiration (perpetual)
-    token_create_no_expiry = ProjectTokenCreate(label="Permanent Token", expires_at=None)
+    token_create_no_expiry = ProjectApiKeyCreate(label="Permanent Token", expires_at=None)
     assert "expires_at" in token_create_no_expiry.model_fields_set
     resolved_none = token_create_no_expiry.resolve_expires_at(now=now)
     assert resolved_none is None
 
-    # 3. Explicit timestamp: Specific expiration
-    target_date = datetime(2026, 6, 1, 0, 0, 0, tzinfo=UTC)
-    token_create_custom = ProjectTokenCreate(label="Custom Token", expires_at=target_date)
+    # 3. Explicit timestamp: Specific expiration (the contract rejects a past one)
+    target_date = datetime.now(UTC).replace(microsecond=0) + timedelta(days=30)
+    token_create_custom = ProjectApiKeyCreate(label="Custom Token", expires_at=target_date)
     assert "expires_at" in token_create_custom.model_fields_set
     resolved_custom = token_create_custom.resolve_expires_at(now=now)
     assert resolved_custom == target_date
 
     # 4. Rotate contract
-    rotate = ProjectTokenRotate(overlap_seconds=600)
+    rotate = ProjectApiKeyRotate(overlap_seconds=600)
     assert rotate.overlap_seconds == 600
 
 
@@ -629,33 +617,33 @@ def test_project_token_create_json_roundtrip_preserves_omitted_vs_null_vs_timest
     now = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
 
     # 1. Omitted expires_at roundtrip: stays omitted and resolves to 90 days
-    t_omitted = ProjectTokenCreate(label="Omitted Expiry Token")
+    t_omitted = ProjectApiKeyCreate(label="Omitted Expiry Token")
     assert "expires_at" not in t_omitted.model_fields_set
     json_omitted = t_omitted.model_dump_json()
     assert "expires_at" not in json_omitted
-    t_omitted_reloaded = ProjectTokenCreate.model_validate_json(json_omitted)
+    t_omitted_reloaded = ProjectApiKeyCreate.model_validate_json(json_omitted)
     assert "expires_at" not in t_omitted_reloaded.model_fields_set
     assert t_omitted_reloaded.resolve_expires_at(now=now) == now + timedelta(
-        days=DEFAULT_TOKEN_LIFETIME_DAYS
+        days=DEFAULT_API_KEY_LIFETIME_DAYS
     )
 
     # 2. Explicit null expires_at roundtrip: stays null and resolves to None (perpetual)
-    t_null = ProjectTokenCreate(label="Permanent Token", expires_at=None)
+    t_null = ProjectApiKeyCreate(label="Permanent Token", expires_at=None)
     assert "expires_at" in t_null.model_fields_set
     json_null = t_null.model_dump_json()
     assert "expires_at" in json_null
     assert '"expires_at":null' in json_null.replace(" ", "")
-    t_null_reloaded = ProjectTokenCreate.model_validate_json(json_null)
+    t_null_reloaded = ProjectApiKeyCreate.model_validate_json(json_null)
     assert "expires_at" in t_null_reloaded.model_fields_set
     assert t_null_reloaded.resolve_expires_at(now=now) is None
 
     # 3. Explicit timestamp roundtrip: stays timestamp and resolves to exact datetime
-    target_dt = datetime(2026, 8, 1, 0, 0, 0, tzinfo=UTC)
-    t_custom = ProjectTokenCreate(label="Custom Token", expires_at=target_dt)
+    target_dt = datetime.now(UTC).replace(microsecond=0) + timedelta(days=60)
+    t_custom = ProjectApiKeyCreate(label="Custom Token", expires_at=target_dt)
     assert "expires_at" in t_custom.model_fields_set
     json_custom = t_custom.model_dump_json()
     assert "expires_at" in json_custom
-    t_custom_reloaded = ProjectTokenCreate.model_validate_json(json_custom)
+    t_custom_reloaded = ProjectApiKeyCreate.model_validate_json(json_custom)
     assert "expires_at" in t_custom_reloaded.model_fields_set
     assert t_custom_reloaded.resolve_expires_at(now=now) == target_dt
 
@@ -786,8 +774,9 @@ async def test_alpha_bootstrap_procedure() -> None:
             assert result.database_path.exists()
             assert result.account_id == DEFAULT_INSTALLATION_ACCOUNT_ID
             assert result.admin_user.email == "test_alpha_admin@freesearch.local"
+            # A1: the account row carries no role; authority is the assignment.
             assert result.admin_user.is_superuser is False
-            assert result.admin_user.role == "agent"
+            assert not hasattr(result.admin_user, "role")
             assert result.default_project.name == "Isolated Alpha Workspace"
             assert result.system_role_assignment.role_key == BuiltinRole.SYSTEM_ADMIN
             assert result.project_admin_context.allows(PermissionAction.PROJECT_ARCHIVE) is True
@@ -800,12 +789,6 @@ async def test_alpha_bootstrap_procedure() -> None:
                 initial_admin_user_id=result.admin_user.id,
             )
             assert project_model.status == ProjectStatus.ACTIVE
-
-            token_pair, _hash = build_alpha_project_token(
-                project_id=project_model.id,
-                created_by=result.admin_user.id,
-            )
-            assert token_pair.token.prefix.startswith("fs_live_")
         finally:
             await result.repository.close()
 
@@ -824,7 +807,7 @@ async def test_alpha_bootstrap_runbook_clean_cleanup_on_windows(tmp_path: Path) 
         assert result.account_id == DEFAULT_INSTALLATION_ACCOUNT_ID
         assert result.admin_user.email == "runbook_admin@freesearch.local"
         assert result.admin_user.is_superuser is False
-        assert result.admin_user.role == "agent"
+        assert not hasattr(result.admin_user, "role")
         assert result.default_project.name == "Runbook Alpha Project"
         assert result.system_role_assignment.role_key == BuiltinRole.SYSTEM_ADMIN
         assert result.project_admin_context.allows(PermissionAction.PROJECT_ARCHIVE) is True
@@ -833,32 +816,56 @@ async def test_alpha_bootstrap_runbook_clean_cleanup_on_windows(tmp_path: Path) 
         await result.repository.close()
 
 
+@pytest.mark.parametrize("model", [ProjectApiKeyCreate, ProjectApiKeyRotate])
+def test_api_key_requests_reject_past_or_naive_expiry(model: type) -> None:
+    body: dict[str, object] = {"label": "k"} if model is ProjectApiKeyCreate else {}
+    with pytest.raises(ValidationError, match="must be in the future"):
+        model.model_validate({**body, "expires_at": datetime.now(UTC) - timedelta(seconds=1)})
+    with pytest.raises(ValidationError):
+        model.model_validate({**body, "expires_at": datetime(2099, 1, 1)})
+
+
+@pytest.mark.parametrize("overlap", [-1, 604_801])
+def test_api_key_rotate_rejects_overlap_out_of_bounds(overlap: int) -> None:
+    with pytest.raises(ValidationError):
+        ProjectApiKeyRotate(overlap_seconds=overlap)
+    assert ProjectApiKeyRotate().overlap_seconds == 86_400
+    assert ProjectApiKeyRotate(overlap_seconds=0).overlap_seconds == 0
+
+
+@pytest.mark.parametrize("scopes", [[], ["search.execute", "tokens.manage"], ["SEARCH.EXECUTE"]])
+def test_api_key_create_rejects_empty_or_unknown_scopes(scopes: list[str]) -> None:
+    with pytest.raises(ValidationError):
+        ProjectApiKeyCreate.model_validate({"label": "k", "scopes": scopes})
+    assert ProjectApiKeyCreate(label="k").scopes == API_KEY_SCOPES
+
+
 def test_project_token_rotate_json_roundtrip_preserves_omitted_vs_null_vs_timestamp() -> None:
     # 1. Omitted expires_at: stays omitted
-    r_omitted = ProjectTokenRotate()
+    r_omitted = ProjectApiKeyRotate()
     assert "expires_at" not in r_omitted.model_fields_set
     json_omitted = r_omitted.model_dump_json()
     assert "expires_at" not in json_omitted
-    r_omitted_reloaded = ProjectTokenRotate.model_validate_json(json_omitted)
+    r_omitted_reloaded = ProjectApiKeyRotate.model_validate_json(json_omitted)
     assert "expires_at" not in r_omitted_reloaded.model_fields_set
 
     # 2. Explicit null expires_at: stays null
-    r_null = ProjectTokenRotate(expires_at=None)
+    r_null = ProjectApiKeyRotate(expires_at=None)
     assert "expires_at" in r_null.model_fields_set
     json_null = r_null.model_dump_json()
     assert "expires_at" in json_null
     assert '"expires_at":null' in json_null.replace(" ", "")
-    r_null_reloaded = ProjectTokenRotate.model_validate_json(json_null)
+    r_null_reloaded = ProjectApiKeyRotate.model_validate_json(json_null)
     assert "expires_at" in r_null_reloaded.model_fields_set
     assert r_null_reloaded.expires_at is None
 
     # 3. Explicit timestamp: stays timestamp
-    target_dt = datetime(2026, 9, 1, 0, 0, 0, tzinfo=UTC)
-    r_custom = ProjectTokenRotate(expires_at=target_dt)
+    target_dt = datetime.now(UTC).replace(microsecond=0) + timedelta(days=90)
+    r_custom = ProjectApiKeyRotate(expires_at=target_dt)
     assert "expires_at" in r_custom.model_fields_set
     json_custom = r_custom.model_dump_json()
     assert "expires_at" in json_custom
-    r_custom_reloaded = ProjectTokenRotate.model_validate_json(json_custom)
+    r_custom_reloaded = ProjectApiKeyRotate.model_validate_json(json_custom)
     assert "expires_at" in r_custom_reloaded.model_fields_set
     assert r_custom_reloaded.expires_at == target_dt
 
@@ -868,7 +875,7 @@ def test_default_installation_account_id() -> None:
 
 
 def test_target_user_create_local_valid() -> None:
-    user = TargetUserCreate(
+    user = UserAccountCreate(
         email="User@Domain.COM",
         auth_provider=AuthProvider.LOCAL,
         hashed_password="secure_password_hash",
@@ -882,7 +889,7 @@ def test_target_user_create_local_valid() -> None:
 
 
 def test_target_user_create_workos_valid() -> None:
-    user = TargetUserCreate(
+    user = UserAccountCreate(
         email="WorkOS.User@Domain.COM",
         auth_provider=AuthProvider.WORKOS,
         auth_provider_id="workos_usr_12345",
@@ -895,19 +902,19 @@ def test_target_user_create_workos_valid() -> None:
 
 def test_target_user_create_local_rejects_missing_or_empty_password() -> None:
     with pytest.raises(ValidationError, match="Local user requires a non-empty hashed_password"):
-        TargetUserCreate(
+        UserAccountCreate(
             email="test@local.com", auth_provider=AuthProvider.LOCAL, hashed_password=None
         )
 
     with pytest.raises(ValidationError, match="Local user requires a non-empty hashed_password"):
-        TargetUserCreate(
+        UserAccountCreate(
             email="test@local.com", auth_provider=AuthProvider.LOCAL, hashed_password="   "
         )
 
 
 def test_target_user_create_local_rejects_auth_provider_id() -> None:
     with pytest.raises(ValidationError, match="Local user must not have auth_provider_id"):
-        TargetUserCreate(
+        UserAccountCreate(
             email="test@local.com",
             auth_provider=AuthProvider.LOCAL,
             hashed_password="valid_hash",
@@ -917,7 +924,7 @@ def test_target_user_create_local_rejects_auth_provider_id() -> None:
 
 def test_target_user_create_workos_rejects_password_or_missing_id() -> None:
     with pytest.raises(ValidationError, match="WorkOS user must not have hashed_password"):
-        TargetUserCreate(
+        UserAccountCreate(
             email="test@workos.com",
             auth_provider=AuthProvider.WORKOS,
             auth_provider_id="workos_123",
@@ -925,31 +932,33 @@ def test_target_user_create_workos_rejects_password_or_missing_id() -> None:
         )
 
     with pytest.raises(ValidationError, match="WorkOS user requires a non-empty auth_provider_id"):
-        TargetUserCreate(
+        UserAccountCreate(
             email="test@workos.com",
             auth_provider=AuthProvider.WORKOS,
             auth_provider_id=None,
+            is_active=True,
+            is_verified=False,
         )
 
 
 def test_target_user_strictly_forbids_role_and_account_type_fields() -> None:
     # Target human schema has NO role or account_type classifications
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-        TargetUserCreate(
+        UserAccountCreate(
             email="test@example.com",
             hashed_password="hash",
             role="admin",  # type: ignore[call-arg]
         )
 
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-        TargetUserCreate(
+        UserAccountCreate(
             email="test@example.com",
             hashed_password="hash",
             is_superuser=True,  # type: ignore[call-arg]
         )
 
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-        TargetUserRead(
+        UserAccount(
             id=uuid4(),
             email="test@example.com",
             auth_provider=AuthProvider.LOCAL,
@@ -959,26 +968,32 @@ def test_target_user_strictly_forbids_role_and_account_type_fields() -> None:
 
 def test_target_user_read_validates_provider_invariants() -> None:
     uid = uuid4()
-    local_read = TargetUserRead(
+    local_read = UserAccount(
         id=uid,
         email="READ@Example.com",
         auth_provider=AuthProvider.LOCAL,
+        is_active=True,
+        is_verified=False,
     )
     assert local_read.email == "read@example.com"
     assert local_read.auth_provider == AuthProvider.LOCAL
 
     with pytest.raises(ValidationError, match="Local user must not have auth_provider_id"):
-        TargetUserRead(
+        UserAccount(
             id=uid,
             email="read@example.com",
             auth_provider=AuthProvider.LOCAL,
             auth_provider_id="unexpected_id",
+            is_active=True,
+            is_verified=False,
         )
 
     with pytest.raises(ValidationError, match="WorkOS user requires a non-empty auth_provider_id"):
-        TargetUserRead(
+        UserAccount(
             id=uid,
             email="read@example.com",
             auth_provider=AuthProvider.WORKOS,
             auth_provider_id=None,
+            is_active=True,
+            is_verified=False,
         )

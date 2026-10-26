@@ -34,17 +34,16 @@ from freesearch.models.contracts import (
     UsageOperation,
 )
 from freesearch.models.provider_access import is_operation_enabled
-from freesearch.models.users import UserRole
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
+from tests.fixtures.api_keys import mcp_key_credentials
 from tests.fixtures.auth import (
     TEMP_PASSWORD,
     configure_bdd_secret,
-    mcp_account_token,
-    promote_account,
+    promote_to_system_admin,
     temp_email,
 )
-from tests.fixtures.execution import bdd_project_id, bdd_token_project_id
+from tests.fixtures.execution import bdd_project_id
 
 
 class _MemorySecretStore:
@@ -203,14 +202,15 @@ def _client(context: Any, *, raise_server_exceptions: bool = True) -> Iterator[T
             os.chdir(previous_cwd)
 
 
-def _login_headers(context: Any, role: UserRole, prefix: str) -> dict[str, str]:
-    # Register one account, assign one role, and return one access header.
+def _login_headers(context: Any, prefix: str, *, system_admin: bool = False) -> dict[str, str]:
+    # Register one ordinary account; grant system_admin (trusted) only when the
+    # scenario exercises a system-scoped control surface (A1).
     email = temp_email(prefix)
     with _client(context) as client:
         registered = client.post("/auth/register", json={"email": email, "password": TEMP_PASSWORD})
         assert registered.status_code == 201
-        if role is not UserRole.AGENT:
-            context.loop.run_until_complete(promote_account(context.repository, email, role))
+        if system_admin:
+            context.loop.run_until_complete(promote_to_system_admin(context.repository, email))
         logged_in = client.post(
             "/auth/jwt/login", data={"username": email, "password": TEMP_PASSWORD}
         )
@@ -263,20 +263,19 @@ def _control_headers(context: Any) -> dict[str, str]:
     existing = getattr(context, "developer_headers", None)
     if existing is not None:
         return existing
-    headers = _login_headers(context, UserRole.DEVELOPER, "control-dev")
+    headers = _login_headers(context, "control-reader", system_admin=True)
     context.developer_headers = headers
     return headers
 
 
 def _build_mcp_server(context: Any) -> Any:
-    """Build one MCP tool server with a real account and its stdio credential."""
+    """Build one MCP tool server with a real project API key as its stdio credential."""
 
     from pydantic import SecretStr
 
-    service, token, _email = context.loop.run_until_complete(
-        mcp_account_token(context.repository, "control-mcp")
+    service, token, context.mcp_pid = context.loop.run_until_complete(
+        mcp_key_credentials(context.repository, "control-mcp")
     )
-    context.mcp_pid = bdd_token_project_id(context, token)
     return create_server(
         context.adapters,
         repository=context.repository,
@@ -292,8 +291,8 @@ def step_given_control_api(context: Any) -> None:
     context.adapters = [_ControlAdapter("exa"), _ControlAdapter("brave")]
     _build_app(context)
     # Admin owns mutations, Developer owns reads. One account per role is enough.
-    context.admin_headers = _login_headers(context, UserRole.ADMIN, "control-admin")
-    context.developer_headers = _login_headers(context, UserRole.DEVELOPER, "control-dev")
+    context.admin_headers = _login_headers(context, "control-admin", system_admin=True)
+    context.developer_headers = _login_headers(context, "control-reader", system_admin=True)
 
 
 @given("an offline control API with stub adapters and call counters")
@@ -308,8 +307,8 @@ def step_given_control_api_counters(context: Any) -> None:
     context.server = None
     _build_app(context)
     # Reads and searches need an account; mutations need Admin.
-    context.admin_headers = _login_headers(context, UserRole.ADMIN, "control-admin")
-    context.developer_headers = _login_headers(context, UserRole.DEVELOPER, "control-dev")
+    context.admin_headers = _login_headers(context, "control-admin", system_admin=True)
+    context.developer_headers = _login_headers(context, "control-reader", system_admin=True)
 
 
 @given("an offline control API with stub adapters and call counters and an MCP server")
@@ -322,8 +321,8 @@ def step_given_control_api_counters_mcp(context: Any) -> None:
     ]
     _reset_counts(context)
     _build_app(context)
-    context.admin_headers = _login_headers(context, UserRole.ADMIN, "control-admin")
-    context.developer_headers = _login_headers(context, UserRole.DEVELOPER, "control-dev")
+    context.admin_headers = _login_headers(context, "control-admin", system_admin=True)
+    context.developer_headers = _login_headers(context, "control-reader", system_admin=True)
     context.server = _build_mcp_server(context)
 
 
@@ -337,7 +336,7 @@ def step_given_control_api_secret_store(context: Any) -> None:
     context.secret_store = _MemorySecretStore()
     _build_app(context)
     # Secret writes need the Admin role.
-    context.admin_headers = _login_headers(context, UserRole.ADMIN, "control-admin")
+    context.admin_headers = _login_headers(context, "control-admin", system_admin=True)
 
 
 @given("an offline control API with a failing adapter")
@@ -347,7 +346,7 @@ def step_given_failing_control_api(context: Any) -> None:
     context.adapters = [_ControlAdapter("exa", fail=True), _ControlAdapter("brave")]
     _build_app(context)
     # Search needs any role, stats and dashboard need the Reader role.
-    context.developer_headers = _login_headers(context, UserRole.DEVELOPER, "control-dev")
+    context.developer_headers = _login_headers(context, "control-reader", system_admin=True)
 
 
 @when("I list the control-plane providers")
@@ -541,7 +540,7 @@ def step_then_failure_telemetry(context: Any) -> None:
 @when('I apply the "{choice}" access choice to "{provider}"')
 def step_when_apply_access_choice(context: Any, choice: str, provider: str) -> None:
     headers = getattr(context, "admin_headers", None) or _login_headers(
-        context, UserRole.ADMIN, "control-admin"
+        context, "control-admin", system_admin=True
     )
     context.admin_headers = headers
     with _client(context) as client:

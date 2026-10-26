@@ -37,7 +37,7 @@ from freesearch.models.projects import (
     ProjectRead,
     ScopeType,
 )
-from freesearch.models.users import UserPrincipal, UserRole
+from freesearch.models.users import UserPrincipal
 from freesearch.persistence.credentials import (
     CredentialRepository,
     ProviderCredentialRow,
@@ -453,7 +453,7 @@ async def test_ac4_project_projection_hides_system_internals_and_scope_boundarie
 
         # System authority grants no implicit project access.
         system_only = temp_principal(
-            await create_temp_user(boot.repository, temp_email("p08-sysonly"), role=UserRole.ADMIN)
+            await create_temp_user(boot.repository, temp_email("p08-sysonly"), system_admin=True)
         )
         with pytest.raises(CredentialNotFound):
             await service.list_project_credentials(system_only, project_b.id)

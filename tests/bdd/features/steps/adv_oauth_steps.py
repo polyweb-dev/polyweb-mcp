@@ -24,7 +24,6 @@ from freesearch.models.contracts import (
     SearchResponse,
     UsageOperation,
 )
-from freesearch.models.users import UserRole
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
 from freesearch.services.parallel_oauth import (
@@ -35,7 +34,7 @@ from freesearch.services.parallel_oauth import (
 from tests.fixtures.auth import (
     TEMP_PASSWORD,
     configure_bdd_secret,
-    promote_account,
+    promote_to_system_admin,
     temp_email,
 )
 from tests.integration.services.oauth.oauth_stubs import (
@@ -204,7 +203,7 @@ def _setup_adv(context: Any) -> None:
     email = temp_email("adv-admin")
     registered = client.post("/auth/register", json={"email": email, "password": TEMP_PASSWORD})
     assert registered.status_code == 201
-    context.loop.run_until_complete(promote_account(repo, email, UserRole.ADMIN))
+    context.loop.run_until_complete(promote_to_system_admin(repo, email))
     logged_in = client.post("/auth/jwt/login", data={"username": email, "password": TEMP_PASSWORD})
     assert logged_in.status_code == 200
     context.adv_auth_headers = {"Authorization": f"Bearer {logged_in.json()['access_token']}"}

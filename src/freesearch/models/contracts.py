@@ -66,8 +66,14 @@ class RoutingPreference(ContractModel):
         return providers
 
 
+_PROJECT_ID_DESCRIPTION = (
+    "Project to execute in. Required with a human session. A project API key executes "
+    "in its own project; a supplied value must name that project."
+)
+
+
 class SearchRequest(ContractModel):
-    project_id: UUID
+    project_id: UUID | None = Field(default=None, description=_PROJECT_ID_DESCRIPTION)
     query: str = Field(min_length=1, max_length=2_000)
     limit: int = Field(default=10, ge=1, le=100)
     mode: Literal["turbo", "fast", "basic", "advanced"] | None = None
@@ -123,7 +129,7 @@ class SearchResponse(ContractModel):
 
 
 class FetchRequest(ContractModel):
-    project_id: UUID
+    project_id: UUID | None = Field(default=None, description=_PROJECT_ID_DESCRIPTION)
     url: AnyHttpUrl
     max_chars: int | None = Field(default=None, ge=1, le=2_000_000)
     url_count: int = Field(default=1, ge=1, le=10_000)

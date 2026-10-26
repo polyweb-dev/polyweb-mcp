@@ -13,13 +13,13 @@ import pytest_asyncio
 from fastapi.testclient import TestClient
 
 from freesearch.models.provider_limits import SyncClaim
-from freesearch.models.users import UserRole
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
 from tests.fixtures.auth import (
     account_id_from_pair,
     raw_auth_headers,
-    register_promote_login,
+    register_and_login,
+    register_system_admin_login,
     temp_email,
 )
 from tests.fixtures.execution import seed_execution_project
@@ -62,9 +62,7 @@ def _client(repository, adapters=None):
 
 async def test_unknown_provider_is_404(repository, auth_secret: str) -> None:
     with TestClient(_client(repository)) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("limit-reader"), UserRole.DEVELOPER
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("limit-reader"))
         headers = raw_auth_headers(pair["access_token"])
         response = client.get("/api/v1/providers/nope/limits", headers=headers)
     assert response.status_code == 404
@@ -72,9 +70,7 @@ async def test_unknown_provider_is_404(repository, auth_secret: str) -> None:
 
 async def test_invalid_auth_mode_is_422_before_vendor_io(repository, auth_secret: str) -> None:
     with TestClient(_client(repository)) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("limit-admin"), UserRole.ADMIN
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("limit-admin"))
         headers = raw_auth_headers(pair["access_token"])
         response = client.patch(
             "/api/v1/providers/keenable/limits/bogus/search",
@@ -86,9 +82,7 @@ async def test_invalid_auth_mode_is_422_before_vendor_io(repository, auth_secret
 
 async def test_invalid_operation_is_422(repository, auth_secret: str) -> None:
     with TestClient(_client(repository)) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("limit-admin"), UserRole.ADMIN
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("limit-admin"))
         headers = raw_auth_headers(pair["access_token"])
         response = client.patch(
             "/api/v1/providers/keenable/limits/keyed/bogus",
@@ -100,9 +94,7 @@ async def test_invalid_operation_is_422(repository, auth_secret: str) -> None:
 
 async def test_unsafe_usage_url_is_422(repository, auth_secret: str) -> None:
     with TestClient(_client(repository)) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("limit-admin"), UserRole.ADMIN
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("limit-admin"))
         headers = raw_auth_headers(pair["access_token"])
         response = client.patch(
             "/api/v1/providers/keenable/limits/keyed/search",
@@ -120,9 +112,8 @@ async def test_unsafe_usage_url_is_422(repository, auth_secret: str) -> None:
 
 async def test_batch_fetch_rejected_422_without_vendor_call(repository, auth_secret: str) -> None:
     with TestClient(_client(repository)) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("limit-reader"), UserRole.DEVELOPER
-        )
+        # Execution needs project membership only, never system authority.
+        pair = register_and_login(client, temp_email("limit-member"))
         headers = raw_auth_headers(pair["access_token"])
         pid = str(
             (
@@ -140,9 +131,7 @@ async def test_batch_fetch_rejected_422_without_vendor_call(repository, auth_sec
 
 async def test_history_requires_valid_limit(repository, auth_secret: str) -> None:
     with TestClient(_client(repository)) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("limit-reader"), UserRole.DEVELOPER
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("limit-reader"))
         headers = raw_auth_headers(pair["access_token"])
         response = client.get(
             "/api/v1/providers/keenable/limits/history?auth_mode=keyed&limit=0",
@@ -154,9 +143,7 @@ async def test_history_requires_valid_limit(repository, auth_secret: str) -> Non
 async def test_no_repository_write_is_503(repository, auth_secret: str) -> None:
     app = _client(repository)
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("limit-reader"), UserRole.DEVELOPER
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("limit-reader"))
         headers = raw_auth_headers(pair["access_token"])
         app.state.limits = None
         response = client.get("/api/v1/providers/keenable/limits", headers=headers)
@@ -165,9 +152,7 @@ async def test_no_repository_write_is_503(repository, auth_secret: str) -> None:
 
 async def test_stale_version_is_409(repository, auth_secret: str) -> None:
     with TestClient(_client(repository)) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("limit-admin"), UserRole.ADMIN
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("limit-admin"))
         headers = raw_auth_headers(pair["access_token"])
         response = client.patch(
             "/api/v1/providers/brave/limits/keyed/search",
@@ -182,9 +167,7 @@ async def test_held_lease_sync_returns_skipped_200(repository, auth_secret: str)
 
     app = _client(repository, adapters=[_StubAdapter("brave")])
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("limit-admin"), UserRole.ADMIN
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("limit-admin"))
         headers = raw_auth_headers(pair["access_token"])
         assert client.get("/api/v1/providers/brave/limits", headers=headers).status_code == 200
         assert (
