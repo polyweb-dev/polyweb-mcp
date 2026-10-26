@@ -56,6 +56,9 @@ def before_scenario(context: Any, scenario: Any) -> None:
        offline path never constructs live adapters. Live provider quota
        scenarios (``@live @quota``) are exempted so they fall through to live
        adapter construction and exercise the real vendor quota endpoints.
+       Routing-latency scenarios (``@latency``, offline and ``@live``) also
+       take this path: they serve their own adapters from their steps, and
+       ``@live @latency`` gates each provider on its own harness key there.
     2. A ``@live @keenable`` scenario runs only when ``FREESEARCH_RUN_LIVE=1``;
        otherwise it is skipped before any resource setup, keeping offline BDD
        runs network-safe (Keenable is keyless, so no key check can gate it).
@@ -76,6 +79,7 @@ def before_scenario(context: Any, scenario: Any) -> None:
         or _has_fanout_tag(scenario)
         or _has_limits_tag(scenario)
         or _has_users_tag(scenario)
+        or _has_latency_tag(scenario)
         or (_has_quota_tag(scenario) and not _has_live_tag(scenario))
         or (_has_tinyfish_tag(scenario) and not _has_live_tag(scenario))
     ):
@@ -397,6 +401,28 @@ def _tags_include_users(tags: Iterable[Any]) -> bool:
     """Return True when ``tags`` carries 'users' (str or Tag forms)."""
 
     return any(str(getattr(tag, "name", tag)).lstrip("@") == "users" for tag in tags)
+
+
+def _has_latency_tag(scenario: Any) -> bool:
+    """Return True for routing-latency scenarios, including feature-level tags.
+
+    The latency tag sits on the feature (features/routing_latency.feature and
+    features/live/routing_latency_live.feature); detection reads the effective
+    tag set, mirroring the monitoring/control helpers.
+    """
+
+    effective_tags = getattr(scenario, "effective_tags", None)
+    if effective_tags:
+        return _tags_include_latency(effective_tags)
+    tags = getattr(scenario, "tags", None) or ()
+    feature_tags = getattr(getattr(scenario, "feature", None), "tags", None) or ()
+    return _tags_include_latency((*tags, *feature_tags))
+
+
+def _tags_include_latency(tags: Iterable[Any]) -> bool:
+    """Return True when ``tags`` carries 'latency' (str or Tag forms)."""
+
+    return any(str(getattr(tag, "name", tag)).lstrip("@") == "latency" for tag in tags)
 
 
 def _has_youcom_tag(scenario: Any) -> bool:

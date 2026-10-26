@@ -363,7 +363,7 @@ uv run freesearch-mcp --transport stdio
 # Run unit and integration tests
 uv run pytest
 
-# Run BDD feature scenarios
+# Run BDD feature scenarios (default run excludes @live; includes the offline @latency gate)
 uv run behave tests/bdd/features
 
 # Linting and formatting checks
@@ -373,6 +373,49 @@ uv run ruff format --check .
 # Static type checking
 uv run mypy src
 ```
+
+### Routing Latency Checks
+
+FreeSearch must add under 80 ms at p95, per provider, for a warm search and a warm fetch
+over both REST and MCP. FreeSearch latency is measured server-side: from the request
+reaching the FreeSearch app until its response leaves it, minus provider time. The Behave
+latency scenarios serve the real REST app and the MCP Streamable HTTP app with uvicorn on
+`127.0.0.1` using OS-assigned ports, call them over TCP, and wrap each served app in a
+timing middleware. Each request pins one provider; per request the report lists
+`server_ms` (inside the app), `provider_ms` (the adapter call), the gated
+`added_ms = server_ms - provider_ms`, and, reported only, the client `wall_ms`,
+`client_overhead_ms = wall_ms - server_ms`, and database reads per request (never
+pass/fail). Brave has no fetch, so Brave fetch rows are reported as N/A (skipped).
+
+- **Offline gate (default suite):** `tests/bdd/features/routing_latency.feature` (`@latency`)
+  uses instant fake adapters that mirror each provider's capability flags and limit rail,
+  so provider time is near zero. It runs in every default `uv run behave` run
+  (5 warmup + 30 measured requests per row) and writes
+  `test_reports/routing_latency_offline.{csv,md}`.
+- **Server-side profiles (opt-in):** set `FREESEARCH_LATENCY_PROFILE=1` to profile every
+  measured request with pyinstrument; combined sessions per transport are written to
+  `test_reports/routing_latency_<mode>_<rest|mcp>_profile.{html,txt,pyisession}`. Profiling
+  adds overhead, so use the unprofiled run for the latency numbers.
+- **Live performance checks (opt-in, real credits):** `@live` scenarios never run by
+  default — `pyproject.toml` sets `[tool.behave] default_tags = ["not @live"]`, and an
+  explicit `--tags` replaces that default. The one command for the live latency checks
+  (and a later CI job) is:
+
+  ```bash
+  uv run behave --tags="@live and @latency"
+  ```
+
+  Each provider runs only when its key is set in the process environment:
+  `FREESEARCH_BRAVE_SEARCH_API_KEY`, `FREESEARCH_EXA_API_KEY`,
+  `FREESEARCH_FIRECRAWL_API_KEY`, `FREESEARCH_PARALLEL_API_KEY`,
+  `FREESEARCH_TAVILY_API_KEY`, `TINYFISH_API_KEY`, `FREESEARCH_YOU_API_KEY`. Keenable is
+  keyless and runs only with `FREESEARCH_RUN_LIVE=1` (an optional
+  `FREESEARCH_KEENABLE_API_KEY` selects its keyed rail). A provider without its variable
+  is skipped with a reason naming the variable, never its value. Sample counts default to
+  1 warmup + 5 measured requests per row; override them with
+  `FREESEARCH_LATENCY_LIVE_WARMUP` and `FREESEARCH_LATENCY_LIVE_SAMPLES`. Requests are
+  spaced to each provider's documented per-second/per-minute rate windows. Results land in
+  `test_reports/routing_latency_live.{csv,md}`.
 
 ### Frontend Checks
 

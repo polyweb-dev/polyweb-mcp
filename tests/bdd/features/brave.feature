@@ -3,6 +3,8 @@ Feature: Brave Provider Adapter Integration
   I want to interact with the Brave Search provider
   So that I can run live web searches and observe normalized results with per-query usage
 
+  # @live scenarios run only when selected explicitly: uv run behave --tags=@live (default_tags excludes @live).
+
   Background:
     Given a configured Brave search adapter
 
