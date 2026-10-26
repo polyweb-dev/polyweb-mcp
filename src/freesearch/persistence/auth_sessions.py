@@ -95,7 +95,7 @@ class RefreshTokenRow(Base):
     __tablename__ = "refresh_tokens"
     __table_args__ = (Index("refresh_tokens_family_id", "family_id"),)
 
-    token_hash: Mapped[str] = mapped_column(String(length=64), primary_key=True, nullable=True)
+    token_hash: Mapped[str] = mapped_column(String(length=64), primary_key=True, nullable=False)
     family_id: Mapped[UUID] = mapped_column(
         GUID, ForeignKey("auth_sessions.id", ondelete="CASCADE"), nullable=False
     )

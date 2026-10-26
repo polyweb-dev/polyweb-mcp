@@ -19,6 +19,7 @@ from freesearch.configuration.provider_config import (
 from freesearch.infrastructure.secrets import PROVIDER_ENV_VARS, ProviderName
 from freesearch.models.contracts import UsageEvent, UsageOperation, UsageStatus
 from freesearch.models.users import UserRole
+from freesearch.persistence.database_migrations import DatabaseResetRequired
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
 from tests.conftest import FakeAdapter
@@ -338,8 +339,8 @@ async def test_invalid_non_access_field_preserves_valid_stored_access(
 
 
 @pytest.mark.asyncio
-async def test_legacy_usage_table_is_upgraded_additively_on_open(tmp_path: Path) -> None:
-    """AC-8/AC-10: a legacy usage table is recreated empty with project ownership columns."""
+async def test_legacy_usage_table_is_refused_unchanged_on_open(tmp_path: Path) -> None:
+    """TASK-000040: a legacy usage table is refused with a reset message and kept intact."""
     database = tmp_path / "legacy.db"
     with sqlite3.connect(database) as connection:
         connection.execute(
@@ -363,19 +364,19 @@ async def test_legacy_usage_table_is_upgraded_additively_on_open(tmp_path: Path)
             """
         )
         connection.commit()
+    before = database.read_bytes()
 
-    repository = await SQLiteRepository.open(database)
-    try:
-        # P04 alpha: the migration recreates usage_events empty — legacy rows
-        # are dropped rather than backfilled with synthetic ownership.
-        assert await repository.list_usage() == []
+    # Alpha baseline: an unversioned database with tables is never adopted;
+    # it is refused before any write, and its legacy rows stay in place.
+    with pytest.raises(DatabaseResetRequired, match="unversioned"):
+        await SQLiteRepository.open(database)
 
-        async with repository._engine.connect() as connection:
-            columns = await connection.exec_driver_sql("PRAGMA table_info(usage_events)")
-            names = {row[1] for row in columns.fetchall()}
-        assert {"latency_ms", "status", "project_id", "actor_type", "actor_id", "trace_id"} <= names
-    finally:
-        await repository.close()
+    assert database.read_bytes() == before
+    with sqlite3.connect(database) as connection:
+        names = {row[1] for row in connection.execute("PRAGMA table_info(usage_events)")}
+        rows = connection.execute("SELECT id, provider FROM usage_events").fetchall()
+    assert not {"project_id", "actor_type", "actor_id"} & names
+    assert rows == [(1, "exa")]
 
 
 @pytest.mark.asyncio

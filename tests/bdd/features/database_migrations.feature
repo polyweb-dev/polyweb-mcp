@@ -1,35 +1,24 @@
 @database @migration @quota
-Feature: Safe database migration across Git worktrees
+Feature: Alpha database lifecycle across Git worktrees
   As a FreeSearch operator
-  I want each checkout database adopted independently
-  So that merging code never replaces or silently rewrites another checkout's data
+  I want each checkout database created at the settled alpha baseline
+  So that an incompatible database is never silently rewritten and no checkout touches another
 
-  Scenario: A pre-Alembic database is backed up and upgraded without rewriting rows
-    Given a pre-Alembic database with historical usage and quota rows
-    When I run the FreeSearch database migration
-    Then the database should be at the canonical Alembic head
-    And the historical rows and native units should be unchanged
-    And an integrity-checked pre-migration backup should exist
+  Scenario: A fresh database is created at the alpha baseline and validates
+    Given no FreeSearch database exists at the selected path
+    When FreeSearch prepares the selected database
+    Then the selected database is at the alpha baseline revision
+    And the selected database passes schema and foreign-key validation
 
-  Scenario: Upgrading a worktree database does not touch the main checkout database
-    Given separate main and worktree databases with distinct historical rows
-    When I run the FreeSearch database migration for the worktree
-    Then only the worktree database should be at the canonical Alembic head
-    And the main checkout database bytes should be unchanged
+  Scenario: A database from an older revision is rejected and left unchanged
+    Given a FreeSearch database left at the older revision "0009_provider_credentials"
+    When FreeSearch tries to prepare the selected database
+    Then FreeSearch refuses the database with a reset message naming "0009_provider_credentials"
+    And the refused database bytes are unchanged
 
-  Scenario: Old provider ON and OFF rows migrate to exact access masks
-    Given a pre-Alembic database with old provider access rows for all eight providers
-    When I run the FreeSearch database migration
-    Then the database should be at the canonical Alembic head
-    And the migrated provider masks should be ON 7 and OFF 0 with Brave support 3 and others 7
-    And the historical rows and native units should be unchanged
-    And an integrity-checked pre-migration backup should exist
-    And the pre-migration backup should contain the original provider access rows
-
-  Scenario: Migrating a worktree provider database does not touch the main checkout provider rows
-    Given separate main and worktree databases with old provider access rows
-    When I run the FreeSearch database migration for the worktree
-    Then only the worktree database should be at the canonical Alembic head
-    And the worktree migrated provider masks should be ON 7 and OFF 0 with Brave support 3 and others 7
-    And the main checkout database bytes should be unchanged
-    And the main checkout provider access rows should be unchanged
+  Scenario: Creating a worktree database never touches the main checkout database
+    Given a main checkout database at the older revision "0009_provider_credentials"
+    And no FreeSearch database exists at the worktree path
+    When FreeSearch prepares the worktree database
+    Then the worktree database is at the alpha baseline revision
+    And the main checkout database is byte-for-byte unchanged

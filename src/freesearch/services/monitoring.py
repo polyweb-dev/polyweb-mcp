@@ -821,7 +821,7 @@ async def _expire_soft_zero(
     Persistence failures raise; callers keep their stored snapshot.
     """
 
-    events = await repository.list_usage(provider=provider)
+    events = await repository.list_provider_usage(provider=provider)
     successful = [
         event
         for event in events
@@ -973,8 +973,8 @@ async def collect_stats(
     if repository is None:
         return _empty_stats()
     try:
-        totals = await repository.usage_totals()
-        recent = await repository.recent_usage(limit=recent_limit)
+        totals = await repository.installation_usage_totals()
+        recent = await repository.recent_installation_usage(limit=recent_limit)
         providers = sorted(
             set(adapter_names)
             | {total.provider for total in totals}
@@ -1047,7 +1047,7 @@ async def _latest_quotas(
     """Return each provider's newest quota snapshot, keeping its provenance."""
     if totals is None:
         try:
-            totals = await repository.usage_totals()
+            totals = await repository.installation_usage_totals()
         except Exception:
             totals = []
     brave_total = _brave_request_success_total(totals)

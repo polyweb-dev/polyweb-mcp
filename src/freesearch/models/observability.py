@@ -26,7 +26,7 @@ class ActorType(StrEnum):
     """Execution principal class recorded on usage and trace rows."""
 
     HUMAN = "human"
-    PROJECT_TOKEN = "project_token"
+    PROJECT_API_KEY = "project_api_key"
 
 
 class ExecutionAttribution(ContractModel):

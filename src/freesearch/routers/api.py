@@ -13,6 +13,7 @@ provider, secret, and routing-policy endpoints.
 """
 
 import asyncio
+import logging
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager, suppress
@@ -89,7 +90,11 @@ from freesearch.models.provider_limits import (
     LimitStoreUnavailable,
 )
 from freesearch.models.users import UserPrincipal
-from freesearch.persistence.database_migrations import upgrade_database
+from freesearch.persistence.database_migrations import (
+    DatabaseResetRequired,
+    exit_if_database_reset_required,
+    upgrade_database,
+)
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.auth import register_auth_routes, require_control_reader
 from freesearch.routers.control import (
@@ -132,6 +137,8 @@ from freesearch.services.monitoring import (
 from freesearch.services.provider_limits import ProviderLimitsService
 from freesearch.services.routing import RoutingError, select_route
 from freesearch.services.users import AuthService
+
+logger = logging.getLogger(__name__)
 
 # Route templates that receive a root server span. Extending provider-querying
 # coverage means adding one entry here (plus its operation shape) — the
@@ -350,7 +357,7 @@ def create_app(
                 # starts writing. A failure here is not fatal: the exporter
                 # reports a failed batch instead of failing user requests.
                 with suppress(Exception):
-                    await asyncio.to_thread(upgrade_database, trace_database)
+                    await _prepare_trace_database(trace_database)
             app.state.observability = build_observability(
                 get_settings(),
                 database=trace_database,
@@ -601,6 +608,16 @@ def _pin_free_first(ordered: list[ProviderAdapter], preset: CostPreset) -> list[
     pinned = [adapter for adapter in ordered if adapter.name == "keenable"]
     rest = [adapter for adapter in ordered if adapter.name != "keenable"]
     return pinned + rest
+
+
+async def _prepare_trace_database(trace_database: Path) -> None:
+    """Upgrade the trace database, logging the reset instructions when it is refused."""
+
+    try:
+        await asyncio.to_thread(upgrade_database, trace_database)
+    except DatabaseResetRequired as error:
+        logger.warning("trace database refused: %s", error)
+        raise
 
 
 def _trace_database(repo: SQLiteRepository | None, database: str | Path | None) -> Path | None:
@@ -1384,6 +1401,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     if args.port is not None:
         overrides["api_port"] = args.port
     effective = settings.model_copy(update=overrides) if overrides else settings
+    exit_if_database_reset_required(resolve_database_path(None))
 
     uvicorn.run(
         create_app(),

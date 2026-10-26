@@ -102,7 +102,7 @@ def execution_attribution(context: ProjectContext) -> ExecutionAttribution:
     if isinstance(principal, ProjectTokenPrincipal):
         return ExecutionAttribution(
             project_id=context.project_id,
-            actor_type=ActorType.PROJECT_TOKEN,
+            actor_type=ActorType.PROJECT_API_KEY,
             actor_id=principal.token_id,
         )
     return ExecutionAttribution(

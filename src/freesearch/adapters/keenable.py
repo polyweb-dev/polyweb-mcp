@@ -463,7 +463,7 @@ class KeenableAdapter(ProviderAdapter):
             # interpreted as public-pool rate usage.
             now = datetime.now(UTC)
             cutoff = now - timedelta(hours=1)
-            events = await repository.list_usage(provider=self.name, since=cutoff)
+            events = await repository.list_provider_usage(provider=self.name, since=cutoff)
             self._keyless_calls.clear()
             self._keyless_calls.extend(
                 event.observed_at
@@ -479,7 +479,7 @@ class KeenableAdapter(ProviderAdapter):
         if self._hydrated_month == month_start:
             return None
         latest = await repository.latest_quota(self.name)
-        events = await repository.list_usage(provider=self.name)
+        events = await repository.list_provider_usage(provider=self.name)
         current = [
             event
             for event in events

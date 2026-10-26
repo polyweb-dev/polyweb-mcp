@@ -731,7 +731,7 @@ def step_given_incompatible_usage(context: Any) -> None:
 
 @when("I read usage totals")
 def step_when_read_totals(context: Any) -> None:
-    context.totals = _run(context, context.repository.usage_totals())
+    context.totals = _run(context, context.repository.installation_usage_totals())
 
 
 @then("totals should group by provider, operation, and unit kind without cross-kind sums")
@@ -1570,7 +1570,7 @@ def step_when_record_legacy(context: Any) -> None:
 
 @then("legacy rows should read back with unknown unit kind and stay out of known-kind totals")
 def step_then_legacy_unknown(context: Any) -> None:
-    events = _run(context, context.repository.list_usage(provider="exa"))
+    events = _run(context, context.repository.list_provider_usage(provider="exa"))
     assert len(events) == 1 and events[0].units == Decimal("0.001"), (
         f"AC-8: legacy usage rows must remain readable with exact units, saw {events!r}"
     )
@@ -1585,7 +1585,7 @@ def step_then_legacy_unknown(context: Any) -> None:
     assert _opt(latest, "unit_kind", None) is None, (
         "AC-8: legacy quota rows must read back with unknown unit kind"
     )
-    totals = _run(context, context.repository.usage_totals())
+    totals = _run(context, context.repository.installation_usage_totals())
     if any(hasattr(total, "unit_kind") for total in totals):
         for total in totals:
             assert _opt(total, "unit_kind", None) is not None, (
@@ -1620,7 +1620,7 @@ def step_then_credentials_rejected(context: Any) -> None:
         "AC-8: usage metadata containing credential keys (api_key) must be "
         "rejected, but the write was accepted"
     )
-    events = _run(context, context.repository.list_usage(provider="tavily"))
+    events = _run(context, context.repository.list_provider_usage(provider="tavily"))
     for event in events:
         assert "sk-secret-should-never-persist" not in repr(event.metadata), (
             "AC-8: credential material must never persist in usage metadata"
@@ -1707,7 +1707,7 @@ def step_then_legacy_separate(context: Any) -> None:
     assert ("tavily", "search") not in known_providers, (
         "AC-8: the legacy tavily row must never merge into a known-kind total"
     )
-    legacy_rows = _run(context, context.repository.list_usage(provider="tavily"))
+    legacy_rows = _run(context, context.repository.list_provider_usage(provider="tavily"))
     assert len(legacy_rows) == 1 and legacy_rows[0].units == Decimal("5"), (
         f"AC-8: legacy rows stay available in history with exact raw units, saw {legacy_rows!r}"
     )
@@ -2102,7 +2102,7 @@ def step_then_parallel_seed_remaining(context: Any, remaining: str, limit: str) 
         "AC-PA-3: Parallel budget snapshots must be unit_kind USD "
         f"(saw {_opt(latest, 'unit_kind', None)!r})"
     )
-    totals = _run(context, context.repository.usage_totals())
+    totals = _run(context, context.repository.installation_usage_totals())
     assert totals, "AC-PA-3 setup: spend ledger usage missing"
 
 

@@ -36,6 +36,7 @@ from freesearch.models.contracts import (
 )
 from freesearch.models.users import AuthProvider, UserRole, normalize_email
 from freesearch.persistence.database_migrations import (
+    DatabaseResetRequired,
     database_status,
     migration_head,
     upgrade_database,
@@ -331,7 +332,11 @@ def step_given_prealembic_users_db(context: Any) -> None:
 
 @when("I run the users database migration")
 def step_when_users_migration(context: Any) -> None:
-    context.migration_result = upgrade_database(Path(str(context.database_path)))
+    context.migration_error = None
+    try:
+        context.migration_result = upgrade_database(Path(str(context.database_path)))
+    except DatabaseResetRequired as error:
+        context.migration_error = error
 
 
 @then('the users database should be at head "{revision}" with a valid schema')
@@ -343,17 +348,21 @@ def step_then_users_db_at_head(context: Any, revision: str) -> None:
     validate_database_schema(Path(str(context.database_path)))
 
 
-@then("the historical usage rows should remain unchanged")
-def step_then_users_history_unchanged(context: Any) -> None:
-    with sqlite3.connect(str(context.database_path)) as connection:
-        rows = connection.execute(
-            "SELECT id, provider, operation, units FROM usage_events ORDER BY id"
-        ).fetchall()
-    assert rows == context.rows_before
+@then("the users database migration should be refused with a reset message")
+def step_then_users_migration_refused(context: Any) -> None:
+    error = context.migration_error
+    assert isinstance(error, DatabaseResetRequired)
+    message = str(error)
+    assert "unversioned" in message
+    assert migration_head() in message
+    assert "FREESEARCH_DB" in message
+    status = database_status(Path(str(context.database_path)))
+    assert status.current_revision is None
+    assert status.schema_valid is False
 
 
-@then("the migration should create the account tables and trace ownership column")
-def step_then_users_migration_objects(context: Any) -> None:
+@then("the refused users database should have no account tables")
+def step_then_refused_users_db_untouched(context: Any) -> None:
     with sqlite3.connect(str(context.database_path)) as connection:
         tables = {
             str(row[0])
@@ -361,14 +370,18 @@ def step_then_users_migration_objects(context: Any) -> None:
                 "SELECT name FROM sqlite_master WHERE type = 'table'"
             ).fetchall()
         }
-        trace_columns = {
-            str(row[1]) for row in connection.execute('PRAGMA table_info("trace_spans")')
-        }
-        backup_check = connection.execute("PRAGMA integrity_check").fetchone()
-    assert {"user", "login_throttle", "auth_sessions", "refresh_tokens"} <= tables
-    assert "user_id" in trace_columns
-    assert backup_check == ("ok",)
-    assert context.migration_result.backup is not None
+        integrity = connection.execute("PRAGMA integrity_check").fetchone()
+    assert tables == {"usage_events"}
+    assert integrity == ("ok",)
+
+
+@then("the historical usage rows should remain unchanged")
+def step_then_users_history_unchanged(context: Any) -> None:
+    with sqlite3.connect(str(context.database_path)) as connection:
+        rows = connection.execute(
+            "SELECT id, provider, operation, units FROM usage_events ORDER BY id"
+        ).fetchall()
+    assert rows == context.rows_before
 
 
 @when("I check the users settings contracts")

@@ -54,6 +54,7 @@ from tests.fixtures.auth import (
     temp_email,
 )
 from tests.fixtures.execution import seed_execution_project
+from tests.fixtures.usage_ledger import all_usage_events
 
 
 class AsyncVaultDouble:
@@ -1345,7 +1346,7 @@ async def test_rest_and_mcp_success_record_latency_and_success_status(
     assert rest_response.status_code == 200
     assert rest_response.json()["provider"] == "exa"
     assert mcp_result[1]["provider"] == "brave"
-    events = await repository.list_usage()
+    events = await all_usage_events(repository)
     assert [(event.provider, event.status) for event in events] == [
         ("exa", UsageStatus.SUCCESS),
         ("brave", UsageStatus.SUCCESS),
@@ -1375,7 +1376,7 @@ async def test_success_without_usage_writes_no_usage_row(
         )
 
     assert response.status_code == 200
-    assert await repository.list_usage() == []
+    assert await all_usage_events(repository) == []
 
 
 @pytest.mark.asyncio
@@ -1405,7 +1406,7 @@ async def test_failure_records_zero_unit_failure_usage_and_degraded_health(
         dashboard = client.get("/dashboard", headers=headers)
 
     assert response.status_code == 500
-    events = await repository.list_usage()
+    events = await all_usage_events(repository)
     assert len(events) == 1
     assert events[0].provider == "exa"
     assert events[0].operation is UsageOperation.SEARCH

@@ -7,7 +7,7 @@ operation rows. Rate observations and rate attempts live in their own tables so
 the REST and MCP processes count the same window from one durable record.
 """
 
-from sqlalchemy import Index, Integer, Text, UniqueConstraint
+from sqlalchemy import CHAR, ForeignKeyConstraint, Index, Integer, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from freesearch.persistence.storage import Base
@@ -113,11 +113,35 @@ class LimitEventRow(Base):
     detail_json: Mapped[str | None] = mapped_column(Text)
 
 
+def _attribution_foreign_keys(table: str) -> tuple[ForeignKeyConstraint, ...]:
+    """Return the consumer-attribution keys an admission or rate attempt declares.
+
+    ``project_id`` names the project whose execution consumed the shared
+    capacity; it is never an owner, so every key falls back to ``NULL`` when
+    the referenced row is removed and the capacity record survives.
+    """
+
+    targets = (
+        ("project_id", "projects.id"),
+        ("credential_id", "provider_credentials.id"),
+        ("binding_id", "project_provider_bindings.id"),
+        ("upstream_pool_id", "upstream_quota_pools.id"),
+    )
+    return tuple(
+        ForeignKeyConstraint([column], [target], name=f"{table}_{column}_fkey", ondelete="SET NULL")
+        for column, target in targets
+    )
+
+
 class LimitAdmissionRow(Base):
     """Durable reservation that finalizes or releases exactly once."""
 
     __tablename__ = "provider_limit_admissions"
-    __table_args__ = (Index("provider_limit_admissions_created_at", "created_at"),)
+    __table_args__ = (
+        *_attribution_foreign_keys("provider_limit_admissions"),
+        Index("provider_limit_admissions_created_at", "created_at"),
+        Index("provider_limit_admissions_upstream_pool_state", "upstream_pool_id", "state"),
+    )
 
     attempt_id: Mapped[str] = mapped_column(Text, primary_key=True, nullable=True)
     provider: Mapped[str] = mapped_column(Text)
@@ -131,6 +155,11 @@ class LimitAdmissionRow(Base):
     expires_at: Mapped[str] = mapped_column(Text)
     rate_reservations_json: Mapped[str | None] = mapped_column(Text)
     local_only: Mapped[int] = mapped_column(Integer)
+    project_id: Mapped[str | None] = mapped_column(CHAR(36))
+    credential_id: Mapped[str | None] = mapped_column(CHAR(36))
+    binding_id: Mapped[str | None] = mapped_column(CHAR(36))
+    upstream_pool_id: Mapped[str | None] = mapped_column(CHAR(36))
+    request_id: Mapped[str | None] = mapped_column(Text)
 
 
 class RateWindowObservationRow(Base):
@@ -158,8 +187,10 @@ class RateAttemptRow(Base):
 
     __tablename__ = "provider_rate_attempts"
     __table_args__ = (
+        *_attribution_foreign_keys("provider_rate_attempts"),
         Index("provider_rate_attempts_bucket_attempted", "bucket_id", "attempted_at"),
         Index("provider_rate_attempts_expires_at", "expires_at"),
+        Index("provider_rate_attempts_upstream_pool_attempted", "upstream_pool_id", "attempted_at"),
     )
 
     attempt_id: Mapped[str] = mapped_column(Text, primary_key=True, nullable=True)
@@ -172,3 +203,8 @@ class RateAttemptRow(Base):
     units_text: Mapped[str] = mapped_column(Text)
     attempted_at: Mapped[str] = mapped_column(Text)
     expires_at: Mapped[str] = mapped_column(Text)
+    project_id: Mapped[str | None] = mapped_column(CHAR(36))
+    credential_id: Mapped[str | None] = mapped_column(CHAR(36))
+    binding_id: Mapped[str | None] = mapped_column(CHAR(36))
+    upstream_pool_id: Mapped[str | None] = mapped_column(CHAR(36))
+    request_id: Mapped[str | None] = mapped_column(Text)

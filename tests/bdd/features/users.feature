@@ -22,12 +22,12 @@ Feature: Local user accounts, migration, and settings
     Then the stored account should use email "agent@example.com" and role "agent"
     And the Agent account should not carry the superuser flag
 
-  Scenario: Migration reaches head 0005 with backup and intact data
+  Scenario: A pre-alpha users database is refused with a reset message and intact data
     Given a pre-Alembic users database with historical usage rows
     When I run the users database migration
-    Then the users database should be at head "0005_tinyfish_plan_label" with a valid schema
+    Then the users database migration should be refused with a reset message
     And the historical usage rows should remain unchanged
-    And the migration should create the account tables and trace ownership column
+    And the refused users database should have no account tables
 
   Scenario: Settings require secrets and ports without secret leakage
     Given an offline users repository with a temporary database

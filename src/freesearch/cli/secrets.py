@@ -9,6 +9,7 @@ ever prints a secret value or key material.
 
 import argparse
 import asyncio
+import sys
 from pathlib import Path
 
 from freesearch.configuration.config import get_settings
@@ -17,6 +18,7 @@ from freesearch.infrastructure.encrypted_store import (
     load_secret_codec,
     rekey_secrets,
 )
+from freesearch.persistence.database_migrations import DatabaseResetRequired
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.services.monitoring import DB_ENV_VAR, DEFAULT_DB_FILENAME, resolve_database_path
 
@@ -79,9 +81,13 @@ def _run(arguments: list[str] | None = None) -> int:
             print("Dry run: no envelopes were rewritten")
         return 0 if report.undecryptable == 0 else 1
 
-    if options.command == "status":
-        return asyncio.run(_status())
-    return asyncio.run(_rekey(dry_run=options.dry_run))
+    try:
+        if options.command == "status":
+            return asyncio.run(_status())
+        return asyncio.run(_rekey(dry_run=options.dry_run))
+    except DatabaseResetRequired as error:
+        print(str(error), file=sys.stderr)
+        return 1
 
 
 def main() -> None:

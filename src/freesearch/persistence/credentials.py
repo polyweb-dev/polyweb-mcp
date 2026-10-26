@@ -1,7 +1,7 @@
 """Provider credential instance and project grant persistence (P08).
 
 Rows follow the accepted schema shape owned by Alembic revision
-``0009_provider_credentials``::
+``0001_alpha_baseline``::
 
     provider_credentials(id, account_id, provider_type, owner_scope,
         owner_project_id, label, auth_mode, generation, status,
@@ -28,6 +28,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import (
     CHAR,
     CheckConstraint,
+    ColumnElement,
     ForeignKeyConstraint,
     Index,
     Integer,
@@ -152,6 +153,16 @@ class ProviderCredentialRow(Base):
             "owner_scope",
             unique=True,
         ),
+        # Parent keys of the composite foreign keys that bind ownership,
+        # provider type, and auth mode on bindings, pool links, and OAuth grants.
+        Index(
+            "provider_credentials_id_owner_project_key",
+            "id",
+            "owner_project_id",
+            unique=True,
+        ),
+        Index("provider_credentials_id_provider_key", "id", "provider_type", unique=True),
+        Index("provider_credentials_id_auth_mode_key", "id", "auth_mode", unique=True),
         Index(
             "provider_credentials_live_label_key",
             "account_id",
@@ -221,6 +232,30 @@ class CredentialProjectGrantRow(Base):
     granted_by: Mapped[str] = mapped_column(CHAR(36), nullable=False)
     created_at: Mapped[str] = mapped_column(Text, nullable=False)
     version: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+def credential_owner_filter(
+    *,
+    owner_scope: CredentialOwnerScope,
+    owner_project_id: UUID | None,
+) -> tuple[ColumnElement[bool], ...]:
+    """Return SQL predicates matching a credential with exactly this owner.
+
+    A system owner has no project and a project owner needs one; an
+    inconsistent pair raises ``ValueError`` instead of widening the match.
+    """
+
+    scope = CredentialOwnerScope(owner_scope)
+    if scope is CredentialOwnerScope.SYSTEM and owner_project_id is not None:
+        raise ValueError("a system credential has no owning project")
+    if scope is CredentialOwnerScope.PROJECT and owner_project_id is None:
+        raise ValueError("a project credential needs its owning project id")
+    project = (
+        ProviderCredentialRow.owner_project_id.is_(None)
+        if owner_project_id is None
+        else ProviderCredentialRow.owner_project_id == str(owner_project_id)
+    )
+    return (ProviderCredentialRow.owner_scope == scope.value, project)
 
 
 class CredentialRepository:
@@ -419,7 +454,11 @@ class CredentialRepository:
         return bool(getattr(result, "rowcount", 0))
 
     async def delete_grants_for_credential(self, *, credential_id: UUID) -> int:
-        """Remove every grant on one credential; return the removed count."""
+        """Remove every grant on one credential; return the removed count.
+
+        A system-scope operation on one shared credential: grants exist only on
+        system credentials, so no project selector applies.
+        """
 
         result = await self._session.execute(
             delete(CredentialProjectGrantRow).where(
@@ -429,7 +468,11 @@ class CredentialRepository:
         return int(getattr(result, "rowcount", 0))
 
     async def list_grants(self, *, credential_id: UUID) -> list[CredentialProjectGrantRead]:
-        """List every project grant on one credential."""
+        """List every project grant on one credential.
+
+        A system-scope read of one shared credential: grants exist only on
+        system credentials, so the result spans the projects granted it.
+        """
 
         result = await self._session.execute(
             select(CredentialProjectGrantRow)
@@ -442,19 +485,25 @@ class CredentialRepository:
         self,
         *,
         credential_id: UUID,
+        owner_scope: CredentialOwnerScope,
+        owner_project_id: UUID | None,
         expected_generation: int,
         now: str | None = None,
     ) -> bool:
-        """Advance ``generation`` by one only at the expected value.
+        """Advance ``generation`` by one only at the expected value and owner.
 
         A single compare-and-set ``UPDATE`` makes concurrent rotations safe:
-        exactly one writer moves ``expected`` to ``expected + 1``.
+        exactly one writer moves ``expected`` to ``expected + 1``. A credential
+        of another owner is left unchanged and reported as ``False``.
         """
 
         result = await self._session.execute(
             update(ProviderCredentialRow)
             .where(
                 ProviderCredentialRow.id == str(credential_id),
+                *credential_owner_filter(
+                    owner_scope=owner_scope, owner_project_id=owner_project_id
+                ),
                 ProviderCredentialRow.generation == expected_generation,
                 ProviderCredentialRow.status == CredentialStatus.ACTIVE.value,
             )
@@ -466,13 +515,23 @@ class CredentialRepository:
         )
         return bool(getattr(result, "rowcount", 0))
 
-    async def mark_deleted(self, *, credential_id: UUID, now: str | None = None) -> bool:
-        """Mark one credential deleted; return whether a row transitioned."""
+    async def mark_deleted(
+        self,
+        *,
+        credential_id: UUID,
+        owner_scope: CredentialOwnerScope,
+        owner_project_id: UUID | None,
+        now: str | None = None,
+    ) -> bool:
+        """Mark one credential of this owner deleted; return whether a row transitioned."""
 
         result = await self._session.execute(
             update(ProviderCredentialRow)
             .where(
                 ProviderCredentialRow.id == str(credential_id),
+                *credential_owner_filter(
+                    owner_scope=owner_scope, owner_project_id=owner_project_id
+                ),
                 ProviderCredentialRow.status == CredentialStatus.ACTIVE.value,
             )
             .values(
@@ -535,4 +594,5 @@ __all__ = [
     "CredentialProjectGrantRow",
     "CredentialRepository",
     "ProviderCredentialRow",
+    "credential_owner_filter",
 ]

@@ -733,6 +733,8 @@ class CredentialService:
 
         advanced = await credentials.advance_generation(
             credential_id=current.id,
+            owner_scope=current.owner_scope,
+            owner_project_id=current.owner_project_id,
             expected_generation=body.expected_generation,
         )
         if not advanced:
@@ -764,7 +766,11 @@ class CredentialService:
             session,
             credential_secret_slot(current.id, current.generation),
         )
-        await credentials.mark_deleted(credential_id=current.id)
+        await credentials.mark_deleted(
+            credential_id=current.id,
+            owner_scope=current.owner_scope,
+            owner_project_id=current.owner_project_id,
+        )
         await credentials.delete_grants_for_credential(credential_id=current.id)
 
     async def _reject_foreign_credential(

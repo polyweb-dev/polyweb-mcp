@@ -41,6 +41,7 @@ from tests.fixtures.auth import (
     temp_email,
 )
 from tests.fixtures.execution import bdd_project_id, bdd_token_project_id
+from tests.fixtures.usage_ledger import all_usage_events
 
 
 class _MonitoringStubAdapter(ProviderAdapter):
@@ -347,7 +348,7 @@ def step_then_mcp_telemetry(context: Any) -> None:
     assert context.mcp_search_result[1]["provider"] == "mcp-search"
     assert context.mcp_fetch_result[1]["provider"] == "mcp-fetch"
 
-    usage = context.loop.run_until_complete(context.repository.list_usage())
+    usage = context.loop.run_until_complete(all_usage_events(context.repository))
     assert [(event.provider, event.operation.value, event.units) for event in usage] == [
         ("mcp-search", "search", Decimal("1.25")),
         ("mcp-fetch", "fetch", Decimal("2.50")),
@@ -399,7 +400,7 @@ def step_when_private_rest_requests(context: Any) -> None:
 def step_then_numeric_metadata(context: Any) -> None:
     assert context.private_search_response.status_code == 200
     assert context.private_fetch_response.status_code == 200
-    events = context.loop.run_until_complete(context.repository.list_usage())
+    events = context.loop.run_until_complete(all_usage_events(context.repository))
     assert len(events) == 2
     for event in events:
         assert event.metadata == {"credits": 3, "tokens": 12, "latency_ms": 8.5}

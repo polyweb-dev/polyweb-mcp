@@ -80,13 +80,13 @@ FreeSearch includes a dedicated database management CLI tool (`freesearch-db`):
   uv run freesearch-db status
   ```
 
-- **Run migrations up to the latest revision:**
+- **Create or validate the database:**
   ```bash
   uv run freesearch-db upgrade
   ```
-  *(Note: `upgrade` automatically makes an integrity-verified pre-migration backup before applying schema changes, preserving existing data.)*
+  *(Note: a missing or empty database is created at the alpha baseline revision `0001_alpha_baseline`; a database already at the baseline is validated. There are no incremental migrations and no automatic backup.)*
 
-> **Tip:** You do not have to run `freesearch-db upgrade` manually every time. When the backend server starts, it will automatically verify the schema and run pending migrations up to Alembic head.
+> **Alpha reset:** The alpha keeps no compatibility with databases from earlier revisions. The backend, MCP server, and CLIs refuse such a database without changing it and print reset steps: stop FreeSearch, move or delete the database file together with its `-wal`/`-shm` side files (or point `FREESEARCH_DB` at a new path), and start again. Accounts, provider credentials, and settings must then be entered again.
 
 #### Local account bootstrap
 

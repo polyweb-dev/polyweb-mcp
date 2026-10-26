@@ -1,20 +1,38 @@
-"""Alembic adoption tests for fresh, legacy, current, and concurrent databases."""
+"""Alpha baseline lifecycle: create, validate, reject-and-never-modify (TASK-000040).
+
+The alpha keeps no compatibility with older databases. A missing or empty file
+is created at the single baseline revision; a database at the baseline is
+validated and opened; anything else (another revision, an unknown revision, or
+an unversioned database with tables) is rejected with an actionable reset
+message *before* anything touches the file.
+"""
+
+from __future__ import annotations
 
 import asyncio
+import dataclasses
 import hashlib
-import json
+import os
+import shutil
 import sqlite3
 import subprocess
 import sys
+import time
+import uuid
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import pytest
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 
 import freesearch.persistence.database_migrations as migration_module
+from freesearch.persistence.database_cli import _run
 from freesearch.persistence.database_migrations import (
     DatabaseMigrationError,
+    DatabaseResetRequired,
+    MigrationResult,
     absolute_database_path,
     database_status,
     migration_head,
@@ -23,72 +41,12 @@ from freesearch.persistence.database_migrations import (
 )
 from freesearch.persistence.storage import SQLiteRepository
 
-_PREVIOUS_HEAD = "0002_canonical_quota_units"
+_BASELINE = "0001_alpha_baseline"
+_OLDER_REVISION = "0009_provider_credentials"
+_UNKNOWN_REVISION = "ffffffffffff_not_a_freesearch_revision"
 
 
-def _create_partial_legacy(database: Path, *, provider: str = "legacy") -> None:
-    with sqlite3.connect(database) as connection:
-        connection.executescript(
-            """
-            CREATE TABLE usage_events (
-                id INTEGER PRIMARY KEY,
-                provider TEXT NOT NULL,
-                operation TEXT NOT NULL,
-                units TEXT NOT NULL,
-                observed_at TEXT NOT NULL,
-                request_id TEXT,
-                metadata TEXT NOT NULL
-            );
-            CREATE TABLE quota_snapshots (
-                id INTEGER PRIMARY KEY,
-                provider TEXT NOT NULL,
-                source TEXT NOT NULL,
-                remaining TEXT,
-                limit_units TEXT,
-                reset_at TEXT,
-                observed_at TEXT NOT NULL
-            );
-            """
-        )
-        connection.execute(
-            """
-            INSERT INTO usage_events
-                (id, provider, operation, units, observed_at, request_id, metadata)
-            VALUES (7, ?, 'search', '12.50', '2026-01-01T00:00:00+00:00', 'r-7', '{}')
-            """,
-            (provider,),
-        )
-        connection.execute(
-            """
-            INSERT INTO quota_snapshots
-                (id, provider, source, remaining, limit_units, reset_at, observed_at)
-            VALUES
-                (9, ?, 'OBSERVED', '75', '100', NULL, '2026-01-01T00:00:00+00:00')
-            """,
-            (provider,),
-        )
-
-
-def _columns(database: Path, table: str) -> set[str]:
-    with sqlite3.connect(database) as connection:
-        return {str(row[1]) for row in connection.execute(f'PRAGMA table_info("{table}")')}
-
-
-def _revision(database: Path) -> list[str]:
-    with sqlite3.connect(database) as connection:
-        return [
-            str(row[0]) for row in connection.execute("SELECT version_num FROM alembic_version")
-        ]
-
-
-def _usage_rows(database: Path) -> list[tuple[object, ...]]:
-    with sqlite3.connect(database) as connection:
-        return connection.execute(
-            """
-            SELECT id, provider, operation, units, observed_at, request_id, metadata
-            FROM usage_events ORDER BY id
-            """
-        ).fetchall()
+# --------------------------------------------------------------------------- helpers
 
 
 def _config_for(database: Path) -> Config:
@@ -102,6 +60,22 @@ def _config_for(database: Path) -> Config:
     return config
 
 
+def _versions_directory() -> Path:
+    assert migration_module.__file__ is not None
+    return Path(migration_module.__file__).with_name("migrations") / "versions"
+
+
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _revision(database: Path) -> list[str]:
+    with sqlite3.connect(database) as connection:
+        return [
+            str(row[0]) for row in connection.execute("SELECT version_num FROM alembic_version")
+        ]
+
+
 def _tables(database: Path) -> set[str]:
     with sqlite3.connect(database) as connection:
         return {
@@ -113,209 +87,168 @@ def _tables(database: Path) -> set[str]:
         }
 
 
-def _indexes(database: Path) -> set[str]:
-    with sqlite3.connect(database) as connection:
-        return {
-            str(row[0])
-            for row in connection.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'index' AND sql IS NOT NULL"
-            ).fetchall()
-        }
+def _directory_files(directory: Path) -> set[str]:
+    return {entry.name for entry in directory.iterdir()}
 
 
-# Exact ``trace_spans`` contract per PLAN §8 (revision 0004 adds ``user_id``).
-_TRACE_SPAN_COLUMNS = frozenset(
-    {
-        "span_id",
-        "trace_id",
-        "parent_span_id",
-        "name",
-        "kind",
-        "started_at",
-        "ended_at",
-        "duration_ms",
-        "status_code",
-        "status_message",
-        "outcome",
-        "error_type",
-        "operation",
-        "provider",
-        "user_id",
-        "project_id",
-        "actor_type",
-        "actor_id",
-        "input_text",
-        "output_json",
-        "result_count",
-        "attributes_json",
-        "events_json",
-        "resource_json",
+def _legacy_rows_script(revision: str | None) -> str:
+    """A small pre-alpha schema in rollback-journal mode (not WAL)."""
+
+    version = (
+        "CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL PRIMARY KEY);"
+        f"INSERT INTO alembic_version (version_num) VALUES ('{revision}');"
+        if revision is not None
+        else ""
+    )
+    return f"""
+        PRAGMA journal_mode = DELETE;
+        CREATE TABLE usage_events (
+            id INTEGER PRIMARY KEY,
+            provider TEXT NOT NULL,
+            operation TEXT NOT NULL,
+            units TEXT NOT NULL,
+            observed_at TEXT NOT NULL,
+            request_id TEXT,
+            metadata TEXT NOT NULL
+        );
+        INSERT INTO usage_events VALUES
+            (7, 'legacy', 'search', '12.50', '2026-01-01T00:00:00+00:00', 'r-7', '{{}}');
+        CREATE TABLE runtime_settings (key TEXT PRIMARY KEY, value_json TEXT NOT NULL);
+        INSERT INTO runtime_settings VALUES ('theme', '"dark"');
+        {version}
+    """
+
+
+def _create_legacy(database: Path, revision: str | None) -> None:
+    database.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(database)
+    try:
+        connection.executescript(_legacy_rows_script(revision))
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def _create_unrelated(database: Path, revision: str | None) -> None:
+    """An unversioned (or empty-version-table) SQLite file holding foreign tables."""
+
+    database.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(database)
+    try:
+        connection.execute("PRAGMA journal_mode = DELETE")
+        connection.execute("CREATE TABLE customer_data (id INTEGER PRIMARY KEY, name TEXT)")
+        connection.execute("INSERT INTO customer_data VALUES (1, 'keep me')")
+        if revision is not None:
+            connection.execute(
+                "CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL PRIMARY KEY)"
+            )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def _create_baseline_then_restamp(database: Path, revision: str | None) -> None:
+    """A real alpha baseline database whose revision was later changed or removed."""
+
+    staging = database.parent / "staging"
+    staging.mkdir(parents=True, exist_ok=True)
+    staged = staging / database.name
+    upgrade_database(staged)
+    connection = sqlite3.connect(staged)
+    try:
+        if revision is None:
+            connection.execute("DROP TABLE alembic_version")
+        else:
+            connection.execute("UPDATE alembic_version SET version_num = ?", (revision,))
+        connection.commit()
+        connection.execute("PRAGMA journal_mode = DELETE")
+    finally:
+        connection.close()
+    database.write_bytes(staged.read_bytes())
+
+
+_REJECTED_CASES: dict[str, tuple[Callable[[Path], None], str | None]] = {
+    "older-revision-legacy": (lambda db: _create_legacy(db, _OLDER_REVISION), _OLDER_REVISION),
+    "older-revision-restamped-baseline": (
+        lambda db: _create_baseline_then_restamp(db, _OLDER_REVISION),
+        _OLDER_REVISION,
+    ),
+    "unknown-revision": (lambda db: _create_legacy(db, _UNKNOWN_REVISION), _UNKNOWN_REVISION),
+    "unversioned-legacy-tables": (lambda db: _create_legacy(db, None), None),
+    "unversioned-baseline-tables": (lambda db: _create_baseline_then_restamp(db, None), None),
+    "unrelated-tables-only": (lambda db: _create_unrelated(db, None), None),
+    "empty-version-table-with-tables": (lambda db: _create_unrelated(db, "empty"), None),
+}
+
+
+def _assert_reset_message(
+    message: str, *, database: Path, found: str | None, not_sqlite: bool = False
+) -> None:
+    lowered = message.lower()
+    assert str(absolute_database_path(database)) in message, message
+    if found is not None:
+        assert found in message, message
+    elif not not_sqlite:
+        # rework_1 nit: an unversioned file "has no schema revision", not "at revision ...".
+        assert "has no schema revision (unversioned)" in message, message
+        assert "at revision unversioned" not in message, message
+    assert migration_head() in message, message
+    assert _BASELINE in message, message
+    # Actionable reset instructions.
+    assert "stop" in lowered, message
+    assert "move" in lowered or "delete" in lowered, message
+    assert "-wal" in message and "-shm" in message, message
+    assert "FREESEARCH_DB" in message, message
+    assert "start" in lowered, message
+    # Operators must know what has to be re-entered.
+    assert "account" in lowered, message
+    assert "credential" in lowered, message
+    assert "setting" in lowered, message
+
+
+@pytest.fixture
+def rejected_database(tmp_path: Path, request: pytest.FixtureRequest) -> tuple[Path, str | None]:
+    builder, found = _REJECTED_CASES[request.param]
+    database = tmp_path / "rejected dir" / "freesearch old.db"
+    builder(database)
+    return database, found
+
+
+_REJECTED_IDS = list(_REJECTED_CASES)
+
+
+# --------------------------------------------------------------------------- baseline
+
+
+def test_exactly_one_migration_revision_is_the_alpha_baseline() -> None:
+    revision_files = sorted(
+        path.name for path in _versions_directory().glob("*.py") if path.name != "__init__.py"
+    )
+    assert revision_files == ["0001_alpha_baseline.py"]
+
+    script = ScriptDirectory.from_config(_config_for(Path("unused.db")))
+    revisions = list(script.walk_revisions())
+    assert [revision.revision for revision in revisions] == [_BASELINE]
+    assert revisions[0].down_revision is None
+    assert script.get_heads() == [_BASELINE]
+    assert migration_head() == _BASELINE
+
+
+def test_migration_result_has_no_backup_field() -> None:
+    """The legacy adoption backup path is gone, so the result cannot report one."""
+
+    assert {field.name for field in dataclasses.fields(MigrationResult)} == {
+        "database",
+        "previous_revision",
+        "current_revision",
+        "changed",
     }
-)
-_TRACE_SPAN_NOTNULL = frozenset(
-    {
-        "trace_id",
-        "project_id",
-        "actor_type",
-        "actor_id",
-        "name",
-        "kind",
-        "started_at",
-        "ended_at",
-        "duration_ms",
-        "status_code",
-        "outcome",
-        "attributes_json",
-        "events_json",
-        "resource_json",
-    }
-)
-_TRACE_SPAN_NULLABLE = _TRACE_SPAN_COLUMNS - _TRACE_SPAN_NOTNULL - {"span_id"}
-_TRACE_INDEXES = frozenset({"trace_spans_trace_started_at", "trace_spans_root_started_at"})
-_TRACE_USER_INDEX = "trace_spans_user_root_started_at"
-_AUTH_TABLES = frozenset({"user", "login_throttle", "auth_sessions", "refresh_tokens"})
-_AUTH_INDEXES = frozenset(
-    {
-        "ix_user_email",
-        "user_email_lower_key",
-        "user_provider_identity_key",
-        "auth_sessions_user_id",
-        "auth_sessions_expires_at",
-        "refresh_tokens_family_id",
-    }
-)
-_HEAD_TABLES = frozenset(
-    {
-        "usage_events",
-        "runtime_settings",
-        "quota_snapshots",
-        "provider_health",
-        "trace_spans",
-        "user",
-        "login_throttle",
-        "auth_sessions",
-        "refresh_tokens",
-    }
-)
-_HEAD_INDEXES = frozenset(
-    {
-        "usage_events_provider_observed_at",
-        "quota_snapshots_provider_source_observed_at",
-        "provider_health_provider_checked_at",
-        "trace_spans_trace_started_at",
-        "trace_spans_root_started_at",
-        "trace_spans_user_root_started_at",
-        "trace_spans_project_root_started_at",
-        "usage_events_project_observed_at",
-        "ix_user_email",
-        "user_email_lower_key",
-        "user_provider_identity_key",
-        "auth_sessions_user_id",
-        "auth_sessions_expires_at",
-        "refresh_tokens_family_id",
-    }
-)
+    assert issubclass(DatabaseResetRequired, DatabaseMigrationError)
 
 
-def _table_info(database: Path, table: str) -> dict[str, tuple[bool, bool]]:
-    """Return ``column -> (notnull, is_primary_key)`` for one table."""
-
-    with sqlite3.connect(database) as connection:
-        return {
-            str(row[1]): (bool(row[3]), bool(row[5]))
-            for row in connection.execute(f'PRAGMA table_info("{table}")')
-        }
-
-
-def _index_columns(database: Path, index: str) -> list[str]:
-    with sqlite3.connect(database) as connection:
-        return [str(row[2]) for row in connection.execute(f'PRAGMA index_info("{index}")')]
-
-
-def _index_sql(database: Path, index: str) -> str:
-    with sqlite3.connect(database) as connection:
-        row = connection.execute(
-            "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?",
-            (index,),
-        ).fetchone()
-    assert row is not None
-    return str(row[0])
-
-
-def _assert_trace_spans_schema(database: Path) -> None:
-    """Assert the exact ``trace_spans`` table/column/index contract (head 0004)."""
-
-    assert _columns(database, "trace_spans") == set(_TRACE_SPAN_COLUMNS)
-    info = _table_info(database, "trace_spans")
-    assert info["span_id"] == (False, True)
-    for column in _TRACE_SPAN_NOTNULL:
-        assert info[column][0] is True, column
-    for column in _TRACE_SPAN_NULLABLE:
-        assert info[column][0] is False, column
-    assert info["user_id"] == (False, False)
-    assert _indexes(database) >= _TRACE_INDEXES
-    assert _TRACE_USER_INDEX in _indexes(database)
-    assert _index_columns(database, "trace_spans_trace_started_at") == [
-        "trace_id",
-        "started_at",
-    ]
-    assert _index_columns(database, "trace_spans_root_started_at") == ["started_at"]
-    assert "parent_span_id IS NULL" in _index_sql(database, "trace_spans_root_started_at")
-    assert _index_columns(database, _TRACE_USER_INDEX) == ["user_id", "started_at", "span_id"]
-    assert "parent_span_id IS NULL" in _index_sql(database, _TRACE_USER_INDEX)
-
-
-def _seed_at_0002(database: Path) -> None:
-    migration_module.command.upgrade(_config_for(database), _PREVIOUS_HEAD)
-    with sqlite3.connect(database) as connection:
-        connection.execute(
-            """
-            INSERT INTO usage_events
-                (id, provider, operation, units, observed_at, request_id, metadata,
-                 latency_ms, status, unit_kind)
-            VALUES
-                (7, 'exa', 'search', '12.50', '2026-01-01T00:00:00+00:00',
-                 'r-7', '{}', 123, 'success', 'USD'),
-                (8, 'tavily', 'search', '0.007', '2026-01-02T00:00:00+00:00',
-                 NULL, '{"k": 1}', NULL, 'success', 'CREDIT')
-            """
-        )
-        connection.execute(
-            """
-            INSERT INTO quota_snapshots
-                (id, provider, source, remaining, limit_units, reset_at, observed_at,
-                 unit_kind, display_unit, metadata)
-            VALUES
-                (9, 'tavily', 'AUTHORITATIVE', '75.25', '100.00', NULL,
-                 '2026-01-01T00:00:00+00:00', 'CREDIT', 'credits', NULL)
-            """
-        )
-        connection.execute(
-            """
-            INSERT INTO provider_health (id, provider, status, checked_at, message)
-            VALUES (3, 'exa', 'ok', '2026-01-01T00:00:00+00:00', 'healthy')
-            """
-        )
-        connection.execute(
-            "INSERT INTO runtime_settings (key, value_json) VALUES ('theme', '\"dark\"')"
-        )
-        connection.execute(
-            """
-            INSERT INTO cache_metadata
-                (cache_key, provider, operation, created_at, expires_at,
-                 accessed_at, hit_count, size_bytes)
-            VALUES
-                ('k1', 'exa', 'search', '2026-01-01T00:00:00+00:00',
-                 '2026-02-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00', 2, 512),
-                ('k2', 'tavily', 'search', '2026-01-01T00:00:00+00:00',
-                 '2026-02-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00', 0, NULL)
-            """
-        )
-
-
-def _all_rows(database: Path, table: str, order: str) -> list[tuple[object, ...]]:
-    with sqlite3.connect(database) as connection:
-        return connection.execute(f"SELECT * FROM {table} ORDER BY {order}").fetchall()
+def test_legacy_adoption_machinery_is_removed() -> None:
+    for name in ("_LEGACY_APP_TABLES", "_preflight_unversioned", "_backup"):
+        assert not hasattr(migration_module, name), name
 
 
 def test_upgrade_database_fresh_path_with_spaces_reaches_head(tmp_path: Path) -> None:
@@ -325,137 +258,97 @@ def test_upgrade_database_fresh_path_with_spaces_reaches_head(tmp_path: Path) ->
 
     assert result.database == absolute_database_path(database)
     assert result.previous_revision is None
-    assert result.current_revision == migration_head()
-    assert result.backup is None
+    assert result.current_revision == migration_head() == _BASELINE
     assert result.changed is True
+    assert _revision(database) == [_BASELINE]
     validate_database_schema(database)
     status = database_status(database)
-    assert status.current_revision == migration_head()
+    assert status.current_revision == _BASELINE
+    assert status.head_revision == _BASELINE
     assert status.schema_valid is True
+    assert not list(database.parent.glob("*.creating-*"))
 
 
-def test_upgrade_database_legacy_partial_schema_preserves_rows_and_backup(
-    tmp_path: Path,
-) -> None:
-    database = tmp_path / "legacy.db"
-    _create_partial_legacy(database)
-    original_usage = _usage_rows(database)
+def test_zero_byte_file_is_created_at_baseline(tmp_path: Path) -> None:
+    database = tmp_path / "empty.db"
+    database.write_bytes(b"")
 
     result = upgrade_database(database)
 
     assert result.previous_revision is None
-    assert result.current_revision == migration_head()
     assert result.changed is True
-    assert result.backup is not None
-    assert result.backup.is_file()
-    assert result.backup.name.startswith(f"{database.name}.pre-alembic-")
-    # P04: usage_events is recreated empty at 0008; the backup keeps the rows.
-    assert _usage_rows(database) == []
-    assert _usage_rows(result.backup) == original_usage
-    assert _revision(database) == [migration_head()]
-    new_columns = {"project_id", "actor_type", "actor_id", "trace_id"}
-    assert {"latency_ms", "status", "unit_kind"} | new_columns <= _columns(database, "usage_events")
-    assert {"unit_kind", "display_unit", "metadata"} <= _columns(database, "quota_snapshots")
-    assert "latency_ms" not in _columns(result.backup, "usage_events")
-    with sqlite3.connect(result.backup) as connection:
-        assert connection.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+    assert _revision(database) == [_BASELINE]
     validate_database_schema(database)
 
 
-def test_upgrade_database_current_unversioned_schema_does_not_rewrite_rows(
-    tmp_path: Path,
-) -> None:
-    database = tmp_path / "current-unversioned.db"
-    upgrade_database(database)
-    with sqlite3.connect(database) as connection:
-        connection.execute("DROP TABLE alembic_version")
-        connection.execute(
-            """
-            INSERT INTO user (id, email, hashed_password, is_active, is_verified)
-            VALUES ('00000000-0000-4000-8000-000000000002',
-                    'seed@example.com', 'not-a-real-hash', 1, 0)
-            """
-        )
-        connection.execute(
-            """
-            INSERT INTO accounts (id, status)
-            VALUES ('00000000-0000-4000-8000-000000000002', 'active')
-            """
-        )
-        connection.execute(
-            """
-            INSERT INTO projects (id, account_id, name, slug, status, created_by, created_at)
-            VALUES ('00000000-0000-4000-8000-000000000001',
-                    '00000000-0000-4000-8000-000000000002',
-                    'seed', 'seed', 'active',
-                    '00000000-0000-4000-8000-000000000002',
-                    '2026-01-01T00:00:00+00:00')
-            """
-        )
-        connection.execute(
-            """
-            INSERT INTO usage_events
-                (id, provider, operation, units, observed_at, request_id, metadata,
-                 latency_ms, status, unit_kind,
-                 project_id, actor_type, actor_id)
-            VALUES
-                (11, 'exa', 'search', '0.007', '2026-01-01T00:00:00+00:00',
-                 NULL, '{}', 123, 'success', 'USD',
-                 '00000000-0000-4000-8000-000000000001', 'human',
-                 '00000000-0000-4000-8000-000000000002')
-            """
-        )
-    rows_before = _usage_rows(database)
+def test_sqlite_file_without_tables_or_revision_is_created_at_baseline(tmp_path: Path) -> None:
+    database = tmp_path / "no-tables.db"
+    connection = sqlite3.connect(database)
+    try:
+        connection.execute("CREATE TABLE scratch (x INTEGER)")
+        connection.execute("DROP TABLE scratch")
+        connection.commit()
+    finally:
+        connection.close()
+    assert database.stat().st_size > 0
 
     result = upgrade_database(database)
 
     assert result.previous_revision is None
-    assert result.current_revision == migration_head()
-    assert result.backup is not None
-    assert _usage_rows(database) == rows_before
-    assert _revision(database) == [migration_head()]
+    assert result.changed is True
+    validate_database_schema(database)
+
+
+def test_downgrade_drops_everything_and_an_emptied_file_is_recreated(tmp_path: Path) -> None:
+    database = tmp_path / "round-trip.db"
+    upgrade_database(database)
+
+    migration_module.command.downgrade(_config_for(database), "base")
+
+    assert _tables(database) == set()
+    # Alembic leaves an empty version table behind: no revision, no app tables.
+    result = upgrade_database(database)
+    assert result.changed is True
+    assert result.previous_revision is None
     validate_database_schema(database)
 
 
 def test_upgrade_database_is_idempotent_at_head(tmp_path: Path) -> None:
     database = tmp_path / "idempotent.db"
     first = upgrade_database(database)
-    backups_after_first = list(tmp_path.glob(f"{database.name}.pre-alembic-*.bak"))
+    files_after_first = _directory_files(tmp_path)
 
     second = upgrade_database(database)
 
     assert first.changed is True
-    assert second.previous_revision == migration_head()
-    assert second.current_revision == migration_head()
+    assert second.previous_revision == _BASELINE
+    assert second.current_revision == _BASELINE
     assert second.changed is False
-    assert second.backup is None
-    assert list(tmp_path.glob(f"{database.name}.pre-alembic-*.bak")) == backups_after_first
-    assert _revision(database) == [migration_head()]
+    assert _revision(database) == [_BASELINE]
+    new_files = _directory_files(tmp_path) - files_after_first
+    assert not {name for name in new_files if not name.endswith(("-wal", "-shm"))}, new_files
 
 
 @pytest.mark.asyncio
 async def test_concurrent_upgrades_are_serialized(tmp_path: Path) -> None:
     database = tmp_path / "concurrent.db"
-    _create_partial_legacy(database)
 
     results = await asyncio.gather(
         *(asyncio.to_thread(upgrade_database, database) for _ in range(6))
     )
 
     assert sum(result.changed for result in results) == 1
-    assert sum(result.backup is not None for result in results) == 1
-    assert _usage_rows(database) == []
-    assert _revision(database) == [migration_head()]
+    assert {result.current_revision for result in results} == {_BASELINE}
+    assert _revision(database) == [_BASELINE]
     validate_database_schema(database)
 
 
 def test_cross_process_upgrades_are_serialized(tmp_path: Path) -> None:
     database = tmp_path / "processes.db"
-    _create_partial_legacy(database)
     code = (
-        "from pathlib import Path; "
+        "import sys; from pathlib import Path; "
         "from freesearch.persistence.database_migrations import upgrade_database; "
-        "upgrade_database(Path(__import__('sys').argv[1]))"
+        "print(int(upgrade_database(Path(sys.argv[1])).changed))"
     )
     processes = [
         subprocess.Popen(
@@ -467,33 +360,340 @@ def test_cross_process_upgrades_are_serialized(tmp_path: Path) -> None:
         for _ in range(4)
     ]
 
-    outputs = [process.communicate(timeout=30) for process in processes]
+    outputs = [process.communicate(timeout=60) for process in processes]
 
     assert [process.returncode for process in processes] == [0, 0, 0, 0], outputs
-    assert len(list(tmp_path.glob(f"{database.name}.pre-alembic-*.bak"))) == 1
-    assert _revision(database) == [migration_head()]
+    assert sorted(stdout.strip() for stdout, _ in outputs) == ["0", "0", "0", "1"], outputs
+    assert _revision(database) == [_BASELINE]
     validate_database_schema(database)
 
 
-def test_failed_migration_keeps_backup_and_original_rows(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_upgrade_database_enables_wal_mode(tmp_path: Path) -> None:
+    database = tmp_path / "wal-mode.db"
+    result = upgrade_database(database)
+    assert result.current_revision == _BASELINE
+
+    with sqlite3.connect(database) as connection:
+        journal_mode = connection.execute("PRAGMA journal_mode").fetchone()[0]
+    assert journal_mode == "wal"
+
+
+# --------------------------------------------------------------------------- rejection
+
+
+@pytest.mark.parametrize("rejected_database", _REJECTED_IDS, indirect=True)
+def test_rejected_database_raises_reset_required_and_is_not_modified(
+    rejected_database: tuple[Path, str | None],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    database = tmp_path / "failed.db"
-    _create_partial_legacy(database)
-    original_rows = _usage_rows(database)
+    database, found = rejected_database
+    directory = database.parent
+    digest_before = _sha256(database)
+    size_before = database.stat().st_size
+    files_before = _directory_files(directory)
 
-    def fail_upgrade(*_: object, **__: object) -> None:
-        raise RuntimeError("simulated migration failure")
+    def forbidden(*_: object, **__: object) -> None:
+        raise AssertionError("Alembic must not run against a rejected database")
 
-    monkeypatch.setattr(migration_module.command, "upgrade", fail_upgrade)
+    monkeypatch.setattr(migration_module.command, "upgrade", forbidden)
+    monkeypatch.setattr(migration_module.command, "stamp", forbidden)
+    monkeypatch.setattr(migration_module.command, "downgrade", forbidden)
 
-    with pytest.raises(DatabaseMigrationError, match="simulated migration failure"):
+    with pytest.raises(DatabaseResetRequired) as raised:
         upgrade_database(database)
 
-    assert _usage_rows(database) == original_rows
-    backups = list(tmp_path.glob(f"{database.name}.pre-alembic-*.bak"))
-    assert len(backups) == 1
-    assert _usage_rows(backups[0]) == original_rows
+    _assert_reset_message(str(raised.value), database=database, found=found)
+    assert _sha256(database) == digest_before
+    assert database.stat().st_size == size_before
+    new_files = _directory_files(directory) - files_before
+    # Only the advisory migration lock may appear; no -wal/-shm/backup/journal.
+    assert {name for name in new_files if not name.endswith(".migration.lock")} == set(), new_files
+    assert not list(directory.glob("*.bak"))
+    assert not list(directory.glob("*pre-alembic*"))
+
+
+@pytest.mark.parametrize("rejected_database", _REJECTED_IDS, indirect=True)
+def test_database_status_reports_rejected_database_invalid_without_writing(
+    rejected_database: tuple[Path, str | None],
+) -> None:
+    database, found = rejected_database
+    digest_before = _sha256(database)
+    files_before = _directory_files(database.parent)
+
+    status = database_status(database)
+
+    assert status.schema_valid is False
+    assert status.current_revision == found
+    assert status.head_revision == _BASELINE
+    assert status.database == absolute_database_path(database)
+    assert _sha256(database) == digest_before
+    assert {
+        name
+        for name in _directory_files(database.parent) - files_before
+        if not name.endswith(".migration.lock")
+    } == set()
+
+
+def test_rejected_wal_mode_database_main_file_is_byte_identical(tmp_path: Path) -> None:
+    """A WAL-mode database at another revision keeps its exact bytes.
+
+    A read-only SQLite open of a WAL database may materialize empty ``-wal`` and
+    ``-shm`` side files; nothing may be written into them.
+    """
+
+    database = tmp_path / "wal-old.db"
+    connection = sqlite3.connect(database)
+    try:
+        connection.execute("PRAGMA journal_mode = WAL")
+        connection.executescript(_legacy_rows_script(_OLDER_REVISION).replace("DELETE", "WAL"))
+        connection.commit()
+    finally:
+        connection.close()
+    for side in ("-wal", "-shm"):
+        Path(f"{database}{side}").unlink(missing_ok=True)
+    digest_before = _sha256(database)
+
+    with pytest.raises(DatabaseResetRequired) as raised:
+        upgrade_database(database)
+
+    _assert_reset_message(str(raised.value), database=database, found=_OLDER_REVISION)
+    assert _sha256(database) == digest_before
+    wal = Path(f"{database}-wal")
+    assert not wal.exists() or wal.stat().st_size == 0
+    assert not list(tmp_path.glob("*.bak"))
+    assert _revision(database) == [_OLDER_REVISION]
+
+
+@pytest.mark.asyncio
+async def test_repository_open_rejects_older_database(tmp_path: Path) -> None:
+    database = tmp_path / "old.db"
+    _create_legacy(database, _OLDER_REVISION)
+    digest_before = _sha256(database)
+
+    with pytest.raises(DatabaseResetRequired):
+        await SQLiteRepository.open(database)
+
+    assert _sha256(database) == digest_before
+
+
+@pytest.mark.parametrize("rejected_database", _REJECTED_IDS[:1] + _REJECTED_IDS[3:4], indirect=True)
+@pytest.mark.parametrize("command", ["status", "upgrade"])
+def test_cli_reports_reset_required_without_traceback(
+    rejected_database: tuple[Path, str | None],
+    command: str,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    database, found = rejected_database
+    monkeypatch.delenv("FREESEARCH_DB", raising=False)
+    digest_before = _sha256(database)
+
+    exit_code = _run(["--database", str(database), command])
+
+    captured = capsys.readouterr()
+    output = captured.out + captured.err
+    assert exit_code == 1
+    assert "Traceback" not in output
+    # rework_1 M4: freesearch-db prints the reset message to stderr.
+    _assert_reset_message(captured.err, database=database, found=found)
+    if command == "status":
+        assert "Schema: reset required" in captured.out
+    assert "Backup:" not in output
+    assert _sha256(database) == digest_before
+
+
+def test_cli_status_and_upgrade_on_fresh_database(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    database = tmp_path / "cli fresh.db"
+    monkeypatch.delenv("FREESEARCH_DB", raising=False)
+
+    assert _run(["--database", str(database), "upgrade"]) == 0
+    upgraded = capsys.readouterr().out
+    assert "Backup:" not in upgraded
+    assert _BASELINE in upgraded
+
+    assert _run(["--database", str(database), "status"]) == 0
+    status = capsys.readouterr().out
+    assert "Schema: valid" in status
+    assert _BASELINE in status
+
+
+@pytest.mark.parametrize("state", ["missing", "empty"])
+def test_cli_status_on_a_database_that_is_not_created_yet(
+    tmp_path: Path,
+    state: str,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """rework_1 nit: status names a not-yet-created database and exits 1 without creating it."""
+
+    database = tmp_path / "not created.db"
+    if state == "empty":
+        database.write_bytes(b"")
+    monkeypatch.delenv("FREESEARCH_DB", raising=False)
+
+    assert _run(["--database", str(database), "status"]) == 1
+
+    captured = capsys.readouterr()
+    assert "Schema: not created (will be created on first start)" in captured.out
+    assert "Traceback" not in captured.out + captured.err
+    assert database.exists() is (state == "empty")
+    if state == "empty":
+        assert database.stat().st_size == 0
+
+
+# --------------------------------------------------------------------------- creation races
+
+
+_CREATOR = (
+    "import sys; from pathlib import Path; "
+    "from freesearch.persistence.database_migrations import upgrade_database; "
+    "upgrade_database(Path(sys.argv[1]))"
+)
+
+
+def test_concurrent_fresh_creation_is_never_reported_as_reset(tmp_path: Path) -> None:
+    """rework_1 B1: a database being created by another process is not a foreign database.
+
+    One subprocess creates a fresh database while this process keeps calling
+    ``upgrade_database`` on the same path from the moment the file appears.
+    """
+
+    false_resets: list[str] = []
+    for trial in range(3):
+        database = tmp_path / f"race {trial}" / "freesearch.db"
+        database.parent.mkdir()
+        creator = subprocess.Popen(
+            [sys.executable, "-c", _CREATOR, str(database)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        deadline = time.monotonic() + 30
+        try:
+            while time.monotonic() < deadline:
+                finished = creator.poll() is not None
+                if database.exists() and database.stat().st_size > 0:
+                    try:
+                        upgrade_database(database)
+                    except DatabaseResetRequired as error:
+                        false_resets.append(str(error).splitlines()[0])
+                if finished:
+                    break
+                time.sleep(0.001)
+        finally:
+            stdout, stderr = creator.communicate(timeout=60)
+        assert creator.returncode == 0, (stdout, stderr)
+        validate_database_schema(database)
+        assert not list(database.parent.glob("*.creating-*"))
+    assert false_resets == []
+
+
+def test_crashed_creation_leaves_no_half_built_database(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """rework_1 B1: creation is atomic; a crash never leaves a partial file at the path.
+
+    A stale ``<name>.creating-*`` file from an earlier crash does not block creation.
+    """
+
+    database = tmp_path / "atomic.db"
+    stale = tmp_path / "atomic.db.creating-deadbeef"
+    stale.write_bytes(b"left behind by a crashed creation")
+    real_upgrade = migration_module.command.upgrade
+
+    def crash_after_partial_build(config: Config, *_: object, **__: object) -> None:
+        target = Path(config.attributes["database_path"])
+        connection = sqlite3.connect(target)
+        try:
+            connection.execute("CREATE TABLE accounts (id CHAR(36) PRIMARY KEY)")
+            connection.commit()
+        finally:
+            connection.close()
+        raise RuntimeError("simulated crash during baseline creation")
+
+    monkeypatch.setattr(migration_module.command, "upgrade", crash_after_partial_build)
+    with pytest.raises(Exception, match="simulated crash"):
+        upgrade_database(database)
+
+    assert not database.exists() or database.stat().st_size == 0
+    leftovers = {path.name for path in tmp_path.glob("atomic.db.creating-*")} - {stale.name}
+    assert leftovers == set()
+
+    monkeypatch.setattr(migration_module.command, "upgrade", real_upgrade)
+    result = upgrade_database(database)
+    assert result.changed is True
+    validate_database_schema(database)
+
+
+# --------------------------------------------------------------------------- locking / read-only
+
+
+def _delete_mode_baseline(database: Path) -> None:
+    upgrade_database(database)
+    connection = sqlite3.connect(database)
+    try:
+        connection.execute("PRAGMA journal_mode = DELETE")
+    finally:
+        connection.close()
+
+
+def _unversioned_legacy(database: Path) -> None:
+    _create_legacy(database, None)
+
+
+@pytest.mark.parametrize("builder", [_delete_mode_baseline, _unversioned_legacy])
+def test_locked_database_is_not_reported_as_reset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, builder: Callable[[Path], None]
+) -> None:
+    """rework_1 m2: a busy/locked file is a lock problem, never a reset instruction."""
+
+    database = tmp_path / "locked.db"
+    builder(database)
+    monkeypatch.setattr(migration_module, "_SQLITE_TIMEOUT_SECONDS", 0.2, raising=False)
+    holder = sqlite3.connect(database, isolation_level=None)
+    try:
+        holder.execute("BEGIN EXCLUSIVE")
+        digest_before = _sha256(database)
+        with pytest.raises(DatabaseMigrationError) as raised:
+            upgrade_database(database)
+        assert not isinstance(raised.value, DatabaseResetRequired), str(raised.value)
+        assert "lock" in str(raised.value).lower()
+    finally:
+        holder.execute("ROLLBACK")
+        holder.close()
+    assert _sha256(database) == digest_before
+
+
+@pytest.mark.parametrize("rejected_database", _REJECTED_IDS, indirect=True)
+def test_rejection_only_opens_read_only_connections(
+    rejected_database: tuple[Path, str | None], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """rework_1 nit: every SQLite connection made while rejecting is ``mode=ro`` via a URI."""
+
+    database, _ = rejected_database
+    real_connect = sqlite3.connect
+    calls: list[tuple[object, dict[str, object]]] = []
+
+    def spy(target: Any, *args: Any, **kwargs: Any) -> sqlite3.Connection:
+        calls.append((target, dict(kwargs)))
+        connection: sqlite3.Connection = real_connect(target, *args, **kwargs)
+        return connection
+
+    monkeypatch.setattr(sqlite3, "connect", spy)
+    with pytest.raises(DatabaseResetRequired):
+        upgrade_database(database)
+    monkeypatch.setattr(sqlite3, "connect", real_connect)
+
+    assert calls, "the rejection decision must inspect the file"
+    for target, kwargs in calls:
+        assert isinstance(target, str) and target.startswith("file:"), target
+        assert "mode=ro" in target, target
+        assert kwargs.get("uri") is True, kwargs
+
+
+# --------------------------------------------------------------------------- worktrees
 
 
 @pytest.mark.asyncio
@@ -502,90 +702,24 @@ async def test_repository_open_targets_only_selected_worktree_database(
 ) -> None:
     main_database = tmp_path / "main" / "freesearch.db"
     worktree_database = tmp_path / "worktree" / "freesearch.db"
-    main_database.parent.mkdir()
     worktree_database.parent.mkdir()
-    _create_partial_legacy(main_database, provider="main-sentinel")
-    _create_partial_legacy(worktree_database, provider="worktree-sentinel")
-    main_hash = hashlib.sha256(main_database.read_bytes()).digest()
+    _create_legacy(main_database, _OLDER_REVISION)
+    main_hash = _sha256(main_database)
     main_mtime = main_database.stat().st_mtime_ns
+    main_files = _directory_files(main_database.parent)
 
     async with await SQLiteRepository.open(worktree_database):
         pass
 
     assert database_status(worktree_database).schema_valid is True
-    assert _usage_rows(worktree_database) == []
     assert "projects" in _tables(worktree_database)
-    assert hashlib.sha256(main_database.read_bytes()).digest() == main_hash
+    assert _sha256(main_database) == main_hash
     assert main_database.stat().st_mtime_ns == main_mtime
-    assert database_status(main_database).current_revision is None
-    assert not list(main_database.parent.glob("freesearch.db.pre-alembic-*.bak"))
+    assert _directory_files(main_database.parent) == main_files
+    assert _revision(main_database) == [_OLDER_REVISION]
 
 
-def test_upgrade_database_rejects_unrelated_or_incompatible_schema(tmp_path: Path) -> None:
-    unrelated = tmp_path / "unrelated.db"
-    with sqlite3.connect(unrelated) as connection:
-        connection.execute("CREATE TABLE customer_data (id INTEGER PRIMARY KEY)")
-    with pytest.raises(DatabaseMigrationError, match="unrelated tables only"):
-        upgrade_database(unrelated)
-
-    incompatible = tmp_path / "incompatible.db"
-    with sqlite3.connect(incompatible) as connection:
-        connection.execute("CREATE TABLE usage_events (id INTEGER PRIMARY KEY)")
-    with pytest.raises(DatabaseMigrationError, match="missing core columns"):
-        upgrade_database(incompatible)
-    assert database_status(incompatible).current_revision is None
-
-
-_LIMIT_TABLES = frozenset(
-    {
-        "provider_limits",
-        "provider_native_pools",
-        "provider_crd_grants",
-        "provider_limit_events",
-        "provider_limit_admissions",
-        "provider_rate_observations",
-        "provider_rate_attempts",
-    }
-)
-_LIMIT_INDEXES = frozenset(
-    {
-        "provider_limit_events_provider_auth_observed",
-        "provider_limit_admissions_created_at",
-        "provider_rate_attempts_bucket_attempted",
-        "provider_rate_attempts_expires_at",
-    }
-)
-_PROJECT_TABLES = frozenset(
-    {
-        "accounts",
-        "projects",
-        "project_memberships",
-        "system_role_assignments",
-        "project_role_assignments",
-    }
-)
-_PROJECT_INDEXES = frozenset(
-    {
-        "ix_projects_account_id",
-        "ix_projects_slug",
-        "ix_projects_account_id_slug",
-        "ix_projects_created_by",
-        "ix_project_memberships_user_id",
-        "ix_system_role_assignments_user_id",
-        "ix_project_role_assignments_user_id",
-        "ix_project_role_assignments_project_user",
-    }
-)
-_SETTINGS_TABLES = frozenset({"system_settings", "project_settings"})
-_CREDENTIAL_TABLES = frozenset({"provider_credentials", "credential_project_grants"})
-_CREDENTIAL_INDEXES = frozenset(
-    {
-        "provider_credentials_id_owner_scope_key",
-        "provider_credentials_live_label_key",
-        "ix_provider_credentials_owner_project_id",
-        "ix_credential_project_grants_project_id",
-    }
-)
+# --------------------------------------------------------------------------- validation
 
 
 def test_validate_database_schema_rejects_missing_auth_foreign_keys(tmp_path: Path) -> None:
@@ -616,374 +750,349 @@ def test_validate_database_schema_rejects_missing_auth_foreign_keys(tmp_path: Pa
         validate_database_schema(database)
 
 
-def test_fresh_database_at_head_has_no_cache_metadata(tmp_path: Path) -> None:
-    database = tmp_path / "fresh-no-cache.db"
+def test_validate_database_schema_rejects_foreign_key_violations(tmp_path: Path) -> None:
+    database = tmp_path / "orphan.db"
+    upgrade_database(database)
+    connection = sqlite3.connect(database)
+    try:
+        connection.execute("PRAGMA foreign_keys=OFF")
+        connection.execute(
+            """
+            INSERT INTO project_audit_events
+                (id, project_id, occurred_at, action, actor_type, actor_id, target_type,
+                 target_id, outcome, correlation_id, detail)
+            VALUES ('00000000-0000-4000-8000-0000000000f1',
+                    '00000000-0000-4000-8000-0000000000f2',
+                    '2026-01-01T00:00:00+00:00', 'orphan', 'system', NULL, NULL, NULL,
+                    'success', NULL, '{}')
+            """
+        )
+        connection.commit()
+    finally:
+        connection.close()
 
-    result = upgrade_database(database)
-
-    assert result.current_revision == migration_head()
-    assert result.current_revision == "0009_provider_credentials"
-    assert "cache_metadata" not in _tables(database)
-    assert "cache_metadata_expires_at" not in _indexes(database)
-    assert _indexes(database) == (
-        set(_HEAD_INDEXES) | set(_LIMIT_INDEXES) | set(_PROJECT_INDEXES) | set(_CREDENTIAL_INDEXES)
-    )
-    assert _tables(database) == (
-        set(_HEAD_TABLES)
-        | set(_LIMIT_TABLES)
-        | set(_PROJECT_TABLES)
-        | set(_SETTINGS_TABLES)
-        | set(_CREDENTIAL_TABLES)
-    )
-    assert _tables(database) >= _AUTH_TABLES
-    assert _indexes(database) >= _AUTH_INDEXES
-    _assert_trace_spans_schema(database)
-    validate_database_schema(database)
+    with pytest.raises(DatabaseMigrationError, match="foreign key"):
+        validate_database_schema(database)
+    assert database_status(database).schema_valid is False
 
 
-def test_upgrade_from_0002_drops_seeded_cache_rows_preserving_unrelated_data(
-    tmp_path: Path,
+def test_validate_database_schema_rejects_missing_new_table(tmp_path: Path) -> None:
+    database = tmp_path / "no-retention.db"
+    upgrade_database(database)
+    with sqlite3.connect(database) as connection:
+        connection.execute("DROP TABLE retention_runs")
+
+    with pytest.raises(DatabaseMigrationError, match="retention_runs"):
+        validate_database_schema(database)
+
+
+def test_validate_database_schema_rejects_missing_new_index(tmp_path: Path) -> None:
+    database = tmp_path / "no-index.db"
+    upgrade_database(database)
+    with sqlite3.connect(database) as connection:
+        connection.execute("DROP INDEX execution_dispatches_pool_state")
+
+    with pytest.raises(DatabaseMigrationError, match="execution_dispatches_pool_state"):
+        validate_database_schema(database)
+
+
+#: Tables that declare foreign keys and are not themselves referenced, so they
+#: can be rebuilt without keys while every other table stays intact.
+_LEAF_TABLES_WITH_FOREIGN_KEYS = (
+    "retention_runs",
+    "project_audit_events",
+    "system_audit_events",
+    "execution_dispatches",
+    "credential_oauth_grants",
+    "credential_pool_links",
+    "project_pool_allocations",
+    "usage_events",
+)
+
+
+@pytest.mark.parametrize("table", _LEAF_TABLES_WITH_FOREIGN_KEYS)
+def test_validate_database_schema_rejects_missing_new_foreign_key(
+    tmp_path: Path, table: str
 ) -> None:
-    database = tmp_path / "seeded-0002.db"
-    _seed_at_0002(database)
-    assert _revision(database) == [_PREVIOUS_HEAD]
-    assert "cache_metadata" in _tables(database)
-    usage_before = _all_rows(database, "usage_events", "id")
-    quota_before = _all_rows(database, "quota_snapshots", "id")
-    health_before = _all_rows(database, "provider_health", "id")
-    settings_before = _all_rows(database, "runtime_settings", "key")
-    indexes_before = _indexes(database)
+    """The validator checks foreign keys on the new tables, not only the auth tables."""
 
-    result = upgrade_database(database)
-
-    assert result.previous_revision == _PREVIOUS_HEAD
-    assert result.current_revision == migration_head()
-    assert result.changed is True
-    assert result.backup is not None
-    assert result.backup.is_file()
-    assert _revision(database) == [migration_head()]
-    assert "cache_metadata" not in _tables(database)
-    assert "cache_metadata_expires_at" not in _indexes(database)
-    # P04: usage_events/trace_spans are recreated empty; unrelated data stays.
-    assert _all_rows(database, "usage_events", "id") == []
-    assert _all_rows(database, "quota_snapshots", "id") == quota_before
-    assert _all_rows(database, "provider_health", "id") == health_before
-    assert _all_rows(database, "runtime_settings", "key") == settings_before
-    assert _all_rows(result.backup, "usage_events", "id") == usage_before
-    # Exact decimals survive in the rows that are preserved.
-    assert _all_rows(database, "quota_snapshots", "id")[0][3] == "75.25"
-    assert _all_rows(database, "quota_snapshots", "id")[0][4] == "100.00"
-    assert _indexes(database) == (
-        (indexes_before - {"cache_metadata_expires_at"})
-        | set(_TRACE_INDEXES)
-        | {_TRACE_USER_INDEX}
-        | {
-            "trace_spans_project_root_started_at",
-            "usage_events_project_observed_at",
-        }
-        | set(_AUTH_INDEXES)
-        | set(_LIMIT_INDEXES)
-        | set(_PROJECT_INDEXES)
-        | set(_CREDENTIAL_INDEXES)
-    )
-    _assert_trace_spans_schema(database)
-    assert _tables(database) >= _AUTH_TABLES
-    # The 0002 database had no trace store: upgrade creates it empty.
-    with sqlite3.connect(database) as connection:
-        assert connection.execute("SELECT COUNT(*) FROM trace_spans").fetchone() == (0,)
-    assert "trace_spans" not in _tables(result.backup)
-    # The pre-migration backup retains the dropped cache rows for recovery.
-    assert "cache_metadata" in _tables(result.backup)
-    assert len(_all_rows(result.backup, "cache_metadata", "cache_key")) == 2
-    with sqlite3.connect(result.backup) as connection:
-        assert connection.execute("PRAGMA integrity_check").fetchone() == ("ok",)
-    validate_database_schema(database)
-
-
-def test_downgrade_recreates_cache_metadata_table_and_index(tmp_path: Path) -> None:
-    database = tmp_path / "downgrade-cache.db"
+    database = tmp_path / f"no-fk-{table}.db"
     upgrade_database(database)
-
-    # Explicit target: from the 0004 head back to the last revision that
-    # still owns the cache table (0002). Head-relative "-2" is ambiguous
-    # once the later 0004 revisions exist, so name the revision directly.
-    migration_module.command.downgrade(_config_for(database), _PREVIOUS_HEAD)
-
-    assert _revision(database) == [_PREVIOUS_HEAD]
-    assert "cache_metadata" in _tables(database)
-    assert _columns(database, "cache_metadata") == {
-        "cache_key",
-        "provider",
-        "operation",
-        "created_at",
-        "expires_at",
-        "accessed_at",
-        "hit_count",
-        "size_bytes",
-    }
-    assert "cache_metadata_expires_at" in _indexes(database)
-    # Downgrade drops the trace store added by revision 0003, the seven
-    # limit tables added by the limits revision, and every auth object.
-    assert "trace_spans" not in _tables(database)
-    assert not (_TRACE_INDEXES & _indexes(database))
-    assert _TRACE_USER_INDEX not in _indexes(database)
-    assert not (_AUTH_TABLES & _tables(database))
-    assert not (_AUTH_INDEXES & _indexes(database))
-    assert not (_LIMIT_TABLES & _tables(database))
-    assert not (_LIMIT_INDEXES & _indexes(database))
-    assert not (_SETTINGS_TABLES & _tables(database))
-
-    result = upgrade_database(database)
-
-    assert result.previous_revision == _PREVIOUS_HEAD
-    assert result.current_revision == migration_head()
-    assert "cache_metadata" not in _tables(database)
-    assert "cache_metadata_expires_at" not in _indexes(database)
-    assert _tables(database) >= _LIMIT_TABLES
-    assert _indexes(database) >= _LIMIT_INDEXES
-    _assert_trace_spans_schema(database)
-    validate_database_schema(database)
-
-
-def test_upgrade_database_enables_wal_mode(tmp_path: Path) -> None:
-    """upgrade_database() must ensure WAL journal mode is set on disk."""
-    database = tmp_path / "wal-mode.db"
-    result = upgrade_database(database)
-    assert result.current_revision == migration_head()
-
     with sqlite3.connect(database) as connection:
-        journal_mode = connection.execute("PRAGMA journal_mode").fetchone()[0]
-    assert journal_mode == "wal"
-
-
-_CANONICAL_PROVIDERS = [
-    "brave",
-    "exa",
-    "firecrawl",
-    "keenable",
-    "parallel",
-    "tavily",
-    "tinyfish",
-    "you",
-]
-
-
-def _seed_legacy_provider_rows(database: Path, *, enabled_on: set[str]) -> None:
-    with sqlite3.connect(database) as connection:
-        for provider in _CANONICAL_PROVIDERS:
-            enabled = provider in enabled_on
-            payload = json.dumps(
-                {
-                    "config": {
-                        "enabled": enabled,
-                        "priority": 100,
-                        "free_tier_estimates": {"search": "0", "fetch": "0"},
-                    }
-                },
-                separators=(",", ":"),
+        sql = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
+        ).fetchone()[0]
+        columns = [str(row[1]) for row in connection.execute(f'PRAGMA table_info("{table}")')]
+        indexes = [
+            str(row[0])
+            for row in connection.execute(
+                "SELECT sql FROM sqlite_master WHERE type = 'index' "
+                "AND tbl_name = ? AND sql IS NOT NULL",
+                (table,),
             )
-            connection.execute(
-                "INSERT OR REPLACE INTO runtime_settings (key, value_json) VALUES (?, ?)",
-                (f"provider.{provider}", payload),
-            )
-        connection.execute(
-            "INSERT OR REPLACE INTO runtime_settings (key, value_json) VALUES (?, ?)",
-            ("theme", json.dumps("dark")),
-        )
-        connection.commit()
+        ]
+        assert "REFERENCES" in sql.upper()
+        column_sql = ", ".join(f'"{column}" TEXT' for column in columns)
+        connection.execute("PRAGMA foreign_keys=OFF")
+        connection.execute(f'DROP TABLE "{table}"')
+        connection.execute(f'CREATE TABLE "{table}" ({column_sql})')
+        for index_sql in indexes:
+            connection.execute(index_sql)
+        connection.execute("PRAGMA foreign_keys=ON")
+
+    with pytest.raises(DatabaseMigrationError, match=table):
+        validate_database_schema(database)
 
 
-def _provider_config(database: Path, provider: str) -> dict[str, Any]:
-    with sqlite3.connect(database) as connection:
-        row = connection.execute(
-            "SELECT value_json FROM runtime_settings WHERE key = ?", (f"provider.{provider}",)
-        ).fetchone()
-    assert row is not None
-    return cast(dict[str, Any], json.loads(row[0])["config"])
-
-
-def test_upgrade_converts_legacy_on_off_to_masks(tmp_path: Path) -> None:
-    database = tmp_path / "masks-on-off.db"
-    migration_module.command.upgrade(_config_for(database), _PREVIOUS_HEAD)
-    _seed_legacy_provider_rows(database, enabled_on={"exa", "brave", "tavily"})
-
-    result = upgrade_database(database)
-
-    assert result.previous_revision == _PREVIOUS_HEAD
-    assert result.current_revision == migration_head()
-    for provider in ("exa", "brave", "tavily"):
-        config = _provider_config(database, provider)
-        assert config["enable_mask"] == 7
-        assert "enabled" not in config
-    for provider in set(_CANONICAL_PROVIDERS) - {"exa", "brave", "tavily"}:
-        config = _provider_config(database, provider)
-        assert config["enable_mask"] == 0
-        assert "enabled" not in config
-    assert _provider_config(database, "brave")["support_mask"] == 3
-    for provider in set(_CANONICAL_PROVIDERS) - {"brave"}:
-        assert _provider_config(database, provider)["support_mask"] == 7
-
-
-def test_upgrade_preserves_unrelated_fields_and_keys(tmp_path: Path) -> None:
-    database = tmp_path / "masks-preserve.db"
-    migration_module.command.upgrade(_config_for(database), _PREVIOUS_HEAD)
-    with sqlite3.connect(database) as connection:
-        payload = json.dumps(
-            {"config": {"enabled": True, "priority": 7, "reset_schedule": "monthly"}},
-            separators=(",", ":"),
-        )
-        connection.execute(
-            "INSERT OR REPLACE INTO runtime_settings (key, value_json) VALUES (?, ?)",
-            ("provider.exa", payload),
-        )
-        connection.execute(
-            "INSERT OR REPLACE INTO runtime_settings (key, value_json) VALUES (?, ?)",
-            ("theme", json.dumps("dark")),
-        )
-        connection.commit()
-
+def test_validate_database_schema_rejects_missing_new_column(tmp_path: Path) -> None:
+    database = tmp_path / "no-column.db"
     upgrade_database(database)
-
-    config = _provider_config(database, "exa")
-    assert config["enable_mask"] == 7
-    assert config["support_mask"] == 7
-    assert config["priority"] == 7
-    assert config["reset_schedule"] == "monthly"
     with sqlite3.connect(database) as connection:
-        theme = connection.execute(
-            "SELECT value_json FROM runtime_settings WHERE key = ?", ("theme",)
-        ).fetchone()
-    assert json.loads(theme[0]) == "dark"
+        connection.execute("ALTER TABLE project_audit_events DROP COLUMN correlation_id")
+
+    with pytest.raises(DatabaseMigrationError, match="correlation_id"):
+        validate_database_schema(database)
 
 
-def test_upgrade_preserves_new_masks_and_rejects_ambiguous(tmp_path: Path) -> None:
-    database = tmp_path / "masks-ambiguous.db"
-    migration_module.command.upgrade(_config_for(database), _PREVIOUS_HEAD)
-    with sqlite3.connect(database) as connection:
-        good = json.dumps(
-            {"config": {"enable_mask": 5, "support_mask": 7, "priority": 100}},
-            separators=(",", ":"),
-        )
-        bad = json.dumps(
-            {"config": {"enabled": True, "enable_mask": 7, "support_mask": 7}},
-            separators=(",", ":"),
-        )
-        connection.execute(
-            "INSERT OR REPLACE INTO runtime_settings (key, value_json) VALUES (?, ?)",
-            ("provider.exa", good),
-        )
-        connection.execute(
-            "INSERT OR REPLACE INTO runtime_settings (key, value_json) VALUES (?, ?)",
-            ("provider.brave", bad),
-        )
-        connection.commit()
+def test_non_sqlite_file_is_rejected_and_not_modified(tmp_path: Path) -> None:
+    database = tmp_path / "not-a-database.db"
+    database.write_bytes(b"this is not an SQLite file, keep it exactly as it is. " * 64)
+    digest_before = _sha256(database)
+    files_before = _directory_files(tmp_path)
 
-    with pytest.raises(DatabaseMigrationError, match="ambiguous"):
+    with pytest.raises(DatabaseResetRequired) as raised:
         upgrade_database(database)
 
-    # The 0004 data revision fails after 0003 succeeds, so Alembic stays at
-    # 0003 and never reaches the head. The pre-migration backup is kept.
-    assert _revision(database) == ["0003_open_telemetry_spans"]
-    assert _revision(database) != [migration_head()]
+    _assert_reset_message(str(raised.value), database=database, found=None, not_sqlite=True)
+    assert _sha256(database) == digest_before
+    assert {
+        name
+        for name in _directory_files(tmp_path) - files_before
+        if not name.endswith(".migration.lock")
+    } == set()
+    assert database_status(database).schema_valid is False
 
 
-def test_upgrade_rejects_malformed_provider_rows(tmp_path: Path) -> None:
-    for name, payload in [
-        ("malformed-json", "{not valid json"),
-        ("invalid-legacy-type", json.dumps({"config": {"enabled": "yes"}})),
-        ("non-dict-config", json.dumps({"config": "oops"})),
-    ]:
-        database = tmp_path / f"masks-{name}.db"
-        migration_module.command.upgrade(_config_for(database), _PREVIOUS_HEAD)
-        with sqlite3.connect(database) as connection:
-            connection.execute(
-                "INSERT OR REPLACE INTO runtime_settings (key, value_json) VALUES (?, ?)",
-                ("provider.exa", payload),
-            )
-            connection.commit()
-
+def test_absolute_database_path_rejects_memory_and_side_files(tmp_path: Path) -> None:
+    for target in (":memory:", "file:x.db", f"{tmp_path / 'x.db'}-wal"):
         with pytest.raises(DatabaseMigrationError):
-            upgrade_database(database)
-
-        assert _revision(database) == ["0003_open_telemetry_spans"]
-        assert _revision(database) != [migration_head()]
+            upgrade_database(target)
+    assert os.listdir(tmp_path) == []
 
 
-def test_upgrade_backup_contains_original_provider_rows(tmp_path: Path) -> None:
-    database = tmp_path / "masks-backup.db"
-    migration_module.command.upgrade(_config_for(database), _PREVIOUS_HEAD)
-    _seed_legacy_provider_rows(database, enabled_on={"exa"})
-    with sqlite3.connect(database) as connection:
-        original = connection.execute(
-            "SELECT key, value_json FROM runtime_settings WHERE key LIKE 'provider.%' ORDER BY key"
-        ).fetchall()
-
-    result = upgrade_database(database)
-
-    assert result.backup is not None
-    assert result.backup.is_file()
-    with sqlite3.connect(result.backup) as connection:
-        backed = connection.execute(
-            "SELECT key, value_json FROM runtime_settings WHERE key LIKE 'provider.%' ORDER BY key"
-        ).fetchall()
-        assert connection.execute("PRAGMA integrity_check").fetchone() == ("ok",)
-    assert backed == original
-    assert json.loads(dict(backed)["provider.exa"])["config"]["enabled"] is True
-    assert _provider_config(database, "exa")["enable_mask"] == 7
+# ------------------------------------------------------------- stale side files (rework_2)
 
 
-def test_upgrade_provider_masks_is_idempotent(tmp_path: Path) -> None:
-    database = tmp_path / "masks-idempotent.db"
-    migration_module.command.upgrade(_config_for(database), _PREVIOUS_HEAD)
-    _seed_legacy_provider_rows(database, enabled_on={"exa", "brave"})
-
-    first = upgrade_database(database)
-    before = _provider_config(database, "exa")
-    second = upgrade_database(database)
-
-    assert first.changed is True
-    assert second.changed is False
-    assert second.backup is None
-    assert _provider_config(database, "exa") == before
-    assert before["enable_mask"] == 7
+_STALE_CREDENTIAL_SLOT = "credential.x.g1"
 
 
-@pytest.mark.asyncio
-async def test_concurrent_provider_mask_upgrades_are_serialized(tmp_path: Path) -> None:
-    database = tmp_path / "masks-concurrent.db"
-    migration_module.command.upgrade(_config_for(database), _PREVIOUS_HEAD)
-    _seed_legacy_provider_rows(database, enabled_on={"exa", "tavily"})
-    original = _provider_config(database, "exa")
+def _close_without_checkpoint(connection: sqlite3.Connection) -> None:
+    no_checkpoint = getattr(sqlite3, "SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE", None)
+    if no_checkpoint is not None:
+        connection.setconfig(no_checkpoint, True)
+    connection.close()
 
-    results = await asyncio.gather(
-        *(asyncio.to_thread(upgrade_database, database) for _ in range(4))
+
+def _count(database: Path, sql: str, *params: object) -> int:
+    connection = sqlite3.connect(database)
+    try:
+        return int(connection.execute(sql, params).fetchone()[0])
+    finally:
+        connection.close()
+
+
+def _capture_hot_wal(scratch: Path, populate: Callable[[sqlite3.Connection], None]) -> Path:
+    """Write rows into WAL frames only, then copy main+wal+shm while the writer is open.
+
+    Returns the directory holding the copied ``old.db``, ``old.db-wal`` and
+    ``old.db-shm``. The main-file copy exists only to prove the WAL carries data.
+    """
+
+    writer = sqlite3.connect(scratch, isolation_level=None)
+    try:
+        writer.execute("PRAGMA journal_mode = WAL")
+        writer.execute("PRAGMA wal_autocheckpoint = 0")
+        populate(writer)
+        captured = scratch.parent / "captured"
+        captured.mkdir()
+        for suffix in ("", "-wal", "-shm"):
+            shutil.copyfile(f"{scratch}{suffix}", captured / f"old.db{suffix}")
+    finally:
+        _close_without_checkpoint(writer)
+    return captured
+
+
+def _populate_baseline_secrets(writer: sqlite3.Connection) -> None:
+    for index in range(3):
+        user_id = str(uuid.uuid4())
+        writer.execute(
+            "INSERT INTO user (id, email, hashed_password, is_active, is_verified, "
+            "auth_provider, auth_provider_id, username, first_name, last_name) "
+            "VALUES (?, ?, 'not-a-real-hash', 1, 1, 'local', NULL, NULL, NULL, NULL)",
+            (user_id, f"old-{index}@example.test"),
+        )
+    writer.execute(
+        "INSERT INTO runtime_settings (key, value_json) VALUES (?, ?)",
+        (_STALE_CREDENTIAL_SLOT, '"dummy-not-a-secret"'),
     )
 
-    assert sum(result.changed for result in results) == 1
-    assert _provider_config(database, "exa")["enable_mask"] == 7
-    assert _provider_config(database, "tavily")["enable_mask"] == 7
-    assert original["enabled"] is True
-    validate_database_schema(database)
+
+def _populate_legacy(writer: sqlite3.Connection) -> None:
+    writer.executescript(
+        _legacy_rows_script(_OLDER_REVISION).replace("PRAGMA journal_mode = DELETE;", "")
+    )
+    writer.execute(
+        "INSERT INTO runtime_settings (key, value_json) VALUES (?, ?)",
+        (_STALE_CREDENTIAL_SLOT, '"dummy-not-a-secret"'),
+    )
 
 
-def test_downgrade_decodes_global_bit_and_removes_masks(tmp_path: Path) -> None:
-    database = tmp_path / "masks-downgrade.db"
-    migration_module.command.upgrade(_config_for(database), _PREVIOUS_HEAD)
-    _seed_legacy_provider_rows(database, enabled_on={"exa"})
-    upgrade_database(database)
-    assert _provider_config(database, "exa")["enable_mask"] == 7
+def _baseline_scratch(directory: Path) -> Path:
+    scratch = directory / "old.db"
+    upgrade_database(scratch)
+    return scratch
 
-    migration_module.command.downgrade(_config_for(database), "0003_open_telemetry_spans")
 
-    config = _provider_config(database, "exa")
-    assert config["enabled"] is True
-    assert "enable_mask" not in config
-    assert "support_mask" not in config
-    off = _provider_config(database, "brave")
-    # Brave was OFF in the seed, so Bit 0 decodes to False.
-    assert off["enabled"] is False
+def _legacy_scratch(directory: Path) -> Path:
+    scratch = directory / "old.db"
+    connection = sqlite3.connect(scratch)
+    try:
+        connection.execute("PRAGMA journal_mode = WAL")
+        connection.execute("CREATE TABLE warmup (x INTEGER)")
+        connection.commit()
+    finally:
+        connection.close()
+    return scratch
 
-    result = upgrade_database(database)
-    assert result.current_revision == migration_head()
-    assert _provider_config(database, "exa")["enable_mask"] == 7
-    validate_database_schema(database)
+
+@pytest.mark.parametrize(
+    ("make_scratch", "populate", "proof_sql"),
+    [
+        (_baseline_scratch, _populate_baseline_secrets, "SELECT COUNT(*) FROM user"),
+        (_legacy_scratch, _populate_legacy, "SELECT COUNT(*) FROM usage_events"),
+    ],
+    ids=["baseline-with-users-and-secret-slot", "0009-style-database"],
+)
+def test_stale_hot_wal_is_never_replayed_into_a_fresh_database(
+    tmp_path: Path,
+    make_scratch: Callable[[Path], Path],
+    populate: Callable[[sqlite3.Connection], None],
+    proof_sql: str,
+) -> None:
+    """rework_2 N1: a deleted database's leftover ``-wal``/``-shm`` must not resurrect
+    its users or secret envelopes inside the newly created baseline."""
+
+    scratch_dir = tmp_path / "scratch"
+    scratch_dir.mkdir()
+    captured = _capture_hot_wal(make_scratch(scratch_dir), populate)
+
+    # Prove the fixture: the WAL is non-empty and replaying it in place shows the rows.
+    assert (captured / "old.db-wal").stat().st_size > 0
+    proof = tmp_path / "proof"
+    proof.mkdir()
+    for suffix in ("", "-wal", "-shm"):
+        shutil.copyfile(captured / f"old.db{suffix}", proof / f"old.db{suffix}")
+    assert _count(proof / "old.db", proof_sql) > 0
+    assert (
+        _count(
+            proof / "old.db",
+            "SELECT COUNT(*) FROM runtime_settings WHERE key = ?",
+            _STALE_CREDENTIAL_SLOT,
+        )
+        == 1
+    )
+
+    # The operator deleted the old main file but its side files were left behind.
+    target_dir = tmp_path / "checkout"
+    target_dir.mkdir()
+    target = target_dir / "freesearch.db"
+    shutil.copyfile(captured / "old.db-wal", target_dir / "freesearch.db-wal")
+    shutil.copyfile(captured / "old.db-shm", target_dir / "freesearch.db-shm")
+    assert not target.exists()
+
+    result = upgrade_database(target)
+
+    assert result.changed is True
+    assert result.previous_revision is None
+    validate_database_schema(target)
+    assert _revision(target) == [_BASELINE]
+    assert _count(target, "SELECT COUNT(*) FROM user") == 0
+    assert (
+        _count(
+            target,
+            "SELECT COUNT(*) FROM runtime_settings WHERE key = ?",
+            _STALE_CREDENTIAL_SLOT,
+        )
+        == 0
+    )
+    assert _count(target, "SELECT COUNT(*) FROM usage_events") == 0
+    with sqlite3.connect(target) as connection:
+        assert connection.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+        assert connection.execute("SELECT id, status FROM accounts").fetchall() == [
+            ("00000000-0000-4000-8000-000000000001", "active")
+        ]
+    # rework_2 (c): no staging file or staging side file survives a successful create.
+    assert not list(target_dir.glob("*.creating-*"))
+
+
+def test_stale_rollback_journal_is_removed_before_creation(tmp_path: Path) -> None:
+    """A leftover ``-journal`` next to an absent path is deleted, never rolled back in."""
+
+    target = tmp_path / "freesearch.db"
+    Path(f"{target}-journal").write_bytes(b"stale hot journal from a deleted database" * 32)
+
+    result = upgrade_database(target)
+
+    assert result.changed is True
+    validate_database_schema(target)
+    assert not Path(f"{target}-journal").exists()
+
+
+def test_replace_blocked_by_another_process_reports_and_cleans_up(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """rework_2 N2: a target held open on Windows gives an actionable error, no staging left."""
+
+    target = tmp_path / "held open.db"
+
+    def held_open(*_: object, **__: object) -> None:
+        raise PermissionError(13, "The process cannot access the file")
+
+    monkeypatch.setattr(migration_module.os, "replace", held_open)
+    with pytest.raises(DatabaseMigrationError) as raised:
+        upgrade_database(target)
+    monkeypatch.undo()
+
+    assert not isinstance(raised.value, DatabaseResetRequired)
+    assert str(raised.value) == (
+        f"another process has {absolute_database_path(target)} open; close it and retry"
+    )
+    assert not list(tmp_path.glob("*.creating-*"))
+    assert not target.exists()
+
+
+def test_stale_creation_cleanup_only_touches_staging_files(tmp_path: Path) -> None:
+    """rework_2 NIT: only ``<name>.creating-<8 hex>`` (and its side files) are stale."""
+
+    target = tmp_path / "freesearch.db"
+    notes = tmp_path / "freesearch.db.creating-notes.txt"
+    notes.write_text("operator notes, keep me", encoding="utf-8")
+    not_hex = tmp_path / "freesearch.db.creating-0123abcz"
+    not_hex.write_bytes(b"not hex, keep me")
+    longer = tmp_path / "freesearch.db.creating-0123abcd9"
+    longer.write_bytes(b"nine hex digits, keep me")
+    stale = tmp_path / "freesearch.db.creating-0123abcd"
+    stale.write_bytes(b"stale staging file")
+    stale_sides = [Path(f"{stale}{suffix}") for suffix in ("-wal", "-shm", "-journal")]
+    for side in stale_sides:
+        side.write_bytes(b"stale staging side file")
+
+    upgrade_database(target)
+
+    assert notes.read_text(encoding="utf-8") == "operator notes, keep me"
+    assert not_hex.exists()
+    assert longer.exists()
+    assert not stale.exists()
+    for side in stale_sides:
+        assert not side.exists(), side
+    validate_database_schema(target)

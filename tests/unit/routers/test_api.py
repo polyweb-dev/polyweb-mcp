@@ -103,7 +103,7 @@ class SpyBatchRepository:
         self.quota_batch_names.append(list(providers))
         return {}
 
-    async def list_usage(self, **kwargs: Any) -> list[Any]:
+    async def list_provider_usage(self, **kwargs: Any) -> list[Any]:
         return []
 
     async def record_usage(
@@ -136,7 +136,7 @@ class BatchlessRepository:
     async def latest_quota(self, provider: str) -> QuotaSnapshot | None:
         return self._quotas.get(provider)
 
-    async def list_usage(self, **kwargs: Any) -> list[Any]:
+    async def list_provider_usage(self, **kwargs: Any) -> list[Any]:
         return []
 
 

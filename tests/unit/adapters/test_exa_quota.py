@@ -62,7 +62,9 @@ class _MockRepository:
         self._events = events or []
         self._latest = latest_quota
 
-    async def list_usage(self, provider: str, since: datetime | None = None) -> list[UsageEvent]:
+    async def list_provider_usage(
+        self, provider: str, since: datetime | None = None
+    ) -> list[UsageEvent]:
         return [
             e
             for e in self._events

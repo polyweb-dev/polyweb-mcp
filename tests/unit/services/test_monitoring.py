@@ -228,7 +228,7 @@ async def test_effective_quotas_batch_failures_preserve_snapshot(
     async def _failing_list_usage(*args: Any, **kwargs: Any) -> list[UsageEvent]:
         raise RuntimeError("usage store down")
 
-    monkeypatch.setattr(repo, "list_usage", _failing_list_usage)
+    monkeypatch.setattr(repo, "list_provider_usage", _failing_list_usage)
     preserved = await effective_quotas_batch(repo, ["parallel"])
 
     assert preserved["parallel"].remaining == Decimal("0")
