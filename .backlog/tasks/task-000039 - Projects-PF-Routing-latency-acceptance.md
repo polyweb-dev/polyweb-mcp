@@ -4,6 +4,7 @@ title: Projects PF - Routing-latency acceptance
 status: To Do
 assignee: []
 created_date: '2026-10-26T09:47:00Z'
+updated_date: '2026-10-26T10:30:00Z'
 labels:
   - projects-first
   - step-2-api
@@ -29,10 +30,12 @@ Step rules and the shared Definition of Done: doc-000003. Card map and worktree 
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 An end-to-end test per provider, with instant fake adapters, measures the time FreeSearch adds to route a warm search and a warm fetch over REST and MCP; p95 stays under 80 ms.
-- [ ] #2 The same run reports database reads per request as a diagnostic; read counts are not a pass/fail limit, and the fixed read-count assertion in test_auto_route_plan_read_budget becomes a report.
-- [ ] #3 Existing live-provider tests (backend @live BDD, UI @live Playwright, routing latency report) run only when explicitly selected, never in the default suites, and report per-provider added latency separately from provider time.
-- [ ] #4 One documented command runs the live performance checks for a later CI job.
+- [ ] #1 Routing latency is measured at the backend API with Python Behave end-to-end scenarios; no Playwright or UI tests are added for it.
+- [ ] #2 For every provider, with instant fake adapters, a warm search and a warm fetch over REST and MCP add under 80 ms of FreeSearch routing time at p95.
+- [ ] #3 Existing latency tests (tests/integration/latency/test_routing_latency.py and the backend @live Behave scenarios) are reused where they already measure this; only the gaps are rewritten.
+- [ ] #4 The same run reports database reads per request as a diagnostic; read counts are not a pass/fail limit, and the fixed read-count assertion in test_auto_route_plan_read_budget becomes a report.
+- [ ] #5 Backend @live Behave scenarios run only when explicitly selected, never in the default suites, and report per-provider added latency separately from provider time.
+- [ ] #6 One documented command runs the live performance checks for a later CI job.
 <!-- AC:END -->
 
 ## Definition of Done
