@@ -3,7 +3,7 @@ id: doc-000004
 title: Projects specification - alpha bootstrap and verification
 type: specification
 created_date: '2026-10-24T15:49:00Z'
-updated_date: '2026-10-24T15:57:00Z'
+updated_date: '2026-10-26T09:51:00Z'
 tags:
   - projects-first
   - specification
@@ -20,12 +20,12 @@ The user explicitly permits loss of prior history and accounts. Use a fresh-data
 Do not create a Legacy project, backfill old records, convert agent accounts, or support old agent credentials.
 The plan does not delete or modify the current database during research.
 
-1. Build the project schema through small Alembic revisions. Keep schema validation metadata synchronized with each revision.
+1. Build the project schema as one baseline revision. Keep schema validation metadata synchronized with it.
 2. Use temporary fresh databases for each phase. Recreate disposable alpha fixtures when an intermediate contract changes.
 3. Reject unsupported old database revisions with an actionable reset message. Do not silently adopt their accounts or provider settings.
 4. Provision a new system administrator through a controlled local bootstrap operation.
 5. Create projects and their first administrators atomically. Add global credentials and explicit grants, or project-private credentials.
-6. Issue new project tokens through the authorized workflow. Reconfigure clients with those tokens.
+6. Issue new project API keys through the authorized workflow. Reconfigure clients with those API keys.
 7. Start project-first execution only after isolation, provider resolution, and atomic strict caps pass.
 
 Provider credentials and settings need no import. Do not restore old users, execution history, authentication sessions, or provider secrets.
@@ -37,7 +37,7 @@ Preserve new deletion tombstones, OAuth generations, native balances, CRD grants
 An alpha reset is a release operation. It is not a limiter recovery strategy.
 
 For the alpha launch, retain a protected copy of the old installation only if useful to the operator.
-A rollback to that separate installation does not preserve new project activity or reenable new project tokens.
+A rollback to that separate installation does not preserve new project activity or reenable new project API keys.
 After project adoption, prefer a forward fix or coordinated restore. Never run an old single-tenant application against the new project database.
 
 ## 13. Verification required for implementation
@@ -53,8 +53,8 @@ Required security cases include:
 - REST, MCP, CLI, and queued execution agree on the common permission decision for the same principal, action, and scope.
 - Cross-project IDs fail on detail, list, mutation, exports, counters, caches, and pagination.
 - Concurrent account deactivation and membership removal preserve each project's active administrator.
-- Role removal, grant removal, project archive, token revocation, and token expiry affect queued work before dispatch.
-- A token never authorizes system or human account management.
+- Role removal, grant removal, project archive, API key revocation, and API key expiry affect queued work before dispatch.
+- An API key never authorizes system or human account management.
 - Credential rotation and OAuth refresh races cannot restore old or disconnected credentials.
 - Project copy cannot expand grants, secret access, or allocation authority.
 - All constrained dispatch paths reject missing authoritative storage.
@@ -122,4 +122,5 @@ Keep existing provider documentation and observed-limit provenance authoritative
 One exploration child reports a baseline result of 1,835 unit tests passed and one skipped.
 This does not validate the proposed feature. The orchestrator did not repeat that suite or execute migration rehearsals and load tests.
 The gates above specify evidence that coding agents must produce during implementation.
-The main risks are incomplete scope propagation, incorrect shared-pool identity, uncoordinated dispatch, and incomplete bootstrap or token enforcement.
+The main risks are incomplete scope propagation, incorrect shared-pool identity, uncoordinated dispatch, and incomplete bootstrap or API key enforcement.
+

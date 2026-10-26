@@ -1,14 +1,14 @@
 ---
 id: doc-000002
-title: Projects specification - storage, tokens, limits and UX
+title: Projects specification - storage, API keys, limits and UX
 type: specification
 created_date: '2026-10-24T15:49:00Z'
-updated_date: '2026-10-24T17:18:00Z'
+updated_date: '2026-10-26T09:51:00Z'
 tags:
   - projects-first
   - specification
 ---
-# Projects specification - storage, tokens, limits and UX
+# Projects specification - storage, API keys, limits and UX
 
 Snapshot of .agents/communication/projects-feature-plan.md on 2026-10-24.
 
@@ -16,7 +16,7 @@ This Backlog-managed copy makes the accepted design available in other checkouts
 
 ## 5. Proposed database model
 
-Keep schema migrations small. Add the tables in their owning phase rather than one large initial migration.
+The alpha schema is settled in one baseline revision. Later schema changes are exceptions; see doc-000003.
 Use UUIDs for durable identity, UTC timestamps, exact Decimal representations for funds, and explicit version columns.
 
 ### Project and access records
@@ -29,7 +29,7 @@ projects(id, account_id, name, slug, status, created_by, created_at, version)
 project_memberships(project_id, user_id, status, version)
 system_role_assignments(account_id, user_id, role_key, granted_by, version)
 project_role_assignments(project_id, user_id, role_key, granted_by, version)
-project_tokens(id, project_id, label, prefix, verifier_digest, scopes,
+project_api_keys(id, project_id, label, prefix, verifier_digest, scopes,
                created_by, created_at, expires_at, revoked_at, last_used_at)
 ```
 
@@ -84,34 +84,34 @@ Enable foreign keys on every SQLite connection and inspect foreign-key integrity
 SQLite documents this connection-level requirement in its [foreign-key guide](https://www.sqlite.org/foreignkeys.html).
 Do not rely on a simple SQL `CHECK` for the cross-row administrator invariant.
 
-## 6. Project tokens and authentication
+## 6. Project API keys and authentication
 
-Issue opaque tokens with at least 256 bits of random secret material and a recognizable format.
+Issue opaque API keys with at least 256 bits of random secret material and a recognizable format.
 Use a public lookup identifier plus a secret component. Store only a cryptographic verifier digest and sanitized metadata.
-Use constant-time verification. Never store project tokens as decryptable provider secrets.
+Use constant-time verification. Never store project API keys as decryptable provider secrets.
 
-The issue response shows the secret once. Rotation creates a new token with an explicit overlap period.
+The issue response shows the secret once. Rotation creates a new API key with an explicit overlap period.
 Revocation takes effect on the next authorization and again before queued work dispatches.
-For tokens with an expiration date, expiry prevents dispatch. Project suspension blocks tokens with either lifetime type.
+For API keys with an expiration date, expiry prevents dispatch. Project suspension blocks API keys with either lifetime type.
 Existing in-flight requests cannot always stop upstream work.
 
 Store `expires_at` as nullable. An explicit API value of `expires_at: null` means no expiration.
 An omitted creation field uses the documented default. Never substitute a default date for an explicit null.
 
-Show No expiration in token creation and list views. Rotation preserves the lifetime choice unless the administrator explicitly changes it.
-Tokens without expiration remain subject to revocation, scope checks, and project status checks on every execution.
+Show No expiration in API key creation and list views. Rotation preserves the lifetime choice unless the administrator explicitly changes it.
+API keys without expiration remain subject to revocation, scope checks, and project status checks on every execution.
 
-Start with `search.execute` and `fetch.execute` token scopes. Project tokens cannot use account or control-plane management endpoints.
-They do not inherit the creator's future roles. Removing a creator does not implicitly delete a project-owned token.
-Show creator attribution so administrators can review and revoke these tokens explicitly.
+Start with `search.execute` and `fetch.execute` API key scopes. Project API keys cannot use account or control-plane management endpoints.
+They do not inherit the creator's future roles. Removing a creator does not implicitly delete a project-owned API key.
+Show creator attribution so administrators can review and revoke these API keys explicitly.
 
-Human playground calls use the browser's human session and project membership. They do not expose a project token to browser storage.
-REST machine clients and MCP use project tokens. Stdio receives the token through the documented process credential channel.
-An unknown, expired, or revoked token receives a generic authentication error.
+Human playground calls use the browser's human session and project membership. They do not expose a project API key to browser storage.
+REST machine clients and MCP use project API keys. Stdio receives the API key through the documented process credential channel.
+An unknown, expired, or revoked API key receives a generic authentication error.
 
-Transport project selection cannot override token binding. A mismatched project identifier must fail before provider access.
+Transport project selection cannot override API key binding. A mismatched project identifier must fail before provider access.
 MCP must revalidate each tool execution, including calls within a persistent session.
-Do not advertise an OAuth flow that the project-token implementation does not provide.
+Do not advertise an OAuth flow that the project API key implementation does not provide.
 
 Bearer security requires protection in storage and transit. Use the Authorization header and keep secrets out of URLs and logs.
 See [RFC 6750](https://datatracker.ietf.org/doc/html/rfc6750) and the [OWASP secret lifecycle guidance](https://cheatsheetseries.owasp.org/cheatsheets/Secrets_Management_Cheat_Sheet.html).
@@ -230,7 +230,7 @@ Use explicit routes for control operations:
 ```text
 /api/v1/projects
 /api/v1/projects/{project_id}/members
-/api/v1/projects/{project_id}/tokens
+/api/v1/projects/{project_id}/api_keys
 /api/v1/projects/{project_id}/settings
 /api/v1/projects/{project_id}/providers
 /api/v1/projects/{project_id}/traces
@@ -242,8 +242,8 @@ Use explicit routes for control operations:
 /api/v1/system/quota-pools
 ```
 
-Execution aliases can derive the project from a project token. They must never infer a human's project from the first membership.
-Use one authoritative project selector per operation. Reject conflicting URL, token, or body context.
+Execution aliases can derive the project from a project API key. They must never infer a human's project from the first membership.
+Use one authoritative project selector per operation. Reject conflicting URL, API key, or body context.
 Use `401` for absent or invalid credentials and a consistent inaccessible-resource response for cross-project lookups.
 
 Desktop routes use `/p/:projectId/playground`, `/routing`, `/usage`, `/activity`, and `/settings` under the same project prefix.
@@ -261,7 +261,7 @@ Ignore stale responses even when cancellation loses a race. Keep human session s
 Show effective settings with system/project provenance and an Inherit action.
 Show project-member settings as read-only unless the effective permission permits an edit.
 Keep project provider enablement separate from shared credential administration.
-Token creation shows the secret once and permits an intentional copy action without persistence in application state history.
+API key creation shows the secret once and permits an intentional copy action without persistence in application state history.
 
 ## 9. Trace, audit, and retention policy
 
@@ -276,8 +276,9 @@ Keep mandatory security audit events independent from optional request trace sam
 
 Trace payloads can contain queries, URLs, and provider results. Default to metadata-only capture unless the deployment policy permits more detail.
 Retention jobs select projects explicitly. A project administrator cannot purge another project's data through a global cleanup path.
-Archive blocks new execution and token use but preserves configured audit and history retention.
+Archive blocks new execution and API key use but preserves configured audit and history retention.
 
-Record membership, token lifecycle, credential grants, allocation changes, settings edits, copy operations, and support access in the audit log.
-Exclude passwords, raw tokens, provider keys, OAuth grants, and sensitive response payloads.
+Record membership, API key lifecycle, credential grants, allocation changes, settings edits, copy operations, and support access in the audit log.
+Exclude passwords, raw API keys, provider keys, OAuth grants, and sensitive response payloads.
 The [OWASP logging guidance](https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html) supports these event and redaction rules.
+
