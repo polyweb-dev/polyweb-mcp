@@ -3,6 +3,8 @@ Feature: Exa Provider Adapter Integration
   I want to interact with the Exa search provider
   So that I can perform live web searches and fetch page content
 
+  # @live scenarios run only when selected explicitly: uv run behave --tags=@live (default_tags excludes @live).
+
   Background:
     Given a configured and authenticated Exa adapter
 

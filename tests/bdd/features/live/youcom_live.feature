@@ -4,7 +4,9 @@ Feature: Live You.com search and fetch through the vault
   I want a manual live check that a vault-stored You.com key runs search+fetch
   So that vault wiring is proven end to end without hardcoding credentials
 
-  # Manual-only: excluded from CI via `--tags ~@live`. Requires a real
+  # Manual-only: the default behave run excludes @live (pyproject
+  # [tool.behave] default_tags = ["not @live"]); select it explicitly with
+  # `uv run behave --tags="@live and @vault-live"`. Requires a real
   # You.com key in the harness env (FREESEARCH_YOU_API_KEY) plus an
   # encryption passphrase (FREESEARCH_ENCRYPTION_KEY). Skips gracefully
   # when the key is absent; never hardcodes a real key.

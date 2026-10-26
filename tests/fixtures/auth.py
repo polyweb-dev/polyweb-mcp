@@ -10,6 +10,7 @@ settings cache, so the signing secret never lands in code.
 from __future__ import annotations
 
 import secrets
+from collections.abc import Callable
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -216,8 +217,13 @@ async def auth_headers_for(
     return raw_auth_headers(pair["access_token"])
 
 
-def configure_bdd_secret(context: Any) -> str:
-    """Point one Behave scenario at a generated secret with cleanup on exit."""
+def install_process_auth_secret() -> tuple[str, Callable[[], None]]:
+    """Set a generated ``FREESEARCH_AUTH_JWT_SECRET`` in the process env.
+
+    Clear the settings cache so the next composition reads it, and return the
+    secret plus a restore callable that puts back the previous value (or
+    removes the variable) and clears the cache again.
+    """
 
     import os
 
@@ -235,9 +241,16 @@ def configure_bdd_secret(context: Any) -> str:
             os.environ["FREESEARCH_AUTH_JWT_SECRET"] = previous
         get_settings.cache_clear()
 
+    return secret, _restore
+
+
+def configure_bdd_secret(context: Any) -> str:
+    """Point one Behave scenario at a generated secret with cleanup on exit."""
+
+    secret, restore = install_process_auth_secret()
     cleanups: list[Any] = getattr(context, "enc_cleanups", None) or []
     context.enc_cleanups = cleanups
-    cleanups.append(_restore)
+    cleanups.append(restore)
     return secret
 
 

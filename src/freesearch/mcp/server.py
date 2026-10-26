@@ -11,6 +11,7 @@ local telemetry (usage and health observations) through
 import asyncio
 import logging
 import time
+import weakref
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
@@ -146,21 +147,54 @@ async def _start_limits_generation(state: _ServerState, routes: Sequence[Provide
     state["limits_task"] = asyncio.create_task(sync.run(stop))
 
 
-async def _stop_limits_generation(state: _ServerState) -> None:
-    """Stop and await the schedule task before the repository and adapters close."""
+async def _start_injected_limits(state: _ServerState, routes: Sequence[ProviderAdapter]) -> None:
+    """Start the limit service of an injected composition, mirroring REST.
+
+    ``create_app`` with injected adapters and a repository seeds the catalog,
+    projects the Tavily and Keenable rails, and starts one schedule task in its
+    lifespan; an injected MCP server does the same on its first session enter.
+    Without a repository there is no limit store, so nothing starts.
+    """
+
+    # Same order and error handling as the REST lifespan and the owned MCP
+    # generation: restore local quota settings, then start the limit service,
+    # then project the Tavily rail best effort.
+    await _apply_parallel_seed(routes, state["repository"])
+    await _start_limits_generation(state, routes)
+    with suppress(Exception):
+        await _apply_tavily_config(routes, state["repository"], state["limits"])
+
+
+def _take_limit_cells(
+    state: _ServerState,
+) -> tuple[asyncio.Event | None, "asyncio.Task[None] | None"]:
+    """Detach the limit cells: return the stop event and task, set all to None."""
 
     stop = state["limits_stop"]
-    if stop is not None:
-        stop.set()
     task = state["limits_task"]
-    if task is not None:
-        task.cancel()
-        with suppress(Exception, asyncio.CancelledError):
-            await task
     state["limits"] = None
     state["limits_sync"] = None
     state["limits_task"] = None
     state["limits_stop"] = None
+    return stop, task
+
+
+async def _stop_limits_task(stop: asyncio.Event | None, task: "asyncio.Task[None] | None") -> None:
+    """Signal, cancel, and await one schedule task."""
+
+    if stop is not None:
+        stop.set()
+    if task is not None:
+        task.cancel()
+        with suppress(Exception, asyncio.CancelledError):
+            await task
+
+
+async def _stop_limits_generation(state: _ServerState) -> None:
+    """Stop and await the schedule task before the repository and adapters close."""
+
+    await _stop_limits_task(state["limits_stop"], state["limits_task"])
+    _take_limit_cells(state)
 
 
 def _trace_database(
@@ -413,6 +447,30 @@ async def _close_traces(state: _ServerState) -> None:
         return
     await asyncio.to_thread(runtime.force_flush, DEFAULT_FLUSH_TIMEOUT_MILLIS)
     await asyncio.to_thread(runtime.shutdown)
+
+
+#: Trace closers of injected compositions, keyed by their server. An injected
+#: runtime lives as long as its owner's repository, so only the owner closes it.
+_INJECTED_TRACE_CLOSERS: weakref.WeakKeyDictionary[FastMCP, Callable[[], Awaitable[None]]] = (
+    weakref.WeakKeyDictionary()
+)
+
+
+async def shutdown_injected_observability(server: FastMCP) -> None:
+    """Flush and shut down an injected composition's trace runtime.
+
+    This is the embedder/test teardown seam for injected compositions
+    (``create_server`` called with adapters and a caller-owned repository).
+    Such a server builds one trace runtime that each session exit only
+    flushes, because the caller owns the repository; the caller invokes this
+    once, after its last session and before closing that repository, to stop
+    the span exporter. A server that owns its generations closes its runtime
+    itself, so this is a no-op for it; repeated calls are no-ops too.
+    """
+
+    closer = _INJECTED_TRACE_CLOSERS.pop(server, None)
+    if closer is not None:
+        await closer()
 
 
 async def _detach_generation(state: _ServerState, *, owns_repository: bool) -> None:
@@ -820,29 +878,41 @@ def create_server(
     }
     # Streamable-HTTP MCP runs one lifespan per concurrent session, so the
     # owned resources are refcounted (serialized by a lock): the first enter
-    # builds the generation and the last exit tears it down.
+    # builds the generation and the last exit tears it down. An injected
+    # composition refcounts its limit service the same way: like the REST app
+    # with injected adapters and a repository, the first enter seeds the limit
+    # catalog and starts one schedule task, and the last exit stops it.
     lock = asyncio.Lock()
     refcount = 0
 
     @asynccontextmanager
     async def lifespan(server: FastMCP) -> AsyncIterator[None]:
         nonlocal refcount
-        if owns_client:
-            # Concurrent enters serialize here; a failed generation build
-            # propagates without incrementing, so the cells stay empty.
-            async with lock:
-                if refcount == 0:
+        # Concurrent enters serialize here; a failed build propagates without
+        # incrementing, so the cells stay empty.
+        async with lock:
+            if refcount == 0:
+                if owns_client:
                     await _build_generation(
                         state, database=database, owns_repository=owns_repository
                     )
-                refcount += 1
+                else:
+                    await _start_injected_limits(state, routes or [])
+            refcount += 1
         try:
             yield
         finally:
+            limit_stop: asyncio.Event | None = None
+            limit_task: asyncio.Task[None] | None = None
+            async with lock:
+                refcount -= 1
+                last_exit = refcount == 0
+                if last_exit and not owns_client:
+                    # Detach the limit cells under the lock, so a session that
+                    # enters while the old task is still stopping starts a
+                    # fresh limit generation the old stop cannot wipe.
+                    limit_stop, limit_task = _take_limit_cells(state)
             if owns_client:
-                async with lock:
-                    refcount -= 1
-                    last_exit = refcount == 0
                 # Teardown happens outside the lock, exactly once, on the
                 # last exit: intermediate exits keep everything usable, and
                 # detaching under the lock lets a session that enters during
@@ -850,11 +920,15 @@ def create_server(
                 if last_exit:
                     await _detach_generation(state, owns_repository=owns_repository)
             else:
-                from freesearch.routers.control import clear_config_cache
+                if last_exit:
+                    from freesearch.routers.control import clear_config_cache
 
-                clear_quota_poll_cache(repository, routes or [])
-                clear_config_cache(repository)
-                await close_adapters(routes or [], None)
+                    # Mirrors the REST shutdown: the schedule task stops and is
+                    # awaited, the caches clear, then the adapters close.
+                    await _stop_limits_task(limit_stop, limit_task)
+                    clear_quota_poll_cache(repository, routes or [])
+                    clear_config_cache(repository)
+                    await close_adapters(routes or [], None)
                 # The injected repository stays open for its owner, so the
                 # runtime is flushed (never closed) at each session exit.
                 await flush_traces(state["observability"])
@@ -875,6 +949,8 @@ def create_server(
         routes=routes,
         resolve_principal=_resolve_principal,
     )
+    if not owns_client:
+        _INJECTED_TRACE_CLOSERS[server] = lambda: _close_traces(state)
 
     return server
 

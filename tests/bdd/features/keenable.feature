@@ -3,6 +3,8 @@ Feature: Keenable Provider Adapter Integration
   I want to interact with the Keenable search provider
   So that I can perform free, keyless live web searches while tracking hourly request usage
 
+  # @live scenarios run only when selected explicitly: uv run behave --tags=@live (default_tags excludes @live).
+
   @live @keenable @search
   Scenario: Live keyless search queries Keenable and returns structured results
     Given the Keenable adapter is ready for keyless search
