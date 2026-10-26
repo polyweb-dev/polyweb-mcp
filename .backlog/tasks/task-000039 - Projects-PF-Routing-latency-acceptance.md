@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@devin'
 created_date: '2026-10-26T09:47:00Z'
-updated_date: '2026-10-26T15:33:00Z'
+updated_date: '2026-10-26T15:58:00Z'
 labels:
   - projects-first
   - step-2-api
@@ -78,4 +78,10 @@ Other notes:
 - Live latency has run only for keyless Keenable (FREESEARCH_RUN_LIVE=1). Keyed providers are unverified because no keys were used.
 - uvicorn timeout_graceful_shutdown=5 in the harness works around a Windows Proactor ConnectionResetError that hangs wait_closed(); production run_http_server may be affected too.
 - Remaining injected-MCP gap: initialize_provider_configs is not called on the injected path (REST calls it).
+
+Re-measured after rebasing onto feature/project 62e6bc0, which includes TASK-000040. All 1050 offline requests return ok. Server-side added p95: REST search 81-98 ms, REST fetch 86-102 ms, MCP search 107-124 ms, MCP fetch 106-126 ms. Before TASK-000040 the range was 107-180 ms. The gate still fails; REST is near the 80 ms line, and MCP is about 20 ms higher than REST.
+Agreed with the user: merge this check first, so the API cards (TASK-000041, 000042, 000043, 000044, 000045) inherit it as Definition of Done #4. Criterion #2 is met when those cards make the gate green; the remaining slow stages (admission, auth, scope) are in their code.
+Problems already on feature/project, not caused by this card:
+- tests/fixtures/auth.py promote_account uses the obsolete role 'developer'. This causes errors in control, monitoring and observability.
+- The MCP main() dispatch tests fail when the repo-root freesearch.db predates the alpha baseline.
 <!-- SECTION:NOTES:END -->
