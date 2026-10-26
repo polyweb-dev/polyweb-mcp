@@ -348,7 +348,7 @@ def test_caller_supplied_ownership_attributes_are_ignored() -> None:
     bound = _attr()
     forged = {
         TraceAttribute.PROJECT_ID: "11111111-1111-4111-8111-111111111111",
-        TraceAttribute.ACTOR_TYPE: "project_token",
+        TraceAttribute.ACTOR_TYPE: "project_api_key",
         TraceAttribute.ACTOR_ID: "22222222-2222-4222-8222-222222222222",
     }
     from freesearch.infrastructure.observability import bind_execution_attribution
@@ -377,7 +377,7 @@ def test_caller_supplied_ownership_attributes_leave_unbound_spans_clean() -> Non
     runtime, exporter = _attributed_memory_runtime()
     forged = {
         TraceAttribute.PROJECT_ID: "11111111-1111-4111-8111-111111111111",
-        TraceAttribute.ACTOR_TYPE: "project_token",
+        TraceAttribute.ACTOR_TYPE: "project_api_key",
         TraceAttribute.ACTOR_ID: "22222222-2222-4222-8222-222222222222",
     }
 

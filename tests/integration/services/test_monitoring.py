@@ -70,6 +70,7 @@ from tests.fixtures.auth import (
     temp_email,
 )
 from tests.fixtures.execution import seed_execution_project, seed_token_project
+from tests.fixtures.usage_ledger import all_usage_events
 
 
 class _StubAdapter(ProviderAdapter):
@@ -201,10 +202,10 @@ class _FailingTelemetryRepository:
 class _ReadFailingRepository:
     """Repository double whose monitoring reads consistently fail."""
 
-    async def usage_totals(self, *, since: datetime | None = None) -> list[Any]:
+    async def installation_usage_totals(self, *, since: datetime | None = None) -> list[Any]:
         raise OSError("monitoring read unavailable")
 
-    async def recent_usage(self, *, limit: int = 20) -> list[UsageEvent]:
+    async def recent_installation_usage(self, *, limit: int = 20) -> list[UsageEvent]:
         raise OSError("monitoring read unavailable")
 
     async def latest_quota(
@@ -223,10 +224,10 @@ class _LeakyRepository:
         self._event = event
         self._health = health
 
-    async def usage_totals(self, *, since: datetime | None = None) -> list[Any]:
+    async def installation_usage_totals(self, *, since: datetime | None = None) -> list[Any]:
         return []
 
-    async def recent_usage(self, *, limit: int = 20) -> list[UsageEvent]:
+    async def recent_installation_usage(self, *, limit: int = 20) -> list[UsageEvent]:
         return [self._event]
 
     async def latest_quota(
@@ -384,7 +385,7 @@ async def test_rest_search_persists_usage_and_healthy_health(
 
     assert response.status_code == 200
     assert response.json()["provider"] == "rest-provider"
-    assert await repository.list_usage() == [
+    assert await all_usage_events(repository) == [
         UsageEvent(
             provider="rest-provider",
             operation=UsageOperation.SEARCH,
@@ -423,7 +424,7 @@ async def test_usage_write_rejection_does_not_skip_healthy_health(
         repository, response, attribution=await seed_execution_project(repository)
     )
 
-    assert await repository.list_usage() == []
+    assert await all_usage_events(repository) == []
     assert await repository.latest_health("usage-rejected") == ProviderHealth(
         provider="usage-rejected",
         status=HealthStatus.HEALTHY,
@@ -449,7 +450,7 @@ async def test_numeric_exa_usage_persists_with_healthy_health(
         repository, response, attribution=await seed_execution_project(repository)
     )
 
-    assert await repository.list_usage() == [usage]
+    assert await all_usage_events(repository) == [usage]
     assert await repository.latest_health("exa") == ProviderHealth(
         provider="exa",
         status=HealthStatus.HEALTHY,
@@ -501,7 +502,9 @@ async def test_rest_fetch_and_mcp_search_fetch_persist_identical_usage(
     assert mcp_search[1]["provider"] == "shared-provider"
     assert mcp_search[1]["usage"]["operation"] == "search"
     assert mcp_fetch[1]["usage"]["operation"] == "fetch"
-    usage_pairs = [(event.operation.value, event.units) for event in await repository.list_usage()]
+    usage_pairs = [
+        (event.operation.value, event.units) for event in await all_usage_events(repository)
+    ]
     assert sorted(usage_pairs) == sorted(
         [
             (UsageOperation.FETCH.value, Decimal("2.50")),
@@ -540,7 +543,7 @@ async def test_usage_none_still_records_healthy_health(
 
     end = datetime.now(UTC) + timedelta(seconds=1)
     assert response.status_code == 200
-    assert await repository.list_usage() == []
+    assert await all_usage_events(repository) == []
     health = await repository.latest_health("health-only")
     assert health is not None
     assert health.provider == "health-only"
@@ -575,7 +578,7 @@ async def test_fetch_without_usage_uses_document_fetched_at_for_health(
 
     assert response.status_code == 200
     assert response.json()["usage"] is None
-    assert await repository.list_usage() == []
+    assert await all_usage_events(repository) == []
     assert await repository.latest_health("fetch-health-only") == ProviderHealth(
         provider="fetch-health-only",
         status=HealthStatus.HEALTHY,
@@ -685,7 +688,7 @@ async def test_privacy_gate_blocks_sensitive_keys_allows_benign_telemetry(
             await repository.record_usage(
                 invalid_event, attribution=await seed_execution_project(repository)
             )
-        assert await repository.list_usage() == []
+        assert await all_usage_events(repository) == []
     benign = _event(
         "private",
         UsageOperation.SEARCH,
@@ -694,7 +697,7 @@ async def test_privacy_gate_blocks_sensitive_keys_allows_benign_telemetry(
         metadata={"note": "secret-free note", "url_count": 4},
     )
     await repository.record_usage(benign, attribution=await seed_execution_project(repository))
-    assert await repository.list_usage() == [benign]
+    assert await all_usage_events(repository) == [benign]
 
 
 async def test_privacy_gate_rejects_credential_aliases(
@@ -730,7 +733,7 @@ async def test_privacy_gate_rejects_credential_aliases(
                 _event("private", UsageOperation.SEARCH, "1", observed_at, metadata=metadata),
                 attribution=await seed_execution_project(repository),
             )
-        assert await repository.list_usage() == []
+        assert await all_usage_events(repository) == []
 
 
 async def test_collect_stats_shape_ordering_grouping_and_quota_provenance(
@@ -1586,7 +1589,7 @@ async def test_server_owned_lifespan_refcounted_across_overlapping_sessions(
         assert second_result[1]["provider"] == "x"
         assert [
             (event.provider, event.operation, event.units)
-            for event in await repository.list_usage()
+            for event in await all_usage_events(repository)
         ] == [
             ("x", UsageOperation.SEARCH, Decimal("1.25")),
             ("x", UsageOperation.SEARCH, Decimal("1.25")),
@@ -1605,7 +1608,7 @@ async def test_server_owned_lifespan_refcounted_across_overlapping_sessions(
         await repository.record_usage(
             between_event, attribution=await seed_execution_project(repository)
         )
-        ledger = await repository.list_usage()
+        ledger = await all_usage_events(repository)
         assert len(ledger) == 3
         assert between_event in ledger
         assert sorted(
@@ -1704,7 +1707,7 @@ async def test_server_owned_lifespan_sequential_sessions_reuse_fresh_generation(
 
     inspection_repository = await real_open(database)
     try:
-        usage = await inspection_repository.list_usage()
+        usage = await all_usage_events(inspection_repository)
     finally:
         await real_close(inspection_repository)
 
@@ -1828,7 +1831,7 @@ async def test_server_owned_lifespan_delayed_teardown_does_not_close_new_session
 
     inspection_repository = await real_open(tmp_path / "race.db")
     try:
-        usage = await inspection_repository.list_usage()
+        usage = await all_usage_events(inspection_repository)
     finally:
         await real_close(inspection_repository)
 
@@ -1863,7 +1866,7 @@ async def test_injected_repository_remains_open_after_app_lifespan(
             observed_at=datetime(2026, 1, 1, tzinfo=UTC),
         )
         await repository.record_usage(event, attribution=await seed_execution_project(repository))
-        assert await repository.list_usage() == [event]
+        assert await all_usage_events(repository) == [event]
         assert closed == []
     finally:
         await real_close(repository)
@@ -1894,7 +1897,7 @@ async def test_injected_repository_remains_open_after_server_lifespan(
             observed_at=datetime(2026, 1, 1, tzinfo=UTC),
         )
         await repository.record_usage(event, attribution=await seed_execution_project(repository))
-        assert await repository.list_usage() == [event]
+        assert await all_usage_events(repository) == [event]
         assert closed == []
     finally:
         await real_close(repository)
@@ -1934,7 +1937,7 @@ async def test_telemetry_helpers_swallow_repository_exceptions(
         broken, response, attribution=await seed_execution_project(repository)
     )
     await monitoring.record_failure_telemetry(broken, provider="helper-provider")
-    assert await repository.list_usage() == []
+    assert await all_usage_events(repository) == []
 
 
 def test_monitoring_module_contains_no_html_renderer_or_template_runtime() -> None:

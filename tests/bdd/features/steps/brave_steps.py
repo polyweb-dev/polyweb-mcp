@@ -178,7 +178,9 @@ def step_then_brave_no_quota(context: Any) -> None:
 @then("the zero-unit Brave FAILURE should be excluded from usage totals")
 def step_then_brave_failure_excluded(context: Any) -> None:
     """Verify the zero-unit failure row exists for observability but not totals."""
-    events = context.loop.run_until_complete(context.repository.list_usage(provider="brave"))
+    events = context.loop.run_until_complete(
+        context.repository.list_provider_usage(provider="brave")
+    )
     failures = [
         event
         for event in events
@@ -187,7 +189,7 @@ def step_then_brave_failure_excluded(context: Any) -> None:
     assert len(failures) >= 1, (
         f"Expected at least one zero-unit Brave FAILURE event for observability, saw {events!r}"
     )
-    totals = context.loop.run_until_complete(context.repository.usage_totals())
+    totals = context.loop.run_until_complete(context.repository.installation_usage_totals())
     brave_fetch = [
         total
         for total in totals

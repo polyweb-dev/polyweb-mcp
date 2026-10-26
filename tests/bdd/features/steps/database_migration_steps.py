@@ -1,8 +1,12 @@
-"""Behave steps for safe Alembic adoption across Git worktrees."""
+"""Behave steps for the alpha database lifecycle (TASK-000040).
+
+Only the critical end-to-end flows live here: create at the baseline, reject an
+older database without modifying it, and keep worktree databases independent.
+Detailed permutations are covered by the persistence integration tests.
+"""
 
 import gc
 import hashlib
-import json
 import sqlite3
 import tempfile
 from pathlib import Path
@@ -11,41 +15,38 @@ from typing import Any
 from behave import given, then, when  # type: ignore[import-untyped]
 
 from freesearch.persistence.database_migrations import (
+    DatabaseResetRequired,
+    absolute_database_path,
     database_status,
     migration_head,
     upgrade_database,
+    validate_database_schema,
 )
 
-_CANONICAL_PROVIDERS = (
-    "brave",
-    "exa",
-    "firecrawl",
-    "keenable",
-    "parallel",
-    "tavily",
-    "tinyfish",
-    "you",
-)
-_PROVIDERS_ON = frozenset({"brave", "exa", "tavily", "you"})
-_PROVIDERS_OFF = frozenset({"firecrawl", "parallel", "keenable", "tinyfish"})
-_EXPECTED_SUPPORT = {
-    "brave": 3,
-    "exa": 7,
-    "firecrawl": 7,
-    "keenable": 7,
-    "parallel": 7,
-    "tavily": 7,
-    "tinyfish": 7,
-    "you": 7,
-}
+_ALPHA_BASELINE = "0001_alpha_baseline"
 
 
-def _seed_legacy(database: Path, provider: str) -> None:
-    """Create the small pre-Alembic schema used by existing checkouts."""
+def _scenario_root(context: Any) -> Path:
+    if getattr(context, "temp_directory", None) is None:
+        context.temp_directory = tempfile.TemporaryDirectory(prefix="alpha-lifecycle-")
+    return Path(context.temp_directory.name)
+
+
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _create_older_database(database: Path, revision: str) -> None:
+    """A pre-alpha database in rollback-journal mode stamped at ``revision``."""
+
     database.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(database) as connection:
+    connection = sqlite3.connect(database)
+    try:
         connection.executescript(
-            """
+            f"""
+            PRAGMA journal_mode = DELETE;
+            CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL PRIMARY KEY);
+            INSERT INTO alembic_version (version_num) VALUES ('{revision}');
             CREATE TABLE usage_events (
                 id INTEGER PRIMARY KEY,
                 provider TEXT NOT NULL,
@@ -55,284 +56,125 @@ def _seed_legacy(database: Path, provider: str) -> None:
                 request_id TEXT,
                 metadata TEXT NOT NULL
             );
-            CREATE TABLE quota_snapshots (
-                id INTEGER PRIMARY KEY,
-                provider TEXT NOT NULL,
-                source TEXT NOT NULL,
-                remaining TEXT,
-                limit_units TEXT,
-                reset_at TEXT,
-                observed_at TEXT NOT NULL
-            );
+            INSERT INTO usage_events VALUES
+                (1, 'sentinel', 'search', '0.007', '2026-01-01T00:00:00+00:00', NULL, '{{}}');
             """
         )
-        connection.execute(
-            """
-            INSERT INTO usage_events
-                (id, provider, operation, units, observed_at, request_id, metadata)
-            VALUES (1, ?, 'search', '0.007',
-                    '2026-01-01T00:00:00+00:00', NULL, '{}')
-            """,
-            (provider,),
-        )
-        connection.execute(
-            """
-            INSERT INTO quota_snapshots
-                (id, provider, source, remaining, limit_units, reset_at, observed_at)
-            VALUES (1, ?, 'OBSERVED', '900', '1000', NULL,
-                    '2026-01-01T00:00:00+00:00')
-            """,
-            (provider,),
-        )
+        connection.commit()
+    finally:
+        connection.close()
 
 
-def _seed_old_provider_rows(database: Path) -> dict[str, str]:
-    """Seed old ON/OFF provider rows plus unrelated keys; return original JSON."""
-    original: dict[str, str] = {}
-    with sqlite3.connect(database) as connection:
-        connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS runtime_settings (
-                key TEXT PRIMARY KEY,
-                value_json TEXT NOT NULL
-            )
-            """
-        )
-        for provider in _CANONICAL_PROVIDERS:
-            enabled = provider in _PROVIDERS_ON
-            payload = {
-                "config": {
-                    "enabled": enabled,
-                    "priority": 100,
-                    "free_tier_estimates": {"search": "0", "fetch": "0", "cost_estimate": "0"},
-                    "reset_schedule": None,
-                }
-            }
-            value_json = json.dumps(payload, separators=(",", ":"))
-            connection.execute(
-                "INSERT OR REPLACE INTO runtime_settings (key, value_json) VALUES (?, ?)",
-                (f"provider.{provider}", value_json),
-            )
-            original[f"provider.{provider}"] = value_json
-        unrelated = {
-            "theme": json.dumps("dark"),
-            "routing": json.dumps({"fallback_policy": "first_only"}),
-        }
-        for key, value_json in unrelated.items():
-            connection.execute(
-                "INSERT OR REPLACE INTO runtime_settings (key, value_json) VALUES (?, ?)",
-                (key, value_json),
-            )
-            original[key] = value_json
-    return original
+def _assert_at_alpha_baseline(database: Path) -> None:
+    status = database_status(database)
+    assert migration_head() == _ALPHA_BASELINE
+    assert status.current_revision == _ALPHA_BASELINE, status
+    assert status.schema_valid is True, status
 
 
-def _runtime_rows(database: Path) -> dict[str, str]:
-    with sqlite3.connect(database) as connection:
-        rows = connection.execute("SELECT key, value_json FROM runtime_settings").fetchall()
-    return {str(key): str(value) for key, value in rows}
-
-
-def _assert_migrated_masks(database: Path) -> None:
-    rows = _runtime_rows(database)
-    for provider in _CANONICAL_PROVIDERS:
-        key = f"provider.{provider}"
-        assert key in rows, f"missing migrated row {key}"
-        payload = json.loads(rows[key])
-        assert isinstance(payload, dict), payload
-        config = payload.get("config")
-        assert isinstance(config, dict), payload
-        assert "enabled" not in config, f"legacy flag survives in {key}: {config}"
-        expected_enable = 7 if provider in _PROVIDERS_ON else 0
-        assert config.get("enable_mask") == expected_enable, f"{key}: {config}"
-        assert config.get("support_mask") == _EXPECTED_SUPPORT[provider], f"{key}: {config}"
-        assert isinstance(config["enable_mask"], int), config
-        assert isinstance(config["support_mask"], int), config
-        assert config.get("priority") == 100, f"unrelated field lost in {key}: {config}"
-        assert config.get("free_tier_estimates") == {
-            "search": "0",
-            "fetch": "0",
-            "cost_estimate": "0",
-        }, f"{key}: {config}"
-    assert json.loads(rows["theme"]) == "dark"
-    assert json.loads(rows["routing"]) == {"fallback_policy": "first_only"}
-
-
-def _assert_original_provider_rows(database: Path, original: dict[str, str]) -> None:
-    rows = _runtime_rows(database)
-    for provider in _CANONICAL_PROVIDERS:
-        key = f"provider.{provider}"
-        assert key in rows, f"missing backup row {key}"
-        payload = json.loads(rows[key])
-        config = payload.get("config")
-        assert isinstance(config, dict), payload
-        assert config.get("enabled") is (provider in _PROVIDERS_ON), f"{key}: {config}"
-        assert "enable_mask" not in config, f"mask leaks into backup {key}: {config}"
-        assert "support_mask" not in config, f"mask leaks into backup {key}: {config}"
-    assert rows["theme"] == original["theme"]
-    assert rows["routing"] == original["routing"]
-
-
-def _raw_rows(database: Path) -> tuple[list[tuple[object, ...]], list[tuple[object, ...]]]:
-    with sqlite3.connect(database) as connection:
-        usage = connection.execute(
-            "SELECT id, provider, operation, units, observed_at, request_id, metadata "
-            "FROM usage_events ORDER BY id"
-        ).fetchall()
-        quota = connection.execute(
-            "SELECT id, provider, source, remaining, limit_units, reset_at, observed_at "
-            "FROM quota_snapshots ORDER BY id"
-        ).fetchall()
-    return usage, quota
-
-
-@given("a pre-Alembic database with historical usage and quota rows")
-def given_legacy_database(context: Any) -> None:
-    context.temp_directory = tempfile.TemporaryDirectory(prefix="migration-bdd-")
-    database = Path(context.temp_directory.name) / "worktree" / "freesearch.db"
-    _seed_legacy(database, "legacy-worktree")
+@given("no FreeSearch database exists at the selected path")
+def given_no_selected_database(context: Any) -> None:
+    database = _scenario_root(context) / "checkout with spaces" / "freesearch.db"
+    assert not database.exists()
     context.database_path = str(database)
-    context.rows_before = _raw_rows(database)
 
 
-@when("I run the FreeSearch database migration")
-def when_migration_runs(context: Any) -> None:
+@when("FreeSearch prepares the selected database")
+def when_prepare_selected_database(context: Any) -> None:
     context.migration_result = upgrade_database(Path(context.database_path))
 
 
-@then("the database should be at the canonical Alembic head")
-def then_database_is_at_head(context: Any) -> None:
-    status = database_status(Path(context.database_path))
-    assert status.current_revision == migration_head()
-    assert status.schema_valid is True
+@then("the selected database is at the alpha baseline revision")
+def then_selected_database_at_baseline(context: Any) -> None:
+    result = context.migration_result
+    assert result.previous_revision is None
+    assert result.current_revision == _ALPHA_BASELINE
+    assert result.changed is True
+    _assert_at_alpha_baseline(Path(context.database_path))
 
 
-@then("the historical rows and native units should be unchanged")
-def then_history_is_unchanged(context: Any) -> None:
-    # P04: usage_events/trace_spans are recreated empty at 0008; quota rows
-    # and every unrelated table keep their exact contents.
-    usage, quota = _raw_rows(Path(context.database_path))
-    assert usage == []
-    assert quota == context.rows_before[1]
+@then("the selected database passes schema and foreign-key validation")
+def then_selected_database_validates(context: Any) -> None:
+    database = Path(context.database_path)
+    validate_database_schema(database)
+    connection = sqlite3.connect(database)
+    try:
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+    finally:
+        connection.close()
 
 
-@then("an integrity-checked pre-migration backup should exist")
-def then_backup_is_valid(context: Any) -> None:
-    backup = context.migration_result.backup
-    assert backup is not None and backup.is_file()
-    with sqlite3.connect(backup) as connection:
-        assert connection.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+@given('a FreeSearch database left at the older revision "{revision}"')
+def given_older_selected_database(context: Any, revision: str) -> None:
+    database = _scenario_root(context) / "old checkout" / "freesearch.db"
+    _create_older_database(database, revision)
+    context.database_path = str(database)
+    context.database_digest = _sha256(database)
+    context.database_files = {entry.name for entry in database.parent.iterdir()}
 
 
-@given("separate main and worktree databases with distinct historical rows")
-def given_separate_checkout_databases(context: Any) -> None:
-    context.temp_directory = tempfile.TemporaryDirectory(prefix="migration-worktrees-")
-    root = Path(context.temp_directory.name)
-    main_database = root / "main" / "freesearch.db"
-    worktree_database = root / "worktree" / "freesearch.db"
-    _seed_legacy(main_database, "main-sentinel")
-    _seed_legacy(worktree_database, "worktree-sentinel")
+@when("FreeSearch tries to prepare the selected database")
+def when_try_prepare_selected_database(context: Any) -> None:
+    context.reset_error = None
+    try:
+        upgrade_database(Path(context.database_path))
+    except DatabaseResetRequired as error:
+        context.reset_error = error
+
+
+@then('FreeSearch refuses the database with a reset message naming "{revision}"')
+def then_refused_with_reset_message(context: Any, revision: str) -> None:
+    error = context.reset_error
+    assert error is not None, "the older database was not rejected"
+    message = str(error)
+    assert str(absolute_database_path(context.database_path)) in message, message
+    assert revision in message, message
+    assert _ALPHA_BASELINE in message, message
+    assert "FREESEARCH_DB" in message, message
+    assert "-wal" in message and "-shm" in message, message
+
+
+@then("the refused database bytes are unchanged")
+def then_refused_database_unchanged(context: Any) -> None:
+    gc.collect()
+    database = Path(context.database_path)
+    assert _sha256(database) == context.database_digest
+    new_files = {entry.name for entry in database.parent.iterdir()} - context.database_files
+    assert {name for name in new_files if not name.endswith(".migration.lock")} == set(), new_files
+
+
+@given('a main checkout database at the older revision "{revision}"')
+def given_main_checkout_database(context: Any, revision: str) -> None:
+    main_database = _scenario_root(context) / "main" / "freesearch.db"
+    _create_older_database(main_database, revision)
     context.main_database_path = str(main_database)
-    context.database_path = str(worktree_database)
-    context.main_database_hash = hashlib.sha256(main_database.read_bytes()).digest()
+    context.main_database_digest = _sha256(main_database)
     context.main_database_mtime = main_database.stat().st_mtime_ns
+    context.main_database_files = {entry.name for entry in main_database.parent.iterdir()}
 
 
-@when("I run the FreeSearch database migration for the worktree")
-def when_worktree_migration_runs(context: Any) -> None:
+@given("no FreeSearch database exists at the worktree path")
+def given_no_worktree_database(context: Any) -> None:
+    database = _scenario_root(context) / "freesearch_wt_1" / "freesearch.db"
+    assert not database.exists()
+    context.database_path = str(database)
+
+
+@when("FreeSearch prepares the worktree database")
+def when_prepare_worktree_database(context: Any) -> None:
     context.migration_result = upgrade_database(Path(context.database_path))
 
 
-@then("only the worktree database should be at the canonical Alembic head")
-def then_only_worktree_is_at_head(context: Any) -> None:
-    worktree_status = database_status(Path(context.database_path))
-    assert worktree_status.current_revision == migration_head()
-    assert worktree_status.schema_valid is True
-    # The following step checks the full byte-for-byte invariant. Keeping this
-    # assertion read-only avoids opening another SQLite handle on the main DB.
-    assert hashlib.sha256(Path(context.main_database_path).read_bytes()).digest() == (
-        context.main_database_hash
-    )
+@then("the worktree database is at the alpha baseline revision")
+def then_worktree_database_at_baseline(context: Any) -> None:
+    assert context.migration_result.changed is True
+    _assert_at_alpha_baseline(Path(context.database_path))
 
 
-@then("the main checkout database bytes should be unchanged")
-def then_main_database_is_unchanged(context: Any) -> None:
-    # Alembic/SQLAlchemy and sqlite release pooled handles asynchronously on
-    # Windows; collect before Behave's temporary-directory cleanup runs.
+@then("the main checkout database is byte-for-byte unchanged")
+def then_main_checkout_unchanged(context: Any) -> None:
     gc.collect()
     main_database = Path(context.main_database_path)
-    assert hashlib.sha256(main_database.read_bytes()).digest() == context.main_database_hash
+    assert _sha256(main_database) == context.main_database_digest
     assert main_database.stat().st_mtime_ns == context.main_database_mtime
-    assert not list(main_database.parent.glob("freesearch.db.pre-alembic-*.bak"))
-
-
-@given("a pre-Alembic database with old provider access rows for all eight providers")
-def given_legacy_provider_access_rows(context: Any) -> None:
-    context.temp_directory = tempfile.TemporaryDirectory(prefix="migration-bdd-masks-")
-    database = Path(context.temp_directory.name) / "worktree" / "freesearch.db"
-    _seed_legacy(database, "legacy-worktree")
-    context.provider_rows_before = _seed_old_provider_rows(database)
-    context.database_path = str(database)
-    context.rows_before = _raw_rows(database)
-
-
-@then("the migrated provider masks should be ON 7 and OFF 0 with Brave support 3 and others 7")
-def then_migrated_provider_masks(context: Any) -> None:
-    _assert_migrated_masks(Path(context.database_path))
-
-
-@then("the pre-migration backup should contain the original provider access rows")
-def then_backup_has_original_provider_rows(context: Any) -> None:
-    backup = context.migration_result.backup
-    assert backup is not None and backup.is_file()
-    with sqlite3.connect(backup) as connection:
-        assert connection.execute("PRAGMA integrity_check").fetchone() == ("ok",)
-        usage = connection.execute(
-            "SELECT id, provider, operation, units, observed_at, request_id, metadata "
-            "FROM usage_events ORDER BY id"
-        ).fetchall()
-        quota = connection.execute(
-            "SELECT id, provider, source, remaining, limit_units, reset_at, observed_at "
-            "FROM quota_snapshots ORDER BY id"
-        ).fetchall()
-    assert (usage, quota) == context.rows_before
-    _assert_original_provider_rows(backup, context.provider_rows_before)
-
-
-@given("separate main and worktree databases with old provider access rows")
-def given_separate_provider_access_databases(context: Any) -> None:
-    context.temp_directory = tempfile.TemporaryDirectory(prefix="migration-masks-worktrees-")
-    root = Path(context.temp_directory.name)
-    main_database = root / "main" / "freesearch.db"
-    worktree_database = root / "worktree" / "freesearch.db"
-    _seed_legacy(main_database, "main-sentinel")
-    _seed_legacy(worktree_database, "worktree-sentinel")
-    _seed_old_provider_rows(main_database)
-    context.provider_rows_before = _seed_old_provider_rows(worktree_database)
-    context.main_provider_rows_before = _runtime_rows(main_database)
-    context.main_database_path = str(main_database)
-    context.database_path = str(worktree_database)
-    context.main_database_hash = hashlib.sha256(main_database.read_bytes()).digest()
-    context.main_database_mtime = main_database.stat().st_mtime_ns
-
-
-@then(
-    "the worktree migrated provider masks should be ON 7 and OFF 0 "
-    "with Brave support 3 and others 7"
-)
-def then_worktree_migrated_masks(context: Any) -> None:
-    _assert_migrated_masks(Path(context.database_path))
-
-
-@then("the main checkout provider access rows should be unchanged")
-def then_main_provider_rows_unchanged(context: Any) -> None:
-    gc.collect()
-    rows = _runtime_rows(Path(context.main_database_path))
-    assert rows == context.main_provider_rows_before
-    gc.collect()
-    # Windows holds SQLite handles briefly after close; pause so the
-    # temporary-directory cleanup in after_scenario never races the last read.
-    import time as _time
-
-    _time.sleep(0.2)
-    gc.collect()
+    assert {entry.name for entry in main_database.parent.iterdir()} == (context.main_database_files)

@@ -300,13 +300,13 @@ async def test_project_delete_cascades_private_credentials_and_grants(
         await boot.repository.close()
 
 
-def test_downgrade_to_0007_then_upgrade_restores_head(tmp_path: Path) -> None:
-    """The credential migration round-trips through downgrade and re-upgrade."""
+def test_downgrade_to_base_then_upgrade_restores_head(tmp_path: Path) -> None:
+    """The credential tables round-trip through the baseline downgrade and re-upgrade."""
 
     database = tmp_path / "p08-roundtrip.db"
     upgrade_database(database)
 
-    migration_module.command.downgrade(_config_for(database), "0007_project_settings")
+    migration_module.command.downgrade(_config_for(database), "base")
     with sqlite3.connect(database) as connection:
         tables = {
             str(row[0])

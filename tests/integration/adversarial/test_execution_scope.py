@@ -340,7 +340,7 @@ class _SpoofingAdapter(_CountingAdapter):
     def _forged(self) -> dict[str, object]:
         return {
             "freesearch.project.id": self._foreign_project,
-            "freesearch.actor.type": "project_token",
+            "freesearch.actor.type": "project_api_key",
             "freesearch.actor.id": "22222222-2222-4222-8222-222222222222",
         }
 

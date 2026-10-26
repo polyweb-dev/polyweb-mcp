@@ -39,6 +39,7 @@ from tests.fixtures.auth import (
     temp_email,
 )
 from tests.fixtures.execution import seed_execution_project
+from tests.fixtures.usage_ledger import all_usage_events
 
 
 @pytest.fixture
@@ -177,7 +178,7 @@ async def test_fanout_search_runs_all_providers_in_parallel_and_fuses_results(
     assert first["snippet"] == "Longer, richer snippet from Brave about consensus page"
 
     # Verify telemetry was recorded for both providers in repository
-    events = await repository.list_usage()
+    events = await all_usage_events(repository)
     provider_names = {e.provider for e in events}
     assert "exa" in provider_names
     assert "brave" in provider_names
@@ -448,7 +449,7 @@ async def test_fanout_search_returns_waterfall_and_records_activity_telemetry(
         assert item["results_count"] == 1
         assert item["latency_ms"] >= 0
 
-    recent = await repository.recent_usage(limit=10)
+    recent = await repository.recent_installation_usage(limit=10)
     aggregated_events = [e for e in recent if e.provider == "aggregated"]
     assert len(aggregated_events) == 1
     assert aggregated_events[0].status.value == "success"

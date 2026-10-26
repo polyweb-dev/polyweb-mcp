@@ -1,5 +1,10 @@
 # Release note — Local users, backend slice
 
+> **Superseded (TASK-000040):** the alpha baseline revision `0001_alpha_baseline`
+> replaced the migrations described here. FreeSearch now refuses databases from
+> these older revisions without changing them and prints reset steps; the
+> upgrade, backup, and adoption instructions below no longer apply.
+
 This release adds local accounts, account roles, session families, and
 account-only trace reads to FreeSearch. It covers the backend only. The browser
 login interface comes in a later release.

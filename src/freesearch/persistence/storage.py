@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import json
 import math
+import unicodedata
 from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -13,7 +14,22 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Self, cast, overload
 from uuid import UUID
 
-from sqlalchemy import CHAR, URL, ForeignKey, Index, Integer, Text, event, func, insert, select
+from sqlalchemy import (
+    CHAR,
+    URL,
+    CheckConstraint,
+    ColumnElement,
+    ForeignKeyConstraint,
+    Index,
+    Integer,
+    Text,
+    and_,
+    event,
+    func,
+    insert,
+    select,
+    text,
+)
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Row
 from sqlalchemy.ext.asyncio import (
@@ -47,6 +63,7 @@ from freesearch.models.observability import (
     parse_trace_output,
     trace_error,
 )
+from freesearch.models.projects import PROJECT_TOKEN_PREFIX
 from freesearch.persistence.database_migrations import (
     absolute_database_path,
     upgrade_database,
@@ -108,39 +125,109 @@ def _timestamp(value: datetime) -> str:
     return value.astimezone(UTC).isoformat()
 
 
-def _metadata_json(metadata: dict[str, object]) -> str:
-    """Serialize bounded telemetry while rejecting request content and secrets."""
+def _optional_id(value: UUID | None) -> str | None:
+    return None if value is None else str(value)
 
-    def normalize(value: object) -> object:
-        if value is None or isinstance(value, (bool, int, str)):
-            return value
-        if isinstance(value, Decimal):
-            if not value.is_finite():
-                raise ValueError("metadata decimals must be finite")
-            return {_DECIMAL_METADATA_TAG: str(value)}
-        if isinstance(value, float):
-            if math.isfinite(value):
-                return value
-            raise ValueError("metadata floats must be finite")
-        if isinstance(value, list):
-            return [normalize(item) for item in value]
-        if isinstance(value, dict):
-            normalized: dict[str, object] = {}
-            for child_key, item in value.items():
-                if not isinstance(child_key, str):
-                    raise ValueError("metadata keys must be strings")
-                canonical = "".join(
-                    character for character in child_key.lower() if character.isalnum()
-                )
-                if canonical in _FORBIDDEN_METADATA_KEYS:
-                    raise ValueError(
-                        "metadata must not contain sensitive or request-content fields"
-                    )
-                normalized[child_key] = normalize(item)
-            return normalized
-        raise ValueError("metadata values must be JSON telemetry, not custom objects")
 
-    normalized = normalize(metadata)
+#: Substrings that make a key secret-like in strict (audit) mode.
+_STRICT_FORBIDDEN_KEY_PARTS = (
+    "token",
+    "secret",
+    "password",
+    "passwd",
+    "apikey",
+    "privatekey",
+    "credential",
+    "authorization",
+    "cookie",
+    "digest",
+    "verifier",
+    "bearer",
+    "session",
+)
+#: Exact strict-mode keys that contain a forbidden part but name no secret.
+_STRICT_ALLOWED_KEYS = frozenset(
+    {"tokengeneration", "credentialgeneration", "credentialid", "credentialscope"}
+)
+#: Strict-mode key endings that name identifiers, counts, or states, not secrets.
+#: They exempt a key from the substring rule only, never from the exact denylist.
+_STRICT_ALLOWED_KEY_SUFFIXES = ("id", "ids", "count", "label", "generation", "scope", "status")
+#: Value prefixes (case-insensitive) of credentials that strict mode rejects.
+_STRICT_FORBIDDEN_VALUE_PREFIXES = (PROJECT_TOKEN_PREFIX.lower(), "bearer ")
+_SENSITIVE_KEY_ERROR = "metadata must not contain sensitive or request-content fields"
+
+
+def _folded_key(key: str) -> str:
+    """Return the lowercase ASCII alphanumerics of a key after NFKD folding."""
+
+    ascii_key = unicodedata.normalize("NFKD", key).encode("ascii", "ignore").decode("ascii")
+    return "".join(character for character in ascii_key.lower() if character.isalnum())
+
+
+def _is_forbidden_key(key: str, *, strict: bool) -> bool:
+    canonical = "".join(character for character in key.lower() if character.isalnum())
+    if canonical in _FORBIDDEN_METADATA_KEYS:
+        return True
+    if not strict:
+        return False
+    folded = _folded_key(key)
+    if folded in _FORBIDDEN_METADATA_KEYS:
+        return True
+    if folded in _STRICT_ALLOWED_KEYS or folded.endswith(_STRICT_ALLOWED_KEY_SUFFIXES):
+        return False
+    return any(part in folded for part in _STRICT_FORBIDDEN_KEY_PARTS)
+
+
+def _normalized_number(value: Decimal | float) -> object:
+    if isinstance(value, Decimal):
+        if not value.is_finite():
+            raise ValueError("metadata decimals must be finite")
+        return {_DECIMAL_METADATA_TAG: str(value)}
+    if math.isfinite(value):
+        return value
+    raise ValueError("metadata floats must be finite")
+
+
+def _normalized_string(value: str, *, strict: bool) -> str:
+    if strict and value.lstrip().lower().startswith(_STRICT_FORBIDDEN_VALUE_PREFIXES):
+        raise ValueError("metadata must not contain credential values")
+    return value
+
+
+def _normalized_metadata(value: object, *, strict: bool) -> object:
+    if isinstance(value, str):
+        return _normalized_string(value, strict=strict)
+    if value is None or isinstance(value, (bool, int)):
+        return value
+    if isinstance(value, (Decimal, float)):
+        return _normalized_number(value)
+    if isinstance(value, list):
+        return [_normalized_metadata(item, strict=strict) for item in value]
+    if isinstance(value, dict):
+        normalized: dict[str, object] = {}
+        for child_key, item in value.items():
+            if not isinstance(child_key, str):
+                raise ValueError("metadata keys must be strings")
+            if _is_forbidden_key(child_key, strict=strict):
+                raise ValueError(_SENSITIVE_KEY_ERROR)
+            normalized[child_key] = _normalized_metadata(item, strict=strict)
+        return normalized
+    raise ValueError("metadata values must be JSON telemetry, not custom objects")
+
+
+def sanitized_metadata_json(metadata: dict[str, object], *, strict: bool = False) -> str:
+    """Serialize bounded telemetry while rejecting request content and secrets.
+
+    Shared by usage and quota telemetry and by audit event details: a key that
+    canonicalizes to a forbidden name raises ``ValueError`` before anything is
+    written. ``strict`` (always used for audit details) additionally rejects
+    any key whose NFKD-folded ASCII form contains a secret-like part, unless
+    the key is one of a few exact identifier keys or ends with an identifier,
+    count, label, generation, scope, or status suffix, and any string value
+    that starts with a project API key prefix or a ``Bearer`` credential.
+    """
+
+    normalized = _normalized_metadata(metadata, strict=strict)
     return json.dumps(normalized, separators=(",", ":"), allow_nan=False)
 
 
@@ -148,11 +235,40 @@ class Base(DeclarativeBase):
     """Declarative base for the SQLite persistence schema."""
 
 
+#: Execution principal classes a telemetry row may record.
+TELEMETRY_ACTOR_CHECK = "actor_type IN ('human', 'project_api_key')"
+
+
 class UsageEventRow(Base):
-    """Row model for provider usage events."""
+    """Row model for provider usage events.
+
+    ``credential_id``, ``binding_id``, and ``pool_id`` attribute the usage to
+    the credential, binding, and upstream pool that served it; they become
+    ``NULL`` when that row is removed so the usage history survives.
+    """
 
     __tablename__ = "usage_events"
     __table_args__ = (
+        ForeignKeyConstraint(["project_id"], ["projects.id"], name="usage_events_project_id_fkey"),
+        ForeignKeyConstraint(
+            ["credential_id"],
+            ["provider_credentials.id"],
+            name="usage_events_credential_id_fkey",
+            ondelete="SET NULL",
+        ),
+        ForeignKeyConstraint(
+            ["binding_id"],
+            ["project_provider_bindings.id"],
+            name="usage_events_binding_id_fkey",
+            ondelete="SET NULL",
+        ),
+        ForeignKeyConstraint(
+            ["pool_id"],
+            ["upstream_quota_pools.id"],
+            name="usage_events_pool_id_fkey",
+            ondelete="SET NULL",
+        ),
+        CheckConstraint(TELEMETRY_ACTOR_CHECK, name="usage_events_actor_type_allowed"),
         Index("usage_events_provider_observed_at", "provider", "observed_at"),
         Index("usage_events_project_observed_at", "project_id", "observed_at"),
     )
@@ -168,10 +284,13 @@ class UsageEventRow(Base):
     status: Mapped[str | None] = mapped_column(Text)
     unit_kind: Mapped[str | None] = mapped_column(Text)
     # Non-null execution ownership: the verified project and acting principal.
-    project_id: Mapped[str] = mapped_column(CHAR(36), ForeignKey("projects.id"))
+    project_id: Mapped[str] = mapped_column(CHAR(36))
     actor_type: Mapped[str] = mapped_column(Text)
     actor_id: Mapped[str] = mapped_column(CHAR(36))
     trace_id: Mapped[str | None] = mapped_column(Text)
+    credential_id: Mapped[str | None] = mapped_column(CHAR(36))
+    binding_id: Mapped[str | None] = mapped_column(CHAR(36))
+    pool_id: Mapped[str | None] = mapped_column(CHAR(36))
 
 
 class RuntimeSettingRow(Base):
@@ -184,11 +303,24 @@ class RuntimeSettingRow(Base):
 
 
 class QuotaSnapshotRow(Base):
-    """Row model for provider quota observations."""
+    """Row model for quota observations of a provider, upstream pool, or credential."""
 
     __tablename__ = "quota_snapshots"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["pool_id"],
+            ["upstream_quota_pools.id"],
+            name="quota_snapshots_pool_id_fkey",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["credential_id"],
+            ["provider_credentials.id"],
+            name="quota_snapshots_credential_id_fkey",
+            ondelete="CASCADE",
+        ),
         Index("quota_snapshots_provider_source_observed_at", "provider", "source", "observed_at"),
+        Index("quota_snapshots_pool_observed_at", "pool_id", "observed_at"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, nullable=True)
@@ -201,19 +333,34 @@ class QuotaSnapshotRow(Base):
     unit_kind: Mapped[str | None] = mapped_column(Text)
     display_unit: Mapped[str | None] = mapped_column(Text)
     metadata_json: Mapped[str | None] = mapped_column("metadata", Text)
+    pool_id: Mapped[str | None] = mapped_column(CHAR(36))
+    credential_id: Mapped[str | None] = mapped_column(CHAR(36))
 
 
 class ProviderHealthRow(Base):
-    """Row model for provider health observations."""
+    """Row model for provider health observations.
+
+    A ``NULL`` ``credential_id`` is a provider-wide fact.
+    """
 
     __tablename__ = "provider_health"
-    __table_args__ = (Index("provider_health_provider_checked_at", "provider", "checked_at"),)
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["credential_id"],
+            ["provider_credentials.id"],
+            name="provider_health_credential_id_fkey",
+            ondelete="CASCADE",
+        ),
+        Index("provider_health_provider_checked_at", "provider", "checked_at"),
+        Index("provider_health_credential_checked_at", "credential_id", "checked_at"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True, nullable=True)
     provider: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(Text)
     checked_at: Mapped[str] = mapped_column(Text)
     message: Mapped[str | None] = mapped_column(Text)
+    credential_id: Mapped[str | None] = mapped_column(CHAR(36))
 
 
 class TraceSpanRow(Base):
@@ -227,12 +374,26 @@ class TraceSpanRow(Base):
 
     __tablename__ = "trace_spans"
     __table_args__ = (
+        ForeignKeyConstraint(["project_id"], ["projects.id"], name="trace_spans_project_id_fkey"),
+        CheckConstraint(TELEMETRY_ACTOR_CHECK, name="trace_spans_actor_type_allowed"),
         Index("trace_spans_trace_started_at", "trace_id", "started_at"),
         Index(
             "trace_spans_project_root_started_at",
             "project_id",
             "parent_span_id",
             "started_at",
+        ),
+        Index(
+            "trace_spans_root_started_at",
+            "started_at",
+            sqlite_where=text("parent_span_id IS NULL"),
+        ),
+        Index(
+            "trace_spans_user_root_started_at",
+            "user_id",
+            "started_at",
+            "span_id",
+            sqlite_where=text("parent_span_id IS NULL"),
         ),
     )
 
@@ -243,7 +404,7 @@ class TraceSpanRow(Base):
     # keep ``None``; the root row is the only ownership authority.
     user_id: Mapped[str | None] = mapped_column(CHAR(36))
     # Non-null execution ownership stamped by the trusted attribution binder.
-    project_id: Mapped[str] = mapped_column(CHAR(36), ForeignKey("projects.id"))
+    project_id: Mapped[str] = mapped_column(CHAR(36))
     actor_type: Mapped[str] = mapped_column(Text)
     actor_id: Mapped[str] = mapped_column(CHAR(36))
     name: Mapped[str] = mapped_column(Text)
@@ -309,6 +470,13 @@ def _decode_metadata(value: object) -> object:
             return parsed if parsed.is_finite() else value
         return {key: _decode_metadata(item) for key, item in value.items()}
     return value
+
+
+def decode_metadata_json(raw: str) -> dict[str, object]:
+    """Decode text written by :func:`sanitized_metadata_json` back into a mapping."""
+
+    value = _decode_metadata(json.loads(raw))
+    return cast(dict[str, object], value) if isinstance(value, dict) else {}
 
 
 _SUMMARY_COLUMNS = (
@@ -508,8 +676,17 @@ class SQLiteRepository:
         engine: AsyncEngine,
         session_factory: async_sessionmaker[AsyncSession] | None = None,
     ) -> None:
-        """Wrap an engine; the session factory defaults to one bound to it."""
+        """Wrap an engine; the session factory defaults to one bound to it.
 
+        Every row module is loaded first, so string foreign keys between rows
+        declared in different modules resolve in any process, whatever that
+        process imported. The import stays local because the schema module
+        imports this one.
+        """
+
+        from freesearch.persistence.schema import load_all_rows
+
+        load_all_rows()
         configure_sqlite_engine(engine)
         self._engine = engine
         self._session_factory = session_factory or async_sessionmaker(
@@ -603,20 +780,33 @@ class SQLiteRepository:
         carries request content.
         """
 
-        statement = (
-            select(*_SUMMARY_COLUMNS)
-            .where(TraceSpanRow.parent_span_id.is_(None))
-            .where(TraceSpanRow.user_id == str(user_id))
-            .order_by(TraceSpanRow.started_at.desc(), TraceSpanRow.span_id.desc())
-            .limit(min(max(limit, MIN_TRACE_LIMIT), MAX_TRACE_LIMIT))
+        return await self._trace_summaries(
+            TraceSpanRow.user_id == str(user_id),
+            limit=limit,
+            operation=operation,
+            outcome=outcome,
         )
-        if operation is not None:
-            statement = statement.where(TraceSpanRow.operation == operation.value)
-        if outcome is not None:
-            statement = statement.where(TraceSpanRow.outcome == outcome.value)
-        async with self._session_factory() as session:
-            rows = (await session.execute(statement)).all()
-        return [_trace_summary(row) for row in rows]
+
+    async def list_project_trace_summaries(
+        self,
+        *,
+        project_id: UUID,
+        limit: int = 50,
+        operation: TraceOperation | None = None,
+        outcome: TraceOutcome | None = None,
+    ) -> list[TraceSummary]:
+        """Return one project's root traces newest first, summary columns only.
+
+        The project predicate is applied in SQL before the order and the limit,
+        so another project's traces can never appear or displace a row.
+        """
+
+        return await self._trace_summaries(
+            TraceSpanRow.project_id == str(project_id),
+            limit=limit,
+            operation=operation,
+            outcome=outcome,
+        )
 
     async def get_trace(self, trace_id: str, *, user_id: UUID) -> TraceDetail | None:
         """Return one owned trace's summary, full content, and ordered spans.
@@ -628,20 +818,60 @@ class SQLiteRepository:
         even when fanout children ran concurrently.
         """
 
+        return await self._trace_detail(trace_id, TraceSpanRow.user_id == str(user_id))
+
+    async def get_project_trace(self, trace_id: str, *, project_id: UUID) -> TraceDetail | None:
+        """Return one trace of this project with its ordered spans, else ``None``.
+
+        The root is found in SQL with both the trace id and the project id, so
+        an absent and a foreign-project trace give the same ``None``; child
+        spans are read only after that scoped root check, and only the spans
+        stamped with the root's project.
+        """
+
+        return await self._trace_detail(trace_id, TraceSpanRow.project_id == str(project_id))
+
+    async def _trace_summaries(
+        self,
+        scope: ColumnElement[bool],
+        *,
+        limit: int,
+        operation: TraceOperation | None,
+        outcome: TraceOutcome | None,
+    ) -> list[TraceSummary]:
+        statement = (
+            select(*_SUMMARY_COLUMNS)
+            .where(TraceSpanRow.parent_span_id.is_(None))
+            .where(scope)
+            .order_by(TraceSpanRow.started_at.desc(), TraceSpanRow.span_id.desc())
+            .limit(min(max(limit, MIN_TRACE_LIMIT), MAX_TRACE_LIMIT))
+        )
+        if operation is not None:
+            statement = statement.where(TraceSpanRow.operation == operation.value)
+        if outcome is not None:
+            statement = statement.where(TraceSpanRow.outcome == outcome.value)
+        async with self._session_factory() as session:
+            rows = (await session.execute(statement)).all()
+        return [_trace_summary(row) for row in rows]
+
+    async def _trace_detail(self, trace_id: str, scope: ColumnElement[bool]) -> TraceDetail | None:
         root_statement = select(TraceSpanRow).where(
             TraceSpanRow.trace_id == trace_id,
             TraceSpanRow.parent_span_id.is_(None),
-            TraceSpanRow.user_id == str(user_id),
-        )
-        span_statement = (
-            select(TraceSpanRow)
-            .where(TraceSpanRow.trace_id == trace_id)
-            .order_by(TraceSpanRow.started_at, TraceSpanRow.span_id)
+            scope,
         )
         async with self._session_factory() as session:
             root = (await session.scalars(root_statement)).first()
             if root is None:
                 return None
+            span_statement = (
+                select(TraceSpanRow)
+                .where(
+                    TraceSpanRow.trace_id == trace_id,
+                    TraceSpanRow.project_id == root.project_id,
+                )
+                .order_by(TraceSpanRow.started_at, TraceSpanRow.span_id)
+            )
             rows = (await session.scalars(span_statement)).all()
         summary = _trace_summary(root)
         return TraceDetail(
@@ -657,8 +887,15 @@ class SQLiteRepository:
         *,
         attribution: ExecutionAttribution,
         trace_id: str | None = None,
+        credential_id: UUID | None = None,
+        binding_id: UUID | None = None,
+        pool_id: UUID | None = None,
     ) -> None:
-        """Append a provider usage event owned by ``attribution``'s project."""
+        """Append a provider usage event owned by ``attribution``'s project.
+
+        ``credential_id``, ``binding_id``, and ``pool_id`` attribute the event
+        to the credential, binding, and upstream pool that served it.
+        """
 
         async with self._session_factory() as session:
             await session.execute(
@@ -668,7 +905,7 @@ class SQLiteRepository:
                     units=str(event.units),
                     observed_at=_timestamp(event.observed_at),
                     request_id=event.request_id,
-                    metadata_json=_metadata_json(event.metadata),
+                    metadata_json=sanitized_metadata_json(event.metadata),
                     latency_ms=event.latency_ms,
                     status=event.status.value,
                     unit_kind=event.unit_kind.value if event.unit_kind is not None else None,
@@ -676,22 +913,86 @@ class SQLiteRepository:
                     actor_type=attribution.actor_type.value,
                     actor_id=str(attribution.actor_id),
                     trace_id=trace_id,
+                    credential_id=_optional_id(credential_id),
+                    binding_id=_optional_id(binding_id),
+                    pool_id=_optional_id(pool_id),
                 )
             )
             await session.commit()
 
-    async def list_usage(
+    async def list_provider_usage(
         self,
         *,
+        provider: str,
+        operation: UsageOperation | None = None,
+        since: datetime | None = None,
+    ) -> list[UsageEvent]:
+        """Return one provider's usage ledger in chronological (observed_at, id) order.
+
+        A provider's ledger is a shared provider fact (quota sync and latency
+        reads), so the provider is required; project reads use
+        :meth:`list_project_usage`.
+        """
+
+        return await self._usage_ledger(
+            UsageEventRow.provider == provider, operation=operation, since=since
+        )
+
+    async def list_project_usage(
+        self,
+        *,
+        project_id: UUID,
         provider: str | None = None,
         operation: UsageOperation | None = None,
         since: datetime | None = None,
     ) -> list[UsageEvent]:
-        """Return the usage ledger in chronological (observed_at, id) order."""
+        """Return one project's usage ledger in chronological (observed_at, id) order."""
 
-        statement = select(UsageEventRow).order_by(UsageEventRow.observed_at, UsageEventRow.id)
+        scope = UsageEventRow.project_id == str(project_id)
         if provider is not None:
-            statement = statement.where(UsageEventRow.provider == provider)
+            scope = and_(scope, UsageEventRow.provider == provider)
+        return await self._usage_ledger(scope, operation=operation, since=since)
+
+    async def installation_usage_totals(
+        self, *, since: datetime | None = None
+    ) -> list[UsageTotal | LegacyUsageTotal]:
+        """Return installation-wide per-provider, per-operation usage totals.
+
+        This is a system aggregate across every project. Units are stored as
+        exact decimal text and summed with :class:`Decimal` (never through
+        floats); ``since`` filters on the UTC-normalized ``observed_at``
+        instant, inclusively.
+        """
+
+        return await self._usage_totals(None, since=since)
+
+    async def project_usage_totals(
+        self, *, project_id: UUID, since: datetime | None = None
+    ) -> list[UsageTotal | LegacyUsageTotal]:
+        """Return one project's per-provider, per-operation usage totals."""
+
+        return await self._usage_totals(UsageEventRow.project_id == str(project_id), since=since)
+
+    async def recent_installation_usage(self, *, limit: int = 20) -> list[UsageEvent]:
+        """Return the installation's newest usage events first (a system aggregate)."""
+
+        return await self._recent_usage(None, limit=limit)
+
+    async def recent_project_usage(self, *, project_id: UUID, limit: int = 20) -> list[UsageEvent]:
+        """Return one project's newest usage events first, up to ``limit`` rows."""
+
+        return await self._recent_usage(UsageEventRow.project_id == str(project_id), limit=limit)
+
+    async def _usage_ledger(
+        self,
+        scope: ColumnElement[bool],
+        *,
+        operation: UsageOperation | None,
+        since: datetime | None,
+    ) -> list[UsageEvent]:
+        statement = (
+            select(UsageEventRow).where(scope).order_by(UsageEventRow.observed_at, UsageEventRow.id)
+        )
         if operation is not None:
             statement = statement.where(UsageEventRow.operation == operation.value)
         if since is not None:
@@ -700,16 +1001,9 @@ class SQLiteRepository:
             rows = (await session.scalars(statement)).all()
         return [self._usage_from_row(row) for row in rows]
 
-    async def usage_totals(
-        self, *, since: datetime | None = None
+    async def _usage_totals(
+        self, scope: ColumnElement[bool] | None, *, since: datetime | None
     ) -> list[UsageTotal | LegacyUsageTotal]:
-        """Return per-provider, per-operation usage totals, provider-ordered.
-
-        Units are stored as exact decimal text and summed with :class:`Decimal`
-        (never through floats); ``since`` filters on the UTC-normalized
-        ``observed_at`` instant, inclusively.
-        """
-
         statement = select(
             UsageEventRow.provider,
             UsageEventRow.operation,
@@ -717,20 +1011,23 @@ class SQLiteRepository:
             UsageEventRow.status,
             UsageEventRow.unit_kind,
         )
+        if scope is not None:
+            statement = statement.where(scope)
         if since is not None:
             statement = statement.where(UsageEventRow.observed_at >= _timestamp(since))
         async with self._session_factory() as session:
             rows = (await session.execute(statement)).all()
         return _sum_usage_rows(rows)
 
-    async def recent_usage(self, *, limit: int = 20) -> list[UsageEvent]:
-        """Return the newest usage events first, up to ``limit`` rows."""
-
-        statement = (
-            select(UsageEventRow)
-            .order_by(UsageEventRow.observed_at.desc(), UsageEventRow.id.desc())
-            .limit(limit)
-        )
+    async def _recent_usage(
+        self, scope: ColumnElement[bool] | None, *, limit: int
+    ) -> list[UsageEvent]:
+        statement = select(UsageEventRow)
+        if scope is not None:
+            statement = statement.where(scope)
+        statement = statement.order_by(
+            UsageEventRow.observed_at.desc(), UsageEventRow.id.desc()
+        ).limit(limit)
         async with self._session_factory() as session:
             rows = (await session.scalars(statement)).all()
         return [self._usage_from_row(row) for row in rows]
@@ -771,7 +1068,7 @@ class SQLiteRepository:
                     observed_at=_timestamp(snapshot.observed_at),
                     unit_kind=snapshot.unit_kind.value if snapshot.unit_kind is not None else None,
                     display_unit=snapshot.display_unit,
-                    metadata_json=_metadata_json(snapshot.metadata),
+                    metadata_json=sanitized_metadata_json(snapshot.metadata),
                 )
             )
             await session.commit()

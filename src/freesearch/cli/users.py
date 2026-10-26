@@ -32,7 +32,10 @@ from pydantic import SecretStr
 
 from freesearch.configuration.config import get_settings
 from freesearch.models.users import UserRole
-from freesearch.persistence.database_migrations import absolute_database_path
+from freesearch.persistence.database_migrations import (
+    DatabaseResetRequired,
+    absolute_database_path,
+)
 from freesearch.services.monitoring import resolve_database_path
 from freesearch.services.projects import (
     LAST_PROJECT_ADMIN,
@@ -170,6 +173,9 @@ def _prompt_password() -> SecretStr:
 def _report(error: Exception) -> int:
     """Print one fixed, secret-free message for a failed operation."""
 
+    if isinstance(error, DatabaseResetRequired):
+        print(str(error), file=sys.stderr)
+        return 1
     if isinstance(error, CliError):
         print(str(error), file=sys.stderr)
         return 1

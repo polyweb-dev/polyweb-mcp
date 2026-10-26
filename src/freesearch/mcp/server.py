@@ -79,6 +79,7 @@ from freesearch.models.observability import (
 )
 from freesearch.models.projects import PermissionAction
 from freesearch.models.users import UserPrincipal
+from freesearch.persistence.database_migrations import exit_if_database_reset_required
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.services.aggregation import reciprocal_rank_fusion
 from freesearch.services.execution_scope import (
@@ -930,6 +931,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     if args.port is not None:
         overrides["mcp_port"] = args.port
     effective = settings.model_copy(update=overrides) if overrides else settings
+    exit_if_database_reset_required(resolve_database_path(None))
 
     auth_service = AuthService(effective)
     server = create_server(

@@ -357,7 +357,7 @@ class _StubRepo:
         self._events = events
         self._latest = latest
 
-    async def list_usage(self, provider: str, since: object | None = None) -> list[object]:
+    async def list_provider_usage(self, provider: str, since: object | None = None) -> list[object]:
         del provider, since
         return self._events
 

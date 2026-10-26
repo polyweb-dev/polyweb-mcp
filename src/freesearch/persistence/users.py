@@ -8,7 +8,7 @@ from uuid import UUID, uuid4
 from fastapi_users import exceptions
 from fastapi_users_db_sqlalchemy import SQLAlchemyUserDatabase
 from fastapi_users_db_sqlalchemy.generics import GUID
-from sqlalchemy import CHAR, Boolean, CheckConstraint, Index, String, cast, select, text
+from sqlalchemy import CHAR, Boolean, CheckConstraint, Index, String, Text, cast, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, foreign, mapped_column, relationship
 
@@ -49,19 +49,14 @@ class LoginThrottleRow(Base):
 
     __tablename__ = "login_throttle"
     __table_args__ = (
-        CheckConstraint(
-            "length(key) = 64",
-            name="login_throttle_key_length",
-        ),
-        CheckConstraint(
-            "attempts >= 0",
-            name="login_throttle_attempts_non_negative",
-        ),
+        CheckConstraint("length(key) = 64", name="login_throttle_key_length"),
+        CheckConstraint("attempts >= 0", name="login_throttle_attempts_non_negative"),
+        Index("ix_login_throttle_expires_at", "expires_at"),
     )
 
     key: Mapped[str] = mapped_column(String(length=64), primary_key=True)
     attempts: Mapped[int] = mapped_column(nullable=False, default=0)
-    expires_at: Mapped[str] = mapped_column(String(length=64), nullable=False, index=True)
+    expires_at: Mapped[str] = mapped_column(Text, nullable=False)
 
 
 class UserRow(Base):
@@ -74,10 +69,23 @@ class UserRow(Base):
         CheckConstraint(_WORKOS_ID_REQUIRED, name="user_workos_provider_id_required"),
         CheckConstraint(_LOCAL_ID_REQUIRED_NULL, name="user_local_provider_id_null"),
         CheckConstraint(_PROVIDER_ALLOWED, name="user_provider_allowed"),
+        CheckConstraint("username IS NULL OR length(username) > 0", name="user_username_not_empty"),
+        CheckConstraint(
+            "first_name IS NULL OR length(first_name) > 0", name="user_first_name_not_empty"
+        ),
+        CheckConstraint(
+            "last_name IS NULL OR length(last_name) > 0", name="user_last_name_not_empty"
+        ),
         # Case-insensitive uniqueness for concurrent registrations: the plain
         # library index is case-sensitive, so "A@x" and "a@x" would both fit.
         Index("user_email_lower_key", text("lower(email)"), unique=True),
         Index("user_provider_identity_key", "auth_provider", "auth_provider_id", unique=True),
+        Index(
+            "user_username_lower_key",
+            text("lower(username)"),
+            unique=True,
+            sqlite_where=text("username IS NOT NULL"),
+        ),
     )
 
     if TYPE_CHECKING:
@@ -89,6 +97,9 @@ class UserRow(Base):
         is_verified: bool
         auth_provider: str
         auth_provider_id: str | None
+        username: str | None
+        first_name: str | None
+        last_name: str | None
         role: str
         system_role_assignments: list[SystemRoleAssignmentRow]
     else:
@@ -106,6 +117,10 @@ class UserRow(Base):
             server_default=AuthProvider.LOCAL.value,
         )
         auth_provider_id: Mapped[str | None] = mapped_column(String(length=320), nullable=True)
+        # TASK-000001 profile fields, nullable until signup collects them.
+        username: Mapped[str | None] = mapped_column(String(length=64), nullable=True)
+        first_name: Mapped[str | None] = mapped_column(String(length=100), nullable=True)
+        last_name: Mapped[str | None] = mapped_column(String(length=100), nullable=True)
 
         system_role_assignments: Mapped[list[SystemRoleAssignmentRow]] = relationship(
             SystemRoleAssignmentRow,
@@ -202,6 +217,9 @@ class UserDatabase(SQLAlchemyUserDatabase[UserRow, UUID]):
         auth_provider_id: str | None = None,
         is_active: bool = True,
         is_verified: bool = False,
+        username: str | None = None,
+        first_name: str | None = None,
+        last_name: str | None = None,
     ) -> UserRow:
         """Insert one trusted account row for seeding, WorkOS SSO, or tests."""
 
@@ -212,6 +230,9 @@ class UserDatabase(SQLAlchemyUserDatabase[UserRow, UUID]):
             "auth_provider_id": auth_provider_id,
             "is_active": is_active,
             "is_verified": is_verified,
+            "username": username,
+            "first_name": first_name,
+            "last_name": last_name,
             "is_superuser": False,
             "role": DEFAULT_REGISTRATION_ROLE.value,
         }

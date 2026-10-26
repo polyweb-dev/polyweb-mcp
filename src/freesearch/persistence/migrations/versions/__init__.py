@@ -1,1 +1,0 @@
-"""FreeSearch database schema revisions."""

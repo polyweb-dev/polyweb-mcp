@@ -232,7 +232,7 @@ class TestDecimalRules:
             ),
             attribution=await seed_execution_project(repo),
         )
-        totals = await repo.usage_totals()
+        totals = await repo.installation_usage_totals()
         assert totals[0].total_units == Decimal("0.001"), (
             f"totals must stay Decimal-exact, saw {totals[0].total_units!r}"
         )
@@ -265,7 +265,7 @@ class TestSafeAggregation:
                 ),
                 attribution=await seed_execution_project(repo),
             )
-        totals = await repo.usage_totals()
+        totals = await repo.installation_usage_totals()
         assert all(hasattr(total, "unit_kind") for total in totals), (
             "AC-3: UsageTotal must carry unit_kind (group by provider, operation, kind)"
         )
@@ -300,7 +300,7 @@ class TestSafeAggregation:
             ),
             attribution=await seed_execution_project(repo),
         )
-        totals = await repo.usage_totals()
+        totals = await repo.installation_usage_totals()
         known = [total for total in totals if _opt(total, "unit_kind", None) is not None]
         assert len(known) == 1 and known[0].total_units == Decimal("1"), (
             f"AC-3: known totals stay exact beside legacy rows, saw {totals!r}"
@@ -310,7 +310,7 @@ class TestSafeAggregation:
                 assert isinstance(total, LegacyUsageTotal), (
                     f"AC-8: kind-less totals must be LegacyUsageTotal, saw {type(total).__name__}"
                 )
-        rows = await repo.list_usage(provider="exa")
+        rows = await repo.list_provider_usage(provider="exa")
         assert len(rows) == 1 and rows[0].units == Decimal("0.001"), (
             "AC-8: legacy rows stay listed in history with exact raw units"
         )
@@ -328,7 +328,7 @@ class TestSafeAggregation:
             ),
             attribution=await seed_execution_project(repo),
         )
-        totals = await repo.usage_totals()
+        totals = await repo.installation_usage_totals()
         assert len(totals) == 1 and isinstance(totals[0], LegacyUsageTotal), (
             f"AC-8: legacy-only data must aggregate as LegacyUsageTotal, saw {totals!r}"
         )
@@ -359,7 +359,7 @@ class TestSafeAggregation:
             ),
             attribution=await seed_execution_project(repo),
         )
-        totals = await repo.usage_totals()
+        totals = await repo.installation_usage_totals()
         assert len(totals) == 1, f"AC-3: FAILURE row must not form its own total: {totals!r}"
         assert totals[0].event_count == 1, (
             f"AC-3: FAILURE zeros excluded from counts (saw {totals[0].event_count})"
@@ -1079,7 +1079,7 @@ class TestCompatibilityPrivacy:
                 ),
                 attribution=await seed_execution_project(repo),
             )
-        assert await repo.list_usage(provider="tavily") == [], (
+        assert await repo.list_provider_usage(provider="tavily") == [], (
             "AC-8: rejected credential write must persist nothing"
         )
 
@@ -1107,7 +1107,7 @@ class TestCompatibilityPrivacy:
                 ),
                 attribution=await seed_execution_project(repo),
             )
-        assert await repo.list_usage(provider="tavily") == [], (
+        assert await repo.list_provider_usage(provider="tavily") == [], (
             "AC-8: rejected credential write must persist nothing"
         )
 
@@ -1371,7 +1371,7 @@ class TestParallelFetchUsagePersistence:
         assert response.usage.metadata.get("url_count") == 4, (
             f"AC-PA-1 setup: executed fetch must tag url_count=4, saw {response.usage.metadata!r}"
         )
-        events = await repo.list_usage(provider="parallel", operation=UsageOperation.FETCH)
+        events = await repo.list_provider_usage(provider="parallel", operation=UsageOperation.FETCH)
         assert len(events) == 1, f"AC-PA-1/R2: fetch usage must persist, saw {events!r}"
         assert events[0].metadata.get("url_count") == 4, (
             "AC-PA-1/R2: url_count must survive the metadata filter and the "
@@ -1537,7 +1537,7 @@ class TestMetadataTypePreservation:
             ),
             attribution=await seed_execution_project(repo),
         )
-        (event,) = await repo.list_usage(provider="alpha")
+        (event,) = await repo.list_provider_usage(provider="alpha")
         assert event.metadata["count"] == 4 and isinstance(event.metadata["count"], int)
         assert event.metadata["paid"] is False
         assert event.metadata["missing"] is None
@@ -1555,7 +1555,7 @@ class TestMetadataTypePreservation:
             ),
             attribution=await seed_execution_project(repo),
         )
-        (event,) = await repo.list_usage(provider="alpha")
+        (event,) = await repo.list_provider_usage(provider="alpha")
         assert event.metadata["label"] == "4" and isinstance(event.metadata["label"], str), (
             f"numeric strings must not coerce to numbers, saw {event.metadata!r}"
         )
@@ -1574,7 +1574,7 @@ class TestMetadataTypePreservation:
             ),
             attribution=await seed_execution_project(repo),
         )
-        (event,) = await repo.list_usage(provider="alpha")
+        (event,) = await repo.list_provider_usage(provider="alpha")
         back = event.metadata["price"]
         assert not isinstance(back, float), (
             f"Decimal telemetry must never round-trip through float, saw {back!r}"
@@ -1895,7 +1895,7 @@ class TestBraveDerivedSpend:
         )
         totals = {
             (total.provider, str(total.operation), str(_opt(total, "unit_kind"))): total
-            for total in await repo.usage_totals()
+            for total in await repo.installation_usage_totals()
         }
         assert totals[("brave", "search", "REQUEST")].total_units == Decimal("176"), (
             "AC-3: Brave REQUEST ledger stays exact (175 plus the tracked search)"

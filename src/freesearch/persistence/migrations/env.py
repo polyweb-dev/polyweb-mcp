@@ -39,7 +39,7 @@ def _engine() -> Engine:
     if database_path is None:
         raise RuntimeError(
             "Direct online Alembic execution is disabled; use freesearch-db upgrade "
-            "so backup, locking, and preflight validation are applied"
+            "so locking, the reset check, and schema validation are applied"
         )
     return create_engine(URL.create("sqlite", database=str(database_path)), poolclass=pool.NullPool)
 

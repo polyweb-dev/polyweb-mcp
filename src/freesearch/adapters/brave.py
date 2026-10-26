@@ -507,7 +507,7 @@ class BraveAdapter(ProviderAdapter):
         ):
             self._monthly_limit = latest.limit
             self._monthly_limit_implied = False
-        events = await repository.list_usage(provider=self.name)
+        events = await repository.list_provider_usage(provider=self.name)
         used = Decimal("0")
         for event in events:
             if (

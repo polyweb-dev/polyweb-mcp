@@ -28,6 +28,7 @@ from freesearch.persistence.storage import SQLiteRepository, UsageEventRow
 from freesearch.routers.control import clear_config_cache
 from freesearch.services.monitoring import clear_quota_poll_cache, effective_quotas_batch
 from tests.fixtures.execution import seed_execution_project
+from tests.fixtures.usage_ledger import all_usage_events
 
 # Baseline raw-SQL schema contract: column -> (SQLite type, PRAGMA notnull=0 -> nullable).
 _SCHEMA: dict[str, dict[str, object]] = {
@@ -47,6 +48,9 @@ _SCHEMA: dict[str, dict[str, object]] = {
             "actor_type": ("TEXT", False),
             "actor_id": ("CHAR", False),
             "trace_id": ("TEXT", True),
+            "credential_id": ("CHAR", True),
+            "binding_id": ("CHAR", True),
+            "pool_id": ("CHAR", True),
         },
         "primary_key": ("id",),
         "indexes": {
@@ -66,10 +70,13 @@ _SCHEMA: dict[str, dict[str, object]] = {
             "unit_kind": ("TEXT", True),
             "display_unit": ("TEXT", True),
             "metadata": ("TEXT", True),
+            "pool_id": ("CHAR", True),
+            "credential_id": ("CHAR", True),
         },
         "primary_key": ("id",),
         "indexes": {
-            "quota_snapshots_provider_source_observed_at": ["provider", "source", "observed_at"]
+            "quota_snapshots_provider_source_observed_at": ["provider", "source", "observed_at"],
+            "quota_snapshots_pool_observed_at": ["pool_id", "observed_at"],
         },
     },
     "provider_health": {
@@ -79,9 +86,13 @@ _SCHEMA: dict[str, dict[str, object]] = {
             "status": ("TEXT", False),
             "checked_at": ("TEXT", False),
             "message": ("TEXT", True),
+            "credential_id": ("CHAR", True),
         },
         "primary_key": ("id",),
-        "indexes": {"provider_health_provider_checked_at": ["provider", "checked_at"]},
+        "indexes": {
+            "provider_health_provider_checked_at": ["provider", "checked_at"],
+            "provider_health_credential_checked_at": ["credential_id", "checked_at"],
+        },
     },
 }
 
@@ -125,7 +136,7 @@ async def test_schema_initialization_is_idempotent(tmp_path: Path) -> None:
         await repository.record_usage(event, attribution=await seed_execution_project(repository))
     async with await SQLiteRepository.open(db_path) as reopened:
         await reopened.initialize()
-        assert await reopened.list_usage() == [event]
+        assert await all_usage_events(reopened) == [event]
 
 
 async def test_usage_event_round_trips_exactly(repository: SQLiteRepository) -> None:
@@ -138,7 +149,7 @@ async def test_usage_event_round_trips_exactly(repository: SQLiteRepository) -> 
         metadata={"tokens": 42, "nested": {"ok": True}, "cost": 1.25},
     )
     await repository.record_usage(event, attribution=await seed_execution_project(repository))
-    assert await repository.list_usage() == [event]
+    assert await all_usage_events(repository) == [event]
 
 
 async def test_list_usage_filters_by_provider_operation_and_time(
@@ -167,11 +178,13 @@ async def test_list_usage_filters_by_provider_operation_and_time(
     for event in (first, second, third):
         await repository.record_usage(event, attribution=await seed_execution_project(repository))
 
-    assert await repository.list_usage() == [first, second, third]
-    assert await repository.list_usage(provider="alpha") == [first, second]
-    assert await repository.list_usage(operation=UsageOperation.SEARCH) == [first, third]
-    assert await repository.list_usage(since=t0 + timedelta(hours=1)) == [second, third]
-    assert await repository.list_usage(provider="alpha", operation=UsageOperation.SEARCH) == [first]
+    assert await all_usage_events(repository) == [first, second, third]
+    assert await repository.list_provider_usage(provider="alpha") == [first, second]
+    assert await all_usage_events(repository, operation=UsageOperation.SEARCH) == [first, third]
+    assert await all_usage_events(repository, since=t0 + timedelta(hours=1)) == [second, third]
+    assert await repository.list_provider_usage(
+        provider="alpha", operation=UsageOperation.SEARCH
+    ) == [first]
 
 
 async def test_usage_ordering_and_filtering_use_utc_instants(
@@ -196,12 +209,14 @@ async def test_usage_ordering_and_filtering_use_utc_instants(
     await repository.record_usage(earlier, attribution=await seed_execution_project(repository))
     await repository.record_usage(later, attribution=await seed_execution_project(repository))
 
-    assert await repository.list_usage() == [canonical_earlier, later]
-    assert await repository.list_usage(
-        since=datetime(2026, 1, 1, 12, 0, tzinfo=plus_two)  # 10:00 UTC
+    assert await all_usage_events(repository) == [canonical_earlier, later]
+    assert await all_usage_events(
+        repository,
+        since=datetime(2026, 1, 1, 12, 0, tzinfo=plus_two),  # 10:00 UTC
     ) == [canonical_earlier, later]
-    assert await repository.list_usage(
-        since=datetime(2026, 1, 1, 11, 15, tzinfo=timezone(timedelta(hours=1)))  # 10:15 UTC
+    assert await all_usage_events(
+        repository,
+        since=datetime(2026, 1, 1, 11, 15, tzinfo=timezone(timedelta(hours=1))),  # 10:15 UTC
     ) == [later]
 
 
@@ -329,7 +344,7 @@ async def test_usage_metadata_blocklist_contract(
                 UsageEvent(metadata=metadata, **base),
                 attribution=await seed_execution_project(repository),
             )
-        assert await repository.list_usage() == []
+        assert await all_usage_events(repository) == []
     valid = [
         {"note": "string telemetry"},
         {"mode": "keyed", "sku": "search.pro", "paid": True},
@@ -343,7 +358,7 @@ async def test_usage_metadata_blocklist_contract(
             UsageEvent(metadata=metadata, **base),
             attribution=await seed_execution_project(repository),
         )
-    events = await repository.list_usage()
+    events = await all_usage_events(repository)
     assert [event.metadata for event in events] == valid
 
 
@@ -400,13 +415,13 @@ async def test_usage_metadata_alias_blocklist(
                 UsageEvent(metadata=metadata, **base),
                 attribution=await seed_execution_project(repository),
             )
-        assert await repository.list_usage() == []
+        assert await all_usage_events(repository) == []
     # Lookalikes that merely resemble blocked keys keep working.
     await repository.record_usage(
         UsageEvent(metadata={"url_count": 4, "content_type": "text/markdown"}, **base),
         attribution=await seed_execution_project(repository),
     )
-    (event,) = await repository.list_usage()
+    (event,) = await all_usage_events(repository)
     assert event.metadata == {"url_count": 4, "content_type": "text/markdown"}
 
 
@@ -453,7 +468,11 @@ async def test_initialized_schema_matches_baseline_contract(
 async def test_initialize_rejects_schema_drift_at_alembic_head(tmp_path: Path) -> None:
     """A stamped database with missing schema must fail instead of hiding drift."""
     async with await SQLiteRepository.open(tmp_path / "repair.db") as repository:
-        usage_index = next(iter(UsageEventRow.__table__.indexes))
+        usage_index = next(
+            index
+            for index in UsageEventRow.__table__.indexes
+            if index.name == "usage_events_provider_observed_at"
+        )
         async with repository._engine.begin() as connection:
             await connection.run_sync(usage_index.drop)
 
@@ -487,7 +506,7 @@ async def test_open_uses_literal_database_path_with_spaces(tmp_path: Path) -> No
         await repository.record_usage(event, attribution=await seed_execution_project(repository))
     assert db_path.is_file()
     async with await SQLiteRepository.open(db_path) as reopened:
-        assert await reopened.list_usage() == [event]
+        assert await all_usage_events(reopened) == [event]
 
 
 async def test_repository_constructs_with_engine_only(tmp_path: Path) -> None:
@@ -506,7 +525,7 @@ async def test_repository_constructs_with_engine_only(tmp_path: Path) -> None:
         ),
         attribution=await seed_execution_project(repository),
     )
-    assert len(await repository.list_usage()) == 1
+    assert len(await all_usage_events(repository)) == 1
     await repository.close()
 
 
