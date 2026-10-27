@@ -149,8 +149,13 @@ def test_resolution_without_stored_documents_uses_catalog_defaults() -> None:
         "execution.default_timeout_seconds": 30.0,
         "execution.max_fanout_concurrency": 5,
         "execution.cache_ttl_seconds": 300,
+        "trace.sampling_rate": 1.0,
+        "trace.detail": "metadata",
+        "trace.payload_redaction": "standard",
+        "trace.retention_days": 30,
         "system.max_timeout_seconds": 300.0,
         "system.max_fanout_concurrency": 20,
+        "system.max_trace_retention_days": 365,
     }
     assert set(resolution.provenance_by_field.values()) == {SettingsProvenance.SYSTEM_DEFAULT}
     assert all(field.constraint_applied is False for field in resolution.fields.values())

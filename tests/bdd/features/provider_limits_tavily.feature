@@ -42,7 +42,7 @@ Feature: Tavily keyed Credits through synthetic headers
     Given Tavily keyed and keyless adapters with recording SDKs
     When I send Tavily full search and extract params on both rails
     Then both Tavily rails forward identical search depth topic domains answer content images country and extract depth format query chunks images
-    And a Tavily explicit depth conflict denies before vendor I/O
+    And a Tavily nested depth overrides common mode on both rails with two-Credit cost
 
   Scenario: T08 Tavily search debits basic 1 and advanced 2 Credits
     Given a Tavily dev pool with 1000 Credits remaining

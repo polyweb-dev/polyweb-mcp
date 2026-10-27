@@ -151,7 +151,8 @@ def test_annotate_root_error_marks_type_and_message() -> None:
 
     (attributes,) = runtime.annotations
     assert attributes[TraceAttribute.ERROR_TYPE] == "RuntimeError"
-    assert attributes[TraceAttribute.ERROR_MESSAGE] == "provider exploded"
+    assert "error.message" not in attributes
+    assert "provider exploded" not in str(attributes)
 
 
 def test_output_projection_keeps_provider_contracts() -> None:

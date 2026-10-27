@@ -35,7 +35,7 @@ from tests.fixtures.auth import (
     register_and_login,
     temp_email,
 )
-from tests.fixtures.execution import seed_execution_project
+from tests.fixtures.execution import allow_full_trace_capture, seed_execution_project
 
 
 @pytest.fixture
@@ -82,6 +82,7 @@ async def test_single_search_error_trace_keeps_query_and_provider(
     auth_secret: str,
 ) -> None:
     """An error trace records the query text and provider of the failed call."""
+    await allow_full_trace_capture(repository)
     app = create_app([_FailingAdapter("doomed-provider")], repository=repository)
 
     with TestClient(app, raise_server_exceptions=False) as client:
@@ -102,11 +103,11 @@ async def test_single_search_error_trace_keeps_query_and_provider(
             headers=headers,
         )
         assert response.status_code == 500
-        listing = client.get("/api/v1/traces", headers=headers).json()
+        listing = client.get(f"/api/v1/projects/{pid}/traces", headers=headers).json()
         rows = listing["items"] if isinstance(listing, dict) else listing
         assert len(rows) == 1
         trace_id = rows[0]["trace_id"]
-        detail = client.get(f"/api/v1/traces/{trace_id}", headers=headers).json()
+        detail = client.get(f"/api/v1/projects/{pid}/traces/{trace_id}", headers=headers).json()
 
     assert detail["outcome"] == "error"
     roots = [span for span in detail["spans"] if span["parent_span_id"] is None]

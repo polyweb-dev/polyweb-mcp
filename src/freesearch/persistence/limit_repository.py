@@ -9,7 +9,8 @@ exact text, so a fractional credit-unit value survives a restart unchanged.
 import json
 import math
 import uuid
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -185,6 +186,17 @@ class LimitRepository:
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._session_factory = session_factory
 
+    @asynccontextmanager
+    async def session(self) -> AsyncIterator[AsyncSession]:
+        """Yield one caller-owned read session for a multi-value decision.
+
+        Admission reads several pools and grants; the caller holds them on one
+        snapshot and closes without writing. Writes keep their own transactions.
+        """
+
+        async with self._session_factory() as session:
+            yield session
+
     # ---------------------------------------------------------------- catalog
 
     async def seed_records(self, records: Sequence[ProviderLimitRecord]) -> None:
@@ -251,11 +263,21 @@ class LimitRepository:
             rows = (await session.scalars(statement)).all()
         return [_pool_from_row(row) for row in rows]
 
-    async def get_pool(self, pool_id: str) -> NativePool | None:
-        """Return one native pool by ID."""
+    async def get_pool(
+        self, pool_id: str, *, session: AsyncSession | None = None
+    ) -> NativePool | None:
+        """Return one native pool by ID, optionally inside a caller's session.
 
-        async with self._session_factory() as session:
+        The execution admission reads several pools and grants for one decision;
+        passing its session keeps those reads on one snapshot instead of opening
+        and closing a connection per value.
+        """
+
+        if session is not None:
             row = await session.get(NativePoolRow, pool_id)
+            return _pool_from_row(row) if row is not None else None
+        async with self._session_factory() as own_session:
+            row = await own_session.get(NativePoolRow, pool_id)
         return _pool_from_row(row) if row is not None else None
 
     async def ensure_pool(self, pool: NativePool) -> NativePool:
@@ -298,9 +320,7 @@ class LimitRepository:
             old_native = _decimal(row.remaining_text) if row is not None else None
             effective = _preserve_known_values(row, snapshot)
             if _is_tavily_credits_pool(snapshot) and snapshot.source == _TAVILY_VENDOR_API_SOURCE:
-                debits = await _native_debits_after(
-                    session, snapshot.pool_id, snapshot.observed_at
-                )
+                debits = await _native_debits_after(session, snapshot.pool_id, snapshot.observed_at)
                 adjusted = _remaining_after(snapshot.remaining, debits)
                 if adjusted is not None and adjusted != effective.remaining:
                     effective = effective.model_copy(update={"remaining": adjusted})
@@ -474,9 +494,18 @@ class LimitRepository:
             await session.commit()
 
     async def grants(
-        self, provider: str, auth_mode: AuthMode, *, now: datetime
+        self,
+        provider: str,
+        auth_mode: AuthMode,
+        *,
+        now: datetime,
+        session: AsyncSession | None = None,
     ) -> CRDGrantsSummary | None:
-        """Return the current period grant summary, or ``None`` when none exists."""
+        """Return the current period grant summary, or ``None`` when none exists.
+
+        Accepts the admission's session so the grant and pool reads that feed one
+        decision share a snapshot.
+        """
 
         today = now.date().isoformat()
         statement = select(CRDGrantRow).where(
@@ -485,64 +514,83 @@ class LimitRepository:
             CRDGrantRow.period_start <= today,
             CRDGrantRow.period_end >= today,
         )
-        async with self._session_factory() as session:
+        if session is not None:
             rows = (await session.scalars(statement)).all()
+        else:
+            async with self._session_factory() as own_session:
+                rows = (await own_session.scalars(statement)).all()
         if not rows:
             return None
         return _grants_summary(provider, auth_mode, rows)
 
     async def reserve(
-        self, admission: LimitAdmission, *, record: ProviderLimitRecord | None = None
+        self,
+        admission: LimitAdmission,
+        *,
+        record: ProviderLimitRecord | None = None,
+        session: AsyncSession | None = None,
     ) -> LimitAdmission:
         """Reserve funds and rate units in one transaction.
 
         A repeated attempt ID keeps its first reservation, so a retried call
-        cannot reserve twice. For Tavily, the same transaction rechecks before
-        the insert: first the documented minute rate window counts unexpired
-        attempts, then the known native funds count the active native
-        reservations of other admissions. A denial raises before the admission
-        row exists, and a funds denial takes status precedence over a rate
-        denial.
+        cannot reserve twice. For Tavily, pre-insert checks count unexpired
+        attempts and active native reservations. A denial raises before the
+        admission row exists, and a funds denial takes status precedence over
+        a rate denial. These reads do not serialize competing reservations.
+
+        The caller may reuse its admission-read session; otherwise this opens
+        its own. Either way the reservation commits before returning.
         """
 
-        async with self._session_factory() as session:
-            existing = await session.get(LimitAdmissionRow, admission.attempt_id)
-            if existing is not None:
-                return _admission_from_row(existing)
-            if record is not None and record.provider == _TAVILY_PROVIDER:
-                rate_denial = await _tavily_rate_denial(session, admission, record)
-                if await _tavily_funds_denial(session, admission):
-                    raise local_funds_denial(
-                        provider=_TAVILY_PROVIDER,
-                        operation=admission.operation,
-                        reasons=["funds_exhausted"],
-                    )
-                if rate_denial is not None:
-                    raise rate_denial
-            await session.execute(
-                sqlite_insert(LimitAdmissionRow).values(**_admission_values(admission))
-            )
-            for reservation in admission.rate_reservations:
-                await _insert_rate_attempt(
-                    session,
-                    attempt_id=admission.attempt_id,
-                    bucket_id=reservation.bucket_id,
-                    provider=admission.provider,
-                    auth_mode=admission.auth_mode,
+        if session is not None:
+            return await self._reserve_in_session(session, admission, record=record)
+        async with self._session_factory() as own_session:
+            return await self._reserve_in_session(own_session, admission, record=record)
+
+    async def _reserve_in_session(
+        self,
+        session: AsyncSession,
+        admission: LimitAdmission,
+        *,
+        record: ProviderLimitRecord | None,
+    ) -> LimitAdmission:
+        existing = await session.get(LimitAdmissionRow, admission.attempt_id)
+        if existing is not None:
+            return _admission_from_row(existing)
+        if record is not None and record.provider == _TAVILY_PROVIDER:
+            rate_denial = await _tavily_rate_denial(session, admission, record)
+            if await _tavily_funds_denial(session, admission):
+                raise local_funds_denial(
+                    provider=_TAVILY_PROVIDER,
                     operation=admission.operation,
-                    window=reservation.window,
-                    units=reservation.units,
-                    attempted_at=admission.created_at,
+                    reasons=["funds_exhausted"],
                 )
-            if admission.reserved_crd > 0:
-                await _adjust_grant(
-                    session,
-                    admission.provider,
-                    admission.auth_mode,
-                    admission.operation,
-                    reserved_delta=admission.reserved_crd,
-                )
-            await session.commit()
+            if rate_denial is not None:
+                raise rate_denial
+        await session.execute(
+            sqlite_insert(LimitAdmissionRow).values(**_admission_values(admission))
+        )
+        for reservation in admission.rate_reservations:
+            await _insert_rate_attempt(
+                session,
+                attempt_id=admission.attempt_id,
+                bucket_id=reservation.bucket_id,
+                provider=admission.provider,
+                auth_mode=admission.auth_mode,
+                operation=admission.operation,
+                window=reservation.window,
+                units=reservation.units,
+                attempted_at=admission.created_at,
+            )
+        if admission.reserved_crd > 0:
+            await _adjust_grant(
+                session,
+                admission.provider,
+                admission.auth_mode,
+                admission.operation,
+                reserved_delta=admission.reserved_crd,
+            )
+        await session.commit()
         return admission
 
     async def finalize(self, debit: LimitDebit) -> bool:
@@ -819,14 +867,24 @@ class LimitRepository:
             )
             await session.commit()
 
-    async def list_observations(self, provider: str) -> list[RateObservation]:
-        """Return stored rate observations for one provider."""
+    async def list_observations(
+        self, provider: str, *, session: AsyncSession | None = None
+    ) -> list[RateObservation]:
+        """Return stored rate observations for one provider.
+
+        Accepts the admission's read session so several rate windows share one
+        observation query instead of re-reading the provider's history per
+        window.
+        """
 
         statement = select(RateWindowObservationRow).where(
             RateWindowObservationRow.provider == provider
         )
-        async with self._session_factory() as session:
+        if session is not None:
             rows = (await session.scalars(statement)).all()
+        else:
+            async with self._session_factory() as own_session:
+                rows = (await own_session.scalars(statement)).all()
         observations: list[RateObservation] = []
         for row in rows:
             observed_at = _instant(row.observed_at)
@@ -860,6 +918,7 @@ class LimitRepository:
         window: RateWindowName,
         now: datetime,
         since: datetime | None = None,
+        session: AsyncSession | None = None,
     ) -> Decimal:
         """Count local rate units still inside one window.
 
@@ -868,9 +927,13 @@ class LimitRepository:
         after that observation, so a local count is never double counted.
         """
 
-        async with self._session_factory() as session:
+        if session is not None:
             return await _rate_used_in_window(
                 session, bucket_id, window=window, now=now, since=since
+            )
+        async with self._session_factory() as own_session:
+            return await _rate_used_in_window(
+                own_session, bucket_id, window=window, now=now, since=since
             )
 
     async def oldest_attempt(
@@ -1498,14 +1561,11 @@ def _is_tavily_credits_pool(snapshot: NativeUsageSnapshot) -> bool:
     """Return whether one snapshot describes the Tavily keyed Credits pool."""
 
     return (
-        snapshot.provider == _TAVILY_PROVIDER
-        and snapshot.pool_id == _TAVILY_KEYED_CREDITS_POOL_ID
+        snapshot.provider == _TAVILY_PROVIDER and snapshot.pool_id == _TAVILY_KEYED_CREDITS_POOL_ID
     )
 
 
-def _tavily_observation_rejected(
-    row: NativePoolRow | None, snapshot: NativeUsageSnapshot
-) -> bool:
+def _tavily_observation_rejected(row: NativePoolRow | None, snapshot: NativeUsageSnapshot) -> bool:
     """Return whether a vendor_api Tavily observation must not write.
 
     An observation stamped at or before the stored terminal observation stays
@@ -1572,9 +1632,7 @@ async def _rate_used_in_window(
     """
 
     start = since or (now - timedelta(seconds=_WINDOW_SECONDS[window]))
-    statement = select(
-        func.coalesce(func.sum(cast(RateAttemptRow.units_text, _QUANTUM)), 0)
-    ).where(
+    statement = select(func.coalesce(func.sum(cast(RateAttemptRow.units_text, _QUANTUM)), 0)).where(
         RateAttemptRow.bucket_id == bucket_id,
         RateAttemptRow.attempted_at >= _timestamp(start),
         RateAttemptRow.attempted_at <= _timestamp(now),

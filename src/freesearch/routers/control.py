@@ -1202,9 +1202,7 @@ async def _eject_provider_adapter(request: Request, provider: ProviderName) -> N
                         client = create_async_client()
                         app.state._client = client
                     with suppress(Exception):
-                        adapter = _build_with_resolved_secret(
-                            factory, client, None, config=config
-                        )
+                        adapter = _build_with_resolved_secret(factory, client, None, config=config)
                         if provider is ProviderName.KEENABLE:
                             _apply_keenable_limits(app, adapter)
                         routes.append(adapter)

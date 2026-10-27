@@ -100,13 +100,16 @@ class TraceAttribute:
     RESPONSE_PARTIAL: Final[str] = "freesearch.response.partial"
     RESPONSE_OUTPUT_JSON: Final[str] = "freesearch.response.output_json"
     ERROR_TYPE: Final[str] = "error.type"
-    ERROR_MESSAGE: Final[str] = "freesearch.error.message"
     HTTP_REQUEST_METHOD: Final[str] = "http.request.method"
     HTTP_ROUTE: Final[str] = "http.route"
     HTTP_RESPONSE_STATUS_CODE: Final[str] = "http.response.status_code"
     URL_PATH: Final[str] = "url.path"
     SERVER_ADDRESS: Final[str] = "server.address"
     SERVER_PORT: Final[str] = "server.port"
+    #: Internal capture decision stamped by the trusted execution boundary.
+    CAPTURE_PAYLOAD: Final[str] = "freesearch.trace.capture_payload"
+    #: Internal sampling decision stamped by the trusted execution boundary.
+    SAMPLED: Final[str] = "freesearch.trace.sampled"
 
 
 OWNERSHIP_ATTRIBUTES: Final[frozenset[str]] = frozenset(
@@ -117,6 +120,44 @@ OWNERSHIP_ATTRIBUTES: Final[frozenset[str]] = frozenset(
     }
 )
 """Ownership keys only the trusted attribution binder may stamp on a span."""
+
+INTERNAL_ATTRIBUTES: Final[frozenset[str]] = OWNERSHIP_ATTRIBUTES | frozenset(
+    {
+        TraceAttribute.CAPTURE_PAYLOAD,
+        TraceAttribute.SAMPLED,
+    }
+)
+"""Keys owned by the trusted binders: callers cannot set them and they are never stored."""
+
+TRACE_CONTENT_ATTRIBUTES: Final[frozenset[str]] = frozenset(
+    {
+        TraceAttribute.REQUEST_QUERY,
+        TraceAttribute.REQUEST_URL,
+        TraceAttribute.RESPONSE_OUTPUT_JSON,
+    }
+)
+"""Span attributes that carry request/response payload content."""
+
+TRACE_SAFE_EVENT_ATTRIBUTES: Final[frozenset[str]] = frozenset(
+    {
+        "content_length",
+        "country_code",
+        "enhanced",
+        "exception.type",
+        "language",
+        "limit",
+        "max_chars",
+        "mode",
+        "pdf_pages",
+        "result_count",
+    }
+)
+"""Event attributes kept under metadata-only capture.
+
+These are provider request shape, counts, and the sanitized error type. Any
+other event attribute is treated as request/response content and dropped at
+capture time.
+"""
 
 TRACE_SCHEMA_VERSION: Final[int] = 1
 """Schema version stamped on every root span."""
@@ -230,6 +271,25 @@ def is_trace_id(value: str) -> bool:
     return _TRACE_ID_PATTERN.fullmatch(value) is not None
 
 
+def trace_is_sampled(trace_id: str, sampling_rate: float) -> bool:
+    """Return whether one trace id falls inside the sampling rate.
+
+    The decision is a pure function of the trace id and rate, so a root and all
+    its children (even when exported in different batches) always agree. A
+    malformed id fails open and is kept.
+    """
+
+    if sampling_rate <= 0.0:
+        return False
+    if sampling_rate >= 1.0:
+        return True
+    try:
+        bucket = int(trace_id[-16:], 16) / float(1 << 64)
+    except (ValueError, TypeError):
+        return True
+    return bucket < sampling_rate
+
+
 def parse_trace_output(output_json: str | None) -> TraceOutput | None:
     """Decode a stored tagged output payload, or ``None`` when absent/legacy."""
 
@@ -293,10 +353,11 @@ class TraceDetail(TraceSummary):
 
 
 class TraceListResponse(ContractModel):
-    """Wire payload of ``GET /api/v1/traces``."""
+    """Wire payload of ``GET /api/v1/projects/{project_id}/traces``."""
 
     items: list[TraceSummary] = Field(default_factory=list)
     generated_at: AwareDatetime
+    next_cursor: str | None = None
 
 
 class TraceSpanRecord(ContractModel):

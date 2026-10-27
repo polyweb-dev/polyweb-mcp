@@ -2424,33 +2424,29 @@ def step_tavily_params_identical(context: Any) -> None:
     assert keyed_extract["urls"] == ["https://example.com/doc"]
 
 
-@then("a Tavily explicit depth conflict denies before vendor I/O")
-def step_tavily_depth_conflict(context: Any) -> None:
+@then("a Tavily nested depth overrides common mode on both rails with two-Credit cost")
+def step_tavily_depth_precedence(context: Any) -> None:
     from freesearch.models.contracts import SearchRequest
     from freesearch.models.tavily import TavilySearchParams
 
-    before_keyed = len(context.tavily_keyed_sdk.search_calls)
-    before_keyless = len(context.tavily_keyless_sdk.search_calls)
-    for adapter in (context.tavily_keyed_adapter, context.tavily_keyless_adapter):
-        try:
-            _run(
-                context,
-                adapter.search(
-                    SearchRequest(
-                        project_id="00000000-0000-4000-8000-0000000000aa",
-                        query="conflict",
-                        mode="basic",
-                        provider_options={"tavily": TavilySearchParams(search_depth="advanced")},
-                    )
-                ),
-            )
-            raise AssertionError("depth conflict must deny before vendor I/O")
-        except Exception as exc:
-            error = getattr(exc, "error", exc)
-            assert getattr(error, "code", "") == "bad_request"
-            assert getattr(error, "retryable", True) is False
-    assert len(context.tavily_keyed_sdk.search_calls) == before_keyed
-    assert len(context.tavily_keyless_sdk.search_calls) == before_keyless
+    request = SearchRequest(
+        project_id="00000000-0000-4000-8000-0000000000aa",
+        query="explicit depth precedence",
+        mode="basic",
+        provider_options={"tavily": TavilySearchParams(search_depth="advanced")},
+    )
+    for adapter, sdk in (
+        (context.tavily_keyed_adapter, context.tavily_keyed_sdk),
+        (context.tavily_keyless_adapter, context.tavily_keyless_sdk),
+    ):
+        before = len(sdk.search_calls)
+        _run(context, adapter.search(request))
+        assert len(sdk.search_calls) == before + 1
+        assert sdk.search_calls[-1]["search_depth"] == "advanced"
+        estimate = _run(context, adapter.estimate_cost(request))
+        assert estimate.units == Decimal("2")
+        assert estimate.currency == "Credits"
+        assert len(sdk.search_calls) == before + 1, "cost estimation must not call the vendor"
 
 
 @when("I estimate Tavily basic and advanced search cost")

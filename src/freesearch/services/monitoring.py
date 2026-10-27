@@ -22,9 +22,10 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from pydantic import AwareDatetime, Field, model_serializer
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.adapters.brave import COST_USD_PER_REQUEST, FREE_CREDITS_USD, brave_spend_usd
@@ -48,6 +49,7 @@ from freesearch.models.contracts import (
     is_soft_quota_zero,
 )
 from freesearch.models.observability import ExecutionAttribution
+from freesearch.models.projects import PermissionAction
 from freesearch.models.provider_limits import (
     AuthMode,
     CRDUsageTotal,
@@ -57,7 +59,11 @@ from freesearch.models.provider_limits import (
     LimitStoreUnavailable,
     ProviderLimitsResponse,
 )
+from freesearch.models.users import UserPrincipal
 from freesearch.persistence.storage import LegacyUsageTotal, SQLiteRepository, UsageTotal
+from freesearch.services.authorization import ScopedAuthorizationService
+from freesearch.services.control_access import require_project_permission, run_control_read
+from freesearch.services.control_errors import ControlStorageUnavailable
 
 if TYPE_CHECKING:
     from freesearch.services.provider_limits import ProviderLimitsService
@@ -204,6 +210,15 @@ class DashboardResponse(StatsResponse):
 
     generated_at: AwareDatetime
     provider_limits: list[ProviderLimitsResponse] = Field(default_factory=list)
+
+
+class ProjectUsageResponse(ContractModel):
+    """Project-scoped usage totals and a privacy-projected recent ledger."""
+
+    project_id: UUID
+    totals: list[ProviderUsageTotal] = Field(default_factory=list)
+    recent_usage: list[RecentUsageEntry] = Field(default_factory=list)
+    generated_at: AwareDatetime
 
 
 def _environment_file_value(name: str) -> str | None:
@@ -993,6 +1008,65 @@ async def collect_stats(
         latest_quota=latest_quota,
         latest_health=_contract_health(latest_health),
         crd_usage_totals=crd_totals,
+    )
+
+
+def _clamped_recent_limit(limit: int) -> int:
+    return min(max(limit, 1), MAX_RECENT_LIMIT)
+
+
+async def _require_usage_read(
+    repository: SQLiteRepository, actor: UserPrincipal, project_id: UUID
+) -> None:
+    """Require live project ``usage.read``; unknown projects are not found."""
+
+    async def operation(session: AsyncSession) -> None:
+        await require_project_permission(
+            session,
+            ScopedAuthorizationService(repository),
+            actor,
+            project_id,
+            PermissionAction.USAGE_READ,
+        )
+
+    await run_control_read(repository, operation)
+
+
+async def _project_usage_rows(
+    repository: SQLiteRepository,
+    *,
+    project_id: UUID,
+    recent_limit: int,
+) -> tuple[list[UsageTotal | LegacyUsageTotal], list[UsageEvent]]:
+    try:
+        totals = await repository.project_usage_totals(project_id=project_id)
+        recent = await repository.recent_project_usage(
+            project_id=project_id, limit=_clamped_recent_limit(recent_limit)
+        )
+    except Exception as error:
+        logger.warning("project usage reads could not be collected")
+        raise ControlStorageUnavailable("project usage is unavailable") from error
+    return totals, recent
+
+
+async def collect_project_usage(
+    repository: SQLiteRepository,
+    actor: UserPrincipal,
+    project_id: UUID,
+    *,
+    recent_limit: int = DEFAULT_RECENT_LIMIT,
+) -> ProjectUsageResponse:
+    """Return only the authorized project's usage totals and recent ledger."""
+
+    await _require_usage_read(repository, actor, project_id)
+    totals, recent = await _project_usage_rows(
+        repository, project_id=project_id, recent_limit=recent_limit
+    )
+    return ProjectUsageResponse(
+        project_id=project_id,
+        totals=_contract_totals(totals),
+        recent_usage=_contract_recent(recent),
+        generated_at=datetime.now(UTC),
     )
 
 

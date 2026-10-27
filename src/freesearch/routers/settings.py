@@ -18,6 +18,9 @@ from fastapi.responses import JSONResponse
 from freesearch.models.projects import SettingsResolution
 from freesearch.models.settings import (
     ProjectSettingsUpdate,
+    SettingsCopyPreview,
+    SettingsCopyRequest,
+    SettingsCopyResult,
     SystemSettingsDocument,
     SystemSettingsUpdate,
 )
@@ -144,6 +147,34 @@ def register_settings_routes(app: FastAPI) -> None:
         """Apply a bounded project override write at one expected revision."""
 
         return await _settings_service(request).update_project_settings(principal, project_id, body)
+
+    @app.post(
+        "/api/v1/projects/{project_id}/settings/copy/preview",
+        response_model=SettingsCopyPreview,
+    )
+    async def preview_project_settings_copy(
+        request: Request,
+        principal: _Principal,
+        project_id: UUID,
+        body: SettingsCopyRequest,
+    ) -> SettingsCopyPreview:
+        """Return a revision-bound copy plan without writing anything."""
+
+        return await _settings_service(request).preview_copy(principal, project_id, body)
+
+    @app.post(
+        "/api/v1/projects/{project_id}/settings/copy",
+        response_model=SettingsCopyResult,
+    )
+    async def apply_project_settings_copy(
+        request: Request,
+        principal: _Principal,
+        project_id: UUID,
+        body: SettingsCopyRequest,
+    ) -> SettingsCopyResult:
+        """Apply a previewed settings copy atomically and audit the result."""
+
+        return await _settings_service(request).apply_copy(principal, project_id, body)
 
 
 __all__ = ["register_settings_routes"]

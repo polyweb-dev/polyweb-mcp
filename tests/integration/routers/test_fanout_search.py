@@ -38,7 +38,7 @@ from tests.fixtures.auth import (
     register_and_login,
     temp_email,
 )
-from tests.fixtures.execution import seed_execution_project
+from tests.fixtures.execution import allow_full_trace_capture, seed_execution_project
 from tests.fixtures.usage_ledger import all_usage_events
 
 
@@ -483,6 +483,7 @@ async def test_fanout_trace_has_sibling_providers_and_partial_outcome(
             )
         ],
     )
+    await allow_full_trace_capture(repository)
     app = create_app([failing, working], repository=repository)
 
     with TestClient(app) as client:
@@ -500,7 +501,7 @@ async def test_fanout_trace_has_sibling_providers_and_partial_outcome(
         )
         assert response.status_code == 200
         trace_id = _trace_id_of(response)
-        detail = client.get(f"/api/v1/traces/{trace_id}", headers=headers).json()
+        detail = client.get(f"/api/v1/projects/{pid}/traces/{trace_id}", headers=headers).json()
 
     assert detail["outcome"] == "partial"
     assert detail["input"] == "partial query"
@@ -534,6 +535,7 @@ async def test_fanout_success_trace_has_one_root_and_two_provider_children(
         "p2",
         [SearchResult(title="P2", url=AnyHttpUrl("https://example.com/2"), snippet="2")],
     )
+    await allow_full_trace_capture(repository)
     app = create_app([p1, p2], repository=repository)
 
     with TestClient(app) as client:
@@ -552,7 +554,7 @@ async def test_fanout_success_trace_has_one_root_and_two_provider_children(
         assert response.status_code == 200
         assert response.json()["provider"] == "aggregated"
         trace_id = _trace_id_of(response)
-        detail = client.get(f"/api/v1/traces/{trace_id}", headers=headers).json()
+        detail = client.get(f"/api/v1/projects/{pid}/traces/{trace_id}", headers=headers).json()
 
     assert detail["outcome"] == "success"
     assert detail["result_count"] == 2
@@ -568,6 +570,7 @@ async def test_fanout_all_fail_writes_error_trace_without_results(
     # Use one Agent account for search and trace reads.
     first = FakeSearchAdapter("flaky-a", fail=True)
     second = FakeSearchAdapter("flaky-b", fail=True)
+    await allow_full_trace_capture(repository)
     app = create_app([first, second], repository=repository)
 
     with TestClient(app) as client:
@@ -585,7 +588,7 @@ async def test_fanout_all_fail_writes_error_trace_without_results(
         )
         assert response.status_code == 500
         trace_id = _trace_id_of(response)
-        detail = client.get(f"/api/v1/traces/{trace_id}", headers=headers).json()
+        detail = client.get(f"/api/v1/projects/{pid}/traces/{trace_id}", headers=headers).json()
 
     assert detail["outcome"] == "error"
     assert detail["output"] is None
@@ -776,6 +779,7 @@ async def test_fanout_partial_failure_detailed_contract(
                 )
             ],
         )
+        await allow_full_trace_capture(repository)
         app = create_app([failing, working], repository=repository)
         with TestClient(app) as client:
             pair = register_and_login(client, temp_email("fanout-partial2"))
@@ -809,7 +813,7 @@ async def test_fanout_partial_failure_detailed_contract(
                 "reliable_provider",
             ]
             trace_id = response.headers["x-trace-id"]
-            detail = client.get(f"/api/v1/traces/{trace_id}", headers=headers).json()
+            detail = client.get(f"/api/v1/projects/{pid}/traces/{trace_id}", headers=headers).json()
         assert detail["outcome"] == "partial"
         assert detail["output"]["kind"] == "search_results"
         assert len(detail["output"]["results"]) == 1
@@ -840,6 +844,7 @@ async def test_fanout_all_fail_first_error_deterministic(
     try:
         first = FakeSearchAdapter("flaky-a", fail=True)
         second = FakeSearchAdapter("flaky-b", fail=True)
+        await allow_full_trace_capture(repository)
         app = create_app([first, second], repository=repository)
         with TestClient(app) as client:
             pair = register_and_login(client, temp_email("fanout-doom2"))
@@ -860,7 +865,9 @@ async def test_fanout_all_fail_first_error_deterministic(
             assert "flaky-a" in detail_text
             trace_id = response.headers.get("x-trace-id")
             if trace_id is not None:
-                detail = client.get(f"/api/v1/traces/{trace_id}", headers=headers).json()
+                detail = client.get(
+                    f"/api/v1/projects/{pid}/traces/{trace_id}", headers=headers
+                ).json()
                 assert detail["outcome"] == "error"
                 providers = [s for s in detail["spans"] if s["name"] == "freesearch.provider"]
                 assert len(providers) == 2

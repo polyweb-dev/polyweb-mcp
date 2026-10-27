@@ -40,7 +40,7 @@ from tests.fixtures.auth import (
     promote_to_system_admin,
     temp_email,
 )
-from tests.fixtures.execution import bdd_project_id
+from tests.fixtures.execution import allow_full_trace_capture, bdd_project_id
 
 _TRACE_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 _FAKE_API_KEY = "sk-test-obs-7f3a9c-not-a-real-secret"
@@ -250,12 +250,24 @@ def _get_status(context: Any, path: str) -> Any:
         return client.get(path, headers=context.otel_auth_headers)
 
 
+def _trace_path(context: Any, headers: dict[str, str] | None = None) -> str:
+    pid = bdd_project_id(context, headers or context.otel_auth_headers)
+    return f"/api/v1/projects/{pid}/traces"
+
+
 def _trace_list(context: Any, **params: Any) -> Any:
-    return _get_json(context, "/api/v1/traces", **params)
+    return _get_json(
+        context,
+        f"{_trace_path(context)}",
+        **params,
+    )
 
 
 def _trace_detail(context: Any, trace_id: str) -> Any:
-    return _get_json(context, f"/api/v1/traces/{trace_id}")
+    return _get_json(
+        context,
+        f"{_trace_path(context)}/{trace_id}",
+    )
 
 
 def _spans_by_name(detail: Any) -> dict[str, list[Any]]:
@@ -656,7 +668,10 @@ def step_then_fanout_sibling_identities(
 def step_then_unknown_trace_404(context: Any) -> None:
     """Verify absent/invalid ids 404 and do not create traces."""
     for bad_id in ("not-a-trace-id", "0" * 32):
-        response = _get_status(context, f"/api/v1/traces/{bad_id}")
+        response = _get_status(
+            context,
+            f"{_trace_path(context)}/{bad_id}",
+        )
         assert response.status_code == 404, f"{bad_id} -> {response.status_code}"
     body = _trace_list(context)
     assert len(body["items"]) == 1
@@ -765,8 +780,14 @@ def step_then_each_reader_own_trace(context: Any) -> None:
     second_owner = _account_uuid(context.otel_second_headers)
     assert first_owner != second_owner
     with _client_for(context) as client:
-        first = client.get("/api/v1/traces", headers=context.otel_auth_headers).json()["items"]
-        second = client.get("/api/v1/traces", headers=context.otel_second_headers).json()["items"]
+        first = client.get(
+            f"{_trace_path(context)}",
+            headers=context.otel_auth_headers,
+        ).json()["items"]
+        second = client.get(
+            f"{_trace_path(context, context.otel_second_headers)}",
+            headers=context.otel_second_headers,
+        ).json()["items"]
     assert [item["trace_id"] for item in first] == [context.otel_first_trace_id]
     assert [item["trace_id"] for item in second] == [context.otel_second_trace_id]
     assert all(item["user_id"] == first_owner for item in first)
@@ -775,12 +796,25 @@ def step_then_each_reader_own_trace(context: Any) -> None:
 
 @then("a foreign trace read should return 404 like an absent trace")
 def step_then_foreign_read_matches_absent(context: Any) -> None:
+    assert (
+        _get_status(context, f"{_trace_path(context)}/{context.otel_first_trace_id}").status_code
+        == 200
+    )
     with _client_for(context) as client:
         foreign = client.get(
-            f"/api/v1/traces/{context.otel_first_trace_id}", headers=context.otel_second_headers
+            f"{_trace_path(context, context.otel_second_headers)}/{context.otel_first_trace_id}",
+            headers=context.otel_second_headers,
         )
-        absent = client.get(f"/api/v1/traces/{'0' * 32}", headers=context.otel_auth_headers)
+        absent = client.get(
+            f"{_trace_path(context)}/{'0' * 32}",
+            headers=context.otel_auth_headers,
+        )
     assert foreign.status_code == 404
     assert absent.status_code == 404
     assert set(foreign.json()) == {"detail"}
     assert set(absent.json()) == {"detail"}
+
+
+@given("the system policy explicitly permits full trace capture")
+def step_given_full_capture_policy(context: Any) -> None:
+    context.loop.run_until_complete(allow_full_trace_capture(context.repository))
