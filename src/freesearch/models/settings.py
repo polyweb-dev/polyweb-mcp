@@ -353,8 +353,7 @@ class SystemSettingsPayload(ContractModel):
             )
         if self.trace.retention_days > self.safety_limits.max_trace_retention_days:
             raise ValueError(
-                "system trace retention_days must not exceed "
-                "safety_limits.max_trace_retention_days"
+                "system trace retention_days must not exceed safety_limits.max_trace_retention_days"
             )
         return self
 

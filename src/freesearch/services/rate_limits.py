@@ -338,9 +338,7 @@ class RateLimitService:
 
         if self._repository is None:
             return (window.limit, None, window.reset_at, None)
-        observation = await self._latest_observation(
-            provider, window, observations=observations
-        )
+        observation = await self._latest_observation(provider, window, observations=observations)
         used = await self._repository.count_attempts(
             window.bucket_id,
             window=window.window,
@@ -424,11 +422,7 @@ class RateLimitService:
             if record.rate is None:
                 continue
             window = next(
-                (
-                    item
-                    for item in record.rate.windows
-                    if item.window is RateWindowName.MINUTE
-                ),
+                (item for item in record.rate.windows if item.window is RateWindowName.MINUTE),
                 None,
             )
             if window is not None:

@@ -4,6 +4,8 @@ Pure admit/progress paths use repository=None. Counting paths use a tiny
 in-memory fake double. No real SQLite, no vendor I/O, fixed clock.
 """
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -99,6 +101,10 @@ class _FakeRateRepository:
         self.observations: list[RateObservation] = []
         self.attempts: list[dict[str, object]] = []
 
+    @asynccontextmanager
+    async def session(self) -> AsyncIterator[None]:
+        yield None
+
     async def observe_rate(self, observation: RateObservation) -> None:
         self.observations = [
             item
@@ -148,7 +154,9 @@ class _FakeRateRepository:
         window: RateWindowName,
         now: datetime,
         since: datetime | None = None,
+        session: object | None = None,
     ) -> Decimal:
+        del session
         start = since if since is not None else now - timedelta(seconds=_WINDOW_SECONDS[window])
         total = Decimal("0")
         for item in self.attempts:
@@ -160,7 +168,10 @@ class _FakeRateRepository:
                 total += units
         return total
 
-    async def list_observations(self, provider: str) -> list[RateObservation]:
+    async def list_observations(
+        self, provider: str, *, session: object | None = None
+    ) -> list[RateObservation]:
+        del session
         return [item for item in self.observations if item.provider == provider]
 
     async def list_rate_progress(self, provider: str, now: datetime) -> list[object]:

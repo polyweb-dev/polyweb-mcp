@@ -54,9 +54,7 @@ async def delete_project_traces(
     return _deleted(result)
 
 
-async def delete_project_usage(
-    session: AsyncSession, *, project_id: UUID, cutoff: datetime
-) -> int:
+async def delete_project_usage(session: AsyncSession, *, project_id: UUID, cutoff: datetime) -> int:
     """Delete this project's usage events observed before ``cutoff``."""
 
     result = await session.execute(
