@@ -9,12 +9,6 @@ Feature: Core CRD contracts and gates through synthetic services
     Then the synthetic catalog holds 0 records
     And the synthetic dashboard views are empty
 
-  Scenario: B02 legacy native rows survive upgrade with one migration head
-    Given a legacy synthetic database with native history
-    When I upgrade the synthetic database twice
-    Then the synthetic native rows are preserved
-    And the synthetic database is at one migration head with limit tables
-
   Scenario: B04 one lease owner coordinates shared sync
     Given an empty synthetic limit catalog
     When two synthetic sync claimants race for one provider

@@ -50,7 +50,8 @@ from freesearch.models.projects import (
     CredentialOwnerScope,
     CredentialProjectGrantRead,
 )
-from freesearch.persistence.storage import Base
+from freesearch.persistence.storage import Base, ProviderHealthRow
+from freesearch.persistence.timestamps import parse_timestamp
 
 
 def _now_iso() -> str:
@@ -334,6 +335,27 @@ class CredentialRepository:
         )
         return None if row is None else _credential_read(row)
 
+    async def get_active_credential(
+        self,
+        *,
+        account_id: UUID,
+        credential_id: UUID,
+    ) -> CredentialInstanceRead | None:
+        """Return one active credential of this account under any owner.
+
+        A system-scope read for installation administration (pool links);
+        project-facing code uses the owner-specific getters instead.
+        """
+
+        row = await self._session.scalar(
+            select(ProviderCredentialRow).where(
+                ProviderCredentialRow.id == str(credential_id),
+                ProviderCredentialRow.account_id == str(account_id),
+                ProviderCredentialRow.status == CredentialStatus.ACTIVE.value,
+            )
+        )
+        return None if row is None else _credential_read(row)
+
     async def list_system_credentials(self, *, account_id: UUID) -> list[CredentialInstanceRead]:
         """List active system-owned credentials only, never project-private."""
 
@@ -567,6 +589,43 @@ class CredentialRepository:
             )
         )
         return bool(result.scalar_one())
+
+    async def latest_health(self, *, credential_ids: set[UUID]) -> dict[UUID, tuple[str, datetime]]:
+        """Return the newest health status and check time of each named credential.
+
+        Only the status and time are read; the free-text message, which may
+        quote a vendor error, never leaves this method.
+        """
+
+        if not credential_ids:
+            return {}
+        ranked = (
+            select(
+                ProviderHealthRow.credential_id,
+                ProviderHealthRow.status,
+                ProviderHealthRow.checked_at,
+                func.row_number()
+                .over(
+                    partition_by=ProviderHealthRow.credential_id,
+                    order_by=(ProviderHealthRow.checked_at.desc(), ProviderHealthRow.id.desc()),
+                )
+                .label("rank"),
+            )
+            .where(
+                ProviderHealthRow.credential_id.in_(
+                    [str(credential_id) for credential_id in credential_ids]
+                )
+            )
+            .subquery()
+        )
+        rows = await self._session.execute(
+            select(ranked.c.credential_id, ranked.c.status, ranked.c.checked_at).where(
+                ranked.c.rank == 1
+            )
+        )
+        return {
+            UUID(row.credential_id): (row.status, parse_timestamp(row.checked_at)) for row in rows
+        }
 
     async def _select_active(
         self,

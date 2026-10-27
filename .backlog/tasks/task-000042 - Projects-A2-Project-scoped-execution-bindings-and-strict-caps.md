@@ -4,6 +4,7 @@ title: Projects A2 - Project-scoped execution, bindings and strict caps
 status: To Do
 assignee: []
 created_date: '2026-10-26T09:47:00Z'
+updated_date: '2026-10-27T11:41:00Z'
 labels:
   - projects-first
   - step-2-api
@@ -46,3 +47,9 @@ Step rules and the shared Definition of Done: doc-000003. Card map and worktree 
 - [ ] #3 No secret material (passwords, API keys, provider keys, OAuth grants) appears in responses, logs, traces or test output.
 - [ ] #4 If the card changes the request path, the routing-latency check passes: FreeSearch adds under 80 ms at p95 per provider, end to end, over REST and MCP. Database read counts are a diagnostic, not a limit.
 <!-- DOD:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Carried in from A1/A4 (lead): (1) Remove the xfail(strict=True) on tests/integration/services/test_provider_limits.py::test_tavily_bucket_race_across_independent_connections_never_overspends by fixing LimitRepository.reserve serialization across connections (AC5). (2) Delete the provider-name singleton secret/OAuth control endpoints, the parallel_oauth singleton state and monitoring poll, and registry provider-name construction once execution resolves credentials via bindings + CredentialService.resolve_material. (3) Re-measure the routing-latency gate for A1's DoD 4 (TASK-000041 stays In Progress until then). (4) Add the approved 0002 revision with NOT NULL actor_type/actor_id on provider_limit_admissions and provider_rate_attempts.
+<!-- SECTION:NOTES:END -->

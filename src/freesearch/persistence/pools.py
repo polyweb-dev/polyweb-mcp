@@ -402,6 +402,93 @@ class UpstreamPoolRepository:
         )
         return [_stored_pool(row) for row in rows]
 
+    async def update_pool(
+        self,
+        *,
+        account_id: UUID,
+        pool_id: UUID,
+        upstream_scope: UpstreamScope,
+        pool_key: str,
+        label: str,
+        constraints: list[dict[str, Any]],
+        max_concurrency: int | None,
+        max_queued_requests: int | None,
+        status: PoolStatus,
+        now: datetime | None = None,
+    ) -> StoredPool | None:
+        """Replace one pool's tunable fields; ``None`` when absent in this account.
+
+        The provider type and native balance link never change here.
+        """
+
+        row = await self._session.scalar(
+            update(UpstreamQuotaPoolRow)
+            .where(
+                UpstreamQuotaPoolRow.id == str(pool_id),
+                UpstreamQuotaPoolRow.account_id == str(account_id),
+            )
+            .values(
+                upstream_scope=UpstreamScope(upstream_scope).value,
+                pool_key=pool_key,
+                label=label,
+                constraints=json.dumps(constraints, separators=(",", ":"), sort_keys=True),
+                max_concurrency=max_concurrency,
+                max_queued_requests=max_queued_requests,
+                status=PoolStatus(status).value,
+                updated_at=stored_timestamp(resolve_now(now)),
+                version=UpstreamQuotaPoolRow.version + 1,
+            )
+            .returning(UpstreamQuotaPoolRow)
+            .execution_options(populate_existing=True)
+        )
+        await self._session.flush()
+        return None if row is None else _stored_pool(row)
+
+    async def get_pools(self, *, account_id: UUID, pool_ids: set[UUID]) -> dict[UUID, StoredPool]:
+        """Return the named pools of this account keyed by id."""
+
+        if not pool_ids:
+            return {}
+        rows = await self._session.scalars(
+            select(UpstreamQuotaPoolRow).where(
+                UpstreamQuotaPoolRow.account_id == str(account_id),
+                UpstreamQuotaPoolRow.id.in_([str(pool_id) for pool_id in pool_ids]),
+            )
+        )
+        return {UUID(row.id): _stored_pool(row) for row in rows}
+
+    async def unlink_credential(
+        self, *, credential_id: UUID, operation: CredentialOperation, pool_id: UUID
+    ) -> bool:
+        """Remove one credential's link to this pool for one operation."""
+
+        result = await self._session.execute(
+            delete(CredentialPoolLinkRow).where(
+                CredentialPoolLinkRow.credential_id == str(credential_id),
+                CredentialPoolLinkRow.operation_scope == CredentialOperation(operation).value,
+                CredentialPoolLinkRow.pool_id == str(pool_id),
+            )
+        )
+        await self._session.flush()
+        return bool(getattr(result, "rowcount", 0))
+
+    async def links_for_credentials(self, *, credential_ids: set[UUID]) -> list[StoredPoolLink]:
+        """List the pool links of the named credentials."""
+
+        if not credential_ids:
+            return []
+        rows = await self._session.scalars(
+            select(CredentialPoolLinkRow)
+            .where(
+                CredentialPoolLinkRow.credential_id.in_(
+                    [str(credential_id) for credential_id in credential_ids]
+                )
+            )
+            .order_by(CredentialPoolLinkRow.credential_id, CredentialPoolLinkRow.operation_scope)
+            .execution_options(populate_existing=True)
+        )
+        return [_stored_link(row) for row in rows]
+
     async def link_credential(
         self,
         *,

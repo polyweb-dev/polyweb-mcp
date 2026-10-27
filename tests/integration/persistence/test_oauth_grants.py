@@ -7,6 +7,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
@@ -37,6 +38,7 @@ class _World:
     system_oauth: UUID
     private_oauth_a: UUID
     api_key_credential: UUID
+    actor_id: UUID
 
 
 @pytest_asyncio.fixture
@@ -76,7 +78,13 @@ async def world(tmp_path: Path) -> AsyncIterator[_World]:
             )
             await session.commit()
         yield _World(
-            repo, a.project_id, b.project_id, system_oauth.id, private_oauth.id, api_key.id
+            repo,
+            a.project_id,
+            b.project_id,
+            system_oauth.id,
+            private_oauth.id,
+            api_key.id,
+            a.actor_id,
         )
     finally:
         await repo.close()
@@ -369,3 +377,77 @@ async def test_deleting_the_credential_cascades_the_grant(world: _World) -> None
     finally:
         connection.close()
     assert _grant_rows(world) == 0
+
+
+async def test_list_pending_for_owner_rejects_mismatched_owner_pairs(world: _World) -> None:
+    async with world.repo.session() as session:
+        repository = CredentialOAuthGrantRepository(session)
+        for scope, owner in ((_SYSTEM, world.project_a), (_PROJECT, None)):
+            with pytest.raises(ValueError):
+                await repository.list_pending_for_owner(
+                    account_id=DEFAULT_INSTALLATION_ACCOUNT_ID,
+                    owner_scope=scope,
+                    owner_project_id=owner,
+                )
+
+
+async def test_list_pending_for_owner_never_crosses_owners(world: _World) -> None:
+    async with world.repo.session() as session:
+        private_b = await CredentialRepository(session).insert_credential(
+            account_id=DEFAULT_INSTALLATION_ACCOUNT_ID,
+            provider_type="parallel",
+            owner_scope=_PROJECT,
+            owner_project_id=world.project_b,
+            label="private oauth b",
+            auth_mode="oauth",
+            created_by=world.actor_id,
+        )
+        connected_a = await CredentialRepository(session).insert_credential(
+            account_id=DEFAULT_INSTALLATION_ACCOUNT_ID,
+            provider_type="parallel",
+            owner_scope=_PROJECT,
+            owner_project_id=world.project_a,
+            label="connected oauth a",
+            auth_mode="oauth",
+            created_by=world.actor_id,
+        )
+        await session.commit()
+    assert await _begin(world, world.system_oauth, _SYSTEM, None) is not None
+    assert await _begin(world, world.private_oauth_a, _PROJECT, world.project_a) is not None
+    assert await _begin(world, private_b.id, _PROJECT, world.project_b) is not None
+    # A connected grant is no longer a pending flow, whatever its owner.
+    started = await _begin(world, connected_a.id, _PROJECT, world.project_a)
+    assert started is not None
+    assert (
+        await _record(world, connected_a.id, _PROJECT, world.project_a, started.token_generation)
+        is not None
+    )
+
+    async def listed(scope: CredentialOwnerScope, owner: UUID | None) -> set[tuple[Any, ...]]:
+        async with world.repo.session() as session:
+            items = await CredentialOAuthGrantRepository(session).list_pending_for_owner(
+                account_id=DEFAULT_INSTALLATION_ACCOUNT_ID,
+                owner_scope=scope,
+                owner_project_id=owner,
+            )
+        return {(i.grant.credential_id, i.owner_scope, i.owner_project_id) for i in items}
+
+    assert await listed(_PROJECT, world.project_a) == {
+        (world.private_oauth_a, _PROJECT, world.project_a)
+    }
+    assert await listed(_PROJECT, world.project_b) == {(private_b.id, _PROJECT, world.project_b)}
+    assert await listed(_SYSTEM, None) == {(world.system_oauth, _SYSTEM, None)}
+    assert await listed(_PROJECT, uuid4()) == set()
+
+    async with world.repo.session() as session:
+        repository = CredentialOAuthGrantRepository(session)
+        everything = await repository.list_pending_for_account(
+            account_id=DEFAULT_INSTALLATION_ACCOUNT_ID
+        )
+        foreign = await repository.list_pending_for_account(account_id=uuid4())
+    assert {item.grant.credential_id for item in everything} == {
+        world.system_oauth,
+        world.private_oauth_a,
+        private_b.id,
+    }
+    assert foreign == []

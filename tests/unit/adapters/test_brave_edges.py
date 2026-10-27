@@ -1,8 +1,9 @@
 """Response and operation edge coverage for BraveAdapter; all HTTP is mocked.
 
 Complements the locked acceptance suite in ``test_brave.py`` with rate-limit
-header hygiene, malformed payload rejection, sparse-result normalization, and
-the unsupported-fetch / fetch-estimate operation edges.  Runner/retry behavior
+header hygiene, malformed item records, sparse-result normalization, and
+the unsupported-fetch / fetch-estimate operation edges.  Malformed-envelope
+rejection lives in ``test_brave.py::test_search_rejects_malformed_payloads``.  Runner/retry behavior
 lives in ``test_brave_resilience.py``; outgoing wire-request hygiene lives in
 ``test_brave_wire.py``.  Keys are injected explicitly into the constructor.
 """
@@ -13,39 +14,19 @@ from decimal import Decimal
 
 import httpx
 import pytest
-from pydantic import SecretStr
 
 from freesearch.adapters.brave import BraveAdapter
 from freesearch.infrastructure.resilience import ProviderOperationError
 from freesearch.models.contracts import FetchRequest, SearchRequest, SearchResponse, UsageOperation
+from tests.unit.adapters._brave_test_support import brave_adapter, brave_payload
 
-
-def _payload(**overrides: object) -> dict[str, object]:
-    payload: dict[str, object] = {
-        "web": {
-            "results": [
-                {
-                    "title": "Example",
-                    "url": "https://example.com/article",
-                    "description": "A result snippet.",
-                    "page_age": "2024-01-02T03:04:05Z",
-                    "language": "en",
-                }
-            ]
-        }
-    }
-    payload.update(overrides)
-    return payload
+_payload = brave_payload
 
 
 def _adapter(
     handler: Callable[[httpx.Request], httpx.Response], *, key: str = "edge-secret"
 ) -> tuple[BraveAdapter, httpx.AsyncClient]:
-    client = httpx.AsyncClient(
-        transport=httpx.MockTransport(handler),
-        headers={"Authorization": "Bearer caller", "X-API-Key": "caller-key"},
-    )
-    return BraveAdapter(client, api_key=SecretStr(key)), client
+    return brave_adapter(handler, key=key)
 
 
 @pytest.mark.parametrize(
@@ -78,31 +59,6 @@ async def test_rate_limit_header_normalization(
 
     assert response.usage is not None
     assert response.usage.metadata == expected
-
-
-@pytest.mark.parametrize(
-    "payload",
-    [
-        {"web": []},
-        {"web": "not-a-mapping"},
-        {"web": {"results": "not-a-list"}},
-    ],
-)
-async def test_malformed_results_and_page_age_map_to_invalid_response(
-    payload: dict[str, object],
-) -> None:
-    adapter, client = _adapter(lambda request: httpx.Response(200, json=payload))
-    try:
-        with pytest.raises(ProviderOperationError) as excinfo:
-            await adapter.search(
-                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="query")
-            )
-    finally:
-        await client.aclose()
-
-    assert excinfo.value.error.code == "invalid_response"
-    assert excinfo.value.error.retryable is False
-    assert excinfo.value.__cause__ is None
 
 
 @pytest.mark.parametrize(

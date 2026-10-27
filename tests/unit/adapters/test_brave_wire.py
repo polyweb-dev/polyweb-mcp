@@ -18,34 +18,15 @@ from pydantic import SecretStr
 from freesearch.adapters.brave import BraveAdapter
 from freesearch.infrastructure.resilience import ProviderOperationError
 from freesearch.models.contracts import SearchRequest, SearchResponse
+from tests.unit.adapters._brave_test_support import brave_adapter, brave_payload
 
-
-def _payload(**overrides: object) -> dict[str, object]:
-    payload: dict[str, object] = {
-        "web": {
-            "results": [
-                {
-                    "title": "Example",
-                    "url": "https://example.com/article",
-                    "description": "A result snippet.",
-                    "page_age": "2024-01-02T03:04:05Z",
-                    "language": "en",
-                }
-            ]
-        }
-    }
-    payload.update(overrides)
-    return payload
+_payload = brave_payload
 
 
 def _adapter(
     handler: Callable[[httpx.Request], httpx.Response], *, key: str = "edge-secret"
 ) -> tuple[BraveAdapter, httpx.AsyncClient]:
-    client = httpx.AsyncClient(
-        transport=httpx.MockTransport(handler),
-        headers={"Authorization": "Bearer caller", "X-API-Key": "caller-key"},
-    )
-    return BraveAdapter(client, api_key=SecretStr(key)), client
+    return brave_adapter(handler, key=key)
 
 
 def _no_leak_client(

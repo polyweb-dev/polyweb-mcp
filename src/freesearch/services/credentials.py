@@ -16,21 +16,26 @@ generation of a granted system credential, and cannot modify a system
 credential through a project route.
 
 Reads and writes require live scoped permissions from
-:class:`~freesearch.services.authorization.ScopedAuthorizationService`.
-``resolve_for_project`` is the P09 runtime seam: it re-checks grant state on
-every call so a revoked grant stops resolving immediately.
+:class:`~freesearch.services.authorization.ScopedAuthorizationService`. Every
+mutation appends its scoped audit event in the same transaction: system
+credentials and grants at system scope (grants also at the granted project's
+scope), private credentials at project scope.
+
+``resolve_material`` is the runtime seam for A2: it re-checks credential
+state (project liveness, ownership or grant, status, generation) on every
+call and loads the secret. It grants no actor authority; the dispatch path
+performs the live actor permission check.
 """
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Final, NoReturn, TypeVar
 from uuid import UUID
 
 from pydantic import SecretStr
-from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -41,6 +46,7 @@ from freesearch.infrastructure.encrypted_store import (
 from freesearch.infrastructure.secrets import ProviderName
 from freesearch.models.credentials import (
     ALL_CREDENTIAL_OPERATIONS,
+    CredentialAuthMode,
     CredentialCreate,
     CredentialGrantUpsert,
     CredentialOperation,
@@ -60,11 +66,20 @@ from freesearch.models.projects import (
     ProjectStatus,
     ScopeType,
 )
+from freesearch.models.schema_enums import OAuthGrantStatus
 from freesearch.models.users import UserPrincipal
+from freesearch.persistence.bindings import ProjectBindingRepository
 from freesearch.persistence.credentials import CredentialRepository
+from freesearch.persistence.oauth_grants import (
+    OAUTH_SECRET_KINDS,
+    CredentialOAuthGrantRepository,
+    oauth_secret_slot,
+)
 from freesearch.persistence.projects import ProjectRepository
 from freesearch.persistence.scoped import ProjectScopedRepository
 from freesearch.persistence.storage import SQLiteRepository
+from freesearch.persistence.transactions import run_serialized
+from freesearch.services.audit_events import record_project_event, record_system_event
 from freesearch.services.authorization import (
     AuthorizationDenied,
     ScopedAuthorizationService,
@@ -75,6 +90,16 @@ from freesearch.services.authorization import (
 from freesearch.services.projects import ProjectsRolloutGate
 
 _T = TypeVar("_T")
+
+#: Audit actions of credential and grant lifecycle events.
+CREDENTIAL_CREATED: Final[str] = "credential.created"
+CREDENTIAL_ROTATED: Final[str] = "credential.rotated"
+CREDENTIAL_DELETED: Final[str] = "credential.deleted"
+CREDENTIAL_GRANT_PUT: Final[str] = "credential_grant.put"
+CREDENTIAL_GRANT_DELETED: Final[str] = "credential_grant.deleted"
+
+#: Providers whose credentials may use the per-credential OAuth device flow.
+OAUTH_PROVIDER_TYPES: Final[frozenset[str]] = frozenset({ProviderName.PARALLEL.value})
 
 #: Conflict code for a rotation that named a stale generation.
 CREDENTIAL_GENERATION_CONFLICT: Final[str] = "CREDENTIAL_GENERATION_CONFLICT"
@@ -89,11 +114,6 @@ _VALID_PROVIDER_NAMES: Final[frozenset[str]] = frozenset(
     provider.value for provider in ProviderName
 )
 
-_OPERATION_PERMISSION: Final[dict[CredentialOperation, PermissionAction]] = {
-    CredentialOperation.SEARCH: PermissionAction.SEARCH_EXECUTE,
-    CredentialOperation.FETCH: PermissionAction.FETCH_EXECUTE,
-}
-
 
 def credential_secret_slot(credential_id: UUID, generation: int) -> str:
     """Return the runtime-settings slot name of one credential generation."""
@@ -101,12 +121,24 @@ def credential_secret_slot(credential_id: UUID, generation: int) -> str:
     return f"credential.{credential_id}.g{generation}"
 
 
+def oauth_slot_names(credential_id: UUID, token_generation: int) -> list[str]:
+    """Return every OAuth secret slot name of one token generation."""
+
+    return [
+        oauth_secret_slot(credential_id, kind, token_generation)
+        for kind in sorted(OAUTH_SECRET_KINDS)
+    ]
+
+
 @dataclass(frozen=True)
 class ResolvedCredential:
     """One usable credential: identity, generation, allowed ops, and secret.
 
-    The secret is a ``SecretStr`` excluded from ``repr`` so an accidental log
-    or traceback never carries plaintext.
+    For an ``api_key`` credential ``secret`` is the key of ``generation``; for
+    an ``oauth`` credential it is the current access token and
+    ``token_generation`` names the grant generation it belongs to. The secret
+    is a ``SecretStr`` excluded from ``repr`` so an accidental log or
+    traceback never carries plaintext.
     """
 
     credential_id: UUID
@@ -114,6 +146,8 @@ class ResolvedCredential:
     generation: int
     permitted_operations: frozenset[CredentialOperation]
     secret: SecretStr = field(repr=False)
+    auth_mode: str = CredentialAuthMode.API_KEY.value
+    token_generation: int | None = None
 
 
 class CredentialServiceError(RuntimeError):
@@ -221,14 +255,16 @@ class CredentialService:
 
         async def operation(session: AsyncSession) -> CredentialInstanceRead:
             await self._require_system_manager(session, actor)
-            self._validate_provider_type(body.provider_type)
-            return await self._create_in_session(
+            self._validate_create(body)
+            created = await self._create_in_session(
                 session,
                 actor,
                 body,
                 owner_scope=CredentialOwnerScope.SYSTEM,
                 owner_project_id=None,
             )
+            await self._audit_credential(session, actor, created, CREDENTIAL_CREATED)
+            return created
 
         return await self._write(operation)
 
@@ -250,7 +286,9 @@ class CredentialService:
             )
             if current is None:
                 raise CredentialNotFound("credential is not available")
-            return await self._rotate_in_session(session, credentials, current, body)
+            rotated = await self._rotate_in_session(session, credentials, current, body)
+            await self._audit_credential(session, actor, rotated, CREDENTIAL_ROTATED)
+            return rotated
 
         return await self._write(operation)
 
@@ -272,6 +310,7 @@ class CredentialService:
             if current is None:
                 raise CredentialNotFound("credential is not available")
             await self._delete_in_session(session, credentials, current)
+            await self._audit_credential(session, actor, current, CREDENTIAL_DELETED)
 
         await self._write(operation)
 
@@ -313,12 +352,31 @@ class CredentialService:
                     PROJECT_ARCHIVED,
                     "archived projects cannot hold credential grants",
                 )
-            return await credentials.upsert_grant(
+            grant = await credentials.upsert_grant(
                 credential_id=credential_id,
                 project_id=project_id,
                 permitted_operations=body.permitted_operations,
                 granted_by=actor.id,
             )
+            # A narrowed grant also narrows every binding of this project to
+            # the credential: no binding keeps an operation the grant dropped.
+            narrowed = await ProjectBindingRepository(session).restrict_operations_for_credential(
+                project_id=project_id,
+                credential_id=credential_id,
+                allowed=body.permitted_operations,
+            )
+            await self._audit_grant(
+                session,
+                actor,
+                credential_id=credential_id,
+                project_id=project_id,
+                action=CREDENTIAL_GRANT_PUT,
+                detail={
+                    "permitted_operations": sorted(grant.permitted_operations),
+                    "narrowed_binding_count": narrowed,
+                },
+            )
+            return grant
 
         return await self._write(operation)
 
@@ -336,11 +394,25 @@ class CredentialService:
             await self._require_system_manager(session, actor)
             credentials = CredentialRepository(session)
             await self._require_system_credential(credentials, credential_id)
-            removed = await credentials.delete_grant(
-                credential_id=credential_id, project_id=project_id
-            )
-            if not removed:
+            grant = await credentials.get_grant(credential_id=credential_id, project_id=project_id)
+            if grant is None:
                 raise CredentialNotFound("credential grant is not available")
+            # Revoking a grant removes every binding of this project to the
+            # credential in the same transaction. The binding's composite
+            # foreign key to the grant also cascades, so no binding can
+            # outlive the grant it was created under.
+            removed_bindings = await ProjectBindingRepository(session).delete_for_credential(
+                project_id=project_id, credential_id=credential_id
+            )
+            await credentials.delete_grant(credential_id=credential_id, project_id=project_id)
+            await self._audit_grant(
+                session,
+                actor,
+                credential_id=credential_id,
+                project_id=project_id,
+                action=CREDENTIAL_GRANT_DELETED,
+                detail={"removed_binding_count": removed_bindings},
+            )
 
         await self._write(operation)
 
@@ -432,7 +504,7 @@ class CredentialService:
                 ),
             )
             await self._require_active_project(session, context)
-            self._validate_provider_type(body.provider_type)
+            self._validate_create(body)
             created = await self._create_in_session(
                 session,
                 actor,
@@ -440,6 +512,7 @@ class CredentialService:
                 owner_scope=CredentialOwnerScope.PROJECT,
                 owner_project_id=project_id,
             )
+            await self._audit_credential(session, actor, created, CREDENTIAL_CREATED)
             return _project_read(
                 created,
                 operations=ALL_CREDENTIAL_OPERATIONS,
@@ -482,6 +555,7 @@ class CredentialService:
                 )
             await self._require_active_project(session, context)
             rotated = await self._rotate_in_session(session, credentials, private, body)
+            await self._audit_credential(session, actor, rotated, CREDENTIAL_ROTATED)
             return _project_read(
                 rotated,
                 operations=ALL_CREDENTIAL_OPERATIONS,
@@ -523,11 +597,12 @@ class CredentialService:
                 )
             await self._require_active_project(session, context)
             await self._delete_in_session(session, credentials, private)
+            await self._audit_credential(session, actor, private, CREDENTIAL_DELETED)
 
         await self._write(operation)
 
     # ------------------------------------------------------------------
-    # P09 runtime seam: grant-aware secret resolution
+    # Runtime seam: credential-state-only material resolution (A2 consumer)
     # ------------------------------------------------------------------
 
     async def usable_credential_in_session(
@@ -567,7 +642,7 @@ class CredentialService:
             return None
         return granted[0]
 
-    async def resolve_for_project(
+    async def resolve_material(
         self,
         context: ProjectContext,
         credential_id: UUID,
@@ -575,20 +650,30 @@ class CredentialService:
         operation: CredentialOperation,
         expected_generation: int | None = None,
     ) -> ResolvedCredential | None:
-        """Resolve the current-generation secret of one usable credential.
+        """Load the current secret material of one credential usable by this project.
 
-        Every call re-evaluates execution permission, project liveness, and
-        grant state, so a revoked grant stops resolving immediately. Any
-        failed check, generation mismatch, or missing slot returns ``None``;
-        the secret itself never leaves this method except inside the returned
-        ``SecretStr``.
+        This method grants no actor authority. It never consults
+        ``context.effective_permissions``: a context is a snapshot and cannot
+        prove the actor still holds a permission. The dispatch path (A2) must
+        perform the live actor permission check (membership, role, account
+        status, API key revocation and expiry) before it calls this method.
+
+        What this method does check, on every call and against current state:
+        the project exists in this account and is active; the credential is
+        an active private credential of that project, or an active system
+        credential with a grant to that project that lists ``operation``;
+        ``expected_generation``, when given, equals the credential's
+        generation. It then loads the secret: the API key of the current
+        generation slot, or, for an OAuth credential, the access token of the
+        current token generation of a ``connected``, unexpired grant.
+
+        Any failed check or missing slot returns ``None``. The secret never
+        leaves this method except inside the returned ``SecretStr``.
         """
 
         self._rollout.require_management()
         if context.account_id != self._account_id:
             raise ValueError("project context account does not match the installation account")
-        if not context.allows(_OPERATION_PERMISSION[operation]):
-            return None
         try:
             async with self._repository.session() as session:
                 usable = await self.usable_credential_in_session(
@@ -601,11 +686,10 @@ class CredentialService:
                     return None
                 if expected_generation is not None and usable.generation != expected_generation:
                     return None
-                plaintext = await self._secret_store.get_in_session(
-                    session, credential_secret_slot(usable.id, usable.generation)
-                )
-                if plaintext is None:
+                material = await self._load_material(session, usable)
+                if material is None:
                     return None
+                plaintext, token_generation = material
                 operations = await self._resolved_operations(session, usable, context.project_id)
                 return ResolvedCredential(
                     credential_id=usable.id,
@@ -613,9 +697,35 @@ class CredentialService:
                     generation=usable.generation,
                     permitted_operations=operations,
                     secret=SecretStr(plaintext),
+                    auth_mode=usable.auth_mode,
+                    token_generation=token_generation,
                 )
         except OperationalError as error:
             raise CredentialStorageUnavailable("the credential store is unavailable") from error
+
+    async def _load_material(
+        self, session: AsyncSession, credential: CredentialInstanceRead
+    ) -> tuple[str, int | None] | None:
+        """Return the plaintext secret and OAuth token generation, or ``None``."""
+
+        if credential.auth_mode != CredentialAuthMode.OAUTH.value:
+            plaintext = await self._secret_store.get_in_session(
+                session, credential_secret_slot(credential.id, credential.generation)
+            )
+            return None if plaintext is None else (plaintext, None)
+        grant = await CredentialOAuthGrantRepository(session).get(
+            credential_id=credential.id,
+            owner_scope=credential.owner_scope,
+            owner_project_id=credential.owner_project_id,
+        )
+        if grant is None or grant.status is not OAuthGrantStatus.CONNECTED:
+            return None
+        if grant.access_expires_at is not None and grant.access_expires_at <= datetime.now(UTC):
+            return None
+        token = await self._secret_store.get_in_session(
+            session, oauth_secret_slot(credential.id, "access", grant.token_generation)
+        )
+        return None if token is None else (token, grant.token_generation)
 
     # ------------------------------------------------------------------
     # Shared helpers
@@ -692,7 +802,11 @@ class CredentialService:
         owner_scope: CredentialOwnerScope,
         owner_project_id: UUID | None,
     ) -> CredentialInstanceRead:
-        """Insert the row and its generation-1 slot in one transaction."""
+        """Insert the row and its generation-1 slot in one transaction.
+
+        An OAuth credential has no generation slot: its tokens arrive through
+        the device flow into token-generation slots.
+        """
 
         credentials = CredentialRepository(session)
         if await credentials.live_label_exists(
@@ -715,11 +829,12 @@ class CredentialService:
             auth_mode=body.auth_mode.value,
             created_by=actor.id,
         )
-        await self._secret_store.create_slot_in_session(
-            session,
-            credential_secret_slot(created.id, created.generation),
-            body.secret.get_secret_value(),
-        )
+        if body.secret is not None:
+            await self._secret_store.create_slot_in_session(
+                session,
+                credential_secret_slot(created.id, created.generation),
+                body.secret.get_secret_value(),
+            )
         return created
 
     async def _rotate_in_session(
@@ -731,6 +846,10 @@ class CredentialService:
     ) -> CredentialInstanceRead:
         """Advance the generation and move the secret slot atomically."""
 
+        if current.auth_mode == CredentialAuthMode.OAUTH.value:
+            raise CredentialValidationError(
+                "an oauth credential has no key to rotate; reconnect it through the device flow"
+            )
         advanced = await credentials.advance_generation(
             credential_id=current.id,
             owner_scope=current.owner_scope,
@@ -760,18 +879,119 @@ class CredentialService:
         credentials: CredentialRepository,
         current: CredentialInstanceRead,
     ) -> None:
-        """Tombstone the live slot, mark the row deleted, and drop grants."""
+        """Tombstone the live slots, mark the row deleted, and drop grants and bindings.
+
+        An OAuth credential's grant is disconnected and every token slot of
+        its current token generation is tombstoned in the same transaction.
+        Dropping a system credential's grants cascades to every project's
+        bindings of it; a private credential's bindings are removed directly.
+        """
 
         await self._secret_store.tombstone_in_session(
             session,
             credential_secret_slot(current.id, current.generation),
         )
+        if current.auth_mode == CredentialAuthMode.OAUTH.value:
+            await self._retire_oauth_in_session(session, current)
         await credentials.mark_deleted(
             credential_id=current.id,
             owner_scope=current.owner_scope,
             owner_project_id=current.owner_project_id,
         )
         await credentials.delete_grants_for_credential(credential_id=current.id)
+        if current.owner_project_id is not None:
+            await ProjectBindingRepository(session).delete_for_credential(
+                project_id=current.owner_project_id, credential_id=current.id
+            )
+
+    async def _retire_oauth_in_session(
+        self, session: AsyncSession, credential: CredentialInstanceRead
+    ) -> None:
+        """Disconnect one OAuth grant and tombstone its current token slots."""
+
+        grants = CredentialOAuthGrantRepository(session)
+        grant = await grants.get(
+            credential_id=credential.id,
+            owner_scope=credential.owner_scope,
+            owner_project_id=credential.owner_project_id,
+        )
+        if grant is None:
+            return
+        for slot in oauth_slot_names(credential.id, grant.token_generation):
+            await self._secret_store.tombstone_in_session(session, slot)
+        await grants.disconnect(
+            credential_id=credential.id,
+            owner_scope=credential.owner_scope,
+            owner_project_id=credential.owner_project_id,
+        )
+
+    async def _audit_credential(
+        self,
+        session: AsyncSession,
+        actor: UserPrincipal,
+        credential: CredentialInstanceRead,
+        action: str,
+    ) -> None:
+        """Audit one credential lifecycle event in its owner's scope."""
+
+        detail: dict[str, object] = {
+            "provider_type": credential.provider_type,
+            "auth_mode": credential.auth_mode,
+            "label": credential.label,
+            "generation": credential.generation,
+        }
+        if credential.owner_project_id is None:
+            await record_system_event(
+                session,
+                account_id=self._account_id,
+                actor=actor,
+                action=action,
+                target_type="credential",
+                target_id=str(credential.id),
+                detail=detail,
+            )
+            return
+        await record_project_event(
+            session,
+            project_id=credential.owner_project_id,
+            actor=actor,
+            action=action,
+            target_type="credential",
+            target_id=str(credential.id),
+            detail=detail,
+        )
+
+    async def _audit_grant(
+        self,
+        session: AsyncSession,
+        actor: UserPrincipal,
+        *,
+        credential_id: UUID,
+        project_id: UUID,
+        action: str,
+        detail: dict[str, object],
+    ) -> None:
+        """Audit one grant change at system scope and in the granted project."""
+
+        target_id = f"{credential_id}:{project_id}"
+        await record_system_event(
+            session,
+            account_id=self._account_id,
+            actor=actor,
+            action=action,
+            target_type="credential_grant",
+            target_id=target_id,
+            detail=detail,
+        )
+        await record_project_event(
+            session,
+            project_id=project_id,
+            actor=actor,
+            action=action,
+            target_type="credential_grant",
+            target_id=target_id,
+            detail=detail,
+        )
 
     async def _reject_foreign_credential(
         self,
@@ -877,37 +1097,35 @@ class CredentialService:
         if provider_type not in _VALID_PROVIDER_NAMES:
             raise CredentialValidationError(f"unknown provider type {provider_type!r}")
 
+    @classmethod
+    def _validate_create(cls, body: CredentialCreate) -> None:
+        cls._validate_provider_type(body.provider_type)
+        if (
+            body.auth_mode is CredentialAuthMode.OAUTH
+            and body.provider_type not in OAUTH_PROVIDER_TYPES
+        ):
+            raise CredentialValidationError(
+                f"provider type {body.provider_type!r} does not support oauth credentials"
+            )
+
     async def _write(self, operation: Callable[[AsyncSession], Awaitable[_T]]) -> _T:
         """Run one credential write under ``BEGIN IMMEDIATE`` with bounded retries."""
 
-        for attempt in range(self._max_write_attempts):
-            async with self._repository.session() as session:
-                try:
-                    await session.execute(text("BEGIN IMMEDIATE"))
-                    result = await operation(session)
-                    await session.commit()
-                    return result
-                except OperationalError as error:
-                    await session.rollback()
-                    if self._is_locked(error) and attempt + 1 < self._max_write_attempts:
-                        await asyncio.sleep(0.02 * (2**attempt))
-                        continue
-                    raise CredentialStorageUnavailable(
-                        "the credential store is temporarily unavailable"
-                    ) from error
-                except IntegrityError as error:
-                    await session.rollback()
-                    raise self._integrity_conflict(error) from error
-                except SecretSlotConflict as error:
-                    await session.rollback()
-                    raise CredentialConflict(
-                        CREDENTIAL_CONFLICT,
-                        "the credential operation conflicts with existing data",
-                    ) from error
-                except BaseException:
-                    await session.rollback()
-                    raise
-        raise CredentialStorageUnavailable("the credential store is temporarily unavailable")
+        try:
+            return await run_serialized(
+                self._repository, operation, max_attempts=self._max_write_attempts
+            )
+        except OperationalError as error:
+            raise CredentialStorageUnavailable(
+                "the credential store is temporarily unavailable"
+            ) from error
+        except IntegrityError as error:
+            raise self._integrity_conflict(error) from error
+        except SecretSlotConflict as error:
+            raise CredentialConflict(
+                CREDENTIAL_CONFLICT,
+                "the credential operation conflicts with existing data",
+            ) from error
 
     @staticmethod
     def _integrity_conflict(error: IntegrityError) -> CredentialConflict:
@@ -923,16 +1141,17 @@ class CredentialService:
             "the credential operation conflicts with existing data",
         )
 
-    @staticmethod
-    def _is_locked(error: OperationalError) -> bool:
-        message = str(error.orig).lower()
-        return "database is locked" in message or "database table is locked" in message
-
 
 __all__ = [
     "CREDENTIAL_CONFLICT",
+    "CREDENTIAL_CREATED",
+    "CREDENTIAL_DELETED",
     "CREDENTIAL_GENERATION_CONFLICT",
+    "CREDENTIAL_GRANT_DELETED",
+    "CREDENTIAL_GRANT_PUT",
     "CREDENTIAL_LABEL_CONFLICT",
+    "CREDENTIAL_ROTATED",
+    "OAUTH_PROVIDER_TYPES",
     "PROJECT_ARCHIVED",
     "CredentialConflict",
     "CredentialNotFound",
@@ -942,4 +1161,5 @@ __all__ = [
     "CredentialValidationError",
     "ResolvedCredential",
     "credential_secret_slot",
+    "oauth_slot_names",
 ]

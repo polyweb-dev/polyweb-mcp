@@ -5,8 +5,6 @@ repositories with the real Tavily catalog records. No vendor I/O, no live
 keys; usage payloads are built locally through the adapter mapping seam.
 """
 
-import gc
-import time
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -26,28 +24,12 @@ from freesearch.models.provider_limits import (
 )
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.services.provider_limits import ProviderLimitsService
+from tests.fixtures.database_lifecycle import unlink_with_retries
 from tests.fixtures.execution import seed_execution_project
 
 FIXED_AT = datetime(2026, 3, 10, 12, 0, 0, tzinfo=UTC)
 
 TAVILY_POOL = "tavily:keyed:credit"
-
-
-def _unlink_with_retries(path: Path, *, attempts: int = 20) -> None:
-    """Remove a test database after Windows releases delayed SQLite handles."""
-
-    for attempt in range(attempts):
-        try:
-            path.unlink()
-        except FileNotFoundError:
-            return
-        except PermissionError:
-            if attempt == attempts - 1:
-                raise
-            gc.collect()
-            time.sleep(0.05)
-        else:
-            return
 
 
 @pytest_asyncio.fixture
@@ -59,7 +41,7 @@ async def repository(tmp_path: Path):
     finally:
         await repo.close()
         for extra in (db_path, Path(f"{db_path}.migration.lock")):
-            _unlink_with_retries(extra)
+            unlink_with_retries(extra)
 
 
 def _tavily_records() -> list[ProviderLimitRecord]:

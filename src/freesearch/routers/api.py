@@ -38,7 +38,6 @@ from freesearch.infrastructure.auth_asgi import (
 from freesearch.infrastructure.encrypted_store import (
     EncryptedDbSecretStore,
     load_secret_codec,
-    migrate_legacy_secrets_to_encrypted_db,
 )
 from freesearch.infrastructure.http import create_async_client
 from freesearch.infrastructure.observability import (
@@ -99,6 +98,7 @@ from freesearch.persistence.database_migrations import (
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api_keys import register_api_key_routes
 from freesearch.routers.auth import register_auth_routes, require_control_reader
+from freesearch.routers.bindings import register_binding_routes
 from freesearch.routers.control import (
     _build_with_resolved_secret,
     _resolve_secret,
@@ -108,9 +108,11 @@ from freesearch.routers.control import (
     register_control_routes,
     routing_policy,
 )
+from freesearch.routers.credential_oauth import register_credential_oauth_routes
 from freesearch.routers.credentials import register_credential_routes
 from freesearch.routers.limits import limit_denial_response, register_limit_routes
 from freesearch.routers.observability import register_observability_routes
+from freesearch.routers.pools import register_pool_routes
 from freesearch.routers.projects import register_project_routes
 from freesearch.routers.settings import register_settings_routes
 from freesearch.services.aggregation import reciprocal_rank_fusion
@@ -345,15 +347,6 @@ def create_app(
             await _open_accounts(
                 auth, repo=repo, database=database, owns_auth_service=owns_auth_service
             )
-            if (
-                owns_repository
-                and repo is not None
-                and isinstance(app.state.secret_store, EncryptedDbSecretStore)
-            ):
-                await migrate_legacy_secrets_to_encrypted_db(
-                    repository=repo,
-                    encrypted_store=app.state.secret_store,
-                )
             if adapters is None:
                 if isinstance(repo, SQLiteRepository):
                     await _build_app_adapters(
@@ -441,6 +434,9 @@ def create_app(
     register_api_key_routes(app)
     register_settings_routes(app)
     register_credential_routes(app)
+    register_credential_oauth_routes(app)
+    register_binding_routes(app)
+    register_pool_routes(app)
     register_control_routes(app)
     register_limit_routes(app)
     register_observability_routes(app)

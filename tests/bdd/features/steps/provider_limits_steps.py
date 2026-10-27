@@ -2,12 +2,11 @@
 
 Every scenario uses synthetic provider ids (never real vendor builders),
 a fresh isolated SQLite database, and deterministic clocks. No vendor I/O.
-Plan: P01-P02, P03 base hooks, P04-P07, P08 generic detail; B01/0, B02,
+Plan: P01-P02, P03 base hooks, P04-P07, P08 generic detail; B01/0,
 B04-B06, B11-B13, B19-B27, B33, B37-B41. Rev5 K=0.001 exact Decimal math.
 """
 
 import asyncio
-import sqlite3
 import tempfile
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -45,6 +44,7 @@ from freesearch.models.provider_limits import (
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.services import credit_units as cu
 from freesearch.services.provider_limits import ProviderLimitsService
+from tests.fixtures.database_lifecycle import unlink_with_retries
 from tests.fixtures.execution import bdd_project_id, scenario_attribution
 
 FIXED_AT = datetime(2026, 3, 10, 12, 0, 0, tzinfo=UTC)
@@ -57,11 +57,37 @@ def _run(context: Any, coro: Any) -> Any:
 
 
 def _open_repo(context: Any) -> None:
-    with tempfile.NamedTemporaryFile(
-        prefix="s0-core-", suffix=".db", dir=Path.cwd(), delete=False
-    ) as tmp:
-        context.database_path = tmp.name
-    context.repository = _run(context, SQLiteRepository.open(Path(context.database_path)))
+    """Open a fresh repository inside a per-scenario temporary directory.
+
+    Databases never land in the working directory. A scenario may open more
+    than one repository, so every one opened here is closed, and the directory
+    removed, by a scenario cleanup registered on first use.
+    """
+
+    directory = getattr(context, "s0_core_directory", None)
+    if directory is None:
+        directory = Path(tempfile.mkdtemp(prefix="s0-core-"))
+        context.s0_core_directory = directory
+        context.s0_core_repositories = []
+        context.enc_cleanups = [
+            *getattr(context, "enc_cleanups", []),
+            lambda: _close_and_remove_s0_core(context),
+        ]
+    path = directory / f"s0-core-{len(context.s0_core_repositories)}.db"
+    context.database_path = str(path)
+    context.repository = _run(context, SQLiteRepository.open(path))
+    context.s0_core_repositories.append(context.repository)
+
+
+def _close_and_remove_s0_core(context: Any) -> None:
+    """Close every scenario repository, then delete its temporary directory."""
+
+    for repository in context.s0_core_repositories:
+        _run(context, repository.close())
+    directory = context.s0_core_directory
+    for child in directory.iterdir():
+        unlink_with_retries(child)
+    directory.rmdir()
 
 
 def _limits_repo(context: Any) -> Any:
@@ -174,84 +200,13 @@ def step_empty_views(context: Any) -> None:
     assert context.dashboard_views == []
 
 
-# --- B02: migration ---------------------------------------------------------
-
-
-@given("a legacy synthetic database with native history")
-def step_legacy_db(context: Any) -> None:
-    with tempfile.NamedTemporaryFile(
-        prefix="s0-legacy-", suffix=".db", dir=Path.cwd(), delete=False
-    ) as tmp:
-        context.database_path = tmp.name
-    with sqlite3.connect(context.database_path) as conn:
-        conn.executescript(
-            """
-            CREATE TABLE usage_events (
-                id INTEGER PRIMARY KEY, provider TEXT NOT NULL,
-                operation TEXT NOT NULL, units TEXT NOT NULL,
-                observed_at TEXT NOT NULL, request_id TEXT, metadata TEXT NOT NULL);
-            CREATE TABLE quota_snapshots (
-                id INTEGER PRIMARY KEY, provider TEXT NOT NULL,
-                source TEXT NOT NULL, remaining TEXT, limit_units TEXT,
-                reset_at TEXT, observed_at TEXT NOT NULL);
-            """
-        )
-        conn.execute(
-            "INSERT INTO usage_events VALUES (7,'synth','search','12.50',"
-            "'2026-01-01T00:00:00+00:00','r-7','{}')"
-        )
-        conn.execute(
-            "INSERT INTO quota_snapshots VALUES (9,'synth','OBSERVED','75',"
-            "'100',NULL,'2026-01-01T00:00:00+00:00')"
-        )
-
-
-@when("I upgrade the synthetic database twice")
-def step_upgrade_twice(context: Any) -> None:
-    from freesearch.persistence.database_migrations import (
-        migration_head,
-        upgrade_database,
-    )
-
-    first = upgrade_database(Path(context.database_path))
-    second = upgrade_database(Path(context.database_path))
-    context.first_changed = first.changed
-    context.second_changed = second.changed
-    context.head = migration_head()
-
-
-@then("the synthetic native rows are preserved")
-def step_rows_preserved(context: Any) -> None:
-    assert context.first_changed is True
-    assert context.second_changed is False
-    with sqlite3.connect(context.database_path) as conn:
-        usage = conn.execute("SELECT units FROM usage_events WHERE id=7").fetchone()
-        quota = conn.execute("SELECT remaining FROM quota_snapshots WHERE id=9").fetchone()
-    # P04: usage_events is recreated empty at 0008; unrelated rows stay.
-    assert usage is None
-    assert quota == ("75",)
-
-
-@then("the synthetic database is at one migration head with limit tables")
-def step_one_head(context: Any) -> None:
-    from freesearch.persistence.database_migrations import migration_head
-
-    assert context.head == migration_head()
-    with sqlite3.connect(context.database_path) as conn:
-        tables = {
-            row[0]
-            for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
-        }
-    for table in (
-        "provider_limits",
-        "provider_native_pools",
-        "provider_crd_grants",
-        "provider_limit_events",
-        "provider_limit_admissions",
-        "provider_rate_observations",
-        "provider_rate_attempts",
-    ):
-        assert table in tables
+# --- B02: retired ----------------------------------------------------------
+# "B02 legacy native rows survive upgrade with one migration head" and its four
+# exclusively consumed steps were removed (RT-13): D1 rejects older databases
+# without modification. Survivors: database_migrations.feature "A database from
+# an older revision is rejected and left unchanged" plus the baseline,
+# idempotency, byte-identical and worktree-isolation tests in
+# tests/integration/persistence/test_database_migrations.py.
 
 
 # --- B04: lease -------------------------------------------------------------

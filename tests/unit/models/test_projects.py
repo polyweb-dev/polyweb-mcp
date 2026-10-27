@@ -1,13 +1,13 @@
 """Unit tests for projects domain models, contracts, and alpha bootstrap fixtures."""
 
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
 
+from freesearch.models.credentials import CredentialOperation
 from freesearch.models.projects import (
     API_KEY_ACTIONS,
     API_KEY_SCOPES,
@@ -38,7 +38,6 @@ from freesearch.models.projects import (
     ProjectMemberAdd,
     ProjectMemberRead,
     ProjectMemberUpdate,
-    ProjectPoolAllocationRead,
     ProjectRead,
     ProjectRolloutState,
     ProjectSettingsDocument,
@@ -49,9 +48,10 @@ from freesearch.models.projects import (
     SettingsFieldResolution,
     SettingsProvenance,
     SettingsResolution,
-    UpstreamQuotaPoolRead,
     evaluate_authorization,
 )
+from freesearch.models.providers import AllocationRead, PoolRead
+from freesearch.models.schema_enums import PoolStatus, UpstreamScope
 from freesearch.models.users import AuthProvider, UserAccount, UserAccountCreate
 from tests.fixtures.alpha_fixtures import (
     alpha_test_db_context,
@@ -729,25 +729,40 @@ def test_downstream_model_contracts_structure() -> None:
     )
     assert binding.priority == 1
 
-    # UpstreamQuotaPoolRead
-    pool = UpstreamQuotaPoolRead(
+    # F3 (A4): the P00 UpstreamQuotaPoolRead/ProjectPoolAllocationRead models were
+    # deleted; the A4 wire models PoolRead/AllocationRead replace them.
+    pool = PoolRead(
         id=uuid4(),
         provider_type="brave",
-        upstream_scope="tier_1",
+        upstream_scope=UpstreamScope.CREDENTIAL,
+        pool_key="brave-key",
+        label="Brave key pool",
+        constraints=[],
+        max_concurrency=None,
+        max_queued_requests=None,
+        status=PoolStatus.ACTIVE,
         version=1,
     )
     assert pool.provider_type == "brave"
 
-    # ProjectPoolAllocationRead
-    alloc = ProjectPoolAllocationRead(
+    alloc = AllocationRead(
         project_id=proj_id,
         pool_id=pool.id,
-        operation_scope="search",
-        base_rate=Decimal("10.0"),
-        max_rate=Decimal("20.0"),
+        operation_scope=CredentialOperation.SEARCH,
+        base_rate=10,
+        rate_window_seconds=60,
+        borrow_enabled=True,
+        max_rate=20,
+        effective_max_rate=20,
+        weight=1,
+        best_effort=False,
+        max_concurrency=None,
+        max_queued_requests=None,
+        max_queued_bytes=None,
+        max_queue_wait_ms=None,
         version=1,
     )
-    assert alloc.max_rate == Decimal("20.0")
+    assert alloc.max_rate == 20
 
 
 @pytest.mark.asyncio

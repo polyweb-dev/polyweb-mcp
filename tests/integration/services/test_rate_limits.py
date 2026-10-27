@@ -4,8 +4,6 @@ Synthetic records only. Uses a real SQLite repository through the shared
 rate service. No vendor I/O.
 """
 
-import gc
-import time
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -29,25 +27,9 @@ from freesearch.models.provider_limits import (
 )
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.services.provider_limits import ProviderLimitsService
+from tests.fixtures.database_lifecycle import unlink_with_retries
 
 FIXED_AT = datetime(2026, 3, 10, 12, 0, 0, tzinfo=UTC)
-
-
-def _unlink_with_retries(path: Path, *, attempts: int = 20) -> None:
-    """Remove a test database after Windows releases delayed SQLite handles."""
-
-    for attempt in range(attempts):
-        try:
-            path.unlink()
-        except FileNotFoundError:
-            return
-        except PermissionError:
-            if attempt == attempts - 1:
-                raise
-            gc.collect()
-            time.sleep(0.05)
-        else:
-            return
 
 
 @pytest_asyncio.fixture
@@ -59,7 +41,7 @@ async def repository(tmp_path: Path):
     finally:
         await repo.close()
         for extra in (db_path, Path(f"{db_path}.migration.lock")):
-            _unlink_with_retries(extra)
+            unlink_with_retries(extra)
 
 
 def _record():
@@ -124,6 +106,15 @@ async def test_two_unit_hour_denies_third(repository) -> None:
 
 
 async def test_vendor_observation_not_double_counted(repository) -> None:
+    """RT-09: a vendor observation already reflects earlier attempts.
+
+    The vendor reports 2 of 5 hourly units left at ``T-300s``. One durable
+    attempt predates that observation (already inside the vendor's number) and
+    one follows it. Only the later attempt may reduce the vendor headroom, so
+    exactly 1 unit remains at ``T``; counting the old attempt again would leave
+    0 and wrongly deny the next call.
+    """
+
     svc = ProviderLimitsService(
         repository.limits,
         records=[_record()],
@@ -131,6 +122,7 @@ async def test_vendor_observation_not_double_counted(repository) -> None:
         clock=lambda: FIXED_AT,
     )
     await svc.initialize()
+    observed_at = FIXED_AT - timedelta(seconds=300)
     await svc.rate_limits.observe(
         RateObservation(
             bucket_id="s-hour",
@@ -138,22 +130,54 @@ async def test_vendor_observation_not_double_counted(repository) -> None:
             auth_mode=AuthMode.KEYED,
             window=RateWindowName.HOUR,
             unit=RateUnit.REQUESTS,
-            limit=Decimal("2"),
+            limit=Decimal("5"),
             remaining=Decimal("2"),
-            observed_at=FIXED_AT,
+            observed_at=observed_at,
         )
     )
-    await svc.admit(
-        LimitCallContext(
+
+    def _ctx(attempt: str, at: datetime) -> LimitCallContext:
+        return LimitCallContext(
             provider="synth",
             operation=LimitOperation.SEARCH,
             auth_mode=AuthMode.KEYED,
-            attempt_id="v-1",
-            requested_at=FIXED_AT,
+            attempt_id=attempt,
+            requested_at=at,
         )
-    )
-    bars = await svc.rate_limits.progress("synth", FIXED_AT)
-    assert isinstance(bars, list)
+
+    async def _remaining() -> tuple[Decimal | None, Decimal | None]:
+        bars = {bar.bucket_id: bar for bar in await svc.rate_limits.progress("synth", FIXED_AT)}
+        details = {
+            w.bucket_id: w
+            for w in await svc.rate_limits.window_details("synth", AuthMode.KEYED, FIXED_AT)
+        }
+        return bars["s-hour"].remaining, details["s-hour"].remaining
+
+    async def _persisted(since: datetime | None = None) -> Decimal:
+        return await repository.limits.count_attempts(
+            "s-hour", window=RateWindowName.HOUR, now=FIXED_AT, since=since
+        )
+
+    # Before any local attempt the vendor headroom is reported unchanged.
+    assert await _remaining() == (Decimal("2"), Decimal("2"))
+
+    await svc.admit(_ctx("v-old", FIXED_AT - timedelta(seconds=400)))
+    await svc.admit(_ctx("v-new", FIXED_AT - timedelta(seconds=100)))
+    assert await _persisted() == Decimal("2")
+    assert await _persisted(since=observed_at) == Decimal("1")
+    # Only the post-observation attempt is subtracted from the vendor's 2.
+    assert await _remaining() == (Decimal("1"), Decimal("1"))
+
+    third = await svc.admit(_ctx("v-third", FIXED_AT))
+    assert third.attempt_id == "v-third"
+    assert await _persisted() == Decimal("3")
+    assert await _persisted(since=observed_at) == Decimal("2")
+    assert await _remaining() == (Decimal("0"), Decimal("0"))
+
+    with pytest.raises(LimitDeniedError) as exc:
+        await svc.admit(_ctx("v-fourth", FIXED_AT))
+    assert exc.value.status_code == 429
+    assert await _persisted() == Decimal("3")
 
 
 async def test_window_reset_restores_capacity(repository) -> None:

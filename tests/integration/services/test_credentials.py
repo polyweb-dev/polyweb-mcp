@@ -16,7 +16,6 @@ from freesearch.infrastructure.cryptography import MasterKey, SecretCodec
 from freesearch.infrastructure.encrypted_store import (
     EncryptedDbSecretStore,
     SecretSlotConflict,
-    migrate_legacy_secrets_to_encrypted_db,
 )
 from freesearch.models.credentials import (
     ALL_CREDENTIAL_OPERATIONS,
@@ -144,10 +143,10 @@ async def test_ac1_multiple_instances_distinct_secrets_and_label_conflicts(
         await service.put_grant(admin, primary.id, project_id, _both_ops())
         await service.put_grant(admin, backup.id, project_id, _both_ops())
         context = _context(boot, project_id)
-        resolved_primary = await service.resolve_for_project(
+        resolved_primary = await service.resolve_material(
             context, primary.id, operation=CredentialOperation.SEARCH
         )
-        resolved_backup = await service.resolve_for_project(
+        resolved_backup = await service.resolve_material(
             context, backup.id, operation=CredentialOperation.FETCH
         )
         assert resolved_primary is not None
@@ -224,10 +223,10 @@ async def test_ac2_shared_system_credential_grants_and_revocation(
         context_b = _context(boot, project_b.id)
         context_c = _context(boot, project_c.id)
 
-        resolved_a = await service.resolve_for_project(
+        resolved_a = await service.resolve_material(
             context_a, shared.id, operation=CredentialOperation.SEARCH
         )
-        resolved_b = await service.resolve_for_project(
+        resolved_b = await service.resolve_material(
             context_b, shared.id, operation=CredentialOperation.SEARCH
         )
         assert resolved_a is not None and resolved_b is not None
@@ -235,7 +234,7 @@ async def test_ac2_shared_system_credential_grants_and_revocation(
         assert resolved_b.secret.get_secret_value() == shared_secret.get_secret_value()
         # B's grant covers search only; fetch resolves nothing.
         assert (
-            await service.resolve_for_project(
+            await service.resolve_material(
                 context_b, shared.id, operation=CredentialOperation.FETCH
             )
             is None
@@ -271,12 +270,12 @@ async def test_ac2_shared_system_credential_grants_and_revocation(
         # Revoking B's grant resolves None for B while A keeps working.
         await service.delete_grant(admin, shared.id, project_b.id)
         assert (
-            await service.resolve_for_project(
+            await service.resolve_material(
                 context_b, shared.id, operation=CredentialOperation.SEARCH
             )
             is None
         )
-        still_a = await service.resolve_for_project(
+        still_a = await service.resolve_material(
             context_a, shared.id, operation=CredentialOperation.SEARCH
         )
         assert still_a is not None
@@ -287,7 +286,7 @@ async def test_ac2_shared_system_credential_grants_and_revocation(
         with pytest.raises(CredentialNotFound):
             await service.get_project_credential(admin, project_c.id, shared.id)
         assert (
-            await service.resolve_for_project(
+            await service.resolve_material(
                 context_c, shared.id, operation=CredentialOperation.SEARCH
             )
             is None
@@ -335,7 +334,7 @@ async def test_ac3_private_credentials_are_invisible_across_projects(
 
         context_b = _context(boot, project_b.id, user_id=b_admin_row.id)
         assert (
-            await service.resolve_for_project(
+            await service.resolve_material(
                 context_b, private_a.id, operation=CredentialOperation.SEARCH
             )
             is None
@@ -488,7 +487,7 @@ async def test_ac5_rotation_advances_generation_and_slots(tmp_path: Path) -> Non
         assert rotated.generation == 2
 
         assert (
-            await service.resolve_for_project(
+            await service.resolve_material(
                 context,
                 credential.id,
                 operation=CredentialOperation.SEARCH,
@@ -496,7 +495,7 @@ async def test_ac5_rotation_advances_generation_and_slots(tmp_path: Path) -> Non
             )
             is None
         )
-        resolved = await service.resolve_for_project(
+        resolved = await service.resolve_material(
             context,
             credential.id,
             operation=CredentialOperation.SEARCH,
@@ -519,7 +518,7 @@ async def test_ac5_rotation_advances_generation_and_slots(tmp_path: Path) -> Non
                 CredentialRotate(expected_generation=1, secret=_secret("stale")),
             )
         assert conflict.value.code == CREDENTIAL_GENERATION_CONFLICT
-        current = await service.resolve_for_project(
+        current = await service.resolve_material(
             context, credential.id, operation=CredentialOperation.SEARCH
         )
         assert current is not None
@@ -611,7 +610,7 @@ async def test_ac5_private_rotation_never_touches_other_credentials(
 
         view_b = await service.get_project_credential(admin, project_b.id, private_b.id)
         assert view_b.generation == 1
-        resolved_b = await service.resolve_for_project(
+        resolved_b = await service.resolve_material(
             _context(boot, project_b.id),
             private_b.id,
             operation=CredentialOperation.SEARCH,
@@ -620,7 +619,7 @@ async def test_ac5_private_rotation_never_touches_other_credentials(
         assert resolved_b.secret.get_secret_value() == b_secret.get_secret_value()
 
         await service.put_grant(admin, system.id, project_a, _both_ops())
-        resolved_system = await service.resolve_for_project(
+        resolved_system = await service.resolve_material(
             _context(boot, project_a),
             system.id,
             operation=CredentialOperation.SEARCH,
@@ -655,7 +654,7 @@ async def test_ac5_delete_tombstones_slots_grants_and_label_reuse(
         await service.delete_system_credential(admin, credential.id)
 
         assert (
-            await service.resolve_for_project(
+            await service.resolve_material(
                 context, credential.id, operation=CredentialOperation.SEARCH
             )
             is None
@@ -697,7 +696,7 @@ async def test_ac5_delete_tombstones_slots_grants_and_label_reuse(
         assert recreated.generation == 1
         assert credential_secret_slot(recreated.id, 1) != slot
         await service.put_grant(admin, recreated.id, project_a, _both_ops())
-        resolved = await service.resolve_for_project(
+        resolved = await service.resolve_material(
             context, recreated.id, operation=CredentialOperation.SEARCH
         )
         assert resolved is not None
@@ -732,7 +731,7 @@ async def test_ac5_no_secret_output_in_logs_or_dtos(tmp_path: Path, caplog) -> N
                 credential.id,
                 CredentialRotate(expected_generation=1, secret=second),
             )
-            resolved = await service.resolve_for_project(
+            resolved = await service.resolve_material(
                 context, credential.id, operation=CredentialOperation.SEARCH
             )
             await service.delete_system_credential(admin, credential.id)
@@ -781,7 +780,7 @@ async def test_ac5_archived_project_blocks_writes_and_resolution(
 
         context_b = _context(boot, project_b.id)
         assert (
-            await service.resolve_for_project(
+            await service.resolve_material(
                 context_b, system.id, operation=CredentialOperation.SEARCH
             )
             is None
@@ -794,7 +793,7 @@ async def test_ac5_archived_project_blocks_writes_and_resolution(
 async def test_ac6_legacy_singleton_secrets_are_invisible_to_credentials(
     tmp_path: Path,
 ) -> None:
-    """AC6: legacy provider slots never list or resolve; census unaffected."""
+    """AC6: legacy provider slots never list, resolve or get imported into instances."""
 
     boot = await bootstrap_fresh_alpha(tmp_path / "p08-ac6.db")
     try:
@@ -807,18 +806,15 @@ async def test_ac6_legacy_singleton_secrets_are_invisible_to_credentials(
         assert await service.list_system_credentials(admin) == []
         context = _context(boot, boot.default_project.id)
         assert (
-            await service.resolve_for_project(
-                context, uuid4(), operation=CredentialOperation.SEARCH
-            )
+            await service.resolve_material(context, uuid4(), operation=CredentialOperation.SEARCH)
             is None
         )
 
-        await service.create_system_credential(admin, _create("tavily", "instance", "i"))
-        report = await migrate_legacy_secrets_to_encrypted_db(
-            repository=boot.repository, encrypted_store=store
-        )
-        assert report.migrated == 0
-        assert report.skipped_existing + report.absent == 12
+        # A4 (API-11) deleted the no-op legacy census; what it pinned stays
+        # pinned: creating an instance never imports, copies or touches the
+        # legacy singleton slot, and the singleton never becomes an instance.
+        instance = await service.create_system_credential(admin, _create("tavily", "instance", "i"))
+        assert [item.id for item in await service.list_system_credentials(admin)] == [instance.id]
         assert await store.get("tavily") == "fake-p08-legacy-singleton"
     finally:
         await boot.repository.close()
@@ -885,7 +881,7 @@ async def test_ac7_ciphertext_is_bound_to_its_slot(tmp_path: Path) -> None:
 
         # The same system credential resolves for every granted project.
         for context in (context_a, context_b):
-            resolved = await service.resolve_for_project(
+            resolved = await service.resolve_material(
                 context, cred_a.id, operation=CredentialOperation.SEARCH
             )
             assert resolved is not None
@@ -899,12 +895,12 @@ async def test_ac7_ciphertext_is_bound_to_its_slot(tmp_path: Path) -> None:
             f"secret.enc:{credential_secret_slot(cred_b.id, 1)}", copied
         )
         assert (
-            await service.resolve_for_project(
+            await service.resolve_material(
                 context_a, cred_b.id, operation=CredentialOperation.SEARCH
             )
             is None
         )
-        resolved_a = await service.resolve_for_project(
+        resolved_a = await service.resolve_material(
             context_a, cred_a.id, operation=CredentialOperation.SEARCH
         )
         assert resolved_a is not None
@@ -940,7 +936,7 @@ async def test_ac8_master_key_rotation_keeps_credentials_usable(
             boot.repository, SecretCodec(key_two, retired=[key_one])
         )
         service_rotated = CredentialService(boot.repository, store_rotated)
-        resolved = await service_rotated.resolve_for_project(
+        resolved = await service_rotated.resolve_material(
             context, credential.id, operation=CredentialOperation.SEARCH
         )
         assert resolved is not None
@@ -958,7 +954,7 @@ async def test_ac8_master_key_rotation_keeps_credentials_usable(
         # A store with only the new key still resolves; only the old key fails.
         store_new = EncryptedDbSecretStore(boot.repository, SecretCodec(key_two))
         service_new = CredentialService(boot.repository, store_new)
-        resolved_new = await service_new.resolve_for_project(
+        resolved_new = await service_new.resolve_material(
             context, credential.id, operation=CredentialOperation.SEARCH
         )
         assert resolved_new is not None
@@ -967,7 +963,7 @@ async def test_ac8_master_key_rotation_keeps_credentials_usable(
         store_old_only = EncryptedDbSecretStore(boot.repository, SecretCodec(key_one))
         service_old = CredentialService(boot.repository, store_old_only)
         assert (
-            await service_old.resolve_for_project(
+            await service_old.resolve_material(
                 context, credential.id, operation=CredentialOperation.SEARCH
             )
             is None

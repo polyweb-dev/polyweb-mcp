@@ -137,24 +137,58 @@ def load_or_create_master_key(
     return MasterKey(_read_secret_file(path, _KEY_BYTES, "key"))
 
 
+def _read_existing_salt(key_file: Path) -> bytes:
+    salt_file = key_file.with_name(".secret_salt")
+    if not salt_file.exists():
+        raise FileNotFoundError("the master key salt file does not exist")
+    return _read_secret_file(salt_file, _SALT_BYTES, "salt")
+
+
+def load_existing_master_key(
+    *, key_file: Path | None = None, passphrase_env: str | None = None
+) -> MasterKey:
+    """Load the installation key without ever creating key or salt material.
+
+    Same sources as :func:`load_or_create_master_key` (passphrase plus the
+    installation salt, or the key file), but a missing file raises
+    ``FileNotFoundError`` instead of generating a new key.
+    """
+
+    path = key_file or DEFAULT_KEY_FILE
+    passphrase = (
+        passphrase_env if passphrase_env is not None else os.environ.get(MASTER_KEY_ENV_VAR)
+    )
+    if passphrase:
+        return MasterKey(_derive_key_from_passphrase(passphrase, _read_existing_salt(path)))
+    if not path.exists():
+        raise FileNotFoundError("the master key file does not exist")
+    return MasterKey(_read_secret_file(path, _KEY_BYTES, "key"))
+
+
 def load_retired_master_keys(
     *,
     key_files: Sequence[Path],
     passphrases: Sequence[str],
     salt_key_file: Path,
+    create_salt: bool = True,
 ) -> list[MasterKey]:
     """Load retired master keys for decrypting pre-rotation envelopes only.
 
     Retired key files must already exist and be exactly 32 bytes; this function
     never creates key material. Retired passphrases derive through PBKDF2 with
-    the installation salt that lives beside the primary key file.
+    the installation salt that lives beside the primary key file; with
+    ``create_salt=False`` a missing salt raises ``FileNotFoundError``.
     """
 
     retired: list[MasterKey] = []
     for path in key_files:
         retired.append(MasterKey(_read_secret_file(path, _KEY_BYTES, "key")))
     if passphrases:
-        salt = _load_or_create_salt(salt_key_file)
+        salt = (
+            _load_or_create_salt(salt_key_file)
+            if create_salt
+            else _read_existing_salt(salt_key_file)
+        )
         for passphrase in passphrases:
             retired.append(MasterKey(_derive_key_from_passphrase(passphrase, salt)))
     return retired

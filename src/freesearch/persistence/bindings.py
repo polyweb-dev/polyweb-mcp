@@ -275,6 +275,107 @@ class ProjectBindingRepository:
         await self._session.flush()
         return None if row is None else _stored(row)
 
+    async def update(
+        self,
+        *,
+        project_id: UUID,
+        binding_id: UUID,
+        enabled_operations: frozenset[CredentialOperation],
+        priority: int,
+        route_label: str,
+        now: datetime | None = None,
+    ) -> StoredBinding | None:
+        """Replace the tunable fields of one binding of this project.
+
+        The caller validates the values inside its serialized transaction;
+        ``None`` means the binding is absent or belongs to another project.
+        """
+
+        row = await self._session.scalar(
+            update(ProjectBindingRow)
+            .where(
+                ProjectBindingRow.id == str(binding_id),
+                ProjectBindingRow.project_id == str(project_id),
+            )
+            .values(
+                enabled_operations=_encode_operations(enabled_operations),
+                priority=priority,
+                route_label=route_label,
+                updated_at=stored_timestamp(resolve_now(now)),
+                version=ProjectBindingRow.version + 1,
+            )
+            .returning(ProjectBindingRow)
+            .execution_options(populate_existing=True)
+        )
+        await self._session.flush()
+        return None if row is None else _stored(row)
+
+    async def list_for_credential(
+        self, *, project_id: UUID, credential_id: UUID
+    ) -> list[StoredBinding]:
+        """List this project's bindings of one credential."""
+
+        rows = await self._session.scalars(
+            select(ProjectBindingRow)
+            .where(
+                ProjectBindingRow.project_id == str(project_id),
+                ProjectBindingRow.credential_id == str(credential_id),
+            )
+            .order_by(ProjectBindingRow.id)
+            .execution_options(populate_existing=True)
+        )
+        return [_stored(row) for row in rows]
+
+    async def restrict_operations_for_credential(
+        self,
+        *,
+        project_id: UUID,
+        credential_id: UUID,
+        allowed: frozenset[CredentialOperation],
+        now: datetime | None = None,
+    ) -> int:
+        """Drop every enabled operation outside ``allowed``; return the changed count.
+
+        Used when a grant narrows: no binding of this project may keep an
+        operation its credential no longer permits.
+        """
+
+        changed = 0
+        for binding in await self.list_for_credential(
+            project_id=project_id, credential_id=credential_id
+        ):
+            narrowed = binding.enabled_operations & allowed
+            if narrowed == binding.enabled_operations:
+                continue
+            await self._session.execute(
+                update(ProjectBindingRow)
+                .where(
+                    ProjectBindingRow.id == str(binding.id),
+                    ProjectBindingRow.project_id == str(project_id),
+                )
+                .values(
+                    enabled_operations=_encode_operations(narrowed),
+                    updated_at=stored_timestamp(resolve_now(now)),
+                    version=ProjectBindingRow.version + 1,
+                )
+                .execution_options(synchronize_session=False)
+            )
+            changed += 1
+        await self._session.flush()
+        return changed
+
+    async def delete_for_credential(self, *, project_id: UUID, credential_id: UUID) -> int:
+        """Remove every binding of this project to one credential; return the count."""
+
+        result = await self._session.execute(
+            delete(ProjectBindingRow).where(
+                ProjectBindingRow.project_id == str(project_id),
+                ProjectBindingRow.credential_id == str(credential_id),
+            )
+        )
+        await self._session.flush()
+        return int(getattr(result, "rowcount", 0))
+
     async def delete(self, *, project_id: UUID, binding_id: UUID) -> bool:
         """Remove one binding of this project; return whether a row was removed."""
 

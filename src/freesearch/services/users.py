@@ -43,6 +43,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from freesearch.configuration.config import Settings
+from freesearch.infrastructure.encrypted_store import EncryptedDbSecretStore
 from freesearch.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID, BuiltinRole
 from freesearch.models.schema_enums import AuditActorType, AuditCategory, AuditOutcome
 from freesearch.models.users import (
@@ -64,7 +65,9 @@ from freesearch.persistence.login_throttle import (
 from freesearch.persistence.projects import AccountRow, ProjectRepository
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.persistence.users import UserDatabase, UserRow, local_password_hash
+from freesearch.services.authorization import ScopedAuthorizationService
 from freesearch.services.monitoring import resolve_database_path
+from freesearch.services.oauth_flow_guard import end_unauthorized_oauth_flows
 
 #: Accepted password rule (Q2b): length plus three character classes.
 PASSWORD_MIN_LENGTH: int = 12
@@ -685,12 +688,22 @@ class AuthService:
 
         return await self._serialized(operation)
 
-    async def revoke_system_admin(self, user_id: UUID, *, revoked_by: UUID | None = None) -> bool:
+    async def revoke_system_admin(
+        self,
+        user_id: UUID,
+        *,
+        revoked_by: UUID | None = None,
+        secret_store: EncryptedDbSecretStore | None = None,
+    ) -> bool:
         """Remove ``system_admin`` from one account; ``False`` when it was not held.
 
         The revocation refuses to leave the installation without an active
-        system administrator, ends the account's session families and writes
-        its system audit event in the same serialized transaction.
+        system administrator, ends the account's session families, ends every
+        pending OAuth device flow on a system credential whose initiator no
+        longer holds ``system.credentials.manage`` and writes its system audit
+        event in the same serialized transaction. ``secret_store`` lets the
+        flow check read each flow's initiator; without it those flows end
+        fail-closed.
         """
 
         async def operation(session: AsyncSession) -> bool:
@@ -713,10 +726,33 @@ class AuthService:
             await AuthSessionRepository(session).revoke_user_families(
                 user_id, now=datetime.now(UTC)
             )
+            await self._end_system_oauth_flows(session, secret_store, revoked_by)
             await self._system_role_event(session, SYSTEM_ROLE_REVOKED, user_id, revoked_by)
             return True
 
         return await self._serialized(operation)
+
+    async def _end_system_oauth_flows(
+        self,
+        session: AsyncSession,
+        secret_store: EncryptedDbSecretStore | None,
+        actor_id: UUID | None,
+    ) -> None:
+        """End pending system-credential OAuth flows whose initiator lost authority."""
+
+        repository = self.repository
+        if repository is None:
+            raise AuthStorageUnavailable("the account store is unavailable")
+        await end_unauthorized_oauth_flows(
+            session,
+            authorization=ScopedAuthorizationService(
+                repository, account_id=DEFAULT_INSTALLATION_ACCOUNT_ID
+            ),
+            secret_store=secret_store,
+            account_id=DEFAULT_INSTALLATION_ACCOUNT_ID,
+            system_only=True,
+            actor_id=actor_id,
+        )
 
     async def get_account(self, user_id: UUID) -> UserAccount | None:
         """Return one account's safe projection, or ``None`` for an unknown id.
