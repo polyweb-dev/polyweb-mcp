@@ -41,16 +41,13 @@ Feature: Encrypted-DB secrets storage
     Then no captured log, response body, or database row should contain a sentinel
     And storing the same secret twice should yield different ciphertext
 
-  Scenario: AC-6 Vault writes are idempotent and deletes win via tombstone
+  Scenario: AC-6 Vault deletes win via tombstone across a restart
     Given an offline encrypted control API in passphrase mode
     When I write the sentinel secret for "exa" through the control API
     And I delete the sentinel secret for "exa" through the control API
     Then the secret for "exa" should stay missing with a tombstone
-    When I run the vault migration
+    When I restart the control API on the same database
     Then the secret for "exa" should stay missing with a tombstone
-    And the migration report should count a tombstone as skipped
-    When I run the vault migration again
-    Then no encrypted row should be overwritten
 
   Scenario: AC-7 OAuth lifecycle stays encrypted end to end
     Given an offline encrypted OAuth API with stubbed vendor

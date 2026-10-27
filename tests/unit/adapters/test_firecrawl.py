@@ -1167,25 +1167,24 @@ async def test_fetch_markdown_key_missing_raises_invalid_response() -> None:
 # --- usage boundary values ----------------------------------------------------
 
 
-@pytest.mark.parametrize("credits", ["1", True, -1, -0.5])
+# ARCH-04: one seven-case invalid-credit matrix.  The first four cases are this
+# function's originals; the three non-finite cases moved here from the deleted
+# ``test_search_non_finite_credits_raise_invalid_response`` (identical body).
+_INVALID_FIRECRAWL_CREDITS = [
+    pytest.param("1", id="numeric-string"),
+    pytest.param(True, id="bool-true"),
+    pytest.param(-1, id="negative-int"),
+    pytest.param(-0.5, id="negative-fraction"),
+    pytest.param(float("nan"), id="nan"),
+    pytest.param(float("inf"), id="positive-infinity"),
+    pytest.param(float("-inf"), id="negative-infinity"),
+]
+
+
+@pytest.mark.parametrize("credits", _INVALID_FIRECRAWL_CREDITS)
 async def test_search_non_numeric_or_negative_credits_raise_invalid_response(
     credits: object,
 ) -> None:
-    sdk = _FakeSDK()
-    sdk.search_response = _search_payload(usage={"credits": credits})
-    adapter = make_adapter(sdk=sdk)
-
-    with pytest.raises(ProviderOperationError) as excinfo:
-        await adapter.search(
-            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="usage")
-        )
-
-    assert excinfo.value.error.code == "invalid_response"
-    assert excinfo.value.error.retryable is False
-
-
-@pytest.mark.parametrize("credits", [float("nan"), float("inf"), float("-inf")])
-async def test_search_non_finite_credits_raise_invalid_response(credits: float) -> None:
     sdk = _FakeSDK()
     sdk.search_response = _search_payload(usage={"credits": credits})
     adapter = make_adapter(sdk=sdk)

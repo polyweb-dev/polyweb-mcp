@@ -28,16 +28,16 @@ administrator guard. No HTTP caller can skip authorization.
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime
 from typing import TypeVar
 from uuid import UUID
 
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from freesearch.infrastructure.encrypted_store import EncryptedDbSecretStore
 from freesearch.models.projects import (
     DEFAULT_INSTALLATION_ACCOUNT_ID,
     BuiltinRole,
@@ -68,6 +68,7 @@ from freesearch.persistence.projects import (
     ProjectRow,
 )
 from freesearch.persistence.storage import SQLiteRepository
+from freesearch.persistence.transactions import run_serialized
 from freesearch.persistence.users import UserRow
 from freesearch.services.authorization import (
     ScopedAuthorizationService,
@@ -76,6 +77,7 @@ from freesearch.services.authorization import (
     project_role_permissions,
     system_query,
 )
+from freesearch.services.oauth_flow_guard import end_unauthorized_oauth_flows
 from freesearch.services.users import AuthLastSystemAdmin
 
 #: Stable conflict code returned when a write would leave a project admin-free.
@@ -160,12 +162,16 @@ class ProjectService:
         account_id: UUID = DEFAULT_INSTALLATION_ACCOUNT_ID,
         rollout_state: ProjectRolloutState = ProjectRolloutState.PROJECTS_PREVIEW,
         max_write_attempts: int = 5,
+        secret_store: EncryptedDbSecretStore | None = None,
     ) -> None:
         self._repository = repository
         self._account_id = account_id
         self._rollout = ProjectsRolloutGate(rollout_state)
         self._authorization = ScopedAuthorizationService(repository, account_id=account_id)
         self._max_write_attempts = max(1, max_write_attempts)
+        # Reads OAuth device payloads to find flows whose initiator lost
+        # permission; without it those flows end fail-closed.
+        self._secret_store = secret_store
 
     async def list_projects(
         self,
@@ -447,6 +453,7 @@ class ProjectService:
                 status=member_update.status,
             )
             await self._require_active_admin(session, repository, {project_id})
+            await self._end_unauthorized_flows(session, actor, project_id=project_id)
             if previous_status != member_update.status.value:
                 await _member_event(
                     session,
@@ -483,6 +490,7 @@ class ProjectService:
             ):
                 raise ProjectNotFound(f"User {user_id} is not a member of project {project_id}")
             await self._require_active_admin(session, repository, {project_id})
+            await self._end_unauthorized_flows(session, actor, project_id=project_id)
             await _member_event(
                 session, project_id, MEMBER_REMOVED, actor, user_id, {"role_keys": existing.roles}
             )
@@ -557,6 +565,7 @@ class ProjectService:
             ):
                 raise ProjectNotFound(f"User {user_id} has no {role_key!r} role in this project")
             await self._require_active_admin(session, repository, {project_id})
+            await self._end_unauthorized_flows(session, actor, project_id=project_id)
             await _member_event(
                 session, project_id, ROLE_REMOVED, actor, user_id, {"role_key": role_key}
             )
@@ -629,6 +638,7 @@ class ProjectService:
                     await self._apply_member_change(session, repository, actor, project_id, change)
                 )
             await self._require_active_admin(session, repository, {project_id})
+            await self._end_unauthorized_flows(session, actor, project_id=project_id)
             return updated
 
         return await self._write(operation)
@@ -734,6 +744,14 @@ class ProjectService:
             await session.flush()
             await self._require_active_admin(session, repository, admin_project_ids)
             await self._require_active_system_admin(repository, changed)
+            await end_unauthorized_oauth_flows(
+                session,
+                authorization=self._authorization,
+                secret_store=self._secret_store,
+                account_id=self._account_id,
+                initiator_ids=frozenset(user.id for user in users),
+                actor_id=actor.id if actor is not None else None,
+            )
             audit = AuditRepository(session)
             for user_id in changed:
                 await audit.append_system_event(
@@ -751,39 +769,36 @@ class ProjectService:
 
         return await self._write(operation)
 
+    async def _end_unauthorized_flows(
+        self, session: AsyncSession, actor: UserPrincipal, *, project_id: UUID
+    ) -> None:
+        """End this project's pending OAuth flows whose initiator just lost permission."""
+
+        await end_unauthorized_oauth_flows(
+            session,
+            authorization=self._authorization,
+            secret_store=self._secret_store,
+            account_id=self._account_id,
+            project_id=project_id,
+            actor_id=actor.id,
+        )
+
     async def _write(self, operation: Callable[[AsyncSession], Awaitable[_T]]) -> _T:
         """Run one operation under ``BEGIN IMMEDIATE`` with bounded lock retries."""
 
-        for attempt in range(self._max_write_attempts):
-            async with self._repository.session() as session:
-                try:
-                    await session.execute(text("BEGIN IMMEDIATE"))
-                    result = await operation(session)
-                    await session.commit()
-                    return result
-                except OperationalError as error:
-                    await session.rollback()
-                    if self._is_locked(error) and attempt + 1 < self._max_write_attempts:
-                        await asyncio.sleep(0.02 * (2**attempt))
-                        continue
-                    raise ProjectStorageUnavailable(
-                        "the project store is temporarily unavailable"
-                    ) from error
-                except IntegrityError as error:
-                    await session.rollback()
-                    raise ProjectConflict(
-                        "PROJECT_CONFLICT",
-                        "the project operation conflicts with existing data",
-                    ) from error
-                except BaseException:
-                    await session.rollback()
-                    raise
-        raise ProjectStorageUnavailable("the project store is temporarily unavailable")
-
-    @staticmethod
-    def _is_locked(error: OperationalError) -> bool:
-        message = str(error.orig).lower()
-        return "database is locked" in message or "database table is locked" in message
+        try:
+            return await run_serialized(
+                self._repository, operation, max_attempts=self._max_write_attempts
+            )
+        except OperationalError as error:
+            raise ProjectStorageUnavailable(
+                "the project store is temporarily unavailable"
+            ) from error
+        except IntegrityError as error:
+            raise ProjectConflict(
+                "PROJECT_CONFLICT",
+                "the project operation conflicts with existing data",
+            ) from error
 
     async def _require_project(
         self,

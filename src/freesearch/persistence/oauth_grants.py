@@ -160,11 +160,80 @@ def _owned_credential(
     )
 
 
+@dataclass(frozen=True)
+class PendingOAuthGrant:
+    """One pending grant with the owner of its credential."""
+
+    grant: StoredOAuthGrant
+    owner_scope: CredentialOwnerScope
+    owner_project_id: UUID | None
+
+
 class CredentialOAuthGrantRepository:
     """Owner-checked OAuth grant state transitions on one caller-owned session."""
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
+
+    async def list_pending_for_owner(
+        self,
+        *,
+        account_id: UUID,
+        owner_scope: CredentialOwnerScope,
+        owner_project_id: UUID | None,
+    ) -> list[PendingOAuthGrant]:
+        """List pending grants of credentials with exactly this owner.
+
+        ``owner_project_id`` must be ``None`` for the system scope and the
+        project's id for the project scope; a mismatch raises ``ValueError``.
+        """
+
+        return await self._pending(
+            account_id=account_id,
+            owner=credential_owner_filter(
+                owner_scope=owner_scope, owner_project_id=owner_project_id
+            ),
+        )
+
+    async def list_pending_for_account(self, *, account_id: UUID) -> list[PendingOAuthGrant]:
+        """List every pending grant of the account, system and project owned.
+
+        The only account-wide scan; it serves account deactivation, which must
+        find every flow the account started wherever it lives.
+        """
+
+        return await self._pending(account_id=account_id, owner=())
+
+    async def _pending(
+        self, *, account_id: UUID, owner: tuple[Any, ...]
+    ) -> list[PendingOAuthGrant]:
+        statement = (
+            select(
+                CredentialOAuthGrantRow,
+                ProviderCredentialRow.owner_scope,
+                ProviderCredentialRow.owner_project_id,
+            )
+            .join(
+                ProviderCredentialRow,
+                ProviderCredentialRow.id == CredentialOAuthGrantRow.credential_id,
+            )
+            .where(
+                ProviderCredentialRow.account_id == str(account_id),
+                CredentialOAuthGrantRow.status == OAuthGrantStatus.PENDING.value,
+                *owner,
+            )
+            .order_by(CredentialOAuthGrantRow.credential_id)
+            .execution_options(populate_existing=True)
+        )
+        rows = await self._session.execute(statement)
+        return [
+            PendingOAuthGrant(
+                grant=_stored(row),
+                owner_scope=CredentialOwnerScope(scope),
+                owner_project_id=UUID(project) if project else None,
+            )
+            for row, scope, project in rows.all()
+        ]
 
     async def get(
         self,
@@ -329,23 +398,36 @@ class CredentialOAuthGrantRepository:
         owner_scope: CredentialOwnerScope,
         owner_project_id: UUID | None,
         now: datetime | None = None,
+        expected_token_generation: int | None = None,
+        error_code: str | None = None,
     ) -> bool:
-        """Disconnect a grant and retire its secret slots by advancing the generation."""
+        """Disconnect a grant and retire its secret slots by advancing the generation.
+
+        With ``expected_token_generation`` the disconnect is a compare-and-set:
+        it only ends the flow or connection at exactly that generation, so a
+        late cleanup of an abandoned device flow cannot end a newer one.
+        ``error_code`` records why a flow ended (for example a denied device
+        approval); a plain disconnect clears any earlier code.
+        """
 
         owned = _owned_credential(
             credential_id=credential_id, owner_scope=owner_scope, owner_project_id=owner_project_id
         )
         timestamp = stored_timestamp(resolve_now(now))
+        conditions = [
+            CredentialOAuthGrantRow.credential_id.in_(owned),
+            CredentialOAuthGrantRow.status != OAuthGrantStatus.DISCONNECTED.value,
+        ]
+        if expected_token_generation is not None:
+            conditions.append(CredentialOAuthGrantRow.token_generation == expected_token_generation)
         result = await self._session.execute(
             update(CredentialOAuthGrantRow)
-            .where(
-                CredentialOAuthGrantRow.credential_id.in_(owned),
-                CredentialOAuthGrantRow.status != OAuthGrantStatus.DISCONNECTED.value,
-            )
+            .where(*conditions)
             .values(
                 status=OAuthGrantStatus.DISCONNECTED.value,
                 token_generation=CredentialOAuthGrantRow.token_generation + 1,
                 disconnected_at=timestamp,
+                last_error_code=error_code,
                 updated_at=timestamp,
                 version=CredentialOAuthGrantRow.version + 1,
             )
@@ -359,6 +441,7 @@ __all__ = [
     "OAUTH_SECRET_KINDS",
     "CredentialOAuthGrantRepository",
     "CredentialOAuthGrantRow",
+    "PendingOAuthGrant",
     "StoredOAuthGrant",
     "oauth_secret_slot",
 ]

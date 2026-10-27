@@ -1,4 +1,4 @@
-"""Encrypted runtime-settings secret store and vault-only migration."""
+"""Encrypted runtime-settings secret store, codec loading and master-key rekey."""
 
 from __future__ import annotations
 
@@ -15,10 +15,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from freesearch.infrastructure.cryptography import (
     SecretCodec,
     SecretDecryptError,
+    load_existing_master_key,
     load_or_create_master_key,
     load_retired_master_keys,
 )
-from freesearch.infrastructure.secrets import ProviderName
 from freesearch.persistence.storage import RuntimeSettingRow, SQLiteRepository
 
 ENCRYPTED_SECRET_PREFIX = "secret.enc:"
@@ -140,27 +140,28 @@ class EncryptedDbSecretStore:
     async def tombstone_in_session(self, session: AsyncSession, name: str) -> None:
         """Remove any ciphertext row and upsert a delete-wins tombstone."""
 
-        await session.execute(
-            delete(RuntimeSettingRow).where(RuntimeSettingRow.key == self._key(name))
-        )
-        payload = json.dumps({"v": 1}, separators=(",", ":"), allow_nan=False)
-        statement = sqlite_insert(RuntimeSettingRow).values(
-            key=self._tombstone_key(name), value_json=payload
-        )
-        statement = statement.on_conflict_do_update(
-            index_elements=[RuntimeSettingRow.key],
-            set_={"value_json": statement.excluded.value_json},
-        )
-        await session.execute(statement)
+        await tombstone_slot_in_session(session, name)
 
 
-@dataclass(frozen=True)
-class MigrationReport:
-    """Value-free migration counters suitable for safe operational logs."""
+async def tombstone_slot_in_session(session: AsyncSession, name: str) -> None:
+    """Remove any ciphertext row of ``name`` and upsert its delete-wins tombstone.
 
-    migrated: int = 0
-    skipped_existing: int = 0
-    absent: int = 0
+    Needs no key material, so callers without a configured codec can still
+    retire a slot inside their own transaction.
+    """
+
+    await session.execute(
+        delete(RuntimeSettingRow).where(RuntimeSettingRow.key == ENCRYPTED_SECRET_PREFIX + name)
+    )
+    payload = json.dumps({"v": 1}, separators=(",", ":"), allow_nan=False)
+    statement = sqlite_insert(RuntimeSettingRow).values(
+        key=TOMBSTONE_PREFIX + name, value_json=payload
+    )
+    statement = statement.on_conflict_do_update(
+        index_elements=[RuntimeSettingRow.key],
+        set_={"value_json": statement.excluded.value_json},
+    )
+    await session.execute(statement)
 
 
 def load_secret_codec(settings: Any) -> SecretCodec:
@@ -181,6 +182,28 @@ def load_secret_codec(settings: Any) -> SecretCodec:
         key_files=settings.encryption_retired_key_files,
         passphrases=[item.get_secret_value() for item in settings.encryption_retired_keys],
         salt_key_file=key_file,
+    )
+    return SecretCodec(master, retired=retired)
+
+
+def load_existing_secret_codec(settings: Any) -> SecretCodec:
+    """Compose the codec from an existing master key; never creates key material.
+
+    For offline tools that must not provision an installation key (the
+    account CLI). A missing or unreadable key raises; the API lifespan keeps
+    using :func:`load_secret_codec`, which creates a key on first start.
+    """
+
+    passphrase = (
+        settings.encryption_key.get_secret_value() if settings.encryption_key is not None else None
+    )
+    key_file = settings.encryption_key_file
+    master = load_existing_master_key(key_file=key_file, passphrase_env=passphrase)
+    retired = load_retired_master_keys(
+        key_files=settings.encryption_retired_key_files,
+        passphrases=[item.get_secret_value() for item in settings.encryption_retired_keys],
+        salt_key_file=key_file,
+        create_salt=False,
     )
     return SecretCodec(master, retired=retired)
 
@@ -278,40 +301,3 @@ async def rekey_secrets(
         legacy_upgraded=legacy_upgraded,
         undecryptable=undecryptable,
     )
-
-
-async def migrate_legacy_secrets_to_encrypted_db(
-    *,
-    repository: SQLiteRepository,
-    encrypted_store: EncryptedDbSecretStore,
-) -> MigrationReport:
-    """One-shot vault census over the eleven encrypted slots, never overwriting.
-
-    Vault-only: there is no legacy source left to import from, so nothing is
-    ever written here. Slots holding ciphertext or a delete-wins tombstone
-    count as ``skipped_existing``; empty slots count as ``absent``. Idempotent.
-    """
-
-    from freesearch.services.parallel_oauth import (
-        ACCESS_SECRET_KEY,
-        CLIENT_SECRET_KEY,
-        DEVICE_SECRET_KEY,
-        REFRESH_SECRET_KEY,
-    )
-
-    del encrypted_store
-    migrated = skipped_existing = absent = 0
-    slots = [item.value for item in ProviderName] + [
-        ACCESS_SECRET_KEY,
-        REFRESH_SECRET_KEY,
-        DEVICE_SECRET_KEY,
-        CLIENT_SECRET_KEY,
-    ]
-    for name in slots:
-        existing = await repository.get_runtime_setting(ENCRYPTED_SECRET_PREFIX + name)
-        tombstoned = await repository.get_runtime_setting(TOMBSTONE_PREFIX + name)
-        if existing is not None or tombstoned is not None:
-            skipped_existing += 1
-        else:
-            absent += 1
-    return MigrationReport(migrated, skipped_existing, absent)

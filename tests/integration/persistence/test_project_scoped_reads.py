@@ -257,14 +257,37 @@ def test_oauth_grant_methods_require_the_owner_pair() -> None:
         "record_tokens",
         "mark_refresh_failed",
         "disconnect",
+        "list_pending_for_owner",
+        "list_pending_for_account",
     }
+
+    def _required_keyword(name: str, parameter_name: str) -> None:
+        parameter = inspect.signature(methods[name]).parameters.get(parameter_name)
+        assert parameter is not None, (name, parameter_name)
+        assert parameter.default is inspect.Parameter.empty, (name, parameter_name)
+        assert parameter.kind is inspect.Parameter.KEYWORD_ONLY, (name, parameter_name)
+
+    # The ONE named exemption from the owner pair: the account-wide pending scan
+    # used only by account deactivation. It requires a keyword-only account_id
+    # and takes nothing else, so no optional argument can widen or narrow it.
+    _required_keyword("list_pending_for_account", "account_id")
+    scan_parameters = set(inspect.signature(methods["list_pending_for_account"]).parameters)
+    assert scan_parameters == {"self", "account_id"}
+
     for name, method in methods.items():
+        if name == "list_pending_for_account":
+            continue
         parameters = inspect.signature(method).parameters
-        for required in ("credential_id", "owner_scope", "owner_project_id"):
-            parameter = parameters.get(required)
-            assert parameter is not None, (name, required)
-            assert parameter.default is inspect.Parameter.empty, (name, required)
-            assert parameter.kind is inspect.Parameter.KEYWORD_ONLY, (name, required)
+        # Every other method requires the owner pair; none takes an optional one.
+        for required in ("owner_scope", "owner_project_id"):
+            _required_keyword(name, required)
+        # The owner listing is scoped by account and owner (it lists credentials,
+        # so it has no single credential_id); every other method names one.
+        if name == "list_pending_for_owner":
+            _required_keyword(name, "account_id")
+            assert set(parameters) == {"self", "account_id", "owner_scope", "owner_project_id"}
+            continue
+        _required_keyword(name, "credential_id")
 
 
 async def test_list_provider_usage_without_provider_is_a_type_error(world: _World) -> None:

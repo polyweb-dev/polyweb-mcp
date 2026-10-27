@@ -523,3 +523,190 @@ async def test_cli_deactivate_refuses_the_last_active_system_admin(
             assert kept is not None and kept.is_active is True
     finally:
         await repository.close()
+
+
+# --- A4 ruling 3: the CLI never creates key material ------------------------
+
+
+async def _pending_flows(tmp_path: Path) -> tuple[Path, dict[str, object]]:
+    """Seed one private-credential and one system-credential pending OAuth flow.
+
+    The flows are started with a throwaway in-memory master key, so the CLI
+    (which only sees an empty key directory) cannot read their initiators.
+    """
+
+    import os
+
+    import httpx
+
+    from freesearch.infrastructure.cryptography import MasterKey, SecretCodec
+    from freesearch.infrastructure.encrypted_store import EncryptedDbSecretStore
+    from freesearch.models.credentials import CredentialAuthMode, CredentialCreate
+    from freesearch.services.credential_oauth import CredentialOAuthService, OAuthTarget
+    from freesearch.services.credentials import CredentialService
+    from tests.fixtures.alpha_fixtures import bootstrap_fresh_alpha
+    from tests.fixtures.parallel_oauth_vendor import FakeParallelVendor
+
+    database = tmp_path / "cli-oauth-flows.db"
+    boot = await bootstrap_fresh_alpha(database)
+    vendor = FakeParallelVendor()
+    http = httpx.AsyncClient(transport=httpx.MockTransport(vendor.handler))
+    try:
+        store = EncryptedDbSecretStore(boot.repository, SecretCodec(MasterKey(os.urandom(32))))
+        system_admin = temp_principal(boot.admin_user)
+        second_row = await create_temp_user(
+            boot.repository, temp_email("cli-oauth-sys2"), system_admin=True
+        )
+        initiator_row = await create_temp_user(boot.repository, temp_email("cli-oauth-init"))
+        co_admin_row = await create_temp_user(boot.repository, temp_email("cli-oauth-co"))
+        projects = ProjectService(boot.repository, secret_store=store)
+        project = await projects.create_project(
+            system_admin,
+            ProjectCreate(
+                name="CLI OAuth", slug="cli-oauth", initial_admin_user_id=initiator_row.id
+            ),
+        )
+        initiator = temp_principal(initiator_row)
+        await projects.add_member(
+            initiator,
+            project.id,
+            ProjectMemberAdd(user_id=co_admin_row.id, initial_role=BuiltinRole.PROJECT_ADMIN),
+        )
+        credentials = CredentialService(boot.repository, store)
+        private = await credentials.create_project_credential(
+            initiator,
+            project.id,
+            CredentialCreate(
+                provider_type="parallel", label="cli-private", auth_mode=CredentialAuthMode.OAUTH
+            ),
+        )
+        system = await credentials.create_system_credential(
+            system_admin,
+            CredentialCreate(
+                provider_type="parallel", label="cli-system", auth_mode=CredentialAuthMode.OAUTH
+            ),
+        )
+        oauth = CredentialOAuthService(boot.repository, store, http_client=http)
+        private_target = OAuthTarget(project_id=project.id)
+        await oauth.start(initiator, private_target, private.id)
+        second = temp_principal(second_row)
+        await oauth.start(second, OAuthTarget(), system.id)
+    finally:
+        await http.aclose()
+        await boot.repository.close()
+    return database, {
+        "project_id": project.id,
+        "private_id": private.id,
+        "system_id": system.id,
+        "initiator_id": initiator_row.id,
+        "second_admin_id": second_row.id,
+    }
+
+
+async def _grant_state(database: Path, credential_id: object) -> tuple[str, str | None]:
+    from sqlalchemy import text
+
+    repository = await SQLiteRepository.open(database)
+    try:
+        async with repository.session() as session:
+            row = (
+                await session.execute(
+                    text(
+                        "SELECT status, last_error_code FROM credential_oauth_grants "
+                        "WHERE credential_id = :id"
+                    ),
+                    {"id": str(credential_id)},
+                )
+            ).one()
+            live_device = (
+                await session.execute(
+                    text(
+                        "SELECT COUNT(*) FROM runtime_settings WHERE key LIKE :slot "
+                        "AND value_json IS NOT NULL AND value_json != 'null'"
+                    ),
+                    {"slot": f"secret.enc:credential.{credential_id}.oauth.device.%"},
+                )
+            ).scalar_one()
+    finally:
+        await repository.close()
+    status, error = str(row[0]), row[1]
+    if status == "disconnected":
+        assert live_device == 0, "an ended flow must keep no device-code slot"
+    return status, error
+
+
+def _isolated_key_location(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    from freesearch.configuration.config import get_settings
+
+    home = tmp_path / "empty-home"
+    home.mkdir()
+    for variable in ("HOME", "USERPROFILE"):
+        monkeypatch.setenv(variable, str(home))
+    key_file = home / ".local" / "share" / "freesearch" / ".secret_key"
+    monkeypatch.setenv("FREESEARCH_ENCRYPTION_KEY_FILE", str(key_file))
+    monkeypatch.delenv("FREESEARCH_ENCRYPTION_KEY", raising=False)
+    monkeypatch.delenv("FREESEARCH_ENCRYPTION_RETIRED_KEY_FILES", raising=False)
+    get_settings.cache_clear()
+    return home
+
+
+async def test_cli_deactivate_creates_no_key_and_ends_the_initiators_flow_fail_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    auth_secret: str,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from freesearch.configuration.config import get_settings
+    from freesearch.infrastructure.cryptography import DEFAULT_KEY_FILE
+
+    database, ids = await _pending_flows(tmp_path)
+    home = _isolated_key_location(monkeypatch, tmp_path)
+    default_existed = DEFAULT_KEY_FILE.exists()
+    try:
+        command = ["deactivate", "--user-id", str(ids["initiator_id"]), "--database", str(database)]
+        assert await _run(command) == 0
+        assert "Active: false" in capsys.readouterr().out
+    finally:
+        get_settings.cache_clear()
+
+    assert list(home.rglob("*")) == [], "the CLI must not create key or salt material"
+    assert DEFAULT_KEY_FILE.exists() is default_existed
+    assert await _grant_state(database, ids["private_id"]) == (
+        "disconnected",
+        "initiator_permission_revoked",
+    )
+
+
+async def test_cli_revoke_system_admin_creates_no_key_and_ends_system_flows_only(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    auth_secret: str,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from freesearch.configuration.config import get_settings
+    from freesearch.infrastructure.cryptography import DEFAULT_KEY_FILE
+
+    database, ids = await _pending_flows(tmp_path)
+    home = _isolated_key_location(monkeypatch, tmp_path)
+    default_existed = DEFAULT_KEY_FILE.exists()
+    try:
+        command = [
+            "revoke-system-admin",
+            "--user-id",
+            str(ids["second_admin_id"]),
+            "--database",
+            str(database),
+        ]
+        assert await _run(command) == 0
+        assert "System role: system_admin revoked" in capsys.readouterr().out
+    finally:
+        get_settings.cache_clear()
+
+    assert list(home.rglob("*")) == [], "the CLI must not create key or salt material"
+    assert DEFAULT_KEY_FILE.exists() is default_existed
+    assert await _grant_state(database, ids["system_id"]) == (
+        "disconnected",
+        "initiator_permission_revoked",
+    )
+    # The system-scope guard never touches a project's private flow.
+    assert await _grant_state(database, ids["private_id"]) == ("pending", None)

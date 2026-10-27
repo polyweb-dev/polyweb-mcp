@@ -13,7 +13,6 @@ Defines the core P00 contracts for:
 """
 
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
 from enum import StrEnum
 from typing import Annotated, Any, Final, Literal, Protocol, cast, runtime_checkable
 from uuid import UUID
@@ -959,49 +958,6 @@ class ProjectBindingRead(ContractModel):
     priority: int = 0
     overrides: dict[str, Any] = Field(default_factory=dict)
     version: int
-
-
-class UpstreamQuotaPoolRead(ContractModel):
-    """Shared upstream capacity boundary across credentials and operations."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    id: UUID
-    provider_type: str
-    upstream_scope: str
-    constraints: dict[str, Any] = Field(default_factory=dict)
-    version: int
-
-
-class ProjectPoolAllocationRead(ContractModel):
-    """Project-specific capacity entitlement and ceiling within a quota pool."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    project_id: UUID
-    pool_id: UUID
-    operation_scope: str
-    base_rate: Decimal
-    window_seconds: int = 1
-    borrow_enabled: bool = False
-    max_rate: Decimal
-    weight: int = 1
-    max_concurrency: int = 1
-    queue_policy: str = "strict"
-    version: int
-
-    @field_validator("base_rate", "max_rate")
-    @classmethod
-    def _validate_non_negative_rate(cls, value: Decimal) -> Decimal:
-        if value < 0:
-            raise ValueError("Rate values must be non-negative")
-        return value
-
-    @model_validator(mode="after")
-    def _validate_rate_envelope(self) -> "ProjectPoolAllocationRead":
-        if self.max_rate < self.base_rate:
-            raise ValueError("max_rate cannot be less than base_rate")
-        return self
 
 
 class SettingsScope(StrEnum):

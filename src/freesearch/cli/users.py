@@ -35,6 +35,10 @@ from fastapi_users import exceptions
 from pydantic import SecretStr
 
 from freesearch.configuration.config import get_settings
+from freesearch.infrastructure.encrypted_store import (
+    EncryptedDbSecretStore,
+    load_existing_secret_codec,
+)
 from freesearch.persistence.database_migrations import (
     DatabaseResetRequired,
     absolute_database_path,
@@ -231,6 +235,23 @@ def _report(error: Exception) -> int:
     return 1
 
 
+def _secret_store(service: AuthService) -> EncryptedDbSecretStore | None:
+    """Return the installation's encrypted store so OAuth flow checks can read initiators.
+
+    The existing master key is loaded without ever creating one. A missing or
+    unreadable key gives ``None``, and pending OAuth flows in the affected
+    scope then end fail-closed.
+    """
+
+    repository = service.repository
+    if repository is None:
+        return None
+    try:
+        return EncryptedDbSecretStore(repository, load_existing_secret_codec(service.settings))
+    except (OSError, ValueError):
+        return None
+
+
 async def _execute(options: argparse.Namespace) -> int:
     """Run one privileged command against the resolved database."""
 
@@ -254,6 +275,7 @@ async def _execute(options: argparse.Namespace) -> int:
             accounts = await ProjectService(
                 repository,
                 rollout_state=service.settings.projects_rollout_state,
+                secret_store=_secret_store(service),
             ).deactivate_accounts(target_ids, trusted=True)
             for deactivated in accounts:
                 print(f"Account: {deactivated.id}")
@@ -265,7 +287,7 @@ async def _execute(options: argparse.Namespace) -> int:
             print(f"Account: {user_id}")
             print(f"System role: {_SYSTEM_ADMIN} {'granted' if changed else 'already held'}")
             return 0
-        changed = await service.revoke_system_admin(user_id)
+        changed = await service.revoke_system_admin(user_id, secret_store=_secret_store(service))
         print(f"Account: {user_id}")
         print(f"System role: {_SYSTEM_ADMIN} {'revoked' if changed else 'not held'}")
         return 0

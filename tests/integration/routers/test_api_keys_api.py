@@ -318,8 +318,12 @@ def test_a_valid_key_is_rejected_by_every_non_execution_route(world: _World) -> 
         "auth_mode": "keyed",
         "operation": "search",
         "role_key": "project_member",
+        # A4 routes: bindings, pools/links and allocations.
+        "binding_id": str(uuid4()),
+        "pool_id": str(uuid4()),
     }
     checked = 0
+    checked_paths: set[str] = set()
     for route in world.client.app.routes:  # type: ignore[attr-defined]
         if not isinstance(route, APIRoute):
             continue
@@ -334,7 +338,27 @@ def test_a_valid_key_is_rejected_by_every_non_execution_route(world: _World) -> 
             assert response.status_code == 401, (method, route.path, response.status_code)
             assert response.json() == _GENERIC_401
             checked += 1
+            checked_paths.add(route.path)
     assert checked >= 40
+    # Every A4 control-plane route family is in the sweep (none was skipped).
+    a4_routes = {
+        "/api/v1/projects/{project_id}/providers",
+        "/api/v1/projects/{project_id}/bindings",
+        "/api/v1/projects/{project_id}/bindings/{binding_id}",
+        "/api/v1/system/pools",
+        "/api/v1/system/pools/{pool_id}",
+        "/api/v1/system/pools/{pool_id}/links",
+        "/api/v1/system/pools/{pool_id}/links/{credential_id}",
+        "/api/v1/system/projects/{project_id}/allocations",
+        "/api/v1/system/projects/{project_id}/allocations/{pool_id}",
+        "/api/v1/system/credentials/{credential_id}/oauth",
+        "/api/v1/system/credentials/{credential_id}/oauth/device",
+        "/api/v1/system/credentials/{credential_id}/oauth/poll",
+        "/api/v1/projects/{project_id}/credentials/{credential_id}/oauth",
+        "/api/v1/projects/{project_id}/credentials/{credential_id}/oauth/device",
+        "/api/v1/projects/{project_id}/credentials/{credential_id}/oauth/poll",
+    }
+    assert a4_routes <= checked_paths, sorted(a4_routes - checked_paths)
 
     # Nothing the key attempted changed anything: still one key, still live.
     listed = world.client.get(f"/api/v1/projects/{pid}/api-keys", headers=headers).json()

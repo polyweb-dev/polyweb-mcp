@@ -45,7 +45,7 @@ from typing import Final, TypeVar
 from uuid import UUID
 
 from pydantic import SecretStr
-from sqlalchemy import select, text
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -70,6 +70,7 @@ from freesearch.persistence.api_keys import ProjectApiKeyRepository, StoredApiKe
 from freesearch.persistence.audit import AuditRepository
 from freesearch.persistence.projects import AccountRow, ProjectRepository, ProjectRow
 from freesearch.persistence.storage import SQLiteRepository
+from freesearch.persistence.transactions import run_serialized
 from freesearch.services.authorization import (
     ScopedAuthorizationService,
     human_principal,
@@ -766,36 +767,19 @@ class ApiKeyService:
     async def _write(self, operation: Callable[[AsyncSession], Awaitable[_T]]) -> _T:
         """Run one operation under ``BEGIN IMMEDIATE`` with bounded lock retries."""
 
-        for attempt in range(self._max_write_attempts):
-            async with self._repository.session() as session:
-                try:
-                    await session.execute(text("BEGIN IMMEDIATE"))
-                    result = await operation(session)
-                    await session.commit()
-                    return result
-                except OperationalError as error:
-                    await session.rollback()
-                    if _is_locked(error) and attempt + 1 < self._max_write_attempts:
-                        await asyncio.sleep(0.02 * (2**attempt))
-                        continue
-                    raise ProjectStorageUnavailable(
-                        "the project store is temporarily unavailable"
-                    ) from error
-                except IntegrityError as error:
-                    await session.rollback()
-                    raise ProjectConflict(
-                        "PROJECT_CONFLICT",
-                        "the API key operation conflicts with existing data",
-                    ) from error
-                except BaseException:
-                    await session.rollback()
-                    raise
-        raise ProjectStorageUnavailable("the project store is temporarily unavailable")
-
-
-def _is_locked(error: OperationalError) -> bool:
-    message = str(error.orig).lower()
-    return "database is locked" in message or "database table is locked" in message
+        try:
+            return await run_serialized(
+                self._repository, operation, max_attempts=self._max_write_attempts
+            )
+        except OperationalError as error:
+            raise ProjectStorageUnavailable(
+                "the project store is temporarily unavailable"
+            ) from error
+        except IntegrityError as error:
+            raise ProjectConflict(
+                "PROJECT_CONFLICT",
+                "the API key operation conflicts with existing data",
+            ) from error
 
 
 __all__ = [

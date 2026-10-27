@@ -22,14 +22,12 @@ cannot reuse an older effective document.
 
 from __future__ import annotations
 
-import asyncio
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from enum import StrEnum
 from typing import Any, Final, TypeVar
 from uuid import UUID
 
-from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -61,6 +59,7 @@ from freesearch.models.users import UserPrincipal
 from freesearch.persistence.scoped import ProjectScopedRepository
 from freesearch.persistence.settings import StoredSettings, SystemSettingsRepository
 from freesearch.persistence.storage import SQLiteRepository
+from freesearch.persistence.transactions import run_serialized
 from freesearch.services.authorization import (
     ScopedAuthorizationService,
     human_principal,
@@ -588,36 +587,19 @@ class SettingsService:
     async def _write(self, operation: Callable[[AsyncSession], Awaitable[_T]]) -> _T:
         """Run one settings write under ``BEGIN IMMEDIATE`` with bounded retries."""
 
-        for attempt in range(self._max_write_attempts):
-            async with self._repository.session() as session:
-                try:
-                    await session.execute(text("BEGIN IMMEDIATE"))
-                    result = await operation(session)
-                    await session.commit()
-                    return result
-                except OperationalError as error:
-                    await session.rollback()
-                    if self._is_locked(error) and attempt + 1 < self._max_write_attempts:
-                        await asyncio.sleep(0.02 * (2**attempt))
-                        continue
-                    raise SettingsStorageUnavailable(
-                        "the settings store is temporarily unavailable"
-                    ) from error
-                except IntegrityError as error:
-                    await session.rollback()
-                    raise SettingsConflict(
-                        "SETTINGS_CONFLICT",
-                        "the settings operation conflicts with existing data",
-                    ) from error
-                except BaseException:
-                    await session.rollback()
-                    raise
-        raise SettingsStorageUnavailable("the settings store is temporarily unavailable")
-
-    @staticmethod
-    def _is_locked(error: OperationalError) -> bool:
-        message = str(error.orig).lower()
-        return "database is locked" in message or "database table is locked" in message
+        try:
+            return await run_serialized(
+                self._repository, operation, max_attempts=self._max_write_attempts
+            )
+        except OperationalError as error:
+            raise SettingsStorageUnavailable(
+                "the settings store is temporarily unavailable"
+            ) from error
+        except IntegrityError as error:
+            raise SettingsConflict(
+                "SETTINGS_CONFLICT",
+                "the settings operation conflicts with existing data",
+            ) from error
 
 
 __all__ = [

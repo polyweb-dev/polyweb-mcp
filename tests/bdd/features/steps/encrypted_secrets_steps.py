@@ -8,7 +8,6 @@ tombstones) is the sole runtime credential source.
 
 from __future__ import annotations
 
-import inspect
 import logging
 import os
 import shutil
@@ -304,23 +303,6 @@ def _reopen_same_database(context: Any) -> None:
         context.app.state.oauth_http_client = oauth_client
 
 
-def _call_vault_migration(context: Any) -> Any:
-    """Call the vault-only migration (repository + encrypted_store only)."""
-
-    _, store_module = _red_gate()
-    migrate = store_module.migrate_legacy_secrets_to_encrypted_db
-    params = inspect.signature(migrate).parameters
-    assert set(params) == {"repository", "encrypted_store"}, (
-        "RED (AC-6): migrate_legacy_secrets_to_encrypted_db must take exactly "
-        f"(repository, encrypted_store); got {sorted(params)} (vault-only, no "
-        "legacy_store/environ/dotenv args)"
-    )
-    return _run(
-        context,
-        migrate(repository=context.repository, encrypted_store=_enc_store(context)),
-    )
-
-
 # --- Given ---------------------------------------------------------------
 
 
@@ -480,16 +462,6 @@ def step_when_delete_sentinel(context: Any, provider: str) -> None:
         )
 
 
-@when("I run the vault migration")
-def step_when_vault_migrate(context: Any) -> None:
-    context.migration_report = _call_vault_migration(context)
-
-
-@when("I run the vault migration again")
-def step_when_vault_migrate_again(context: Any) -> None:
-    step_when_vault_migrate(context)
-
-
 # --- Then ----------------------------------------------------------------
 
 
@@ -647,33 +619,10 @@ def step_then_tombstone_missing(context: Any, provider: str) -> None:
     context.last_provider = provider
 
 
-@then("the migration report should count a tombstone as skipped")
-def step_then_tombstone_counted(context: Any) -> None:
-    report = context.migration_report
-    if hasattr(report, "skipped_existing"):
-        skipped = int(report.skipped_existing)
-    else:
-        skipped = int(report["skipped_existing"])
-    assert skipped >= 1, (
-        f"RED (AC-6): tombstone delete-wins must count as skipped_existing, got report {report!r}"
-    )
-    if hasattr(report, "migrated"):
-        assert int(report.migrated) == 0
-    else:
-        assert int(report["migrated"]) == 0
-
-
-@then("no encrypted row should be overwritten")
-def step_then_migration_idempotent(context: Any) -> None:
-    before = {
-        slot: _run(context, context.repository.get_runtime_setting(f"secret.enc:{slot}"))
-        for slot in ("exa", "tavily", "brave", "you", ACCESS_SECRET_KEY)
-    }
-    step_when_vault_migrate(context)
-    for slot, envelope in before.items():
-        assert (
-            _run(context, context.repository.get_runtime_setting(f"secret.enc:{slot}")) == envelope
-        ), f"RED (AC-6): migration must never overwrite secret.enc:{slot}"
+# AC-6 census steps retired with ``migrate_legacy_secrets_to_encrypted_db``
+# (A4, API-11): "I run the vault migration [again]", "the migration report
+# should count a tombstone as skipped" and "no encrypted row should be
+# overwritten". The scenario now proves delete-wins across a restart.
 
 
 @then("the four OAuth slots should hold only ciphertext")

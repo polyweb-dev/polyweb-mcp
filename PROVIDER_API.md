@@ -153,6 +153,12 @@ Parallel's `/v1/search` does not document `extra_bundles`; non-zero
 `extra_bundles` is rejected before the request. Parallel Task, Responses,
 Image Search, and other endpoints are not part of this Search/Extract surface.
 
+Parallel also supports per-credential OAuth (`auth_mode: "oauth"`), connected
+through the device flow routes described in the README section "Provider
+credentials, bindings, pools and allocations". Its grant is scoped to account
+balance reads (`balance:read`), so an OAuth credential serves no Search or
+Fetch operation and a binding of it cannot enable one.
+
 ### Tavily (`tavily`)
 
 Official references: [Search](https://docs.tavily.com/documentation/api-reference/endpoint/search),

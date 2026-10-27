@@ -11,12 +11,13 @@ from decimal import Decimal
 
 import httpx
 import pytest
-from pydantic import SecretStr, ValidationError
+from pydantic import ValidationError
 
 from freesearch.adapters.brave import BraveAdapter
 from freesearch.infrastructure.resilience import ProviderOperationError
 from freesearch.infrastructure.secrets import PROVIDER_ENV_VARS, ProviderName
 from freesearch.models.contracts import QuotaSource, SearchRequest, SearchResponse, UsageOperation
+from tests.unit.adapters._brave_test_support import brave_adapter, brave_payload
 
 
 class _Runner:
@@ -28,32 +29,13 @@ class _Runner:
         return await operation()
 
 
-def _payload(**overrides: object) -> dict[str, object]:
-    payload: dict[str, object] = {
-        "web": {
-            "results": [
-                {
-                    "title": "Example",
-                    "url": "https://example.com/article",
-                    "description": "A result snippet.",
-                    "page_age": "2024-01-02T03:04:05Z",
-                    "language": "en",
-                }
-            ]
-        }
-    }
-    payload.update(overrides)
-    return payload
+_payload = brave_payload
 
 
 def _adapter(
     handler, *, runner: _Runner | None = None, key: str = "brave-secret"
 ) -> tuple[BraveAdapter, httpx.AsyncClient]:
-    client = httpx.AsyncClient(
-        transport=httpx.MockTransport(handler),
-        headers={"Authorization": "Bearer caller", "X-API-Key": "caller-key"},
-    )
-    return BraveAdapter(client, runner=runner, api_key=SecretStr(key)), client
+    return brave_adapter(handler, runner=runner, key=key)
 
 
 def _assert_wire_request(request: httpx.Request, client: httpx.AsyncClient) -> None:
@@ -398,7 +380,20 @@ async def test_search_normalizes_status_errors_without_key_leaks(
     assert excinfo.value.__cause__ is None
 
 
-@pytest.mark.parametrize("payload", [{}, {"web": {}}])
+# ARCH-04: one named malformed-envelope matrix.  The first two cases are this
+# function's originals; the last three moved here from the deleted
+# ``test_brave_edges.py::test_malformed_results_and_page_age_map_to_invalid_response``
+# (identical body and assertions, different inputs).
+_MALFORMED_BRAVE_ENVELOPES = [
+    pytest.param({}, id="empty-envelope"),
+    pytest.param({"web": {}}, id="web-without-results"),
+    pytest.param({"web": []}, id="web-is-list"),
+    pytest.param({"web": "not-a-mapping"}, id="web-is-string"),
+    pytest.param({"web": {"results": "not-a-list"}}, id="results-is-string"),
+]
+
+
+@pytest.mark.parametrize("payload", _MALFORMED_BRAVE_ENVELOPES)
 async def test_search_rejects_malformed_payloads(payload: dict[str, object]) -> None:
     adapter, client = _adapter(lambda request: httpx.Response(200, json=payload))
     try:

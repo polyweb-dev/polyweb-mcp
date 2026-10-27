@@ -1,15 +1,12 @@
 """Unit acceptance for EncryptedDbSecretStore (vault-only AC-2/AC-3).
 
 Covers ciphertext-only at rest, wrong-key fails closed to None, tombstone
-delete-wins (secret.deleted:), and the vault-only migration
-``migrate_legacy_secrets_to_encrypted_db(*, repository, encrypted_store)``.
-Fails Red while the tombstone contract or the simplified migration signature
-is missing.
+delete-wins (secret.deleted:), write-once slots and rekey. The legacy-secret
+census tests were retired with the census itself (A4, API-11).
 """
 
 from __future__ import annotations
 
-import inspect
 import os
 from pathlib import Path
 from typing import Any
@@ -72,21 +69,6 @@ def test_tombstone_prefix_constant() -> None:
     assert getattr(store_module, "TOMBSTONE_PREFIX", None) == "secret.deleted:", (
         "RED (AC-2): encrypted_store.TOMBSTONE_PREFIX must be 'secret.deleted:'"
     )
-
-
-def test_migration_signature_is_vault_only() -> None:
-    """AC-2: migration takes exactly (repository, encrypted_store)."""
-
-    _, store_module = _stack()
-    params = inspect.signature(store_module.migrate_legacy_secrets_to_encrypted_db).parameters
-    assert set(params) == {"repository", "encrypted_store"}, (
-        "RED (AC-2): migrate_legacy_secrets_to_encrypted_db must take exactly "
-        f"(repository, encrypted_store); got {sorted(params)} (no legacy_store/"
-        "environ/dotenv args)"
-    )
-    source = Path(store_module.__file__).read_text(encoding="utf-8")
-    assert "dotenv_values" not in source, "RED (AC-2): dotenv chain must be deleted"
-    assert "legacy_store" not in source, "RED (AC-2): legacy_store branch must be deleted"
 
 
 # --- AC-3: ciphertext-only at rest ------------------------------------------
@@ -243,78 +225,11 @@ async def test_wrong_key_degrades_to_none_with_redacted_warning(
     assert_no_sentinels(caplog.text, (SENTINEL_PROVIDER_KEYS["exa"],), "store warning logs")
 
 
-# --- AC-2: vault-only migration ---------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_migration_is_idempotent_and_never_overwrites(
-    repository,
-    tmp_path,  # type: ignore[no-untyped-def]
-) -> None:
-    crypto, store_module = _stack()
-    enc_store = _store(store_module, repository, _codec(crypto, tmp_path))
-    await maybe_await(enc_store.set("exa", "operator-encrypted-value"))
-    before = await repository.get_runtime_setting("secret.enc:exa")
-
-    first = await maybe_await(
-        store_module.migrate_legacy_secrets_to_encrypted_db(
-            repository=repository, encrypted_store=enc_store
-        )
-    )
-    second = await maybe_await(
-        store_module.migrate_legacy_secrets_to_encrypted_db(
-            repository=repository, encrypted_store=enc_store
-        )
-    )
-
-    assert await maybe_await(enc_store.get("exa")) == "operator-encrypted-value"
-    assert await repository.get_runtime_setting("secret.enc:exa") == before
-    assert _report_count(second, "migrated") == 0
-    assert _report_count(first, "skipped_existing") >= 1
-    assert "operator-encrypted-value" not in repr(first)
-
-
-@pytest.mark.asyncio
-async def test_migration_treats_tombstone_as_delete_wins(
-    repository,
-    tmp_path,  # type: ignore[no-untyped-def]
-) -> None:
-    crypto, store_module = _stack()
-    enc_store = _store(store_module, repository, _codec(crypto, tmp_path))
-    await maybe_await(enc_store.set("exa", SENTINEL_PROVIDER_KEYS["exa"]))
-    await maybe_await(enc_store.delete("exa"))
-
-    report = await maybe_await(
-        store_module.migrate_legacy_secrets_to_encrypted_db(
-            repository=repository, encrypted_store=enc_store
-        )
-    )
-
-    assert await maybe_await(enc_store.get("exa")) is None
-    assert await repository.get_runtime_setting("secret.enc:exa") is None
-    assert _report_count(report, "skipped_existing") >= 1
-    assert _report_count(report, "migrated") == 0
-
-
-@pytest.mark.asyncio
-async def test_migration_report_counts_cover_all_slots_without_values(
-    repository,
-    tmp_path,  # type: ignore[no-untyped-def]
-) -> None:
-    crypto, store_module = _stack()
-    enc_store = _store(store_module, repository, _codec(crypto, tmp_path))
-    report = await maybe_await(
-        store_module.migrate_legacy_secrets_to_encrypted_db(
-            repository=repository, encrypted_store=enc_store
-        )
-    )
-
-    total = (
-        _report_count(report, "migrated")
-        + _report_count(report, "skipped_existing")
-        + _report_count(report, "absent")
-    )
-    assert total == 12, "8 provider slots + 4 OAuth slots must all be accounted for"
+# --- AC-2 census retired ---------------------------------------------------
+# A4 (API-11) deleted the no-op ``migrate_legacy_secrets_to_encrypted_db``
+# census, so its four signature/idempotency/tombstone/report tests went with
+# it. The store's own delete-wins and write-once behavior stays covered below
+# (tombstone, stale-ciphertext, create-after-tombstone and rekey tests).
 
 
 # --- AC-9 pin removed: rotation is out of scope for the vault-only slice ----

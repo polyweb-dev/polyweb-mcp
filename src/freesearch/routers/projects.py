@@ -19,6 +19,7 @@ from uuid import UUID
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
 
+from freesearch.infrastructure.encrypted_store import EncryptedDbSecretStore
 from freesearch.models.projects import (
     ProjectAccessRead,
     ProjectCreate,
@@ -61,9 +62,11 @@ def _project_service(request: Request) -> ProjectService:
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="project management is not configured",
         )
+    secret_store = getattr(request.app.state, "secret_store", None)
     return ProjectService(
         repository,
         rollout_state=account_service.settings.projects_rollout_state,
+        secret_store=secret_store if isinstance(secret_store, EncryptedDbSecretStore) else None,
     )
 
 

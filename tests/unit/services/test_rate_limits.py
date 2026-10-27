@@ -387,7 +387,13 @@ async def test_local_counts_extend_vendor_without_double_count() -> None:
     assert used == Decimal("1")
 
 
-async def test_concurrent_reservations_never_overspend() -> None:
+async def test_admission_decisions_consume_nothing_until_recorded() -> None:
+    """Sequential decision-versus-recording check (formerly a misleading
+    ``test_concurrent_reservations_never_overspend``; RT-09).
+
+    Nothing here runs concurrently. Real cross-connection cap atomicity lives in
+    ``tests/integration/services/test_provider_limits.py``'s race tests.
+    """
     fake = _FakeRateRepository()
     service = RateLimitService(fake, [_record()])  # type: ignore[arg-type]
     first = await service.admit(_context("c1"))
