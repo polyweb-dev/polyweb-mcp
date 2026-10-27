@@ -7,14 +7,22 @@ import os
 import subprocess
 import sys
 import textwrap
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from pydantic import ValidationError
 from sqlalchemy import update
 
 from freesearch.models.contracts import FallbackPolicy
+from freesearch.models.observability import (
+    ActorType,
+    TraceOperation,
+    TraceOutcome,
+    TraceSpanKind,
+    TraceSpanRecord,
+)
 from freesearch.models.projects import (
     BuiltinRole,
     ExecutionSettings,
@@ -27,15 +35,28 @@ from freesearch.models.projects import (
     RoutingSettings,
     SettingsProvenance,
     SettingsScope,
+    TraceDetailPolicy,
+    TraceRedactionPolicy,
+    TraceSettings,
 )
+from freesearch.models.retention import RetentionRunRequest
+from freesearch.models.schema_enums import RetentionDataClass
 from freesearch.models.settings import (
+    COPY_FIELD_NOT_OVERRIDDEN,
+    COPY_FIELD_SYSTEM_ONLY,
     ProjectSettingsUpdate,
+    SettingsCopyMode,
+    SettingsCopyRequest,
     SystemExecutionDefaults,
     SystemRoutingDefaults,
     SystemSafetyLimits,
     SystemSettingsUpdate,
+    SystemTraceDefaults,
 )
 from freesearch.models.users import UserPrincipal
+from freesearch.persistence.audit import AuditRepository
+from freesearch.persistence.bindings import StoredBinding
+from freesearch.persistence.otel_exporter import write_trace_spans
 from freesearch.persistence.projects import (
     AccountRow,
     ProjectMembershipRow,
@@ -49,7 +70,14 @@ from freesearch.services.authorization import (
     ScopedAuthorizationService,
     human_principal,
 )
+from freesearch.services.control_errors import ResourceInvalid, ResourceNotFound
+from freesearch.services.observability import get_project_trace, list_project_traces
 from freesearch.services.projects import ProjectService
+from freesearch.services.retention import (
+    RETENTION_CUTOFF_FUTURE,
+    RETENTION_CUTOFF_REQUIRED,
+    ProjectRetentionService,
+)
 from freesearch.services.settings import (
     PROJECT_ARCHIVED,
     SETTINGS_REVISION_CONFLICT,
@@ -972,5 +1000,1430 @@ async def test_cross_process_revisions_invalidate_cached_project_resolutions(
         assert after_project_b.system_revision == 1
         assert after_project_b.project_revision == 0
         assert after_project_b.effective_settings["execution.cache_enabled"] is True
+    finally:
+        await boot.repository.close()
+
+
+async def _copy_pair(
+    repository: SQLiteRepository,
+    source_id: UUID,
+    admin: UserPrincipal,
+    slug: str,
+) -> tuple[ProjectRead, UserPrincipal]:
+    """Create target B with its own admin who can also read source A.
+
+    The returned copier holds source ``settings.read`` as a plain member of A
+    plus target ``settings.copy``/``settings.write`` as project admin of B.
+    """
+
+    target_admin = temp_principal(await create_temp_user(repository, temp_email("p05-copy-admin")))
+    target = await ProjectService(repository).create_project(
+        admin,
+        ProjectCreate(
+            name="Second Settings Copy Project",
+            slug=slug,
+            initial_admin_user_id=target_admin.id,
+        ),
+    )
+    await ProjectService(repository).add_member(
+        admin,
+        source_id,
+        ProjectMemberAdd(user_id=target_admin.id),
+    )
+    return target, target_admin
+
+
+@pytest.mark.asyncio
+async def test_copy_overrides_only_skips_inherited_values(tmp_path: Path) -> None:
+    """Overrides-only copy moves explicit source overrides and nothing else."""
+
+    boot = await bootstrap_fresh_alpha(tmp_path / "p05-copy-overrides.db")
+    try:
+        service = SettingsService(boot.repository)
+        admin = temp_principal(boot.admin_user)
+        source_id = boot.default_project.id
+        target, copier = await _copy_pair(boot.repository, source_id, admin, "second-copy-settings")
+
+        await service.update_project_settings(
+            admin,
+            source_id,
+            ProjectSettingsUpdate(
+                expected_revision=0,
+                routing=RoutingSettings(
+                    fallback_policy=FallbackPolicy.FIRST_ONLY,
+                    max_attempts=5,
+                    preferred_providers=("brave", "exa"),
+                ),
+                execution=ExecutionSettings(cache_enabled=False),
+            ),
+        )
+
+        preview = await service.preview_copy(
+            copier,
+            target.id,
+            SettingsCopyRequest(
+                source_project_id=source_id,
+                expected_source_revision=1,
+                expected_target_revision=0,
+                expected_system_revision=0,
+            ),
+        )
+        assert preview.source_revision == 1
+        assert preview.target_revision == 0
+        assert preview.system_revision == 0
+        copied = {field.field_id for field in preview.fields}
+        assert copied == {
+            "routing.fallback_policy",
+            "routing.max_attempts",
+            "routing.preferred_providers",
+            "execution.cache_enabled",
+        }
+        assert preview.rejected == []
+        assert preview.bindings == []
+        assert preview.target.system_revision == 0
+        assert preview.target.project_revision == 0
+        assert preview.target.effective_settings["routing.max_attempts"] == 5
+        assert preview.target.effective_settings["routing.preferred_providers"] == ["brave", "exa"]
+        assert preview.target.effective_settings["execution.cache_enabled"] is False
+        assert preview.target.effective_settings["routing.cost_optimization_preset"] == "balanced"
+        # Preview must not write: the live target still inherits the defaults.
+        untouched = await service.get_project_settings(copier, target.id)
+        assert untouched.project_revision == 0
+        assert untouched.effective_settings["routing.max_attempts"] == 3
+        assert untouched.effective_settings["execution.cache_enabled"] is True
+        assert untouched.overrides == {}
+
+        source_revision, target_revision, system_revision = (
+            preview.source_revision,
+            preview.target_revision,
+            preview.system_revision,
+        )
+        result = await service.apply_copy(
+            copier,
+            target.id,
+            SettingsCopyRequest(
+                source_project_id=source_id,
+                expected_source_revision=source_revision,
+                expected_target_revision=target_revision,
+                expected_system_revision=system_revision,
+            ),
+        )
+        assert result.target_revision == 1
+        assert result.bindings_copied == []
+        assert result.target.effective_settings["routing.max_attempts"] == 5
+        assert result.target.effective_settings["execution.cache_enabled"] is False
+        assert result.overrides["routing.max_attempts"] == 5
+        assert "routing.cost_optimization_preset" not in result.overrides
+
+        async with boot.repository.session() as session:
+            events = await AuditRepository(session).list_project_events(project_id=target.id)
+        assert events
+        assert events[0].action == "settings.copy"
+        assert events[0].scope_id == target.id
+        assert result.audit_event_id == events[0].id
+
+        reread = await service.get_project_settings(copier, target.id)
+        assert reread.project_revision == 1
+        assert reread.effective_settings["routing.max_attempts"] == 5
+        assert reread.overrides["routing.preferred_providers"] == ["brave", "exa"]
+
+        # Re-applying the same state is a no-op: no new revision, same overrides.
+        same = await service.apply_copy(
+            copier,
+            target.id,
+            SettingsCopyRequest(
+                source_project_id=source_id,
+                expected_source_revision=1,
+                expected_target_revision=1,
+                expected_system_revision=0,
+            ),
+        )
+        assert same.target_revision == 1
+        assert (await service.get_project_settings(copier, target.id)).project_revision == 1
+    finally:
+        await boot.repository.close()
+
+
+@pytest.mark.asyncio
+async def test_copy_effective_snapshot_pins_inherited_values_as_overrides(
+    tmp_path: Path,
+) -> None:
+    """Effective-snapshot copy pins the source's resolved view onto the target."""
+
+    boot = await bootstrap_fresh_alpha(tmp_path / "p05-copy-snapshot.db")
+    try:
+        service = SettingsService(boot.repository)
+        admin = temp_principal(boot.admin_user)
+        source_id = boot.default_project.id
+        target, copier = await _copy_pair(boot.repository, source_id, admin, "second-copy-snapshot")
+
+        await service.update_system_settings(
+            admin,
+            SystemSettingsUpdate(
+                expected_revision=0,
+                routing=SystemRoutingDefaults(max_attempts=6, preferred_providers=("exa",)),
+                execution=SystemExecutionDefaults(
+                    default_timeout_seconds=40.0,
+                    max_fanout_concurrency=4,
+                    cache_enabled=True,
+                    cache_ttl_seconds=120,
+                ),
+                safety_limits=SystemSafetyLimits(
+                    max_timeout_seconds=70.0,
+                    max_fanout_concurrency=8,
+                ),
+            ),
+        )
+        await service.update_project_settings(
+            admin,
+            source_id,
+            ProjectSettingsUpdate(
+                expected_revision=0,
+                routing=RoutingSettings(max_attempts=5),
+            ),
+        )
+
+        preview = await service.preview_copy(
+            copier,
+            target.id,
+            SettingsCopyRequest(
+                source_project_id=source_id,
+                expected_source_revision=1,
+                expected_target_revision=0,
+                expected_system_revision=1,
+                mode=SettingsCopyMode.EFFECTIVE_SNAPSHOT,
+            ),
+        )
+        snapshot = {field.field_id: field.value for field in preview.fields}
+        # Inherited system values are pinned as explicit overrides here.
+        assert snapshot["routing.max_attempts"] == 5
+        assert list(snapshot["routing.preferred_providers"]) == ["exa"]
+        assert snapshot["execution.cache_enabled"] is True
+        assert snapshot["execution.default_timeout_seconds"] == 40.0
+        assert preview.effective_snapshot["routing.max_attempts"] == 5
+        assert preview.effective_snapshot["routing.preferred_providers"] == ["exa"]
+        assert preview.target.project_revision == 0
+        assert preview.target.effective_settings["routing.max_attempts"] == 5
+
+        source_revision, target_revision, system_revision = (
+            preview.source_revision,
+            preview.target_revision,
+            preview.system_revision,
+        )
+        result = await service.apply_copy(
+            copier,
+            target.id,
+            SettingsCopyRequest(
+                source_project_id=source_id,
+                expected_source_revision=source_revision,
+                expected_target_revision=target_revision,
+                expected_system_revision=system_revision,
+                mode=SettingsCopyMode.EFFECTIVE_SNAPSHOT,
+            ),
+        )
+        assert result.target_revision == 1
+        assert result.overrides["routing.preferred_providers"] == ["exa"]
+        assert result.overrides["execution.cache_enabled"] is True
+        reread = await service.get_project_settings(copier, target.id)
+        assert reread.overrides["routing.preferred_providers"] == ["exa"]
+        assert reread.overrides["execution.cache_enabled"] is True
+    finally:
+        await boot.repository.close()
+
+
+@pytest.mark.asyncio
+async def test_copy_reports_system_only_and_unset_overrides_as_rejections(
+    tmp_path: Path,
+) -> None:
+    """Explicit field lists reject authority-owned and uninherited fields."""
+
+    boot = await bootstrap_fresh_alpha(tmp_path / "p05-copy-reject.db")
+    try:
+        service = SettingsService(boot.repository)
+        admin = temp_principal(boot.admin_user)
+        source_id = boot.default_project.id
+        target, copier = await _copy_pair(boot.repository, source_id, admin, "second-copy-reject")
+        await service.update_project_settings(
+            admin,
+            source_id,
+            ProjectSettingsUpdate(
+                expected_revision=0,
+                routing=RoutingSettings(max_attempts=5),
+            ),
+        )
+
+        preview = await service.preview_copy(
+            copier,
+            target.id,
+            SettingsCopyRequest(
+                source_project_id=source_id,
+                expected_source_revision=1,
+                expected_target_revision=0,
+                expected_system_revision=0,
+                fields=(
+                    "routing.max_attempts",
+                    "routing.preferred_providers",
+                    "system.max_timeout_seconds",
+                ),
+            ),
+        )
+        assert [field.field_id for field in preview.fields] == ["routing.max_attempts"]
+        rejected = {item.field_id: item.reason for item in preview.rejected}
+        assert rejected == {
+            "routing.preferred_providers": COPY_FIELD_NOT_OVERRIDDEN,
+            "system.max_timeout_seconds": COPY_FIELD_SYSTEM_ONLY,
+        }
+
+        with pytest.raises(SettingsValidationError, match="unknown settings field"):
+            await service.preview_copy(
+                copier,
+                target.id,
+                SettingsCopyRequest(
+                    source_project_id=source_id,
+                    expected_source_revision=1,
+                    expected_target_revision=0,
+                    expected_system_revision=0,
+                    fields=("routing.nope",),
+                ),
+            )
+    finally:
+        await boot.repository.close()
+
+
+@pytest.mark.asyncio
+async def test_copy_revision_triple_rejects_stale_source_target_and_system(
+    tmp_path: Path,
+) -> None:
+    """Any stale revision in the source/target/system triple aborts the copy."""
+
+    boot = await bootstrap_fresh_alpha(tmp_path / "p05-copy-stale.db")
+    try:
+        service = SettingsService(boot.repository)
+        admin = temp_principal(boot.admin_user)
+        source_id = boot.default_project.id
+        target, copier = await _copy_pair(boot.repository, source_id, admin, "second-copy-stale")
+        await service.update_project_settings(
+            admin,
+            source_id,
+            ProjectSettingsUpdate(
+                expected_revision=0,
+                routing=RoutingSettings(max_attempts=5),
+            ),
+        )
+        good = SettingsCopyRequest(
+            source_project_id=source_id,
+            expected_source_revision=1,
+            expected_target_revision=0,
+            expected_system_revision=0,
+        )
+
+        with pytest.raises(SettingsRevisionConflict):
+            await service.preview_copy(
+                copier,
+                target.id,
+                good.model_copy(update={"expected_source_revision": 0}),
+            )
+        with pytest.raises(SettingsRevisionConflict):
+            await service.preview_copy(
+                copier,
+                target.id,
+                good.model_copy(update={"expected_target_revision": 7}),
+            )
+        await service.update_system_settings(
+            admin,
+            SystemSettingsUpdate(
+                expected_revision=0,
+                routing=SystemRoutingDefaults(max_attempts=4),
+                execution=SystemExecutionDefaults(
+                    default_timeout_seconds=30.0,
+                    max_fanout_concurrency=5,
+                ),
+                safety_limits=SystemSafetyLimits(
+                    max_timeout_seconds=60.0,
+                    max_fanout_concurrency=6,
+                ),
+            ),
+        )
+        with pytest.raises(SettingsRevisionConflict):
+            await service.preview_copy(copier, target.id, good)
+        with pytest.raises(SettingsRevisionConflict):
+            await service.apply_copy(copier, target.id, good)
+
+        # Target moves too: the first apply wins, the replayed plan loses.
+        moved = await service.apply_copy(
+            copier,
+            target.id,
+            SettingsCopyRequest(
+                source_project_id=source_id,
+                expected_source_revision=1,
+                expected_target_revision=0,
+                expected_system_revision=1,
+            ),
+        )
+        assert moved.target_revision == 1
+        with pytest.raises(SettingsRevisionConflict):
+            await service.apply_copy(
+                copier,
+                target.id,
+                SettingsCopyRequest(
+                    source_project_id=source_id,
+                    expected_source_revision=1,
+                    expected_target_revision=0,
+                    expected_system_revision=1,
+                ),
+            )
+        reread = await service.get_project_settings(copier, target.id)
+        assert reread.project_revision == 1
+    finally:
+        await boot.repository.close()
+
+
+@pytest.mark.asyncio
+async def test_copy_enforces_source_read_target_copy_and_write_split(tmp_path: Path) -> None:
+    """Source reads, target copy, and target writes are independent gates."""
+
+    boot = await bootstrap_fresh_alpha(tmp_path / "p05-copy-rbac.db")
+    try:
+        repository = boot.repository
+        service = SettingsService(repository)
+        admin = temp_principal(boot.admin_user)
+        source_id = boot.default_project.id
+
+        source_outsider_row = await create_temp_user(repository, temp_email("p05-copy-outsider"))
+        source_outsider = temp_principal(source_outsider_row)
+
+        target_admin_row = await create_temp_user(repository, temp_email("p05-copy-tadmin"))
+        target_admin = temp_principal(target_admin_row)
+        target = await ProjectService(repository).create_project(
+            admin,
+            ProjectCreate(
+                name="Second Settings RBAC Project",
+                slug="second-copy-rbac",
+                initial_admin_user_id=target_admin.id,
+            ),
+        )
+
+        request = SettingsCopyRequest(
+            source_project_id=source_id,
+            expected_source_revision=0,
+            expected_target_revision=0,
+            expected_system_revision=0,
+        )
+        # No membership anywhere: target resolution itself is not found.
+        with pytest.raises(SettingsNotFound):
+            await service.preview_copy(source_outsider, target.id, request)
+        with pytest.raises(SettingsNotFound):
+            await service.apply_copy(source_outsider, target.id, request)
+
+        # Source member (read-only) cannot preview into the target: the target
+        # context is missing first, then SETTINGS_COPY is required as a member.
+        await ProjectService(repository).add_member(
+            admin,
+            source_id,
+            ProjectMemberAdd(user_id=source_outsider.id),
+        )
+        readable = await service.get_project_settings(source_outsider, source_id)
+        assert readable.project_revision == 0
+        with pytest.raises(SettingsNotFound):
+            await service.preview_copy(source_outsider, target.id, request)
+        await ProjectService(repository).add_member(
+            target_admin,
+            target.id,
+            ProjectMemberAdd(user_id=source_outsider.id),
+        )
+        with pytest.raises(AuthorizationDenied):
+            await service.preview_copy(source_outsider, target.id, request)
+        # Read on the source and copy on the target are now satisfied, but plain
+        # members cannot write the target.
+        with pytest.raises(AuthorizationDenied):
+            await service.apply_copy(source_outsider, target.id, request)
+
+        # A target-only admin lacks source read: target resolution succeeds but
+        # the source context is not found, so no silent authority copy happens.
+        with pytest.raises(SettingsNotFound):
+            await service.preview_copy(target_admin, target.id, request)
+        with pytest.raises(SettingsNotFound):
+            await service.apply_copy(target_admin, target.id, request)
+
+        # Self-copy is rejected before any revision check.
+        with pytest.raises(SettingsValidationError, match="cannot copy settings onto itself"):
+            await service.preview_copy(
+                admin,
+                source_id,
+                SettingsCopyRequest(
+                    source_project_id=source_id,
+                    expected_source_revision=0,
+                    expected_target_revision=0,
+                    expected_system_revision=0,
+                ),
+            )
+    finally:
+        await boot.repository.close()
+
+
+@pytest.mark.asyncio
+async def test_copy_refuses_archived_targets_and_preserves_without_secret_copy(
+    tmp_path: Path,
+) -> None:
+    """Archived targets refuse the copy; a clean copy carries no secret detail."""
+
+    boot = await bootstrap_fresh_alpha(tmp_path / "p05-copy-archived.db")
+    try:
+        service = SettingsService(boot.repository)
+        admin = temp_principal(boot.admin_user)
+        source_id = boot.default_project.id
+        target, copier = await _copy_pair(boot.repository, source_id, admin, "second-copy-archived")
+        await ProjectService(boot.repository).archive_project(copier, target.id)
+        request = SettingsCopyRequest(
+            source_project_id=source_id,
+            expected_source_revision=0,
+            expected_target_revision=0,
+            expected_system_revision=0,
+        )
+        with pytest.raises(SettingsConflict) as archived_preview:
+            await service.preview_copy(copier, target.id, request)
+        assert archived_preview.value.code == PROJECT_ARCHIVED
+        with pytest.raises(SettingsConflict) as archived_apply:
+            await service.apply_copy(copier, target.id, request)
+        assert archived_apply.value.code == PROJECT_ARCHIVED
+
+        async with boot.repository.session() as session:
+            events = await AuditRepository(session).list_project_events(project_id=target.id)
+        assert all(event.action != "settings.copy" for event in events)
+    finally:
+        await boot.repository.close()
+
+
+@pytest.mark.asyncio
+async def test_trace_inheritance_zero_sampling_and_system_ceilings(tmp_path: Path) -> None:
+    """Trace overrides inherit, zero sampling is explicit, and ceilings bind."""
+
+    boot = await bootstrap_fresh_alpha(tmp_path / "p05-trace-inherit.db")
+    try:
+        service = SettingsService(boot.repository)
+        admin = temp_principal(boot.admin_user)
+        project_id = boot.default_project.id
+
+        inherited = await service.get_project_settings(admin, project_id)
+        assert inherited.effective_settings["trace.sampling_rate"] == 1.0
+        assert inherited.effective_settings["trace.detail"] == "metadata"
+        assert inherited.effective_settings["trace.payload_redaction"] == "standard"
+        assert inherited.effective_settings["trace.retention_days"] == 30
+        assert inherited.overrides == {}
+
+        written = await service.update_project_settings(
+            admin,
+            project_id,
+            ProjectSettingsUpdate(
+                expected_revision=0,
+                trace=TraceSettings(
+                    sampling_rate=0.0,
+                    detail=TraceDetailPolicy.METADATA,
+                    payload_redaction=TraceRedactionPolicy.STRICT,
+                    retention_days=120,
+                ),
+            ),
+        )
+        assert written.project_revision == 1
+        assert written.effective_settings["trace.sampling_rate"] == 0.0
+        assert written.effective_settings["trace.detail"] == "metadata"
+        assert written.effective_settings["trace.payload_redaction"] == "strict"
+        assert written.effective_settings["trace.retention_days"] == 120
+        assert written.overrides["trace.sampling_rate"] == 0.0
+        assert written.fields["trace.sampling_rate"].provenance is (
+            SettingsProvenance.PROJECT_OVERRIDE
+        )
+
+        tightened = await service.update_system_settings(
+            admin,
+            SystemSettingsUpdate(
+                expected_revision=0,
+                routing=SystemRoutingDefaults(max_attempts=3, preferred_providers=()),
+                execution=SystemExecutionDefaults(
+                    cache_enabled=True,
+                    default_timeout_seconds=30.0,
+                    max_fanout_concurrency=5,
+                    cache_ttl_seconds=300,
+                ),
+                trace=SystemTraceDefaults(
+                    detail=TraceDetailPolicy.METADATA,
+                    payload_redaction=TraceRedactionPolicy.STRICT,
+                    retention_days=14,
+                ),
+                safety_limits=SystemSafetyLimits(max_trace_retention_days=14),
+            ),
+        )
+        assert tightened.revision == 1
+        reread = await service.get_project_settings(admin, project_id)
+        assert reread.system_revision == 1
+        assert reread.project_revision == 1
+        assert reread.effective_settings["trace.detail"] == "metadata"
+        assert reread.effective_settings["trace.payload_redaction"] == "strict"
+        # The project asked for a longer window than the ceiling allows.
+        assert reread.effective_settings["trace.retention_days"] == 14
+
+        relaxed = await service.update_project_settings(
+            admin,
+            project_id,
+            ProjectSettingsUpdate(
+                expected_revision=1,
+                trace=TraceSettings(
+                    detail=TraceDetailPolicy.FULL,
+                    payload_redaction=TraceRedactionPolicy.STANDARD,
+                    retention_days=60,
+                ),
+            ),
+        )
+        assert relaxed.project_revision == 2
+        assert relaxed.effective_settings["trace.detail"] == "metadata"
+        assert relaxed.fields["trace.detail"].provenance is (SettingsProvenance.SYSTEM_CONSTRAINED)
+        assert relaxed.effective_settings["trace.retention_days"] == 14
+
+        reset = await service.update_project_settings(
+            admin,
+            project_id,
+            ProjectSettingsUpdate(expected_revision=2, trace=None),
+        )
+        assert reset.project_revision == 3
+        assert reset.effective_settings["trace.sampling_rate"] == 1.0
+        assert reset.effective_settings["trace.detail"] == "metadata"
+        assert reset.effective_settings["trace.retention_days"] == 14
+        assert reset.overrides == {}
+    finally:
+        await boot.repository.close()
+
+
+@pytest.mark.asyncio
+async def test_trace_retention_uses_effective_policy_and_isolates_project(
+    tmp_path: Path,
+) -> None:
+    """Trace retention derives its cutoff from the policy and stays in project."""
+
+    boot = await bootstrap_fresh_alpha(tmp_path / "p05-trace-retention.db")
+    try:
+        settings = SettingsService(boot.repository)
+        admin = temp_principal(boot.admin_user)
+        project_id = boot.default_project.id
+        second_admin = temp_principal(
+            await create_temp_user(boot.repository, temp_email("p05-trace-ret-b"))
+        )
+        other = await ProjectService(boot.repository).create_project(
+            admin,
+            ProjectCreate(
+                name="Other Retention Project",
+                slug="other-retention",
+                initial_admin_user_id=second_admin.id,
+            ),
+        )
+
+        await settings.update_project_settings(
+            admin,
+            project_id,
+            ProjectSettingsUpdate(
+                expected_revision=0,
+                trace=TraceSettings(retention_days=7),
+            ),
+        )
+        retention = ProjectRetentionService(boot.repository)
+        now = datetime.now(UTC)
+        old_root = TraceSpanRecord(
+            project_id=project_id,
+            actor_type=ActorType.HUMAN,
+            actor_id=admin.id,
+            span_id="root-old",
+            trace_id="a" * 32,
+            name="POST /search",
+            kind=TraceSpanKind.SERVER,
+            started_at=now - timedelta(days=30),
+            ended_at=now - timedelta(days=30),
+            duration_ms=5,
+            operation=TraceOperation.SEARCH,
+            outcome=TraceOutcome.SUCCESS,
+            user_id=str(admin.id),
+        )
+        new_root = old_root.model_copy(
+            update={
+                "span_id": "root-new",
+                "trace_id": "b" * 32,
+                "started_at": now - timedelta(days=1),
+                "ended_at": now - timedelta(days=1),
+            }
+        )
+        foreign_root = old_root.model_copy(
+            update={
+                "project_id": other.id,
+                "span_id": "root-foreign",
+                "trace_id": "c" * 32,
+            }
+        )
+        write_trace_spans(boot.repository.database_path, [old_root, new_root, foreign_root])
+
+        run = await retention.run(
+            admin,
+            project_id,
+            RetentionRunRequest(data_class=RetentionDataClass.TRACES),
+        )
+        assert run.project_id == project_id
+        assert run.data_class is RetentionDataClass.TRACES
+        assert run.deleted_rows >= 1
+        assert (now - run.cutoff).days in {6, 7}
+        kept = await get_project_trace(boot.repository, admin, project_id, "b" * 32)
+        assert kept is not None
+        assert await get_project_trace(boot.repository, admin, project_id, "a" * 32) is None
+        foreign = await get_project_trace(boot.repository, second_admin, other.id, "c" * 32)
+        assert foreign is not None
+
+        with pytest.raises(ResourceInvalid) as missing_cutoff:
+            await retention.run(
+                admin,
+                project_id,
+                RetentionRunRequest(data_class=RetentionDataClass.USAGE),
+            )
+        assert missing_cutoff.value.code == RETENTION_CUTOFF_REQUIRED
+        with pytest.raises(ResourceInvalid) as future_cutoff:
+            await retention.run(
+                admin,
+                project_id,
+                RetentionRunRequest(
+                    data_class=RetentionDataClass.USAGE,
+                    cutoff=now + timedelta(days=1),
+                ),
+            )
+        assert future_cutoff.value.code == RETENTION_CUTOFF_FUTURE
+    finally:
+        await boot.repository.close()
+
+
+@pytest.mark.asyncio
+async def test_activity_reads_are_isolated_between_projects(tmp_path: Path) -> None:
+    """Activity lists stay inside the authorized project and need read rights."""
+
+    boot = await bootstrap_fresh_alpha(tmp_path / "p05-trace-isolation.db")
+    try:
+        admin = temp_principal(boot.admin_user)
+        project_id = boot.default_project.id
+        second_admin = temp_principal(
+            await create_temp_user(boot.repository, temp_email("p05-trace-iso-b"))
+        )
+        other = await ProjectService(boot.repository).create_project(
+            admin,
+            ProjectCreate(
+                name="Other Isolation Project",
+                slug="other-isolation",
+                initial_admin_user_id=second_admin.id,
+            ),
+        )
+        now = datetime.now(UTC)
+        write_trace_spans(
+            boot.repository.database_path,
+            [
+                TraceSpanRecord(
+                    project_id=project_id,
+                    actor_type=ActorType.HUMAN,
+                    actor_id=admin.id,
+                    span_id="root-a",
+                    trace_id="d" * 32,
+                    name="POST /search",
+                    kind=TraceSpanKind.SERVER,
+                    started_at=now,
+                    ended_at=now,
+                    duration_ms=5,
+                    operation=TraceOperation.SEARCH,
+                    outcome=TraceOutcome.SUCCESS,
+                    user_id=str(admin.id),
+                ),
+                TraceSpanRecord(
+                    project_id=other.id,
+                    actor_type=ActorType.HUMAN,
+                    actor_id=second_admin.id,
+                    span_id="root-b",
+                    trace_id="e" * 32,
+                    name="POST /search",
+                    kind=TraceSpanKind.SERVER,
+                    started_at=now,
+                    ended_at=now,
+                    duration_ms=5,
+                    operation=TraceOperation.SEARCH,
+                    outcome=TraceOutcome.SUCCESS,
+                    user_id=str(second_admin.id),
+                ),
+            ],
+        )
+
+        own = await list_project_traces(boot.repository, admin, project_id)
+        assert [item.trace_id for item in own.items] == ["d" * 32]
+        foreign_project = await list_project_traces(boot.repository, second_admin, other.id)
+        assert [item.trace_id for item in foreign_project.items] == ["e" * 32]
+        assert await get_project_trace(boot.repository, admin, project_id, "e" * 32) is None
+        assert await get_project_trace(boot.repository, second_admin, other.id, "d" * 32) is None
+        assert await get_project_trace(boot.repository, admin, project_id, "not-a-trace") is None
+
+        outsider_row = await create_temp_user(
+            repository=boot.repository, email=temp_email("p05-iso-out")
+        )
+        outsider = temp_principal(outsider_row)
+        with pytest.raises(ResourceNotFound):
+            await list_project_traces(boot.repository, outsider, project_id)
+
+        await ProjectService(boot.repository).add_member(
+            admin,
+            project_id,
+            ProjectMemberAdd(user_id=outsider.id),
+        )
+        member_view = await list_project_traces(boot.repository, outsider, project_id)
+        assert [item.trace_id for item in member_view.items] == ["d" * 32]
+        with pytest.raises(ResourceNotFound):
+            await list_project_traces(boot.repository, outsider, other.id)
+
+        token_manager_row = await create_temp_user(
+            repository=boot.repository, email=temp_email("p05-iso-token")
+        )
+        token_manager = temp_principal(token_manager_row)
+        await ProjectService(boot.repository).add_member(
+            admin,
+            project_id,
+            ProjectMemberAdd(
+                user_id=token_manager.id,
+                initial_role=BuiltinRole.TOKEN_MANAGER.value,
+            ),
+        )
+        with pytest.raises(AuthorizationDenied):
+            await list_project_traces(boot.repository, token_manager, project_id)
+    finally:
+        await boot.repository.close()
+
+
+@pytest.mark.asyncio
+async def test_settings_edits_and_copy_are_mandatory_audits_at_zero_trace_sampling(
+    tmp_path: Path,
+) -> None:
+    boot = await bootstrap_fresh_alpha(tmp_path / "mandatory-audit.db")
+    try:
+        admin = temp_principal(boot.admin_user)
+        settings = SettingsService(boot.repository)
+        source = boot.default_project.id
+        target, copier = await _copy_pair(boot.repository, source, admin, "audit-copy")
+        await settings.update_project_settings(
+            admin,
+            source,
+            ProjectSettingsUpdate(expected_revision=0, trace=TraceSettings(sampling_rate=0.0)),
+        )
+        await settings.update_project_settings(
+            copier,
+            target.id,
+            ProjectSettingsUpdate(expected_revision=0, trace=TraceSettings(sampling_rate=0.0)),
+        )
+        result = await settings.apply_copy(
+            copier,
+            target.id,
+            SettingsCopyRequest(
+                source_project_id=source,
+                expected_source_revision=1,
+                expected_target_revision=1,
+                expected_system_revision=0,
+            ),
+        )
+        async with boot.repository.session() as session:
+            source_events = await AuditRepository(session).list_project_events(project_id=source)
+            target_events = await AuditRepository(session).list_project_events(project_id=target.id)
+        assert [event.action for event in source_events].count("settings.edit") == 1
+        assert [event.action for event in target_events].count("settings.edit") == 1
+        assert [event.action for event in target_events].count("settings.copy") == 1
+        assert result.audit_event_id in {event.id for event in target_events}
+    finally:
+        await boot.repository.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["edit", "copy"])
+async def test_audit_failure_rolls_back_settings_revision_and_cached_resolution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str
+) -> None:
+    from unittest.mock import AsyncMock
+
+    from freesearch.persistence.bindings import ProjectBindingRepository
+
+    boot = await bootstrap_fresh_alpha(tmp_path / "audit-rollback.db")
+    try:
+        admin = temp_principal(boot.admin_user)
+        source = boot.default_project.id
+        settings = SettingsService(boot.repository)
+        target, copier = await _copy_pair(boot.repository, source, admin, "rollback-copy")
+        await settings.update_project_settings(
+            admin,
+            source,
+            ProjectSettingsUpdate(
+                expected_revision=0, execution=ExecutionSettings(cache_enabled=False)
+            ),
+        )
+        binding = await _copy_binding(boot.repository, source, target.id, admin.id)
+        before = await settings.get_project_settings(copier, target.id)
+        async with boot.repository.session() as session:
+            audit_before = await AuditRepository(session).list_project_events(project_id=target.id)
+        with monkeypatch.context() as patch:
+            patch.setattr(
+                "freesearch.services.settings.record_project_event",
+                AsyncMock(side_effect=RuntimeError("injected audit failure")),
+            )
+            with pytest.raises(RuntimeError, match="injected audit failure"):
+                if operation == "copy":
+                    await settings.apply_copy(
+                        copier,
+                        target.id,
+                        SettingsCopyRequest(
+                            source_project_id=source,
+                            expected_source_revision=1,
+                            expected_target_revision=0,
+                            expected_system_revision=0,
+                            binding_versions={binding.id: binding.version},
+                        ),
+                    )
+                else:
+                    await settings.update_project_settings(
+                        copier,
+                        target.id,
+                        ProjectSettingsUpdate(
+                            expected_revision=0, execution=ExecutionSettings(cache_enabled=False)
+                        ),
+                    )
+        after = await SettingsService(boot.repository).get_project_settings(copier, target.id)
+        assert after == before
+        async with boot.repository.session() as session:
+            audit_after = await AuditRepository(session).list_project_events(project_id=target.id)
+            assert (
+                await ProjectBindingRepository(session).list_for_project(project_id=target.id) == []
+            )
+        assert audit_after == audit_before
+        # The same expected revision remains usable after rollback.
+        written = await settings.update_project_settings(
+            copier,
+            target.id,
+            ProjectSettingsUpdate(
+                expected_revision=0, execution=ExecutionSettings(cache_enabled=False)
+            ),
+        )
+        assert written.project_revision == 1
+        assert written.effective_settings["execution.cache_enabled"] is False
+    finally:
+        await boot.repository.close()
+
+
+async def _copy_binding(
+    repository: SQLiteRepository,
+    source: UUID,
+    target: UUID,
+    actor_id: UUID,
+    *,
+    private: bool = False,
+    target_grant: bool = True,
+) -> StoredBinding:
+    """Seed only nonsecret credential metadata and a source binding."""
+    from freesearch.models.credentials import CredentialOperation
+    from freesearch.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID, CredentialOwnerScope
+    from freesearch.persistence.bindings import ProjectBindingRepository
+    from freesearch.persistence.credentials import CredentialRepository
+
+    scope = CredentialOwnerScope.PROJECT if private else CredentialOwnerScope.SYSTEM
+    async with repository.session() as session:
+        credentials = CredentialRepository(session)
+        credential = await credentials.insert_credential(
+            account_id=DEFAULT_INSTALLATION_ACCOUNT_ID,
+            provider_type="tavily",
+            owner_scope=scope,
+            owner_project_id=source if private else None,
+            label="copy-source",
+            auth_mode="api_key",
+            created_by=actor_id,
+        )
+        if not private:
+            for project in [source] + ([target] if target_grant else []):
+                await credentials.upsert_grant(
+                    credential_id=credential.id,
+                    project_id=project,
+                    permitted_operations=frozenset({CredentialOperation.SEARCH}),
+                    granted_by=actor_id,
+                )
+        binding = await ProjectBindingRepository(session).create(
+            project_id=source,
+            credential_id=credential.id,
+            credential_scope=scope,
+            route_label="source-route",
+            priority=17,
+            created_by=actor_id,
+        )
+        await session.commit()
+    return binding
+
+
+@pytest.mark.asyncio
+async def test_copy_only_explicitly_selected_binding_versions_and_never_authority(
+    tmp_path: Path,
+) -> None:
+    import sqlite3
+
+    from freesearch.models.contracts import UsageEvent, UsageOperation
+    from freesearch.models.observability import ExecutionAttribution
+    from freesearch.persistence.bindings import ProjectBindingRepository
+    from tests.fixtures.api_keys import issue_project_key
+
+    boot = await bootstrap_fresh_alpha(tmp_path / "copy-bindings.db")
+    try:
+        admin = temp_principal(boot.admin_user)
+        source = boot.default_project.id
+        target, copier = await _copy_pair(boot.repository, source, admin, "bindings-target")
+        binding = await _copy_binding(boot.repository, source, target.id, admin.id)
+        await issue_project_key(boot.repository, owner=admin, project_id=source)
+        await boot.repository.set_runtime_setting("secret.fake-test-slot", "fake-only-never-copy")
+        await boot.repository.record_usage(
+            UsageEvent(
+                provider="tavily",
+                operation=UsageOperation.SEARCH,
+                units=3,
+                observed_at=datetime.now(UTC),
+            ),
+            attribution=ExecutionAttribution(
+                project_id=source, actor_type=ActorType.HUMAN, actor_id=admin.id
+            ),
+        )
+        now = datetime.now(UTC)
+        write_trace_spans(
+            boot.repository.database_path,
+            [
+                TraceSpanRecord(
+                    project_id=source,
+                    actor_type=ActorType.HUMAN,
+                    actor_id=admin.id,
+                    span_id="source-history",
+                    trace_id="f" * 32,
+                    name="POST /search",
+                    kind=TraceSpanKind.SERVER,
+                    started_at=now,
+                    ended_at=now,
+                    duration_ms=0,
+                    operation=TraceOperation.SEARCH,
+                    user_id=str(admin.id),
+                )
+            ],
+        )
+        settings = SettingsService(boot.repository)
+        request = SettingsCopyRequest(
+            source_project_id=source,
+            expected_source_revision=0,
+            expected_target_revision=0,
+            expected_system_revision=0,
+            fields=("routing.max_attempts",),
+        )
+        preview = await settings.preview_copy(copier, target.id, request)
+        assert len(preview.bindings) == 1
+        assert preview.bindings[0].version == binding.version
+        assert preview.bindings[0].selected is False
+        assert preview.bindings[0].eligible is True
+        implicit = await settings.apply_copy(copier, target.id, request)
+        assert implicit.bindings_copied == []
+        assert implicit.target_revision == 0
+        selected = request.model_copy(update={"binding_versions": {binding.id: binding.version}})
+        selected_preview = await settings.preview_copy(copier, target.id, selected)
+        assert selected_preview.bindings[0].selected is True
+
+        def authority_snapshot():
+            with sqlite3.connect(boot.repository.database_path) as connection:
+                tables = [
+                    row[0]
+                    for row in connection.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'"
+                    )
+                ]
+                excluded = {
+                    "project_provider_bindings",
+                    "project_audit_events",
+                    "sqlite_sequence",
+                    "project_settings",
+                }
+                return {
+                    table: connection.execute(f'SELECT * FROM "{table}" ORDER BY 1').fetchall()
+                    for table in tables
+                    if table not in excluded
+                }
+
+        before = authority_snapshot()
+        result = await settings.apply_copy(copier, target.id, selected)
+        assert len(result.bindings_copied) == 1
+        assert "fake-only-never-copy" not in result.model_dump_json()
+        assert authority_snapshot() == before
+        async with boot.repository.session() as session:
+            copied = await ProjectBindingRepository(session).list_for_project(project_id=target.id)
+        assert len(copied) == 1
+        assert copied[0].credential_id == binding.credential_id
+        assert copied[0].route_label == binding.route_label
+        assert copied[0].priority == binding.priority
+        assert copied[0].enabled_operations == frozenset()
+        assert result.target_revision == 0
+        assert result.target.overrides == {}
+    finally:
+        await boot.repository.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reason", ["revoked", "unavailable", "private", "not_granted"])
+async def test_copy_rechecks_binding_grant_status_and_private_ownership_at_apply(
+    tmp_path: Path, reason: str
+) -> None:
+    from freesearch.models.settings import (
+        COPY_CREDENTIAL_NOT_GRANTED,
+        COPY_CREDENTIAL_PRIVATE,
+        COPY_CREDENTIAL_UNAVAILABLE,
+    )
+    from freesearch.persistence.bindings import ProjectBindingRepository
+    from freesearch.persistence.credentials import CredentialRepository, ProviderCredentialRow
+
+    boot = await bootstrap_fresh_alpha(tmp_path / "copy-recheck.db")
+    try:
+        admin = temp_principal(boot.admin_user)
+        source = boot.default_project.id
+        target, copier = await _copy_pair(boot.repository, source, admin, "recheck-target")
+        binding = await _copy_binding(
+            boot.repository,
+            source,
+            target.id,
+            admin.id,
+            private=reason == "private",
+            target_grant=reason != "not_granted",
+        )
+        settings = SettingsService(boot.repository)
+        request = SettingsCopyRequest(
+            source_project_id=source,
+            expected_source_revision=0,
+            expected_target_revision=0,
+            expected_system_revision=0,
+            fields=("routing.max_attempts",),
+            binding_versions={binding.id: binding.version},
+        )
+        preview = await settings.preview_copy(copier, target.id, request)
+        if reason in {"revoked", "unavailable"}:
+            assert preview.bindings[0].eligible is True
+            async with boot.repository.session() as session:
+                if reason == "revoked":
+                    await CredentialRepository(session).delete_grant(
+                        credential_id=binding.credential_id, project_id=target.id
+                    )
+                else:
+                    await session.execute(
+                        update(ProviderCredentialRow)
+                        .where(ProviderCredentialRow.id == str(binding.credential_id))
+                        .values(status="deleted")
+                    )
+                await session.commit()
+        denied = await settings.apply_copy(copier, target.id, request)
+        assert denied.bindings_copied == []
+        assert denied.target_revision == 0
+        assert denied.rejected
+        fresh = await settings.preview_copy(copier, target.id, request)
+        expected = (
+            COPY_CREDENTIAL_PRIVATE
+            if reason == "private"
+            else COPY_CREDENTIAL_UNAVAILABLE
+            if reason == "unavailable"
+            else COPY_CREDENTIAL_NOT_GRANTED
+        )
+        assert fresh.bindings[0].rejection == expected
+        assert fresh.bindings[0].eligible is False
+        async with boot.repository.session() as session:
+            assert (
+                await ProjectBindingRepository(session).list_for_project(project_id=target.id) == []
+            )
+            events = await AuditRepository(session).list_project_events(project_id=target.id)
+        assert len([event for event in events if event.action == "settings.copy"]) == 1
+        assert (await settings.get_project_settings(copier, target.id)).project_revision == 0
+    finally:
+        await boot.repository.close()
+
+
+@pytest.mark.asyncio
+async def test_copy_binding_edit_or_unknown_selection_conflicts_with_preview(
+    tmp_path: Path,
+) -> None:
+    from freesearch.models.credentials import CredentialOperation
+    from freesearch.persistence.bindings import ProjectBindingRepository
+
+    boot = await bootstrap_fresh_alpha(tmp_path / "copy-binding-revision.db")
+    try:
+        admin = temp_principal(boot.admin_user)
+        source = boot.default_project.id
+        target, copier = await _copy_pair(boot.repository, source, admin, "version-target")
+        binding = await _copy_binding(boot.repository, source, target.id, admin.id)
+        settings = SettingsService(boot.repository)
+        request = SettingsCopyRequest(
+            source_project_id=source,
+            expected_source_revision=0,
+            expected_target_revision=0,
+            expected_system_revision=0,
+            binding_versions={binding.id: binding.version},
+        )
+        assert (await settings.preview_copy(copier, target.id, request)).bindings[0].eligible
+        async with boot.repository.session() as session:
+            changed = await ProjectBindingRepository(session).update(
+                project_id=source,
+                binding_id=binding.id,
+                enabled_operations=frozenset({CredentialOperation.SEARCH}),
+                route_label="changed-route",
+                priority=5,
+            )
+            assert changed.version == binding.version + 1
+            await session.commit()
+        for stale in [request, request.model_copy(update={"binding_versions": {uuid4(): 1}})]:
+            with pytest.raises(SettingsRevisionConflict):
+                await settings.preview_copy(copier, target.id, stale)
+            with pytest.raises(SettingsRevisionConflict):
+                await settings.apply_copy(copier, target.id, stale)
+        async with boot.repository.session() as session:
+            assert (
+                await ProjectBindingRepository(session).list_for_project(project_id=target.id) == []
+            )
+    finally:
+        await boot.repository.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "reader_mode",
+    ["trace_policy", "execution_scope_human", "execution_scope_api_key"],
+)
+async def test_consistent_read_snapshot_prevents_phantom_full_policy_interleaving(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reader_mode: str
+) -> None:
+    """Interleaved writer changes must not leak phantom FULL trace policy to a concurrent reader.
+
+    Initial state: SYSTEM=metadata, PROJECT=full -> effective: metadata.
+    Writer: updates PROJECT->metadata, then SYSTEM->full.
+    Both durable states allow metadata only. With a deferred SQLite read snapshot
+    established before authorization and settings reads, the reader never sees
+    old PROJECT (full) + new SYSTEM (full).
+    """
+    from freesearch.models.projects import (
+        PermissionAction,
+        ProjectApiKeyPrincipal,
+        TraceDetailPolicy,
+    )
+    from freesearch.models.settings import (
+        ProjectSettingsUpdate,
+        SystemSettingsUpdate,
+        SystemTraceDefaults,
+        TraceSettings,
+    )
+    from freesearch.persistence.scoped import ScopedProjectSettings
+    from freesearch.services.authorization import human_principal
+    from freesearch.services.execution_scope import resolve_execution_boundary
+    from freesearch.services.settings import project_trace_policy
+    from tests.fixtures.api_keys import issue_project_key
+
+    boot = await bootstrap_fresh_alpha(tmp_path / f"snap-{reader_mode}.db")
+    try:
+        admin = temp_principal(boot.admin_user)
+        human_admin = human_principal(admin)
+        project_id = boot.default_project.id
+        settings = SettingsService(boot.repository)
+
+        # Initial durable state: SYSTEM=metadata, PROJECT=full
+        await settings.update_system_settings(
+            admin,
+            SystemSettingsUpdate(
+                expected_revision=0,
+                trace=SystemTraceDefaults(detail=TraceDetailPolicy.METADATA),
+            ),
+        )
+        await settings.update_project_settings(
+            admin,
+            project_id,
+            ProjectSettingsUpdate(
+                expected_revision=0,
+                trace=TraceSettings(detail=TraceDetailPolicy.FULL),
+            ),
+        )
+
+        api_key_principal: ProjectApiKeyPrincipal | None = None
+        if reader_mode == "execution_scope_api_key":
+            key = await issue_project_key(boot.repository, owner=admin, project_id=project_id)
+            api_key_principal = ProjectApiKeyPrincipal(
+                project_id=project_id,
+                api_key_id=key.api_key_id,
+                scopes=frozenset({"search.execute"}),
+            )
+
+        project_read_done = asyncio.Event()
+        writer_done = asyncio.Event()
+        interleaved = False
+
+        real_scoped_read = ScopedProjectSettings.read
+
+        async def intercepted_read(self_scoped: ScopedProjectSettings):
+            stored = await real_scoped_read(self_scoped)
+            nonlocal interleaved
+            if self_scoped._project_id == project_id and not interleaved:
+                interleaved = True
+                project_read_done.set()
+                await writer_done.wait()
+            return stored
+
+        monkeypatch.setattr(ScopedProjectSettings, "read", intercepted_read)
+
+        async def reader_task():
+            if reader_mode == "trace_policy":
+                context = await ScopedAuthorizationService(boot.repository).resolve_project_context(
+                    human_admin, project_id
+                )
+                assert context is not None
+                return await project_trace_policy(boot.repository, context)
+            elif reader_mode == "execution_scope_human":
+                boundary = await resolve_execution_boundary(
+                    boot.repository,
+                    human_admin,
+                    project_id=project_id,
+                    action=PermissionAction.SEARCH_EXECUTE,
+                )
+                return boundary.trace_policy
+            else:
+                boundary = await resolve_execution_boundary(
+                    boot.repository,
+                    api_key_principal,
+                    project_id=project_id,
+                    action=PermissionAction.SEARCH_EXECUTE,
+                )
+                return boundary.trace_policy
+
+        async def writer_task():
+            await project_read_done.wait()
+            # Independent writer commits: PROJECT -> metadata (rev 2), then SYSTEM -> full (rev 2)
+            await settings.update_project_settings(
+                admin,
+                project_id,
+                ProjectSettingsUpdate(
+                    expected_revision=1,
+                    trace=TraceSettings(detail=TraceDetailPolicy.METADATA),
+                ),
+            )
+            await settings.update_system_settings(
+                admin,
+                SystemSettingsUpdate(
+                    expected_revision=1,
+                    trace=SystemTraceDefaults(detail=TraceDetailPolicy.FULL),
+                ),
+            )
+            writer_done.set()
+
+        policy, _ = await asyncio.gather(reader_task(), writer_task())
+        assert policy is not None
+        assert policy.detail == TraceDetailPolicy.METADATA
+        assert policy.captures_payload is False
+    finally:
+        await boot.repository.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation_type", ["edit", "copy"])
+async def test_commit_failure_after_computation_does_not_publish_stale_cache_for_edit_and_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation_type: str
+) -> None:
+    """Commit failure after computation must roll back DB and not leave stale uncommitted cache.
+
+    Injects commit failure after edit/copy computation so DB transaction rolls back.
+    Then an independent writer writes a valid revision 1 with cache_enabled=True.
+    The original service must return cache_enabled=True, not stale False from failed write.
+    """
+    from sqlalchemy.exc import OperationalError
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from freesearch.models.settings import (
+        ExecutionSettings,
+        ProjectSettingsUpdate,
+        SettingsCopyRequest,
+    )
+    from freesearch.services.settings import SETTINGS_NAMESPACE, SettingsStorageUnavailable
+
+    boot = await bootstrap_fresh_alpha(tmp_path / f"commit-cache-{operation_type}.db")
+    try:
+        admin = temp_principal(boot.admin_user)
+        source_id = boot.default_project.id
+        settings = SettingsService(boot.repository)
+
+        if operation_type == "copy":
+            # Set source project to cache_enabled=False
+            await settings.update_project_settings(
+                admin,
+                source_id,
+                ProjectSettingsUpdate(
+                    expected_revision=0,
+                    execution=ExecutionSettings(cache_enabled=False),
+                ),
+            )
+            target, copier = await _copy_pair(boot.repository, source_id, admin, "copy-target")
+            target_id = target.id
+            actor = copier
+            copy_request = SettingsCopyRequest(
+                source_project_id=source_id,
+                expected_source_revision=1,
+                expected_target_revision=0,
+                expected_system_revision=0,
+                fields=("execution.cache_enabled",),
+            )
+        else:
+            target_id = source_id
+            actor = admin
+            edit_request = ProjectSettingsUpdate(
+                expected_revision=0,
+                execution=ExecutionSettings(cache_enabled=False),
+            )
+
+        # Force COMMIT failure AFTER computation
+        injected = False
+        real_commit = AsyncSession.commit
+
+        async def failing_commit(self_session: AsyncSession) -> None:
+            nonlocal injected
+            if not injected:
+                injected = True
+                raise OperationalError("COMMIT", {}, Exception("injected commit failure"))
+            await real_commit(self_session)
+
+        monkeypatch.setattr(AsyncSession, "commit", failing_commit)
+
+        with pytest.raises(SettingsStorageUnavailable):
+            if operation_type == "copy":
+                await settings.apply_copy(actor, target_id, copy_request)
+            else:
+                await settings.update_project_settings(actor, target_id, edit_request)
+
+        assert injected is True
+
+        # Restore healthy commit
+        monkeypatch.setattr(AsyncSession, "commit", real_commit)
+
+        # Verify DB rollback: target project settings is still revision 0 (or absent)
+        from freesearch.models.settings import SETTINGS_SCHEMA_VERSION
+        from freesearch.persistence.settings import ProjectSettingsRepository
+
+        async with boot.repository.session() as session:
+            stored = await ProjectSettingsRepository(session).get(
+                project_id=target_id, namespace=SETTINGS_NAMESPACE
+            )
+            assert stored is None or stored.revision == 0
+
+        # Independent RAW DB writer writes valid revision 1 with cache_enabled=True,
+        # bypassing SettingsService to avoid triggering cache invalidation.
+        async with boot.repository.session() as session:
+            repo = ProjectSettingsRepository(session)
+            applied = await repo.compare_and_set(
+                project_id=target_id,
+                namespace=SETTINGS_NAMESPACE,
+                schema_version=SETTINGS_SCHEMA_VERSION,
+                overrides={"execution": {"cache_enabled": True}},
+                expected_revision=0,
+            )
+            assert applied is True
+            await session.commit()
+
+        # Original service queries settings; must return cache_enabled=True
+        resolved = await settings.get_project_settings(actor, target_id)
+        assert resolved.project_revision == 1
+        assert resolved.effective_settings["execution.cache_enabled"] is True
     finally:
         await boot.repository.close()

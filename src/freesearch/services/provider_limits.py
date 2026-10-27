@@ -20,6 +20,8 @@ from math import ceil
 from typing import Final, Literal
 from uuid import uuid4
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from freesearch.configuration.provider_config import ProviderConfig
 from freesearch.configuration.provider_limits import (
     TAVILY_DEFAULT_BUCKET_ID,
@@ -369,7 +371,23 @@ class ProviderLimitsService:
 
         record = self._record(context.provider, context.operation, context.auth_mode)
         rate_admission = await self._rates.admit(context)
-        decision, reasons = await self._funds_decision(record, context)
+        request = _as_request(context)
+        pool_id: str | None = None
+        if self._repository is None:
+            decision, reasons = await self._funds_decision(record, context)
+            if decision is _FUNDS_OK and rate_admission.admitted:
+                pool_id = await self._selected_pool_id(record, request)
+        else:
+            # Reuse the session for the funds reads and durable reservation.
+            # The reservation commits before returning, but SQLite's legacy
+            # read behavior does not serialize the pre-write checks against
+            # concurrent reservations. A denial exits before a write is attempted.
+            async with self._repository.session() as session:
+                decision, reasons = await self._funds_decision(record, context, session=session)
+                if decision is _FUNDS_OK and rate_admission.admitted:
+                    pool_id = await self._selected_pool_id(record, request, session=session)
+                    admission = self._reservation(record, context, rate_admission, pool_id)
+                    return await self._repository.reserve(admission, record=record, session=session)
         if decision is _FUNDS_UNPRICED:
             raise unpriced_ceiling_error(context.provider, context.operation)
         if decision is _FUNDS_DENIED:
@@ -398,18 +416,8 @@ class ProviderLimitsService:
                 reasons=rate_reasons,
                 retry_after_seconds=rate_admission.retry_after_seconds,
             )
-        admission = self._reservation(
-            record,
-            context,
-            rate_admission,
-            await self._selected_pool_id(record, _as_request(context)),
-        )
-        if self._repository is None:
-            return admission.model_copy(update={"local_only": True})
-        # The repository rechecks rate capacity inside its transaction and may
-        # raise LimitDeniedError from the atomic recheck; it propagates
-        # unchanged to the router transport.
-        return await self._repository.reserve(admission, record=record)
+        admission = self._reservation(record, context, rate_admission, pool_id)
+        return admission.model_copy(update={"local_only": True})
 
     async def record_success(
         self,
@@ -427,12 +435,12 @@ class ProviderLimitsService:
         """
 
         record = self._record(admission.provider, admission.operation, admission.auth_mode)
-        pool = (
-            await self._repository.get_pool(admission.pool_id)
-            if self._repository is not None and admission.pool_id is not None
-            else None
+        daily_tier = self._daily_tier(record)
+        daily = (
+            daily_tier is not None
+            and admission.pool_id is not None
+            and admission.pool_id == daily_tier.pool_id
         )
-        daily = pool is not None and pool.pool_id == self._daily_pool_id(record)
         if daily:
             native_units: Decimal | None = Decimal("1")
             crd_debit = request_cost_crd(record, request)
@@ -455,7 +463,15 @@ class ProviderLimitsService:
                 successful_urls=_successful_urls(response),
                 actual_usd=_reported_usd(response),
                 crd_debit=crd_debit,
-                native_unit=pool.native_unit if daily and pool is not None else record.native_unit,
+                # The admission already chose the pool, and finalize reads that
+                # pool row inside its own transaction; the unit therefore comes
+                # from the same catalog tier that declared the pool, not from a
+                # separate pre-read connection.
+                native_unit=(
+                    daily_tier.native_unit
+                    if daily and daily_tier is not None
+                    else record.native_unit
+                ),
                 reason="local_success",
             )
         )
@@ -573,7 +589,11 @@ class ProviderLimitsService:
         )
 
     async def _selected_pool_id(
-        self, record: ProviderLimitRecord, request: SearchRequest | FetchRequest | None
+        self,
+        record: ProviderLimitRecord,
+        request: SearchRequest | FetchRequest | None,
+        *,
+        session: AsyncSession | None = None,
     ) -> str | None:
         """Return the pool an attempt draws on, preferring a covering daily pool.
 
@@ -585,31 +605,41 @@ class ProviderLimitsService:
         daily_id = self._daily_pool_id(record)
         if daily_id is None or self._repository is None:
             return record.native_pool_id
-        pool = await self._repository.get_pool(daily_id)
+        pool = await self._repository.get_pool(daily_id, session=session)
         cost = request_cost_crd(record, request)
         remaining = native_to_crd(pool, record.conversion_profile) if pool is not None else None
         if remaining is not None and cost is not None and remaining >= cost:
             return daily_id
         return record.native_pool_id
 
-    def _daily_pool_id(self, record: ProviderLimitRecord) -> str | None:
-        """Return the estimated daily free pool of one search rail, when declared."""
+    def _daily_tier(self, record: ProviderLimitRecord) -> TierBalance | None:
+        """Return the declared estimated daily tier of one search rail."""
 
         if record.auth_mode is not AuthMode.KEYED or record.operation is not LimitOperation.SEARCH:
             return None
         for tier in self._tiers.get(f"{record.provider}:{record.auth_mode.value}", []):
             if tier.reset_rule is ResetRule.DAILY_ESTIMATE:
-                return tier.pool_id
+                return tier
         return None
 
+    def _daily_pool_id(self, record: ProviderLimitRecord) -> str | None:
+        """Return the estimated daily free pool of one search rail, when declared."""
+
+        tier = self._daily_tier(record)
+        return tier.pool_id if tier is not None else None
+
     async def _funds_decision(
-        self, record: ProviderLimitRecord, context: LimitCallContext
+        self,
+        record: ProviderLimitRecord,
+        context: LimitCallContext,
+        *,
+        session: AsyncSession | None = None,
     ) -> tuple[str, list[str]]:
         """Return the funds decision and its reasons for one request."""
 
-        view = await self._view_for(record, self._clock(), _as_request(context))
+        view = await self._view_for(record, self._clock(), _as_request(context), session=session)
         if record.provider == "tavily":
-            precheck = await self._tavily_funds_precheck(record, view)
+            precheck = await self._tavily_funds_precheck(record, view, session=session)
             if precheck is not None:
                 return precheck
         if view.state is CRDState.UNMETERED:
@@ -631,7 +661,11 @@ class ProviderLimitsService:
         return (_FUNDS_OK, [])
 
     async def _tavily_funds_precheck(
-        self, record: ProviderLimitRecord, view: CRDView
+        self,
+        record: ProviderLimitRecord,
+        view: CRDView,
+        *,
+        session: AsyncSession | None = None,
     ) -> tuple[str, list[str]] | None:
         """Return the keyed Credits decision, or None for the generic CRD gate.
 
@@ -654,7 +688,7 @@ class ProviderLimitsService:
             or self._repository is None
         ):
             return None
-        pool = await self._repository.get_pool(record.native_pool_id)
+        pool = await self._repository.get_pool(record.native_pool_id, session=session)
         if pool is None:
             return None
         if _tavily_key_cap_zero(pool):
@@ -1015,17 +1049,21 @@ class ProviderLimitsService:
         record: ProviderLimitRecord,
         now: datetime,
         request: SearchRequest | FetchRequest | None,
+        *,
+        session: AsyncSession | None = None,
     ) -> CRDView:
         pool = None
         if self._repository is not None and record.native_pool_id is not None:
-            pool = await self._repository.get_pool(record.native_pool_id)
+            pool = await self._repository.get_pool(record.native_pool_id, session=session)
         grants = (
-            await self._repository.grants(record.provider, record.auth_mode, now=now)
+            await self._repository.grants(
+                record.provider, record.auth_mode, now=now, session=session
+            )
             if self._repository
             else None
         )
         grant_remaining = grants.remaining(record.operation) if grants is not None else None
-        daily_pool = await self._daily_pool(record)
+        daily_pool = await self._daily_pool(record, session=session)
         daily = self._daily_view(record, grant_remaining, now, daily_pool)
         if daily is not None and _covers(daily):
             view = daily
@@ -1033,13 +1071,15 @@ class ProviderLimitsService:
             view = crd_view(record, pool, request=request)
         return effective_crd(view, grant_remaining)
 
-    async def _daily_pool(self, record: ProviderLimitRecord) -> NativePool | None:
+    async def _daily_pool(
+        self, record: ProviderLimitRecord, *, session: AsyncSession | None = None
+    ) -> NativePool | None:
         """Return the stored estimated daily pool of one record, when declared."""
 
         pool_id = self._daily_pool_id(record)
         if pool_id is None or self._repository is None:
             return None
-        return await self._repository.get_pool(pool_id)
+        return await self._repository.get_pool(pool_id, session=session)
 
     def _declared_pools(self) -> list[NativePool]:
         """Return the pool rows the catalog declares, without a balance."""
@@ -1139,8 +1179,7 @@ class ProviderLimitsService:
             return
         processed: set[str] = set()
         keyed_records = [
-            r for r in self._records
-            if r.provider == provider and r.auth_mode is AuthMode.KEYED
+            r for r in self._records if r.provider == provider and r.auth_mode is AuthMode.KEYED
         ]
         for record in keyed_records:
             allowance = record.budget.free_allowance if record.budget is not None else None

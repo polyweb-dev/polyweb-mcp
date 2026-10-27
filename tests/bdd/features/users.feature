@@ -130,12 +130,12 @@ Feature: Local user accounts, migration, and settings
     Then the call should fail with HTTP 401 and a Bearer challenge
 
     Examples:
-      | method | path              |
-      | GET    | /stats            |
-      | GET    | /dashboard        |
-      | GET    | /api/v1/providers |
-      | GET    | /api/v1/traces    |
-      | GET    | /no-such-route    |
+      | method | path                                                         |
+      | GET    | /stats                                                       |
+      | GET    | /dashboard                                                   |
+      | GET    | /api/v1/providers                                            |
+      | GET    | /api/v1/projects/00000000-0000-4000-8000-0000000000aa/traces     |
+      | GET    | /no-such-route                                               |
 
   Scenario: Anonymous Search and Fetch calls are rejected
     Given an offline users API with account auth and stub adapters

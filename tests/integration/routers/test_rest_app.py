@@ -34,7 +34,7 @@ from tests.fixtures.auth import (
     register_and_login,
     temp_email,
 )
-from tests.fixtures.execution import seed_execution_project
+from tests.fixtures.execution import allow_full_trace_capture, seed_execution_project
 
 
 class _StubAdapter(ProviderAdapter):
@@ -268,6 +268,7 @@ async def test_search_emits_trace_header_matching_detail_hierarchy(
     auth_secret: str,
 ) -> None:
     # Use one Agent account for search and trace reads.
+    await allow_full_trace_capture(repository)
     app = create_app([_StubAdapter("stubby")], repository=repository)
 
     with TestClient(app) as client:
@@ -283,7 +284,7 @@ async def test_search_emits_trace_header_matching_detail_hierarchy(
         )
         assert response.status_code == 200
         trace_id = _trace_id_of(response)
-        detail = client.get(f"/api/v1/traces/{trace_id}", headers=headers).json()
+        detail = client.get(f"/api/v1/projects/{pid}/traces/{trace_id}", headers=headers).json()
 
     assert detail["trace_id"] == trace_id
     assert detail["operation"] == "search"
@@ -316,6 +317,7 @@ async def test_fetch_route_mirrors_search_tracing(
     auth_secret: str,
 ) -> None:
     # Use one Agent account for fetch and trace reads.
+    await allow_full_trace_capture(repository)
     app = create_app([_StubAdapter("stubby")], repository=repository)
 
     with TestClient(app) as client:
@@ -331,7 +333,7 @@ async def test_fetch_route_mirrors_search_tracing(
         )
         assert response.status_code == 200
         trace_id = _trace_id_of(response)
-        detail = client.get(f"/api/v1/traces/{trace_id}", headers=headers).json()
+        detail = client.get(f"/api/v1/projects/{pid}/traces/{trace_id}", headers=headers).json()
 
     assert detail["operation"] == "fetch"
     assert detail["outcome"] == "success"
@@ -346,6 +348,7 @@ async def test_unhandled_provider_error_writes_error_trace_without_header(
     auth_secret: str,
 ) -> None:
     # Use one Agent account for search and trace reads.
+    await allow_full_trace_capture(repository)
     app = create_app([_FailingAdapter("flaky")], repository=repository)
 
     with TestClient(app, raise_server_exceptions=False) as client:
@@ -363,16 +366,19 @@ async def test_unhandled_provider_error_writes_error_trace_without_header(
         # Unhandled failures propagate above the tracing middleware, so the
         # 500 cannot carry the header — the trace is still persisted.
         assert "x-trace-id" not in response.headers
-        items = client.get("/api/v1/traces", headers=headers).json()["items"]
+        items = client.get(f"/api/v1/projects/{pid}/traces", headers=headers).json()["items"]
 
     assert len(items) == 1
     assert items[0]["outcome"] == "error"
     assert items[0]["error"]["type"] == "http_error"
 
     with TestClient(app, raise_server_exceptions=False) as client:
-        detail = client.get(f"/api/v1/traces/{items[0]['trace_id']}", headers=headers).json()
+        detail = client.get(
+            f"/api/v1/projects/{pid}/traces/{items[0]['trace_id']}", headers=headers
+        ).json()
 
-    assert detail["error"] == {"type": "http_error", "message": "flaky: http_error: HTTP 502"}
+    assert detail["error"] == {"type": "http_error", "message": "http_error"}
+    assert "HTTP 502" not in str(detail["spans"])
     # No fabricated results on a failed request.
     assert detail["output"] is None
     assert detail["result_count"] is None
@@ -383,6 +389,7 @@ async def test_handled_routing_error_carries_header_and_error_outcome(
     auth_secret: str,
 ) -> None:
     # Use one Agent account for search and trace reads.
+    await allow_full_trace_capture(repository)
     app = create_app([], repository=repository)
 
     with TestClient(app) as client:
@@ -398,7 +405,7 @@ async def test_handled_routing_error_carries_header_and_error_outcome(
         )
         assert response.status_code == 503
         trace_id = _trace_id_of(response)
-        detail = client.get(f"/api/v1/traces/{trace_id}", headers=headers).json()
+        detail = client.get(f"/api/v1/projects/{pid}/traces/{trace_id}", headers=headers).json()
 
     assert detail["outcome"] == "error"
     assert detail["output"] is None

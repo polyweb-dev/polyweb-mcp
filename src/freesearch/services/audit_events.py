@@ -8,13 +8,14 @@ audit sanitizer and must never carry secret material.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from freesearch.models.schema_enums import AuditActorType, AuditCategory, AuditOutcome
 from freesearch.models.users import UserPrincipal
-from freesearch.persistence.audit import AuditRepository
+from freesearch.persistence.audit import AuditRepository, StoredAuditEvent
 
 
 async def record_system_event(
@@ -42,7 +43,7 @@ async def record_system_event(
     )
 
 
-async def record_project_event(
+def record_project_event(
     session: AsyncSession,
     *,
     project_id: UUID,
@@ -51,10 +52,10 @@ async def record_project_event(
     target_type: str,
     target_id: str,
     detail: dict[str, object] | None = None,
-) -> None:
+) -> Awaitable[StoredAuditEvent]:
     """Append one successful project-scope audit event."""
 
-    await AuditRepository(session).append_project_event(
+    return AuditRepository(session).append_project_event(
         project_id=project_id,
         action=action,
         actor_type=AuditActorType.HUMAN,

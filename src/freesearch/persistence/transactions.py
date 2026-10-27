@@ -33,6 +33,17 @@ LOCK_BACKOFF_BASE_SECONDS: Final[float] = 0.02
 type SerializedOperation[T] = Callable[[AsyncSession], Awaitable[T]]
 
 
+async def begin_read_snapshot(session: AsyncSession) -> None:
+    """Begin a deferred SQLite transaction before the first related read.
+
+    The sqlite driver does not start a transaction for SELECT in legacy mode.
+    A real BEGIN lets the first read establish a snapshot shared by later reads,
+    without acquiring a write lock or retaining a snapshot across requests.
+    """
+
+    await session.execute(text("BEGIN"))
+
+
 def is_sqlite_lock_error(error: OperationalError) -> bool:
     """Return whether ``error`` is SQLite reporting a held lock or busy database."""
 
@@ -78,6 +89,7 @@ __all__ = [
     "DEFAULT_WRITE_ATTEMPTS",
     "LOCK_BACKOFF_BASE_SECONDS",
     "SerializedOperation",
+    "begin_read_snapshot",
     "is_sqlite_lock_error",
     "run_serialized",
 ]

@@ -960,6 +960,47 @@ class ProjectBindingRead(ContractModel):
     version: int
 
 
+class TraceDetailPolicy(StrEnum):
+    """How much request/response payload a project trace may persist.
+
+    ``METADATA`` stores timing, provider, outcome, counts, and span metadata
+    only. ``FULL`` also stores the query/URL and the normalized results payload.
+    The system value is the most permissive detail the deployment allows; a
+    project may choose a stricter value but never a looser one.
+    """
+
+    METADATA = "metadata"
+    FULL = "full"
+
+
+#: Constraint order for :class:`TraceDetailPolicy`, strictest first.
+TRACE_DETAIL_CONSTRAINT_ORDER: Final[tuple[str, ...]] = (
+    TraceDetailPolicy.METADATA.value,
+    TraceDetailPolicy.FULL.value,
+)
+
+
+class TraceRedactionPolicy(StrEnum):
+    """How aggressively a project trace scrubs payload content.
+
+    ``STRICT`` never persists request/response payload content, regardless of
+    the selected detail. ``STANDARD`` keeps the documented credential-shaped
+    key redaction and captures content when the detail policy allows it. The
+    system value is the loosest redaction the deployment allows; a project may
+    choose a stricter value but never a looser one.
+    """
+
+    STRICT = "strict"
+    STANDARD = "standard"
+
+
+#: Constraint order for :class:`TraceRedactionPolicy`, strictest first.
+TRACE_REDACTION_CONSTRAINT_ORDER: Final[tuple[str, ...]] = (
+    TraceRedactionPolicy.STRICT.value,
+    TraceRedactionPolicy.STANDARD.value,
+)
+
+
 class SettingsScope(StrEnum):
     """Scope level for settings."""
 
@@ -1043,6 +1084,23 @@ class ExecutionSettings(ContractModel):
     cache_ttl_seconds: int | None = Field(default=None, ge=0, le=86400)
 
 
+class TraceSettings(ContractModel):
+    """Typed project trace policy with explicit inheritance.
+
+    ``None`` inherits the system value. A stored value is always a real
+    override, including a sampling rate of ``0`` and an explicit retention
+    window; the resolution step applies the system ceiling for constrained
+    fields.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    sampling_rate: float | None = Field(default=None, ge=0.0, le=1.0)
+    detail: TraceDetailPolicy | None = None
+    payload_redaction: TraceRedactionPolicy | None = None
+    retention_days: int | None = Field(default=None, ge=1, le=365)
+
+
 class ProjectSettingsDocument(ContractModel):
     """Typed project settings document with inheritance and revision constraints."""
 
@@ -1050,7 +1108,34 @@ class ProjectSettingsDocument(ContractModel):
 
     routing: RoutingSettings = Field(default_factory=RoutingSettings)
     execution: ExecutionSettings = Field(default_factory=ExecutionSettings)
+    trace: TraceSettings = Field(default_factory=TraceSettings)
     revision: int = Field(default=1, ge=1)
+
+
+class ProjectTracePolicy(ContractModel):
+    """Effective trace policy of one project, resolved for capture and retention.
+
+    Only trusted call sites build this: the execution boundary resolves it from
+    the durable settings rows once per request and stamps the resulting
+    decision on every span, and the retention service resolves the same fields
+    for one explicit project.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    sampling_rate: float = Field(default=1.0, ge=0.0, le=1.0)
+    detail: TraceDetailPolicy = TraceDetailPolicy.METADATA
+    payload_redaction: TraceRedactionPolicy = TraceRedactionPolicy.STANDARD
+    retention_days: int = Field(default=30, ge=1, le=365)
+
+    @property
+    def captures_payload(self) -> bool:
+        """Return whether request/response content may be persisted."""
+
+        return (
+            self.detail is TraceDetailPolicy.FULL
+            and self.payload_redaction is TraceRedactionPolicy.STANDARD
+        )
 
 
 class SettingsFieldResolution(ContractModel):

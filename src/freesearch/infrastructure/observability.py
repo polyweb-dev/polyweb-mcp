@@ -6,10 +6,14 @@ adapters. Everything instrumented code needs is behind
 
 * ``span(name, kind=..., attributes=...)`` — a context manager yielding a
   :class:`SpanHandle`; an exception propagating through it marks the span
-  ``ERROR``, records ``error.type`` and exactly one ``exception`` event, then
+  ``ERROR``, records ``error.type`` and exactly one ``exception`` event that
+  carries only the error type (never the message or stack trace), then
   re-raises unchanged.
 * ``annotate_root(...)`` — attaches the request/response projection to the
   inbound root span (the exporter's summary source).
+* ``bind_execution_attribution(...)`` / ``bind_trace_capture(...)`` — stamp the
+  trusted ownership and the immutable trace-policy decision that the execution
+  boundary resolved once for the request.
 * ``current_trace_id()``, ``force_flush(...)``, ``shutdown()``.
 
 Providers are app-scoped (obtained from :class:`TracerProvider` directly, never
@@ -25,7 +29,6 @@ single redaction hook.
 """
 
 import asyncio
-import json
 import logging
 from collections.abc import Iterator, Mapping
 from contextlib import AbstractContextManager, contextmanager
@@ -49,11 +52,15 @@ from opentelemetry.trace import (
 
 from freesearch.configuration.config import Settings
 from freesearch.models.observability import (
-    OWNERSHIP_ATTRIBUTES,
+    INTERNAL_ATTRIBUTES,
+    TRACE_CONTENT_ATTRIBUTES,
+    TRACE_SAFE_EVENT_ATTRIBUTES,
     TRACE_SCHEMA_VERSION,
     ExecutionAttribution,
     TraceAttribute,
+    trace_is_sampled,
 )
+from freesearch.models.projects import ProjectTracePolicy
 
 logger = logging.getLogger(__name__)
 
@@ -107,15 +114,21 @@ def is_sensitive_key(key: str) -> bool:
 
 
 def _redact(value: object) -> AttributeValue:
-    """Coerce one value into a serializable, credential-free attribute value."""
+    """Coerce one value into a serializable, credential-free attribute value.
+
+    Mappings and sequences are filtered recursively with the same
+    credential-key rule as their parent, so a credential nested inside a
+    provider result list never reaches the span buffer. A non-serializable
+    leaf is stringified; a value that cannot be traversed still cannot carry
+    a keyed credential, because only its scalar form survives.
+    """
 
     if value is None or isinstance(value, (bool, int, float, str)):
         return value
-    if isinstance(value, (dict, list, tuple)):
-        try:
-            return cast(AttributeValue, json.loads(json.dumps(value, default=str, allow_nan=False)))
-        except (TypeError, ValueError):
-            return str(value)
+    if isinstance(value, Mapping):
+        return cast(AttributeValue, trace_content_attributes(value))
+    if isinstance(value, (list, tuple)):
+        return [item for item in (_redact(entry) for entry in value) if item is not None]
     return str(value)
 
 
@@ -147,21 +160,62 @@ def trace_content_attributes(payload: Mapping[str, object]) -> dict[str, Attribu
     return attributes
 
 
-def _span_attributes(attributes: Mapping[str, object] | None) -> dict[str, AttributeValue]:
-    """Drop ``None`` and ownership keys, then apply the content/redaction hook.
+def _payload_capture_allowed() -> bool:
+    """Return whether the bound policy lets this span keep payload content.
 
-    ``OWNERSHIP_ATTRIBUTES`` are stripped from every caller-supplied mapping so
-    only :func:`bind_execution_attribution` (and the span processor behind it)
-    can stamp project/actor identity on a span.
+    Capture is metadata-only until the execution boundary binds a policy that
+    permits full detail. Without a bound policy the answer is ``False``, so a
+    database or request that never resolved a policy can never buffer content.
+    """
+
+    cell = _ATTRIBUTION_CELL.get()
+    return cell is not None and cell.policy is not None and cell.policy.captures_payload
+
+
+def _span_attributes(attributes: Mapping[str, object] | None) -> dict[str, AttributeValue]:
+    """Drop ``None``/internal keys, apply the capture policy, then redact.
+
+    ``INTERNAL_ATTRIBUTES`` are stripped from every caller-supplied mapping so
+    only the trusted binders can stamp ownership and capture decisions. Content
+    keys are dropped here — at capture time — when the bound project policy is
+    metadata-only, so they never reach the finished-span buffer.
     """
 
     if attributes is None:
         return {}
+    capture = _payload_capture_allowed()
     return trace_content_attributes(
         {
             key: value
             for key, value in attributes.items()
-            if value is not None and key not in OWNERSHIP_ATTRIBUTES
+            if value is not None
+            and key not in INTERNAL_ATTRIBUTES
+            and (capture or key not in TRACE_CONTENT_ATTRIBUTES)
+        }
+    )
+
+
+def _event_attributes(attributes: Mapping[str, object] | None) -> dict[str, AttributeValue]:
+    """Filter one span event at capture time.
+
+    Provider request/response events carry content under provider-native keys
+    (``query``, ``url``, ``results``), so the span-attribute content allowlist
+    cannot identify them. Under metadata-only or strict-redaction capture, keep
+    only the documented request-shape/count keys; under full capture keep the
+    documented content but still apply the credential-shaped redaction hook.
+    Internal decision keys never reach an event.
+    """
+
+    if attributes is None:
+        return {}
+    capture = _payload_capture_allowed()
+    return trace_content_attributes(
+        {
+            key: value
+            for key, value in attributes.items()
+            if value is not None
+            and key not in INTERNAL_ATTRIBUTES
+            and (capture or key in TRACE_SAFE_EVENT_ATTRIBUTES)
         }
     )
 
@@ -173,6 +227,15 @@ def _ownership_attributes(attribution: ExecutionAttribution) -> dict[str, str]:
         TraceAttribute.PROJECT_ID: str(attribution.project_id),
         TraceAttribute.ACTOR_TYPE: attribution.actor_type.value,
         TraceAttribute.ACTOR_ID: str(attribution.actor_id),
+    }
+
+
+def _capture_attributes(policy: ProjectTracePolicy, trace_id: str) -> dict[str, bool]:
+    """Render one immutable capture decision for the trace this span belongs to."""
+
+    return {
+        TraceAttribute.CAPTURE_PAYLOAD: policy.captures_payload,
+        TraceAttribute.SAMPLED: trace_is_sampled(trace_id, policy.sampling_rate),
     }
 
 
@@ -303,17 +366,18 @@ _EXCEPTION_RECORDED: ContextVar[bool] = ContextVar("freesearch_exception_recorde
 
 
 class _AttributionCell:
-    """Per-request mutable holder for the bound execution attribution.
+    """Per-request mutable holder for the bound ownership and capture decisions.
 
     Fanout tasks inherit the same cell object through their context copy, so a
     binding made by the request handler is visible to every child span started
     afterwards, wherever it runs.
     """
 
-    __slots__ = ("attribution",)
+    __slots__ = ("attribution", "policy")
 
     def __init__(self) -> None:
         self.attribution: ExecutionAttribution | None = None
+        self.policy: ProjectTracePolicy | None = None
 
 
 _ATTRIBUTION_CELL: ContextVar[_AttributionCell | None] = ContextVar(
@@ -322,18 +386,28 @@ _ATTRIBUTION_CELL: ContextVar[_AttributionCell | None] = ContextVar(
 
 
 class _AttributionSpanProcessor(SpanProcessor):
-    """Stamp bound ownership attributes on every span when it starts.
+    """Stamp the bound ownership and capture decisions on every span at start.
 
     Registered before the exporter processors so each span carries the trusted
-    project/actor identity from its first instant; spans started before the
-    handler binds (or while no request is bound) stay unattributed.
+    project/actor identity and its immutable sampling/detail decision from its
+    first instant. Spans started before the handler binds (or while no request
+    is bound) stay undecided, and the exporter suppresses them rather than
+    persisting optional traces without a trusted decision.
     """
 
     def on_start(self, span: Span, parent_context: Any = None) -> None:
         cell = _ATTRIBUTION_CELL.get()
-        if cell is None or cell.attribution is None:
+        if cell is None:
             return
-        span.set_attributes(cast("Mapping[str, Any]", _ownership_attributes(cell.attribution)))
+        stamped: dict[str, object] = {}
+        if cell.attribution is not None:
+            stamped.update(_ownership_attributes(cell.attribution))
+        if cell.policy is not None:
+            context = span.get_span_context()
+            if context.is_valid:
+                stamped.update(_capture_attributes(cell.policy, format_trace_id(context.trace_id)))
+        if stamped:
+            span.set_attributes(cast("Mapping[str, Any]", stamped))
 
 
 def bind_execution_attribution(attribution: ExecutionAttribution) -> None:
@@ -356,6 +430,28 @@ def bind_execution_attribution(attribution: ExecutionAttribution) -> None:
     root = _ROOT_SPAN.get()
     if isinstance(root, _OtelSpan):
         root._stamp_ownership(attribution)
+
+
+def bind_trace_capture(policy: ProjectTracePolicy) -> None:
+    """Bind the project's resolved trace policy to the current request's spans.
+
+    Resolved once at the trusted execution boundary, so a later settings edit
+    cannot change an in-flight trace, and every child sees the same sampling and
+    detail decision. Rebinding the same policy is idempotent; a different policy
+    fails closed. Without an active observability scope this is a no-op.
+    """
+
+    cell = _ATTRIBUTION_CELL.get()
+    if cell is None:
+        return
+    if cell.policy is not None:
+        if cell.policy != policy:
+            raise ValueError("trace policy is already bound to a different project policy")
+        return
+    cell.policy = policy
+    root = _ROOT_SPAN.get()
+    if isinstance(root, _OtelSpan):
+        root._stamp_capture(policy)
 
 
 class _OtelSpan:
@@ -381,15 +477,34 @@ class _OtelSpan:
         with _swallow():
             self._span.set_attributes(cast("Mapping[str, Any]", _ownership_attributes(attribution)))
 
+    def _stamp_capture(self, policy: ProjectTracePolicy) -> None:
+        """Set the capture decision verbatim; internal to the binder only."""
+
+        trace_id = self.trace_id
+        if trace_id is None:
+            return
+        with _swallow():
+            self._span.set_attributes(
+                cast("Mapping[str, Any]", _capture_attributes(policy, trace_id))
+            )
+
     def add_event(self, name: str, attributes: Mapping[str, object] | None = None) -> None:
         with _swallow():
             self._span.add_event(
-                name, attributes=cast("Mapping[str, Any]", _span_attributes(attributes))
+                name, attributes=cast("Mapping[str, Any]", _event_attributes(attributes))
             )
 
     def record_exception(self, error: BaseException) -> None:
+        """Record a sanitized ``exception`` event, then mark the span failed.
+
+        Only the low-cardinality error type is kept: an arbitrary exception
+        message or stack trace can embed a query, a provider response body, or a
+        credential, and trace events are persisted. The span's ``error.type``
+        and status carry the failure for Activity.
+        """
+
         with _swallow():
-            self._span.record_exception(error)
+            self._span.add_event("exception", attributes={"exception.type": error_type_of(error)})
         self.mark_error(error)
 
     def mark_error(self, error: BaseException) -> None:
@@ -550,6 +665,7 @@ __all__ = [
     "SpanHandle",
     "SpanKindName",
     "bind_execution_attribution",
+    "bind_trace_capture",
     "build_observability",
     "build_span_processors",
     "current_observability",

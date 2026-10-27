@@ -46,6 +46,7 @@ from freesearch.infrastructure.observability import (
     SpanHandle,
     SpanKindName,
     bind_execution_attribution,
+    bind_trace_capture,
     build_observability,
     current_observability,
 )
@@ -84,7 +85,7 @@ from freesearch.models.observability import (
     TraceRootSpan,
     TraceSpanName,
 )
-from freesearch.models.projects import PermissionAction, ProjectApiKeyPrincipal, ProjectContext
+from freesearch.models.projects import PermissionAction, ProjectApiKeyPrincipal
 from freesearch.models.provider_limits import (
     LimitDeniedError,
     LimitStoreUnavailable,
@@ -114,6 +115,7 @@ from freesearch.routers.limits import limit_denial_response, register_limit_rout
 from freesearch.routers.observability import register_observability_routes
 from freesearch.routers.pools import register_pool_routes
 from freesearch.routers.projects import register_project_routes
+from freesearch.routers.retention import register_retention_routes
 from freesearch.routers.settings import register_settings_routes
 from freesearch.services.aggregation import reciprocal_rank_fusion
 from freesearch.services.api_keys import DEFAULT_USE_RECORDER, ApiKeyVerifier
@@ -126,7 +128,7 @@ from freesearch.services.execution_scope import (
     ExecutionStorageUnavailable,
     ExecutionUnauthenticated,
     execution_attribution,
-    resolve_execution_scope,
+    resolve_execution_boundary,
 )
 from freesearch.services.limits_sync import LimitSyncService
 from freesearch.services.monitoring import (
@@ -433,6 +435,7 @@ def create_app(
     register_project_routes(app)
     register_api_key_routes(app)
     register_settings_routes(app)
+    register_retention_routes(app)
     register_credential_routes(app)
     register_credential_oauth_routes(app)
     register_binding_routes(app)
@@ -875,28 +878,32 @@ def _execution_scope_http_error(error: ExecutionScopeError) -> HTTPException:
 async def _execution_attribution(
     app: FastAPI, project_id: Any, action: PermissionAction
 ) -> ExecutionAttribution:
-    """Resolve the request's execution scope and bind its trusted attribution.
+    """Resolve the request's execution scope and bind its trusted telemetry.
 
     This is the first step of every provider-executing route — before route
     planning, admission, or provider I/O — so a rejected request leaves no
     usage rows and no attributed trace spans. A human session executes through
     its live project membership; a project API key executes only in its own
-    project with its own scopes.
+    project with its own scopes. The project trace policy is resolved here too,
+    once, so every span of the request carries the same immutable capture and
+    sampling decision.
     """
 
     verified = current_verified_principal()
     principal = human_principal(verified) if isinstance(verified, UserPrincipal) else verified
+    repository = _execution_repository(app)
     try:
-        context: ProjectContext = await resolve_execution_scope(
-            _execution_repository(app),
+        boundary = await resolve_execution_boundary(
+            repository,
             principal,
             project_id=project_id,
             action=action,
         )
     except ExecutionScopeError as error:
         raise _execution_scope_http_error(error) from error
-    attribution = execution_attribution(context)
+    attribution = execution_attribution(boundary.context)
     bind_execution_attribution(attribution)
+    bind_trace_capture(boundary.trace_policy)
     return attribution
 
 

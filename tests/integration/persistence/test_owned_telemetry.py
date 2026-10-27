@@ -124,9 +124,11 @@ async def test_exporter_skips_unattributed_spans_in_a_mixed_batch(
     """An unattributed span is dropped while attributed siblings persist."""
     from freesearch.infrastructure.observability import (
         bind_execution_attribution,
+        bind_trace_capture,
         build_observability,
         use_observability,
     )
+    from freesearch.models.projects import ProjectTracePolicy
     from tests.fixtures.auth import test_settings
 
     attribution = await seed_execution_project(repository)
@@ -134,12 +136,15 @@ async def test_exporter_skips_unattributed_spans_in_a_mixed_batch(
 
     with use_observability(runtime):
         bind_execution_attribution(attribution)
+        bind_trace_capture(ProjectTracePolicy())
         with runtime.span("attributed-span"):
             pass
     # A fresh request cell with no bound attribution -> the span is exported
     # without ownership and the exporter must skip it.
-    with use_observability(runtime), runtime.span("unattributed-span"):
-        pass
+    with use_observability(runtime):
+        bind_trace_capture(ProjectTracePolicy())
+        with runtime.span("unattributed-span"):
+            pass
     assert runtime.force_flush()
 
     con = sqlite3.connect(repository.database_path)
@@ -147,6 +152,7 @@ async def test_exporter_skips_unattributed_spans_in_a_mixed_batch(
     con.close()
     assert "attributed-span" in names
     assert "unattributed-span" not in names
+    runtime.shutdown()
 
 
 async def test_concurrent_two_project_spans_stay_attributed(
@@ -157,9 +163,11 @@ async def test_concurrent_two_project_spans_stay_attributed(
 
     from freesearch.infrastructure.observability import (
         bind_execution_attribution,
+        bind_trace_capture,
         build_observability,
         use_observability,
     )
+    from freesearch.models.projects import ProjectTracePolicy
     from tests.fixtures.auth import test_settings
 
     attr_a = await seed_execution_project(repository, name="A")
@@ -169,6 +177,7 @@ async def test_concurrent_two_project_spans_stay_attributed(
     async def run_one(attr: Any, label: str) -> None:
         with use_observability(runtime):
             bind_execution_attribution(attr)
+            bind_trace_capture(ProjectTracePolicy())
             with runtime.span(label):
                 await asyncio.sleep(0.01)
 
@@ -186,3 +195,4 @@ async def test_concurrent_two_project_spans_stay_attributed(
         expected = attr_a if name.startswith("a-") else attr_b
         assert project_id == str(expected.project_id)
         assert actor_id == str(expected.actor_id)
+    runtime.shutdown()

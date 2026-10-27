@@ -240,3 +240,24 @@ async def register_project_admin(
     pair = register_and_login(client, temp_email(prefix))
     attribution = await seed_execution_project(repository, user_id=account_id_from_pair(pair))
     return raw_auth_headers(pair["access_token"]), attribution
+
+
+async def allow_full_trace_capture(repository: SQLiteRepository) -> None:
+    """Authorize full capture explicitly in one disposable repository only."""
+    from tests.fixtures.auth import create_temp_user, temp_principal
+
+    from freesearch.models.projects import TraceDetailPolicy
+    from freesearch.models.settings import SystemSettingsUpdate, SystemTraceDefaults
+    from freesearch.services.settings import SettingsService
+
+    user = await create_temp_user(repository, temp_email("trace-policy"), system_admin=True)
+    admin = temp_principal(user)
+    service = SettingsService(repository)
+    current = await service.get_system_settings(admin)
+    await service.update_system_settings(
+        admin,
+        SystemSettingsUpdate(
+            expected_revision=current.revision,
+            trace=SystemTraceDefaults(detail=TraceDetailPolicy.FULL),
+        ),
+    )

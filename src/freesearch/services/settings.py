@@ -18,12 +18,19 @@ Effective results are cached under the database identity, namespace, project id,
 system revision, and project revision. Every supported mutation increments one
 of those revisions, so another REST or MCP process that shares the database
 cannot reuse an older effective document.
+
+Settings copy is a revision-bound preview/apply pair. The preview is pure; the
+apply writes selected target overrides, explicitly selected and version-bound
+disabled binding references, the settings audit event, and the copy audit event
+in one serialized transaction, so a stale preview cannot apply unnoticed and no
+partially copied state is ever committed.
 """
 
 from __future__ import annotations
 
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Final, TypeVar
 from uuid import UUID
@@ -34,32 +41,56 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from freesearch.infrastructure.secrets import ProviderName
 from freesearch.models.projects import (
     DEFAULT_INSTALLATION_ACCOUNT_ID,
+    CredentialOwnerScope,
     ExecutionSettings,
     PermissionAction,
     ProjectContext,
     ProjectRolloutState,
     ProjectSettingsDocument,
     ProjectStatus,
+    ProjectTracePolicy,
     RoutingSettings,
     SettingsFieldResolution,
     SettingsProvenance,
     SettingsResolution,
     SettingsScope,
+    TraceSettings,
 )
 from freesearch.models.settings import (
+    COPY_BINDING_ROUTE_CONFLICT,
+    COPY_BINDING_UNAVAILABLE,
+    COPY_CREDENTIAL_NOT_GRANTED,
+    COPY_CREDENTIAL_PRIVATE,
+    COPY_CREDENTIAL_UNAVAILABLE,
+    COPY_FIELD_NOT_OVERRIDDEN,
+    COPY_FIELD_SYSTEM_ONLY,
     SETTINGS_FIELD_CATALOG,
     SETTINGS_NAMESPACE,
     SETTINGS_SCHEMA_VERSION,
     ProjectSettingsUpdate,
+    SettingsCopyBinding,
+    SettingsCopyField,
+    SettingsCopyMode,
+    SettingsCopyPlan,
+    SettingsCopyPreview,
+    SettingsCopyRejection,
+    SettingsCopyRequest,
+    SettingsCopyResult,
     SettingsFieldPolicy,
+    SettingsFieldSpec,
     SystemSettingsDocument,
     SystemSettingsUpdate,
+    resolve_trace_policy,
+    settings_field,
 )
 from freesearch.models.users import UserPrincipal
+from freesearch.persistence.bindings import ProjectBindingRepository, StoredBinding
+from freesearch.persistence.credentials import CredentialRepository
 from freesearch.persistence.scoped import ProjectScopedRepository
 from freesearch.persistence.settings import StoredSettings, SystemSettingsRepository
 from freesearch.persistence.storage import SQLiteRepository
-from freesearch.persistence.transactions import run_serialized
+from freesearch.persistence.transactions import begin_read_snapshot, run_serialized
+from freesearch.services.audit_events import record_project_event, record_system_event
 from freesearch.services.authorization import (
     ScopedAuthorizationService,
     human_principal,
@@ -90,6 +121,143 @@ def _json_value(value: Any) -> Any:
     if isinstance(value, (tuple, list)):
         return [_json_value(item) for item in value]
     return value
+
+
+def _copyable(spec: SettingsFieldSpec) -> bool:
+    """Return whether a catalog field can ever be copied to another project."""
+
+    return spec.policy is not SettingsFieldPolicy.SYSTEM_ONLY
+
+
+def _override_document(document: ProjectSettingsDocument) -> dict[str, Any]:
+    """Return the stored override payload of one project document."""
+
+    return document.model_dump(mode="json", exclude={"revision"}, exclude_none=True)
+
+
+def _validate_provider_names(values: Any) -> None:
+    """Reject a preference list naming a provider this build does not know."""
+
+    if values is None:
+        return
+    unknown = sorted(value for value in values if value not in _VALID_PROVIDER_NAMES)
+    if unknown:
+        raise SettingsValidationError(
+            f"unknown provider name(s) in preferred_providers: {', '.join(unknown)}"
+        )
+
+
+def _system_document(stored: StoredSettings | None) -> tuple[SystemSettingsDocument, int]:
+    """Return the validated system document (or catalog defaults) and revision."""
+
+    if stored is None:
+        return SystemSettingsDocument(revision=0), 0
+    if stored.schema_version != SETTINGS_SCHEMA_VERSION or stored.namespace != SETTINGS_NAMESPACE:
+        raise SettingsCorrupt("stored system settings use an unsupported schema")
+    try:
+        document = SystemSettingsDocument.model_validate(
+            {**stored.document, "revision": stored.revision}
+        )
+    except (ValueError, TypeError) as error:
+        raise SettingsCorrupt("stored system settings are invalid") from error
+    try:
+        _validate_provider_names(document.routing.preferred_providers)
+    except SettingsValidationError as error:
+        raise SettingsCorrupt("stored system settings are invalid") from error
+    return document, stored.revision
+
+
+def _project_document(stored: StoredSettings | None) -> ProjectSettingsDocument:
+    """Return the validated project override document (or inheritance)."""
+
+    if stored is None:
+        return ProjectSettingsDocument()
+    if stored.schema_version != SETTINGS_SCHEMA_VERSION or stored.namespace != SETTINGS_NAMESPACE:
+        raise SettingsCorrupt("stored project settings use an unsupported schema")
+    try:
+        document = ProjectSettingsDocument.model_validate(
+            {**stored.document, "revision": stored.revision}
+        )
+    except (ValueError, TypeError) as error:
+        raise SettingsCorrupt("stored project settings are invalid") from error
+    try:
+        _validate_provider_names(document.routing.preferred_providers)
+    except SettingsValidationError as error:
+        raise SettingsCorrupt("stored project settings are invalid") from error
+    return document
+
+
+def _changed_field_ids(
+    before: SystemSettingsDocument | ProjectSettingsDocument | None,
+    after: SystemSettingsDocument | ProjectSettingsDocument,
+) -> list[str]:
+    """Return the catalog field ids whose stored value differs between documents."""
+
+    if before is None:
+        return []
+    changed: list[str] = []
+    for spec in SETTINGS_FIELD_CATALOG:
+        before_value = getattr(getattr(before, spec.section, None), spec.attribute, None)
+        after_value = getattr(getattr(after, spec.section, None), spec.attribute, None)
+        if _json_value(before_value) != _json_value(after_value):
+            changed.append(spec.field_id)
+    return changed
+
+
+async def project_trace_policy_in_session(
+    session: AsyncSession,
+    context: ProjectContext,
+    *,
+    account_id: UUID = DEFAULT_INSTALLATION_ACCOUNT_ID,
+) -> ProjectTracePolicy:
+    """Resolve one authorized project's policy inside a caller-owned session.
+
+    The caller must begin a real SQLite transaction before its first read.
+    The execution boundary does this before authorization, so the project and
+    system documents belong to the same request-local snapshot.
+    """
+
+    stored = (
+        await ProjectScopedRepository(session, context=context, account_id=account_id)
+        .settings(SETTINGS_NAMESPACE)
+        .read()
+    )
+    system_stored = await SystemSettingsRepository(session).get(SETTINGS_NAMESPACE)
+    system, _revision = _system_document(system_stored)
+    return resolve_trace_policy(system=system, project=_project_document(stored))
+
+
+async def project_trace_policy(
+    repository: SQLiteRepository,
+    context: ProjectContext,
+    *,
+    account_id: UUID = DEFAULT_INSTALLATION_ACCOUNT_ID,
+) -> ProjectTracePolicy:
+    """Resolve one authorized project's effective trace policy.
+
+    The execution boundary calls this once per request and stamps the resulting
+    decision on every span, so the exporter never re-reads settings and a later
+    edit cannot change an in-flight trace. The caller already resolved the live
+    project context, so this read applies no second permission decision.
+    """
+
+    async with repository.session() as session:
+        await begin_read_snapshot(session)
+        return await project_trace_policy_in_session(session, context, account_id=account_id)
+
+
+@dataclass(frozen=True)
+class _CopyComputation:
+    """Validated intermediate of one copy preview or apply."""
+
+    plan: SettingsCopyPlan
+    next_document: ProjectSettingsDocument
+    target_document: ProjectSettingsDocument
+    simulated_resolution: SettingsResolution
+    system: SystemSettingsDocument
+    system_revision: int
+    target_context: ProjectContext
+    eligible_bindings: tuple[StoredBinding, ...]
 
 
 class SettingsServiceError(RuntimeError):
@@ -203,14 +371,26 @@ def resolve_settings(
         safety_limit: Any = None
         constraint_applied = False
         if spec.policy is SettingsFieldPolicy.SYSTEM_CONSTRAINED:
-            limit_attribute = spec.safety_limit_attribute
-            if limit_attribute is None:
-                raise SettingsCorrupt(f"settings field {spec.field_id!r} has no safety limit rule")
-            safety_limit = getattr(system.safety_limits, limit_attribute)
-            if effective_value > safety_limit:
-                effective_value = safety_limit
-                provenance = SettingsProvenance.SYSTEM_CONSTRAINED
-                constraint_applied = True
+            if spec.constraint_order is not None:
+                order = spec.constraint_order
+                safety_limit = system_value
+                if order.index(_json_value(effective_value)) > order.index(
+                    _json_value(system_value)
+                ):
+                    effective_value = system_value
+                    provenance = SettingsProvenance.SYSTEM_CONSTRAINED
+                    constraint_applied = True
+            else:
+                limit_attribute = spec.safety_limit_attribute
+                if limit_attribute is None:
+                    raise SettingsCorrupt(
+                        f"settings field {spec.field_id!r} has no safety limit rule"
+                    )
+                safety_limit = getattr(system.safety_limits, limit_attribute)
+                if effective_value > safety_limit:
+                    effective_value = safety_limit
+                    provenance = SettingsProvenance.SYSTEM_CONSTRAINED
+                    constraint_applied = True
 
         json_effective = _json_value(effective_value)
         fields[spec.field_id] = SettingsFieldResolution(
@@ -300,14 +480,22 @@ class SettingsService:
                     account_id=self._account_id,
                 ),
             )
-            self._validate_provider_names(update.routing.preferred_providers)
+            _validate_provider_names(update.routing.preferred_providers)
             repository = SystemSettingsRepository(session)
-            current_revision = await repository.revision(SETTINGS_NAMESPACE)
+            stored = await repository.get(SETTINGS_NAMESPACE)
+            current_revision = 0 if stored is None else stored.revision
             if update.expected_revision != current_revision:
                 raise SettingsRevisionConflict()
+            try:
+                current: SystemSettingsDocument | None = _system_document(stored)[0]
+            except SettingsCorrupt:
+                # A replacement must stay possible when the old document cannot
+                # be read; the audit still records the write.
+                current = None
             document = SystemSettingsDocument(
                 routing=update.routing,
                 execution=update.execution,
+                trace=update.trace,
                 safety_limits=update.safety_limits,
                 revision=current_revision + 1,
             )
@@ -322,10 +510,23 @@ class SettingsService:
             )
             if not applied:
                 raise SettingsRevisionConflict()
-            _RESOLUTION_CACHE.clear()
+            await record_system_event(
+                session,
+                account_id=self._account_id,
+                actor=actor,
+                action="settings.edit",
+                target_type="system_settings",
+                target_id=SETTINGS_NAMESPACE,
+                detail={
+                    "revision": document.revision,
+                    "fields": _changed_field_ids(current, document),
+                },
+            )
             return document
 
-        return await self._write(operation)
+        document = await self._write(operation)
+        _RESOLUTION_CACHE.clear()
+        return document
 
     async def get_project_settings(
         self,
@@ -337,6 +538,7 @@ class SettingsService:
         self._rollout.require_management()
         try:
             async with self._repository.session() as session:
+                await begin_read_snapshot(session)
                 context = await self._require_context(session, actor, project_id)
                 await self._authorization.require_in_session(
                     session,
@@ -379,16 +581,12 @@ class SettingsService:
             if update.expected_revision != current_revision:
                 raise SettingsRevisionConflict()
 
-            current_document = self._project_document(current_stored)
+            current_document = _project_document(current_stored)
             next_document = self._apply_project_update(current_document, update)
-            self._validate_provider_names(next_document.routing.preferred_providers)
+            _validate_provider_names(next_document.routing.preferred_providers)
             applied = await store.compare_and_set(
                 schema_version=SETTINGS_SCHEMA_VERSION,
-                overrides=next_document.model_dump(
-                    mode="json",
-                    exclude={"revision"},
-                    exclude_none=True,
-                ),
+                overrides=_override_document(next_document),
                 expected_revision=current_revision,
             )
             if not applied:
@@ -396,6 +594,18 @@ class SettingsService:
 
             system, system_revision = await self._load_system(session)
             next_revision = current_revision + 1
+            await record_project_event(
+                session,
+                project_id=context.project_id,
+                actor=actor,
+                action="settings.edit",
+                target_type="project_settings",
+                target_id=str(context.project_id),
+                detail={
+                    "revision": next_revision,
+                    "fields": _changed_field_ids(current_document, next_document),
+                },
+            )
             resolution = resolve_settings(
                 system=system,
                 system_revision=system_revision,
@@ -403,18 +613,404 @@ class SettingsService:
                 project_revision=next_revision,
                 project_id=context.project_id,
             )
-            _RESOLUTION_CACHE.invalidate_project(context.project_id)
-            _RESOLUTION_CACHE.put(
-                self._cache_key(
-                    context.project_id,
-                    system_revision=system_revision,
-                    project_revision=next_revision,
-                ),
-                resolution,
-            )
             return resolution
 
-        return await self._write(operation)
+        resolution = await self._write(operation)
+        _RESOLUTION_CACHE.invalidate_project(project_id)
+        return resolution
+
+    async def preview_copy(
+        self,
+        actor: UserPrincipal,
+        target_project_id: UUID,
+        request: SettingsCopyRequest,
+    ) -> SettingsCopyPreview:
+        """Return a revision-bound, non-mutating copy plan for one target project."""
+
+        self._rollout.require_management()
+        try:
+            async with self._repository.session() as session:
+                await begin_read_snapshot(session)
+                computation = await self._copy_plan(session, actor, target_project_id, request)
+                return SettingsCopyPreview(
+                    **computation.plan.model_dump(),
+                    target=computation.simulated_resolution,
+                )
+        except OperationalError as error:
+            raise SettingsStorageUnavailable("the settings store is unavailable") from error
+
+    async def apply_copy(
+        self,
+        actor: UserPrincipal,
+        target_project_id: UUID,
+        request: SettingsCopyRequest,
+    ) -> SettingsCopyResult:
+        """Apply one settings copy atomically, preserving inheritance and auditing it."""
+
+        self._rollout.require_management()
+
+        async def operation(session: AsyncSession) -> SettingsCopyResult:
+            computation = await self._copy_plan(session, actor, target_project_id, request)
+            await self._authorization.require_in_session(
+                session,
+                project_query(
+                    actor,
+                    PermissionAction.SETTINGS_WRITE,
+                    project_id=target_project_id,
+                ),
+            )
+            target = computation.target_context
+            target_document = computation.target_document
+            current_revision = computation.plan.target_revision
+            next_overrides = _override_document(computation.next_document)
+            current_overrides = _override_document(target_document)
+            new_revision = current_revision
+            if next_overrides != current_overrides:
+                store = ProjectScopedRepository(
+                    session,
+                    context=target,
+                    account_id=self._account_id,
+                ).settings(SETTINGS_NAMESPACE)
+                applied = await store.compare_and_set(
+                    schema_version=SETTINGS_SCHEMA_VERSION,
+                    overrides=next_overrides,
+                    expected_revision=current_revision,
+                )
+                if not applied:
+                    raise SettingsRevisionConflict()
+                new_revision = current_revision + 1
+
+            copied_bindings: list[UUID] = []
+            bindings = ProjectBindingRepository(session)
+            for binding in computation.eligible_bindings:
+                created = await bindings.create(
+                    project_id=target_project_id,
+                    credential_id=binding.credential_id,
+                    credential_scope=binding.credential_scope,
+                    route_label=binding.route_label,
+                    priority=binding.priority,
+                    created_by=actor.id,
+                )
+                copied_bindings.append(created.id)
+
+            event = await record_project_event(
+                session,
+                project_id=target_project_id,
+                actor=actor,
+                action="settings.copy",
+                target_type="project_settings",
+                target_id=str(target_project_id),
+                detail={
+                    "source_project_id": str(request.source_project_id),
+                    "mode": request.mode.value,
+                    "fields": [field.field_id for field in computation.plan.fields],
+                    "bindings": len(copied_bindings),
+                },
+            )
+
+            resolution = resolve_settings(
+                system=computation.system,
+                system_revision=computation.system_revision,
+                project=computation.next_document.model_copy(update={"revision": new_revision}),
+                project_revision=new_revision,
+                project_id=target_project_id,
+            )
+            plan_payload = computation.plan.model_dump()
+            plan_payload["target_revision"] = new_revision
+            return SettingsCopyResult(
+                **plan_payload,
+                target=resolution,
+                bindings_copied=copied_bindings,
+                audit_event_id=event.id,
+            )
+
+        result = await self._write(operation)
+        _RESOLUTION_CACHE.invalidate_project(target_project_id)
+        return result
+
+    async def _copy_plan(
+        self,
+        session: AsyncSession,
+        actor: UserPrincipal,
+        target_project_id: UUID,
+        request: SettingsCopyRequest,
+    ) -> _CopyComputation:
+        """Build and validate one copy plan inside the caller's session."""
+
+        if request.source_project_id == target_project_id:
+            raise SettingsValidationError("a project cannot copy settings onto itself")
+        source = await self._require_context(session, actor, request.source_project_id)
+        await self._authorization.require_in_session(
+            session,
+            project_query(
+                actor,
+                PermissionAction.SETTINGS_READ,
+                project_id=request.source_project_id,
+            ),
+        )
+        target = await self._require_context(session, actor, target_project_id)
+        target_project = await ProjectScopedRepository(
+            session, context=target, account_id=self._account_id
+        ).require_project()
+        if target_project.status is ProjectStatus.ARCHIVED:
+            raise SettingsConflict(PROJECT_ARCHIVED, "archived projects cannot receive settings")
+        await self._authorization.require_in_session(
+            session,
+            project_query(
+                actor,
+                PermissionAction.SETTINGS_COPY,
+                project_id=target_project_id,
+            ),
+        )
+
+        source_stored = (
+            await ProjectScopedRepository(session, context=source, account_id=self._account_id)
+            .settings(SETTINGS_NAMESPACE)
+            .read()
+        )
+        target_stored = (
+            await ProjectScopedRepository(session, context=target, account_id=self._account_id)
+            .settings(SETTINGS_NAMESPACE)
+            .read()
+        )
+        source_revision = 0 if source_stored is None else source_stored.revision
+        target_revision = 0 if target_stored is None else target_stored.revision
+        system, system_revision = await self._load_system(session)
+        if (
+            request.expected_source_revision != source_revision
+            or request.expected_target_revision != target_revision
+            or request.expected_system_revision != system_revision
+        ):
+            raise SettingsRevisionConflict()
+
+        source_document = _project_document(source_stored)
+        target_document = _project_document(target_stored)
+        source_resolution = resolve_settings(
+            system=system,
+            system_revision=system_revision,
+            project=source_document,
+            project_revision=source_revision,
+            project_id=source.project_id,
+        )
+        specs = self._copy_specs(request)
+        fields = self._copy_fields(
+            request=request,
+            specs=specs,
+            source_resolution=source_resolution,
+            target_document=target_document,
+        )
+        next_document = self._copied_document(target_document, fields)
+        _validate_provider_names(next_document.routing.preferred_providers)
+        simulated = resolve_settings(
+            system=system,
+            system_revision=system_revision,
+            project=next_document,
+            project_revision=target_revision,
+            project_id=target_project_id,
+        )
+        binding_plan, eligible = await self._binding_plan(
+            session,
+            source,
+            target,
+            selected=request.binding_versions,
+        )
+        rejected = self._copy_rejections(request, specs, fields)
+        rejected.extend(
+            SettingsCopyRejection(
+                field_id=f"binding:{binding.binding_id}",
+                reason=binding.rejection or COPY_BINDING_UNAVAILABLE,
+            )
+            for binding in binding_plan
+            if not binding.eligible
+        )
+        plan = SettingsCopyPlan(
+            source_project_id=request.source_project_id,
+            target_project_id=target_project_id,
+            mode=request.mode,
+            source_revision=source_revision,
+            target_revision=target_revision,
+            system_revision=system_revision,
+            overrides={field.field_id: _json_value(field.value) for field in fields},
+            effective_snapshot=dict(simulated.effective_settings),
+            fields=fields,
+            rejected=rejected,
+            bindings=binding_plan,
+        )
+        return _CopyComputation(
+            plan=plan,
+            next_document=next_document,
+            target_document=target_document,
+            simulated_resolution=simulated,
+            system=system,
+            system_revision=system_revision,
+            target_context=target,
+            eligible_bindings=tuple(eligible),
+        )
+
+    @staticmethod
+    def _copy_specs(request: SettingsCopyRequest) -> list[SettingsFieldSpec]:
+        """Return the catalog specifications selected by one copy request."""
+
+        if request.fields is None:
+            return [spec for spec in SETTINGS_FIELD_CATALOG if _copyable(spec)]
+        specs: list[SettingsFieldSpec] = []
+        unknown: list[str] = []
+        for field_id in request.fields:
+            try:
+                specs.append(settings_field(field_id))
+            except ValueError:
+                unknown.append(field_id)
+        if unknown:
+            raise SettingsValidationError(
+                f"unknown settings field(s): {', '.join(sorted(unknown))}"
+            )
+        return specs
+
+    @staticmethod
+    def _copy_fields(
+        *,
+        request: SettingsCopyRequest,
+        specs: list[SettingsFieldSpec],
+        source_resolution: SettingsResolution,
+        target_document: ProjectSettingsDocument,
+    ) -> list[SettingsCopyField]:
+        """Return the fields a copy would write, per the selected mode."""
+
+        fields: list[SettingsCopyField] = []
+        for spec in specs:
+            if spec.policy is SettingsFieldPolicy.SYSTEM_ONLY:
+                continue
+            source_field = source_resolution.fields[spec.field_id]
+            if request.mode is SettingsCopyMode.OVERRIDES_ONLY:
+                if source_field.project_override is None:
+                    continue
+                value = source_field.project_override
+                provenance = SettingsProvenance.PROJECT_OVERRIDE
+                constrained = False
+            else:
+                value = source_field.effective_value
+                provenance = source_field.provenance
+                constrained = source_field.constraint_applied
+            current = getattr(getattr(target_document, spec.section), spec.attribute)
+            fields.append(
+                SettingsCopyField(
+                    field_id=spec.field_id,
+                    section=spec.section,
+                    attribute=spec.attribute,
+                    provenance=provenance,
+                    value=value,
+                    changed=_json_value(current) != _json_value(value),
+                    constraint_applied=constrained,
+                )
+            )
+        return fields
+
+    @staticmethod
+    def _copy_rejections(
+        request: SettingsCopyRequest,
+        specs: list[SettingsFieldSpec],
+        fields: list[SettingsCopyField],
+    ) -> list[SettingsCopyRejection]:
+        """Explain explicitly requested fields the plan cannot copy."""
+
+        if request.fields is None:
+            return []
+        planned = {field.field_id for field in fields}
+        rejected: list[SettingsCopyRejection] = []
+        for spec in specs:
+            if spec.field_id in planned:
+                continue
+            reason = (
+                COPY_FIELD_SYSTEM_ONLY
+                if spec.policy is SettingsFieldPolicy.SYSTEM_ONLY
+                else COPY_FIELD_NOT_OVERRIDDEN
+            )
+            rejected.append(SettingsCopyRejection(field_id=spec.field_id, reason=reason))
+        return rejected
+
+    @staticmethod
+    def _copied_document(
+        target_document: ProjectSettingsDocument,
+        fields: list[SettingsCopyField],
+    ) -> ProjectSettingsDocument:
+        """Merge the planned values onto the target's current override document."""
+
+        values = target_document.model_dump()
+        values.pop("revision")
+        for field in fields:
+            values[field.section][field.attribute] = field.value
+        return ProjectSettingsDocument.model_validate(values)
+
+    async def _binding_plan(
+        self,
+        session: AsyncSession,
+        source: ProjectContext,
+        target: ProjectContext,
+        *,
+        selected: dict[UUID, int],
+    ) -> tuple[list[SettingsCopyBinding], list[StoredBinding]]:
+        """List the source bindings and classify them by target eligibility.
+
+        Every source reference is listed with its current version, whether the
+        request selected it, and why the target cannot take it, so a preview
+        can show the choices before anything is selected. Only a selected,
+        eligible reference is returned for creation, and a selected id that is
+        unknown or changed since the preview is a conflict: a stale plan can
+        never copy a binding the caller did not see. An empty selection copies
+        nothing. Eligible references are created disabled on apply; a private
+        source credential, a missing system grant, an inactive credential, or a
+        route label already used by the target is flagged and never copied.
+        """
+
+        bindings = ProjectBindingRepository(session)
+        credentials = CredentialRepository(session)
+        source_bindings = await bindings.list_for_project(project_id=source.project_id)
+        known = {binding.id for binding in source_bindings}
+        if set(selected) - known:
+            raise SettingsRevisionConflict()
+        target_labels = {
+            (binding.credential_id, binding.route_label)
+            for binding in await bindings.list_for_project(project_id=target.project_id)
+        }
+        planned: list[SettingsCopyBinding] = []
+        eligible: list[StoredBinding] = []
+        for binding in source_bindings:
+            is_selected = binding.id in selected
+            if is_selected and binding.version != selected[binding.id]:
+                raise SettingsRevisionConflict()
+            rejection: str | None = None
+            if binding.credential_scope is CredentialOwnerScope.PROJECT:
+                rejection = COPY_CREDENTIAL_PRIVATE
+            else:
+                credential = await credentials.get_system_credential(
+                    account_id=self._account_id,
+                    credential_id=binding.credential_id,
+                )
+                if credential is None:
+                    rejection = COPY_CREDENTIAL_UNAVAILABLE
+                else:
+                    grant = await credentials.get_grant(
+                        credential_id=binding.credential_id,
+                        project_id=target.project_id,
+                    )
+                    if grant is None:
+                        rejection = COPY_CREDENTIAL_NOT_GRANTED
+            if rejection is None and (binding.credential_id, binding.route_label) in target_labels:
+                rejection = COPY_BINDING_ROUTE_CONFLICT
+            planned.append(
+                SettingsCopyBinding(
+                    binding_id=binding.id,
+                    credential_id=binding.credential_id,
+                    route_label=binding.route_label,
+                    version=binding.version,
+                    selected=is_selected,
+                    eligible=rejection is None,
+                    rejection=rejection,
+                )
+            )
+            if is_selected and rejection is None:
+                eligible.append(binding)
+        return planned, eligible
 
     async def _require_context(
         self,
@@ -445,11 +1041,11 @@ class SettingsService:
         )
         await scoped.require_project()
         stored = await scoped.settings(SETTINGS_NAMESPACE).read()
-        project = self._project_document(stored)
+        project = _project_document(stored)
         project_revision = 0 if stored is None else stored.revision
 
         system_stored = await SystemSettingsRepository(session).get(SETTINGS_NAMESPACE)
-        system, system_revision = self._system_document(system_stored)
+        system, system_revision = _system_document(system_stored)
 
         key = self._cache_key(
             context.project_id,
@@ -472,47 +1068,7 @@ class SettingsService:
 
     async def _load_system(self, session: AsyncSession) -> tuple[SystemSettingsDocument, int]:
         stored = await SystemSettingsRepository(session).get(SETTINGS_NAMESPACE)
-        return self._system_document(stored)
-
-    def _system_document(self, stored: StoredSettings | None) -> tuple[SystemSettingsDocument, int]:
-        if stored is None:
-            return SystemSettingsDocument(revision=0), 0
-        if (
-            stored.schema_version != SETTINGS_SCHEMA_VERSION
-            or stored.namespace != SETTINGS_NAMESPACE
-        ):
-            raise SettingsCorrupt("stored system settings use an unsupported schema")
-        try:
-            document = SystemSettingsDocument.model_validate(
-                {**stored.document, "revision": stored.revision}
-            )
-        except (ValueError, TypeError) as error:
-            raise SettingsCorrupt("stored system settings are invalid") from error
-        try:
-            self._validate_provider_names(document.routing.preferred_providers)
-        except SettingsValidationError as error:
-            raise SettingsCorrupt("stored system settings are invalid") from error
-        return document, stored.revision
-
-    def _project_document(self, stored: StoredSettings | None) -> ProjectSettingsDocument:
-        if stored is None:
-            return ProjectSettingsDocument()
-        if (
-            stored.schema_version != SETTINGS_SCHEMA_VERSION
-            or stored.namespace != SETTINGS_NAMESPACE
-        ):
-            raise SettingsCorrupt("stored project settings use an unsupported schema")
-        try:
-            document = ProjectSettingsDocument.model_validate(
-                {**stored.document, "revision": stored.revision}
-            )
-        except (ValueError, TypeError) as error:
-            raise SettingsCorrupt("stored project settings are invalid") from error
-        try:
-            self._validate_provider_names(document.routing.preferred_providers)
-        except SettingsValidationError as error:
-            raise SettingsCorrupt("stored project settings are invalid") from error
-        return document
+        return _system_document(stored)
 
     @staticmethod
     def _apply_project_update(
@@ -535,9 +1091,17 @@ class SettingsService:
                 if update.execution is None
                 else SettingsService._merge_execution(execution, update.execution)
             )
+        trace = current.trace
+        if "trace" in update.model_fields_set:
+            trace = (
+                TraceSettings()
+                if update.trace is None
+                else SettingsService._merge_trace(trace, update.trace)
+            )
         return ProjectSettingsDocument(
             routing=routing,
             execution=execution,
+            trace=trace,
             revision=current.revision,
         )
 
@@ -556,14 +1120,11 @@ class SettingsService:
         return ExecutionSettings.model_validate(values)
 
     @staticmethod
-    def _validate_provider_names(values: Any) -> None:
-        if values is None:
-            return
-        unknown = sorted(value for value in values if value not in _VALID_PROVIDER_NAMES)
-        if unknown:
-            raise SettingsValidationError(
-                f"unknown provider name(s) in preferred_providers: {', '.join(unknown)}"
-            )
+    def _merge_trace(current: TraceSettings, patch: TraceSettings) -> TraceSettings:
+        values = current.model_dump()
+        for field in patch.model_fields_set:
+            values[field] = getattr(patch, field)
+        return TraceSettings.model_validate(values)
 
     def _cache_key(
         self,
@@ -613,5 +1174,6 @@ __all__ = [
     "SettingsServiceError",
     "SettingsStorageUnavailable",
     "SettingsValidationError",
+    "project_trace_policy",
     "resolve_settings",
 ]

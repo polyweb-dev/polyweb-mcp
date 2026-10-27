@@ -25,10 +25,11 @@ from sqlalchemy import (
     Text,
     and_,
     event,
-    func,
     insert,
+    or_,
     select,
     text,
+    union_all,
 )
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Row
@@ -68,6 +69,7 @@ from freesearch.persistence.database_migrations import (
     absolute_database_path,
     upgrade_database,
 )
+from freesearch.persistence.timestamps import stored_timestamp
 
 if TYPE_CHECKING:
     from freesearch.persistence.limit_repository import LimitRepository
@@ -494,6 +496,12 @@ _SUMMARY_COLUMNS = (
 
 MIN_TRACE_LIMIT = 1
 MAX_TRACE_LIMIT = 100
+#: One extra row past the public page size lets the reader tell whether another
+#: page exists without a second query. It is never returned to a caller.
+TRACE_LOOKAHEAD = 1
+
+#: Exclusive Activity paging cursor: ``(started_at, trace_id)`` of the last row seen.
+TraceCursor = tuple[datetime, str]
 
 
 def _trace_operation(raw: str | None) -> TraceOperation | None:
@@ -640,6 +648,13 @@ def configure_sqlite_engine(engine: AsyncEngine) -> None:
         cursor.execute("PRAGMA cache_size = -64000;")
         cursor.execute("PRAGMA mmap_size = 268435456;")
         cursor.execute("PRAGMA temp_store = MEMORY;")
+        # A checkpoint copies the whole WAL back into the main file and can
+        # stall the next commit. The default 1,000-page threshold fires often
+        # enough to show up as request-tail latency; 8,000 pages makes automatic
+        # checkpoints rarer. Long-lived readers can delay them, so neither this
+        # threshold nor journal_size_limit is a strict bound on WAL size.
+        cursor.execute("PRAGMA wal_autocheckpoint = 8000;")
+        cursor.execute("PRAGMA journal_size_limit = 67108864;")
         # Account session families depend on foreign-key cascades, and SQLite
         # keeps foreign-key checks off by default on every new connection.
         cursor.execute("PRAGMA foreign_keys = ON;")
@@ -736,6 +751,14 @@ class SQLiteRepository:
     async def close(self) -> None:
         """Dispose the engine, releasing pooled connections; safe to call repeatedly."""
 
+        # The trace exporter owns a separate connection to the same file. Close
+        # it first so a caller that never shut its trace runtime down still
+        # releases the database handle (Windows otherwise cannot remove it).
+        from freesearch.persistence.otel_exporter import close_trace_exporters
+
+        database = self._engine.url.database
+        if database is not None:
+            close_trace_exporters(Path(database))
         await self._engine.dispose()
 
     @property
@@ -794,11 +817,16 @@ class SQLiteRepository:
         limit: int = 50,
         operation: TraceOperation | None = None,
         outcome: TraceOutcome | None = None,
+        before: TraceCursor | None = None,
     ) -> list[TraceSummary]:
         """Return one project's root traces newest first, summary columns only.
 
         The project predicate is applied in SQL before the order and the limit,
-        so another project's traces can never appear or displace a row.
+        so another project's traces can never appear or displace a row. The
+        cursor is applied inside the same project predicate, so a cursor
+        crafted from another project can only filter this project's rows.
+        ``limit`` may be one past the public page size so the caller can detect
+        a next page; the caller never returns that lookahead row.
         """
 
         return await self._trace_summaries(
@@ -806,6 +834,7 @@ class SQLiteRepository:
             limit=limit,
             operation=operation,
             outcome=outcome,
+            before=before,
         )
 
     async def get_trace(self, trace_id: str, *, user_id: UUID) -> TraceDetail | None:
@@ -838,14 +867,26 @@ class SQLiteRepository:
         limit: int,
         operation: TraceOperation | None,
         outcome: TraceOutcome | None,
+        before: TraceCursor | None = None,
     ) -> list[TraceSummary]:
         statement = (
             select(*_SUMMARY_COLUMNS)
             .where(TraceSpanRow.parent_span_id.is_(None))
             .where(scope)
-            .order_by(TraceSpanRow.started_at.desc(), TraceSpanRow.span_id.desc())
-            .limit(min(max(limit, MIN_TRACE_LIMIT), MAX_TRACE_LIMIT))
+            .order_by(TraceSpanRow.started_at.desc(), TraceSpanRow.trace_id.desc())
+            .limit(min(max(limit, MIN_TRACE_LIMIT), MAX_TRACE_LIMIT + TRACE_LOOKAHEAD))
         )
+        if before is not None:
+            at = stored_timestamp(before[0])
+            statement = statement.where(
+                or_(
+                    TraceSpanRow.started_at < at,
+                    and_(
+                        TraceSpanRow.started_at == at,
+                        TraceSpanRow.trace_id < before[1],
+                    ),
+                )
+            )
         if operation is not None:
             statement = statement.where(TraceSpanRow.operation == operation.value)
         if outcome is not None:
@@ -1091,44 +1132,39 @@ class SQLiteRepository:
         return self._quota_from_row(row) if row is not None else None
 
     async def latest_quota_batch(self, providers: Sequence[str]) -> dict[str, QuotaSnapshot]:
-        """Return the newest quota snapshot for each requested provider in one query."""
+        """Return the newest quota snapshot for each requested provider.
 
-        if not providers:
+        One statement with one indexed ``LIMIT 1`` branch per provider, so route
+        planning does not scan the whole historical quota ledger as polls
+        accumulate.
+        """
+
+        unique = list(dict.fromkeys(providers))
+        if not unique:
             return {}
-        subq = (
+        branches = [
             select(
-                QuotaSnapshotRow.id,
-                QuotaSnapshotRow.provider,
-                QuotaSnapshotRow.source,
-                QuotaSnapshotRow.remaining,
-                QuotaSnapshotRow.limit_units,
-                QuotaSnapshotRow.reset_at,
-                QuotaSnapshotRow.observed_at,
-                QuotaSnapshotRow.unit_kind,
-                QuotaSnapshotRow.display_unit,
-                QuotaSnapshotRow.metadata_json,
-                func.row_number()
-                .over(
-                    partition_by=QuotaSnapshotRow.provider,
-                    order_by=(QuotaSnapshotRow.observed_at.desc(), QuotaSnapshotRow.id.desc()),
-                )
-                .label("rn"),
+                QuotaSnapshotRow.id.label("id"),
+                QuotaSnapshotRow.provider.label("provider"),
+                QuotaSnapshotRow.source.label("source"),
+                QuotaSnapshotRow.remaining.label("remaining"),
+                QuotaSnapshotRow.limit_units.label("limit_units"),
+                QuotaSnapshotRow.reset_at.label("reset_at"),
+                QuotaSnapshotRow.observed_at.label("observed_at"),
+                QuotaSnapshotRow.unit_kind.label("unit_kind"),
+                QuotaSnapshotRow.display_unit.label("display_unit"),
+                QuotaSnapshotRow.metadata_json.label("metadata_json"),
             )
-            .where(QuotaSnapshotRow.provider.in_(providers))
+            .where(QuotaSnapshotRow.provider == provider)
+            .order_by(
+                QuotaSnapshotRow.observed_at.desc(),
+                QuotaSnapshotRow.id.desc(),
+            )
+            .limit(1)
             .subquery()
-        )
-        statement = select(
-            subq.c.id,
-            subq.c.provider,
-            subq.c.source,
-            subq.c.remaining,
-            subq.c.limit_units,
-            subq.c.reset_at,
-            subq.c.observed_at,
-            subq.c.unit_kind,
-            subq.c.display_unit,
-            subq.c.metadata_json,
-        ).where(subq.c.rn == 1)
+            for provider in unique
+        ]
+        statement = union_all(*(select(branch) for branch in branches))
         async with self._session_factory() as session:
             rows = (await session.execute(statement)).all()
         return {row.provider: self._quota_from_row(row) for row in rows}
@@ -1160,34 +1196,33 @@ class SQLiteRepository:
         return self._health_from_row(row) if row is not None else None
 
     async def latest_health_batch(self, providers: Sequence[str]) -> dict[str, ProviderHealth]:
-        """Return the newest health observation for each requested provider in one query."""
+        """Return the newest health observation for each requested provider.
 
-        if not providers:
+        One statement, one indexed ``LIMIT 1`` branch per provider. A
+        window-function scan over every historical observation grows with the
+        request history, and route planning runs this read on every request;
+        each ``UNION ALL`` branch uses the ``(provider, checked_at)`` index and
+        stops at its newest row instead.
+        """
+
+        unique = list(dict.fromkeys(providers))
+        if not unique:
             return {}
-        subq = (
+        branches = [
             select(
-                ProviderHealthRow.id,
-                ProviderHealthRow.provider,
-                ProviderHealthRow.status,
-                ProviderHealthRow.checked_at,
-                ProviderHealthRow.message,
-                func.row_number()
-                .over(
-                    partition_by=ProviderHealthRow.provider,
-                    order_by=(ProviderHealthRow.checked_at.desc(), ProviderHealthRow.id.desc()),
-                )
-                .label("rn"),
+                ProviderHealthRow.id.label("id"),
+                ProviderHealthRow.provider.label("provider"),
+                ProviderHealthRow.status.label("status"),
+                ProviderHealthRow.checked_at.label("checked_at"),
+                ProviderHealthRow.message.label("message"),
             )
-            .where(ProviderHealthRow.provider.in_(providers))
+            .where(ProviderHealthRow.provider == provider)
+            .order_by(ProviderHealthRow.checked_at.desc(), ProviderHealthRow.id.desc())
+            .limit(1)
             .subquery()
-        )
-        statement = select(
-            subq.c.id,
-            subq.c.provider,
-            subq.c.status,
-            subq.c.checked_at,
-            subq.c.message,
-        ).where(subq.c.rn == 1)
+            for provider in unique
+        ]
+        statement = union_all(*(select(branch) for branch in branches))
         async with self._session_factory() as session:
             rows = (await session.execute(statement)).all()
         return {row.provider: self._health_from_row(row) for row in rows}

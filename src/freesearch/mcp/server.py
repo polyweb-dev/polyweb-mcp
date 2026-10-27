@@ -44,6 +44,7 @@ from freesearch.infrastructure.observability import (
     ObservabilityRuntime,
     SpanKindName,
     bind_execution_attribution,
+    bind_trace_capture,
     build_observability,
     use_observability,
 )
@@ -78,7 +79,7 @@ from freesearch.models.observability import (
     TraceAttribute,
     TraceRootSpan,
 )
-from freesearch.models.projects import PermissionAction
+from freesearch.models.projects import PermissionAction, ProjectTracePolicy
 from freesearch.persistence.database_migrations import exit_if_database_reset_required
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.services.aggregation import reciprocal_rank_fusion
@@ -91,7 +92,7 @@ from freesearch.services.execution_scope import (
     ExecutionStorageUnavailable,
     ExecutionUnauthenticated,
     execution_attribution,
-    resolve_execution_scope,
+    resolve_execution_boundary,
 )
 from freesearch.services.limits_sync import LimitSyncService
 from freesearch.services.monitoring import (
@@ -235,18 +236,22 @@ async def _tool_root(
     attributes: Mapping[str, object],
     *,
     attribution: ExecutionAttribution,
+    trace_policy: ProjectTracePolicy,
 ) -> AsyncIterator[None]:
     """Open one SERVER root around a tool body.
 
-    The runtime is bound for the call and the verified execution attribution is
-    bound before the root span starts, so the attribution processor stamps
-    ownership on the root and every child. A failure annotates the root before
-    it propagates, and one bounded flush runs after the root closes — the same
-    contract the API trace middleware applies to a traced request.
+    The runtime is bound for the call, and the verified execution attribution
+    and the project trace policy resolved at the boundary are bound before the
+    root span starts, so the attribution processor stamps ownership and the
+    immutable capture/sampling decision on the root and every child. A failure
+    annotates the root before it propagates, and one bounded flush runs after
+    the root closes — the same contract the API trace middleware applies to a
+    traced request.
     """
 
     with use_observability(observability):
         bind_execution_attribution(attribution)
+        bind_trace_capture(trace_policy)
         with observability.span(name, kind=SpanKindName.SERVER, attributes=attributes):
             try:
                 yield
@@ -784,12 +789,14 @@ def _register_tools(
         request: SearchRequest | FetchRequest,
         action: PermissionAction,
         ctx: Context | None,  # type: ignore[type-arg]
-    ) -> ExecutionAttribution:
+    ) -> tuple[ExecutionAttribution, ProjectTracePolicy]:
         """Take this call's verified key principal and resolve its scope before routing.
 
         Runs on every tool call, so a persistent session is rechecked each time:
         over HTTP from the guard's verification of the call's own request, over
-        stdio by verifying the process key again.
+        stdio by verifying the process key again. The project trace policy is
+        resolved here, once, so the provider call's spans share one immutable
+        capture and sampling decision.
         """
 
         repository = state["repository"]
@@ -797,12 +804,12 @@ def _register_tools(
         if repository is None:
             raise RuntimeError("execution is temporarily unavailable")
         try:
-            context = await resolve_execution_scope(
+            boundary = await resolve_execution_boundary(
                 repository, principal, project_id=request.project_id, action=action
             )
         except ExecutionScopeError as error:
             raise _execution_tool_error(error) from error
-        return execution_attribution(context)
+        return execution_attribution(boundary.context), boundary.trace_policy
 
     @server.tool()
     async def search(
@@ -810,7 +817,9 @@ def _register_tools(
         ctx: Context,  # type: ignore[type-arg]
     ) -> dict[str, Any]:
         """Search the web through the best available provider or all providers concurrently."""
-        attribution = await _resolve_scope(request, PermissionAction.SEARCH_EXECUTE, ctx)
+        attribution, trace_policy = await _resolve_scope(
+            request, PermissionAction.SEARCH_EXECUTE, ctx
+        )
         active = _active_routes()
         if not active:
             raise RuntimeError("no provider is configured: set a FREESEARCH_*_API_KEY")
@@ -820,6 +829,7 @@ def _register_tools(
             TraceRootSpan.MCP_SEARCH.value,
             _mcp_root_attributes(request),
             attribution=attribution,
+            trace_policy=trace_policy,
         ):
             response = await _search_response(request, active, state, attribution=attribution)
             _annotate_root(observability, request, response)
@@ -831,7 +841,9 @@ def _register_tools(
         ctx: Context,  # type: ignore[type-arg]
     ) -> dict[str, Any]:
         """Fetch a URL's content through the best available provider."""
-        attribution = await _resolve_scope(request, PermissionAction.FETCH_EXECUTE, ctx)
+        attribution, trace_policy = await _resolve_scope(
+            request, PermissionAction.FETCH_EXECUTE, ctx
+        )
         active = _active_routes()
         if not active:
             raise RuntimeError("no provider is configured: set a FREESEARCH_*_API_KEY")
@@ -841,6 +853,7 @@ def _register_tools(
             TraceRootSpan.MCP_FETCH.value,
             _mcp_root_attributes(request),
             attribution=attribution,
+            trace_policy=trace_policy,
         ):
             response = await _fetch_response(request, active, state, attribution=attribution)
             _annotate_root(observability, request, response)

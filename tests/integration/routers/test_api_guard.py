@@ -111,7 +111,7 @@ _ANONYMOUS_SURFACES: tuple[tuple[str, str, dict], ...] = (
     ("GET", "/api/v1/providers/tavily", {}),
     ("PATCH", "/api/v1/providers/tavily", {"enabled": False}),
     ("GET", "/api/v1/providers/tavily/oauth/status", {}),
-    ("GET", "/api/v1/traces", {}),
+    ("GET", "/api/v1/projects/00000000-0000-4000-8000-0000000000aa/traces", {}),
     ("GET", "/no-such-route", {}),
 )
 
@@ -173,7 +173,7 @@ async def test_rejected_requests_create_no_trace_root(guard_client: TestClient) 
             )
         ).project_id
     )
-    items = guard_client.get("/api/v1/traces", headers=headers).json()["items"]
+    items = guard_client.get(f"/api/v1/projects/{pid}/traces", headers=headers).json()["items"]
     assert items == []
 
     assert (
@@ -184,7 +184,7 @@ async def test_rejected_requests_create_no_trace_root(guard_client: TestClient) 
         ).status_code
         == 200
     )
-    items = guard_client.get("/api/v1/traces", headers=headers).json()["items"]
+    items = guard_client.get(f"/api/v1/projects/{pid}/traces", headers=headers).json()["items"]
     assert len(items) == 1
     assert items[0]["operation"] == "search"
     assert items[0]["outcome"] == "success"

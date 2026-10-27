@@ -15,6 +15,8 @@ from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from freesearch.models.provider_limits import (
     AuthMode,
     Confidence,
@@ -67,20 +69,44 @@ class RateLimitService:
         self._records = list(records)
 
     async def admit(self, context: LimitCallContext) -> RateAdmission:
-        """Decide rate capacity for one attempt without consuming anything."""
+        """Decide rate capacity for one attempt without consuming anything.
+
+        All windows share one read session and one observation query, so the
+        number of database round-trips does not grow with the window count.
+        """
 
         now = context.requested_at
         reservations: list[RateReservation] = []
         denials: list[RateDenial] = []
         retry_after: int | None = None
-        for window in self._windows(context):
-            reservation, denial, wait = await self._check_window(context, window, now)
-            if denial is not None:
-                denials.append(denial)
-                retry_after = wait if retry_after is None else min(retry_after, wait)
-                continue
-            if reservation is not None:
-                reservations.append(reservation)
+        if self._repository is not None:
+            async with self._repository.session() as session:
+                observations = await self._repository.list_observations(
+                    context.provider, session=session
+                )
+                for window in self._windows(context):
+                    reservation, denial, wait = await self._check_window(
+                        context,
+                        window,
+                        now,
+                        session=session,
+                        observations=observations,
+                    )
+                    if denial is not None:
+                        denials.append(denial)
+                        retry_after = wait if retry_after is None else min(retry_after, wait)
+                        continue
+                    if reservation is not None:
+                        reservations.append(reservation)
+        else:
+            for window in self._windows(context):
+                reservation, denial, wait = await self._check_window(context, window, now)
+                if denial is not None:
+                    denials.append(denial)
+                    retry_after = wait if retry_after is None else min(retry_after, wait)
+                    continue
+                if reservation is not None:
+                    reservations.append(reservation)
         return RateAdmission(
             admitted=not denials,
             provider=context.provider,
@@ -228,7 +254,13 @@ class RateLimitService:
         return _unique_windows(windows)
 
     async def _check_window(
-        self, context: LimitCallContext, window: RateWindow, now: datetime
+        self,
+        context: LimitCallContext,
+        window: RateWindow,
+        now: datetime,
+        *,
+        session: AsyncSession | None = None,
+        observations: Sequence[RateObservation] | None = None,
     ) -> tuple[RateReservation | None, RateDenial | None, int]:
         """Check one window and return its reservation, denial, and wait time.
 
@@ -240,7 +272,11 @@ class RateLimitService:
             return None, None, 0
         units = _UNITS_PER_ATTEMPT
         limit, remaining, observed_at, reset_at = await self._capacity(
-            context.provider, window, now
+            context.provider,
+            window,
+            now,
+            session=session,
+            observations=observations,
         )
         if limit is None and remaining is None:
             # No published numeric limit: the window is tracked, not enforced.
@@ -264,12 +300,18 @@ class RateLimitService:
         return reservation, None, 0
 
     async def _capacity(
-        self, provider: str, window: RateWindow, now: datetime
+        self,
+        provider: str,
+        window: RateWindow,
+        now: datetime,
+        *,
+        session: AsyncSession | None = None,
+        observations: Sequence[RateObservation] | None = None,
     ) -> tuple[Decimal | None, Decimal | None, datetime | None, datetime | None]:
         """Return limit, remaining, observation instant, and reset of one window."""
 
         limit, remaining, reset_at, observation = await self._window_capacity(
-            provider, window, now
+            provider, window, now, session=session, observations=observations
         )
         return (
             limit,
@@ -279,7 +321,13 @@ class RateLimitService:
         )
 
     async def _window_capacity(
-        self, provider: str, window: RateWindow, now: datetime
+        self,
+        provider: str,
+        window: RateWindow,
+        now: datetime,
+        *,
+        session: AsyncSession | None = None,
+        observations: Sequence[RateObservation] | None = None,
     ) -> tuple[Decimal | None, Decimal | None, datetime | None, RateObservation | None]:
         """Return limit, remaining, reset, and the durable observation of one window.
 
@@ -290,12 +338,15 @@ class RateLimitService:
 
         if self._repository is None:
             return (window.limit, None, window.reset_at, None)
-        observation = await self._latest_observation(provider, window)
+        observation = await self._latest_observation(
+            provider, window, observations=observations
+        )
         used = await self._repository.count_attempts(
             window.bucket_id,
             window=window.window,
             now=now,
             since=observation.observed_at if observation is not None else None,
+            session=session,
         )
         if observation is not None and observation.remaining is not None:
             return (
@@ -342,13 +393,22 @@ class RateLimitService:
         )
 
     async def _latest_observation(
-        self, provider: str, window: RateWindow
+        self,
+        provider: str,
+        window: RateWindow,
+        *,
+        observations: Sequence[RateObservation] | None = None,
     ) -> RateObservation | None:
         if self._repository is None:
             return None
+        candidates = (
+            observations
+            if observations is not None
+            else await self._repository.list_observations(provider)
+        )
         matching = [
             observation
-            for observation in await self._repository.list_observations(provider)
+            for observation in candidates
             if observation.bucket_id == window.bucket_id and observation.window is window.window
         ]
         if not matching:

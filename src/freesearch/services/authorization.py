@@ -139,6 +139,35 @@ class ScopedAuthorizationService:
             raise AuthorizationDenied(decision)
         return decision
 
+    def decide_in_context(
+        self, context: ProjectContext, *, action: PermissionAction
+    ) -> AuthorizationDecision:
+        """Evaluate one project action from a live-resolved context.
+
+        The execution boundary builds ``context`` in the same transaction from
+        the current account, user, membership, and role rows, so its
+        ``effective_permissions`` are that request's live decision snapshot.
+        Evaluating the action from it avoids re-reading the same rows without
+        caching anything across requests: a revocation changed before this
+        transaction is already reflected in the context.
+        """
+
+        query = AuthorizationQuery(
+            principal=context.principal,
+            action=action,
+            scope_type=ScopeType.PROJECT,
+            scope_id=context.project_id,
+        )
+        if action_scope(action) is not ScopeType.PROJECT:
+            return AuthorizationDecision(
+                allowed=False,
+                reason=(f"Action {action.value!r} requires {action_scope(action).value!r} scope"),
+                required_permission=action,
+                scope_type=ScopeType.PROJECT,
+                scope_id=context.project_id,
+            )
+        return evaluate_authorization(query, effective_permissions=context.effective_permissions)
+
     async def effective_permissions(
         self,
         principal: HumanPrincipal | ProjectApiKeyPrincipal,

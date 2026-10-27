@@ -141,7 +141,7 @@ def test_protected_surfaces_reject_anonymous_with_challenge() -> None:
         ("GET", "/stats"),
         ("GET", "/dashboard"),
         ("GET", "/api/v1/providers"),
-        ("GET", "/api/v1/traces"),
+        ("GET", "/api/v1/projects/00000000-0000-4000-8000-0000000000aa/traces"),
         ("GET", "/no-such-route"),
         ("POST", "/auth/jwt/refresh"),
     ]
@@ -510,7 +510,7 @@ def test_api_key_is_verified_only_by_the_key_verifier_on_execution_routes(path: 
         ("GET", "/dashboard"),
         ("GET", "/api/v1/providers"),
         ("PUT", "/api/v1/providers/exa/secret"),
-        ("GET", "/api/v1/traces"),
+        ("GET", "/api/v1/projects/00000000-0000-4000-8000-0000000000aa/traces"),
         ("GET", "/api/v1/projects"),
         ("POST", "/api/v1/projects/abc/api-keys"),
         ("POST", "/api/v1/users"),

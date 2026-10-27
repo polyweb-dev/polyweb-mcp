@@ -3,8 +3,9 @@
 Only the exact ``(method, path)`` pairs handed to
 :class:`ProviderTraceMiddleware` receive a root server span — today
 ``POST /search`` and ``POST /fetch``. Monitoring reads (``/stats``,
-``/dashboard``), the trace read API (``/api/v1/traces``), health/control
-routes, and static UI requests are never traced.
+``/dashboard``), the project trace read API
+(``/api/v1/projects/{project_id}/traces``), health/control routes, and static UI
+requests are never traced.
 
 Responsibilities:
 
