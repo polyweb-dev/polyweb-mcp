@@ -1,6 +1,6 @@
 ---
 name: frontend-bdd-test-skill
-description: "Author, maintain, and execute end-to-end BDD tests for React web applications using Playwright-BDD, TypeScript, and Gherkin feature files. Use when adding acceptance scenarios, generating test specs with bddgen, running browser tests, diagnosing E2E failures, or creating typed step definitions."
+description: Use when adding acceptance scenarios, generating test specs with bddgen, running browser tests, diagnosing E2E failures, or creating typed step definitions. Author, maintain, and execute end-to-end BDD tests for React web applications using Playwright-BDD, TypeScript, and Gherkin feature files.
 ---
 
 # Playwright-BDD for React & TypeScript

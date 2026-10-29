@@ -1,6 +1,6 @@
 ---
 name: frontend-code-quality
-description: "Audit architecture boundaries, circular imports, dead code, unused exports, cyclomatic complexity, nesting depth, and TypeScript type safety in freesearch-ui/src. Use when you verify PR readiness, review code changes, diagnose dependency-cruiser violations, fix ESLint complexity errors, or resolve Knip unused export and dependency reports."
+description: Use when you are working on frontend and want to verify PR readiness, review code changes, diagnose dependency-cruiser violations, fix ESLint complexity errors, or resolve Knip unused export and dependency reports. Audit architecture boundaries, circular imports, dead code, unused exports, cyclomatic complexity, nesting depth, and TypeScript type safety in freesearch-ui/src.
 ---
 
 # Code Quality & Static Analysis
