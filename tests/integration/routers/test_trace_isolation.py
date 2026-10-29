@@ -45,7 +45,7 @@ from tests.fixtures.auth import (
     register_system_admin_login,
     temp_email,
 )
-from tests.fixtures.execution import seed_execution_project
+from tests.fixtures.execution import seed_app_bound_project, seed_execution_project
 
 
 class _StubAdapter(ProviderAdapter):
@@ -95,18 +95,22 @@ class _StubAdapter(ProviderAdapter):
 
 
 @pytest_asyncio.fixture
-async def isolation_client(tmp_path: Path, auth_secret: str) -> TestClient:
+async def isolation_client(tmp_path: Path, auth_secret: str, monkeypatch) -> TestClient:
     repository = await SQLiteRepository.open(tmp_path / "isolation.db")
     app = create_app([_StubAdapter("stubby")], repository=repository)
     with TestClient(app) as client:
+        client.execution_patcher = monkeypatch
         yield client
     await repository.close()
 
 
 async def _login(client: TestClient, prefix: str) -> tuple[dict[str, str], str, str]:
     pair = register_and_login(client, temp_email(prefix))
-    attribution = await seed_execution_project(
-        client.app.state.repository, user_id=account_id_from_pair(pair)
+    attribution = await seed_app_bound_project(
+        client.app.state.repository,
+        user_id=account_id_from_pair(pair),
+        app=client.app,
+        monkeypatch=client.execution_patcher,
     )
     return (
         raw_auth_headers(pair["access_token"]),
@@ -144,12 +148,13 @@ async def test_search_and_fetch_traces_carry_the_exact_account_uuid(
 
 
 async def test_fanout_keeps_one_root_with_the_account_uuid(
-    tmp_path: Path, auth_secret: str
+    tmp_path: Path, auth_secret: str, monkeypatch
 ) -> None:
     repository = await SQLiteRepository.open(tmp_path / "fanout-owner.db")
     try:
         app = create_app([_StubAdapter("alpha"), _StubAdapter("beta")], repository=repository)
         with TestClient(app) as client:
+            client.execution_patcher = monkeypatch
             headers, owner, pid = await _login(client, "trace-fanout")
             response = client.post(
                 "/search",
@@ -262,11 +267,14 @@ async def test_owner_filters_and_query_params_stay_inside_the_account(
     assert smuggled[0]["user_id"] == owner_a
 
 
-async def test_admin_has_no_cross_account_trace_exception(tmp_path: Path, auth_secret: str) -> None:
+async def test_admin_has_no_cross_account_trace_exception(
+    tmp_path: Path, auth_secret: str, monkeypatch
+) -> None:
     repository = await SQLiteRepository.open(tmp_path / "admin-owner.db")
     try:
         app = create_app([_StubAdapter("stubby")], repository=repository)
         with TestClient(app) as client:
+            client.execution_patcher = monkeypatch
             headers_agent, _owner, headers_agent_pid = await _login(client, "trace-gail")
             agent_id = client.post(
                 "/search",
@@ -294,7 +302,7 @@ async def test_admin_has_no_cross_account_trace_exception(tmp_path: Path, auth_s
 
 
 async def test_historical_unowned_rows_stay_outside_account_reads(
-    tmp_path: Path, auth_secret: str
+    tmp_path: Path, auth_secret: str, monkeypatch
 ) -> None:
     repository = await SQLiteRepository.open(tmp_path / "legacy-owner.db")
     try:
@@ -321,6 +329,7 @@ async def test_historical_unowned_rows_stay_outside_account_reads(
         )
         app = create_app([_StubAdapter("stubby")], repository=repository)
         with TestClient(app) as client:
+            client.execution_patcher = monkeypatch
             headers, _owner, pid = await _login(client, "trace-heidi")
             assert (
                 client.get(f"/api/v1/projects/{pid}/traces", headers=headers).json()["items"] == []

@@ -31,9 +31,11 @@ from freesearch.models.contracts import (
     UsageEvent,
     UsageOperation,
 )
+from freesearch.models.credentials import CredentialOperation
 from freesearch.models.projects import BuiltinRole
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
+from tests.fixtures.a2_execution import _seed_credential
 from tests.fixtures.auth import (
     account_id_from_pair,
     register_and_login,
@@ -50,7 +52,7 @@ from tests.fixtures.execution import (
 class _CountingAdapter(ProviderAdapter):
     """Stub that counts calls so rejections can prove zero provider I/O."""
 
-    def __init__(self, name: str = "stubby") -> None:
+    def __init__(self, name: str = "exa") -> None:
         self._name = name
         self.search_calls = 0
         self.fetch_calls = 0
@@ -128,6 +130,36 @@ def _register(client: TestClient, prefix: str) -> tuple[dict[str, str], Any]:
     return {"Authorization": f"Bearer {pair['access_token']}"}, pair
 
 
+async def _bind_adapter(
+    repository: SQLiteRepository, app: Any, attribution: Any, adapter: Any, monkeypatch: Any
+) -> None:
+    import freesearch.services.execution as execution_module
+
+    secret = f"fake-key-{attribution.project_id}"
+    await _seed_credential(
+        repository,
+        app.state.secret_store,
+        attribution,
+        provider=adapter.name,
+        label=adapter.name,
+        secret=secret,
+        operations=frozenset({CredentialOperation.SEARCH, CredentialOperation.FETCH}),
+        priority=0,
+    )
+
+    def factory(name: str) -> Any:
+        if name != adapter.name:
+            return None
+
+        def build(client: Any, api_key: Any = None) -> Any:
+            assert api_key is not None and api_key.get_secret_value() == secret
+            return adapter
+
+        return build
+
+    monkeypatch.setattr(execution_module, "adapter_factory", factory)
+
+
 async def test_unknown_project_is_404_with_no_side_effects(
     repository: SQLiteRepository, auth_secret: str
 ) -> None:
@@ -151,7 +183,7 @@ async def test_unknown_project_is_404_with_no_side_effects(
 
 
 async def test_non_member_gets_404_not_403_with_no_side_effects(
-    repository: SQLiteRepository, auth_secret: str
+    repository: SQLiteRepository, auth_secret: str, monkeypatch: Any
 ) -> None:
     """A member of project A naming project B gets 404 and zero side effects."""
     adapter = _CountingAdapter()
@@ -161,12 +193,19 @@ async def test_non_member_gets_404_not_403_with_no_side_effects(
         attr_a = await seed_execution_project(
             repository, user_id=account_id_from_pair(pair_a), name="Project A"
         )
+        await _bind_adapter(repository, app, attr_a, adapter, monkeypatch)
         # A second project owned by someone else
         attr_b = await seed_execution_project(repository, name="Project B")
         body_a = {"project_id": str(attr_a.project_id), "query": "own"}
         body_b = {"project_id": str(attr_b.project_id), "query": "foreign"}
         own = client.post("/search", json=body_a, headers=headers_a)
+        assert own.status_code == 200
+        app.state.observability.force_flush()
+        before = _side_effect_counts(repository.database_path)
         foreign = client.post("/search", json=body_b, headers=headers_a)
+        app.state.observability.force_flush()
+        assert _side_effect_counts(repository.database_path) == before
+    assert adapter.search_calls == 1
     assert own.status_code == 200
     assert foreign.status_code == 404
     # Only the own-project call produced usage rows
@@ -334,7 +373,7 @@ async def test_provider_limit_events_stay_system_scoped(
 class _SpoofingAdapter(_CountingAdapter):
     """Adapter that tries to stamp a foreign project on its spans."""
 
-    def __init__(self, foreign_project: str, name: str = "stubby") -> None:
+    def __init__(self, foreign_project: str, name: str = "exa") -> None:
         super().__init__(name)
         self._foreign_project = foreign_project
 
@@ -435,7 +474,7 @@ def _body(route: str, pid: str | None = None) -> dict[str, object]:
 
 @pytest.mark.parametrize("route", ["/search", "/fetch"])
 async def test_rejections_leave_no_side_effects(
-    repository: SQLiteRepository, auth_secret: str, route: str
+    repository: SQLiteRepository, auth_secret: str, route: str, monkeypatch: Any
 ) -> None:
     """Every REST rejection lands before admission, usage, or trace writes.
 
@@ -451,6 +490,7 @@ async def test_rejections_leave_no_side_effects(
         headers, pair = _register(client, f"adv-reject{route.replace('/', '-')}")
         user_id = account_id_from_pair(pair)
         own = await seed_execution_project(repository, user_id=user_id, name="Own")
+        await _bind_adapter(repository, app, own, adapter, monkeypatch)
         foreign_owner = await seed_execution_user(repository, "adv-reject-owner")
         foreign = await seed_execution_project(repository, user_id=foreign_owner.id, name="Foreign")
         limited = await seed_execution_project(repository, user_id=foreign_owner.id, name="Limited")
@@ -583,7 +623,7 @@ async def test_mcp_rejections_leave_no_side_effects(
 
 
 async def test_revoked_membership_denies_followup_without_side_effects(
-    repository: SQLiteRepository, auth_secret: str
+    repository: SQLiteRepository, auth_secret: str, monkeypatch: Any
 ) -> None:
     """After a suspension the next call is 404 and writes nothing new."""
     adapter = _CountingAdapter()
@@ -592,6 +632,7 @@ async def test_revoked_membership_denies_followup_without_side_effects(
         headers, pair = _register(client, "adv-revoked")
         user_id = account_id_from_pair(pair)
         attr = await seed_execution_project(repository, user_id=user_id, name="Revoke")
+        await _bind_adapter(repository, app, attr, adapter, monkeypatch)
         ok = client.post(
             "/search",
             json={"project_id": str(attr.project_id), "query": "first"},
@@ -618,7 +659,7 @@ async def test_revoked_membership_denies_followup_without_side_effects(
 
 
 async def test_adapter_ownership_spoofing_keeps_bound_project(
-    repository: SQLiteRepository, auth_secret: str
+    repository: SQLiteRepository, auth_secret: str, monkeypatch: Any
 ) -> None:
     """An adapter annotating a foreign project id cannot change ownership."""
     foreign_pid = "00000000-0000-4000-8000-0000000000ff"
@@ -629,6 +670,7 @@ async def test_adapter_ownership_spoofing_keeps_bound_project(
         attr = await seed_execution_project(
             repository, user_id=account_id_from_pair(pair), name="Bound"
         )
+        await _bind_adapter(repository, app, attr, adapter, monkeypatch)
         response = client.post(
             "/search",
             json={"project_id": str(attr.project_id), "query": "spoof probe"},

@@ -38,6 +38,7 @@ from freesearch.persistence.limit_rows import RateAttemptRow
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.services.provider_limits import ProviderLimitsService
 from tests.fixtures.database_lifecycle import unlink_with_retries
+from tests.fixtures.execution import FIXTURE_ACTOR
 
 FIXED_AT = datetime(2026, 3, 10, 12, 0, 0, tzinfo=UTC)
 
@@ -82,6 +83,7 @@ def _service(repo, records, at=FIXED_AT):
 
 def _ctx(provider="synth", attempt="a-1", at=FIXED_AT):
     return LimitCallContext(
+        **FIXTURE_ACTOR,
         provider=provider,
         operation=LimitOperation.SEARCH,
         auth_mode=AuthMode.KEYED,
@@ -281,6 +283,7 @@ def _tavily_service(repo, at=FIXED_AT):  # type: ignore[no-untyped-def]
 
 def _tavily_ctx(operation, attempt, at=FIXED_AT):  # type: ignore[no-untyped-def]
     return LimitCallContext(
+        **FIXTURE_ACTOR,
         provider="tavily",
         operation=operation,
         auth_mode=AuthMode.KEYED,
@@ -417,10 +420,6 @@ async def test_tavily_concurrent_mixed_ops_share_bucket(repository) -> None:
     assert len(await _durable_attempts(repository)) == 100
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="TASK-000042 AC5: LimitRepository.reserve recheck is not serialized across connections",
-)
 async def test_tavily_bucket_race_across_independent_connections_never_overspends(
     tmp_path: Path,
 ) -> None:

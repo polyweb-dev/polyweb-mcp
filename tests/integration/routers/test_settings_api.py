@@ -32,6 +32,11 @@ from tests.fixtures.auth import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _configured_auth(auth_secret):
+    return auth_secret
+
+
 class _MemorySecretStore:
     """Small async secret store so HTTP tests never touch a key file."""
 

@@ -36,8 +36,8 @@ from freesearch.models.projects import ProjectCreate, ProjectMemberAdd, ProjectR
 from freesearch.models.users import UserPrincipal
 from freesearch.persistence.storage import ProviderHealthRow
 from freesearch.routers.api import create_app
-from freesearch.routers.control import persist_provider_config
 from freesearch.services.projects import ProjectService
+from freesearch.services.provider_runtime import persist_provider_config
 from tests.fixtures.alpha_fixtures import (
     ALPHA_ADMIN_PASSWORD,
     AlphaBootstrapResult,

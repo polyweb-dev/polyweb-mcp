@@ -9,6 +9,7 @@ from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
 import pytest_asyncio
 from fastapi.testclient import TestClient
 
@@ -34,7 +35,28 @@ from tests.fixtures.auth import (
     register_and_login,
     temp_email,
 )
-from tests.fixtures.execution import allow_full_trace_capture, seed_execution_project
+from tests.fixtures.execution import (
+    allow_full_trace_capture,
+    install_adapter_map,
+    seed_execution_project,
+    seed_provider_bindings,
+)
+
+
+async def _seed_bound_project(repository, *, user_id, app, monkeypatch):
+    attribution = await seed_execution_project(repository, user_id=user_id)
+    adapters = app.state._routes
+    secrets: dict[str, str] = {}
+    await seed_provider_bindings(
+        repository,
+        project_id=attribution.project_id,
+        actor_id=attribution.actor_id,
+        store=app.state.secret_store,
+        providers=tuple(adapter.name for adapter in adapters),
+        secrets=secrets,
+    )
+    install_adapter_map(monkeypatch, adapters, secrets=secrets)
+    return attribution
 
 
 class _StubAdapter(ProviderAdapter):
@@ -90,6 +112,8 @@ class _StubAdapter(ProviderAdapter):
 
 
 async def test_search_endpoint_routes_and_returns_contract_shape(
+    auth_secret: str,
+    monkeypatch: pytest.MonkeyPatch,
     repository: SQLiteRepository,
 ) -> None:
     # Search now requires a verified principal with project membership.
@@ -98,7 +122,9 @@ async def test_search_endpoint_routes_and_returns_contract_shape(
         pair = register_and_login(client, temp_email("rest-search"))
         pid = str(
             (
-                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+                await _seed_bound_project(
+                    repository, user_id=account_id_from_pair(pair), app=app, monkeypatch=monkeypatch
+                )
             ).project_id
         )
         response = client.post(
@@ -112,6 +138,8 @@ async def test_search_endpoint_routes_and_returns_contract_shape(
 
 
 async def test_fetch_endpoint_returns_document(
+    auth_secret: str,
+    monkeypatch: pytest.MonkeyPatch,
     repository: SQLiteRepository,
 ) -> None:
     app = create_app([_StubAdapter("youcom")], repository=repository)
@@ -119,7 +147,9 @@ async def test_fetch_endpoint_returns_document(
         pair = register_and_login(client, temp_email("rest-fetch"))
         pid = str(
             (
-                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+                await _seed_bound_project(
+                    repository, user_id=account_id_from_pair(pair), app=app, monkeypatch=monkeypatch
+                )
             ).project_id
         )
         response = client.post(
@@ -133,6 +163,8 @@ async def test_fetch_endpoint_returns_document(
 
 
 async def test_search_without_any_adapter_returns_503(
+    auth_secret: str,
+    monkeypatch: pytest.MonkeyPatch,
     repository: SQLiteRepository,
 ) -> None:
     app = create_app([], repository=repository)
@@ -140,7 +172,9 @@ async def test_search_without_any_adapter_returns_503(
         pair = register_and_login(client, temp_email("rest-empty"))
         pid = str(
             (
-                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+                await _seed_bound_project(
+                    repository, user_id=account_id_from_pair(pair), app=app, monkeypatch=monkeypatch
+                )
             ).project_id
         )
         response = client.post(
@@ -176,6 +210,7 @@ async def test_openapi_docs_are_served(
 
 
 async def test_rest_accepts_provider_options_without_changing_route_or_dropping_metadata(
+    monkeypatch: pytest.MonkeyPatch,
     repository: SQLiteRepository,
     auth_secret: str,
 ) -> None:
@@ -197,7 +232,9 @@ async def test_rest_accepts_provider_options_without_changing_route_or_dropping_
         headers = raw_auth_headers(pair["access_token"])
         pid = str(
             (
-                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+                await _seed_bound_project(
+                    repository, user_id=account_id_from_pair(pair), app=app, monkeypatch=monkeypatch
+                )
             ).project_id
         )
         response = client.post(
@@ -264,6 +301,7 @@ def _trace_id_of(response: object) -> str:
 
 
 async def test_search_emits_trace_header_matching_detail_hierarchy(
+    monkeypatch: pytest.MonkeyPatch,
     repository: SQLiteRepository,
     auth_secret: str,
 ) -> None:
@@ -276,7 +314,9 @@ async def test_search_emits_trace_header_matching_detail_hierarchy(
         headers = raw_auth_headers(pair["access_token"])
         pid = str(
             (
-                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+                await _seed_bound_project(
+                    repository, user_id=account_id_from_pair(pair), app=app, monkeypatch=monkeypatch
+                )
             ).project_id
         )
         response = client.post(
@@ -313,6 +353,7 @@ async def test_search_emits_trace_header_matching_detail_hierarchy(
 
 
 async def test_fetch_route_mirrors_search_tracing(
+    monkeypatch: pytest.MonkeyPatch,
     repository: SQLiteRepository,
     auth_secret: str,
 ) -> None:
@@ -325,7 +366,9 @@ async def test_fetch_route_mirrors_search_tracing(
         headers = raw_auth_headers(pair["access_token"])
         pid = str(
             (
-                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+                await _seed_bound_project(
+                    repository, user_id=account_id_from_pair(pair), app=app, monkeypatch=monkeypatch
+                )
             ).project_id
         )
         response = client.post(
@@ -344,6 +387,7 @@ async def test_fetch_route_mirrors_search_tracing(
 
 
 async def test_unhandled_provider_error_writes_error_trace_without_header(
+    monkeypatch: pytest.MonkeyPatch,
     repository: SQLiteRepository,
     auth_secret: str,
 ) -> None:
@@ -356,7 +400,9 @@ async def test_unhandled_provider_error_writes_error_trace_without_header(
         headers = raw_auth_headers(pair["access_token"])
         pid = str(
             (
-                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+                await _seed_bound_project(
+                    repository, user_id=account_id_from_pair(pair), app=app, monkeypatch=monkeypatch
+                )
             ).project_id
         )
         response = client.post(
@@ -385,6 +431,7 @@ async def test_unhandled_provider_error_writes_error_trace_without_header(
 
 
 async def test_handled_routing_error_carries_header_and_error_outcome(
+    monkeypatch: pytest.MonkeyPatch,
     repository: SQLiteRepository,
     auth_secret: str,
 ) -> None:
@@ -397,7 +444,9 @@ async def test_handled_routing_error_carries_header_and_error_outcome(
         headers = raw_auth_headers(pair["access_token"])
         pid = str(
             (
-                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+                await _seed_bound_project(
+                    repository, user_id=account_id_from_pair(pair), app=app, monkeypatch=monkeypatch
+                )
             ).project_id
         )
         response = client.post(
@@ -432,6 +481,7 @@ class _CountingAdapter(_StubAdapter):
 
 
 async def test_search_with_global_mask_off_returns_503_without_call(
+    monkeypatch: pytest.MonkeyPatch,
     repository: SQLiteRepository,
     auth_secret: str,
 ) -> None:
@@ -446,7 +496,9 @@ async def test_search_with_global_mask_off_returns_503_without_call(
         headers = raw_auth_headers(pair["access_token"])
         pid = str(
             (
-                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+                await _seed_bound_project(
+                    repository, user_id=account_id_from_pair(pair), app=app, monkeypatch=monkeypatch
+                )
             ).project_id
         )
         response = client.post(
@@ -459,6 +511,7 @@ async def test_search_with_global_mask_off_returns_503_without_call(
 
 
 async def test_fetch_with_fetch_bit_off_returns_503_without_call(
+    monkeypatch: pytest.MonkeyPatch,
     repository: SQLiteRepository,
     auth_secret: str,
 ) -> None:
@@ -473,7 +526,9 @@ async def test_fetch_with_fetch_bit_off_returns_503_without_call(
         headers = raw_auth_headers(pair["access_token"])
         pid = str(
             (
-                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+                await _seed_bound_project(
+                    repository, user_id=account_id_from_pair(pair), app=app, monkeypatch=monkeypatch
+                )
             ).project_id
         )
         search = client.post(
@@ -490,6 +545,7 @@ async def test_fetch_with_fetch_bit_off_returns_503_without_call(
 
 
 async def test_search_with_search_bit_off_blocks_search_keeps_fetch(
+    monkeypatch: pytest.MonkeyPatch,
     repository: SQLiteRepository,
     auth_secret: str,
 ) -> None:
@@ -504,7 +560,9 @@ async def test_search_with_search_bit_off_blocks_search_keeps_fetch(
         headers = raw_auth_headers(pair["access_token"])
         pid = str(
             (
-                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+                await _seed_bound_project(
+                    repository, user_id=account_id_from_pair(pair), app=app, monkeypatch=monkeypatch
+                )
             ).project_id
         )
         search = client.post(
@@ -530,6 +588,7 @@ class _FailingFetchAdapter(_StubAdapter):
 
 
 async def test_fetch_endpoint_maps_bot_blocked_to_502(
+    monkeypatch: pytest.MonkeyPatch,
     repository: SQLiteRepository,
     auth_secret: str,
 ) -> None:
@@ -548,7 +607,9 @@ async def test_fetch_endpoint_maps_bot_blocked_to_502(
         headers = raw_auth_headers(pair["access_token"])
         pid = str(
             (
-                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+                await _seed_bound_project(
+                    repository, user_id=account_id_from_pair(pair), app=app, monkeypatch=monkeypatch
+                )
             ).project_id
         )
         resp = client.post(
@@ -565,6 +626,7 @@ async def test_fetch_endpoint_maps_bot_blocked_to_502(
 
 
 async def test_fetch_endpoint_maps_rate_limited_to_429(
+    monkeypatch: pytest.MonkeyPatch,
     repository: SQLiteRepository,
     auth_secret: str,
 ) -> None:
@@ -583,7 +645,9 @@ async def test_fetch_endpoint_maps_rate_limited_to_429(
         headers = raw_auth_headers(pair["access_token"])
         pid = str(
             (
-                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+                await _seed_bound_project(
+                    repository, user_id=account_id_from_pair(pair), app=app, monkeypatch=monkeypatch
+                )
             ).project_id
         )
         resp = client.post(
@@ -597,6 +661,7 @@ async def test_fetch_endpoint_maps_rate_limited_to_429(
 
 
 async def test_fetch_endpoint_maps_terminal_quota_to_402(
+    monkeypatch: pytest.MonkeyPatch,
     repository: SQLiteRepository,
     auth_secret: str,
 ) -> None:
@@ -615,7 +680,9 @@ async def test_fetch_endpoint_maps_terminal_quota_to_402(
         headers = raw_auth_headers(pair["access_token"])
         pid = str(
             (
-                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+                await _seed_bound_project(
+                    repository, user_id=account_id_from_pair(pair), app=app, monkeypatch=monkeypatch
+                )
             ).project_id
         )
         resp = client.post(
@@ -628,6 +695,7 @@ async def test_fetch_endpoint_maps_terminal_quota_to_402(
 
 
 async def test_fetch_chained_fallback_succeeds_on_second_candidate(
+    monkeypatch: pytest.MonkeyPatch,
     repository: SQLiteRepository,
     auth_secret: str,
 ) -> None:
@@ -648,7 +716,9 @@ async def test_fetch_chained_fallback_succeeds_on_second_candidate(
         headers = raw_auth_headers(pair["access_token"])
         pid = str(
             (
-                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+                await _seed_bound_project(
+                    repository, user_id=account_id_from_pair(pair), app=app, monkeypatch=monkeypatch
+                )
             ).project_id
         )
         resp = client.post(

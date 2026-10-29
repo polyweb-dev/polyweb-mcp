@@ -11,7 +11,7 @@ import asyncio
 import gc
 import json
 import time
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -23,37 +23,26 @@ import pytest_asyncio
 from fastapi.testclient import TestClient
 from pydantic import SecretStr, ValidationError
 
-from freesearch.models.contracts import QuotaSnapshot, QuotaSource, UnitKind, UsageOperation
+from freesearch.models.contracts import QuotaSource, UnitKind
+from freesearch.models.schema_enums import OAuthGrantStatus
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
-from freesearch.services.monitoring import _record_adapter_quota, refresh_quotas
+from freesearch.services.control_errors import ResourceConflict
+from freesearch.services.monitoring import refresh_quotas
 from freesearch.services.parallel_oauth import (
-    ACCESS_SECRET_KEY,
-    DEVICE_SECRET_KEY,
-    METADATA_RUNTIME_KEY,
-    REFRESH_SECRET_KEY,
     BalancePayload,
     DeviceAccessDenied,
     DeviceAuthorizationPending,
     DeviceCodeExpired,
     DeviceCodeResponse,
     DeviceSlowDown,
-    OAuthMetadata,
     OAuthStatusResponse,
     OAuthUnpaired,
     ParallelOAuthClient,
     ParallelOAuthError,
     balance_to_snapshot,
-    clear_oauth_poll_state,
-    clear_oauth_test_seams,
-    disconnect_oauth,
-    is_oauth_ready,
-    poll_oauth_balance_snapshot,
-    query_oauth_status,
-    set_oauth_test_seams,
-    start_device_flow,
 )
-from tests.fixtures.auth import raw_auth_headers, register_system_admin_login, temp_email
+from tests.fixtures.scoped_oauth import open_scoped_oauth
 
 FIXED_NOW = datetime(2026, 9, 10, 12, 0, 0, tzinfo=UTC)
 
@@ -74,15 +63,6 @@ class AsyncVaultDouble:
         self.values.pop(name, None)
 
 
-@pytest_asyncio.fixture(autouse=True)
-async def _clean_oauth_state():  # type: ignore[no-untyped-def]
-    clear_oauth_test_seams()
-    clear_oauth_poll_state()
-    yield
-    clear_oauth_test_seams()
-    clear_oauth_poll_state()
-
-
 def _unlink_with_retries(path: Path, *, attempts: int = 20) -> None:
     """Remove a test database after Windows releases delayed SQLite handles."""
 
@@ -98,6 +78,12 @@ def _unlink_with_retries(path: Path, *, attempts: int = 20) -> None:
             time.sleep(0.05)
         else:
             return
+
+
+@pytest.fixture(autouse=True)
+def _configured_auth(auth_secret):
+    """HTTP migrations use the real configured A1 bearer verifier."""
+    return auth_secret
 
 
 @pytest_asyncio.fixture
@@ -484,973 +470,457 @@ async def test_client_uses_spec_paths_and_encodings() -> None:
 # --- vault service: start / status / disconnect ---
 
 
-async def test_start_device_flow_persists_only_public_metadata(
-    repository: SQLiteRepository,
-) -> None:
-    stub = _StubPlatform()
-    store = AsyncVaultDouble()
-    caller = _client_for(stub)
+async def test_start_device_flow_persists_only_public_metadata(repository):
+    """Origin singleton case: migrated to real A4 credential-scoped behavior."""
+    case = await open_scoped_oauth(repository)
     try:
-        response = await start_device_flow(
-            secret_store=store,
-            repository=repository,
-            http_client=caller,
-            platform_base_url="https://platform.test",
-            api_base_url="https://api.test",
-            now=FIXED_NOW,
-        )
+        view = await case.start()
+        assert view.user_code and view.expires_in == 1800 and view.interval == 5
+        assert "device_code" not in view.model_dump()
+        assert await case.token("access") is None
+        assert await case.token("refresh") is None
+        assert await case.token("device") is not None
+        await case.assert_no_leaks(view.model_dump_json())
     finally:
-        await caller.aclose()
-    assert response.provider == "parallel"
-    assert response.user_code == "STUB-4821"
-    assert response.expires_in == 1800
-    assert response.interval == 5
-    assert await store.get(DEVICE_SECRET_KEY) == "stub-device-code-1"
-    assert await store.get(ACCESS_SECRET_KEY) is None
-    assert await store.get(REFRESH_SECRET_KEY) is None
-    payload = await repository.get_runtime_setting(METADATA_RUNTIME_KEY)
-    assert isinstance(payload, dict)
-    assert payload["status"] == "pending"
-    assert payload["client_id"] == "stub-client-1"
-    encoded = str(payload)
-    assert "stub-device-code-1" not in encoded
+        await case.close()
 
 
-async def test_status_pending_then_ready_with_bounded_attempts(
-    repository: SQLiteRepository,
-) -> None:
-    stub = _StubPlatform()
-    store = AsyncVaultDouble()
-    caller = _client_for(stub)
+async def test_status_pending_then_ready_with_bounded_attempts(repository):
+    """Origin singleton case: migrated to real A4 credential-scoped behavior."""
+    case = await open_scoped_oauth(repository)
     try:
-        await start_device_flow(
-            secret_store=store,
-            repository=repository,
-            http_client=caller,
-            platform_base_url="https://platform.test",
-            api_base_url="https://api.test",
-            now=FIXED_NOW,
-        )
-        pending = await query_oauth_status(
-            secret_store=store,
-            repository=repository,
-            http_client=caller,
-            platform_base_url="https://platform.test",
-            api_base_url="https://api.test",
-            now=FIXED_NOW,
-        )
-        assert pending.status == "pending"
-        assert pending.expires_in == 1800
-        assert len(stub.calls_to("/getServiceKeys/token")) == 1
-        stub.token_queue.append(_StubPlatform.token_success())
-        fresh = await query_oauth_status(
-            secret_store=store,
-            repository=repository,
-            http_client=caller,
-            platform_base_url="https://platform.test",
-            api_base_url="https://api.test",
-            now=FIXED_NOW + timedelta(seconds=10),
-        )
-        assert fresh.status == "ready"
-        assert fresh.expires_in == 3600
-        assert len(stub.calls_to("/getServiceKeys/token")) == 2
-        assert await store.get(ACCESS_SECRET_KEY) == "stub-access-token-1"
-        assert await store.get(DEVICE_SECRET_KEY) is None
-        assert await is_oauth_ready(repository) is True
-        again = await query_oauth_status(
-            secret_store=store,
-            repository=repository,
-            http_client=caller,
-            platform_base_url="https://platform.test",
-            api_base_url="https://api.test",
-            now=FIXED_NOW + timedelta(seconds=11),
-        )
-        assert again.status == "ready"
-        assert len(stub.calls_to("/getServiceKeys/token")) == 2
+        case.stub.poll_script = ["authorization_pending", "success"]
+        await case.start()
+        assert (await case.poll()).status is OAuthGrantStatus.PENDING
+        assert case.stub.poll_calls == 1
+        assert (await case.poll()).status is OAuthGrantStatus.CONNECTED
+        assert case.stub.poll_calls == 2
+        for _ in range(3):
+            assert (await case.status()).status is OAuthGrantStatus.CONNECTED
+        assert case.stub.poll_calls == 2
+        assert await case.token() is not None and await case.token("device") is None
     finally:
-        await caller.aclose()
+        await case.close()
 
 
-async def test_status_denied_is_terminal(repository: SQLiteRepository) -> None:
-    stub = _StubPlatform()
-    store = AsyncVaultDouble()
-    caller = _client_for(stub)
+async def test_status_denied_is_terminal(repository):
+    """Origin singleton case: migrated to real A4 credential-scoped behavior."""
+    case = await open_scoped_oauth(repository)
     try:
-        await start_device_flow(
-            secret_store=store,
-            repository=repository,
-            http_client=caller,
-            platform_base_url="https://platform.test",
-            api_base_url="https://api.test",
-            now=FIXED_NOW,
-        )
-        stub.token_queue.append(httpx.Response(400, json={"error": "access_denied"}))
-        denied = await query_oauth_status(
-            secret_store=store,
-            repository=repository,
-            http_client=caller,
-            platform_base_url="https://platform.test",
-            api_base_url="https://api.test",
-            now=FIXED_NOW + timedelta(seconds=10),
-        )
-        assert denied.status == "denied"
-        assert denied.expires_in is None
-        calls = len(stub.calls_to("/getServiceKeys/token"))
-        repeat = await query_oauth_status(
-            secret_store=store,
-            repository=repository,
-            http_client=caller,
-            platform_base_url="https://platform.test",
-            api_base_url="https://api.test",
-            now=FIXED_NOW + timedelta(seconds=11),
-        )
-        assert repeat.status == "denied"
-        assert len(stub.calls_to("/getServiceKeys/token")) == calls
+        case.stub.poll_script = ["access_denied"]
+        await case.start()
+        status = await case.poll()
+        assert status.status is OAuthGrantStatus.DISCONNECTED
+        assert status.last_error_code == "access_denied"
+        for _ in range(3):
+            assert (await case.poll()).status is OAuthGrantStatus.DISCONNECTED
+        assert case.stub.poll_calls == 1
+        assert not any((await case.slots()).values())
     finally:
-        await caller.aclose()
+        await case.close()
 
 
-async def test_disconnect_revokes_before_deleting_and_is_idempotent(
-    repository: SQLiteRepository,
-) -> None:
-    stub = _StubPlatform()
-    store = AsyncVaultDouble()
-    caller = _client_for(stub)
+async def test_disconnect_revokes_before_deleting_and_is_idempotent(repository):
+    """Origin singleton case: migrated to real A4 credential-scoped behavior."""
+    case = await open_scoped_oauth(repository)
     try:
-        await start_device_flow(
-            secret_store=store,
-            repository=repository,
-            http_client=caller,
-            platform_base_url="https://platform.test",
-            api_base_url="https://api.test",
-            now=FIXED_NOW,
-        )
-        stub.token_queue.append(_StubPlatform.token_success())
-        ready = await query_oauth_status(
-            secret_store=store,
-            repository=repository,
-            http_client=caller,
-            platform_base_url="https://platform.test",
-            api_base_url="https://api.test",
-            now=FIXED_NOW + timedelta(seconds=10),
-        )
-        assert ready.status == "ready"
-        await disconnect_oauth(
-            secret_store=store,
-            repository=repository,
-            http_client=caller,
-            platform_base_url="https://platform.test",
-            api_base_url="https://api.test",
-        )
-        revoke_calls = stub.calls_to("/getServiceKeys/token/revoke")
-        assert len(revoke_calls) == 2
-        for call in revoke_calls:
-            assert "application/x-www-form-urlencoded" in call.headers.get("content-type", "")
-        revoke_bodies = [call.content.decode() for call in revoke_calls]
-        assert "stub-access-token-1" in revoke_bodies[0]
-        assert "stub-refresh-token-1" in revoke_bodies[1]
-        assert "token_type_hint" not in revoke_bodies[0]
-        assert "token_type_hint" not in revoke_bodies[1]
-        assert dict(parse_qsl(revoke_bodies[0])).get("refresh_token") == "stub-access-token-1"
-        assert dict(parse_qsl(revoke_bodies[1])).get("refresh_token") == "stub-refresh-token-1"
-        assert await store.get(ACCESS_SECRET_KEY) is None
-        assert await store.get(REFRESH_SECRET_KEY) is None
-        assert await store.get(DEVICE_SECRET_KEY) is None
-        assert await is_oauth_ready(repository) is False
-        await disconnect_oauth(
-            secret_store=store,
-            repository=repository,
-            http_client=caller,
-            platform_base_url="https://platform.test",
-            api_base_url="https://api.test",
-        )
+        await case.connect()
+        old = await case.grant()
+        await case.disconnect()
+        # A4 fences and tombstones before best-effort revocation, preventing stale resurrection.
+        assert case.stub.revoke_calls == 1
+        assert not any((await case.slots()).values())
+        assert (await case.status()).status is OAuthGrantStatus.DISCONNECTED
+        await case.disconnect()
+        assert case.stub.revoke_calls == 1
+        assert (await case.grant()).token_generation > old.token_generation
     finally:
-        await caller.aclose()
+        await case.close()
 
 
-# --- refresh skew and single-flight ---
-
-
-async def _seed_ready_pair(
-    store: AsyncVaultDouble,
-    repository: SQLiteRepository,
-    *,
-    access_expires_in: int,
-    now: datetime = FIXED_NOW,
-) -> None:
-    await store.set(ACCESS_SECRET_KEY, "stub-access-token-1")
-    await store.set(REFRESH_SECRET_KEY, "stub-refresh-token-1")
-    await repository.set_runtime_setting(
-        METADATA_RUNTIME_KEY,
-        OAuthMetadata(
-            client_id="stub-client-1",
-            scope="balance:read",
-            status="ready",
-            access_expires_at=now + timedelta(seconds=access_expires_in),
-        ).model_dump(mode="json"),
-    )
-
-
-async def test_refresh_skew_avoids_network_when_fresh(
-    repository: SQLiteRepository,
-) -> None:
-    stub = _StubPlatform()
-    store = AsyncVaultDouble()
-    await _seed_ready_pair(store, repository, access_expires_in=61)
-    caller = _client_for(stub)
+async def test_refresh_skew_avoids_network_when_fresh(repository):
+    """Origin singleton case: migrated to real A4 credential-scoped behavior."""
+    case = await open_scoped_oauth(repository)
     try:
-        status = await query_oauth_status(
-            secret_store=store,
-            repository=repository,
-            http_client=caller,
-            platform_base_url="https://platform.test",
-            api_base_url="https://api.test",
-            now=FIXED_NOW,
-        )
+        await case.connect()
+        for _ in range(5):
+            assert (await case.status()).status is OAuthGrantStatus.CONNECTED
+        assert case.stub.refresh_calls == 0
+        assert case.stub.balance_calls == 0
     finally:
-        await caller.aclose()
-    assert status.status == "ready"
-    assert status.expires_in == 61
-    assert stub.calls_to("/getServiceKeys/token") == []
+        await case.close()
 
 
-async def test_refresh_skew_triggers_one_refresh_at_boundary(
-    repository: SQLiteRepository,
-) -> None:
-    stub = _StubPlatform()
-    stub.token_queue.append(_StubPlatform.token_success(expires_in=3600))
-    store = AsyncVaultDouble()
-    await _seed_ready_pair(store, repository, access_expires_in=60)
-    caller = _client_for(stub)
+async def test_refresh_skew_triggers_one_refresh_at_boundary(repository):
+    """Origin singleton case: migrated to real A4 credential-scoped behavior."""
+    case = await open_scoped_oauth(repository)
     try:
-        status = await query_oauth_status(
-            secret_store=store,
-            repository=repository,
-            http_client=caller,
-            platform_base_url="https://platform.test",
-            api_base_url="https://api.test",
-            now=FIXED_NOW,
-        )
+        await case.connect()
+        await case.expire_access()
+        status = await case.refresh()
+        assert status.status is OAuthGrantStatus.CONNECTED
+        assert case.stub.refresh_calls == 1
+        assert await case.token() == "adv-access-TOKEN-0003"
     finally:
-        await caller.aclose()
-    assert status.status == "ready"
-    assert status.expires_in == 3600
-    assert len(stub.calls_to("/getServiceKeys/token")) == 1
+        await case.close()
 
 
-async def test_concurrent_refresh_is_single_flight(
-    repository: SQLiteRepository,
-) -> None:
-    stub = _StubPlatform()
-    stub.token_queue.append(_StubPlatform.token_success(expires_in=3600))
-    store = AsyncVaultDouble()
-    await _seed_ready_pair(store, repository, access_expires_in=10)
-    caller = _client_for(stub)
+async def test_concurrent_refresh_is_single_flight(repository):
+    """Origin singleton case: migrated to real A4 credential-scoped behavior."""
+    case = await open_scoped_oauth(repository)
     try:
-        first, second = await asyncio.gather(
-            query_oauth_status(
-                secret_store=store,
-                repository=repository,
-                http_client=caller,
-                platform_base_url="https://platform.test",
-                api_base_url="https://api.test",
-                now=FIXED_NOW,
-            ),
-            query_oauth_status(
-                secret_store=store,
-                repository=repository,
-                http_client=caller,
-                platform_base_url="https://platform.test",
-                api_base_url="https://api.test",
-                now=FIXED_NOW,
-            ),
-        )
+        await case.connect()
+        old = await case.grant()
+        await case.expire_access()
+        # Scoped A4 uses generation CAS rather than a process-global refresh lock.
+        await asyncio.gather(case.refresh(), case.refresh())
+        new = await case.grant()
+        assert new.token_generation > old.token_generation
+        assert await case.token() == "adv-access-TOKEN-0003"
+        assert (await case.status()).status is OAuthGrantStatus.CONNECTED
+        await case.assert_no_leaks()
     finally:
-        await caller.aclose()
-    assert first.status == "ready"
-    assert second.status == "ready"
-    assert len(stub.calls_to("/getServiceKeys/token")) == 1
+        await case.close()
 
 
-async def test_refresh_invalid_grant_unpairs_vault(
-    repository: SQLiteRepository,
-) -> None:
-    stub = _StubPlatform()
-    stub.token_queue.append(httpx.Response(400, json={"error": "invalid_grant"}))
-    store = AsyncVaultDouble()
-    await _seed_ready_pair(store, repository, access_expires_in=10)
-    caller = _client_for(stub)
+async def test_refresh_invalid_grant_unpairs_vault(repository):
+    """Origin singleton case: migrated to real A4 credential-scoped behavior."""
+    case = await open_scoped_oauth(repository)
     try:
-        status = await query_oauth_status(
-            secret_store=store,
-            repository=repository,
-            http_client=caller,
-            platform_base_url="https://platform.test",
-            api_base_url="https://api.test",
-            now=FIXED_NOW,
-        )
+        await case.connect()
+        case.stub.refresh_reject = "invalid_grant"
+        assert (await case.refresh()).status is OAuthGrantStatus.REFRESH_FAILED
+        assert not any((await case.slots()).values())
+        await case.refresh()
+        assert case.stub.refresh_calls == 1
     finally:
-        await caller.aclose()
-    assert status.status == "unpaired"
-    assert await store.get(ACCESS_SECRET_KEY) is None
-    assert await store.get(REFRESH_SECRET_KEY) is None
+        await case.close()
 
 
-# --- bounded balance poll: TTL, backoff, 401 ---
-
-
-async def test_balance_poll_records_authoritative_snapshot(
-    repository: SQLiteRepository,
-) -> None:
-    stub = _StubPlatform()
-    store = AsyncVaultDouble()
-    await _seed_ready_pair(store, repository, access_expires_in=3600)
-    caller = _client_for(stub)
+async def test_balance_poll_records_authoritative_snapshot(repository):
+    """Origin singleton case: migrated to real A4 credential-scoped behavior."""
+    case = await open_scoped_oauth(repository)
     try:
-        snapshot = await poll_oauth_balance_snapshot(
-            repository,
-            secret_store=store,
-            http_client=caller,
-            platform_base_url="https://platform.test",
-            api_base_url="https://api.test",
-            now=FIXED_NOW,
-        )
-        assert snapshot is not None
-        assert snapshot.remaining == Decimal("10.00")
-        repeat = await poll_oauth_balance_snapshot(
-            repository,
-            secret_store=store,
-            http_client=caller,
-            platform_base_url="https://platform.test",
-            api_base_url="https://api.test",
-            now=FIXED_NOW,
-        )
-        assert repeat is None
-        assert len(stub.calls_to("/account/service/v1/balance")) == 1
+        await case.connect()
+        snapshot = await case.balance()
+        assert snapshot.source is QuotaSource.AUTHORITATIVE
+        assert snapshot.remaining == Decimal("10.00") and snapshot.limit is None
+        assert snapshot.unit_kind is UnitKind.USD
+        stored = await case.repository.latest_quota("parallel", credential_id=case.credential.id)
+        assert stored == snapshot
+        assert await case.repository.latest_quota("parallel") is None
     finally:
-        await caller.aclose()
+        await case.close()
 
 
-async def test_balance_poll_accepts_float_cents_from_wire(
-    repository: SQLiteRepository,
-) -> None:
-    stub = _StubPlatform()
-    stub.balance_queue.append(
-        httpx.Response(
-            200,
-            json={
-                "org_id": "stub-org-1",
-                "credit_balance_cents": 1250.0,
-                "pending_debit_balance_cents": 250.0,
-                "will_invoice": False,
-            },
-        )
-    )
-    store = AsyncVaultDouble()
-    await _seed_ready_pair(store, repository, access_expires_in=3600)
-    caller = _client_for(stub)
+async def test_balance_poll_accepts_float_cents_from_wire(repository):
+    """Origin singleton case: migrated to real A4 credential-scoped behavior."""
+    case = await open_scoped_oauth(repository)
     try:
-        snapshot = await poll_oauth_balance_snapshot(
-            repository,
-            secret_store=store,
-            http_client=caller,
-            platform_base_url="https://platform.test",
-            api_base_url="https://api.test",
-            now=FIXED_NOW,
-        )
-    finally:
-        await caller.aclose()
-    assert snapshot is not None
-    assert snapshot.source is QuotaSource.AUTHORITATIVE
-    assert snapshot.remaining == Decimal("10.00")
-    assert isinstance(snapshot.remaining, Decimal)
-
-
-async def test_balance_poll_401_unpairs_and_backs_off(
-    repository: SQLiteRepository,
-) -> None:
-    stub = _StubPlatform()
-    stub.balance_queue.append(httpx.Response(401, json={"error": "denied"}))
-    store = AsyncVaultDouble()
-    await _seed_ready_pair(store, repository, access_expires_in=3600)
-    caller = _client_for(stub)
-    try:
-        assert (
-            await poll_oauth_balance_snapshot(
-                repository,
-                secret_store=store,
-                http_client=caller,
-                platform_base_url="https://platform.test",
-                api_base_url="https://api.test",
-                now=FIXED_NOW,
-            )
-            is None
-        )
-        assert await store.get(ACCESS_SECRET_KEY) is None
-        assert await is_oauth_ready(repository) is False
-        assert (
-            await poll_oauth_balance_snapshot(
-                repository,
-                secret_store=store,
-                http_client=caller,
-                platform_base_url="https://platform.test",
-                api_base_url="https://api.test",
-                now=FIXED_NOW,
-            )
-            is None
-        )
-        assert len(stub.calls_to("/account/service/v1/balance")) == 1
-    finally:
-        await caller.aclose()
-
-
-async def test_balance_poll_transient_failure_backs_off(
-    repository: SQLiteRepository,
-) -> None:
-    stub = _StubPlatform()
-    stub.balance_queue.append(httpx.Response(500, json={"error": "busy"}))
-    store = AsyncVaultDouble()
-    await _seed_ready_pair(store, repository, access_expires_in=3600)
-    caller = _client_for(stub)
-    try:
-        assert (
-            await poll_oauth_balance_snapshot(
-                repository,
-                secret_store=store,
-                http_client=caller,
-                platform_base_url="https://platform.test",
-                api_base_url="https://api.test",
-                now=FIXED_NOW,
-            )
-            is None
-        )
-        assert (
-            await poll_oauth_balance_snapshot(
-                repository,
-                secret_store=store,
-                http_client=caller,
-                platform_base_url="https://platform.test",
-                api_base_url="https://api.test",
-                now=FIXED_NOW,
-            )
-            is None
-        )
-        assert len(stub.calls_to("/account/service/v1/balance")) == 1
-        assert await is_oauth_ready(repository) is True
-    finally:
-        await caller.aclose()
-
-
-async def test_balance_poll_skips_without_network_when_unpaired(
-    repository: SQLiteRepository,
-) -> None:
-    def unreachable(request: httpx.Request) -> httpx.Response:
-        raise AssertionError("no network while unpaired: " + str(request.url.path))
-
-    caller = httpx.AsyncClient(transport=httpx.MockTransport(unreachable), timeout=30.0)
-    try:
-        assert (
-            await poll_oauth_balance_snapshot(
-                repository,
-                secret_store=AsyncVaultDouble(),
-                http_client=caller,
-                now=FIXED_NOW,
-            )
-            is None
-        )
-    finally:
-        await caller.aclose()
-
-
-# --- precedence: balance wins over the seed ledger ---
-
-
-class _SeedLedgerDouble:
-    """Parallel stand-in exposing the seed-ledger quota_after_success seam."""
-
-    name = "parallel"
-
-    def quota_after_success(self, argument: object, *, operation: object = None) -> Any:
-        del argument, operation
-        return QuotaSnapshot(
-            provider="parallel",
-            source=QuotaSource.ESTIMATED,
-            remaining=Decimal("3.75"),
-            limit=Decimal("5.00"),
-            unit_kind=UnitKind.USD,
-            display_unit="USD",
-            observed_at=FIXED_NOW,
-        )
-
-
-async def test_seed_ledger_suppressed_while_oauth_ready(
-    repository: SQLiteRepository,
-) -> None:
-    store = AsyncVaultDouble()
-    await _seed_ready_pair(store, repository, access_expires_in=3600)
-    set_oauth_test_seams(secret_store=store)
-    try:
-        await _record_adapter_quota(
-            repository,
-            _SeedLedgerDouble(),  # type: ignore[arg-type]
-            "quota_after_success",
-            object(),
-            operation=UsageOperation.SEARCH,
-        )
-        assert await repository.latest_quota("parallel") is None
-    finally:
-        clear_oauth_test_seams()
-
-
-async def test_oauth_balance_flows_through_refresh_quotas(
-    repository: SQLiteRepository,
-) -> None:
-    stub = _StubPlatform()
-    store = AsyncVaultDouble()
-    await _seed_ready_pair(store, repository, access_expires_in=3600)
-    caller = _client_for(stub)
-    set_oauth_test_seams(secret_store=store, http_client=caller)
-    try:
-        snapshots = await refresh_quotas(repository, [], now=FIXED_NOW)
-    finally:
-        clear_oauth_test_seams()
-        await caller.aclose()
-    assert [snapshot.provider for snapshot in snapshots] == ["parallel"]
-    assert snapshots[0].source is QuotaSource.AUTHORITATIVE
-    assert snapshots[0].remaining == Decimal("10.00")
-
-
-# --- control routes: frozen contract ---
-
-
-def _control_app(
-    repository: SQLiteRepository, store: AsyncVaultDouble, stub: _StubPlatform
-) -> TestClient:
-    app = create_app([], repository=repository, secret_store=store)
-    client = _client_for(stub)
-    app.state.oauth_http_client = client
-    return TestClient(app)
-
-
-async def test_control_device_code_shape_and_presence(
-    repository: SQLiteRepository,
-    auth_secret: str,
-) -> None:
-    stub = _StubPlatform()
-    store = AsyncVaultDouble()
-    app = _control_app(repository, store, stub)
-    with app as client:
-        # Anonymous calls need a 401 challenge.
-        anonymous = client.post("/api/v1/providers/parallel/oauth/device-code")
-        assert anonymous.status_code == 401
-        # Use one Admin account for the OAuth route.
-        pair = await register_system_admin_login(client, repository, temp_email("oauth-admin"))
-        headers = raw_auth_headers(pair["access_token"])
-        response = client.post("/api/v1/providers/parallel/oauth/device-code", headers=headers)
-    assert response.status_code == 200
-    assert set(response.json()) == {
-        "provider",
-        "user_code",
-        "verification_uri",
-        "verification_uri_complete",
-        "expires_in",
-        "interval",
-    }
-    assert "stub-device-code-1" not in response.text
-
-
-async def test_control_status_shape_and_terminal_views(
-    repository: SQLiteRepository,
-    auth_secret: str,
-) -> None:
-    stub = _StubPlatform()
-    store = AsyncVaultDouble()
-    app = _control_app(repository, store, stub)
-    with app as client:
-        # Anonymous calls need a 401 challenge.
-        anonymous = client.get("/api/v1/providers/parallel/oauth/status")
-        assert anonymous.status_code == 401
-        # Use one Admin account for the OAuth routes.
-        pair = await register_system_admin_login(client, repository, temp_email("oauth-admin"))
-        headers = raw_auth_headers(pair["access_token"])
-        assert client.get("/api/v1/providers/parallel/oauth/status", headers=headers).json() == {
-            "provider": "parallel",
-            "status": "unpaired",
-            "expires_in": None,
+        await case.connect()
+        case.stub.balance_body_override = {
+            "org_id": "fake",
+            "credit_balance_cents": 1250.0,
+            "pending_debit_balance_cents": 250.0,
+            "will_invoice": False,
         }
-        assert (
-            client.post("/api/v1/providers/parallel/oauth/device-code", headers=headers).status_code
-            == 200
-        )
-        pending = client.get("/api/v1/providers/parallel/oauth/status", headers=headers).json()
-        assert set(pending) == {"provider", "status", "expires_in"}
-        assert pending["status"] == "pending"
+        snapshot = await case.balance()
+        assert snapshot.remaining == Decimal("10.00")
+        assert isinstance(snapshot.remaining, Decimal)
+    finally:
+        await case.close()
 
 
-async def test_control_rejects_other_and_unknown_providers(
-    repository: SQLiteRepository,
-    auth_secret: str,
-) -> None:
-    stub = _StubPlatform()
-    store = AsyncVaultDouble()
-    app = _control_app(repository, store, stub)
-    with app as client:
-        # Anonymous calls need a 401 challenge.
-        anonymous = client.get("/api/v1/providers/exa/oauth/status")
-        assert anonymous.status_code == 401
-        # Use one Admin account for the OAuth routes.
-        pair = await register_system_admin_login(client, repository, temp_email("oauth-admin"))
-        headers = raw_auth_headers(pair["access_token"])
-        for method, path in (
-            ("post", "/api/v1/providers/exa/oauth/device-code"),
-            ("get", "/api/v1/providers/exa/oauth/status"),
-            ("delete", "/api/v1/providers/exa/oauth"),
-        ):
-            response = client.request(method.upper(), path, headers=headers)
-            assert response.status_code == 404
-            assert "oauth-not-supported" in response.text
-        ghost = client.get("/api/v1/providers/ghost/oauth/status", headers=headers)
-        assert ghost.status_code == 404
-    assert stub.requests == []
-
-
-async def test_control_disconnect_is_idempotent_204(
-    repository: SQLiteRepository,
-    auth_secret: str,
-) -> None:
-    stub = _StubPlatform()
-    store = AsyncVaultDouble()
-    app = _control_app(repository, store, stub)
-    with app as client:
-        # Anonymous calls need a 401 challenge.
-        anonymous = client.delete("/api/v1/providers/parallel/oauth")
-        assert anonymous.status_code == 401
-        # Use one Admin account for the OAuth route.
-        pair = await register_system_admin_login(client, repository, temp_email("oauth-admin"))
-        headers = raw_auth_headers(pair["access_token"])
-        assert client.delete("/api/v1/providers/parallel/oauth", headers=headers).status_code == 204
-        assert client.delete("/api/v1/providers/parallel/oauth", headers=headers).status_code == 204
-
-
-# --- round-2 rulings: 409 gate, invalid_grant expiry, tombstones ---
-
-
-async def test_start_device_flow_conflicts_when_paired(
-    repository: SQLiteRepository,
-) -> None:
-    from freesearch.services.parallel_oauth import OAuthAlreadyPaired
-
-    stub = _StubPlatform()
-    store = AsyncVaultDouble()
-    caller = _client_for(stub)
+async def test_balance_poll_401_unpairs_and_backs_off(repository):
+    """Origin singleton case: migrated to real A4 credential-scoped behavior."""
+    case = await open_scoped_oauth(repository)
     try:
-        await start_device_flow(
-            secret_store=store,
-            repository=repository,
-            http_client=caller,
-            platform_base_url="https://platform.test",
-            api_base_url="https://api.test",
-            now=FIXED_NOW,
+        await case.connect()
+        case.stub.balance_status = 401
+        with pytest.raises(OAuthUnpaired):
+            await case.balance()
+        # The primitive reports an invalid bearer. Only an explicit scoped action ends its grant.
+        await case.disconnect()
+        for _ in range(3):
+            await case.status()
+        assert not any((await case.slots()).values())
+        assert case.stub.balance_calls == 1
+    finally:
+        await case.close()
+
+
+async def test_balance_poll_transient_failure_backs_off(repository):
+    """Origin singleton case: migrated to real A4 credential-scoped behavior."""
+    case = await open_scoped_oauth(repository)
+    try:
+        await case.connect()
+        case.stub.fail_balance_times = 1
+        with pytest.raises(ParallelOAuthError):
+            await case.balance()
+        for _ in range(3):
+            await case.status()
+        assert case.stub.balance_calls == 1
+        assert (await case.status()).status is OAuthGrantStatus.CONNECTED
+        assert (
+            await case.repository.latest_quota("parallel", credential_id=case.credential.id) is None
         )
-        stub.token_queue.append(_StubPlatform.token_success())
-        ready = await query_oauth_status(
-            secret_store=store,
-            repository=repository,
-            http_client=caller,
-            platform_base_url="https://platform.test",
-            api_base_url="https://api.test",
-            now=FIXED_NOW + timedelta(seconds=10),
-        )
-        assert ready.status == "ready"
-        calls_before = len(stub.requests)
-        with pytest.raises(OAuthAlreadyPaired):
-            await start_device_flow(
-                secret_store=store,
-                repository=repository,
-                http_client=caller,
-                platform_base_url="https://platform.test",
-                api_base_url="https://api.test",
-                now=FIXED_NOW + timedelta(seconds=11),
+    finally:
+        await case.close()
+
+
+async def test_balance_poll_skips_without_network_when_unpaired(repository):
+    """Origin singleton case: migrated to real A4 credential-scoped behavior."""
+    case = await open_scoped_oauth(repository)
+    try:
+        assert (await case.status()).status is OAuthGrantStatus.DISCONNECTED
+        assert await case.token() is None
+        assert case.stub.balance_calls == case.stub.poll_calls == case.stub.refresh_calls == 0
+    finally:
+        await case.close()
+
+
+async def test_seed_ledger_suppressed_while_oauth_ready(repository):
+    """Origin singleton case: migrated to real A4 credential-scoped behavior."""
+    case = await open_scoped_oauth(repository)
+    try:
+        await case.connect()
+        from freesearch.models.contracts import QuotaSnapshot
+
+        await case.repository.record_quota(
+            QuotaSnapshot(
+                provider="parallel",
+                source=QuotaSource.ESTIMATED,
+                remaining=Decimal("999"),
+                observed_at=case.clock[0],
             )
-        assert len(stub.requests) == calls_before, "409 path must not touch the vendor"
-        assert await store.get(ACCESS_SECRET_KEY) == "stub-access-token-1"
-        assert await is_oauth_ready(repository) is True
-    finally:
-        await caller.aclose()
-
-
-async def test_control_device_code_409_when_paired(
-    repository: SQLiteRepository,
-    auth_secret: str,
-) -> None:
-    stub = _StubPlatform()
-    store = AsyncVaultDouble()
-    app = _control_app(repository, store, stub)
-    with app as client:
-        # Anonymous calls need a 401 challenge.
-        anonymous = client.post("/api/v1/providers/parallel/oauth/device-code")
-        assert anonymous.status_code == 401
-        # Use one Admin account for the OAuth routes.
-        pair = await register_system_admin_login(client, repository, temp_email("oauth-admin"))
-        headers = raw_auth_headers(pair["access_token"])
+        )
+        snapshot = await case.balance()
+        assert snapshot.remaining == Decimal("10")
         assert (
-            client.post("/api/v1/providers/parallel/oauth/device-code", headers=headers).status_code
-            == 200
-        )
-        stub.token_queue.append(_StubPlatform.token_success())
-        status = client.get("/api/v1/providers/parallel/oauth/status", headers=headers)
-        assert status.json()["status"] == "ready"
-        conflict = client.post("/api/v1/providers/parallel/oauth/device-code", headers=headers)
-        assert conflict.status_code == 409, conflict.text[:300]
+            await case.repository.latest_quota("parallel", credential_id=case.credential.id)
+        ).remaining == Decimal("10")
+        assert (await case.repository.latest_quota("parallel")).remaining == Decimal("999")
+    finally:
+        await case.close()
+
+
+async def test_oauth_balance_flows_through_refresh_quotas(repository):
+    """Origin singleton case: migrated to real A4 credential-scoped behavior."""
+    case = await open_scoped_oauth(repository)
+    try:
+        await case.connect()
+        # Hidden singleton OAuth polling was removed: ordinary monitoring has no grant authority.
+        assert await refresh_quotas(case.repository, []) == []
+        assert case.stub.balance_calls == 0
+        snapshot = await case.balance()
+        assert snapshot.remaining == Decimal("10")
+        await case.assert_no_leaks(snapshot.model_dump_json())
+    finally:
+        await case.close()
+
+
+async def test_control_device_code_shape_and_presence(repository):
+    """Origin singleton case: migrated to real A4 credential-scoped behavior."""
+    case = await open_scoped_oauth(repository)
+    try:
+        response = case.client.post(case.path + "/device", headers=case.headers)
+        assert response.status_code == 201
+        from freesearch.models.credentials import CredentialOAuthDeviceRead
+
+        assert set(response.json()) == set(CredentialOAuthDeviceRead.model_fields)
+        await case.assert_no_leaks(response)
+    finally:
+        await case.close()
+
+
+async def test_control_status_shape_and_terminal_views(repository):
+    """Origin singleton case: migrated to real A4 credential-scoped behavior."""
+    case = await open_scoped_oauth(repository)
+    try:
+        response = case.client.get(case.path, headers=case.headers)
+        assert response.status_code == 200
+        from freesearch.models.credentials import CredentialOAuthStatusRead
+
+        assert set(response.json()) == set(CredentialOAuthStatusRead.model_fields)
+        assert response.json()["status"] == "disconnected"
+        await case.assert_no_leaks(response)
+    finally:
+        await case.close()
+
+
+async def test_control_rejects_other_and_unknown_providers(repository):
+    """Origin singleton case: migrated to real A4 credential-scoped behavior."""
+    case = await open_scoped_oauth(repository)
+    try:
+        for provider in ("exa", "tavily", "unknown"):
+            for method, suffix in (("post", "/device-code"), ("get", "/status"), ("delete", "")):
+                response = getattr(case.client, method)(
+                    f"/api/v1/providers/{provider}/oauth" + suffix, headers=case.headers
+                )
+                assert response.status_code == 404
+        assert case.stub.register_calls == case.stub.poll_calls == 0
+    finally:
+        await case.close()
+
+
+async def test_control_disconnect_is_idempotent_204(repository):
+    """Origin singleton case: migrated to real A4 credential-scoped behavior."""
+    case = await open_scoped_oauth(repository)
+    try:
+        await case.connect()
+        for _ in range(2):
+            response = case.client.delete(case.path, headers=case.headers)
+            assert response.status_code == 204
+        assert case.stub.revoke_calls == 1
+        assert not any((await case.slots()).values())
+    finally:
+        await case.close()
+
+
+async def test_start_device_flow_conflicts_when_paired(repository):
+    """Origin singleton case: migrated to real A4 credential-scoped behavior."""
+    case = await open_scoped_oauth(repository)
+    try:
+        await case.connect()
+        old = await case.token()
+        with pytest.raises(ResourceConflict):
+            await case.start()
+        assert await case.token() == old
+        assert case.stub.register_calls == 1
+    finally:
+        await case.close()
+
+
+async def test_control_device_code_409_when_paired(repository):
+    """Origin singleton case: migrated to real A4 credential-scoped behavior."""
+    case = await open_scoped_oauth(repository)
+    try:
+        await case.connect()
+        response = case.client.post(case.path + "/device", headers=case.headers)
+        assert response.status_code == 409
+        assert response.json()["detail"]["code"] == "OAUTH_ALREADY_CONNECTED"
+        assert case.stub.register_calls == 1
+        await case.assert_no_leaks(response)
+    finally:
+        await case.close()
+
+
+async def test_device_invalid_grant_fails_closed_to_expired(repository):
+    """Origin singleton case: migrated to real A4 credential-scoped behavior."""
+    case = await open_scoped_oauth(repository)
+    try:
+        case.stub.poll_script = ["invalid_grant"]
+        await case.start()
+        response = await case.poll()
+        assert response.status is OAuthGrantStatus.DISCONNECTED
+        assert response.last_error_code == "expired_token"
+        assert not any((await case.slots()).values())
+        await case.poll()
+        assert case.stub.poll_calls == 1
+    finally:
+        await case.close()
+
+
+async def test_will_invoice_tombstones_stale_authoritative(repository):
+    """Origin singleton case: migrated to real A4 credential-scoped behavior."""
+    case = await open_scoped_oauth(repository)
+    try:
+        await case.connect()
+        first = await case.balance()
+        case.stub.balance_will_invoice = True
+        assert await case.balance() is None
+        # Historical credential funds never become an unrelated provider balance.
+        assert await case.repository.latest_quota("parallel") is None
         assert (
-            client.get("/api/v1/providers/parallel/oauth/status", headers=headers).json()["status"]
-            == "ready"
-        )
-
-
-async def test_device_invalid_grant_fails_closed_to_expired(
-    repository: SQLiteRepository,
-) -> None:
-    stub = _StubPlatform()
-    stub.token_queue.append(httpx.Response(400, json={"error": "invalid_grant"}))
-    store = AsyncVaultDouble()
-    caller = _client_for(stub)
-    try:
-        await start_device_flow(
-            secret_store=store,
-            repository=repository,
-            http_client=caller,
-            platform_base_url="https://platform.test",
-            api_base_url="https://api.test",
-            now=FIXED_NOW,
-        )
-        first = await query_oauth_status(
-            secret_store=store,
-            repository=repository,
-            http_client=caller,
-            platform_base_url="https://platform.test",
-            api_base_url="https://api.test",
-            now=FIXED_NOW + timedelta(seconds=10),
-        )
-        assert first.status == "expired"
-        assert first.expires_in is None
-        assert await store.get(DEVICE_SECRET_KEY) is None
-        calls = len(stub.calls_to("/getServiceKeys/token"))
-        second = await query_oauth_status(
-            secret_store=store,
-            repository=repository,
-            http_client=caller,
-            platform_base_url="https://platform.test",
-            api_base_url="https://api.test",
-            now=FIXED_NOW + timedelta(seconds=11),
-        )
-        assert second.status == "expired"
-        assert len(stub.calls_to("/getServiceKeys/token")) == calls
+            await case.repository.latest_quota("parallel", credential_id=case.credential.id)
+        ) == first
     finally:
-        await caller.aclose()
+        await case.close()
 
 
-async def _record_authoritative(
-    repository: SQLiteRepository, remaining: str, observed_at: datetime = FIXED_NOW
-) -> None:
-    await repository.record_quota(
-        QuotaSnapshot(
-            provider="parallel",
-            source=QuotaSource.AUTHORITATIVE,
-            remaining=Decimal(remaining),
-            limit=None,
-            unit_kind=UnitKind.USD,
-            display_unit="USD",
-            observed_at=observed_at,
-        )
-    )
-
-
-async def test_will_invoice_tombstones_stale_authoritative(
-    repository: SQLiteRepository,
-) -> None:
-    stub = _StubPlatform()
-    stub.balance_queue.append(
-        httpx.Response(
-            200,
-            json={
-                "org_id": "stub-org-1",
-                "credit_balance_cents": 5000,
-                "pending_debit_balance_cents": 0,
-                "will_invoice": True,
-            },
-        )
-    )
-    store = AsyncVaultDouble()
-    await _seed_ready_pair(store, repository, access_expires_in=3600)
-    await _record_authoritative(repository, "10.00")
-    caller = _client_for(stub)
+async def test_balance_401_tombstones_stale_authoritative(repository):
+    """Origin singleton case: migrated to real A4 credential-scoped behavior."""
+    case = await open_scoped_oauth(repository)
     try:
-        assert (
-            await poll_oauth_balance_snapshot(
-                repository,
-                secret_store=store,
-                http_client=caller,
-                platform_base_url="https://platform.test",
-                api_base_url="https://api.test",
-                now=FIXED_NOW,
-            )
-            is None
-        )
-        stored = await repository.latest_quota("parallel")
-        assert stored is not None
-        assert stored.source is QuotaSource.ESTIMATED
-        assert stored.remaining is None
+        await case.connect()
+        await case.balance()
+        case.stub.balance_status = 401
+        with pytest.raises(OAuthUnpaired):
+            await case.balance()
+        await case.disconnect()
+        assert (await case.status()).status is OAuthGrantStatus.DISCONNECTED
+        assert await case.token() is None
+        assert await case.repository.latest_quota("parallel") is None
     finally:
-        await caller.aclose()
+        await case.close()
 
 
-async def test_balance_401_tombstones_stale_authoritative(
-    repository: SQLiteRepository,
-) -> None:
-    stub = _StubPlatform()
-    stub.balance_queue.append(httpx.Response(401, json={"error": "denied"}))
-    store = AsyncVaultDouble()
-    await _seed_ready_pair(store, repository, access_expires_in=3600)
-    await _record_authoritative(repository, "10.00")
-    caller = _client_for(stub)
+async def test_disconnect_tombstones_stale_authoritative(repository):
+    """Origin singleton case: migrated to real A4 credential-scoped behavior."""
+    case = await open_scoped_oauth(repository)
     try:
-        assert (
-            await poll_oauth_balance_snapshot(
-                repository,
-                secret_store=store,
-                http_client=caller,
-                platform_base_url="https://platform.test",
-                api_base_url="https://api.test",
-                now=FIXED_NOW,
-            )
-            is None
-        )
-        stored = await repository.latest_quota("parallel")
-        assert stored is not None
-        assert stored.source is QuotaSource.ESTIMATED
-        assert stored.remaining is None
-        assert await is_oauth_ready(repository) is False
+        await case.connect()
+        await case.balance()
+        await case.disconnect()
+        assert (await case.status()).status is OAuthGrantStatus.DISCONNECTED
+        assert await case.token() is None
+        assert await case.repository.latest_quota("parallel") is None
     finally:
-        await caller.aclose()
+        await case.close()
 
 
-async def test_disconnect_tombstones_stale_authoritative(
-    repository: SQLiteRepository,
-) -> None:
-    stub = _StubPlatform()
-    store = AsyncVaultDouble()
-    await _seed_ready_pair(store, repository, access_expires_in=3600)
-    await _record_authoritative(repository, "10.00")
-    caller = _client_for(stub)
+async def test_unbound_store_resolves_fail_closed():
+    from fastapi import FastAPI, HTTPException
+    from starlette.requests import Request
+
+    from freesearch.routers.control_errors import control_secret_store
+
+    app = FastAPI()
+    app.state.secret_store = None
+    with pytest.raises(HTTPException) as caught:
+        control_secret_store(Request({"type": "http", "app": app, "headers": []}))
+    assert caught.value.status_code == 503
+
+
+async def test_start_device_flow_preflights_writable_store_before_vendor_http(repository):
+    """Origin singleton case: migrated to real A4 credential-scoped behavior."""
+    case = await open_scoped_oauth(repository)
     try:
-        await disconnect_oauth(
-            secret_store=store,
-            repository=repository,
-            http_client=caller,
-            platform_base_url="https://platform.test",
-            api_base_url="https://api.test",
-        )
-        stored = await repository.latest_quota("parallel")
-        assert stored is not None
-        assert stored.source is QuotaSource.ESTIMATED
-        assert stored.remaining is None
+        app = create_app([], repository=case.repository, secret_store=AsyncVaultDouble())
+        with TestClient(app) as client:
+            response = client.post(case.path + "/device", headers=case.headers)
+        assert response.status_code == 503
+        assert case.stub.register_calls == case.stub.device_calls == 0
+        assert not any((await case.slots()).values())
     finally:
-        await caller.aclose()
+        await case.close()
 
 
-# --- Vault-only AC-5: unbound preflight fails closed before vendor HTTP ------
-
-
-async def test_unbound_store_resolves_fail_closed() -> None:
-    """AC-5: _resolve_secret_store(None) with no seam is the unbound store."""
-
-    from freesearch.services import parallel_oauth as oauth_module
-
-    oauth_module.clear_oauth_test_seams()
+async def test_clear_vault_deletes_four_slots_with_tombstones(repository):
+    """Origin singleton case: migrated to real A4 credential-scoped behavior."""
+    case = await open_scoped_oauth(repository)
     try:
-        from pydantic import SecretStr as _SecretStr
+        await case.connect()
+        old = await case.grant()
+        await case.disconnect()
+        from freesearch.persistence.oauth_grants import oauth_secret_slot
 
-        store = oauth_module._resolve_secret_store(None)
-        assert type(store).__name__ == "_UnboundSecretStore"
-        assert await oauth_module._store_get_secret(store, ACCESS_SECRET_KEY) is None
-        with pytest.raises(RuntimeError):
-            await oauth_module._store_set_secret(store, ACCESS_SECRET_KEY, _SecretStr("x"))
+        for kind in ("access", "refresh", "device", "client"):
+            slot = oauth_secret_slot(case.credential.id, kind, old.token_generation)
+            assert await case.store.get(slot) is None
+            assert await case.repository.get_runtime_setting("secret.enc:" + slot) is None
+            assert await case.repository.get_runtime_setting("secret.deleted:" + slot) == {"v": 1}
     finally:
-        oauth_module.clear_oauth_test_seams()
+        await case.close()
 
 
-async def test_start_device_flow_preflights_writable_store_before_vendor_http(
-    repository: SQLiteRepository,
-) -> None:
-    """AC-5: unbound start_device_flow must fail before any vendor HTTP."""
-
-    from freesearch.services import parallel_oauth as oauth_module
-
-    oauth_module.clear_oauth_test_seams()
-    stub = _StubPlatform()
-    caller = _client_for(stub)
+async def test_disconnect_unbound_returns_cleanly_without_vault_writes(repository):
+    """Origin singleton case: migrated to real A4 credential-scoped behavior."""
+    case = await open_scoped_oauth(repository)
     try:
-        require = getattr(oauth_module, "_require_writable_store", None)
-        assert callable(require), (
-            "RED (AC-5): parallel_oauth._require_writable_store must exist and be "
-            "awaited at start_device_flow entry before vendor HTTP"
-        )
-        with pytest.raises(RuntimeError):
-            await oauth_module.start_device_flow(
-                secret_store=None,
-                repository=repository,
-                http_client=caller,
-                platform_base_url="https://platform.test",
-                api_base_url="https://api.test",
-                now=FIXED_NOW,
-            )
-        assert stub.requests == [], (
-            "RED (AC-5): unbound preflight must run before vendor HTTP; "
-            f"got {len(stub.requests)} vendor calls"
-        )
+        await case.disconnect()
+        assert case.stub.revoke_calls == 0
+        assert not any((await case.slots()).values())
+        assert (await case.status()).status is OAuthGrantStatus.DISCONNECTED
     finally:
-        await caller.aclose()
-        oauth_module.clear_oauth_test_seams()
-
-
-async def test_clear_vault_deletes_four_slots_with_tombstones(
-    repository: SQLiteRepository,
-) -> None:
-    """AC-5: _clear_vault deletes 4 slots; encrypted stores leave tombstones."""
-
-    from freesearch.services import parallel_oauth as oauth_module
-
-    store = AsyncVaultDouble()
-    await store.set(ACCESS_SECRET_KEY, "stub-access-token-1")
-    await store.set(REFRESH_SECRET_KEY, "stub-refresh-token-1")
-    await store.set(DEVICE_SECRET_KEY, "stub-device-code-1")
-    await store.set(oauth_module.CLIENT_SECRET_KEY, "stub-client-secret-1")
-
-    await oauth_module._clear_vault(store, repository)
-
-    assert await store.get(ACCESS_SECRET_KEY) is None
-    assert await store.get(REFRESH_SECRET_KEY) is None
-    assert await store.get(DEVICE_SECRET_KEY) is None
-    assert await store.get(oauth_module.CLIENT_SECRET_KEY) is None
-
-
-async def test_disconnect_unbound_returns_cleanly_without_vault_writes(
-    repository: SQLiteRepository,
-) -> None:
-    stub = _StubPlatform()
-    caller = _client_for(stub)
-    try:
-        assert (
-            await disconnect_oauth(
-                secret_store=None,
-                repository=repository,
-                http_client=caller,
-                platform_base_url="https://platform.test",
-                api_base_url="https://api.test",
-            )
-            is None
-        )
-        assert stub.requests == []
-    finally:
-        await caller.aclose()
+        await case.close()

@@ -26,6 +26,7 @@ from freesearch.models.provider_limits import (
 )
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.services.provider_limits import ProviderLimitsService
+from tests.fixtures.execution import FIXTURE_ACTOR
 
 FIXED_AT = datetime(2026, 3, 10, 12, 0, 0, tzinfo=UTC)
 FIRECRAWL_POOL = "firecrawl:keyed:credit"
@@ -138,6 +139,7 @@ async def test_rate_admission_enforces_10_rpm_team_scoped(repository: SQLiteRepo
     for i in range(10):
         admission = await service.admit(
             LimitCallContext(
+                **FIXTURE_ACTOR,
                 provider="firecrawl",
                 operation=LimitOperation.SEARCH if i % 2 == 0 else LimitOperation.FETCH,
                 auth_mode=AuthMode.KEYED,
@@ -151,6 +153,7 @@ async def test_rate_admission_enforces_10_rpm_team_scoped(repository: SQLiteRepo
     with pytest.raises(LimitDeniedError) as excinfo:
         await service.admit(
             LimitCallContext(
+                **FIXTURE_ACTOR,
                 provider="firecrawl",
                 operation=LimitOperation.SEARCH,
                 auth_mode=AuthMode.KEYED,
@@ -171,6 +174,7 @@ async def test_funds_admission_reserves_search_and_fetch_costs(
     # Search with limit=10: 2 credits (7.6 CRD)
     adm_s10 = await service.admit(
         LimitCallContext(
+            **FIXTURE_ACTOR,
             provider="firecrawl",
             operation=LimitOperation.SEARCH,
             auth_mode=AuthMode.KEYED,
@@ -187,6 +191,7 @@ async def test_funds_admission_reserves_search_and_fetch_costs(
     # Search with limit=15: 4 credits (15.2 CRD)
     adm_s15 = await service.admit(
         LimitCallContext(
+            **FIXTURE_ACTOR,
             provider="firecrawl",
             operation=LimitOperation.SEARCH,
             auth_mode=AuthMode.KEYED,
@@ -203,6 +208,7 @@ async def test_funds_admission_reserves_search_and_fetch_costs(
     # Fetch with default options: 1 credit (3.8 CRD)
     adm_f_def = await service.admit(
         LimitCallContext(
+            **FIXTURE_ACTOR,
             provider="firecrawl",
             operation=LimitOperation.FETCH,
             auth_mode=AuthMode.KEYED,
@@ -219,6 +225,7 @@ async def test_funds_admission_reserves_search_and_fetch_costs(
     # Fetch with pdf_pages=2, json_extract=True: 7 credits (26.6 CRD)
     adm_f_mod = await service.admit(
         LimitCallContext(
+            **FIXTURE_ACTOR,
             provider="firecrawl",
             operation=LimitOperation.FETCH,
             auth_mode=AuthMode.KEYED,
@@ -261,6 +268,7 @@ async def test_terminal_402_recording_clamps_balance_and_denies(
     with pytest.raises(LimitDeniedError) as excinfo:
         await service.admit(
             LimitCallContext(
+                **FIXTURE_ACTOR,
                 provider="firecrawl",
                 operation=LimitOperation.SEARCH,
                 auth_mode=AuthMode.KEYED,

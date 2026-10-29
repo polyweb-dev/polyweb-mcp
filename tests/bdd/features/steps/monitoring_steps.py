@@ -10,10 +10,8 @@ from typing import Any
 
 from behave import given, then, when  # type: ignore[import-untyped]
 from fastapi.testclient import TestClient
-from pydantic import SecretStr
 
 from freesearch.adapters.base import ProviderAdapter
-from freesearch.mcp.server import create_server
 from freesearch.models.contracts import (
     CostEstimate,
     FetchedDocument,
@@ -32,7 +30,6 @@ from freesearch.models.contracts import (
 )
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
-from tests.fixtures.api_keys import mcp_key_credentials
 from tests.fixtures.auth import (
     TEMP_PASSWORD,
     configure_bdd_secret,
@@ -312,16 +309,10 @@ def step_given_mcp_monitoring(context: Any) -> None:
         ),
     ]
 
-    async def _authed_service() -> tuple[Any, str, str]:
-        service, token, pid = await mcp_key_credentials(context.repository, "monitor-mcp")
-        return service, token.get_secret_value(), pid
+    from tests.fixtures.execution import bdd_mcp_server
 
-    service, raw_token, context.mcp_pid = context.loop.run_until_complete(_authed_service())
-    context.server = create_server(
-        context.adapters,
-        repository=context.repository,
-        auth_service=service,
-        stdio_token=SecretStr(raw_token),
+    context.server, context.mcp_pid = context.loop.run_until_complete(
+        bdd_mcp_server(context, context.adapters, "monitor-mcp")
     )
 
 
@@ -354,7 +345,22 @@ def step_then_mcp_telemetry(context: Any) -> None:
         ("mcp-fetch", "fetch", Decimal("2.50")),
     ]
     for provider in ("mcp-search", "mcp-fetch"):
-        health = context.loop.run_until_complete(context.repository.latest_health(provider))
+
+        async def scoped_health(provider: str = provider):
+            from uuid import UUID
+
+            from freesearch.persistence.bindings import ProjectBindingRepository
+
+            async with context.repository.session() as session:
+                bindings = await ProjectBindingRepository(session).list_for_project(
+                    project_id=UUID(context.mcp_pid)
+                )
+                binding = next(b for b in bindings if b.route_label == provider)
+            return await context.repository.latest_health(
+                provider, credential_id=binding.credential_id
+            )
+
+        health = context.loop.run_until_complete(scoped_health())
         assert health is not None
         assert health.provider == provider
         assert health.status is HealthStatus.HEALTHY

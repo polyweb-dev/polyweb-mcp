@@ -1,8 +1,8 @@
 """Alpha baseline lifecycle: create, validate, reject-and-never-modify (TASK-000040).
 
 The alpha keeps no compatibility with older databases. A missing or empty file
-is created at the single baseline revision; a database at the baseline is
-validated and opened; anything else (another revision, an unknown revision, or
+is created at the current head revision; a database at the head is
+validated and opened; anything else (an older revision, an unknown revision, or
 an unversioned database with tables) is rejected with an actionable reset
 message *before* anything touches the file.
 """
@@ -42,6 +42,7 @@ from freesearch.persistence.database_migrations import (
 from freesearch.persistence.storage import SQLiteRepository
 
 _BASELINE = "0001_alpha_baseline"
+_HEAD = "0002_capacity_actor"
 _OLDER_REVISION = "0009_provider_credentials"
 _UNKNOWN_REVISION = "ffffffffffff_not_a_freesearch_revision"
 
@@ -167,6 +168,11 @@ def _create_baseline_then_restamp(database: Path, revision: str | None) -> None:
     database.write_bytes(staged.read_bytes())
 
 
+def _create_prior_baseline(database: Path) -> None:
+    database.parent.mkdir(parents=True, exist_ok=True)
+    migration_module.command.upgrade(_config_for(database), _BASELINE)
+
+
 _REJECTED_CASES: dict[str, tuple[Callable[[Path], None], str | None]] = {
     "older-revision-legacy": (lambda db: _create_legacy(db, _OLDER_REVISION), _OLDER_REVISION),
     "older-revision-restamped-baseline": (
@@ -178,6 +184,7 @@ _REJECTED_CASES: dict[str, tuple[Callable[[Path], None], str | None]] = {
     "unversioned-baseline-tables": (lambda db: _create_baseline_then_restamp(db, None), None),
     "unrelated-tables-only": (lambda db: _create_unrelated(db, None), None),
     "empty-version-table-with-tables": (lambda db: _create_unrelated(db, "empty"), None),
+    "prior-alpha-baseline": (lambda db: _create_prior_baseline(db), _BASELINE),
 }
 
 
@@ -193,7 +200,6 @@ def _assert_reset_message(
         assert "has no schema revision (unversioned)" in message, message
         assert "at revision unversioned" not in message, message
     assert migration_head() in message, message
-    assert _BASELINE in message, message
     # Actionable reset instructions.
     assert "stop" in lowered, message
     assert "move" in lowered or "delete" in lowered, message
@@ -224,14 +230,33 @@ def test_exactly_one_migration_revision_is_the_alpha_baseline() -> None:
     revision_files = sorted(
         path.name for path in _versions_directory().glob("*.py") if path.name != "__init__.py"
     )
-    assert revision_files == ["0001_alpha_baseline.py"]
+    assert revision_files == ["0001_alpha_baseline.py", "0002_capacity_actor.py"]
 
     script = ScriptDirectory.from_config(_config_for(Path("unused.db")))
     revisions = list(script.walk_revisions())
-    assert [revision.revision for revision in revisions] == [_BASELINE]
-    assert revisions[0].down_revision is None
-    assert script.get_heads() == [_BASELINE]
-    assert migration_head() == _BASELINE
+    assert [revision.revision for revision in revisions] == [_HEAD, _BASELINE]
+    assert revisions[0].down_revision == _BASELINE
+    assert revisions[1].down_revision is None
+    assert script.get_heads() == [_HEAD]
+    assert migration_head() == _HEAD
+
+
+def test_explicit_baseline_upgrade_adds_capacity_actor_columns(tmp_path: Path) -> None:
+    database = tmp_path / "explicit-upgrade.db"
+    _create_prior_baseline(database)
+    assert _revision(database) == [_BASELINE]
+    with sqlite3.connect(database) as connection:
+        for table in ("provider_limit_admissions", "provider_rate_attempts"):
+            columns = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
+            assert "actor_type" not in columns and "actor_id" not in columns
+    migration_module.command.upgrade(_config_for(database), "head")
+    assert _revision(database) == [_HEAD]
+    validate_database_schema(database)
+    with sqlite3.connect(database) as connection:
+        for table in ("provider_limit_admissions", "provider_rate_attempts"):
+            columns = {row[1]: row for row in connection.execute(f"PRAGMA table_info({table})")}
+            assert {"actor_type", "actor_id"} <= columns.keys()
+            assert columns["actor_type"][3] == columns["actor_id"][3] == 1
 
 
 def test_migration_result_has_no_backup_field() -> None:
@@ -258,13 +283,13 @@ def test_upgrade_database_fresh_path_with_spaces_reaches_head(tmp_path: Path) ->
 
     assert result.database == absolute_database_path(database)
     assert result.previous_revision is None
-    assert result.current_revision == migration_head() == _BASELINE
+    assert result.current_revision == migration_head() == _HEAD
     assert result.changed is True
-    assert _revision(database) == [_BASELINE]
+    assert _revision(database) == [_HEAD]
     validate_database_schema(database)
     status = database_status(database)
-    assert status.current_revision == _BASELINE
-    assert status.head_revision == _BASELINE
+    assert status.current_revision == _HEAD
+    assert status.head_revision == _HEAD
     assert status.schema_valid is True
     assert not list(database.parent.glob("*.creating-*"))
 
@@ -277,7 +302,7 @@ def test_zero_byte_file_is_created_at_baseline(tmp_path: Path) -> None:
 
     assert result.previous_revision is None
     assert result.changed is True
-    assert _revision(database) == [_BASELINE]
+    assert _revision(database) == [_HEAD]
     validate_database_schema(database)
 
 
@@ -321,10 +346,10 @@ def test_upgrade_database_is_idempotent_at_head(tmp_path: Path) -> None:
     second = upgrade_database(database)
 
     assert first.changed is True
-    assert second.previous_revision == _BASELINE
-    assert second.current_revision == _BASELINE
+    assert second.previous_revision == _HEAD
+    assert second.current_revision == _HEAD
     assert second.changed is False
-    assert _revision(database) == [_BASELINE]
+    assert _revision(database) == [_HEAD]
     new_files = _directory_files(tmp_path) - files_after_first
     assert not {name for name in new_files if not name.endswith(("-wal", "-shm"))}, new_files
 
@@ -338,8 +363,8 @@ async def test_concurrent_upgrades_are_serialized(tmp_path: Path) -> None:
     )
 
     assert sum(result.changed for result in results) == 1
-    assert {result.current_revision for result in results} == {_BASELINE}
-    assert _revision(database) == [_BASELINE]
+    assert {result.current_revision for result in results} == {_HEAD}
+    assert _revision(database) == [_HEAD]
     validate_database_schema(database)
 
 
@@ -364,14 +389,14 @@ def test_cross_process_upgrades_are_serialized(tmp_path: Path) -> None:
 
     assert [process.returncode for process in processes] == [0, 0, 0, 0], outputs
     assert sorted(stdout.strip() for stdout, _ in outputs) == ["0", "0", "0", "1"], outputs
-    assert _revision(database) == [_BASELINE]
+    assert _revision(database) == [_HEAD]
     validate_database_schema(database)
 
 
 def test_upgrade_database_enables_wal_mode(tmp_path: Path) -> None:
     database = tmp_path / "wal-mode.db"
     result = upgrade_database(database)
-    assert result.current_revision == _BASELINE
+    assert result.current_revision == _HEAD
 
     with sqlite3.connect(database) as connection:
         journal_mode = connection.execute("PRAGMA journal_mode").fetchone()[0]
@@ -424,7 +449,7 @@ def test_database_status_reports_rejected_database_invalid_without_writing(
 
     assert status.schema_valid is False
     assert status.current_revision == found
-    assert status.head_revision == _BASELINE
+    assert status.head_revision == _HEAD
     assert status.database == absolute_database_path(database)
     assert _sha256(database) == digest_before
     assert {
@@ -476,6 +501,17 @@ async def test_repository_open_rejects_older_database(tmp_path: Path) -> None:
     assert _sha256(database) == digest_before
 
 
+@pytest.mark.asyncio
+async def test_repository_open_rejects_prior_alpha_baseline(tmp_path: Path) -> None:
+    database = tmp_path / "prior-alpha.db"
+    _create_prior_baseline(database)
+    digest_before = _sha256(database)
+    with pytest.raises(DatabaseResetRequired) as raised:
+        await SQLiteRepository.open(database)
+    _assert_reset_message(str(raised.value), database=database, found=_BASELINE)
+    assert _sha256(database) == digest_before
+
+
 @pytest.mark.parametrize("rejected_database", _REJECTED_IDS[:1] + _REJECTED_IDS[3:4], indirect=True)
 @pytest.mark.parametrize("command", ["status", "upgrade"])
 def test_cli_reports_reset_required_without_traceback(
@@ -511,12 +547,12 @@ def test_cli_status_and_upgrade_on_fresh_database(
     assert _run(["--database", str(database), "upgrade"]) == 0
     upgraded = capsys.readouterr().out
     assert "Backup:" not in upgraded
-    assert _BASELINE in upgraded
+    assert _HEAD in upgraded
 
     assert _run(["--database", str(database), "status"]) == 0
     status = capsys.readouterr().out
     assert "Schema: valid" in status
-    assert _BASELINE in status
+    assert _HEAD in status
 
 
 @pytest.mark.parametrize("state", ["missing", "empty"])
@@ -1015,7 +1051,7 @@ def test_stale_hot_wal_is_never_replayed_into_a_fresh_database(
     assert result.changed is True
     assert result.previous_revision is None
     validate_database_schema(target)
-    assert _revision(target) == [_BASELINE]
+    assert _revision(target) == [_HEAD]
     assert _count(target, "SELECT COUNT(*) FROM user") == 0
     assert (
         _count(

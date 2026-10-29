@@ -30,7 +30,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, cast
+from typing import Any
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
@@ -242,6 +242,7 @@ class StoredPool:
     native_pool_id: str | None
     status: PoolStatus
     version: int
+    constraints_valid: bool = True
 
 
 @dataclass(frozen=True)
@@ -284,14 +285,31 @@ class StoredAllocation:
         return self.base_rate
 
 
-def _decode_constraints(raw: str) -> list[dict[str, Any]]:
-    value = json.loads(raw)
+def _decode_constraints(raw: str) -> tuple[list[dict[str, Any]], bool]:
+    """Decode one pool's declared constraints and whether the shape is valid.
+
+    A malformed payload is reported as invalid instead of silently becoming an
+    empty list: execution refuses an invalid pool, and the dashboard logs and
+    skips the card. Valid entries are returned as objects; a non-object entry
+    marks the whole payload invalid.
+    """
+
+    try:
+        value = json.loads(raw)
+    except ValueError:
+        return [], False
     if not isinstance(value, list):
-        return []
-    return [cast(dict[str, Any], item) for item in value if isinstance(item, dict)]
+        return [], False
+    entries: list[dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            return [], False
+        entries.append(item)
+    return entries, True
 
 
 def _stored_pool(row: UpstreamQuotaPoolRow) -> StoredPool:
+    constraints, valid = _decode_constraints(row.constraints)
     return StoredPool(
         id=UUID(row.id),
         account_id=UUID(row.account_id),
@@ -299,12 +317,13 @@ def _stored_pool(row: UpstreamQuotaPoolRow) -> StoredPool:
         upstream_scope=UpstreamScope(row.upstream_scope),
         pool_key=row.pool_key,
         label=row.label,
-        constraints=_decode_constraints(row.constraints),
+        constraints=constraints,
         max_concurrency=row.max_concurrency,
         max_queued_requests=row.max_queued_requests,
         native_pool_id=row.native_pool_id,
         status=PoolStatus(row.status),
         version=row.version,
+        constraints_valid=valid,
     )
 
 

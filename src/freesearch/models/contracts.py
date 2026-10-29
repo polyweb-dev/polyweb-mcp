@@ -52,11 +52,18 @@ class RoutingMode(StrEnum):
 
 
 class RoutingPreference(ContractModel):
-    """Caller preferences used later by the routing layer."""
+    """Caller preferences used later by the routing layer.
+
+    ``binding_id`` pins one verified project binding when a project grants
+    several credentials of the same provider. It is only a selector: the
+    execution layer still proves that the binding belongs to the verified
+    project, is enabled for the operation, and resolves a usable credential.
+    """
 
     mode: RoutingMode = RoutingMode.AUTO
     providers: tuple[str, ...] = ()
     allow_fallback: bool = True
+    binding_id: UUID | None = None
 
     @field_validator("providers")
     @classmethod

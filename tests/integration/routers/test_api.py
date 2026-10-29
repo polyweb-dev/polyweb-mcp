@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import suppress
+from contextvars import ContextVar
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -17,6 +18,8 @@ import httpx
 from sqlalchemy import event as sa_event
 
 from freesearch.adapters.base import ProviderAdapter
+from freesearch.configuration.config import get_settings
+from freesearch.infrastructure.encrypted_store import EncryptedDbSecretStore, load_secret_codec
 from freesearch.models.contracts import (
     CostEstimate,
     FetchedDocument,
@@ -32,20 +35,33 @@ from freesearch.models.contracts import (
     SearchResult,
     UsageOperation,
 )
+from freesearch.models.credentials import CredentialOperation
 from freesearch.persistence.storage import SQLiteRepository
-from freesearch.routers.api import _BACKGROUND_TASKS, create_app
-from freesearch.routers.control import (
+from freesearch.routers.api import create_app
+from freesearch.services.execution import ExecutionService
+from freesearch.services.monitoring import clear_quota_poll_cache
+from freesearch.services.provider_runtime import (
+    _BACKGROUND_TASKS,
     clear_config_cache,
     effective_config_for_name,
     routing_policy,
 )
-from freesearch.services.monitoring import clear_quota_poll_cache
 from tests.fixtures.auth import TEMP_PASSWORD, temp_email
-from tests.fixtures.execution import seed_member_project
+from tests.fixtures.execution import (
+    install_adapter_map,
+    seed_member_project,
+    seed_provider_bindings,
+)
 
 FIXED_AT = datetime(2026, 3, 10, 12, 0, 0, tzinfo=UTC)
 
 SEVEN_PROVIDERS = ["exa", "firecrawl", "tavily", "parallel", "you", "brave", "keenable"]
+
+
+def _execution_store(repository: SQLiteRepository) -> EncryptedDbSecretStore:
+    """Return the same encrypted runtime store the app composition builds."""
+
+    return EncryptedDbSecretStore(repository, load_secret_codec(get_settings()))
 
 
 class _QuotaAdapter(ProviderAdapter):
@@ -188,11 +204,14 @@ async def _authed_headers(client: httpx.AsyncClient, prefix: str) -> dict[str, s
     return {"Authorization": f"Bearer {logged_in.json()['access_token']}"}
 
 
-async def test_request_does_not_wait_for_quota_poll(tmp_path: Path, auth_secret: str) -> None:
+async def test_request_does_not_wait_for_quota_poll(
+    tmp_path: Path, auth_secret: str, monkeypatch: Any
+) -> None:
     """M5: an expired TTL never delays the response; the poll lands afterwards."""
     clear_config_cache()
     clear_quota_poll_cache()
     repository = await SQLiteRepository.open(tmp_path / "no-wait.db")
+    store = _execution_store(repository)
     entered = asyncio.Event()
     release = asyncio.Event()
     order: list[str] = []
@@ -207,12 +226,24 @@ async def test_request_does_not_wait_for_quota_poll(tmp_path: Path, auth_secret:
         adapter = _QuotaAdapter(
             "exa", quota_snapshot=fresh_snapshot, entered=entered, release=release
         )
-        app = create_app([adapter], repository=repository)
+        fixture_secrets: dict[str, str] = {}
+        install_adapter_map(monkeypatch, [adapter], secrets=fixture_secrets)
+        app = create_app([adapter], repository=repository, secret_store=store)
         async with app.router.lifespan_context(app):
             transport = httpx.ASGITransport(app=app)
             async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
                 headers = await _authed_headers(client, "no-wait")
-                pid = str((await seed_member_project(repository, headers)).project_id)
+                project = await seed_member_project(repository, headers)
+                pid = str(project.project_id)
+                bindings = await seed_provider_bindings(
+                    repository,
+                    project_id=project.project_id,
+                    actor_id=project.actor_id,
+                    store=store,
+                    providers=("exa",),
+                    secrets=fixture_secrets,
+                )
+                credential_id = bindings["exa"][0]
                 try:
                     request_task = asyncio.create_task(
                         client.post(
@@ -226,14 +257,17 @@ async def test_request_does_not_wait_for_quota_poll(tmp_path: Path, auth_secret:
                     assert response.status_code == 200
                     assert response.json()["provider"] == "exa"
                     assert adapter.search_calls == 1
+                    assert not release.is_set()
+                    assert await repository.latest_quota("exa", credential_id=credential_id) is None
                 finally:
                     release.set()
                 await _drain_background_tasks()
                 order.append("poll_done")
-                stored = await repository.latest_quota("exa")
+                stored = await repository.latest_quota("exa", credential_id=credential_id)
                 assert stored is not None
                 assert stored.remaining == Decimal("5")
                 assert stored.limit == Decimal("10")
+                assert await repository.latest_quota("exa") is None
                 second = await client.post(
                     "/search", json={"project_id": pid, "query": "after poll"}, headers=headers
                 )
@@ -248,13 +282,25 @@ async def test_request_does_not_wait_for_quota_poll(tmp_path: Path, auth_secret:
         await repository.close()
 
 
-async def test_stale_first_snapshot_then_new_snapshot(tmp_path: Path, auth_secret: str) -> None:
+async def test_stale_first_snapshot_then_new_snapshot(
+    tmp_path: Path, auth_secret: str, monkeypatch: Any
+) -> None:
     """E1: first expired-TTL request uses the old snapshot; later request excludes."""
     clear_config_cache()
     clear_quota_poll_cache()
     repository = await SQLiteRepository.open(tmp_path / "stale-first.db")
+    store = _execution_store(repository)
     entered = asyncio.Event()
     release = asyncio.Event()
+    planned_quotas: list[list[Decimal | None]] = []
+    original_plan = ExecutionService._health_and_quota
+
+    async def capture_plan(self: ExecutionService, legs: Any) -> Any:
+        health, quotas = await original_plan(self, legs)
+        planned_quotas.append([snapshot.remaining for snapshot in quotas.values()])
+        return health, quotas
+
+    monkeypatch.setattr(ExecutionService, "_health_and_quota", capture_plan)
     try:
         positive = QuotaSnapshot(
             provider="exa",
@@ -273,12 +319,26 @@ async def test_stale_first_snapshot_then_new_snapshot(tmp_path: Path, auth_secre
             observed_at=datetime(2026, 3, 10, 12, 5, 0, tzinfo=UTC),
         )
         adapter = _QuotaAdapter("exa", quota_snapshot=zero, entered=entered, release=release)
-        app = create_app([adapter], repository=repository)
+        fixture_secrets: dict[str, str] = {}
+        install_adapter_map(monkeypatch, [adapter], secrets=fixture_secrets)
+        app = create_app([adapter], repository=repository, secret_store=store)
         async with app.router.lifespan_context(app):
             transport = httpx.ASGITransport(app=app)
             async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
                 headers = await _authed_headers(client, "stale-first")
-                pid = str((await seed_member_project(repository, headers)).project_id)
+                project = await seed_member_project(repository, headers)
+                pid = str(project.project_id)
+                bindings = await seed_provider_bindings(
+                    repository,
+                    project_id=project.project_id,
+                    actor_id=project.actor_id,
+                    store=store,
+                    providers=("exa",),
+                    operations=frozenset({CredentialOperation.SEARCH}),
+                    secrets=fixture_secrets,
+                )
+                credential_id = bindings["exa"][0]
+                await repository.record_quota(positive, credential_id=credential_id)
                 try:
                     first_task = asyncio.create_task(
                         client.post(
@@ -295,13 +355,19 @@ async def test_stale_first_snapshot_then_new_snapshot(tmp_path: Path, auth_secre
                     first = await asyncio.wait_for(first_task, timeout=5)
                     assert first.status_code == 200
                     assert first.json()["provider"] == "exa"
+                    assert planned_quotas == [[Decimal("10")]]
+                    assert not release.is_set()
+                    stale = await repository.latest_quota("exa", credential_id=credential_id)
+                    assert stale is not None and stale.remaining == Decimal("10")
                 finally:
                     release.set()
                 await _drain_background_tasks()
-                stored = await repository.latest_quota("exa")
+                stored = await repository.latest_quota("exa", credential_id=credential_id)
                 assert stored is not None
                 assert stored.remaining == Decimal("0")
                 assert stored.limit == Decimal("10")
+                unrelated = await repository.latest_quota("exa")
+                assert unrelated is not None and unrelated.remaining == Decimal("10")
                 clear_quota_poll_cache()
                 second = await client.post(
                     "/search",
@@ -315,6 +381,7 @@ async def test_stale_first_snapshot_then_new_snapshot(tmp_path: Path, auth_secre
                 assert second.status_code == 503
                 assert "no required provider is eligible" in second.json()["detail"]
                 assert adapter.search_calls == 1
+                assert planned_quotas == [[Decimal("10")], [Decimal("0")]]
     finally:
         release.set()
         await _drain_background_tasks()
@@ -323,8 +390,10 @@ async def test_stale_first_snapshot_then_new_snapshot(tmp_path: Path, auth_secre
         await repository.close()
 
 
-async def test_auto_route_plan_read_budget(tmp_path: Path, auth_secret: str) -> None:
-    """M6: one warm AUTO plan issues one health batch and one quota batch.
+async def test_auto_route_plan_read_budget(
+    tmp_path: Path, auth_secret: str, monkeypatch: Any
+) -> None:
+    """M6: AUTO plans batch health and read quota only for bound legs.
 
     The warm SELECT count is printed as a diagnostic report, never asserted:
     routing latency (not a fixed read count) is the acceptance measure.
@@ -332,6 +401,7 @@ async def test_auto_route_plan_read_budget(tmp_path: Path, auth_secret: str) -> 
     clear_config_cache()
     clear_quota_poll_cache()
     repository = await SQLiteRepository.open(tmp_path / "read-budget.db")
+    store = _execution_store(repository)
     release = asyncio.Event()
     entered = asyncio.Event()
     try:
@@ -367,27 +437,48 @@ async def test_auto_route_plan_read_budget(tmp_path: Path, auth_secret: str) -> 
             assert isinstance(adapter, _QuotaAdapter)
             adapter._entered = entered if adapter.name == SEVEN_PROVIDERS[0] else None
             adapter._release = release if adapter.name == SEVEN_PROVIDERS[0] else None
-        app = create_app(adapters, repository=repository)
+        fixture_secrets: dict[str, str] = {}
+        install_adapter_map(monkeypatch, adapters, secrets=fixture_secrets)
+        app = create_app(adapters, repository=repository, secret_store=store)
 
         for name in SEVEN_PROVIDERS:
             await effective_config_for_name(repository, name)
         await routing_policy(repository)
 
         health_calls: list[list[str]] = []
-        quota_calls: list[list[str]] = []
+        quota_calls: list[tuple[str, Any, Any]] = []
+        quota_batch_calls: list[list[str]] = []
+        in_plan: ContextVar[bool] = ContextVar("in_plan", default=False)
         orig_health = SQLiteRepository.latest_health_batch
-        orig_quota = SQLiteRepository.latest_quota_batch
+        orig_quota = SQLiteRepository.latest_quota
+        orig_quota_batch = SQLiteRepository.latest_quota_batch
+        orig_plan = ExecutionService._health_and_quota
 
         async def _count_health(self: SQLiteRepository, providers: Any) -> Any:
             health_calls.append(list(providers))
             return await orig_health(self, providers)
 
-        async def _count_quota(self: SQLiteRepository, providers: Any) -> Any:
-            quota_calls.append(list(providers))
-            return await orig_quota(self, providers)
+        async def _count_quota(self: SQLiteRepository, provider: str, **kwargs: Any) -> Any:
+            if in_plan.get():
+                quota_calls.append((provider, kwargs.get("credential_id"), kwargs.get("pool_id")))
+            return await orig_quota(self, provider, **kwargs)
+
+        async def _count_quota_batch(self: SQLiteRepository, providers: Any) -> Any:
+            if in_plan.get():
+                quota_batch_calls.append(list(providers))
+            return await orig_quota_batch(self, providers)
+
+        async def _count_plan(self: ExecutionService, legs: Any) -> Any:
+            token = in_plan.set(True)
+            try:
+                return await orig_plan(self, legs)
+            finally:
+                in_plan.reset(token)
 
         SQLiteRepository.latest_health_batch = _count_health  # type: ignore[method-assign]
-        SQLiteRepository.latest_quota_batch = _count_quota  # type: ignore[method-assign]
+        SQLiteRepository.latest_quota = _count_quota  # type: ignore[method-assign]
+        SQLiteRepository.latest_quota_batch = _count_quota_batch  # type: ignore[method-assign]
+        ExecutionService._health_and_quota = _count_plan  # type: ignore[method-assign]
         select_counts: list[int] = [0]
 
         def _before_cursor(
@@ -407,13 +498,21 @@ async def test_auto_route_plan_read_budget(tmp_path: Path, auth_secret: str) -> 
             quota_calls.clear()
             select_counts[0] = 0
             cold_health = 0
-            cold_quota = 0
             clear_config_cache()
             async with app.router.lifespan_context(app):
                 transport = httpx.ASGITransport(app=app)
                 async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
                     headers = await _authed_headers(client, "read-budget")
-                    pid = str((await seed_member_project(repository, headers)).project_id)
+                    project = await seed_member_project(repository, headers)
+                    pid = str(project.project_id)
+                    bindings = await seed_provider_bindings(
+                        repository,
+                        project_id=project.project_id,
+                        actor_id=project.actor_id,
+                        store=store,
+                        providers=tuple(SEVEN_PROVIDERS),
+                        secrets=fixture_secrets,
+                    )
                     try:
                         first_task = asyncio.create_task(
                             client.post(
@@ -431,7 +530,8 @@ async def test_auto_route_plan_read_budget(tmp_path: Path, auth_secret: str) -> 
                     await _drain_background_tasks()
                     cold_selects = select_counts[0]
                     cold_health = len(health_calls)
-                    cold_quota = len(quota_calls)
+                    cold_quota = list(quota_calls)
+                    assert not quota_batch_calls
 
                     for name in SEVEN_PROVIDERS:
                         await effective_config_for_name(repository, name)
@@ -470,15 +570,22 @@ async def test_auto_route_plan_read_budget(tmp_path: Path, auth_secret: str) -> 
                     print(
                         f"route-plan reads report: cold-cache SELECTs={cold_selects} "
                         f"warm SELECTs={warm_selects} health-batches={len(health_calls)} "
-                        f"cold quota-batches={cold_quota}"
+                        f"cold scoped-quota-reads={len(cold_quota)}"
                     )
                     assert len(health_calls) == 1, f"expected one health batch, got {health_calls}"
-                    assert len(quota_calls) == 1, f"expected one quota batch, got {quota_calls}"
                     assert set(health_calls[0]) == set(SEVEN_PROVIDERS)
-                    assert cold_health >= 1 and cold_quota >= 1
+                    expected_reads = {(name, bindings[name][0], None) for name in SEVEN_PROVIDERS}
+                    assert not quota_batch_calls
+                    assert len(quota_calls) == len(expected_reads)
+                    assert set(quota_calls) == expected_reads
+                    assert cold_health >= 1
+                    assert len(cold_quota) == len(expected_reads)
+                    assert set(cold_quota) == expected_reads
         finally:
             SQLiteRepository.latest_health_batch = orig_health  # type: ignore[method-assign]
-            SQLiteRepository.latest_quota_batch = orig_quota  # type: ignore[method-assign]
+            SQLiteRepository.latest_quota = orig_quota  # type: ignore[method-assign]
+            SQLiteRepository.latest_quota_batch = orig_quota_batch  # type: ignore[method-assign]
+            ExecutionService._health_and_quota = orig_plan  # type: ignore[method-assign]
             if listened and sync_engine is not None:
                 with suppress(Exception):
                     sa_event.remove(sync_engine, "before_cursor_execute", _before_cursor)

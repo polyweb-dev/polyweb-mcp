@@ -39,8 +39,11 @@ from freesearch.models.contracts import (
 )
 from freesearch.models.provider_limits import AuthMode
 from freesearch.persistence.storage import SQLiteRepository
-from freesearch.routers.api import _BACKGROUND_TASKS
-from freesearch.routers.control import effective_config_for_name, routing_policy
+from freesearch.services.provider_runtime import (
+    _BACKGROUND_TASKS,
+    effective_config_for_name,
+    routing_policy,
+)
 
 #: Every canonical provider the adapter registry can construct.
 CANONICAL_PROVIDERS: tuple[str, ...] = tuple(sorted(provider.value for provider in ProviderName))

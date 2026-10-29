@@ -240,6 +240,7 @@ class FirecrawlAdapter(ProviderAdapter):
         self._runner = runner or ResilientRunner(client)
         self._api_key = api_key
         self._sdk = sdk_client or self._build_sdk(api_key)
+        self._configure_sdk_retries()
         # Legacy injected doubles predate Firecrawl's credit endpoint; a real
         # SDK (or the explicit endpoint-only seam) uses current pricing.
         self._supports_credit_quota = sdk_client is None or type(sdk_client) is object
@@ -258,6 +259,15 @@ class FirecrawlAdapter(ProviderAdapter):
         if resolved is None:
             raise self._error("configuration_error", "no Firecrawl API key configured")
         return AsyncFirecrawl(api_key=resolved.get_secret_value())
+
+    def _configure_sdk_retries(self) -> None:
+        """Give retry ownership to the charged runner, including injected SDKs."""
+        for owner in (self._sdk, getattr(self._sdk, "v2", None)):
+            transport = getattr(owner, "async_http_client", None)
+            if transport is not None and hasattr(transport, "max_retries"):
+                # Firecrawl counts attempts rather than additional retries.
+                # One SDK attempt lets ResilientRunner own every resend.
+                transport.max_retries = 1
 
     async def aclose(self) -> None:
         """Close the adapter-created SDK's transport, never the caller's client.

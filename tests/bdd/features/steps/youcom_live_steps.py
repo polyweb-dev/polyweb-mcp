@@ -25,7 +25,10 @@ from freesearch.infrastructure.secrets import ProviderName
 from freesearch.models.contracts import FetchRequest, SearchRequest
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
-from freesearch.routers.control import _build_with_resolved_secret, _resolve_secret
+from freesearch.routers.control import _resolve_secret
+from freesearch.services.provider_runtime import (
+    build_adapter_with_secret as _build_with_resolved_secret,
+)
 from tests.encrypted_secrets_helpers import assert_no_sentinels
 from tests.fixtures.auth import (
     TEMP_PASSWORD,

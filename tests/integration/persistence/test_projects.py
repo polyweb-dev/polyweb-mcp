@@ -54,7 +54,7 @@ async def test_fresh_database_schema_validation_and_head_revision(tmp_path: Path
 
     result = upgrade_database(db_path)
     assert result.current_revision == migration_head()
-    assert result.current_revision == "0001_alpha_baseline"
+    assert result.current_revision == "0002_capacity_actor"
 
     # Schema validator asserts tables, columns, indexes, and FKs
     validate_database_schema(db_path)

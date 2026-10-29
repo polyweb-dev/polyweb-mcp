@@ -37,7 +37,7 @@ from freesearch.models.contracts import (
     UsageOperation,
 )
 from freesearch.persistence.storage import SQLiteRepository
-from tests.fixtures.api_keys import mcp_key_credentials
+from tests.fixtures.execution import bound_mcp_credentials
 
 
 class _CapabilityStub(ProviderAdapter):
@@ -117,11 +117,11 @@ async def repository(tmp_path: Path) -> SQLiteRepository:
 
 
 async def _authed_server(
-    repository: SQLiteRepository, adapters: list[ProviderAdapter], prefix: str
+    repository: SQLiteRepository, adapters: list[ProviderAdapter], prefix: str, *, monkeypatch
 ) -> tuple[FastMCP, str]:
     """Build one tool server with a real project API key as its stdio credential."""
 
-    service, key, pid = await mcp_key_credentials(repository, prefix)
+    service, key, pid = await bound_mcp_credentials(repository, adapters, prefix, monkeypatch)
     server = create_server(
         adapters,
         repository=repository,
@@ -134,8 +134,12 @@ async def _authed_server(
 # --- (a) {"request": ...} schema works for both tools ---
 
 
-async def test_search_tool_accepts_request_schema(repository: SQLiteRepository) -> None:
-    server, pid = await _authed_server(repository, [_CapabilityStub("brave")], "cap-search")
+async def test_search_tool_accepts_request_schema(
+    repository: SQLiteRepository, monkeypatch
+) -> None:
+    server, pid = await _authed_server(
+        repository, [_CapabilityStub("brave")], "cap-search", monkeypatch=monkeypatch
+    )
 
     payload = _payload(
         await server.call_tool(
@@ -147,8 +151,10 @@ async def test_search_tool_accepts_request_schema(repository: SQLiteRepository) 
     assert payload["query"] == "python asyncio"
 
 
-async def test_fetch_tool_accepts_request_schema(repository: SQLiteRepository) -> None:
-    server, pid = await _authed_server(repository, [_CapabilityStub("youcom")], "cap-fetch")
+async def test_fetch_tool_accepts_request_schema(repository: SQLiteRepository, monkeypatch) -> None:
+    server, pid = await _authed_server(
+        repository, [_CapabilityStub("youcom")], "cap-fetch", monkeypatch=monkeypatch
+    )
 
     payload = _payload(
         await server.call_tool(
@@ -161,7 +167,7 @@ async def test_fetch_tool_accepts_request_schema(repository: SQLiteRepository) -
 
 
 async def test_search_tool_accepts_provider_options_and_preserves_vendor_metadata(
-    repository: SQLiteRepository,
+    repository: SQLiteRepository, monkeypatch
 ) -> None:
     class _MetadataStub(_CapabilityStub):
         async def search(self, request: SearchRequest) -> SearchResponse:
@@ -175,7 +181,9 @@ async def test_search_tool_accepts_provider_options_and_preserves_vendor_metadat
             )
 
     stub = _MetadataStub("brave")
-    server, pid = await _authed_server(repository, [stub], "cap-search-provider-options")
+    server, pid = await _authed_server(
+        repository, [stub], "cap-search-provider-options", monkeypatch=monkeypatch
+    )
     payload = _payload(
         await server.call_tool(
             "search",
@@ -197,10 +205,12 @@ async def test_search_tool_accepts_provider_options_and_preserves_vendor_metadat
 
 
 async def test_fetch_tool_accepts_operation_specific_provider_options(
-    repository: SQLiteRepository,
+    repository: SQLiteRepository, monkeypatch
 ) -> None:
     stub = _CapabilityStub("youcom")
-    server, pid = await _authed_server(repository, [stub], "cap-fetch-provider-options")
+    server, pid = await _authed_server(
+        repository, [stub], "cap-fetch-provider-options", monkeypatch=monkeypatch
+    )
 
     payload = _payload(
         await server.call_tool(
@@ -233,11 +243,12 @@ async def test_fetch_tool_accepts_operation_specific_provider_options(
     ],
 )
 async def test_invalid_search_payload_rejected_without_adapter_call(
-    repository: SQLiteRepository,
-    payload: dict[str, Any],
+    repository: SQLiteRepository, payload: dict[str, Any], monkeypatch
 ) -> None:
     stub = _CapabilityStub("brave")
-    server, _pid = await _authed_server(repository, [stub], "cap-bad-search")
+    server, _pid = await _authed_server(
+        repository, [stub], "cap-bad-search", monkeypatch=monkeypatch
+    )
 
     with pytest.raises(ToolError):
         await server.call_tool("search", payload)
@@ -253,11 +264,12 @@ async def test_invalid_search_payload_rejected_without_adapter_call(
     ],
 )
 async def test_invalid_fetch_payload_rejected_without_adapter_call(
-    repository: SQLiteRepository,
-    payload: dict[str, Any],
+    repository: SQLiteRepository, payload: dict[str, Any], monkeypatch
 ) -> None:
     stub = _CapabilityStub("youcom")
-    server, _pid = await _authed_server(repository, [stub], "cap-bad-fetch")
+    server, _pid = await _authed_server(
+        repository, [stub], "cap-bad-fetch", monkeypatch=monkeypatch
+    )
 
     with pytest.raises(ToolError):
         await server.call_tool("fetch", payload)
@@ -268,9 +280,13 @@ async def test_invalid_fetch_payload_rejected_without_adapter_call(
 # --- (c) capability-excluded routing: incapable adapters never invoked ---
 
 
-async def test_search_excludes_fetch_only_adapter(repository: SQLiteRepository) -> None:
+async def test_search_excludes_fetch_only_adapter(
+    repository: SQLiteRepository, monkeypatch
+) -> None:
     stub = _CapabilityStub("fetchonly", search=False, fetch=True)
-    server, pid = await _authed_server(repository, [stub], "cap-exclude-search")
+    server, pid = await _authed_server(
+        repository, [stub], "cap-exclude-search", monkeypatch=monkeypatch
+    )
 
     with pytest.raises(ToolError):
         await server.call_tool("search", {"request": {"project_id": pid, "query": "ok"}})
@@ -278,9 +294,13 @@ async def test_search_excludes_fetch_only_adapter(repository: SQLiteRepository) 
     assert stub.calls == []
 
 
-async def test_fetch_excludes_search_only_adapter(repository: SQLiteRepository) -> None:
+async def test_fetch_excludes_search_only_adapter(
+    repository: SQLiteRepository, monkeypatch
+) -> None:
     stub = _CapabilityStub("searchonly", search=True, fetch=False)
-    server, pid = await _authed_server(repository, [stub], "cap-exclude-fetch")
+    server, pid = await _authed_server(
+        repository, [stub], "cap-exclude-fetch", monkeypatch=monkeypatch
+    )
 
     with pytest.raises(ToolError):
         await server.call_tool(
@@ -291,11 +311,13 @@ async def test_fetch_excludes_search_only_adapter(repository: SQLiteRepository) 
 
 
 async def test_split_capabilities_route_to_capable_adapter(
-    repository: SQLiteRepository,
+    repository: SQLiteRepository, monkeypatch
 ) -> None:
     search_only = _CapabilityStub("searchonly", search=True, fetch=False)
     fetch_only = _CapabilityStub("fetchonly", search=False, fetch=True)
-    server, pid = await _authed_server(repository, [search_only, fetch_only], "cap-split")
+    server, pid = await _authed_server(
+        repository, [search_only, fetch_only], "cap-split", monkeypatch=monkeypatch
+    )
 
     search_payload = _payload(
         await server.call_tool("search", {"request": {"project_id": pid, "query": "hi"}})
@@ -316,9 +338,11 @@ async def test_split_capabilities_route_to_capable_adapter(
 
 
 async def test_search_output_is_json_stable_per_response_contract(
-    repository: SQLiteRepository,
+    repository: SQLiteRepository, monkeypatch
 ) -> None:
-    server, pid = await _authed_server(repository, [_CapabilityStub("brave")], "cap-json-search")
+    server, pid = await _authed_server(
+        repository, [_CapabilityStub("brave")], "cap-json-search", monkeypatch=monkeypatch
+    )
 
     payload = _payload(
         await server.call_tool("search", {"request": {"project_id": pid, "query": "json check"}})
@@ -334,9 +358,11 @@ async def test_search_output_is_json_stable_per_response_contract(
 
 
 async def test_fetch_output_is_json_stable_per_response_contract(
-    repository: SQLiteRepository,
+    repository: SQLiteRepository, monkeypatch
 ) -> None:
-    server, pid = await _authed_server(repository, [_CapabilityStub("youcom")], "cap-json-fetch")
+    server, pid = await _authed_server(
+        repository, [_CapabilityStub("youcom")], "cap-json-fetch", monkeypatch=monkeypatch
+    )
 
     payload = _payload(
         await server.call_tool(
@@ -356,18 +382,18 @@ async def test_fetch_output_is_json_stable_per_response_contract(
 
 
 async def test_search_without_any_adapter_raises_no_provider(
-    repository: SQLiteRepository,
+    repository: SQLiteRepository, monkeypatch
 ) -> None:
-    server, pid = await _authed_server(repository, [], "cap-empty-search")
+    server, pid = await _authed_server(repository, [], "cap-empty-search", monkeypatch=monkeypatch)
 
     with pytest.raises(ToolError, match="no provider is configured"):
         await server.call_tool("search", {"request": {"project_id": pid, "query": "anything"}})
 
 
 async def test_fetch_without_any_adapter_raises_no_provider(
-    repository: SQLiteRepository,
+    repository: SQLiteRepository, monkeypatch
 ) -> None:
-    server, pid = await _authed_server(repository, [], "cap-empty-fetch")
+    server, pid = await _authed_server(repository, [], "cap-empty-fetch", monkeypatch=monkeypatch)
 
     with pytest.raises(ToolError, match="no provider is configured"):
         await server.call_tool(
@@ -379,10 +405,12 @@ async def test_fetch_without_any_adapter_raises_no_provider(
 
 
 async def test_capability_gate_blocks_without_call_even_when_masks_allow(
-    repository: SQLiteRepository,
+    repository: SQLiteRepository, monkeypatch
 ) -> None:
     search_only = _CapabilityStub("searchonly", search=True, fetch=False)
-    server, pid = await _authed_server(repository, [search_only], "cap-gate")
+    server, pid = await _authed_server(
+        repository, [search_only], "cap-gate", monkeypatch=monkeypatch
+    )
 
     with pytest.raises(ToolError):
         await server.call_tool(
@@ -393,7 +421,7 @@ async def test_capability_gate_blocks_without_call_even_when_masks_allow(
 
 
 async def test_mask_gate_blocks_without_call_even_when_capability_allows(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch
 ) -> None:
     from freesearch.persistence.storage import SQLiteRepository
 
@@ -403,7 +431,7 @@ async def test_mask_gate_blocks_without_call_even_when_capability_allows(
             "provider.exa", {"config": {"enable_mask": 0, "support_mask": 7, "priority": 100}}
         )
         stub = _CapabilityStub("exa", search=True, fetch=True)
-        server, pid = await _authed_server(repository, [stub], "cap-mask")
+        server, pid = await _authed_server(repository, [stub], "cap-mask", monkeypatch=monkeypatch)
 
         with pytest.raises(ToolError, match="no eligible provider"):
             await server.call_tool("search", {"request": {"project_id": pid, "query": "mask off"}})
@@ -413,13 +441,15 @@ async def test_mask_gate_blocks_without_call_even_when_capability_allows(
         await repository.close()
 
 
-async def test_unsupported_brave_fetch_never_calls_adapter(tmp_path: Path) -> None:
+async def test_unsupported_brave_fetch_never_calls_adapter(tmp_path: Path, monkeypatch) -> None:
     from freesearch.persistence.storage import SQLiteRepository
 
     repository = await SQLiteRepository.open(tmp_path / "brave-fetch.db")
     try:
         stub = _CapabilityStub("brave", search=True, fetch=False)
-        server, pid = await _authed_server(repository, [stub], "cap-brave-fetch")
+        server, pid = await _authed_server(
+            repository, [stub], "cap-brave-fetch", monkeypatch=monkeypatch
+        )
 
         with pytest.raises(ToolError):
             await server.call_tool(

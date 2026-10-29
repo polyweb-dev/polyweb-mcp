@@ -28,7 +28,7 @@ from tests.fixtures.auth import (
     register_system_admin_login,
     temp_email,
 )
-from tests.fixtures.execution import seed_execution_project
+from tests.fixtures.execution import seed_app_bound_project, seed_execution_project
 
 CANONICAL_ALPHA_ORDER = [
     "brave",
@@ -198,7 +198,12 @@ async def test_locked_reconcile_write_keeps_strict_search_at_200(
             headers = raw_auth_headers(pair["access_token"])
             pid = str(
                 (
-                    await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+                    await seed_app_bound_project(
+                        repository,
+                        user_id=account_id_from_pair(pair),
+                        app=app,
+                        monkeypatch=monkeypatch,
+                    )
                 ).project_id
             )
             search = client.post(
@@ -288,7 +293,12 @@ async def test_corrupt_persisted_provider_config_falls_back_to_defaults_without_
             headers = raw_auth_headers(pair["access_token"])
             pid = str(
                 (
-                    await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+                    await seed_app_bound_project(
+                        repository,
+                        user_id=account_id_from_pair(pair),
+                        app=app,
+                        monkeypatch=monkeypatch,
+                    )
                 ).project_id
             )
             item = client.get("/api/v1/providers/exa", headers=headers)
@@ -318,7 +328,7 @@ async def test_invalid_non_access_field_preserves_valid_stored_access(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """An invalid priority falls back for that field but keeps stored access."""
-    from freesearch.routers.control import effective_provider_config
+    from freesearch.services.provider_runtime import effective_provider_config
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv(PROVIDER_ENV_VARS[ProviderName.EXA], raising=False)

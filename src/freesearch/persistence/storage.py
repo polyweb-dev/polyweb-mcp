@@ -25,6 +25,7 @@ from sqlalchemy import (
     Text,
     and_,
     event,
+    func,
     insert,
     or_,
     select,
@@ -1093,10 +1094,33 @@ class SQLiteRepository:
             values = (await session.scalars(statement)).all()
         return [int(value) for value in values if value is not None]
 
-    async def record_quota(self, snapshot: QuotaSnapshot) -> None:
-        """Append a provider quota observation."""
+    async def record_quota(
+        self,
+        snapshot: QuotaSnapshot,
+        *,
+        credential_id: UUID | None = None,
+        pool_id: UUID | None = None,
+        credential_generation: int | None = None,
+    ) -> None:
+        """Append a provider quota observation.
+
+        A ``credential_id`` scopes the snapshot to one credential instance; a
+        shared provider-rail observation stays unattributed so an unrelated
+        credential never inherits its balance.
+        """
 
         async with self._session_factory() as session:
+            if credential_id is not None and credential_generation is not None:
+                from freesearch.persistence.credentials import ProviderCredentialRow
+
+                await session.execute(text("BEGIN IMMEDIATE"))
+                credential = await session.get(ProviderCredentialRow, str(credential_id))
+                if (
+                    credential is None
+                    or credential.status != "active"
+                    or (credential.generation != credential_generation)
+                ):
+                    return
             await session.execute(
                 insert(QuotaSnapshotRow).values(
                     provider=snapshot.provider,
@@ -1110,14 +1134,28 @@ class SQLiteRepository:
                     unit_kind=snapshot.unit_kind.value if snapshot.unit_kind is not None else None,
                     display_unit=snapshot.display_unit,
                     metadata_json=sanitized_metadata_json(snapshot.metadata),
+                    credential_id=_optional_id(credential_id),
+                    pool_id=_optional_id(pool_id),
                 )
             )
             await session.commit()
 
     async def latest_quota(
-        self, provider: str, *, source: QuotaSource | None = None
+        self,
+        provider: str,
+        *,
+        source: QuotaSource | None = None,
+        credential_id: UUID | None = None,
+        pool_id: UUID | None = None,
     ) -> QuotaSnapshot | None:
-        """Return the newest quota snapshot for a provider and optional source."""
+        """Return the newest quota snapshot for one provider.
+
+        Quotas are funds observations, never provider-outage facts. An explicit
+        pool reads only that pool; an unpooled credential reads only its own
+        balance. Provider-wide reads select only unattributed, unpooled rows.
+        Provider outages belong to health observations and are read separately;
+        an unattributed funds zero must never disable unrelated credentials.
+        """
 
         statement = (
             select(QuotaSnapshotRow)
@@ -1127,6 +1165,17 @@ class SQLiteRepository:
         )
         if source is not None:
             statement = statement.where(QuotaSnapshotRow.source == source.value)
+        if pool_id is not None:
+            statement = statement.where(QuotaSnapshotRow.pool_id == str(pool_id))
+        elif credential_id is not None:
+            statement = statement.where(
+                QuotaSnapshotRow.credential_id == str(credential_id),
+                QuotaSnapshotRow.pool_id.is_(None),
+            )
+        else:
+            statement = statement.where(
+                QuotaSnapshotRow.credential_id.is_(None), QuotaSnapshotRow.pool_id.is_(None)
+            )
         async with self._session_factory() as session:
             row = await session.scalar(statement)
         return self._quota_from_row(row) if row is not None else None
@@ -1155,7 +1204,11 @@ class SQLiteRepository:
                 QuotaSnapshotRow.display_unit.label("display_unit"),
                 QuotaSnapshotRow.metadata_json.label("metadata_json"),
             )
-            .where(QuotaSnapshotRow.provider == provider)
+            .where(
+                QuotaSnapshotRow.provider == provider,
+                QuotaSnapshotRow.credential_id.is_(None),
+                QuotaSnapshotRow.pool_id.is_(None),
+            )
             .order_by(
                 QuotaSnapshotRow.observed_at.desc(),
                 QuotaSnapshotRow.id.desc(),
@@ -1169,8 +1222,15 @@ class SQLiteRepository:
             rows = (await session.execute(statement)).all()
         return {row.provider: self._quota_from_row(row) for row in rows}
 
-    async def record_health(self, health: ProviderHealth) -> None:
-        """Append a provider health observation."""
+    async def record_health(
+        self, health: ProviderHealth, *, credential_id: UUID | None = None
+    ) -> None:
+        """Append a provider health observation.
+
+        A ``credential_id`` scopes the observation to one credential instance;
+        an unattributed observation is a shared provider-wide fact such as a
+        control-plane probe or an outage.
+        """
 
         async with self._session_factory() as session:
             await session.execute(
@@ -1179,20 +1239,41 @@ class SQLiteRepository:
                     status=health.status.value,
                     checked_at=_timestamp(health.checked_at),
                     message=health.message,
+                    credential_id=_optional_id(credential_id),
                 )
             )
             await session.commit()
 
-    async def latest_health(self, provider: str) -> ProviderHealth | None:
-        """Return the newest health observation for a provider."""
+    async def latest_health(
+        self, provider: str, *, credential_id: UUID | None = None
+    ) -> ProviderHealth | None:
+        """Return the newest health observation for one provider.
 
-        async with self._session_factory() as session:
-            row = await session.scalar(
-                select(ProviderHealthRow)
-                .where(ProviderHealthRow.provider == provider)
-                .order_by(ProviderHealthRow.checked_at.desc(), ProviderHealthRow.id.desc())
-                .limit(1)
+        Without a credential id this is a strictly provider-wide fact. With
+        one, the newest fact of that credential wins, but a newer
+        unattributed observation (for example a provider-wide outage or a
+        control-plane probe) still applies, so one credential failing never
+        hides a real outage and stays isolated from another credential's
+        own observation.
+        """
+
+        statement = (
+            select(ProviderHealthRow)
+            .where(ProviderHealthRow.provider == provider)
+            .order_by(ProviderHealthRow.checked_at.desc(), ProviderHealthRow.id.desc())
+            .limit(1)
+        )
+        if credential_id is not None:
+            statement = statement.where(
+                or_(
+                    ProviderHealthRow.credential_id == str(credential_id),
+                    ProviderHealthRow.credential_id.is_(None),
+                )
             )
+        else:
+            statement = statement.where(ProviderHealthRow.credential_id.is_(None))
+        async with self._session_factory() as session:
+            row = await session.scalar(statement)
         return self._health_from_row(row) if row is not None else None
 
     async def latest_health_batch(self, providers: Sequence[str]) -> dict[str, ProviderHealth]:
@@ -1216,7 +1297,10 @@ class SQLiteRepository:
                 ProviderHealthRow.checked_at.label("checked_at"),
                 ProviderHealthRow.message.label("message"),
             )
-            .where(ProviderHealthRow.provider == provider)
+            .where(
+                ProviderHealthRow.provider == provider,
+                ProviderHealthRow.credential_id.is_(None),
+            )
             .order_by(ProviderHealthRow.checked_at.desc(), ProviderHealthRow.id.desc())
             .limit(1)
             .subquery()
@@ -1227,12 +1311,65 @@ class SQLiteRepository:
             rows = (await session.execute(statement)).all()
         return {row.provider: self._health_from_row(row) for row in rows}
 
+    async def latest_health_scopes(self, providers: Sequence[str]) -> list[ProviderHealth]:
+        """Return the newest health observation of every provider scope.
+
+        One row per provider and credential (including the unattributed
+        provider-wide scope), so the dashboard can build an intentional
+        aggregate without hiding a degraded credential behind a healthy
+        provider-wide row. The projection carries no credential id.
+        """
+
+        if not providers:
+            return []
+        subq = (
+            select(
+                ProviderHealthRow.id,
+                ProviderHealthRow.provider,
+                ProviderHealthRow.status,
+                ProviderHealthRow.checked_at,
+                ProviderHealthRow.message,
+                ProviderHealthRow.credential_id,
+                func.row_number()
+                .over(
+                    partition_by=(ProviderHealthRow.provider, ProviderHealthRow.credential_id),
+                    order_by=(ProviderHealthRow.checked_at.desc(), ProviderHealthRow.id.desc()),
+                )
+                .label("rn"),
+            )
+            .where(ProviderHealthRow.provider.in_(providers))
+            .subquery()
+        )
+        statement = select(
+            subq.c.id,
+            subq.c.provider,
+            subq.c.status,
+            subq.c.checked_at,
+            subq.c.message,
+        ).where(subq.c.rn == 1)
+        async with self._session_factory() as session:
+            rows = (await session.execute(statement)).all()
+        return [self._health_from_row(row) for row in rows]
+
     async def get_runtime_setting(self, key: str) -> Any:
         """Return the JSON-decoded runtime setting stored under ``key``."""
 
         async with self._session_factory() as session:
             row = await session.get(RuntimeSettingRow, key)
         return json.loads(row.value_json) if row is not None else None
+
+    async def runtime_setting_snapshot(self, key: str) -> Any:
+        """Read one durable setting value for cross-process cache validation.
+
+        The fresh transaction observes direct SQL commits too, while unrelated
+        usage and trace writes cannot invalidate this setting's value.
+        """
+
+        async with self._session_factory() as session:
+            value = await session.scalar(
+                select(RuntimeSettingRow.value_json).where(RuntimeSettingRow.key == key)
+            )
+        return json.loads(value) if value is not None else None
 
     async def set_runtime_setting(self, key: str, value: Any) -> None:
         """Create or replace the JSON-encoded runtime setting under ``key``."""

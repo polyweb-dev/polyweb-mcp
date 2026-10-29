@@ -13,7 +13,8 @@ import re
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import suppress
-from typing import Any, Literal, TypeVar, cast
+from contextvars import ContextVar
+from typing import Any, Literal, Protocol, TypeVar, cast
 
 import httpx
 from pydantic import AliasChoices, AliasPath, BaseModel
@@ -29,6 +30,44 @@ T = TypeVar("T")
 RETRYABLE_STATUS_CODES: frozenset[int] = frozenset({429, 500, 502, 503, 504})
 # Backwards-compatible alias; prefer RETRYABLE_STATUS_CODES for new imports.
 _RETRYABLE_STATUS_CODES = RETRYABLE_STATUS_CODES
+
+
+class DispatchObserver(Protocol):
+    """Per-send capacity observer installed around one adapter call.
+
+    The runner invokes ``begin`` immediately before each actual HTTP operation
+    and ``end`` when that operation settles. A retry inside the runner is
+    therefore a separately charged dispatch, not a free resend.
+    """
+
+    async def begin(self) -> object: ...
+
+    async def end(
+        self,
+        token: object,
+        *,
+        result: object | None = None,
+        error: BaseException | None = None,
+        retryable: bool = False,
+    ) -> None: ...
+
+
+_DISPATCH_OBSERVER: ContextVar[DispatchObserver | None] = ContextVar(
+    "freesearch_dispatch_observer", default=None
+)
+
+
+def install_dispatch_observer(observer: DispatchObserver | None) -> object:
+    """Install the per-send observer for the current task context."""
+
+    return _DISPATCH_OBSERVER.set(observer)
+
+
+def reset_dispatch_observer(token: object) -> None:
+    """Restore the previous observer token."""
+
+    _DISPATCH_OBSERVER.reset(token)  # type: ignore[arg-type]
+
 
 # Credential-like key tokens, compared against keys with all non-alphanumeric
 # characters removed and lowercased, so ``api_key``, ``x-api-key``, ``access
@@ -554,9 +593,15 @@ class ResilientRunner:
             # backoff sleep must still be waited out.
             await breaker.wait_for_rate_limit(rate_limit_slept)
             rate_limit_slept = None
+            observer = _DISPATCH_OBSERVER.get()
+            token: object | None = None
+            if observer is not None:
+                token = await observer.begin()
             try:
                 result = await operation()
             except ProviderOperationError as exc:
+                if observer is not None and token is not None:
+                    await observer.end(token, error=exc, retryable=exc.error.retryable)
                 if not exc.error.retryable:
                     await breaker.finish(probe, success=False, retryable=False)
                     raise
@@ -568,10 +613,14 @@ class ResilientRunner:
                 # malformed delays keep the current backoff.
                 retry_after = _finite_retry_after_details(exc.error.details)
             except httpx.TransportError as exc:
+                if observer is not None and token is not None:
+                    await observer.end(token, error=exc, retryable=True)
                 last = self._transport_error(provider, exc)
-            except Exception:
+            except Exception as exc:
                 # Unexpected crashes are never retried; a held half-open probe
                 # counts as failed so the circuit does not silently admit more.
+                if observer is not None and token is not None:
+                    await observer.end(token, error=exc, retryable=False)
                 if probe.holds_probe:
                     await breaker.finish(probe, success=False, retryable=True)
                 raise
@@ -591,7 +640,11 @@ class ResilientRunner:
                             status_code=result.status_code,
                         )
                     )
+                    if observer is not None and token is not None:
+                        await observer.end(token, result=result, retryable=True)
                 else:
+                    if observer is not None and token is not None:
+                        await observer.end(token, result=result)
                     await breaker.finish(probe, success=True, retryable=True)
                     return result
 

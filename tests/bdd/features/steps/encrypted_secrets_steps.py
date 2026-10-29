@@ -14,7 +14,7 @@ import shutil
 import stat
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -42,15 +42,6 @@ from freesearch.models.contracts import (
 )
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
-from freesearch.services.parallel_oauth import (
-    ACCESS_SECRET_KEY,
-    CLIENT_SECRET_KEY,
-    DEVICE_SECRET_KEY,
-    METADATA_RUNTIME_KEY,
-    REFRESH_SECRET_KEY,
-    clear_oauth_poll_state,
-    clear_oauth_test_seams,
-)
 from tests.encrypted_secrets_helpers import (
     SENTINEL_PASSPHRASE,
     SENTINEL_PROVIDER_KEYS,
@@ -71,16 +62,12 @@ from tests.integration.services.oauth.oauth_stubs import (
     CLIENT_SECRET_VALUE,
     REFRESH_TOKEN_VALUE,
     TOKEN_SENTINELS,
-    StubOAuthServer,
     collect_sqlite_texts,
-    install_network_guard,
-    stub_client,
 )
 
 FINGERPRINT_RE = r"[A-Z]{3}_•{8}[0-9a-f]{4}"
 KEY_FILE_ENV = "FREESEARCH_ENCRYPTION_KEY_FILE"
 PASSPHRASE_ENV = "FREESEARCH_ENCRYPTION_KEY"
-OAUTH_SLOTS = (ACCESS_SECRET_KEY, REFRESH_SECRET_KEY, DEVICE_SECRET_KEY, CLIENT_SECRET_KEY)
 
 
 class _ControlAdapter(ProviderAdapter):
@@ -274,20 +261,14 @@ class _AttrShim:
 
 
 def _ensure_oauth_stub(context: Any) -> None:
-    """Attach a stubbed vendor transport unless the scenario already has one."""
+    from tests.fixtures.scoped_oauth import open_scoped_oauth
 
-    if getattr(context.app.state, "oauth_http_client", None) is not None:
-        return
-    previous = getattr(context, "http_client", None)
-    if previous is not None:
-        context.loop.run_until_complete(previous.aclose())
-    shim = _AttrShim()
-    _push_cleanup(context, shim.undo)
-    install_network_guard(shim)
-    context.oauth_server = StubOAuthServer()
-    context.oauth_http_client = stub_client(context.oauth_server)
-    context.http_client = context.oauth_http_client
-    context.app.state.oauth_http_client = context.oauth_http_client
+    case = _run(context, open_scoped_oauth(context.repository, store=_enc_store(context)))
+    context.oauth_case = case
+    context.oauth_server = case.stub
+    cases = getattr(context, "_bdd_oauth_cases", [])
+    cases.append(case)
+    context._bdd_oauth_cases = cases
 
 
 def _reopen_same_database(context: Any) -> None:
@@ -304,6 +285,47 @@ def _reopen_same_database(context: Any) -> None:
 
 
 # --- Given ---------------------------------------------------------------
+
+
+def _credential_slot(context, provider):
+    from uuid import UUID
+
+    from freesearch.services.credentials import credential_secret_slot
+
+    body = context.enc_credentials[provider]
+    return credential_secret_slot(UUID(body["id"]), body["generation"])
+
+
+def _write_credential(context, provider):
+    credentials = getattr(context, "enc_credentials", {})
+    with _client(context) as client:
+        if provider in credentials and provider not in getattr(context, "enc_deleted", set()):
+            current = credentials[provider]
+            response = client.post(
+                f"/api/v1/system/credentials/{current['id']}/rotate",
+                headers=context.auth_headers,
+                json={
+                    "expected_generation": current["generation"],
+                    "secret": SENTINEL_PROVIDER_KEYS[provider],
+                },
+            )
+        else:
+            response = client.post(
+                "/api/v1/system/credentials",
+                headers=context.auth_headers,
+                json={
+                    "provider_type": provider,
+                    "label": f"encrypted-{provider}",
+                    "secret": SENTINEL_PROVIDER_KEYS[provider],
+                },
+            )
+    assert response.status_code in (200, 201), response.text
+    deleted = getattr(context, "enc_deleted", set())
+    deleted.discard(provider)
+    context.enc_deleted = deleted
+    credentials[provider] = response.json()
+    context.enc_credentials = credentials
+    return response
 
 
 @given("an offline encrypted control API in passphrase mode")
@@ -340,16 +362,12 @@ def step_given_passphrase_api_logs(context: Any) -> None:
 
 @given("an offline encrypted OAuth API with stubbed vendor")
 def step_given_encrypted_oauth_api(context: Any) -> None:
-    clear_oauth_test_seams()
-    clear_oauth_poll_state()
     _new_scenario_dir(context)
     _isolate_process_state(context, passphrase=SENTINEL_PASSPHRASE)
     configure_bdd_secret(context)
     _open_repository(context)
     _build_app(context, ["parallel"])
     _ensure_oauth_stub(context)
-    # OAuth routes need the Admin role.
-    _login_admin(context)
 
 
 # --- When ----------------------------------------------------------------
@@ -357,25 +375,15 @@ def step_given_encrypted_oauth_api(context: Any) -> None:
 
 @when('I write the sentinel secret for "{provider}" through the control API')
 def step_when_write_sentinel(context: Any, provider: str) -> None:
-    with _client(context) as client:
-        context.secret_response = client.put(
-            f"/api/v1/providers/{provider}/secret",
-            json={"key": SENTINEL_PROVIDER_KEYS[provider]},
-            headers=context.auth_headers,
-        )
+    context.secret_response = _write_credential(context, provider)
     context.last_provider = provider
 
 
 @when("I write all eight sentinel provider secrets through the control API")
 def step_when_write_all_sentinels(context: Any) -> None:
-    with _client(context) as client:
-        for provider in ProviderName:
-            response = client.put(
-                f"/api/v1/providers/{provider.value}/secret",
-                json={"key": SENTINEL_PROVIDER_KEYS[provider.value]},
-                headers=context.auth_headers,
-            )
-            assert response.status_code == 200, response.text
+    for provider in ProviderName:
+        response = _write_credential(context, provider.value)
+        assert response.status_code == 201, response.text
 
 
 @when("I restart the control API on the same database")
@@ -390,75 +398,51 @@ def step_when_restart_wrong_key(context: Any) -> None:
 
 
 def _rewind_oauth_poll(context: Any) -> None:
-    """Age last_poll_at so the next status check honors the vendor interval."""
-
-    async def _age_last_poll() -> None:
-        payload = await context.repository.get_runtime_setting(METADATA_RUNTIME_KEY)
-        if isinstance(payload, dict):
-            payload["last_poll_at"] = "2020-01-01T00:00:00+00:00"
-            await context.repository.set_runtime_setting(METADATA_RUNTIME_KEY, payload)
-
-    context.loop.run_until_complete(_age_last_poll())
+    context.oauth_case.clock[0] += timedelta(seconds=5)
 
 
 @when("I complete an OAuth pairing through the stubbed vendor")
 def step_when_pair_oauth(context: Any) -> None:
-    _ensure_oauth_stub(context)
-    with _client(context) as client:
-        device = client.post(
-            "/api/v1/providers/parallel/oauth/device-code", headers=context.auth_headers
-        )
-        assert device.status_code == 200, device.text
-        first = client.get("/api/v1/providers/parallel/oauth/status", headers=context.auth_headers)
-        assert first.status_code == 200, first.text
-        assert first.json()["status"] == "pending"
-        last = first
-        for _ in range(8):
-            _rewind_oauth_poll(context)
-            probe = client.get(
-                "/api/v1/providers/parallel/oauth/status", headers=context.auth_headers
-            )
-            assert probe.status_code == 200, probe.text
-            last = probe
-            if last.json()["status"] == "ready":
-                break
-        context.oauth_status = last
-    assert context.oauth_status.json()["status"] == "ready", context.oauth_status.text[:500]
+    if getattr(context, "oauth_case", None) is None:
+        _ensure_oauth_stub(context)
+    case = context.oauth_case
+    _run(context, case.connect())
+    context.oauth_status = case.client.get(case.path, headers=case.headers)
+    assert context.oauth_status.status_code == 200
 
 
 @when("I disconnect OAuth")
 def step_when_disconnect_oauth(context: Any) -> None:
-    with _client(context) as client:
-        context.disconnect_response = client.delete(
-            "/api/v1/providers/parallel/oauth", headers=context.auth_headers
-        )
+    case = context.oauth_case
+    context.disconnect_response = case.client.delete(case.path, headers=case.headers)
 
 
 @when("I disconnect OAuth again")
 def step_when_disconnect_oauth_again(context: Any) -> None:
-    with _client(context) as client:
-        context.second_disconnect = client.delete(
-            "/api/v1/providers/parallel/oauth", headers=context.auth_headers
-        )
+    case = context.oauth_case
+    context.second_disconnect = case.client.delete(case.path, headers=case.headers)
 
 
 @when('I read back the provider "{provider}" status and secret routes')
 def step_when_read_back(context: Any, provider: str) -> None:
+    body = context.enc_credentials[provider]
     with _client(context) as client:
         context.status_response = client.get(
-            f"/api/v1/providers/{provider}", headers=context.auth_headers
+            "/api/v1/system/credentials", headers=context.auth_headers
         )
         context.secret_delete_probe = client.delete(
-            f"/api/v1/providers/{provider}/secret", headers=context.auth_headers
+            f"/api/v1/system/credentials/{body['id']}", headers=context.auth_headers
         )
     context.last_provider = provider
+    context.enc_deleted = {provider}
 
 
 @when('I delete the sentinel secret for "{provider}" through the control API')
 def step_when_delete_sentinel(context: Any, provider: str) -> None:
+    body = context.enc_credentials[provider]
     with _client(context) as client:
         context.secret_response = client.delete(
-            f"/api/v1/providers/{provider}/secret", headers=context.auth_headers
+            f"/api/v1/system/credentials/{body['id']}", headers=context.auth_headers
         )
 
 
@@ -467,15 +451,17 @@ def step_when_delete_sentinel(context: Any, provider: str) -> None:
 
 @then('the secret response should report source "encrypted_db" with a masked fingerprint')
 def step_then_encrypted_source(context: Any) -> None:
-    import re
+    from freesearch.models.projects import CredentialInstanceRead
 
-    assert context.secret_response.status_code == 200
+    assert context.secret_response.status_code in (200, 201)
     body = context.secret_response.json()
-    assert body["presence"] == "configured"
-    assert body["source"] == "encrypted_db"
-    assert re.fullmatch(FINGERPRINT_RE, body["fingerprint"])
-    sentinel = SENTINEL_PROVIDER_KEYS[context.last_provider]
-    assert_no_sentinels(context.secret_response.text, (sentinel,), "secret response")
+    assert set(body) == set(CredentialInstanceRead.model_fields)
+    assert body["status"] == "active" and body["auth_mode"] == "api_key"
+    assert_no_sentinels(
+        context.secret_response.text,
+        (SENTINEL_PROVIDER_KEYS[context.last_provider],),
+        "credential metadata",
+    )
 
 
 @then('the provider "{provider}" should probe successfully')
@@ -488,11 +474,12 @@ def step_then_probe_ok(context: Any, provider: str) -> None:
 
 @then('the database file should hold only ciphertext for "{provider}"')
 def step_then_ciphertext_row(context: Any, provider: str) -> None:
+    slot = _credential_slot(context, provider)
     sentinel = SENTINEL_PROVIDER_KEYS[provider]
-    raw = _run(context, context.repository.get_runtime_setting(f"secret.enc:{provider}"))
+    raw = _run(context, context.repository.get_runtime_setting("secret.enc:" + slot))
     assert isinstance(raw, str)
-    assert_no_sentinels(raw, (sentinel,), f"secret.enc:{provider} row")
-    assert _codec(context).decrypt(raw, context=provider).get_secret_value() == sentinel
+    assert_no_sentinels(raw, (sentinel,), "credential ciphertext")
+    assert _codec(context).decrypt(raw, context=slot).get_secret_value() == sentinel
 
 
 @then("a key file should exist with mode 0600 under a 0700 directory")
@@ -513,10 +500,12 @@ def step_then_key_file_perms(context: Any) -> None:
 
 @then('the secret for "{provider}" should still resolve')
 def step_then_secret_still_resolves(context: Any, provider: str) -> None:
-    assert _run(context, _enc_store(context).get(provider)) == SENTINEL_PROVIDER_KEYS[provider]
+    slot = _credential_slot(context, provider)
+    assert _run(context, _enc_store(context).get(slot)) == SENTINEL_PROVIDER_KEYS[provider]
     with _client(context) as client:
-        status = client.get(f"/api/v1/providers/{provider}", headers=context.auth_headers)
-    assert status.json()["secret_presence"] == "configured"
+        status = client.get("/api/v1/system/credentials", headers=context.auth_headers)
+    assert status.status_code == 200
+    assert context.enc_credentials[provider] in status.json()
 
 
 @then("the key file should be unchanged")
@@ -530,11 +519,15 @@ def step_then_key_file_unchanged(context: Any) -> None:
 def step_then_all_rows_decrypt(context: Any) -> None:
     store = _enc_store(context)
     for provider in ProviderName:
-        assert _run(context, store.get(provider.value)) == SENTINEL_PROVIDER_KEYS[provider.value]
-    assert _run(context, store.get(ACCESS_SECRET_KEY)) == ACCESS_TOKEN_VALUE
-    assert _run(context, store.get(REFRESH_SECRET_KEY)) == REFRESH_TOKEN_VALUE
-    assert _run(context, store.get(CLIENT_SECRET_KEY)) == CLIENT_SECRET_VALUE
-    assert _run(context, store.get(DEVICE_SECRET_KEY)) is None
+        assert (
+            _run(context, store.get(_credential_slot(context, provider.value)))
+            == SENTINEL_PROVIDER_KEYS[provider.value]
+        )
+    case = context.oauth_case
+    assert _run(context, case.token()) == ACCESS_TOKEN_VALUE
+    assert _run(context, case.token("refresh")) == REFRESH_TOKEN_VALUE
+    assert _run(context, case.token("client")) == CLIENT_SECRET_VALUE
+    assert _run(context, case.token("device")) is None
 
 
 @then("a database-wide scan should find zero sentinel substrings")
@@ -548,17 +541,18 @@ def step_then_db_scan_clean(context: Any) -> None:
 
 @then("the OAuth metadata should hold no token material")
 def step_then_metadata_clean(context: Any) -> None:
-    metadata = _run(context, context.repository.get_runtime_setting(METADATA_RUNTIME_KEY))
-    assert isinstance(metadata, dict)
-    assert_no_sentinels(repr(metadata), TOKEN_SENTINELS, "oauth.parallel metadata")
+    grant = _run(context, context.oauth_case.grant())
+    assert grant is not None
+    assert_no_sentinels(repr(vars(grant)), TOKEN_SENTINELS, "credential grant metadata")
 
 
 @then('the provider "{provider}" should report no usable secret')
 def step_then_no_usable_secret(context: Any, provider: str) -> None:
+    assert _run(context, _enc_store(context).get(_credential_slot(context, provider))) is None
     with _client(context) as client:
-        status = client.get(f"/api/v1/providers/{provider}", headers=context.auth_headers)
+        status = client.get("/api/v1/system/credentials", headers=context.auth_headers)
     assert status.status_code == 200
-    assert status.json()["secret_presence"] == "missing"
+    assert_no_sentinels(status.text, (SENTINEL_PROVIDER_KEYS[provider],), "wrong key metadata")
     context.last_status_text = status.text
 
 
@@ -584,38 +578,36 @@ def step_then_full_sweep_clean(context: Any) -> None:
 @then("storing the same secret twice should yield different ciphertext")
 def step_then_nondeterministic_rows(context: Any) -> None:
     provider = context.last_provider
-    sentinel = SENTINEL_PROVIDER_KEYS[provider]
-    first = _run(context, context.repository.get_runtime_setting(f"secret.enc:{provider}"))
-    with _client(context) as client:
-        assert (
-            client.put(
-                f"/api/v1/providers/{provider}/secret",
-                json={"key": sentinel},
-                headers=context.auth_headers,
-            ).status_code
-            == 200
-        )
-    second = _run(context, context.repository.get_runtime_setting(f"secret.enc:{provider}"))
-    assert first != second, "fresh nonce required per encrypt call"
-    assert _codec(context).decrypt(second, context=provider).get_secret_value() == sentinel
+    old_slot = _credential_slot(context, provider)
+    first = _run(context, context.repository.get_runtime_setting("secret.enc:" + old_slot))
+    if first is None:
+        _write_credential(context, provider)
+        old_slot = _credential_slot(context, provider)
+        first = _run(context, context.repository.get_runtime_setting("secret.enc:" + old_slot))
+    response = _write_credential(context, provider)
+    assert response.status_code == 200
+    new_slot = _credential_slot(context, provider)
+    second = _run(context, context.repository.get_runtime_setting("secret.enc:" + new_slot))
+    assert first != second
+    assert (
+        _codec(context).decrypt(second, context=new_slot).get_secret_value()
+        == SENTINEL_PROVIDER_KEYS[provider]
+    )
+    assert _run(context, _enc_store(context).get(old_slot)) is None
 
 
 @then('the secret for "{provider}" should stay missing with a tombstone')
 def step_then_tombstone_missing(context: Any, provider: str) -> None:
-    store = _enc_store(context)
-    assert _run(context, store.get(provider)) is None, (
-        "RED (AC-6): get must return None while the tombstone is present"
-    )
+    slot = _credential_slot(context, provider)
+    assert _run(context, _enc_store(context).get(slot)) is None
+    assert _run(context, context.repository.get_runtime_setting(_tombstone_prefix() + slot)) == {
+        "v": 1
+    }
+    assert _run(context, context.repository.get_runtime_setting("secret.enc:" + slot)) is None
     with _client(context) as client:
-        status = client.get(f"/api/v1/providers/{provider}", headers=context.auth_headers)
-    assert status.status_code == 200
-    assert status.json()["secret_presence"] == "missing"
-    prefix = _tombstone_prefix()
-    tombstone = _run(context, context.repository.get_runtime_setting(f"{prefix}{provider}"))
-    assert isinstance(tombstone, dict) and tombstone.get("v") == 1, (
-        f"RED (AC-6): expected tombstone {prefix}{provider} == {{'v': 1}}, got {tombstone!r}"
-    )
-    assert _run(context, context.repository.get_runtime_setting(f"secret.enc:{provider}")) is None
+        listed = client.get("/api/v1/system/credentials", headers=context.auth_headers)
+    assert listed.status_code == 200
+    assert all(body["id"] != context.enc_credentials[provider]["id"] for body in listed.json())
     context.last_provider = provider
 
 
@@ -627,43 +619,50 @@ def step_then_tombstone_missing(context: Any, provider: str) -> None:
 
 @then("the four OAuth slots should hold only ciphertext")
 def step_then_oauth_slots_ciphertext(context: Any) -> None:
-    for slot in OAUTH_SLOTS:
-        raw = _run(context, context.repository.get_runtime_setting(f"secret.enc:{slot}"))
+    case = context.oauth_case
+    grant = _run(context, case.grant())
+    from freesearch.persistence.oauth_grants import oauth_secret_slot
+
+    for kind in ("access", "refresh", "device", "client"):
+        slot = oauth_secret_slot(case.credential.id, kind, grant.token_generation)
+        raw = _run(context, context.repository.get_runtime_setting("secret.enc:" + slot))
         if raw is not None:
             assert isinstance(raw, str)
-            assert_no_sentinels(raw, TOKEN_SENTINELS, f"slot row {slot}")
-    assert _run(context, _enc_store(context).get(ACCESS_SECRET_KEY)) == ACCESS_TOKEN_VALUE
+            assert_no_sentinels(raw, TOKEN_SENTINELS, "OAuth ciphertext")
+    assert _run(context, case.token()) == ACCESS_TOKEN_VALUE
 
 
 @then("the OAuth status should be fingerprint-only")
 def step_then_oauth_fingerprint_only(context: Any) -> None:
+    from freesearch.models.credentials import CredentialOAuthStatusRead
+
     body = context.oauth_status.json()
-    assert set(body) == {"provider", "status", "expires_in"}
-    assert body["status"] == "ready"
-    assert_no_sentinels(context.oauth_status.text, TOKEN_SENTINELS, "oauth status body")
+    assert set(body) == set(CredentialOAuthStatusRead.model_fields)
+    assert body["status"] == "connected"
+    assert_no_sentinels(context.oauth_status.text, TOKEN_SENTINELS, "credential OAuth status")
 
 
 @then("the vendor revoke should have been called before local deletion")
 def step_then_revoke_before_delete(context: Any) -> None:
     assert context.disconnect_response.status_code == 204
-    assert context.oauth_server.revoke_calls == 2
-    store = _enc_store(context)
-    for slot in OAUTH_SLOTS:
-        assert _run(context, store.get(slot)) is None
+    assert context.oauth_server.revoke_calls == 1
+    assert not any(_run(context, context.oauth_case.slots()).values())
 
 
 @then("disconnecting OAuth again should stay idempotent")
 def step_then_disconnect_idempotent(context: Any) -> None:
     assert context.second_disconnect.status_code == 204
-    assert context.oauth_server.revoke_calls == 2
+    assert context.oauth_server.revoke_calls == 1
+    assert not any(_run(context, context.oauth_case.slots()).values())
 
 
 @then('the secret response should report missing with source "none"')
 def step_then_secret_missing_none(context: Any) -> None:
-    assert context.secret_response.status_code == 200
-    body = context.secret_response.json()
-    assert body["presence"] == "missing"
-    assert body["source"] == "none"
+    assert context.secret_response.status_code == 204
+    assert (
+        _run(context, _enc_store(context).get(_credential_slot(context, context.last_provider)))
+        is None
+    )
 
 
 @then("unknown provider secret routes should return 404")

@@ -72,6 +72,22 @@ class ProviderAdapter(ABC):
 
         return AuthMode.KEYED
 
+    @property
+    def dispatch_runner(self) -> object | None:
+        """Return the retrying runner that dispatches this adapter's sends.
+
+        The telemetry wrapper installs a per-send capacity observer on such a
+        runner, so an internal HTTP retry is charged as its own upstream
+        attempt. Adapters without a runner dispatch exactly once.
+        """
+
+        runner = getattr(self, "_runner", None)
+        if runner is None:
+            return None
+        from freesearch.infrastructure.resilience import ResilientRunner
+
+        return runner if isinstance(runner, ResilientRunner) else None
+
     async def usage_snapshot(self, request: UsageSyncRequest) -> NativeUsageSnapshot | None:
         """Return a native usage observation, or None when the provider exposes none."""
 

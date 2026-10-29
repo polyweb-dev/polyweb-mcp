@@ -130,6 +130,7 @@ def _post_fanout_search(
 ) -> None:
     """POST a fanout search through the real FastAPI app with stub adapters."""
     app = create_app(list(context.fanout_adapters), repository=context.repository)
+    context.app = app
     payload: dict[str, Any] = {"query": query, "fanout": True, "limit": limit}
     if allow_list:
         payload["routing"] = {"mode": "fanout", "providers": list(allow_list)}

@@ -285,6 +285,8 @@ _HEAD_COLUMNS: dict[str, frozenset[str]] = {
             "binding_id",
             "upstream_pool_id",
             "request_id",
+            "actor_type",
+            "actor_id",
         }
     ),
     "provider_rate_observations": frozenset(
@@ -321,6 +323,8 @@ _HEAD_COLUMNS: dict[str, frozenset[str]] = {
             "binding_id",
             "upstream_pool_id",
             "request_id",
+            "actor_type",
+            "actor_id",
         }
     ),
     "quota_snapshots": frozenset(

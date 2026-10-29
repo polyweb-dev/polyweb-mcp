@@ -2,7 +2,7 @@
 
 Covers ciphertext-only at rest, wrong-key fails closed to None, tombstone
 delete-wins (secret.deleted:), write-once slots and rekey. The legacy-secret
-census tests were retired with the census itself (A4, API-11).
+census case names now exercise A4 rekey and slot boundaries.
 """
 
 from __future__ import annotations
@@ -225,11 +225,73 @@ async def test_wrong_key_degrades_to_none_with_redacted_warning(
     assert_no_sentinels(caplog.text, (SENTINEL_PROVIDER_KEYS["exa"],), "store warning logs")
 
 
-# --- AC-2 census retired ---------------------------------------------------
-# A4 (API-11) deleted the no-op ``migrate_legacy_secrets_to_encrypted_db``
-# census, so its four signature/idempotency/tombstone/report tests went with
-# it. The store's own delete-wins and write-once behavior stays covered below
-# (tombstone, stale-ciphertext, create-after-tombstone and rekey tests).
+# --- Historical census cases migrated to the actual A4 maintenance seam ---
+
+
+def test_migration_signature_is_vault_only() -> None:
+    """Origin: no env/dotenv/legacy-store input may populate credential material."""
+    import inspect
+
+    _, store_module = _stack()
+    assert set(inspect.signature(store_module.rekey_secrets).parameters) == {
+        "repository",
+        "codec",
+        "dry_run",
+    }
+    assert not hasattr(store_module, "migrate_legacy_secrets_to_encrypted_db")
+    source = Path(store_module.__file__).read_text(encoding="utf-8")
+    assert "dotenv_values" not in source and "legacy_store" not in source
+
+
+@pytest.mark.asyncio
+async def test_migration_is_idempotent_and_never_overwrites(repository, tmp_path) -> None:
+    """Origin: a current operator-encrypted slot stays byte-identical across maintenance."""
+    crypto, store_module = _stack()
+    codec = _codec(crypto, tmp_path)
+    store = _store(store_module, repository, codec)
+    slot = "credential.00000000-0000-4000-8000-0000000000ab.g1"
+    await store.set(slot, "operator-encrypted-value")
+    before = await repository.get_runtime_setting("secret.enc:" + slot)
+    for _ in range(2):
+        report = await store_module.rekey_secrets(repository, codec)
+        assert report.rekeyed == 0 and report.current == 1
+        assert "operator-encrypted-value" not in repr(report)
+        assert await store.get(slot) == "operator-encrypted-value"
+        assert await repository.get_runtime_setting("secret.enc:" + slot) == before
+
+
+@pytest.mark.asyncio
+async def test_migration_treats_tombstone_as_delete_wins(repository, tmp_path) -> None:
+    """Origin: maintenance cannot resurrect a tombstoned credential generation."""
+    crypto, store_module = _stack()
+    codec = _codec(crypto, tmp_path)
+    store = _store(store_module, repository, codec)
+    slot = "credential.00000000-0000-4000-8000-0000000000ac.g1"
+    await store.set(slot, SENTINEL_PROVIDER_KEYS["exa"])
+    await store.delete(slot)
+    report = await store_module.rekey_secrets(repository, codec)
+    assert await store.get(slot) is None
+    assert await repository.get_runtime_setting("secret.enc:" + slot) is None
+    assert await repository.get_runtime_setting("secret.deleted:" + slot) == {"v": 1}
+    assert report.rekeyed == report.total == 0
+    assert_no_sentinels(repr(report), (SENTINEL_PROVIDER_KEYS["exa"],), "rekey report")
+
+
+@pytest.mark.asyncio
+async def test_migration_report_counts_cover_all_slots_without_values(repository, tmp_path) -> None:
+    """Origin: all twelve slots count once, with no secret values in the report."""
+    from uuid import uuid4
+
+    crypto, store_module = _stack()
+    codec = _codec(crypto, tmp_path)
+    store = _store(store_module, repository, codec)
+    values = [f"fixture-private-slot-{index}" for index in range(12)]
+    for value in values:
+        await store.set(f"credential.{uuid4()}.g1", value)
+    report = await store_module.rekey_secrets(repository, codec)
+    assert report.total == report.current == 12
+    assert report.rekeyed == report.undecryptable == report.legacy_upgraded == 0
+    assert_no_sentinels(repr(report), values, "twelve-slot rekey report")
 
 
 # --- AC-9 pin removed: rotation is out of scope for the vault-only slice ----

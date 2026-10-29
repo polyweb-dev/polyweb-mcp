@@ -38,7 +38,7 @@ from tests.fixtures.auth import (
     register_and_login,
     temp_email,
 )
-from tests.fixtures.execution import allow_full_trace_capture, seed_execution_project
+from tests.fixtures.execution import allow_full_trace_capture, seed_app_bound_project
 from tests.fixtures.usage_ledger import all_usage_events
 
 
@@ -108,6 +108,7 @@ class FakeSearchAdapter(ProviderAdapter):
 
 
 async def test_fanout_search_runs_all_providers_in_parallel_and_fuses_results(
+    monkeypatch: pytest.MonkeyPatch,
     repository: SQLiteRepository,
     auth_secret: str,
 ) -> None:
@@ -149,7 +150,12 @@ async def test_fanout_search_runs_all_providers_in_parallel_and_fuses_results(
         headers = raw_auth_headers(pair["access_token"])
         pid = str(
             (
-                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+                await seed_app_bound_project(
+                    repository,
+                    user_id=account_id_from_pair(pair),
+                    app=app,
+                    monkeypatch=monkeypatch,
+                )
             ).project_id
         )
         # Fanout search with fanout=True
@@ -185,6 +191,7 @@ async def test_fanout_search_runs_all_providers_in_parallel_and_fuses_results(
 
 
 async def test_fanout_search_via_routing_mode_fanout(
+    monkeypatch: pytest.MonkeyPatch,
     repository: SQLiteRepository,
     auth_secret: str,
 ) -> None:
@@ -204,7 +211,12 @@ async def test_fanout_search_via_routing_mode_fanout(
         headers = raw_auth_headers(pair["access_token"])
         pid = str(
             (
-                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+                await seed_app_bound_project(
+                    repository,
+                    user_id=account_id_from_pair(pair),
+                    app=app,
+                    monkeypatch=monkeypatch,
+                )
             ).project_id
         )
         response = client.post(
@@ -223,6 +235,7 @@ async def test_fanout_search_via_routing_mode_fanout(
 
 
 async def test_fanout_search_tolerates_individual_provider_failure(
+    monkeypatch: pytest.MonkeyPatch,
     repository: SQLiteRepository,
     auth_secret: str,
 ) -> None:
@@ -246,7 +259,12 @@ async def test_fanout_search_tolerates_individual_provider_failure(
         headers = raw_auth_headers(pair["access_token"])
         pid = str(
             (
-                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+                await seed_app_bound_project(
+                    repository,
+                    user_id=account_id_from_pair(pair),
+                    app=app,
+                    monkeypatch=monkeypatch,
+                )
             ).project_id
         )
         response = client.post(
@@ -264,6 +282,7 @@ async def test_fanout_search_tolerates_individual_provider_failure(
 
 
 async def test_fanout_search_when_all_providers_fail_returns_500(
+    monkeypatch: pytest.MonkeyPatch,
     repository: SQLiteRepository,
     auth_secret: str,
 ) -> None:
@@ -278,7 +297,12 @@ async def test_fanout_search_when_all_providers_fail_returns_500(
         headers = raw_auth_headers(pair["access_token"])
         pid = str(
             (
-                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+                await seed_app_bound_project(
+                    repository,
+                    user_id=account_id_from_pair(pair),
+                    app=app,
+                    monkeypatch=monkeypatch,
+                )
             ).project_id
         )
         response = client.post(
@@ -294,6 +318,7 @@ async def test_fanout_search_when_all_providers_fail_returns_500(
 
 
 async def test_fanout_search_without_any_adapter_returns_503(
+    monkeypatch: pytest.MonkeyPatch,
     repository: SQLiteRepository,
     auth_secret: str,
 ) -> None:
@@ -309,7 +334,12 @@ async def test_fanout_search_without_any_adapter_returns_503(
         headers = raw_auth_headers(pair["access_token"])
         pid = str(
             (
-                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+                await seed_app_bound_project(
+                    repository,
+                    user_id=account_id_from_pair(pair),
+                    app=app,
+                    monkeypatch=monkeypatch,
+                )
             ).project_id
         )
         response = client.post(
@@ -323,6 +353,7 @@ async def test_fanout_search_without_any_adapter_returns_503(
 
 
 async def test_fanout_search_honors_provider_allow_list(
+    monkeypatch: pytest.MonkeyPatch,
     repository: SQLiteRepository,
     auth_secret: str,
 ) -> None:
@@ -343,7 +374,12 @@ async def test_fanout_search_honors_provider_allow_list(
         headers = raw_auth_headers(pair["access_token"])
         pid = str(
             (
-                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+                await seed_app_bound_project(
+                    repository,
+                    user_id=account_id_from_pair(pair),
+                    app=app,
+                    monkeypatch=monkeypatch,
+                )
             ).project_id
         )
         response = client.post(
@@ -366,6 +402,7 @@ async def test_fanout_search_honors_provider_allow_list(
 
 
 async def test_single_provider_require_does_not_fanout(
+    monkeypatch: pytest.MonkeyPatch,
     repository: SQLiteRepository,
     auth_secret: str,
 ) -> None:
@@ -386,7 +423,12 @@ async def test_single_provider_require_does_not_fanout(
         headers = raw_auth_headers(pair["access_token"])
         pid = str(
             (
-                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+                await seed_app_bound_project(
+                    repository,
+                    user_id=account_id_from_pair(pair),
+                    app=app,
+                    monkeypatch=monkeypatch,
+                )
             ).project_id
         )
         response = client.post(
@@ -407,6 +449,7 @@ async def test_single_provider_require_does_not_fanout(
 
 
 async def test_fanout_search_returns_waterfall_and_records_activity_telemetry(
+    monkeypatch: pytest.MonkeyPatch,
     repository: SQLiteRepository,
     auth_secret: str,
 ) -> None:
@@ -429,7 +472,12 @@ async def test_fanout_search_returns_waterfall_and_records_activity_telemetry(
         headers = raw_auth_headers(pair["access_token"])
         pid = str(
             (
-                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+                await seed_app_bound_project(
+                    repository,
+                    user_id=account_id_from_pair(pair),
+                    app=app,
+                    monkeypatch=monkeypatch,
+                )
             ).project_id
         )
         response = client.post(
@@ -468,6 +516,7 @@ def _trace_id_of(response: object) -> str:
 
 
 async def test_fanout_trace_has_sibling_providers_and_partial_outcome(
+    monkeypatch: pytest.MonkeyPatch,
     repository: SQLiteRepository,
     auth_secret: str,
 ) -> None:
@@ -491,7 +540,12 @@ async def test_fanout_trace_has_sibling_providers_and_partial_outcome(
         headers = raw_auth_headers(pair["access_token"])
         pid = str(
             (
-                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+                await seed_app_bound_project(
+                    repository,
+                    user_id=account_id_from_pair(pair),
+                    app=app,
+                    monkeypatch=monkeypatch,
+                )
             ).project_id
         )
         response = client.post(
@@ -523,6 +577,7 @@ async def test_fanout_trace_has_sibling_providers_and_partial_outcome(
 
 
 async def test_fanout_success_trace_has_one_root_and_two_provider_children(
+    monkeypatch: pytest.MonkeyPatch,
     repository: SQLiteRepository,
     auth_secret: str,
 ) -> None:
@@ -543,7 +598,12 @@ async def test_fanout_success_trace_has_one_root_and_two_provider_children(
         headers = raw_auth_headers(pair["access_token"])
         pid = str(
             (
-                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+                await seed_app_bound_project(
+                    repository,
+                    user_id=account_id_from_pair(pair),
+                    app=app,
+                    monkeypatch=monkeypatch,
+                )
             ).project_id
         )
         response = client.post(
@@ -564,6 +624,7 @@ async def test_fanout_success_trace_has_one_root_and_two_provider_children(
 
 
 async def test_fanout_all_fail_writes_error_trace_without_results(
+    monkeypatch: pytest.MonkeyPatch,
     repository: SQLiteRepository,
     auth_secret: str,
 ) -> None:
@@ -578,7 +639,12 @@ async def test_fanout_all_fail_writes_error_trace_without_results(
         headers = raw_auth_headers(pair["access_token"])
         pid = str(
             (
-                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+                await seed_app_bound_project(
+                    repository,
+                    user_id=account_id_from_pair(pair),
+                    app=app,
+                    monkeypatch=monkeypatch,
+                )
             ).project_id
         )
         response = client.post(
@@ -599,6 +665,7 @@ async def test_fanout_all_fail_writes_error_trace_without_results(
 
 
 async def test_fanout_excludes_search_off_provider_without_call(
+    monkeypatch: pytest.MonkeyPatch,
     repository: SQLiteRepository,
     auth_secret: str,
 ) -> None:
@@ -620,7 +687,12 @@ async def test_fanout_excludes_search_off_provider_without_call(
         headers = raw_auth_headers(pair["access_token"])
         pid = str(
             (
-                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+                await seed_app_bound_project(
+                    repository,
+                    user_id=account_id_from_pair(pair),
+                    app=app,
+                    monkeypatch=monkeypatch,
+                )
             ).project_id
         )
         response = client.post(
@@ -637,6 +709,7 @@ async def test_fanout_excludes_search_off_provider_without_call(
 
 
 async def test_fanout_with_no_eligible_candidate_returns_503(
+    monkeypatch: pytest.MonkeyPatch,
     repository: SQLiteRepository,
     auth_secret: str,
 ) -> None:
@@ -661,7 +734,12 @@ async def test_fanout_with_no_eligible_candidate_returns_503(
         headers = raw_auth_headers(pair["access_token"])
         pid = str(
             (
-                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+                await seed_app_bound_project(
+                    repository,
+                    user_id=account_id_from_pair(pair),
+                    app=app,
+                    monkeypatch=monkeypatch,
+                )
             ).project_id
         )
         response = client.post(
@@ -677,19 +755,19 @@ async def test_fanout_with_no_eligible_candidate_returns_503(
 
 
 async def _reset_fanout_caches() -> None:
-    from freesearch.routers.control import clear_config_cache
     from freesearch.services.monitoring import clear_quota_poll_cache
+    from freesearch.services.provider_runtime import clear_config_cache
 
     clear_config_cache()
     clear_quota_poll_cache()
 
 
 async def test_pinned_fanout_reads_only_subset(
-    repository: SQLiteRepository, auth_secret: str
+    monkeypatch: pytest.MonkeyPatch, repository: SQLiteRepository, auth_secret: str
 ) -> None:
     """M4: fanout with providers=[A,B] queries only the subset (batch name lists)."""
-    from freesearch.routers.control import clear_config_cache
     from freesearch.services.monitoring import clear_quota_poll_cache
+    from freesearch.services.provider_runtime import clear_config_cache
 
     await _reset_fanout_caches()
     try:
@@ -709,6 +787,7 @@ async def test_pinned_fanout_reads_only_subset(
         quota_names: list[list[str]] = []
         orig_health = SQLiteRepository.latest_health_batch
         orig_quota = SQLiteRepository.latest_quota_batch
+        orig_scoped_quota = SQLiteRepository.latest_quota
 
         async def _spy_health(self: SQLiteRepository, providers: list[str]) -> dict:  # type: ignore[no-untyped-def]
             health_names.append(list(providers))
@@ -718,15 +797,27 @@ async def test_pinned_fanout_reads_only_subset(
             quota_names.append(list(providers))
             return await orig_quota(self, providers)
 
+        # A2: quota is read per bound credential, not as a global name batch;
+        # every scoped read is recorded under its provider name.
+        async def _spy_scoped_quota(self: SQLiteRepository, provider: str, **kwargs):  # type: ignore[no-untyped-def]
+            quota_names.append([provider])
+            return await orig_scoped_quota(self, provider, **kwargs)
+
         SQLiteRepository.latest_health_batch = _spy_health  # type: ignore[method-assign]
         SQLiteRepository.latest_quota_batch = _spy_quota  # type: ignore[method-assign]
+        SQLiteRepository.latest_quota = _spy_scoped_quota  # type: ignore[method-assign]
         try:
             with TestClient(app) as client:
                 pair = register_and_login(client, temp_email("fanout-pinned"))
                 headers = raw_auth_headers(pair["access_token"])
                 pid = str(
                     (
-                        await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+                        await seed_app_bound_project(
+                            repository,
+                            user_id=account_id_from_pair(pair),
+                            app=app,
+                            monkeypatch=monkeypatch,
+                        )
                     ).project_id
                 )
                 response = client.post(
@@ -742,29 +833,32 @@ async def test_pinned_fanout_reads_only_subset(
         finally:
             SQLiteRepository.latest_health_batch = orig_health  # type: ignore[method-assign]
             SQLiteRepository.latest_quota_batch = orig_quota  # type: ignore[method-assign]
+            SQLiteRepository.latest_quota = orig_scoped_quota  # type: ignore[method-assign]
         assert response.status_code == 200
         data = response.json()
         assert data["participating_providers"] == ["p1", "p2"]
         assert [a.search_calls for a in adapters] == [1, 1, 0, 0]
         assert health_names, "expected at least one health batch"
-        assert quota_names, "expected at least one quota batch"
+        assert quota_names, "expected at least one quota read"
         for seen in health_names:
             assert set(seen) <= {"p1", "p2"}, f"health batch leaked: {seen}"
         for seen in quota_names:
             assert set(seen) <= {"p1", "p2"}, f"quota batch leaked: {seen}"
         assert any(set(seen) == {"p1", "p2"} for seen in health_names)
+        assert {name for seen in quota_names for name in seen} == {"p1", "p2"}
     finally:
         clear_config_cache()
         clear_quota_poll_cache()
 
 
 async def test_fanout_partial_failure_detailed_contract(
+    monkeypatch: pytest.MonkeyPatch,
     repository: SQLiteRepository,
     auth_secret: str,
 ) -> None:
     """E7: one failure preserves results, waterfall, RRF output, and partial trace."""
-    from freesearch.routers.control import clear_config_cache
     from freesearch.services.monitoring import clear_quota_poll_cache
+    from freesearch.services.provider_runtime import clear_config_cache
 
     await _reset_fanout_caches()
     try:
@@ -786,7 +880,12 @@ async def test_fanout_partial_failure_detailed_contract(
             headers = raw_auth_headers(pair["access_token"])
             pid = str(
                 (
-                    await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+                    await seed_app_bound_project(
+                        repository,
+                        user_id=account_id_from_pair(pair),
+                        app=app,
+                        monkeypatch=monkeypatch,
+                    )
                 ).project_id
             )
             response = client.post(
@@ -833,12 +932,13 @@ async def test_fanout_partial_failure_detailed_contract(
 
 
 async def test_fanout_all_fail_first_error_deterministic(
+    monkeypatch: pytest.MonkeyPatch,
     repository: SQLiteRepository,
     auth_secret: str,
 ) -> None:
     """E7: all-fail gives REST 500 with the first candidate error in order."""
-    from freesearch.routers.control import clear_config_cache
     from freesearch.services.monitoring import clear_quota_poll_cache
+    from freesearch.services.provider_runtime import clear_config_cache
 
     await _reset_fanout_caches()
     try:
@@ -851,7 +951,12 @@ async def test_fanout_all_fail_first_error_deterministic(
             headers = raw_auth_headers(pair["access_token"])
             pid = str(
                 (
-                    await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+                    await seed_app_bound_project(
+                        repository,
+                        user_id=account_id_from_pair(pair),
+                        app=app,
+                        monkeypatch=monkeypatch,
+                    )
                 ).project_id
             )
             response = client.post(

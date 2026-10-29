@@ -25,8 +25,8 @@ from freesearch.models.contracts import (
 )
 from freesearch.persistence.database_migrations import DatabaseMigrationError
 from freesearch.persistence.storage import SQLiteRepository, UsageEventRow
-from freesearch.routers.control import clear_config_cache
 from freesearch.services.monitoring import clear_quota_poll_cache, effective_quotas_batch
+from freesearch.services.provider_runtime import clear_config_cache
 from tests.fixtures.execution import seed_execution_project
 from tests.fixtures.usage_ledger import all_usage_events
 
@@ -969,3 +969,53 @@ async def test_effective_quotas_batch_soft_zero_persistence(tmp_path: Path) -> N
         repeated = await effective_quotas_batch(database, ["parallel", "exa", "tavily"])
         assert len(recorded) - repeat_calls == 0
         assert repeated == combined
+
+
+async def test_quota_funds_are_credential_or_pool_scoped_but_provider_outages_apply(
+    tmp_path, monkeypatch
+):
+    """A provider outage and a credential's depleted funds have different scope."""
+    from tests.fixtures.a2_execution import PoolSpec, build_execution_world
+
+    world = await build_execution_world(
+        tmp_path, monkeypatch, labels=("a1", "a2"), pool=PoolSpec(constraints=[]), limits=False
+    )
+    repository = world.repository
+    first, sibling = (world.credentials[label].credential_id for label in ("a1", "a2"))
+    assert world.pool is not None
+    pool = world.pool.id
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+
+    def quota(remaining, observed):
+        return QuotaSnapshot(
+            provider="exa",
+            source=QuotaSource.AUTHORITATIVE,
+            remaining=Decimal(remaining),
+            observed_at=observed,
+        )
+
+    try:
+        await repository.record_quota(quota("0", now))
+        assert await repository.latest_quota("exa", credential_id=first) is None
+        assert await repository.latest_quota("exa", credential_id=sibling) is None
+        await repository.record_quota(quota("2", now), credential_id=first)
+        assert (await repository.latest_quota("exa", credential_id=first)).remaining == Decimal("2")
+        assert await repository.latest_quota("exa", credential_id=sibling) is None
+        await repository.record_quota(quota("3", now), credential_id=first, pool_id=pool)
+        for credential in (first, sibling):
+            assert (
+                await repository.latest_quota("exa", credential_id=credential, pool_id=pool)
+            ).remaining == Decimal("3")
+        await repository.record_health(
+            ProviderHealth(provider="exa", status=HealthStatus.HEALTHY, checked_at=now),
+            credential_id=first,
+        )
+        outage = ProviderHealth(
+            provider="exa", status=HealthStatus.UNAVAILABLE, checked_at=now + timedelta(seconds=1)
+        )
+        await repository.record_health(outage)
+        for credential in (first, sibling):
+            assert await repository.latest_health("exa", credential_id=credential) == outage
+        assert (await repository.latest_quota("exa")).remaining == Decimal("0")
+    finally:
+        await world.aclose()

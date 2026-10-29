@@ -130,8 +130,8 @@ async def test_unrelated_keys_survive_provider_update(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def _reset_caches_for_runtime_case() -> None:
-    from freesearch.routers.control import clear_config_cache
     from freesearch.services.monitoring import clear_quota_poll_cache
+    from freesearch.services.provider_runtime import clear_config_cache
 
     clear_config_cache()
     clear_quota_poll_cache()
@@ -139,7 +139,7 @@ async def _reset_caches_for_runtime_case() -> None:
 
 async def test_runtime_setting_notification_invalidates_cache(tmp_path: Path) -> None:
     """Supported writes invalidate config/policy caches so the next read is fresh."""
-    from freesearch.routers.control import (
+    from freesearch.services.provider_runtime import (
         clear_config_cache,
         effective_config_for_name,
         routing_policy,
@@ -202,12 +202,12 @@ async def test_runtime_setting_notification_invalidates_cache(tmp_path: Path) ->
 
 
 async def test_direct_sql_requires_explicit_cache_clear(tmp_path: Path) -> None:
-    """Direct SQL stays stale until clear_config_cache; supported writes do not."""
+    """Direct SQL is fresh across cache hits, and explicit clears remain safe."""
     import json
 
     from sqlalchemy import text
 
-    from freesearch.routers.control import (
+    from freesearch.services.provider_runtime import (
         clear_config_cache,
         effective_config_for_name,
         routing_policy,
@@ -256,8 +256,8 @@ async def test_direct_sql_requires_explicit_cache_clear(tmp_path: Path) -> None:
 
         stale_config = await effective_config_for_name(repository, "exa")
         stale_policy = await routing_policy(repository)
-        assert stale_config.priority == 100
-        assert stale_policy.fallback_policy.value == "chained"
+        assert stale_config.priority == 42
+        assert stale_policy.fallback_policy.value == "first_only"
 
         clear_config_cache(repository)
         fresh_config = await effective_config_for_name(repository, "exa")

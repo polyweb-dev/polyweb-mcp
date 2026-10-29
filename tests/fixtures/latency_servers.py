@@ -80,9 +80,9 @@ from freesearch.mcp.server import create_server, shutdown_injected_observability
 from freesearch.models.provider_limits import LimitRecordUpdate, RateBlock, RateWindowName
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
-from freesearch.routers.control import clear_config_cache
 from freesearch.services.monitoring import clear_quota_poll_cache
 from freesearch.services.provider_limits import ProviderLimitsService
+from freesearch.services.provider_runtime import clear_config_cache
 
 if TYPE_CHECKING:
     from pyinstrument.session import Session

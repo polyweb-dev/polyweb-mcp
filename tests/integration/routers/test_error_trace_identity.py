@@ -35,7 +35,7 @@ from tests.fixtures.auth import (
     register_and_login,
     temp_email,
 )
-from tests.fixtures.execution import allow_full_trace_capture, seed_execution_project
+from tests.fixtures.execution import allow_full_trace_capture, seed_app_bound_project
 
 
 @pytest.fixture
@@ -78,8 +78,7 @@ class _FailingAdapter(ProviderAdapter):
 
 
 async def test_single_search_error_trace_keeps_query_and_provider(
-    repository: SQLiteRepository,
-    auth_secret: str,
+    repository: SQLiteRepository, auth_secret: str, monkeypatch
 ) -> None:
     """An error trace records the query text and provider of the failed call."""
     await allow_full_trace_capture(repository)
@@ -90,7 +89,9 @@ async def test_single_search_error_trace_keeps_query_and_provider(
         headers = raw_auth_headers(pair["access_token"])
         pid = str(
             (
-                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+                await seed_app_bound_project(
+                    repository, user_id=account_id_from_pair(pair), app=app, monkeypatch=monkeypatch
+                )
             ).project_id
         )
         response = client.post(

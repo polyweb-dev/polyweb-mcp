@@ -44,6 +44,22 @@ class ExecutionAttribution(ContractModel):
     actor_id: UUID
 
 
+class AttemptBinding(ContractModel):
+    """The project binding, credential instance, and pool one attempt used.
+
+    Built only by the execution service after the binding and credential
+    checks pass, so telemetry can attribute every usage row, health
+    observation, quota snapshot, admission, and rate attempt to the exact
+    credential that served it.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    binding_id: UUID
+    credential_id: UUID
+    pool_id: UUID | None = None
+
+
 class TraceOperation(StrEnum):
     """Operation that produced a trace (the future-Answer expansion seam)."""
 

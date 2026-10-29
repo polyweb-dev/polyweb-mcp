@@ -112,7 +112,7 @@ class _World:
 
 
 @pytest.fixture
-def world(tmp_path: Path, auth_secret: str) -> Iterator[_World]:
+def world(tmp_path: Path, auth_secret: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[_World]:
     import asyncio
 
     loop = asyncio.new_event_loop()
@@ -123,6 +123,7 @@ def world(tmp_path: Path, auth_secret: str) -> Iterator[_World]:
         with TestClient(app) as client:
             state = _World(client, repository, adapter)
             state.loop_run = loop.run_until_complete
+            state.monkeypatch = monkeypatch
             yield state
     finally:
         loop.run_until_complete(repository.close())
@@ -132,6 +133,18 @@ def world(tmp_path: Path, auth_secret: str) -> Iterator[_World]:
 def _admin_project(world: _World, prefix: str = "keys-admin") -> tuple[dict[str, str], UUID, UUID]:
     headers, user_id = world.human(prefix)
     project = world.loop_run(seed_execution_project(world.repository, user_id=user_id))
+    from tests.fixtures.execution import bind_existing_project
+
+    world.loop_run(
+        bind_existing_project(
+            world.repository,
+            project.project_id,
+            user_id,
+            [world.adapter],
+            world.monkeypatch,
+            world.client.app.state.secret_store,
+        )
+    )
     return headers, user_id, project.project_id
 
 
