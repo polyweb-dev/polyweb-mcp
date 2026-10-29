@@ -40,9 +40,9 @@ from freesearch.models.provider_limits import (
 )
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.services.limits_sync import LimitSyncService
-from freesearch.services.monitoring import tracked_call
 from freesearch.services.provider_limits import ProviderLimitsService
-from tests.fixtures.execution import seed_execution_project
+from tests.fixtures.execution import FIXTURE_ACTOR, seed_execution_project
+from tests.fixtures.execution import attributed_tracked_call as tracked_call
 
 FIXED_AT = datetime(2026, 3, 10, 12, 0, 0, tzinfo=UTC)
 _KEY = SecretStr("keenable-test-secret")
@@ -317,6 +317,7 @@ async def test_failures_release_funds_reservations(
     await _seed_full(service, repository)
     admission = await service.admit(
         LimitCallContext(
+            **FIXTURE_ACTOR,
             provider="keenable",
             operation=LimitOperation.SEARCH,
             auth_mode=AuthMode.KEYED,
@@ -334,6 +335,7 @@ async def test_failures_release_funds_reservations(
     assert totals == []
     admission2 = await service.admit(
         LimitCallContext(
+            **FIXTURE_ACTOR,
             provider="keenable",
             operation=LimitOperation.SEARCH,
             auth_mode=AuthMode.KEYED,
@@ -418,6 +420,7 @@ async def test_keyless_operations_share_rate_capacity(
     for index in range(10):
         await service.admit(
             LimitCallContext(
+                **FIXTURE_ACTOR,
                 provider="keenable",
                 operation=LimitOperation.SEARCH,
                 auth_mode=AuthMode.KEYLESS,
@@ -428,6 +431,7 @@ async def test_keyless_operations_share_rate_capacity(
     try:
         await service.admit(
             LimitCallContext(
+                **FIXTURE_ACTOR,
                 provider="keenable",
                 operation=LimitOperation.FETCH,
                 auth_mode=AuthMode.KEYLESS,
@@ -440,6 +444,7 @@ async def test_keyless_operations_share_rate_capacity(
         assert exc.status_code == 429
     keyed = await service.admit(
         LimitCallContext(
+            **FIXTURE_ACTOR,
             provider="keenable",
             operation=LimitOperation.SEARCH,
             auth_mode=AuthMode.KEYED,
@@ -536,6 +541,7 @@ async def test_concurrent_search_fetch_share_pool_and_rate(
         try:
             return await service.admit(
                 LimitCallContext(
+                    **FIXTURE_ACTOR,
                     provider="keenable",
                     operation=op,
                     auth_mode=AuthMode.KEYED,
@@ -554,6 +560,7 @@ async def test_concurrent_search_fetch_share_pool_and_rate(
     try:
         await service.admit(
             LimitCallContext(
+                **FIXTURE_ACTOR,
                 provider="keenable",
                 operation=LimitOperation.SEARCH,
                 auth_mode=AuthMode.KEYED,

@@ -30,10 +30,14 @@ from freesearch.models.provider_limits import (
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
 from freesearch.services.provider_limits import ProviderLimitsService
-from tests.fixtures.api_keys import mcp_key_credentials
 from tests.fixtures.auth import TEMP_PASSWORD, raw_auth_headers, temp_email
-from tests.fixtures.execution import seed_member_project
+from tests.fixtures.execution import (
+    bind_existing_project,
+    bound_mcp_credentials,
+    seed_member_project,
+)
 from tests.fixtures.latency import OfflineAdapter
+from tests.integration.services.test_monitoring import _StubAdapter
 
 
 def _unlink_with_retries(path: Path, *, attempts: int = 20) -> None:
@@ -76,10 +80,11 @@ def _stub_only(monkeypatch: pytest.MonkeyPatch) -> None:
 async def test_generation_lifecycle_closes_cleanly(
     database: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _stub_only(monkeypatch)
     service_repository = await SQLiteRepository.open(database)
     try:
-        service, token, pid = await mcp_key_credentials(service_repository, "mcp-lifecycle")
+        service, token, pid = await bound_mcp_credentials(
+            service_repository, [_StubAdapter("x")], "mcp-lifecycle", monkeypatch
+        )
         server = create_server(
             None,
             database=database,
@@ -99,10 +104,11 @@ async def test_generation_lifecycle_closes_cleanly(
 async def test_overlapping_generations_share_one_repository(
     database: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _stub_only(monkeypatch)
     service_repository = await SQLiteRepository.open(database)
     try:
-        service, token, pid = await mcp_key_credentials(service_repository, "mcp-overlap")
+        service, token, pid = await bound_mcp_credentials(
+            service_repository, [_StubAdapter("x")], "mcp-overlap", monkeypatch
+        )
         server = create_server(
             None,
             database=database,
@@ -135,7 +141,7 @@ async def test_one_schedule_task_per_generation_with_clean_close(
     await first.__aenter__()
     try:
         after_first = set(asyncio.all_tasks())
-        assert len(after_first - before) >= 1
+        assert after_first == before  # No provider-wide OAuth/quota schedule remains.
         second = server._mcp_server.lifespan(server)
         await second.__aenter__()
         try:
@@ -188,7 +194,7 @@ async def _one_search_per_minute(repository: SQLiteRepository) -> None:
 
 
 async def test_injected_repository_mcp_runs_admission_like_rest(
-    tmp_path: Path, auth_secret: str
+    tmp_path: Path, auth_secret: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """An exhausted rate window denies the second call on BOTH transports.
 
@@ -209,7 +215,16 @@ async def test_injected_repository_mcp_runs_admission_like_rest(
             transport = httpx.ASGITransport(app=app)
             async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
                 headers = raw_auth_headers((await _register_and_login(client))["access_token"])
-                pid = str((await seed_member_project(rest_repository, headers)).project_id)
+                project = await seed_member_project(rest_repository, headers)
+                pid = str(project.project_id)
+                await bind_existing_project(
+                    rest_repository,
+                    project.project_id,
+                    project.actor_id,
+                    [rest_adapter],
+                    monkeypatch,
+                    app.state.secret_store,
+                )
                 body = {
                     "project_id": pid,
                     "query": "admission probe",
@@ -223,7 +238,9 @@ async def test_injected_repository_mcp_runs_admission_like_rest(
         assert rest_adapter.search_calls == 1
 
         mcp_adapter = _CountingAdapter()
-        service, token, mcp_pid = await mcp_key_credentials(mcp_repository, "mcp-admission")
+        service, token, mcp_pid = await bound_mcp_credentials(
+            mcp_repository, [mcp_adapter], "mcp-admission", monkeypatch
+        )
         server = create_server(
             [mcp_adapter],
             repository=mcp_repository,
@@ -291,39 +308,72 @@ class _GatedSyncService:
 
 
 async def test_injected_last_exit_stop_cannot_wipe_a_session_entering_meanwhile(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A session entering while the last exit still stops the old schedule task
-    keeps its own fresh limit generation, and its own exit stops that task."""
+    """Origin schedule race: an old teardown cannot close fresh scoped execution."""
+    import freesearch.mcp.server as module
+    from freesearch.services.execution import ExecutionService
 
-    _GatedSyncService.instances = []
-    _GatedSyncService.release = asyncio.Event()
-    monkeypatch.setattr("freesearch.mcp.server.LimitSyncService", _GatedSyncService)
     repository = await SQLiteRepository.open(tmp_path / "race.db")
+    release, started = asyncio.Event(), asyncio.Event()
+    closed = []
+    calls = []
+    real_close = ExecutionService.aclose
+    real_search = ExecutionService.search
+
+    async def close(service):
+        closed.append(service)
+        await real_close(service)
+
+    async def search(service, *args, **kwargs):
+        calls.append(service)
+        return await real_search(service, *args, **kwargs)
+
+    old_stop = module._stop_limits_task
+    stops = []
+
+    async def delayed(stop, task):
+        stops.append(1)
+        if len(stops) == 1:
+            started.set()
+            await release.wait()
+        await old_stop(stop, task)
+
+    monkeypatch.setattr(ExecutionService, "aclose", close)
+    monkeypatch.setattr(ExecutionService, "search", search)
+    monkeypatch.setattr(module, "_stop_limits_task", delayed)
+    adapter = _CountingAdapter()
+    service, key, pid = await bound_mcp_credentials(repository, [adapter], "mcp-race", monkeypatch)
+    server = create_server([adapter], repository=repository, auth_service=service, stdio_token=key)
+    first, second = server._mcp_server.lifespan(server), server._mcp_server.lifespan(server)
+    exiting = None
+    second_entered = False
     try:
-        server = create_server([_CountingAdapter()], repository=repository)
-        first = server._mcp_server.lifespan(server)
         await first.__aenter__()
-        assert len(_GatedSyncService.instances) == 1
-        old = _GatedSyncService.instances[0]
-
+        request = {"request": {"project_id": pid, "query": "race"}}
+        await server.call_tool("search", request)
         exiting = asyncio.create_task(first.__aexit__(None, None, None))
-        await asyncio.wait_for(old.cancelling.wait(), timeout=5)
-        assert not exiting.done(), "the last exit must still be stopping the old task"
-
-        second = server._mcp_server.lifespan(server)
+        await asyncio.wait_for(started.wait(), 5)
+        assert not exiting.done()
         await second.__aenter__()
-        assert len(_GatedSyncService.instances) == 2, "the entering session starts afresh"
-        fresh = _GatedSyncService.instances[1]
-
-        _GatedSyncService.release.set()
-        await asyncio.wait_for(exiting, timeout=5)
-        assert old.cancelled is True
-        assert fresh.cancelled is False, "the old stop must not touch the fresh generation"
-
+        second_entered = True
+        await server.call_tool("search", request)
+        assert calls[0] is not calls[1]
+        release.set()
+        await asyncio.wait_for(exiting, 5)
+        assert closed == [calls[0]]
+        await server.call_tool("search", request)
+        assert calls[2] is calls[1]
         await second.__aexit__(None, None, None)
-        assert fresh.cancelled is True, "the fresh session's own last exit stops its task"
+        second_entered = False
+        assert closed == [calls[0], calls[1]]
+        assert adapter.search_calls == 3
         await shutdown_injected_observability(server)
     finally:
-        _GatedSyncService.release.set()
+        release.set()
+        if exiting is not None:
+            await exiting
+        if second_entered:
+            await second.__aexit__(None, None, None)
         await repository.close()

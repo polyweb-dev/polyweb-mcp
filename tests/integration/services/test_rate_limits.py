@@ -28,6 +28,7 @@ from freesearch.models.provider_limits import (
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.services.provider_limits import ProviderLimitsService
 from tests.fixtures.database_lifecycle import unlink_with_retries
+from tests.fixtures.execution import FIXTURE_ACTOR
 
 FIXED_AT = datetime(2026, 3, 10, 12, 0, 0, tzinfo=UTC)
 
@@ -76,6 +77,7 @@ async def test_two_unit_hour_denies_third(repository) -> None:
     await svc.initialize()
     await svc.admit(
         LimitCallContext(
+            **FIXTURE_ACTOR,
             provider="synth",
             operation=LimitOperation.SEARCH,
             auth_mode=AuthMode.KEYED,
@@ -85,6 +87,7 @@ async def test_two_unit_hour_denies_third(repository) -> None:
     )
     await svc.admit(
         LimitCallContext(
+            **FIXTURE_ACTOR,
             provider="synth",
             operation=LimitOperation.SEARCH,
             auth_mode=AuthMode.KEYED,
@@ -95,6 +98,7 @@ async def test_two_unit_hour_denies_third(repository) -> None:
     with pytest.raises(LimitDeniedError) as exc:
         await svc.admit(
             LimitCallContext(
+                **FIXTURE_ACTOR,
                 provider="synth",
                 operation=LimitOperation.SEARCH,
                 auth_mode=AuthMode.KEYED,
@@ -113,13 +117,18 @@ async def test_vendor_observation_not_double_counted(repository) -> None:
     one follows it. Only the later attempt may reduce the vendor headroom, so
     exactly 1 unit remains at ``T``; counting the old attempt again would leave
     0 and wrongly deny the next call.
+
+    A2: the post-lock service clock is the authoritative reservation instant
+    (a caller's ``requested_at`` can only move a stamp forward), so each
+    attempt's time is set through the injected clock, not the context.
     """
 
+    now = [FIXED_AT]
     svc = ProviderLimitsService(
         repository.limits,
         records=[_record()],
         tier_defaults={},
-        clock=lambda: FIXED_AT,
+        clock=lambda: now[0],
     )
     await svc.initialize()
     observed_at = FIXED_AT - timedelta(seconds=300)
@@ -138,6 +147,7 @@ async def test_vendor_observation_not_double_counted(repository) -> None:
 
     def _ctx(attempt: str, at: datetime) -> LimitCallContext:
         return LimitCallContext(
+            **FIXTURE_ACTOR,
             provider="synth",
             operation=LimitOperation.SEARCH,
             auth_mode=AuthMode.KEYED,
@@ -161,8 +171,11 @@ async def test_vendor_observation_not_double_counted(repository) -> None:
     # Before any local attempt the vendor headroom is reported unchanged.
     assert await _remaining() == (Decimal("2"), Decimal("2"))
 
-    await svc.admit(_ctx("v-old", FIXED_AT - timedelta(seconds=400)))
-    await svc.admit(_ctx("v-new", FIXED_AT - timedelta(seconds=100)))
+    now[0] = FIXED_AT - timedelta(seconds=400)
+    await svc.admit(_ctx("v-old", now[0]))
+    now[0] = FIXED_AT - timedelta(seconds=100)
+    await svc.admit(_ctx("v-new", now[0]))
+    now[0] = FIXED_AT
     assert await _persisted() == Decimal("2")
     assert await _persisted(since=observed_at) == Decimal("1")
     # Only the post-observation attempt is subtracted from the vendor's 2.
@@ -190,6 +203,7 @@ async def test_window_reset_restores_capacity(repository) -> None:
     await svc.initialize()
     await svc.admit(
         LimitCallContext(
+            **FIXTURE_ACTOR,
             provider="synth",
             operation=LimitOperation.SEARCH,
             auth_mode=AuthMode.KEYED,
@@ -199,6 +213,7 @@ async def test_window_reset_restores_capacity(repository) -> None:
     )
     await svc.admit(
         LimitCallContext(
+            **FIXTURE_ACTOR,
             provider="synth",
             operation=LimitOperation.SEARCH,
             auth_mode=AuthMode.KEYED,
@@ -209,6 +224,7 @@ async def test_window_reset_restores_capacity(repository) -> None:
     later = FIXED_AT + timedelta(hours=2)
     admission = await svc.admit(
         LimitCallContext(
+            **FIXTURE_ACTOR,
             provider="synth",
             operation=LimitOperation.SEARCH,
             auth_mode=AuthMode.KEYED,
@@ -241,6 +257,7 @@ async def test_tavily_rate_windows_expose_shared_bucket_headroom(repository) -> 
     await svc.apply_tavily_config(ProviderConfig(), auth_mode=AuthMode.KEYED)
     await svc.admit(
         LimitCallContext(
+            **FIXTURE_ACTOR,
             provider="tavily",
             operation=LimitOperation.SEARCH,
             auth_mode=AuthMode.KEYED,

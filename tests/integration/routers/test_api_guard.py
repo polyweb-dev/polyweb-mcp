@@ -37,7 +37,7 @@ from tests.fixtures.auth import (
     register_and_login,
     temp_email,
 )
-from tests.fixtures.execution import seed_execution_project
+from tests.fixtures.execution import seed_app_bound_project
 
 
 class _CountingAdapter(ProviderAdapter):
@@ -93,13 +93,16 @@ class _CountingAdapter(ProviderAdapter):
 
 
 @pytest_asyncio.fixture
-async def guard_client(tmp_path: Path, auth_secret: str) -> TestClient:
+async def guard_client(
+    tmp_path: Path, auth_secret: str, monkeypatch: pytest.MonkeyPatch
+) -> TestClient:
     repository = await SQLiteRepository.open(tmp_path / "guard.db")
     adapter = _CountingAdapter("stubby")
     app = create_app([adapter], repository=repository)
     app.state.counting_adapter = adapter
     with TestClient(app) as client:
         client.execution_repository = repository
+        client.execution_patcher = monkeypatch
         yield client
     await repository.close()
 
@@ -168,8 +171,11 @@ async def test_rejected_requests_create_no_trace_root(guard_client: TestClient) 
     headers = raw_auth_headers(pair["access_token"])
     pid = str(
         (
-            await seed_execution_project(
-                guard_client.execution_repository, user_id=account_id_from_pair(pair)
+            await seed_app_bound_project(
+                guard_client.execution_repository,
+                user_id=account_id_from_pair(pair),
+                app=guard_client.app,
+                monkeypatch=guard_client.execution_patcher,
             )
         ).project_id
     )

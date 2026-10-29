@@ -15,7 +15,8 @@ from freesearch.configuration.provider_config import ProviderConfig
 from freesearch.infrastructure.resilience import ProviderOperationError
 from freesearch.models.contracts import ProviderError, SearchRequest
 from freesearch.models.provider_limits import AuthMode, LimitOperation
-from freesearch.routers.api import _fanout_outcomes, _terminal_tavily_402
+from freesearch.services.execution import _fanout_outcomes
+from freesearch.services.monitoring import _terminal_quota_402
 
 
 class _FakeSDK:
@@ -32,7 +33,9 @@ def _keyless_adapter() -> tuple[TavilyAdapter, httpx.AsyncClient]:
 
 
 def test_construction_keyless_without_key() -> None:
-    from freesearch.routers.control import _build_with_resolved_secret
+    from freesearch.services.provider_runtime import (
+        build_adapter_with_secret as _build_with_resolved_secret,
+    )
 
     client = httpx.AsyncClient(timeout=30.0)
     try:
@@ -73,7 +76,7 @@ def _terminal_402() -> ProviderOperationError:
 
 def test_terminal_402_single_preserved() -> None:
     error = _terminal_402()
-    assert _terminal_tavily_402(error) is error
+    assert _terminal_quota_402(error) is True
     other = ProviderOperationError(
         ProviderError(
             provider="tavily",
@@ -83,8 +86,8 @@ def test_terminal_402_single_preserved() -> None:
             status_code=429,
         )
     )
-    assert _terminal_tavily_402(other) is None
-    assert _terminal_tavily_402(ValueError("boom")) is None
+    assert _terminal_quota_402(other) is False
+    assert _terminal_quota_402(ValueError("boom")) is False
 
 
 async def test_terminal_402_fanout_cancels_and_raises() -> None:

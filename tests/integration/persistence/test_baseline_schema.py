@@ -380,6 +380,8 @@ _SPEC_COLUMNS: dict[str, frozenset[str]] = {
         "binding_id",
         "upstream_pool_id",
         "request_id",
+        "actor_type",
+        "actor_id",
     ),
     "provider_rate_observations": _columns(
         "bucket_id",
@@ -412,6 +414,8 @@ _SPEC_COLUMNS: dict[str, frozenset[str]] = {
         "binding_id",
         "upstream_pool_id",
         "request_id",
+        "actor_type",
+        "actor_id",
     ),
     "quota_snapshots": _columns(
         "id",

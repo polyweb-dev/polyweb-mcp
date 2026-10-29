@@ -22,6 +22,7 @@ from freesearch.models.provider_limits import (
     RateWindowName,
 )
 from freesearch.services.rate_limits import RateLimitService
+from tests.fixtures.execution import FIXTURE_ACTOR
 
 FIXED = datetime(2026, 1, 15, 12, 0, 0, tzinfo=UTC)
 
@@ -86,6 +87,7 @@ def _context(
     operation: LimitOperation = LimitOperation.SEARCH,
 ) -> LimitCallContext:
     return LimitCallContext(
+        **FIXTURE_ACTOR,
         provider=provider,
         operation=operation,
         auth_mode=AuthMode.KEYED,
@@ -130,7 +132,10 @@ class _FakeRateRepository:
         window: RateWindowName,
         units: Decimal,
         attempted_at: datetime,
+        actor_type: object = None,
+        actor_id: object = None,
     ) -> None:
+        # Revision 0002: the real repository also persists the verified actor.
         for item in self.attempts:
             if item["attempt_id"] == attempt_id and item["bucket_id"] == bucket_id:
                 return
@@ -144,6 +149,8 @@ class _FakeRateRepository:
                 "window": window,
                 "units": units,
                 "attempted_at": attempted_at,
+                "actor_type": actor_type,
+                "actor_id": actor_id,
             }
         )
 

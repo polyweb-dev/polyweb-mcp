@@ -25,7 +25,7 @@ from freesearch.models.provider_limits import (
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.services.provider_limits import ProviderLimitsService
 from tests.fixtures.database_lifecycle import unlink_with_retries
-from tests.fixtures.execution import seed_execution_project
+from tests.fixtures.execution import FIXTURE_ACTOR, seed_execution_project
 
 FIXED_AT = datetime(2026, 3, 10, 12, 0, 0, tzinfo=UTC)
 
@@ -132,6 +132,7 @@ async def test_admission_and_ledger_debit_basic_then_advanced(
     ):
         admission = await service.admit(
             LimitCallContext(
+                **FIXTURE_ACTOR,
                 provider="tavily",
                 operation=LimitOperation.SEARCH,
                 auth_mode=AuthMode.KEYED,
@@ -160,6 +161,7 @@ async def test_funds_gate_terminal_vendor_402_denies(
     try:
         await service.admit(
             LimitCallContext(
+                **FIXTURE_ACTOR,
                 provider="tavily",
                 operation=LimitOperation.SEARCH,
                 auth_mode=AuthMode.KEYED,
@@ -206,6 +208,7 @@ async def test_paygo_flag_admits_after_free_zero(
     await repository.limits.apply_snapshot(snapshot)
     admission = await service.admit(
         LimitCallContext(
+            **FIXTURE_ACTOR,
             provider="tavily",
             operation=LimitOperation.SEARCH,
             auth_mode=AuthMode.KEYED,
@@ -402,7 +405,7 @@ async def test_pinned_second_call_after_402_denies_locally(
     from freesearch.adapters.tavily import TavilyAdapter
     from freesearch.infrastructure.resilience import ProviderOperationError
     from freesearch.models.contracts import UsageOperation
-    from freesearch.services.monitoring import tracked_call
+    from tests.fixtures.execution import attributed_tracked_call as tracked_call
 
     class _FailingSDK:
         calls = 0
@@ -455,6 +458,7 @@ async def test_pinned_second_call_after_402_denies_locally(
     try:
         await service.admit(
             LimitCallContext(
+                **FIXTURE_ACTOR,
                 provider="tavily",
                 operation=LimitOperation.SEARCH,
                 auth_mode=AuthMode.KEYED,
@@ -605,6 +609,7 @@ async def test_spent_key_with_funded_plan_denies_key_cap(
     with pytest.raises(LimitDeniedError) as excinfo:
         await service.admit(
             LimitCallContext(
+                **FIXTURE_ACTOR,
                 provider="tavily",
                 operation=LimitOperation.SEARCH,
                 auth_mode=AuthMode.KEYED,

@@ -16,8 +16,9 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
 from typing import Annotated, Any, Final, Literal
+from uuid import UUID
 
-from pydantic import BeforeValidator, Field, PlainSerializer
+from pydantic import BeforeValidator, ConfigDict, Field, PlainSerializer
 
 from freesearch.models.contracts import (
     ContractModel,
@@ -26,6 +27,7 @@ from freesearch.models.contracts import (
     SearchRequest,
     UnitKind,
 )
+from freesearch.models.observability import ActorType
 
 # Approved common reference: one CRD is USD 0.001 of priced native use.
 CRD_USD_REFERENCE: Final[Decimal] = Decimal("0.001")
@@ -219,6 +221,26 @@ class RateBlock(ContractModel):
     published: bool = False
 
 
+class PoolRateConstraint(ContractModel):
+    """One documented upstream-pool rate constraint.
+
+    This is the settled contract for the ``upstream_quota_pools.constraints``
+    JSON list: any other kind, algorithm, unit, field, or operation selector is
+    invalid instead of being silently skipped. An omitted ``operations``
+    selector is one allowance shared by both operations; a present selector
+    declares independent per-operation allowances.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["rate"] = "rate"
+    algorithm: Literal["trailing_window"] = "trailing_window"
+    window: int | str
+    limit: ExactDecimal
+    unit: Literal["requests", "urls"] = "requests"
+    operations: tuple[Literal["search", "fetch"], ...] | None = Field(default=None, min_length=1)
+
+
 class BudgetBlock(ContractModel):
     """Native budget description for one rail.
 
@@ -404,10 +426,34 @@ class RateAdmission(ContractModel):
     provider: str
     auth_mode: AuthMode
     attempt_id: str
+    operation: LimitOperation | None = None
     reservations: list[RateReservation] = Field(default_factory=list)
     denials: list[RateDenial] = Field(default_factory=list)
     retry_after_seconds: int | None = None
     source: str = "local"
+    # The verified actor of the admitted attempt, copied from the trusted
+    # call context; durable rate rows refuse an attempt without one.
+    actor_type: ActorType | None = None
+    actor_id: UUID | None = None
+
+
+class ProviderObservationScope(ContractModel):
+    """Resolved credential identity carried through polling and reconciliation."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    credential_id: UUID
+    upstream_pool_id: UUID | None = None
+    credential_generation: int = 0
+
+    def native_pool_id(self, base: str) -> str:
+        """Use the same funds identity as a scoped execution admission."""
+        scope = (
+            f"pool:{self.upstream_pool_id}"
+            if self.upstream_pool_id is not None
+            else f"cred:{self.credential_id}"
+        )
+        return f"{base}#{scope}"
 
 
 class NativeUsageSnapshot(ContractModel):
@@ -425,6 +471,8 @@ class NativeUsageSnapshot(ContractModel):
     actual_spend_usd: OptionalExactDecimal = None
     reset_at: datetime | None = None
     credential_generation: int = 0
+    credential_id: UUID | None = None
+    upstream_pool_id: UUID | None = None
     plan_name: str | None = None
     usage_url: str | None = None
     tiers: list[TierBalance] = Field(default_factory=list)
@@ -450,6 +498,7 @@ class SyncClaim(ContractModel):
     provider: str
     owner: str
     now: datetime
+    pool_id: str | None = None
     lease_seconds: int = 60
     credential_generation: int = 0
 
@@ -515,6 +564,15 @@ class LimitCallContext(ContractModel):
     request: SearchRequest | FetchRequest | None = None
     requested_at: datetime
     credential_generation: int = 0
+    # Trusted consumer attribution resolved from a verified project context;
+    # never caller input, and never a substitute for the live scope decision.
+    project_id: UUID | None = None
+    credential_id: UUID | None = None
+    binding_id: UUID | None = None
+    upstream_pool_id: UUID | None = None
+    request_id: str | None = None
+    actor_type: ActorType | None = None
+    actor_id: UUID | None = None
 
 
 class LimitAdmission(ContractModel):
@@ -532,6 +590,13 @@ class LimitAdmission(ContractModel):
     expires_at: datetime
     rate_reservations: list[RateReservation] = Field(default_factory=list)
     local_only: bool = False
+    project_id: UUID | None = None
+    credential_id: UUID | None = None
+    binding_id: UUID | None = None
+    upstream_pool_id: UUID | None = None
+    request_id: str | None = None
+    actor_type: ActorType | None = None
+    actor_id: UUID | None = None
 
     @property
     def finalized(self) -> bool:
@@ -737,10 +802,10 @@ class ProviderLimitsResponse(ContractModel):
 
 
 class LimitStoreUnavailable(RuntimeError):
-    """Raised when a limit write has no repository to persist into."""
+    """Raised when a limit write or capacity check cannot reach durable storage."""
 
     def __init__(self, provider: str) -> None:
-        super().__init__(f"{provider}: no repository is available for a limit write")
+        super().__init__(f"{provider}: the limit store is unavailable for a metered write")
         self.provider = provider
 
 

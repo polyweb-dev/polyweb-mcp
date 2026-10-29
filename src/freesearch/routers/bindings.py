@@ -26,9 +26,9 @@ from freesearch.models.projects import ProjectBindingRead
 from freesearch.models.providers import BindingCreate, BindingUpdate, ProjectProvidersRead
 from freesearch.models.users import UserPrincipal
 from freesearch.routers.auth import current_principal
-from freesearch.routers.control import effective_config_for_name
 from freesearch.routers.control_errors import control_repository, register_control_error_handlers
 from freesearch.services.provider_bindings import ProviderBindingService
+from freesearch.services.provider_runtime import effective_config_for_name
 
 _Principal = Annotated[UserPrincipal, Depends(current_principal)]
 

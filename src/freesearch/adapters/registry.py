@@ -1,13 +1,8 @@
-"""Adapter-owned construction registry shared by the REST and MCP transports.
+"""Provider constructors for credential-scoped execution and resource cleanup.
 
-This module is the canonical home of the provider constructor registry
-(``_ADAPTERS``), the :func:`adapter_factory` control-plane seam, and the
-:func:`build_adapters` / :func:`close_adapters` generation helpers. Both
-transports consume it — :mod:`freesearch.routers.control` builds newly
-configured adapters on demand under the app control lock, and
-:mod:`freesearch.mcp.server` builds/tears down owned generations under its
-lifespan refcount lock. ``freesearch.mcp.server`` re-exports these names so
-existing ``freesearch.mcp.server.*`` lookup/patch paths keep working.
+Execution resolves A4 credential material before asking adapter_factory for
+its constructor. No generation builds a provider-name singleton or infers an
+execution credential from the process environment.
 """
 
 from collections.abc import Callable, Sequence
@@ -23,8 +18,6 @@ from freesearch.adapters.parallel import ParallelAdapter
 from freesearch.adapters.tavily import TavilyAdapter
 from freesearch.adapters.tinyfish import TinyfishAdapter
 from freesearch.adapters.youcom import YoucomAdapter
-from freesearch.configuration.provider_config import get_provider_configs
-from freesearch.infrastructure.http import create_async_client
 from freesearch.infrastructure.secrets import ProviderName
 
 _ADAPTERS: dict[ProviderName, Callable[[httpx.AsyncClient], ProviderAdapter]] = {
@@ -66,51 +59,3 @@ async def close_adapters(
         await adapter.aclose()
     if client is not None:
         await client.aclose()
-
-
-def build_adapters(client: httpx.AsyncClient | None = None) -> list[ProviderAdapter]:
-    """Return credentialed adapters in configured priority order.
-
-    Each adapter resolves its own credential through the shared resolver at
-    construction; providers without a key are skipped so the server runs with
-    whatever keys are present. Keenable operates in keyless public mode when
-    unconfigured. An administrator OFF choice does not skip construction: each
-    request filters the candidates.
-    """
-
-    http_client = client or create_async_client()
-    adapters: list[ProviderAdapter] = []
-    for name, record in sorted(
-        get_provider_configs().items(), key=lambda item: (item[1].priority, item[0].value)
-    ):
-        adapter_cls = _ADAPTERS.get(name)
-        if adapter_cls is None:
-            continue
-        try:
-            if name is ProviderName.PARALLEL:
-                adapters.append(
-                    ParallelAdapter(http_client, free_seed=record.parallel_free_seed_usd)
-                )
-            elif name is ProviderName.EXA:
-                adapters.append(
-                    ExaAdapter(
-                        http_client,
-                        monthly_budget=record.exa_monthly_budget_usd,
-                        manual_starting_credits=record.exa_manual_starting_credits_usd,
-                    )
-                )
-            elif name is ProviderName.TAVILY:
-                # Keyless public search and extract run without a vault key;
-                # the explicit non-secret configuration values ride along.
-                adapters.append(
-                    TavilyAdapter(
-                        http_client,
-                        key_environment=record.tavily_key_environment,
-                        paygo_enabled=record.tavily_paygo_enabled,
-                    )
-                )
-            else:
-                adapters.append(adapter_cls(http_client))
-        except Exception:
-            continue  # provider without a configured key fails closed at construction
-    return adapters

@@ -42,7 +42,7 @@ from tests.fixtures.auth import (
     register_and_login,
     temp_email,
 )
-from tests.fixtures.execution import seed_execution_project
+from tests.fixtures.execution import bdd_bind_project, seed_execution_project
 
 
 class _CountingAdapter(ProviderAdapter):
@@ -113,6 +113,7 @@ def step_given_key_api(context: Any) -> None:
         seed_execution_project(context.repository, user_id=account_id_from_pair(pair))
     )
     context.key_project_id = str(project.project_id)
+    bdd_bind_project(context, context.app, project.project_id, project.actor_id)
 
 
 @when("the project administrator issues an API key through the API")

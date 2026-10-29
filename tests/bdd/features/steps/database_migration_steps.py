@@ -23,7 +23,8 @@ from freesearch.persistence.database_migrations import (
     validate_database_schema,
 )
 
-_ALPHA_BASELINE = "0001_alpha_baseline"
+# 0001_alpha_baseline remains the baseline; fresh databases include the additive A2 head.
+_MIGRATION_HEAD = "0002_capacity_actor"
 
 
 def _scenario_root(context: Any) -> Path:
@@ -67,8 +68,8 @@ def _create_older_database(database: Path, revision: str) -> None:
 
 def _assert_at_alpha_baseline(database: Path) -> None:
     status = database_status(database)
-    assert migration_head() == _ALPHA_BASELINE
-    assert status.current_revision == _ALPHA_BASELINE, status
+    assert migration_head() == _MIGRATION_HEAD
+    assert status.current_revision == _MIGRATION_HEAD, status
     assert status.schema_valid is True, status
 
 
@@ -88,7 +89,7 @@ def when_prepare_selected_database(context: Any) -> None:
 def then_selected_database_at_baseline(context: Any) -> None:
     result = context.migration_result
     assert result.previous_revision is None
-    assert result.current_revision == _ALPHA_BASELINE
+    assert result.current_revision == _MIGRATION_HEAD
     assert result.changed is True
     _assert_at_alpha_baseline(Path(context.database_path))
 
@@ -129,7 +130,7 @@ def then_refused_with_reset_message(context: Any, revision: str) -> None:
     message = str(error)
     assert str(absolute_database_path(context.database_path)) in message, message
     assert revision in message, message
-    assert _ALPHA_BASELINE in message, message
+    assert _MIGRATION_HEAD in message, message
     assert "FREESEARCH_DB" in message, message
     assert "-wal" in message and "-shm" in message, message
 

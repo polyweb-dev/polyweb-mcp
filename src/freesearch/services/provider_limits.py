@@ -18,7 +18,7 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from math import ceil
 from typing import Final, Literal
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -78,9 +78,14 @@ from freesearch.models.provider_limits import (
     effective_attempt_deadline,
     local_funds_denial,
     local_rate_denial,
+    native_pool_id,
     unpriced_ceiling_error,
 )
-from freesearch.persistence.limit_repository import LimitRepository
+from freesearch.persistence.limit_repository import (
+    AttemptReservation,
+    LimitRepository,
+    StrictAttemptSpec,
+)
 from freesearch.services.credit_units import (
     crd_view,
     effective_crd,
@@ -369,25 +374,33 @@ class ProviderLimitsService:
         window has no capacity, and a local denial consumes no reservation.
         """
 
+        record, admission = await self._admission_candidate(context)
+        if self._repository is None:
+            return admission.model_copy(update={"local_only": True})
+        # The repository rechecks rate capacity inside its transaction and may
+        # raise LimitDeniedError from the atomic recheck; it propagates
+        # unchanged to the router transport.
+        return await self._repository.reserve(admission, record=record, clock=self._clock)
+
+    async def _admission_candidate(
+        self, context: LimitCallContext
+    ) -> tuple[ProviderLimitRecord, LimitAdmission]:
+        """Resolve the catalog record, funds/rate decision, and reservation."""
+
         record = self._record(context.provider, context.operation, context.auth_mode)
         rate_admission = await self._rates.admit(context)
-        request = _as_request(context)
-        pool_id: str | None = None
+        # The scoped pool row may be created here, so the pool is chosen before
+        # the funds reads open their shared snapshot. These reads are only a
+        # fast pre-check: the repository reservation rechecks Tavily capacity
+        # under its own write lock, so this snapshot is never the authority.
+        pool_id = await self._selected_pool_id(record, _as_request(context), context=context)
         if self._repository is None:
-            decision, reasons = await self._funds_decision(record, context)
-            if decision is _FUNDS_OK and rate_admission.admitted:
-                pool_id = await self._selected_pool_id(record, request)
+            decision, reasons = await self._funds_decision(record, context, pool_id=pool_id)
         else:
-            # Reuse the session for the funds reads and durable reservation.
-            # The reservation commits before returning, but SQLite's legacy
-            # read behavior does not serialize the pre-write checks against
-            # concurrent reservations. A denial exits before a write is attempted.
             async with self._repository.session() as session:
-                decision, reasons = await self._funds_decision(record, context, session=session)
-                if decision is _FUNDS_OK and rate_admission.admitted:
-                    pool_id = await self._selected_pool_id(record, request, session=session)
-                    admission = self._reservation(record, context, rate_admission, pool_id)
-                    return await self._repository.reserve(admission, record=record, session=session)
+                decision, reasons = await self._funds_decision(
+                    record, context, pool_id=pool_id, session=session
+                )
         if decision is _FUNDS_UNPRICED:
             raise unpriced_ceiling_error(context.provider, context.operation)
         if decision is _FUNDS_DENIED:
@@ -416,8 +429,87 @@ class ProviderLimitsService:
                 reasons=rate_reasons,
                 retry_after_seconds=rate_admission.retry_after_seconds,
             )
-        admission = self._reservation(record, context, rate_admission, pool_id)
-        return admission.model_copy(update={"local_only": True})
+        return record, self._reservation(record, context, rate_admission, pool_id)
+
+    async def admit_attempt(
+        self, context: LimitCallContext, spec: StrictAttemptSpec | None
+    ) -> AttemptReservation:
+        """Reserve native funds and strict capacity in one transaction.
+
+        The execution service calls this once per actual dispatch. The native
+        admission and the strict pool/project reservation share the context's
+        attempt id, so a strict denial rolls back the native reservation
+        instead of leaking it and the concurrency check never counts a sibling
+        row of the same attempt.
+        """
+
+        record, admission = await self._admission_candidate(context)
+        if self._repository is None:
+            return AttemptReservation(
+                attempt_id=context.attempt_id,
+                admission=admission.model_copy(update={"local_only": True}),
+            )
+        return await self._repository.reserve_attempt(
+            attempt_id=context.attempt_id,
+            provider=context.provider,
+            operation=context.operation,
+            auth_mode=context.auth_mode,
+            admission=admission,
+            spec=spec,
+            record=record,
+        )
+
+    def observation_pool_id(self, provider: str, auth_mode: AuthMode) -> str | None:
+        """Return the catalog funds pool used by authoritative usage polling."""
+        return next(
+            (
+                record.native_pool_id
+                for record in self._records
+                if record.provider == provider
+                and record.auth_mode is auth_mode
+                and record.native_pool_id is not None
+            ),
+            None,
+        )
+
+    async def record_uncertain(
+        self, admission: LimitAdmission, *, reason: str, upstream_complete: bool = False
+    ) -> None:
+        """Finalize one dispatched attempt whose upstream receipt is unknown.
+
+        A cancellation after dispatch cannot prove the vendor skipped the
+        call, so the reservation is not refunded: it finalizes with the
+        reserved native and credit amounts (and keeps its rate units). Vendor
+        truth reconciles a later usage poll; the local books stay conservative.
+        """
+
+        if self._repository is None:
+            return
+        await self._repository.finalize(
+            LimitDebit(
+                attempt_id=admission.attempt_id,
+                provider=admission.provider,
+                operation=admission.operation,
+                auth_mode=admission.auth_mode,
+                pool_id=admission.pool_id,
+                outcome="failure",
+                native_units=admission.reserved_native,
+                successful_urls=0,
+                crd_debit=admission.reserved_crd,
+                native_unit=self._record(
+                    admission.provider, admission.operation, admission.auth_mode
+                ).native_unit,
+                reason="local_unknown_charge" if upstream_complete else "local_uncertain",
+                audit_source="local",
+            )
+        )
+
+    async def release_admission(self, admission: LimitAdmission) -> None:
+        """Refund a reservation whose vendor call provably never started."""
+
+        if self._repository is None:
+            return
+        await self._repository.release(admission.attempt_id, "cancelled", refund_rate=True)
 
     async def record_success(
         self,
@@ -436,10 +528,15 @@ class ProviderLimitsService:
 
         record = self._record(admission.provider, admission.operation, admission.auth_mode)
         daily_tier = self._daily_tier(record)
+        # A credential/pool-scoped daily pool (``<daily>#cred:...``) is the
+        # same declared tier for this one credential instance.
         daily = (
             daily_tier is not None
             and admission.pool_id is not None
-            and admission.pool_id == daily_tier.pool_id
+            and (
+                admission.pool_id == daily_tier.pool_id
+                or admission.pool_id.startswith(f"{daily_tier.pool_id}#")
+            )
         )
         if daily:
             native_units: Decimal | None = Decimal("1")
@@ -515,20 +612,24 @@ class ProviderLimitsService:
             )
         )
 
-    async def record_terminal_402(self, provider: str, auth_mode: AuthMode) -> None:
+    async def record_terminal_402(
+        self,
+        provider: str,
+        auth_mode: AuthMode,
+        *,
+        credential_id: UUID | None = None,
+        upstream_pool_id: UUID | None = None,
+    ) -> None:
         """Write one terminal out-of-Credits observation after a vendor 402.
 
-        The legacy quota table alone does not gate the next pinned call: the
-        funds precheck reads the native pool, so the terminal zero is mirrored
-        into one native pool with provenance ``vendor_402``. The pool comes
-        from the provider's record on the calling auth rail that declares a
-        ``native_pool_id`` (for the keyed Tavily rail that is
-        ``tavily:keyed:credit``); a keyless rail declares none, so it stays
-        silent. A second pinned call then denies locally before vendor I/O.
-        A missing repository, a record without a native pool row, a missing
-        pool, or a failed write stays silent: the next usage poll or monthly
-        refill restores pool truth. The repository's own snapshot guards keep
-        the terminal record ahead of later vendor observations.
+        A credential-scoped or shared-pool attempt records its zero against the
+        exact resolved pool and credential instance, so an unrelated credential
+        of the same provider stays usable. Only an unattributed provider-wide
+        call keeps the legacy catalog-pool behavior. The same terminal fact is
+        also stored as a credential-scoped quota observation, which the routing
+        plan reads per credential. A missing pool, credential store, or failed
+        write stays silent: the next usage poll or monthly refill restores pool
+        truth.
         """
 
         record = next(
@@ -541,12 +642,32 @@ class ProviderLimitsService:
             ),
             None,
         )
-        if record is None or record.native_pool_id is None or self._repository is None:
+        if record is None or self._repository is None:
             return
-        pool_id = record.native_pool_id
+        base_pool_id = record.native_pool_id
+        if base_pool_id is None:
+            return
+        if upstream_pool_id is not None:
+            pool_id = f"{base_pool_id}#pool:{upstream_pool_id}"
+        elif credential_id is not None:
+            pool_id = f"{base_pool_id}#cred:{credential_id}"
+        else:
+            pool_id = base_pool_id
         pool = await self._repository.get_pool(pool_id)
+        if pool is None and pool_id != base_pool_id:
+            pool = await self._repository.ensure_pool(
+                NativePool(
+                    pool_id=pool_id,
+                    provider=provider,
+                    auth_mode=auth_mode,
+                    native_unit=record.native_unit or UnitKind.REQUEST,
+                    source="credential_scope",
+                    confidence=Confidence.UNKNOWN,
+                )
+            )
         if pool is None:
             return
+        now = self._clock()
         with contextlib.suppress(Exception):
             await self._repository.apply_snapshot(
                 NativeUsageSnapshot(
@@ -554,12 +675,12 @@ class ProviderLimitsService:
                     provider=provider,
                     auth_mode=auth_mode,
                     native_unit=pool.native_unit,
-                    observed_at=self._clock(),
+                    observed_at=now,
                     source=_TAVILY_TERMINAL_SOURCE,
                     confidence=Confidence.OBSERVED,
                     remaining=Decimal("0"),
                     allowance=pool.allowance,
-                    reset_at=pool.reset_at or _next_month_start(self._clock()),
+                    reset_at=pool.reset_at or _next_month_start(now),
                     credential_generation=pool.credential_generation,
                     plan_name=record.plan_name,
                 )
@@ -586,6 +707,13 @@ class ProviderLimitsService:
             created_at=created,
             expires_at=effective_attempt_deadline(created),
             rate_reservations=rate_admission.reservations,
+            project_id=context.project_id,
+            credential_id=context.credential_id,
+            binding_id=context.binding_id,
+            upstream_pool_id=context.upstream_pool_id,
+            request_id=context.request_id,
+            actor_type=context.actor_type,
+            actor_id=context.actor_id,
         )
 
     async def _selected_pool_id(
@@ -593,24 +721,97 @@ class ProviderLimitsService:
         record: ProviderLimitRecord,
         request: SearchRequest | FetchRequest | None,
         *,
-        session: AsyncSession | None = None,
+        context: LimitCallContext | None = None,
     ) -> str | None:
         """Return the pool an attempt draws on, preferring a covering daily pool.
 
-        The estimated daily free pool covers a search only while it still holds
-        the whole request cost, so an exhausted daily pool permits a funded paid
-        search instead of denying it.
+        A project credential's private vendor balance is keyed to that
+        credential, and a credential linked to a shared upstream pool draws on
+        the pool's one balance; only an unattributed/system attempt keeps the
+        provider-wide catalog pool. A scoped pool row is created without a
+        balance first, so an unknown balance stays eligible until a vendor
+        observation or terminal 402 records the truth.
         """
 
+        base = record.native_pool_id
+        scoped = self._scoped_pool_id(base, record, context)
+        if scoped is None or self._repository is None:
+            return scoped
+        if scoped != base:
+            await self._repository.ensure_pool(
+                NativePool(
+                    pool_id=scoped,
+                    provider=record.provider,
+                    auth_mode=record.auth_mode,
+                    native_unit=record.native_unit or UnitKind.REQUEST,
+                    source="credential_scope",
+                    confidence=Confidence.UNKNOWN,
+                )
+            )
         daily_id = self._daily_pool_id(record)
-        if daily_id is None or self._repository is None:
-            return record.native_pool_id
-        pool = await self._repository.get_pool(daily_id, session=session)
+        if daily_id is None:
+            return scoped
+        scoped_daily = self._scoped_pool_id(daily_id, record, context)
+        if scoped_daily is None:
+            return scoped
+        if scoped_daily == daily_id or self._repository is None:
+            daily = await self._repository.get_pool(daily_id) if self._repository else None
+        else:
+            base_daily = await self._repository.get_pool(daily_id)
+            daily = await self._repository.ensure_pool(
+                NativePool(
+                    pool_id=scoped_daily,
+                    provider=record.provider,
+                    auth_mode=record.auth_mode,
+                    native_unit=(
+                        base_daily.native_unit
+                        if base_daily is not None
+                        else record.native_unit or UnitKind.REQUEST
+                    ),
+                    remaining=base_daily.remaining if base_daily is not None else None,
+                    allowance=base_daily.allowance if base_daily is not None else None,
+                    source=base_daily.source if base_daily is not None else "credential_scope",
+                    confidence=(
+                        base_daily.confidence if base_daily is not None else Confidence.UNKNOWN
+                    ),
+                    reset_at=base_daily.reset_at if base_daily is not None else None,
+                )
+            )
         cost = request_cost_crd(record, request)
-        remaining = native_to_crd(pool, record.conversion_profile) if pool is not None else None
+        remaining = native_to_crd(daily, record.conversion_profile) if daily is not None else None
         if remaining is not None and cost is not None and remaining >= cost:
-            return daily_id
-        return record.native_pool_id
+            return scoped_daily
+        return scoped
+
+    @staticmethod
+    def _scoped_pool_id(
+        base: str | None,
+        record: ProviderLimitRecord,
+        context: LimitCallContext | None,
+    ) -> str | None:
+        """Return the credential/pool-scoped native pool id of one attempt.
+
+        The scope suffix keeps two project credentials of one provider, or two
+        independent upstream pools, from sharing a funds balance. A shared
+        upstream pool uses one suffix for every credential attached to it, so
+        a terminal 402 on the pool correctly affects the pool's members and an
+        unrelated credential stays clean.
+        """
+
+        if context is None:
+            return base
+        if context.upstream_pool_id is not None:
+            scope = f"pool:{context.upstream_pool_id}"
+        elif context.credential_id is not None:
+            scope = f"cred:{context.credential_id}"
+        else:
+            return base
+        root = base or (
+            native_pool_id(record.provider, record.auth_mode, record.native_unit)
+            if record.native_unit is not None
+            else f"{record.provider}:{record.auth_mode.value}:credits"
+        )
+        return f"{root}#{scope}"
 
     def _daily_tier(self, record: ProviderLimitRecord) -> TierBalance | None:
         """Return the declared estimated daily tier of one search rail."""
@@ -633,13 +834,18 @@ class ProviderLimitsService:
         record: ProviderLimitRecord,
         context: LimitCallContext,
         *,
+        pool_id: str | None = None,
         session: AsyncSession | None = None,
     ) -> tuple[str, list[str]]:
         """Return the funds decision and its reasons for one request."""
 
-        view = await self._view_for(record, self._clock(), _as_request(context), session=session)
+        view = await self._view_for(
+            record, self._clock(), _as_request(context), pool_id=pool_id, session=session
+        )
         if record.provider == "tavily":
-            precheck = await self._tavily_funds_precheck(record, view, session=session)
+            precheck = await self._tavily_funds_precheck(
+                record, view, pool_id=pool_id, session=session
+            )
             if precheck is not None:
                 return precheck
         if view.state is CRDState.UNMETERED:
@@ -665,6 +871,7 @@ class ProviderLimitsService:
         record: ProviderLimitRecord,
         view: CRDView,
         *,
+        pool_id: str | None = None,
         session: AsyncSession | None = None,
     ) -> tuple[str, list[str]] | None:
         """Return the keyed Credits decision, or None for the generic CRD gate.
@@ -688,7 +895,7 @@ class ProviderLimitsService:
             or self._repository is None
         ):
             return None
-        pool = await self._repository.get_pool(record.native_pool_id, session=session)
+        pool = await self._repository.get_pool(pool_id or record.native_pool_id, session=session)
         if pool is None:
             return None
         if _tavily_key_cap_zero(pool):
@@ -1050,11 +1257,14 @@ class ProviderLimitsService:
         now: datetime,
         request: SearchRequest | FetchRequest | None,
         *,
+        pool_id: str | None = None,
         session: AsyncSession | None = None,
     ) -> CRDView:
         pool = None
-        if self._repository is not None and record.native_pool_id is not None:
-            pool = await self._repository.get_pool(record.native_pool_id, session=session)
+        if self._repository is not None and (pool_id or record.native_pool_id) is not None:
+            pool = await self._repository.get_pool(
+                pool_id or record.native_pool_id or "", session=session
+            )
         grants = (
             await self._repository.grants(
                 record.provider, record.auth_mode, now=now, session=session
@@ -1064,7 +1274,11 @@ class ProviderLimitsService:
         )
         grant_remaining = grants.remaining(record.operation) if grants is not None else None
         daily_pool = await self._daily_pool(record, session=session)
-        daily = self._daily_view(record, grant_remaining, now, daily_pool)
+        daily = (
+            self._daily_view(record, grant_remaining, now, daily_pool)
+            if daily_pool is not None and (pool_id is None or pool_id == daily_pool.pool_id)
+            else None
+        )
         if daily is not None and _covers(daily):
             view = daily
         else:

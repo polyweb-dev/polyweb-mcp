@@ -22,7 +22,7 @@ from pydantic import SecretStr
 
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.mcp.auth import MCP_AUTH_ERROR
-from freesearch.mcp.server import create_server
+from freesearch.mcp.server import _encrypted_store, create_server
 from freesearch.models.contracts import (
     CostEstimate,
     FetchedDocument,
@@ -35,13 +35,16 @@ from freesearch.models.contracts import (
     UsageEvent,
     UsageOperation,
 )
+from freesearch.models.credentials import CredentialOperation
+from freesearch.models.observability import ActorType, ExecutionAttribution
 from freesearch.persistence.storage import SQLiteRepository
+from tests.fixtures.a2_execution import _seed_credential
 from tests.fixtures.api_keys import issue_project_key
 from tests.fixtures.auth import auth_service_for
 
 
 class _StubAdapter(ProviderAdapter):
-    def __init__(self, name: str = "stubby") -> None:
+    def __init__(self, name: str = "exa") -> None:
         self._name = name
 
     @property
@@ -110,8 +113,33 @@ def _roots(repository: SQLiteRepository) -> list[tuple[object, ...]]:
     return [row for row in _rows(repository) if row[1] is None]
 
 
+@pytest.fixture
+def adapter_keys(monkeypatch: pytest.MonkeyPatch) -> dict[str, ProviderAdapter]:
+    import freesearch.services.execution as execution_module
+
+    adapters: dict[str, ProviderAdapter] = {}
+
+    def factory(name: str):
+        if name not in {"exa", "brave"}:
+            return None
+
+        def build(client, api_key=None):
+            assert api_key is not None
+            adapter = adapters[api_key.get_secret_value()]
+            assert adapter.name == name
+            return adapter
+
+        return build
+
+    monkeypatch.setattr(execution_module, "adapter_factory", factory)
+    return adapters
+
+
 async def _authed_server(
-    repository: SQLiteRepository, adapters: list[ProviderAdapter], prefix: str
+    repository: SQLiteRepository,
+    adapters: list[ProviderAdapter],
+    prefix: str,
+    adapter_keys: dict[str, ProviderAdapter],
 ) -> tuple[FastMCP, UUID, str]:
     key = await issue_project_key(repository, prefix=prefix)
     server = create_server(
@@ -120,21 +148,53 @@ async def _authed_server(
         auth_service=auth_service_for(repository),
         stdio_token=SecretStr(key.raw),
     )
+    owner = ExecutionAttribution(
+        project_id=key.project_id, actor_type=ActorType.HUMAN, actor_id=key.owner.id
+    )
+    store = _encrypted_store(repository)
+    for adapter in adapters:
+        secret = f"fake-{key.project_id}-{adapter.name}"
+        await _seed_credential(
+            repository,
+            store,
+            owner,
+            provider=adapter.name,
+            label=adapter.name,
+            secret=secret,
+            operations=frozenset({CredentialOperation.SEARCH, CredentialOperation.FETCH}),
+            priority=0,
+        )
+        adapter_keys[secret] = adapter
     return server, key.api_key_id, str(key.project_id)
 
 
 async def test_mcp_search_and_fetch_roots_carry_the_exact_account_uuid(
     repository: SQLiteRepository,
+    adapter_keys: dict[str, ProviderAdapter],
 ) -> None:
     """Each tool call writes one root owned by the key's project and the key as actor."""
 
-    server, key_id, pid = await _authed_server(repository, [_StubAdapter("stubby")], "mcp-trace-id")
+    server, key_id, pid = await _authed_server(
+        repository, [_StubAdapter("exa")], "mcp-trace-id", adapter_keys
+    )
 
     await server.call_tool("search", {"request": {"project_id": pid, "query": "mcp owned"}})
     await server.call_tool(
         "fetch", {"request": {"project_id": pid, "url": "https://example.com/mcp"}}
     )
 
+    # Stash origin: exercise scoped list/detail reads as well as raw attribution.
+    items = await repository.list_project_trace_summaries(project_id=UUID(pid))
+    assert len(items) == 2
+    assert {item.operation for item in items} == {"search", "fetch"}
+    assert all(item.user_id is None for item in items)
+    for item in items:
+        detail = await repository.get_project_trace(item.trace_id, project_id=UUID(pid))
+        assert detail is not None and detail.user_id is None
+        detail_roots = [span for span in detail.spans if span.parent_span_id is None]
+        assert len(detail_roots) == 1
+        assert detail_roots[0].name in ("mcp search", "mcp fetch")
+        assert detail_roots[0].parent_span_id is None
     roots = _roots(repository)
     assert len(roots) == 2
     assert {row[2] for row in roots} == {"mcp search", "mcp fetch"}
@@ -148,9 +208,10 @@ async def test_mcp_search_and_fetch_roots_carry_the_exact_account_uuid(
 
 async def test_mcp_fanout_keeps_one_root_with_the_account_uuid(
     repository: SQLiteRepository,
+    adapter_keys: dict[str, ProviderAdapter],
 ) -> None:
     server, key_id, pid = await _authed_server(
-        repository, [_StubAdapter("alpha"), _StubAdapter("beta")], "mcp-trace-fanout"
+        repository, [_StubAdapter("exa"), _StubAdapter("brave")], "mcp-trace-fanout", adapter_keys
     )
 
     result = await server.call_tool(
@@ -158,6 +219,8 @@ async def test_mcp_fanout_keeps_one_root_with_the_account_uuid(
     )
     assert result[1]["provider"] == "aggregated"
 
+    items = await repository.list_project_trace_summaries(project_id=UUID(pid))
+    assert len(items) == 1 and items[0].user_id is None
     roots = _roots(repository)
     assert len(roots) == 1
     assert {row[0] for row in _rows(repository)} == {roots[0][0]}
@@ -170,7 +233,7 @@ async def test_rejected_tool_call_writes_no_trace_root(repository: SQLiteReposit
     key = await issue_project_key(repository, prefix="mcp-quiet")
     service = auth_service_for(repository)
     # No process credential at all: the call must fail before any root opens.
-    server = create_server([_StubAdapter("stubby")], repository=repository, auth_service=service)
+    server = create_server([_StubAdapter("exa")], repository=repository, auth_service=service)
 
     with pytest.raises(ToolError, match=MCP_AUTH_ERROR):
         await server.call_tool(
@@ -180,7 +243,7 @@ async def test_rejected_tool_call_writes_no_trace_root(repository: SQLiteReposit
 
     # A malformed process credential is rejected the same way.
     forged = create_server(
-        [_StubAdapter("stubby")],
+        [_StubAdapter("exa")],
         repository=repository,
         auth_service=service,
         stdio_token=SecretStr(key.raw[:-1] + ("A" if key.raw[-1] != "A" else "B")),
@@ -192,13 +255,19 @@ async def test_rejected_tool_call_writes_no_trace_root(repository: SQLiteReposit
         )
 
     assert _rows(repository) == []
+    assert await repository.list_project_trace_summaries(project_id=key.project_id) == []
 
 
 async def test_each_account_lists_only_its_own_mcp_traces(
     repository: SQLiteRepository,
+    adapter_keys: dict[str, ProviderAdapter],
 ) -> None:
-    server_a, key_a, pid_a = await _authed_server(repository, [_StubAdapter("stubby")], "mcp-alice")
-    server_b, key_b, pid_b = await _authed_server(repository, [_StubAdapter("stubby")], "mcp-bob")
+    server_a, key_a, pid_a = await _authed_server(
+        repository, [_StubAdapter("exa")], "mcp-alice", adapter_keys
+    )
+    server_b, key_b, pid_b = await _authed_server(
+        repository, [_StubAdapter("exa")], "mcp-bob", adapter_keys
+    )
     assert key_a != key_b
     assert pid_a != pid_b
 
@@ -209,6 +278,18 @@ async def test_each_account_lists_only_its_own_mcp_traces(
     for row in _rows(repository):
         by_project.setdefault(row[4], set()).add(row[6])
     assert by_project == {pid_a: {str(key_a)}, pid_b: {str(key_b)}}
+    items_a = await repository.list_project_trace_summaries(project_id=UUID(pid_a))
+    items_b = await repository.list_project_trace_summaries(project_id=UUID(pid_b))
+    assert len(items_a) == len(items_b) == 1
+    assert items_a[0].user_id is items_b[0].user_id is None
+    assert await repository.get_project_trace(items_a[0].trace_id, project_id=UUID(pid_b)) is None
+    assert await repository.get_project_trace(items_b[0].trace_id, project_id=UUID(pid_a)) is None
+    assert (
+        await repository.get_project_trace(items_a[0].trace_id, project_id=UUID(pid_a)) is not None
+    )
+    assert (
+        await repository.get_project_trace(items_b[0].trace_id, project_id=UUID(pid_b)) is not None
+    )
     # A key naming the other key's project is refused before execution.
     with pytest.raises(ToolError, match="project is unavailable"):
         await server_a.call_tool("search", {"request": {"project_id": pid_b, "query": "steal"}})

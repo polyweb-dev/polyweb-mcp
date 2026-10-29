@@ -45,7 +45,7 @@ from freesearch.persistence.storage import SQLiteRepository
 from freesearch.services import credit_units as cu
 from freesearch.services.provider_limits import ProviderLimitsService
 from tests.fixtures.database_lifecycle import unlink_with_retries
-from tests.fixtures.execution import bdd_project_id, scenario_attribution
+from tests.fixtures.execution import FIXTURE_ACTOR, bdd_project_id, scenario_attribution
 
 FIXED_AT = datetime(2026, 3, 10, 12, 0, 0, tzinfo=UTC)
 SYNTH = "synth"
@@ -165,6 +165,7 @@ def _ctx(
     at: datetime = FIXED_AT,
 ) -> LimitCallContext:
     return LimitCallContext(
+        **FIXTURE_ACTOR,
         provider=provider,
         operation=operation,
         auth_mode=AuthMode.KEYED,
@@ -1245,7 +1246,9 @@ def _brave_adapter(handler: Any, calls: list[Any] | None = None) -> tuple[Any, A
         return handler(request)
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(counting), timeout=30.0)
-    return BraveAdapter(client, api_key=SecretStr("brave-test-secret")), client
+    return BraveAdapter(
+        client, api_key=SecretStr("brave-test-secret"), clock=lambda: FIXED_AT
+    ), client
 
 
 def _brave_records() -> list[ProviderLimitRecord]:
@@ -1843,6 +1846,7 @@ def _tavily_ctx(
     at: datetime = FIXED_AT,
 ) -> LimitCallContext:
     return LimitCallContext(
+        **FIXTURE_ACTOR,
         provider="tavily",
         operation=operation,
         auth_mode=AuthMode.KEYED,
@@ -3203,6 +3207,9 @@ def step_tavily_held_usage(context: Any) -> None:
         def __init__(self, outer: Any) -> None:
             self._outer = outer
 
+        async def aclose(self) -> None:
+            """No sockets are owned by this held in-memory transport."""
+
         async def get(self, url: str) -> Any:
             self._outer.tavily_usage_gets.append(url)
             await self._outer.tavily_release.wait()
@@ -3555,24 +3562,17 @@ def _tavily_402_sdk() -> _TavilyFakeSDK:
     return sdk
 
 
-def _tavily_assert_zero_debit(context: Any, *, terminal_pool: bool = True) -> None:
-    pool = _run(context, _limits_repo(context).get_pool(_tavily_pool_id()))
-    assert pool is not None
-    if terminal_pool:
-        assert pool.remaining == Decimal("0")
-        assert pool.source == "vendor_402"
-    else:
-        # The injected MCP composition builds no limits generation
-        # (create_server keeps state["limits"] None without a lifespan
-        # enter), so tracked_call runs limit-free and the pool row stays
-        # at its seeded value. Pool immediacy itself is pinned through
-        # the shared helper by the REST, fanout, and service cases.
-        assert pool.remaining == Decimal("999")
-        assert pool.source == "vendor_api"
-    history = _run(
-        context,
-        context.service.history(LimitHistoryQuery(provider="tavily", limit=20)),
-    )
+def _tavily_assert_zero_debit(context: Any) -> None:
+    pools = _run(context, _limits_repo(context).list_pools("tavily"))
+    scoped = [pool for pool in pools if "#cred:" in pool.pool_id]
+    assert len(scoped) == 1, [(pool.pool_id, pool.remaining) for pool in pools]
+    assert scoped[0].remaining == Decimal("0")
+    assert scoped[0].source == "vendor_402"
+    # A scoped terminal response must not contaminate the unrelated catalog balance.
+    catalog = _run(context, _limits_repo(context).get_pool(_tavily_pool_id()))
+    assert catalog is not None and catalog.remaining == Decimal("999")
+    assert catalog.source == "vendor_api"
+    history = _run(context, context.service.history(LimitHistoryQuery(provider="tavily", limit=20)))
     assert all(e.reason != "local_success" for e in history.events)
 
 
@@ -3617,6 +3617,7 @@ def step_tavily_rest_402(context: Any) -> None:
 def step_tavily_rest_search(context: Any) -> None:
     from fastapi.testclient import TestClient
 
+    context.app = context.tavily_rest_app
     with TestClient(context.tavily_rest_app) as client:
         context.tavily_rest_response = client.post(
             "/search",
@@ -3646,8 +3647,6 @@ def step_tavily_mcp_402(context: Any) -> None:
     from pydantic import SecretStr
 
     from freesearch.adapters.tavily import TavilyAdapter
-    from freesearch.mcp.server import create_server
-    from tests.fixtures.api_keys import mcp_key_credentials
 
     _open_repo(context)
     context.service = _service(context, _tavily_records())
@@ -3663,18 +3662,11 @@ def step_tavily_mcp_402(context: Any) -> None:
         api_key=SecretStr("tvly-mcp-402"),
     )
 
-    async def _server() -> Any:
-        service, token, context.tavily_mcp_pid = await mcp_key_credentials(
-            context.repository, "tav-mcp"
-        )
-        return create_server(
-            [context.tavily_mcp_adapter],
-            repository=context.repository,
-            auth_service=service,
-            stdio_token=SecretStr(token.get_secret_value()),
-        )
+    from tests.fixtures.execution import bdd_mcp_server
 
-    context.tavily_mcp_server = _run(context, _server())
+    context.tavily_mcp_server, context.tavily_mcp_pid = _run(
+        context, bdd_mcp_server(context, [context.tavily_mcp_adapter], "tav-mcp")
+    )
 
 
 @when("I request one Tavily search through MCP")
@@ -3696,7 +3688,7 @@ def step_tavily_mcp_search(context: Any) -> None:
         context.tavily_mcp_error = exc
 
     async def _drain_refresh() -> None:
-        from freesearch.routers.api import _BACKGROUND_TASKS
+        from freesearch.services.provider_runtime import _BACKGROUND_TASKS
 
         pending = [task for task in list(_BACKGROUND_TASKS) if not task.done()]
         if pending:
@@ -3711,7 +3703,7 @@ def step_tavily_mcp_402_assert(context: Any) -> None:
     text = str(context.tavily_mcp_error)
     assert "Tavily is out of Credits. Wait until reset or upgrade." in text
     assert len(context.tavily_mcp_sdk.search_calls) == 1
-    _tavily_assert_zero_debit(context, terminal_pool=False)
+    _tavily_assert_zero_debit(context)
 
 
 @given("a Tavily fanout app with a held other task and vendor 402")
@@ -3803,6 +3795,7 @@ def step_tavily_fanout_app(context: Any) -> None:
 def step_tavily_fanout_run(context: Any) -> None:
     from fastapi.testclient import TestClient
 
+    context.app = context.tavily_fanout_app
     with TestClient(context.tavily_fanout_app) as client:
         context.tavily_fanout_held = client.post(
             "/search",
@@ -3826,6 +3819,7 @@ def step_tavily_fanout_run(context: Any) -> None:
             },
             headers=context.tavily_fanout_headers,
         )
+    context.app = context.tavily_single_app
     with TestClient(context.tavily_single_app) as client:
         context.tavily_single_fallback = client.post(
             "/search",
@@ -3838,7 +3832,7 @@ def step_tavily_fanout_run(context: Any) -> None:
         )
 
     async def _drain_refresh() -> None:
-        from freesearch.routers.api import _BACKGROUND_TASKS
+        from freesearch.services.provider_runtime import _BACKGROUND_TASKS
 
         pending = [task for task in list(_BACKGROUND_TASKS) if not task.done()]
         if pending:
@@ -4411,6 +4405,7 @@ def step_keenable_shared_usage(context: Any) -> None:
         context,
         context.service.admit(
             LimitCallContext(
+                **FIXTURE_ACTOR,
                 provider="keenable",
                 operation=LimitOperation.SEARCH,
                 auth_mode=AuthMode.KEYED,
@@ -4443,6 +4438,7 @@ def step_keenable_shared_usage(context: Any) -> None:
         context,
         context.service.admit(
             LimitCallContext(
+                **FIXTURE_ACTOR,
                 provider="keenable",
                 operation=LimitOperation.FETCH,
                 auth_mode=AuthMode.KEYED,
@@ -4758,6 +4754,7 @@ def step_keenable_two_standard(context: Any) -> None:
         context,
         context.service.admit(
             LimitCallContext(
+                **FIXTURE_ACTOR,
                 provider="keenable",
                 operation=LimitOperation.SEARCH,
                 auth_mode=AuthMode.KEYED,
@@ -4776,6 +4773,7 @@ def step_keenable_two_standard(context: Any) -> None:
         context,
         context.service.admit(
             LimitCallContext(
+                **FIXTURE_ACTOR,
                 provider="keenable",
                 operation=LimitOperation.FETCH,
                 auth_mode=AuthMode.KEYED,
@@ -4841,6 +4839,7 @@ def step_keenable_keyless_exhausted(context: Any) -> None:
             context,
             context.service.admit(
                 LimitCallContext(
+                    **FIXTURE_ACTOR,
                     provider="keenable",
                     operation=LimitOperation.SEARCH,
                     auth_mode=AuthMode.KEYLESS,
@@ -4859,6 +4858,7 @@ def step_keenable_keyless_request(context: Any) -> None:
             context,
             context.service.admit(
                 LimitCallContext(
+                    **FIXTURE_ACTOR,
                     provider="keenable",
                     operation=LimitOperation.SEARCH,
                     auth_mode=AuthMode.KEYLESS,

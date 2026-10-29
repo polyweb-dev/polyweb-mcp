@@ -36,7 +36,7 @@ from freesearch.models.contracts import (
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
 from tests.fixtures.auth import TEMP_PASSWORD, temp_email
-from tests.fixtures.execution import seed_execution_project
+from tests.fixtures.execution import seed_app_bound_project
 
 
 class _StubAdapter(ProviderAdapter):
@@ -130,7 +130,7 @@ async def _post(
 
 
 async def test_concurrent_two_project_requests_keep_full_ownership(
-    repository: SQLiteRepository, auth_secret: str
+    repository: SQLiteRepository, auth_secret: str, monkeypatch
 ) -> None:
     app = create_app(
         [_StubAdapter("alpha"), _StubAdapter("beta", fail_query="fail-me")],
@@ -141,8 +141,12 @@ async def test_concurrent_two_project_requests_keep_full_ownership(
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
             headers_a, user_a = await _register(client, "attr-alice")
             headers_b, user_b = await _register(client, "attr-bob")
-            attr_a = await seed_execution_project(repository, user_id=user_a, name="Project A")
-            attr_b = await seed_execution_project(repository, user_id=user_b, name="Project B")
+            attr_a = await seed_app_bound_project(
+                repository, user_id=user_a, app=app, monkeypatch=monkeypatch
+            )
+            attr_b = await seed_app_bound_project(
+                repository, user_id=user_b, app=app, monkeypatch=monkeypatch
+            )
             pid_a, pid_b = str(attr_a.project_id), str(attr_b.project_id)
 
             async def call(

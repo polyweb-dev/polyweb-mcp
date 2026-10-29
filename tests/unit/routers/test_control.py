@@ -15,19 +15,19 @@ import pytest
 import pytest_asyncio
 from pydantic import ValidationError
 
-import freesearch.routers.control as control_module
+import freesearch.services.provider_runtime as provider_runtime
 from freesearch.configuration.provider_config import ProviderConfigUpdate
 from freesearch.infrastructure.secrets import ProviderName
 from freesearch.models.contracts import FallbackPolicy, RoutingConfigResponse
 from freesearch.persistence.storage import SQLiteRepository
-from freesearch.routers.control import (
+from freesearch.services.monitoring import clear_quota_poll_cache
+from freesearch.services.provider_runtime import (
     clear_config_cache,
     effective_config_for_name,
     patch_provider_config,
     persist_routing_config,
     routing_policy,
 )
-from freesearch.services.monitoring import clear_quota_poll_cache
 
 
 @pytest.fixture(autouse=True)
@@ -171,7 +171,7 @@ async def test_cache_identity_reuse_after_clear(monkeypatch: pytest.MonkeyPatch,
                 return id_of_a
             return real_id(obj)
 
-        monkeypatch.setattr(control_module, "id", _reused_id, raising=False)
+        monkeypatch.setattr(provider_runtime, "id", _reused_id, raising=False)
 
         config_b = await effective_config_for_name(repo_b, "tavily")
         policy_b = await routing_policy(repo_b)

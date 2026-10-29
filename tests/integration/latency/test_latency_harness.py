@@ -26,6 +26,7 @@ from freesearch.configuration.config import get_settings
 from freesearch.models.provider_limits import AuthMode, LimitCallContext, LimitOperation
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.services.provider_limits import ProviderLimitsService
+from tests.fixtures.execution import FIXTURE_ACTOR
 from tests.fixtures.latency_servers import AdapterBuilder, RoutingLatencyHarness, lift_rate_windows
 
 _JWT_ENV = "FREESEARCH_AUTH_JWT_SECRET"
@@ -111,6 +112,7 @@ async def test_lift_rate_windows_persists_and_admission_still_runs(tmp_path: Pat
         for _ in range(15):
             admission = await reloaded.admit(
                 LimitCallContext(
+                    **FIXTURE_ACTOR,
                     provider="firecrawl",
                     operation=LimitOperation.SEARCH,
                     auth_mode=AuthMode.KEYED,

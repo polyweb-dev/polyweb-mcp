@@ -33,6 +33,7 @@ from freesearch.models.provider_limits import (
 )
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.services.provider_limits import ProviderLimitsService
+from tests.fixtures.execution import FIXTURE_ACTOR
 
 FIXED_AT = datetime(2026, 3, 10, 12, 0, 0, tzinfo=UTC)
 EXA_POOL = "exa:keyed:usd"
@@ -145,6 +146,7 @@ async def test_rate_admission_search_and_fetch(repository: SQLiteRepository) -> 
     for i in range(10):
         admission = await service.admit(
             LimitCallContext(
+                **FIXTURE_ACTOR,
                 provider="exa",
                 operation=LimitOperation.SEARCH,
                 auth_mode=AuthMode.KEYED,
@@ -161,6 +163,7 @@ async def test_rate_admission_search_and_fetch(repository: SQLiteRepository) -> 
     with pytest.raises(LimitDeniedError) as excinfo:
         await service.admit(
             LimitCallContext(
+                **FIXTURE_ACTOR,
                 provider="exa",
                 operation=LimitOperation.SEARCH,
                 auth_mode=AuthMode.KEYED,
@@ -179,6 +182,7 @@ async def test_rate_admission_search_and_fetch(repository: SQLiteRepository) -> 
     for i in range(100):
         admission = await service.admit(
             LimitCallContext(
+                **FIXTURE_ACTOR,
                 provider="exa",
                 operation=LimitOperation.FETCH,
                 auth_mode=AuthMode.KEYED,
@@ -196,6 +200,7 @@ async def test_rate_admission_search_and_fetch(repository: SQLiteRepository) -> 
     with pytest.raises(LimitDeniedError) as excinfo:
         await service.admit(
             LimitCallContext(
+                **FIXTURE_ACTOR,
                 provider="exa",
                 operation=LimitOperation.FETCH,
                 auth_mode=AuthMode.KEYED,
@@ -220,6 +225,7 @@ async def test_dynamic_crd_request_cost(repository: SQLiteRepository) -> None:
     # Limit 10 -> 7 CRD ($0.007)
     adm_s10 = await service.admit(
         LimitCallContext(
+            **FIXTURE_ACTOR,
             provider="exa",
             operation=LimitOperation.SEARCH,
             auth_mode=AuthMode.KEYED,
@@ -236,6 +242,7 @@ async def test_dynamic_crd_request_cost(repository: SQLiteRepository) -> None:
     # Limit 20 -> 17 CRD ($0.017)
     adm_s20 = await service.admit(
         LimitCallContext(
+            **FIXTURE_ACTOR,
             provider="exa",
             operation=LimitOperation.SEARCH,
             auth_mode=AuthMode.KEYED,
@@ -252,6 +259,7 @@ async def test_dynamic_crd_request_cost(repository: SQLiteRepository) -> None:
     # Fetch 1 URL -> 1 CRD ($0.001)
     adm_f1 = await service.admit(
         LimitCallContext(
+            **FIXTURE_ACTOR,
             provider="exa",
             operation=LimitOperation.FETCH,
             auth_mode=AuthMode.KEYED,
@@ -270,6 +278,7 @@ async def test_dynamic_crd_request_cost(repository: SQLiteRepository) -> None:
     # Fetch 5 URLs -> 5 CRD ($0.005)
     adm_f5 = await service.admit(
         LimitCallContext(
+            **FIXTURE_ACTOR,
             provider="exa",
             operation=LimitOperation.FETCH,
             auth_mode=AuthMode.KEYED,
@@ -294,6 +303,7 @@ async def test_funds_denial_on_zero_balance(repository: SQLiteRepository) -> Non
     with pytest.raises(LimitDeniedError) as excinfo:
         await service.admit(
             LimitCallContext(
+                **FIXTURE_ACTOR,
                 provider="exa",
                 operation=LimitOperation.SEARCH,
                 auth_mode=AuthMode.KEYED,
@@ -332,6 +342,7 @@ async def test_terminal_402_records_zero_and_blocks_locally(
     with pytest.raises(LimitDeniedError) as excinfo:
         await service.admit(
             LimitCallContext(
+                **FIXTURE_ACTOR,
                 provider="exa",
                 operation=LimitOperation.SEARCH,
                 auth_mode=AuthMode.KEYED,
@@ -356,6 +367,7 @@ async def test_debit_success_decrements_exact_usd_and_crd(
 
     admission = await service.admit(
         LimitCallContext(
+            **FIXTURE_ACTOR,
             provider="exa",
             operation=LimitOperation.SEARCH,
             auth_mode=AuthMode.KEYED,

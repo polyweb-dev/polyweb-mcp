@@ -299,7 +299,7 @@ def _assert_hierarchy(context: Any, root_name: str, *, expect_adapter_children: 
     assert {span["name"] for span in root_children} == {
         "freesearch.backend",
         "freesearch.response",
-    }
+    }, repr([(span["name"], span["parent_span_id"]) for span in root_children])
     backend = next(span for span in root_children if span["name"] == "freesearch.backend")
 
     backend_children = [span for span in spans if span["parent_span_id"] == backend["span_id"]]
@@ -307,7 +307,7 @@ def _assert_hierarchy(context: Any, root_name: str, *, expect_adapter_children: 
         "freesearch.route",
         "freesearch.provider",
         "freesearch.results",
-    }
+    }, repr([span["name"] for span in backend_children])
     provider = next(span for span in backend_children if span["name"] == "freesearch.provider")
     assert provider["kind"] == "client"
 
@@ -318,7 +318,7 @@ def _assert_hierarchy(context: Any, root_name: str, *, expect_adapter_children: 
         assert {span["name"] for span in provider_children} == {
             "freesearch.provider.http",
             "freesearch.provider.parse",
-        }
+        }, repr([span["name"] for span in provider_children])
         http_child = next(
             span for span in provider_children if span["name"] == "freesearch.provider.http"
         )

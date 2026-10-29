@@ -49,7 +49,7 @@ from tests.fixtures.auth import (
     register_system_admin_login,
     temp_email,
 )
-from tests.fixtures.execution import seed_execution_project
+from tests.fixtures.execution import FIXTURE_ACTOR, create_bound_provider, seed_execution_project
 from tests.integration.services.oauth.oauth_stubs import install_http_stub
 
 PASSPHRASE = "genuine-proof-passphrase-9f31"
@@ -320,14 +320,18 @@ async def test_put_then_on_demand_test_constructs_genuine_adapter(
                 await seed_execution_project(repository, user_id=account_id_from_pair(pair))
             ).project_id
         )
-        put = client.put(
-            f"/api/v1/providers/{provider.value}/secret",
-            json={"key": sentinel},
+        put = create_bound_provider(client, pid, provider.value, sentinel, headers)
+        assert put.status_code == 201
+        assert_no_sentinels(put.text, (sentinel,), "credential creation")
+        probe = client.post(
+            "/search",
             headers=headers,
+            json={
+                "project_id": pid,
+                "query": "credential probe",
+                "routing": {"mode": "require", "providers": [provider.value]},
+            },
         )
-        assert put.status_code == 200
-        assert put.json()["source"] == "encrypted_db", put.text
-        probe = client.post(f"/api/v1/providers/{provider.value}/test", headers=headers)
         search = None
         if provider is ProviderName.KEENABLE and probe.status_code == 200:
             # Isolate the proof: keyless Tavily would otherwise shadow routing.
@@ -346,7 +350,8 @@ async def test_put_then_on_demand_test_constructs_genuine_adapter(
     )
     body = probe.json()
     assert body["provider"] == provider.value
-    assert body["ok"] is True
+    assert body["total_results"] == 1
+    _assert_key_on_wire(wire, provider, sentinel)
     assert_no_sentinels(probe.text, (sentinel,), f"{provider.value} probe")
 
     if provider is ProviderName.KEENABLE:
@@ -387,13 +392,9 @@ async def test_restart_routes_search_through_encrypted_key(
             pid = str(
                 (await seed_execution_project(first, user_id=account_id_from_pair(pair))).project_id
             )
-            put = client.put(
-                f"/api/v1/providers/{provider.value}/secret",
-                json={"key": sentinel},
-                headers=headers,
-            )
-            assert put.status_code == 200
-            assert put.json()["source"] == "encrypted_db", put.text
+            put = create_bound_provider(client, pid, provider.value, sentinel, headers)
+            assert put.status_code == 201
+            assert_no_sentinels(put.text, (sentinel,), "credential creation")
             if provider is not ProviderName.KEENABLE:
                 # Isolate the proof: keyless Keenable would otherwise shadow routing.
                 disable = client.patch(
@@ -460,13 +461,9 @@ async def test_env_key_is_ignored_vault_key_reaches_wire(
                 await seed_execution_project(repository, user_id=account_id_from_pair(pair))
             ).project_id
         )
-        put = client.put(
-            f"/api/v1/providers/{provider.value}/secret",
-            json={"key": vault_sentinel},
-            headers=headers,
-        )
-        assert put.status_code == 200
-        assert put.json()["source"] == "encrypted_db", put.text
+        put = create_bound_provider(client, pid, provider.value, vault_sentinel, headers)
+        assert put.status_code == 201
+        assert_no_sentinels(put.text, (vault_sentinel, env_decoy), "credential creation")
         if provider is not ProviderName.KEENABLE:
             # Isolate the proof: keyless Keenable would otherwise shadow routing.
             disable = client.patch(
@@ -560,7 +557,7 @@ async def test_tavily_402_fanout_cancels_and_raises() -> None:
     import pytest
 
     from freesearch.infrastructure.resilience import ProviderOperationError
-    from freesearch.routers.api import _fanout_outcomes
+    from freesearch.services.execution import _fanout_outcomes
 
     async def _held() -> tuple:
         await asyncio.sleep(30)
@@ -597,8 +594,8 @@ async def test_tavily_402_single_attempt_zero_debit(
         LimitOperation,
         NativeUsageSnapshot,
     )
-    from freesearch.services.monitoring import tracked_call
     from freesearch.services.provider_limits import ProviderLimitsService
+    from tests.fixtures.execution import attributed_tracked_call as tracked_call
 
     class _FailingSDK:
         calls = 0
@@ -669,6 +666,7 @@ async def test_tavily_402_single_attempt_zero_debit(
     try:
         await service.admit(
             LimitCallContext(
+                **FIXTURE_ACTOR,
                 provider="tavily",
                 operation=LimitOperation.SEARCH,
                 auth_mode=AuthMode.KEYED,

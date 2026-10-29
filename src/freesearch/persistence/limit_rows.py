@@ -7,7 +7,15 @@ operation rows. Rate observations and rate attempts live in their own tables so
 the REST and MCP processes count the same window from one durable record.
 """
 
-from sqlalchemy import CHAR, ForeignKeyConstraint, Index, Integer, Text, UniqueConstraint
+from sqlalchemy import (
+    CHAR,
+    CheckConstraint,
+    ForeignKeyConstraint,
+    Index,
+    Integer,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from freesearch.persistence.storage import Base
@@ -133,12 +141,21 @@ def _attribution_foreign_keys(table: str) -> tuple[ForeignKeyConstraint, ...]:
     )
 
 
+def _actor_type_check(table: str) -> CheckConstraint:
+    """Return the actor-class constraint revision 0002 declares on ``table``."""
+
+    return CheckConstraint(
+        "actor_type IN ('human', 'project_api_key')", name=f"{table}_actor_type_allowed"
+    )
+
+
 class LimitAdmissionRow(Base):
     """Durable reservation that finalizes or releases exactly once."""
 
     __tablename__ = "provider_limit_admissions"
     __table_args__ = (
         *_attribution_foreign_keys("provider_limit_admissions"),
+        _actor_type_check("provider_limit_admissions"),
         Index("provider_limit_admissions_created_at", "created_at"),
         Index("provider_limit_admissions_upstream_pool_state", "upstream_pool_id", "state"),
     )
@@ -160,6 +177,10 @@ class LimitAdmissionRow(Base):
     binding_id: Mapped[str | None] = mapped_column(CHAR(36))
     upstream_pool_id: Mapped[str | None] = mapped_column(CHAR(36))
     request_id: Mapped[str | None] = mapped_column(Text)
+    # The verified actor (revision 0002): required, constrained to the two
+    # principal classes, and deliberately without a foreign key.
+    actor_type: Mapped[str] = mapped_column(Text, nullable=False)
+    actor_id: Mapped[str] = mapped_column(CHAR(36), nullable=False)
 
 
 class RateWindowObservationRow(Base):
@@ -188,6 +209,7 @@ class RateAttemptRow(Base):
     __tablename__ = "provider_rate_attempts"
     __table_args__ = (
         *_attribution_foreign_keys("provider_rate_attempts"),
+        _actor_type_check("provider_rate_attempts"),
         Index("provider_rate_attempts_bucket_attempted", "bucket_id", "attempted_at"),
         Index("provider_rate_attempts_expires_at", "expires_at"),
         Index("provider_rate_attempts_upstream_pool_attempted", "upstream_pool_id", "attempted_at"),
@@ -208,3 +230,7 @@ class RateAttemptRow(Base):
     binding_id: Mapped[str | None] = mapped_column(CHAR(36))
     upstream_pool_id: Mapped[str | None] = mapped_column(CHAR(36))
     request_id: Mapped[str | None] = mapped_column(Text)
+    # The verified actor (revision 0002): required, constrained to the two
+    # principal classes, and deliberately without a foreign key.
+    actor_type: Mapped[str] = mapped_column(Text, nullable=False)
+    actor_id: Mapped[str] = mapped_column(CHAR(36), nullable=False)

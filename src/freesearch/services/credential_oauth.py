@@ -577,7 +577,7 @@ class CredentialOAuthService:
         self, target: OAuthTarget, credential_id: UUID, grant: StoredOAuthGrant
     ) -> None:
         async def operation(session: AsyncSession) -> None:
-            await CredentialOAuthGrantRepository(session).mark_refresh_failed(
+            changed = await CredentialOAuthGrantRepository(session).mark_refresh_failed(
                 credential_id=credential_id,
                 owner_scope=target.owner_scope,
                 owner_project_id=target.project_id,
@@ -585,6 +585,8 @@ class CredentialOAuthService:
                 error_code=REFRESH_INVALID_GRANT,
                 now=self._clock(),
             )
+            if changed:
+                await self._tombstone_generation(session, credential_id, grant.token_generation)
 
         await self._write(operation)
 

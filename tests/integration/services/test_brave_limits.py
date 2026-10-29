@@ -36,6 +36,7 @@ from freesearch.models.provider_limits import (
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.services.limits_sync import LimitSyncService
 from freesearch.services.provider_limits import ProviderLimitsService
+from tests.fixtures.execution import FIXTURE_ACTOR
 
 FIXED_AT = datetime(2026, 3, 10, 12, 0, 0, tzinfo=UTC)
 
@@ -168,6 +169,7 @@ async def test_zero_funds_deny_with_non_retryable_402(repository: SQLiteReposito
     try:
         await service.admit(
             LimitCallContext(
+                **FIXTURE_ACTOR,
                 provider="brave",
                 operation=LimitOperation.SEARCH,
                 auth_mode=AuthMode.KEYED,
@@ -244,6 +246,7 @@ async def test_two_successes_debit_exact_ten(repository: SQLiteRepository) -> No
     for attempt in ("brave-s1", "brave-s2"):
         admission = await service.admit(
             LimitCallContext(
+                **FIXTURE_ACTOR,
                 provider="brave",
                 operation=LimitOperation.SEARCH,
                 auth_mode=AuthMode.KEYED,

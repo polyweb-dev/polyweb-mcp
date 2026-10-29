@@ -29,7 +29,7 @@ from tests.fixtures.auth import (
     register_and_login,
     temp_email,
 )
-from tests.fixtures.execution import seed_execution_project
+from tests.fixtures.execution import seed_app_bound_project
 
 
 class _StubAdapter(ProviderAdapter):
@@ -88,8 +88,7 @@ async def repository(tmp_path: Path) -> SQLiteRepository:
 
 
 async def test_api_search_works_with_explicit_temp_accounts(
-    repository: SQLiteRepository,
-    auth_secret: str,
+    repository: SQLiteRepository, auth_secret: str, monkeypatch
 ) -> None:
     first = await create_temp_user(repository, temp_email("api-first"))
     second = await create_temp_user(repository, temp_email("api-second"))
@@ -104,7 +103,9 @@ async def test_api_search_works_with_explicit_temp_accounts(
         pair = register_and_login(client, temp_email("api-search"))
         pid = str(
             (
-                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+                await seed_app_bound_project(
+                    repository, user_id=account_id_from_pair(pair), app=app, monkeypatch=monkeypatch
+                )
             ).project_id
         )
         response = client.post(

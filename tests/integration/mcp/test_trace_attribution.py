@@ -19,7 +19,7 @@ import pytest_asyncio
 from pydantic import SecretStr
 
 from freesearch.adapters.base import ProviderAdapter
-from freesearch.mcp.server import create_server
+from freesearch.mcp.server import _encrypted_store, create_server
 from freesearch.models.contracts import (
     CostEstimate,
     FetchedDocument,
@@ -32,7 +32,10 @@ from freesearch.models.contracts import (
     UsageEvent,
     UsageOperation,
 )
+from freesearch.models.credentials import CredentialOperation
+from freesearch.models.observability import ActorType, ExecutionAttribution
 from freesearch.persistence.storage import SQLiteRepository
+from tests.fixtures.a2_execution import _seed_credential
 from tests.fixtures.api_keys import issue_project_key
 from tests.fixtures.auth import auth_service_for
 
@@ -102,15 +105,54 @@ async def repository(tmp_path: Path) -> object:
 
 
 async def test_concurrent_two_project_tool_calls_keep_full_ownership(
-    repository: SQLiteRepository, auth_secret: str
+    repository: SQLiteRepository, auth_secret: str, monkeypatch: object
 ) -> None:
-    adapters = [_StubAdapter("alpha"), _StubAdapter("beta", fail_query="fail-me")]
+    adapters = [_StubAdapter("exa"), _StubAdapter("brave", fail_query="fail-me")]
     key_a = await issue_project_key(repository, prefix="mcp-alice")
     key_b = await issue_project_key(repository, prefix="mcp-bob")
     service_a = auth_service_for(repository)
     service_b = auth_service_for(repository)
     token_a, token_b = key_a.key, key_b.key
     pid_a, pid_b = str(key_a.project_id), str(key_b.project_id)
+    store = _encrypted_store(repository)
+    by_secret = {}
+    for key in (key_a, key_b):
+        # Credentials are created by the human project owner; execution must
+        # still attribute every row to the verified project key, not the owner.
+        owner = ExecutionAttribution(
+            project_id=key.project_id, actor_type=ActorType.HUMAN, actor_id=key.owner.id
+        )
+        for provider in ("exa", "brave"):
+            secret = f"fake-{key.project_id}-{provider}"
+            await _seed_credential(
+                repository,
+                store,
+                owner,
+                provider=provider,
+                label=provider,
+                secret=secret,
+                operations=frozenset({CredentialOperation.SEARCH, CredentialOperation.FETCH}),
+                priority=0,
+            )
+            by_secret[secret] = _StubAdapter(
+                provider, fail_query="fail-me" if provider == "brave" else None
+            )
+
+    import freesearch.services.execution as execution_module
+
+    def adapter_factory(name: str):
+        if name not in {"exa", "brave"}:
+            return None
+
+        def build(client, api_key=None):
+            assert api_key is not None
+            adapter = by_secret[api_key.get_secret_value()]
+            assert adapter.name == name
+            return adapter
+
+        return build
+
+    monkeypatch.setattr(execution_module, "adapter_factory", adapter_factory)
 
     server_a = create_server(
         adapters,
@@ -202,6 +244,6 @@ async def test_concurrent_two_project_tool_calls_keep_full_ownership(
     fanout_rows = {
         t
         for t, providers in per_trace_providers.items()
-        if "beta" in providers and "alpha" in providers
+        if "brave" in providers and "exa" in providers
     }
     assert len(fanout_rows) == 2

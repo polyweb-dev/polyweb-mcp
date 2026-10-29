@@ -858,6 +858,10 @@ def step_when_auth_prepare_roles(context: Any) -> None:
         )
     )
     context.matrix_project_id = str(project.project_id)
+    from tests.fixtures.execution import bdd_bind_project
+
+    with _auth_client(context):
+        bdd_bind_project(context, context.app, project.project_id, project.actor_id)
 
 
 def _role_headers(context: Any, role: str) -> dict[str, str]:

@@ -31,6 +31,7 @@ from freesearch.models.provider_limits import (
 )
 from freesearch.persistence.storage import SQLiteRepository
 from tests.fixtures.database_lifecycle import unlink_with_retries
+from tests.fixtures.execution import FIXTURE_ACTOR
 
 FIXED_AT = datetime(2026, 3, 10, 12, 0, 0, tzinfo=UTC)
 
@@ -137,6 +138,7 @@ async def test_stale_generation_rejected(limits_repo) -> None:
 
 async def test_reserve_finalize_release_exactly_once(limits_repo) -> None:
     admission = LimitAdmission(
+        **FIXTURE_ACTOR,
         attempt_id="adm-1",
         provider="synth",
         operation=LimitOperation.SEARCH,
@@ -292,6 +294,7 @@ async def test_finalize_exact_payment_is_not_an_overspend(limits_repo) -> None:
     )
     await limits_repo.reserve(
         LimitAdmission(
+            **FIXTURE_ACTOR,
             attempt_id="exact-1",
             provider="synth",
             operation=LimitOperation.SEARCH,
@@ -343,6 +346,7 @@ async def test_finalize_real_overspend_stays_visible(limits_repo) -> None:
     )
     await limits_repo.reserve(
         LimitAdmission(
+            **FIXTURE_ACTOR,
             attempt_id="over-1",
             provider="synth",
             operation=LimitOperation.SEARCH,
@@ -414,6 +418,7 @@ async def test_tavily_reserve_rechecks_rate_and_funds_atomically(limits_repo) ->
 
     def _admission(attempt: str) -> LimitAdmission:
         return LimitAdmission(
+            **FIXTURE_ACTOR,
             attempt_id=attempt,
             provider="tavily",
             operation=LimitOperation.SEARCH,

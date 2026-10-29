@@ -230,23 +230,27 @@ def _is_tavily_scenario(scenario: Any) -> bool:
 
 
 def after_scenario(context: Any, scenario: Any) -> None:
-    """Clean up adapter resources, test repositories, and the async event loop."""
-    cleanups = getattr(context, "enc_cleanups", [])
-    context.enc_cleanups = []
-    for cleanup in cleanups:
-        with suppress(Exception):
-            cleanup()
-    repository = getattr(context, "repository", None)
+    """Close every client/session before disposing and deleting its temporary DB."""
     loop = getattr(context, "loop", None)
+    if loop is not None:
+        from freesearch.mcp.server import shutdown_injected_observability
+
+        for session, server in reversed(getattr(context, "_bdd_mcp_sessions", [])):
+            loop.run_until_complete(session.__aexit__(None, None, None))
+            loop.run_until_complete(shutdown_injected_observability(server))
+        for case in reversed(getattr(context, "_bdd_oauth_cases", [])):
+            loop.run_until_complete(case.close())
+    for name in ("monitor_client", "test_client", "client", "otel_client", "enc_client"):
+        client = getattr(context, name, None)
+        if client is not None and callable(getattr(client, "__exit__", None)):
+            with suppress(Exception):
+                client.__exit__(None, None, None)
+    repository = getattr(context, "repository", None)
     if repository is not None and loop is not None and callable(getattr(repository, "close", None)):
         loop.run_until_complete(repository.close())
-    adapter = getattr(context, "adapter", None)
-    if adapter is not None and callable(getattr(adapter, "aclose", None)):
-        context.loop.run_until_complete(adapter.aclose())
-    youcom_adapter = getattr(context, "youcom_adapter", None)
-    if youcom_adapter is not None and callable(getattr(youcom_adapter, "aclose", None)):
-        context.loop.run_until_complete(youcom_adapter.aclose())
-    for tavily_adapter_attr in (
+    resource_names = (
+        "adapter",
+        "youcom_adapter",
         "tavily_keyless_adapter",
         "tavily_keyed_adapter",
         "tavily_cost_adapter",
@@ -258,23 +262,36 @@ def after_scenario(context: Any, scenario: Any) -> None:
         "tavily_retry_adapter",
         "tavily_variant_adapter",
         "tavily_sched_adapter",
-    ):
-        tavily_adapter = getattr(context, tavily_adapter_attr, None)
-        if tavily_adapter is not None and callable(getattr(tavily_adapter, "aclose", None)):
-            with suppress(Exception):
-                context.loop.run_until_complete(tavily_adapter.aclose())
-    for tavily_client in getattr(context, "tavily_caller_clients", None) or []:
-        if callable(getattr(tavily_client, "aclose", None)):
-            with suppress(Exception):
-                context.loop.run_until_complete(tavily_client.aclose())
-    if getattr(context, "http_client", None) is not None:
-        context.loop.run_until_complete(context.http_client.aclose())
-    if getattr(context, "loop", None) is not None:
-        context.loop.close()
+        "http_client",
+        "brave_client",
+        "exa_client",
+        "firecrawl_client",
+        "keenable_client",
+        "parallel_client",
+    )
+    resources = [getattr(context, name, None) for name in resource_names]
+    resources.extend(getattr(context, "tavily_caller_clients", []) or [])
+    seen = set()
+    for resource in resources:
+        if resource is None or id(resource) in seen:
+            continue
+        seen.add(id(resource))
+        if loop is not None and callable(getattr(resource, "aclose", None)):
+            loop.run_until_complete(resource.aclose())
+    patcher = getattr(context, "_execution_patcher", None)
+    if patcher is not None:
+        patcher.undo()
+    # Directory cleanup and env restoration happen only after all DB users close.
+    cleanups = getattr(context, "enc_cleanups", [])
+    context.enc_cleanups = []
+    for cleanup in cleanups:
+        cleanup()
+    if loop is not None:
+        loop.run_until_complete(loop.shutdown_asyncgens())
+        loop.close()
     database_path = getattr(context, "database_path", None)
-    migration_lock_path = f"{database_path}.migration.lock" if database_path else None
-    for test_path in (database_path, migration_lock_path):
-        if test_path is not None:
+    if database_path is not None:
+        for test_path in (database_path, f"{database_path}.migration.lock"):
             _unlink_with_retries(test_path)
     temp_directory = getattr(context, "temp_directory", None)
     if temp_directory is not None:

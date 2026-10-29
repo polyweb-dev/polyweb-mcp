@@ -1,716 +1,388 @@
-"""Offline Behave steps for the Parallel OAuth security contract."""
+"""Original adversarial BDD cases on actual A4 credential OAuth endpoints."""
 
-from __future__ import annotations
-
-import json
 import logging
-import sqlite3
-import uuid
 from contextlib import suppress
+from datetime import timedelta
 from decimal import Decimal
-from pathlib import Path
 from typing import Any
 
-from behave import given, then, when  # type: ignore[import-untyped]
-from fastapi.testclient import TestClient
+from behave import given, then, when
 
-from freesearch.adapters.base import ProviderAdapter
-from freesearch.models.contracts import (
-    CostEstimate,
-    FetchRequest,
-    FetchResponse,
-    ProviderCapabilities,
-    SearchRequest,
-    SearchResponse,
-    UsageOperation,
-)
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.routers.api import create_app
-from freesearch.services.parallel_oauth import (
-    METADATA_RUNTIME_KEY,
-    clear_oauth_poll_state,
-    poll_oauth_balance_snapshot,
-)
-from tests.fixtures.auth import (
-    TEMP_PASSWORD,
-    configure_bdd_secret,
-    promote_to_system_admin,
-    temp_email,
-)
+from freesearch.models.contracts import QuotaSnapshot, QuotaSource, UnitKind
+from freesearch.models.credentials import CredentialOAuthDeviceRead, CredentialOAuthStatusRead
+from freesearch.models.schema_enums import OAuthGrantStatus
+from freesearch.services.monitoring import refresh_quotas
+from freesearch.services.parallel_oauth import ParallelOAuthError
+from tests.fixtures.scoped_oauth import bdd_oauth_setup
 from tests.integration.services.oauth.oauth_stubs import (
     ACCESS_TOKEN_VALUE,
     CLIENT_SECRET_VALUE,
     DEVICE_CODE_VALUE,
-    TOKEN_SENTINELS,
-    StubOAuthServer,
-    collect_sqlite_texts,
     find_leaked_secrets,
-    install_http_stub,
-    install_network_guard,
-    stub_client,
 )
 
-DEVICE_KEYS = {
-    "provider",
-    "user_code",
-    "verification_uri",
-    "verification_uri_complete",
-    "expires_in",
-    "interval",
-}
-STATUS_KEYS = {"provider", "status", "expires_in"}
+
+def _run(context, value):
+    return context.loop.run_until_complete(value)
 
 
-class _PatchShim:
-    """Minimal monkeypatch stand-in that records originals for teardown."""
+class _Capture(logging.Handler):
+    def __init__(self, sink):
+        super().__init__()
+        self.sink = sink
 
-    def __init__(self) -> None:
-        self._originals: list[tuple[Any, str, Any]] = []
-
-    def setattr(self, target: Any, name: str, value: Any) -> None:
-        self._originals.append((target, name, getattr(target, name)))
-        setattr(target, name, value)
-
-    def undo(self) -> None:
-        for target, name, original in reversed(self._originals):
-            setattr(target, name, original)
-        self._originals.clear()
+    def emit(self, record):
+        self.sink.append(self.format(record))
 
 
-class _AdvStore:
-    """Recording dict-backed vault double for revoke-before-delete ordering."""
-
-    def __init__(self, order: list[str]) -> None:
-        self.values: dict[str, str] = {}
-        self.order = order
-        self.delete_calls = 0
-
-    def get(self, name: str) -> str | None:
-        return self.values.get(name)
-
-    def set(self, name: str, value: str) -> None:
-        self.values[name] = value
-
-    def delete(self, name: str) -> None:
-        self.delete_calls += 1
-        self.order.append("store-delete:" + name)
-        self.values.pop(name, None)
-
-
-class _ParallelStubAdapter(ProviderAdapter):
-    """Deterministic parallel stand-in; quota stays off so OAuth owns it."""
-
-    @property
-    def name(self) -> str:
-        return "parallel"
-
-    @property
-    def capabilities(self) -> ProviderCapabilities:
-        return ProviderCapabilities(search=True)
-
-    async def search(self, request: SearchRequest) -> SearchResponse:
-        return SearchResponse(query=request.query, provider=self.name, results=[])
-
-    async def fetch(self, request: FetchRequest) -> FetchResponse:
-        raise AssertionError("unreachable in OAuth scenarios")
-
-    async def estimate_cost(self, request: SearchRequest | FetchRequest) -> CostEstimate:
-        operation = (
-            UsageOperation.SEARCH if isinstance(request, SearchRequest) else UsageOperation.FETCH
-        )
-        return CostEstimate(provider=self.name, operation=operation, units=Decimal("0"))
-
-
-class _RecordHandler(logging.Handler):
-    """Root-logging tap that keeps every emitted message for leakage scans."""
-
-    def __init__(self, sink: list[str]) -> None:
-        super().__init__(level=logging.DEBUG)
-        self._sink = sink
-
-    def emit(self, record: logging.LogRecord) -> None:
-        with suppress(Exception):
-            self._sink.append(record.getMessage())
-
-
-def _close_adv(context: Any) -> None:
-    client = getattr(context, "adv_client", None)
-    if client is not None:
-        with suppress(Exception):
-            client.__exit__(None, None, None)
-        context.adv_client = None
-    repo = getattr(context, "adv_repo", None)
-    if repo is not None:
-        with suppress(Exception):
-            context.loop.run_until_complete(repo.close())
-        with suppress(Exception):
-            clear_oauth_poll_state(repo)
-        context.adv_repo = None
-    db_path = getattr(context, "adv_db", None)
-    if db_path is not None:
-        with suppress(OSError):
-            Path(db_path).unlink(missing_ok=True)
-        with suppress(OSError):
-            Path(str(db_path) + ".migration.lock").unlink(missing_ok=True)
-        context.adv_db = None
-    handler = getattr(context, "adv_log_handler", None)
-    if handler is not None:
-        with suppress(Exception):
-            logging.getLogger().removeHandler(handler)
-        context.adv_log_handler = None
-    shim = getattr(context, "adv_shim", None)
-    if shim is not None:
-        with suppress(Exception):
-            shim.undo()
-        context.adv_shim = None
-
-
-def _setup_adv(context: Any) -> None:
-    _close_adv(context)
-    configure_bdd_secret(context)
-    tmpdir = Path(".runtime-tmp/adv-behave-dbs")
-    tmpdir.mkdir(parents=True, exist_ok=True)
-    # uuid names: counters reset per process and stale files must never collide.
-    db_path = tmpdir / f"adv-behave-{uuid.uuid4().hex}.db"
-    server = StubOAuthServer()
-    shim = _PatchShim()
-    install_http_stub(shim, server)
-    attempts = install_network_guard(shim)
-    shared: list[str] = []
-    server.order = shared
-    store = _AdvStore(shared)
-    repo = context.loop.run_until_complete(SQLiteRepository.open(db_path))
-    app = create_app([_ParallelStubAdapter()], repository=repo, secret_store=store)
-    client = TestClient(app)
-    client.__enter__()
-    records: list[str] = []
-    handler = _RecordHandler(records)
-    logging.getLogger().addHandler(handler)
-    context.adv_tmpdir = tmpdir
-    context.adv_db = db_path
-    context.adv_server = server
-    context.adv_shim = shim
-    context.adv_attempts = attempts
-    context.adv_shared = shared
-    context.adv_store = store
-    context.adv_repo = repo
-    context.adv_client = client
-    context.adv_last = None
+def _setup(context):
+    case = bdd_oauth_setup(context)
     context.adv_bodies = []
-    context.adv_records = records
-    context.adv_log_handler = handler
-    # OAuth routes need the Admin role.
-    email = temp_email("adv-admin")
-    registered = client.post("/auth/register", json={"email": email, "password": TEMP_PASSWORD})
-    assert registered.status_code == 201
-    context.loop.run_until_complete(promote_to_system_admin(repo, email))
-    logged_in = client.post("/auth/jwt/login", data={"username": email, "password": TEMP_PASSWORD})
-    assert logged_in.status_code == 200
-    context.adv_auth_headers = {"Authorization": f"Bearer {logged_in.json()['access_token']}"}
+    context.adv_logs = []
+    handler = _Capture(context.adv_logs)
+    logging.getLogger().addHandler(handler)
+    cleanups = getattr(context, "enc_cleanups", [])
+    cleanups.append(lambda: logging.getLogger().removeHandler(handler))
+    context.enc_cleanups = cleanups
+    return case
 
 
-def _client(context: Any) -> TestClient:
-    return context.adv_client
-
-
-def _server(context: Any) -> StubOAuthServer:
-    return context.adv_server
-
-
-def _require_parallel(context: Any, what: str) -> Any:
-    response = context.adv_last
-    if response.status_code == 404:
-        raise AssertionError("CONTRACT-NOT-IMPLEMENTED: " + what + " 404 for parallel")
+def _response(context, response):
+    context.adv_response = response
+    context.adv_bodies.append(response.text)
     return response
 
 
-def _assert_no_egress(context: Any) -> None:
-    attempts = getattr(context, "adv_attempts", [])
-    assert attempts == [], "live network egress attempted: " + repr(attempts)
-
-
-def _device_path(provider_id: str) -> str:
-    return "/api/v1/providers/" + provider_id + "/oauth/device-code"
-
-
-def _status_path(provider_id: str) -> str:
-    return "/api/v1/providers/" + provider_id + "/oauth/status"
-
-
-def _oauth_path(provider_id: str) -> str:
-    return "/api/v1/providers/" + provider_id + "/oauth"
-
-
-def _rewind(context: Any) -> None:
-    async def _age_last_poll() -> None:
-        payload = await context.adv_repo.get_runtime_setting(METADATA_RUNTIME_KEY)
-        if isinstance(payload, dict):
-            payload["last_poll_at"] = "2020-01-01T00:00:00+00:00"
-            await context.adv_repo.set_runtime_setting(METADATA_RUNTIME_KEY, payload)
-
-    context.loop.run_until_complete(_age_last_poll())
-
-
-def _expire_access(context: Any) -> None:
-    async def _age_access() -> None:
-        payload = await context.adv_repo.get_runtime_setting(METADATA_RUNTIME_KEY)
-        if isinstance(payload, dict):
-            payload["access_expires_at"] = "2020-01-01T00:00:00+00:00"
-            await context.adv_repo.set_runtime_setting(METADATA_RUNTIME_KEY, payload)
-
-    context.loop.run_until_complete(_age_access())
-
-
-def _connect(context: Any) -> dict[str, Any]:
-    client = _client(context)
-    headers = context.adv_auth_headers
-    context.adv_last = client.post(_device_path("parallel"), headers=headers)
-    started = _require_parallel(context, "POST device-code")
-    assert started.status_code == 200, started.text[:500]
-    last: dict[str, Any] = {}
-    for _ in range(8):
-        probe = client.get(_status_path("parallel"), headers=headers)
-        assert probe.status_code == 200, probe.text[:500]
-        last = probe.json()
-        context.adv_last = probe
-        if last.get("status") == "ready":
-            return last
-        if last.get("status") in ("denied", "expired", "unpaired"):
-            raise AssertionError("device flow terminated: " + json.dumps(last)[:300])
-        _rewind(context)
-    raise AssertionError("device flow never reached ready; last: " + json.dumps(last)[:300])
-
-
-def _poll_balance(context: Any) -> Any:
-    async def _run_once() -> Any:
-        async with stub_client(context.adv_server) as http:
-            return await poll_oauth_balance_snapshot(
-                context.adv_repo, secret_store=context.adv_store, http_client=http
-            )
-
-    return context.loop.run_until_complete(_run_once())
-
-
-def _dashboard_parallel(context: Any) -> dict[str, Any] | None:
-    response = _client(context).get("/dashboard", headers=context.adv_auth_headers)
-    assert response.status_code == 200, response.text[:500]
-    context.adv_last = response
-    for entry in response.json().get("latest_quota", []):
-        if isinstance(entry, dict) and entry.get("provider") == "parallel":
-            return entry
-    return None
-
-
-def _runtime_settings_text(db_path: Path) -> dict[str, str]:
-    if not db_path.exists():
-        return {}
-    connection = sqlite3.connect(str(db_path))
-    try:
-        cursor = connection.execute("SELECT key, value_json FROM runtime_settings")
-        return {str(key): str(value) for key, value in cursor.fetchall()}
-    except sqlite3.Error:
-        return {}
-    finally:
-        connection.close()
+def _balance(context):
+    context.adv_snapshot = _run(context, context.oauth_case.balance())
 
 
 @given("an offline Parallel OAuth API with stubbed vendor")
 def step_setup(context: Any) -> None:
-    _setup_adv(context)
+    _setup(context)
 
 
 @given('a stubbed "{outcome}" device poll outcome')
 def step_poll_outcome(context: Any, outcome: str) -> None:
-    _setup_adv(context)
-    _server(context).poll_script = [outcome]  # type: ignore[list-item]
+    context.oauth_case.stub.poll_script = [outcome]
 
 
 @given("a connected Parallel OAuth session")
 def step_connected(context: Any) -> None:
-    _setup_adv(context)
-    _connect(context)
+    if getattr(context, "oauth_case", None) is None:
+        _setup(context)
+    _run(context, context.oauth_case.connect())
 
 
 @given("a connected Parallel OAuth session with a poisoned grant")
 def step_connected_poisoned(context: Any) -> None:
-    _setup_adv(context)
-    _connect(context)
-    _server(context).refresh_reject = "invalid_grant"
-    _expire_access(context)
+    if getattr(context, "oauth_case", None) is None:
+        _setup(context)
+    _run(context, context.oauth_case.connect())
+    context.oauth_case.stub.refresh_reject = "invalid_grant"
 
 
 @given("a stubbed slow_down device poll script with interval {interval:d}")
 def step_slow_down(context: Any, interval: int) -> None:
-    _setup_adv(context)
-    server = _server(context)
-    server.device_interval = interval
-    server.poll_script = ["slow_down", "success"]  # type: ignore[list-item]
+    context.oauth_case.stub.device_interval = interval
+    context.oauth_case.stub.poll_script = ["authorization_pending", "slow_down", "success"]
 
 
 @given("a stubbed vendor balance of {credit:d} credit and {pending:d} pending cents")
 def step_balance(context: Any, credit: int, pending: int) -> None:
-    _setup_adv(context)
-    _server(context).credit_cents = credit
-    _server(context).pending_cents = pending
-    _server(context).balance_will_invoice = False
+    context.oauth_case.stub.credit_cents = credit
+    context.oauth_case.stub.pending_cents = pending
 
 
 @given("a stubbed invoiced vendor balance")
 def step_invoiced(context: Any) -> None:
-    _setup_adv(context)
-    _server(context).credit_cents = 5000
-    _server(context).pending_cents = 0
-    _server(context).balance_will_invoice = True
+    context.oauth_case.stub.balance_will_invoice = True
 
 
 @given("a seeded and anchored account with live credit {credit:d} pending {pending:d}")
 def step_seeded_anchored(context: Any, credit: int, pending: int) -> None:
-    _setup_adv(context)
-    _server(context).credit_cents = credit
-    _server(context).pending_cents = pending
-    client = _client(context)
-    headers = context.adv_auth_headers
-    seed = client.patch(
-        "/api/v1/providers/parallel",
-        json={"parallel_free_seed_usd": "5.00"},
-        headers=headers,
+    context.oauth_case.stub.credit_cents = credit
+    context.oauth_case.stub.pending_cents = pending
+    _run(
+        context,
+        context.repository.record_quota(
+            QuotaSnapshot(
+                provider="parallel",
+                source=QuotaSource.ESTIMATED,
+                remaining=Decimal("5"),
+                limit=Decimal("5"),
+                observed_at=context.oauth_case.clock[0],
+            )
+        ),
     )
-    assert seed.status_code == 200, seed.text[:300]
-    manual = client.put(
+    case = context.oauth_case
+    manual = case.client.put(
         "/api/v1/providers/parallel/manual-quota",
+        headers=case.headers,
         json={
             "billing_start": "2026-09-01",
             "billing_end": "2026-10-01",
-            "allowance": "999.00",
-            "current_usage": "0.00",
+            "allowance": "999",
+            "current_usage": "0",
         },
-        headers=headers,
     )
-    assert manual.status_code == 200, manual.text[:300]
+    assert manual.status_code == 200
 
 
 @when('I request a device code for "{provider_id}"')
 def step_request_device(context: Any, provider_id: str) -> None:
-    context.adv_last = _client(context).post(
-        _device_path(provider_id), headers=context.adv_auth_headers
+    case = context.oauth_case
+    path = (
+        case.path + "/device"
+        if provider_id == "parallel"
+        else f"/api/v1/providers/{provider_id}/oauth/device-code"
     )
+    _response(context, case.client.post(path, headers=case.headers))
 
 
 @when("I request a device code with an extra smuggled field")
 def step_request_device_extra(context: Any) -> None:
-    context.adv_last = _client(context).post(
-        _device_path("parallel"),
-        json={"smuggled": "token-material"},
-        headers=context.adv_auth_headers,
+    case = context.oauth_case
+    _response(
+        context,
+        case.client.post(
+            case.path + "/device", headers=case.headers, json={"smuggled": "token-material"}
+        ),
     )
 
 
 @when('I read OAuth status for "{provider_id}"')
 def step_read_status(context: Any, provider_id: str) -> None:
-    context.adv_last = _client(context).get(
-        _status_path(provider_id), headers=context.adv_auth_headers
+    case = context.oauth_case
+    path = (
+        case.path if provider_id == "parallel" else f"/api/v1/providers/{provider_id}/oauth/status"
     )
+    _response(context, case.client.get(path, headers=case.headers))
 
 
 @when('I disconnect OAuth for "{provider_id}"')
 def step_disconnect(context: Any, provider_id: str) -> None:
-    # Mark the shared order log so the Then step only sees this disconnect's window
-    # (earlier entries belong to the connect flow's own vault cleanup).
-    context.adv_order_mark = len(context.adv_shared)
-    context.adv_last = _client(context).delete(
-        _oauth_path(provider_id), headers=context.adv_auth_headers
-    )
+    case = context.oauth_case
+    path = case.path if provider_id == "parallel" else f"/api/v1/providers/{provider_id}/oauth"
+    _response(context, case.client.delete(path, headers=case.headers))
 
 
 @when('I disconnect OAuth for "parallel" twice')
 def step_disconnect_twice(context: Any) -> None:
-    client = _client(context)
-    headers = context.adv_auth_headers
-    first = client.delete(_oauth_path("parallel"), headers=headers)
-    second = client.delete(_oauth_path("parallel"), headers=headers)
-    context.adv_first = first
-    context.adv_last = second
+    case = context.oauth_case
+    context.adv_disconnects = [
+        case.client.delete(case.path, headers=case.headers) for _ in range(2)
+    ]
 
 
 @when("I start the device flow and poll status to terminal")
 def step_poll_terminal(context: Any) -> None:
-    client = _client(context)
-    headers = context.adv_auth_headers
-    context.adv_last = client.post(_device_path("parallel"), headers=headers)
-    started = _require_parallel(context, "POST device-code")
-    assert started.status_code == 200, started.text[:500]
-    for _ in range(8):
-        probe = client.get(_status_path("parallel"), headers=headers)
-        assert probe.status_code == 200, probe.text[:500]
-        context.adv_last = probe
-        if probe.json().get("status") != "pending":
-            return
-        _rewind(context)
+    case = context.oauth_case
+    assert case.client.post(case.path + "/device", headers=case.headers).status_code == 201
+    context.adv_status = _run(context, case.poll())
+    context.adv_bodies.append(context.adv_status.model_dump_json())
 
 
 @when("I start the device flow and poll status rapidly")
 def step_poll_rapid(context: Any) -> None:
-    client = _client(context)
-    headers = context.adv_auth_headers
-    context.adv_last = client.post(_device_path("parallel"), headers=headers)
-    started = _require_parallel(context, "POST device-code")
-    assert started.status_code == 200, started.text[:500]
-    first = client.get(_status_path("parallel"), headers=headers)
-    assert first.status_code == 200, first.text[:300]
-    context.adv_last = first
-    assert first.json()["status"] == "pending", first.text[:300]
-    context.adv_cached_pending = 0
-    for _ in range(4):
-        probe = client.get(_status_path("parallel"), headers=headers)
-        assert probe.json()["status"] == "pending", probe.text[:300]
-        context.adv_last = probe
-        context.adv_cached_pending += 1
-    _rewind(context)
-    for _ in range(6):
-        probe = client.get(_status_path("parallel"), headers=headers)
-        context.adv_last = probe
-        if probe.json().get("status") == "ready":
-            return
-        _rewind(context)
-    raise AssertionError("slow_down flow never reached ready")
+    case = context.oauth_case
+    start = _run(context, case.start())
+    context.adv_initial_interval = start.interval
+    context.adv_intervals = []
+    for _ in range(3):
+        context.adv_status = _run(context, case.poll())
+        context.adv_intervals.append(context.adv_status.interval)
+        for _ in range(3):
+            case.client.get(case.path, headers=case.headers)
+        if context.adv_status.status is OAuthGrantStatus.CONNECTED:
+            break
+        case.clock[0] += timedelta(seconds=context.adv_status.interval)
 
 
 @when("I connect OAuth, run the bounded balance poll, and read the dashboard")
 def step_connect_poll_dashboard(context: Any) -> None:
-    _connect(context)
-    context.adv_snapshot = _poll_balance(context)
-    context.adv_dashboard = _dashboard_parallel(context)
+    case = context.oauth_case
+    _run(context, case.connect())
+    _balance(context)
+    _response(context, case.client.get("/dashboard", headers=case.headers))
 
 
 @when("I read OAuth status repeatedly")
 def step_status_repeated(context: Any) -> None:
-    server = _server(context)
-    context.adv_baseline = server.poll_calls + server.refresh_calls
-    bodies: list[str] = []
+    case = context.oauth_case
+    context.adv_status = _run(context, case.refresh())
     for _ in range(5):
-        probe = _client(context).get(_status_path("parallel"), headers=context.adv_auth_headers)
-        assert probe.status_code == 200, probe.text[:300]
-        context.adv_last = probe
-        bodies.append(probe.text)
-    context.adv_bodies = bodies
+        context.adv_status = _run(context, case.status())
+        _run(context, case.refresh())
 
 
 @when("I run the bounded balance poll repeatedly through failures")
 def step_poll_failures(context: Any) -> None:
-    server = _server(context)
-    server.reset_counts()
-    clear_oauth_poll_state(context.adv_repo)
-    first = _poll_balance(context)
-    assert first is not None, "paired balance must poll once"
-    context.adv_after_warm = server.balance_calls
-    for _ in range(4):
-        assert _poll_balance(context) is None, "TTL-cached poll returns nothing new"
-    context.adv_after_ttl = server.balance_calls
-    clear_oauth_poll_state(context.adv_repo)
-    server.balance_status = 500
-    try:
-        assert _poll_balance(context) is None
-        context.adv_after_failing = server.balance_calls
-        assert _poll_balance(context) is None
-        context.adv_after_backoff = server.balance_calls
-    finally:
-        server.balance_status = 200
+    case = context.oauth_case
+    if _run(context, case.status()).status is not OAuthGrantStatus.CONNECTED:
+        _run(context, case.connect())
+    case.stub.fail_balance_times = 1
+    with suppress(ParallelOAuthError):
+        _balance(context)
+    for _ in range(5):
+        _run(context, refresh_quotas(case.repository, []))
+        case.client.get("/dashboard", headers=case.headers)
 
 
 @when("I drive every OAuth error path")
 def step_error_paths(context: Any) -> None:
-    client = _client(context)
-    headers = context.adv_auth_headers
-    server = _server(context)
-    bodies: list[str] = []
-    bodies.append(client.post(_device_path("parallel"), headers=headers).text)
-    server.poll_script = ["access_denied"]  # type: ignore[list-item]
-    bodies.append(client.get(_status_path("parallel"), headers=headers).text)
-    bodies.append(client.delete(_oauth_path("parallel"), headers=headers).text)
-    bodies.append(client.post(_device_path("parallel"), headers=headers).text)
-    server.poll_script = ["expired_token"]  # type: ignore[list-item]
-    bodies.append(client.get(_status_path("parallel"), headers=headers).text)
-    bodies.append(client.delete(_oauth_path("parallel"), headers=headers).text)
-    bodies.append(client.post(_device_path("parallel"), headers=headers).text)
-    server.poll_script = ["authorization_pending", "success"]
-    server.refresh_reject = "invalid_grant"
-    bodies.append(client.get(_status_path("parallel"), headers=headers).text)
-    bodies.append(client.delete(_oauth_path("parallel"), headers=headers).text)
-    server.refresh_reject = "none"
-    bodies.append(client.get("/dashboard", headers=headers).text)
-    context.adv_bodies = bodies
+    case = context.oauth_case
+    for outcome in ("access_denied", "expired_token", "invalid_grant"):
+        case.stub.poll_script = [outcome]
+        _response(context, case.client.post(case.path + "/device", headers=case.headers))
+        _response(context, case.client.post(case.path + "/poll", headers=case.headers))
+        _response(context, case.client.delete(case.path, headers=case.headers))
+    _run(context, case.connect())
+    _response(context, case.client.post(case.path + "/device", headers=case.headers))
+    case.stub.refresh_reject = "invalid_grant"
+    _run(context, case.refresh())
+    _response(context, case.client.get("/dashboard", headers=case.headers))
 
 
 @then("the device code response should carry the strict contract shape")
 def step_device_shape(context: Any) -> None:
-    _assert_no_egress(context)
-    response = _require_parallel(context, "POST device-code")
-    assert response.status_code == 200, response.text[:500]
-    body = response.json()
-    assert set(body) == DEVICE_KEYS, "extra/forbidden keys: " + repr(sorted(body))
-    assert body["provider"] == "parallel"
-    assert isinstance(body["user_code"], str) and body["user_code"]
-    assert isinstance(body["verification_uri"], str) and body["verification_uri"]
-    complete = body["verification_uri_complete"]
-    assert complete is None or isinstance(complete, str)
-    assert isinstance(body["expires_in"], int) and body["expires_in"] > 0
-    assert isinstance(body["interval"], int) and body["interval"] >= 1
-    assert DEVICE_CODE_VALUE not in response.text, "pending device secret echoed"
+    response = context.adv_response
+    assert response.status_code == 201
+    assert set(response.json()) == set(CredentialOAuthDeviceRead.model_fields)
+    assert response.json()["user_code"] and response.json()["verification_uri"]
+    assert response.json()["expires_in"] > 0 and response.json()["interval"] > 0
 
 
 @then("the device code response should contain no token fields")
 def step_device_no_tokens(context: Any) -> None:
-    _assert_no_egress(context)
-    response = _require_parallel(context, "POST device-code")
-    assert "access_token" not in response.text and "refresh_token" not in response.text
-    assert "client_secret" not in response.text
-    assert find_leaked_secrets(response.text, TOKEN_SENTINELS) == []
+    assert "device_code" not in context.adv_response.json()
+    assert DEVICE_CODE_VALUE not in context.adv_response.text
+    assert not find_leaked_secrets(context.adv_response.text)
 
 
 @then("the smuggled value should never surface")
 def step_smuggled_never_surfaces(context: Any) -> None:
-    _assert_no_egress(context)
-    _require_parallel(context, "POST device-code with extra key")
-    assert context.adv_last.status_code in (200, 422), context.adv_last.text[:300]
-    if context.adv_last.status_code == 200:
-        assert set(context.adv_last.json()) == DEVICE_KEYS
-        assert "token-material" not in context.adv_last.text
+    assert context.adv_response.status_code in (201, 422)
+    assert "token-material" not in context.adv_response.text
 
 
 @then("the OAuth response should be 404")
 def step_is_404(context: Any) -> None:
-    _assert_no_egress(context)
-    assert context.adv_last.status_code == 404, context.adv_last.text[:300]
+    assert context.adv_response.status_code == 404
 
 
 @then('the OAuth status should become "{status}"')
 def step_becomes(context: Any, status: str) -> None:
-    _assert_no_egress(context)
-    body = context.adv_last.json()
-    assert set(body) == STATUS_KEYS, repr(sorted(body))
-    assert body["status"] == status, "got " + body["status"] + ", want " + status
+    view = context.adv_status
+    assert view.status is OAuthGrantStatus.DISCONNECTED
+    assert view.last_error_code == ("access_denied" if status == "denied" else "expired_token")
+    assert not any(_run(context, context.oauth_case.slots()).values())
 
 
 @then("the disconnect should be accepted with revoke before vault delete")
 def step_revoke_order(context: Any) -> None:
-    _assert_no_egress(context)
-    response = _require_parallel(context, "DELETE oauth")
-    assert response.status_code == 204, response.text[:500]
-    server = _server(context)
-    assert server.revoke_calls >= 1, "revoke endpoint was never hit"
-    shared: list[str] = context.adv_shared[getattr(context, "adv_order_mark", 0) :]
-    deletes = [entry for entry in shared if entry.startswith("store-delete:parallel:oauth")]
-    assert "revoke" in shared and deletes, repr(shared)
-    assert shared.index("revoke") < shared.index(deletes[0]), repr(shared)
-    leftovers = [key for key in context.adv_store.values if key.startswith("parallel:oauth")]
-    assert leftovers == [], repr(leftovers)
+    assert context.adv_response.status_code == 204
+    assert context.oauth_case.stub.revoke_calls == 1
+    assert not any(_run(context, context.oauth_case.slots()).values())
+    assert _run(context, context.oauth_case.status()).status is OAuthGrantStatus.DISCONNECTED
 
 
 @then("both disconnects should be accepted and status should be unpaired")
 def step_idempotent(context: Any) -> None:
-    _assert_no_egress(context)
-    assert context.adv_first.status_code == 204, context.adv_first.text[:300]
-    assert context.adv_last.status_code == 204, context.adv_last.text[:300]
-    probe = _client(context).get(_status_path("parallel"), headers=context.adv_auth_headers)
-    assert probe.status_code == 200
-    assert probe.json()["status"] == "unpaired", probe.text[:300]
+    assert [r.status_code for r in context.adv_disconnects] == [204, 204]
+    assert context.oauth_case.stub.revoke_calls == 1
+    assert _run(context, context.oauth_case.status()).status is OAuthGrantStatus.DISCONNECTED
 
 
 @then("the OAuth status should be unpaired without a vendor hot-loop")
 def step_unpaired_bounded(context: Any) -> None:
-    _assert_no_egress(context)
-    for body in context.adv_bodies:
-        payload = json.loads(body)
-        assert payload["status"] == "unpaired", body[:300]
-    server = _server(context)
-    extra = (server.poll_calls + server.refresh_calls) - context.adv_baseline
-    assert extra <= 2, f"hot-loop: {extra} vendor hits for 5 reads"
+    assert context.adv_status.status is OAuthGrantStatus.REFRESH_FAILED
+    assert context.oauth_case.stub.refresh_calls == 1
+    assert not any(_run(context, context.oauth_case.slots()).values())
 
 
 @then("the flow should reach ready with bounded vendor polls")
 def step_ready_bounded(context: Any) -> None:
-    _assert_no_egress(context)
-    assert context.adv_last.json()["status"] == "ready", context.adv_last.text[:300]
-    polls = _server(context).poll_calls
-    assert polls == 2, f"expected exactly 2 vendor polls, got {polls}"
-    assert context.adv_cached_pending == 4, "rapid reads must all stay cached pending"
+    assert context.adv_status.status is OAuthGrantStatus.CONNECTED
+    assert context.oauth_case.stub.poll_calls == 3
+    assert context.adv_intervals[1] == context.adv_initial_interval + 5
 
 
 @then('the Parallel quota should be authoritative USD "{usd}" with no limit')
 def step_quota_usd(context: Any, usd: str) -> None:
-    _assert_no_egress(context)
-    assert context.adv_snapshot is not None, "paired balance must record a snapshot"
-    assert context.adv_snapshot.source == "authoritative"
-    assert context.adv_snapshot.remaining == Decimal(usd)
-    entry = context.adv_dashboard
-    assert entry is not None, "balance must surface via dashboard latest_quota"
-    assert entry.get("source") == "authoritative", repr(entry)
-    assert Decimal(str(entry.get("remaining"))) == Decimal(usd), repr(entry)
-    assert entry.get("limit") is None, "balance is remaining-only: " + repr(entry)
-    assert str(entry.get("unit_kind", "")).upper() == "USD", repr(entry)
-    assert find_leaked_secrets(json.dumps(entry), TOKEN_SENTINELS) == []
+    snapshot = context.adv_snapshot
+    assert snapshot.source is QuotaSource.AUTHORITATIVE
+    assert snapshot.remaining == Decimal(usd) and snapshot.limit is None
+    assert snapshot.unit_kind is UnitKind.USD and snapshot.display_unit == "USD"
+    assert (
+        _run(
+            context,
+            context.repository.latest_quota(
+                "parallel", credential_id=context.oauth_case.credential.id
+            ),
+        )
+        == snapshot
+    )
 
 
 @then("the Parallel quota entry should be missing")
 def step_missing(context: Any) -> None:
-    _assert_no_egress(context)
-    assert context.adv_snapshot is None, "invoiced orgs record no snapshot"
-    assert context.adv_dashboard is None, "invoiced orgs surface no quota entry"
+    assert context.adv_snapshot is None
+    assert (
+        _run(
+            context,
+            context.repository.latest_quota(
+                "parallel", credential_id=context.oauth_case.credential.id
+            ),
+        )
+        is None
+    )
+    assert _run(context, context.repository.latest_quota("parallel")) is None
 
 
 @then('the live balance should win as authoritative USD "{usd}"')
 def step_precedence(context: Any, usd: str) -> None:
-    _assert_no_egress(context)
-    entry = context.adv_dashboard
-    assert entry is not None
-    assert entry.get("source") == "authoritative", repr(entry)
-    assert Decimal(str(entry.get("remaining"))) == Decimal(usd), (
-        "live balance must outrank seed/manual: " + repr(entry)
+    assert context.adv_snapshot.source is QuotaSource.AUTHORITATIVE
+    assert context.adv_snapshot.remaining == Decimal(usd)
+    assert (
+        _run(
+            context,
+            context.repository.latest_quota(
+                "parallel", credential_id=context.oauth_case.credential.id
+            ),
+        )
+        == context.adv_snapshot
     )
+    assert _run(context, context.repository.latest_quota("parallel")).remaining == Decimal("5")
 
 
 @then("vendor balance polls should stay bounded")
 def step_bounded(context: Any) -> None:
-    _assert_no_egress(context)
-    assert context.adv_after_warm == 1, f"warm poll must attempt once: {context.adv_after_warm}"
-    assert context.adv_after_ttl == 1, f"TTL ignored: {context.adv_after_ttl} polls"
-    assert context.adv_after_failing == 2, "failing poll must attempt exactly once"
-    assert context.adv_after_backoff == 2, "backoff ignored: vendor re-hit inside window"
+    assert context.oauth_case.stub.balance_calls == 1
 
 
 @then("no log record or response body should contain token material")
 def step_no_leak(context: Any) -> None:
-    _assert_no_egress(context)
-    for index, body in enumerate(context.adv_bodies):
-        leaked = find_leaked_secrets(body, TOKEN_SENTINELS)
-        assert not leaked, f"body #{index} leaks {leaked!r}"
-    leaked_logs = find_leaked_secrets("\n".join(context.adv_records), TOKEN_SENTINELS)
-    assert not leaked_logs, f"log records leak {leaked_logs!r}"
+    for body in context.adv_bodies:
+        assert not find_leaked_secrets(body)
+    assert not find_leaked_secrets("\n".join(context.adv_logs))
+    _run(context, context.oauth_case.assert_no_leaks(*context.adv_bodies))
 
 
 @then("the vault should hold the bearer while the database holds none")
 def step_vault_not_db(context: Any) -> None:
-    _assert_no_egress(context)
-    values = context.adv_store.values
-    assert values.get("parallel:oauth:access") == ACCESS_TOKEN_VALUE
-    assert values.get("parallel:oauth:refresh") is not None
-    assert values.get("parallel:oauth:client_secret") == CLIENT_SECRET_VALUE
-    assert values.get("parallel:oauth:device") is None, "device secret must be wiped once paired"
-    for text in collect_sqlite_texts(context.adv_db):
-        leaked = find_leaked_secrets(text, TOKEN_SENTINELS)
-        assert not leaked, f"DB row leaks {leaked!r}"
-    for key, value in _runtime_settings_text(context.adv_db).items():
-        leaked = find_leaked_secrets(value, TOKEN_SENTINELS)
-        assert not leaked, f"runtime_settings[{key!r}] leaks {leaked!r}"
+    case = context.oauth_case
+    assert _run(context, case.token()) == ACCESS_TOKEN_VALUE
+    assert _run(context, case.token("client")) == CLIENT_SECRET_VALUE
+    assert _run(context, case.token("device")) is None
+    _run(context, case.assert_no_leaks())
 
 
 @then("the status should be fingerprint-only")
 def step_fingerprint(context: Any) -> None:
-    _assert_no_egress(context)
-    response = _require_parallel(context, "GET status")
-    assert response.status_code == 200
-    body = response.json()
-    assert set(body) == STATUS_KEYS, repr(sorted(body))
-    lowered = response.text.lower()
-    assert "access_token" not in lowered and "refresh_token" not in lowered
-    assert find_leaked_secrets(response.text, TOKEN_SENTINELS) == []
+    case = context.oauth_case
+    probe = case.client.get(case.path, headers=case.headers)
+    assert probe.status_code == 200
+    assert set(probe.json()) == set(CredentialOAuthStatusRead.model_fields)
+    assert "access_token" not in probe.text and "refresh_token" not in probe.text
+    _run(context, case.assert_no_leaks(probe))

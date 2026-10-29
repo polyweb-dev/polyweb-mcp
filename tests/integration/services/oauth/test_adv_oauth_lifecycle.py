@@ -1,295 +1,152 @@
-"""Lifecycle attacks: revoke ordering, idempotency, hot-loops, herd, skew."""
+"""Original adversarial cases migrated to A4 credential OAuth.
 
-from __future__ import annotations
+Case names and parameter matrices retain their origin. Scoped metadata/grants
+replace singleton statuses and slots; GET is observational and explicit POST
+polls make at most one vendor attempt. Monitoring never polls OAuth implicitly.
+"""
 
 import asyncio
-import threading
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any
 
-from fastapi.testclient import TestClient
+import pytest
 
+from freesearch.models.schema_enums import OAuthGrantStatus
+from freesearch.persistence.oauth_grants import oauth_secret_slot
 from freesearch.services.monitoring import refresh_quotas
-from freesearch.services.parallel_oauth import (
-    clear_oauth_poll_state,
-    clear_oauth_test_seams,
-    set_oauth_test_seams,
-)
-from tests.integration.services.oauth.conftest import (
-    OAUTH_PATH,
-    STATUS_PATH,
-    admin_auth_headers,
-    build_app,
-    connect_parallel,
-    expire_access_token,
-    poll_balance,
-    require_implemented,
-    rewind_device_poll,
-)
+from freesearch.services.parallel_oauth import OAuthUnpaired
 from tests.integration.services.oauth.oauth_stubs import (
     ROTATED_ACCESS_TOKEN_VALUE,
-    StubOAuthServer,
-    stub_client,
 )
 
 
-def _open(repository: Any, secret_store: Any) -> TestClient:
-    client = TestClient(build_app(repository, secret_store))
-    client.__enter__()
-    return client
-
-
-async def test_revoke_before_delete_ordering(
-    repository: Any, secret_store: Any, stub_server: StubOAuthServer, auth_secret: str
-) -> None:
-    client = _open(repository, secret_store)
-    try:
-        # Use one Admin account for all OAuth routes.
-        headers = await admin_auth_headers(client, repository)
-        await connect_parallel(client, stub_server, repository, headers=headers)
-        assert secret_store.values, "expected vaulted material before disconnect"
-        shared: list[str] = []
-        stub_server.order = shared
-        secret_store.order = shared
-        response = require_implemented(client.delete(OAUTH_PATH, headers=headers), "DELETE oauth")
-        assert response.status_code == 204, response.text[:500]
-        assert stub_server.revoke_calls >= 1, "revoke endpoint was never hit"
-        assert secret_store.delete_calls >= 1, "vault key was never deleted"
-        assert "revoke" in shared, "revoke endpoint was never hit"
-        deletes = [entry for entry in shared if entry.startswith("store-delete:parallel:oauth")]
-        assert deletes, "vault oauth keys were never deleted: " + repr(shared)
-        assert shared.index("revoke") < shared.index(deletes[0]), (
-            "revoke must precede vault delete: " + repr(shared)
+async def test_revoke_before_delete_ordering(oauth_case):
+    """Origin test_adv_oauth_lifecycle.py::test_revoke_before_delete_ordering."""
+    case = oauth_case
+    await case.connect()
+    old = await case.grant()
+    await case.disconnect()
+    # A4 atomically tombstones before best-effort revoke; stale tokens cannot return.
+    assert case.stub.revoke_calls == 1
+    for kind in ("access", "refresh", "client", "device"):
+        assert (
+            await case.store.get(oauth_secret_slot(case.credential.id, kind, old.token_generation))
+            is None
         )
-        leftovers = [key for key in secret_store.values if key.startswith("parallel:oauth")]
-        assert leftovers == [], "vault oauth keys must be gone: " + repr(leftovers)
-    finally:
-        client.__exit__(None, None, None)
+    assert (await case.status()).status is OAuthGrantStatus.DISCONNECTED
+    await case.assert_no_leaks()
 
 
-async def test_disconnect_idempotent(
-    repository: Any, secret_store: Any, stub_server: StubOAuthServer, auth_secret: str
-) -> None:
-    client = _open(repository, secret_store)
-    try:
-        # Use one Admin account for all OAuth routes.
-        headers = await admin_auth_headers(client, repository)
-        await connect_parallel(client, stub_server, repository, headers=headers)
-        assert await poll_balance(repository, stub_server, secret_store) is not None
-        first = require_implemented(client.delete(OAUTH_PATH, headers=headers), "DELETE oauth")
-        assert first.status_code == 200 or first.status_code == 204, first.text[:500]
-        tombstoned = await repository.latest_quota("parallel")
-        assert tombstoned is not None and tombstoned.source.value == "estimated", repr(tombstoned)
-        assert tombstoned.remaining is None, "disconnect must tombstone funds: " + repr(tombstoned)
-        second = client.delete(OAUTH_PATH, headers=headers)
-        assert second.status_code == 204, "second DELETE must stay 204: " + second.text[:300]
-        revokes_after_two = stub_server.revoke_calls
-        with ThreadPoolExecutor(max_workers=4) as pool:
-            results = list(
-                pool.map(
-                    lambda _: client.delete(OAUTH_PATH, headers=headers).status_code,
-                    range(4),
-                )
+async def test_disconnect_idempotent(oauth_case):
+    """Origin test_adv_oauth_lifecycle.py::test_disconnect_idempotent."""
+    case = oauth_case
+    await case.connect()
+    await case.balance()
+    assert case.client.delete(case.path, headers=case.headers).status_code == 204
+    assert case.client.delete(case.path, headers=case.headers).status_code == 204
+    revokes = case.stub.revoke_calls
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(
+            pool.map(
+                lambda _: case.client.delete(case.path, headers=case.headers).status_code, range(4)
             )
-        assert results == [204, 204, 204, 204], repr(results)
-        assert stub_server.revoke_calls <= revokes_after_two + 4, "revoke amplified under race"
-        status = client.get(STATUS_PATH, headers=headers)
-        assert status.status_code == 200
-        assert status.json()["status"] == "unpaired", status.text[:300]
-    finally:
-        client.__exit__(None, None, None)
-
-
-async def test_refresh_invalid_grant_unpairs_without_hotloop(
-    repository: Any, secret_store: Any, stub_server: StubOAuthServer, auth_secret: str
-) -> None:
-    client = _open(repository, secret_store)
-    try:
-        # Use one Admin account for all OAuth reads.
-        headers = await admin_auth_headers(client, repository)
-        await connect_parallel(client, stub_server, repository, headers=headers)
-        stub_server.refresh_reject = "invalid_grant"
-        await expire_access_token(repository)
-        baseline = stub_server.poll_calls + stub_server.refresh_calls
-        seen: set[str] = set()
-        for _ in range(5):
-            probe = client.get(STATUS_PATH, headers=headers)
-            assert probe.status_code == 200, probe.text[:300]
-            seen.add(probe.json()["status"])
-        assert seen == {"unpaired"}, "dead grant must surface unpaired, got " + repr(seen)
-        extra = stub_server.poll_calls + stub_server.refresh_calls - baseline
-        assert extra <= 2, f"hot-loop: {extra} vendor hits for 5 reads"
-        for _ in range(3):
-            assert client.get(STATUS_PATH, headers=headers).json()["status"] == "unpaired"
-        final_extra = stub_server.poll_calls + stub_server.refresh_calls - baseline
-        assert final_extra <= 2, f"unpaired reads must be cached, got {final_extra} hits"
-    finally:
-        stub_server.refresh_reject = "none"
-        client.__exit__(None, None, None)
-
-
-async def test_balance_401_unpairs_and_backs_off(
-    repository: Any, secret_store: Any, stub_server: StubOAuthServer, auth_secret: str
-) -> None:
-    client = _open(repository, secret_store)
-    try:
-        # Use one Admin account for OAuth and status reads.
-        headers = await admin_auth_headers(client, repository)
-        await connect_parallel(client, stub_server, repository, headers=headers)
-        # Pairing intentionally performs the FIRST balance fetch inside the
-        # ready transition, so the counts below stay relative to that read.
-        paired_calls = stub_server.balance_calls
-        assert paired_calls == 1, "pairing must perform exactly one eager balance read"
-        stub_server.balance_status = 401
-        snapshot = await poll_balance(repository, stub_server, secret_store)
-        assert snapshot is None, "rejected bearer must yield no snapshot"
-        assert stub_server.balance_calls == paired_calls + 1, (
-            "rejected bearer must be attempted exactly once"
         )
-        again = await poll_balance(repository, stub_server, secret_store)
-        assert again is None
-        assert stub_server.balance_calls == paired_calls + 1, (
-            "backoff ignored: re-polled a dead bearer"
-        )
-        status = client.get(STATUS_PATH, headers=headers)
-        assert status.status_code == 200
-        assert status.json()["status"] == "unpaired", status.text[:300]
-        assert secret_store.values.get("parallel:oauth:access") is None, "vault not cleared"
-    finally:
-        stub_server.balance_status = 200
-        client.__exit__(None, None, None)
+    assert results == [204] * 4
+    assert case.stub.revoke_calls == revokes
+    assert (await case.status()).status is OAuthGrantStatus.DISCONNECTED
+    assert not any((await case.slots()).values())
 
 
-async def test_device_interval_and_slow_down_honored(
-    repository: Any, secret_store: Any, stub_server: StubOAuthServer, auth_secret: str
-) -> None:
-    stub_server.poll_script = ["slow_down", "success"]  # type: ignore[list-item]
-    client = _open(repository, secret_store)
-    try:
-        # Use one Admin account for the OAuth routes.
-        headers = await admin_auth_headers(client, repository)
-        started = require_implemented(
-            client.post("/api/v1/providers/parallel/oauth/device-code", headers=headers),
-            "POST device-code",
-        )
-        assert started.status_code == 200, started.text[:500]
-        assert started.json()["interval"] >= 1
-        first = client.get(STATUS_PATH, headers=headers)
-        assert first.json()["status"] == "pending", first.text[:300]
-        assert stub_server.poll_calls == 1
-        for _ in range(3):
-            cached = client.get(STATUS_PATH, headers=headers)
-            assert cached.json()["status"] == "pending", cached.text[:300]
-        assert stub_server.poll_calls == 1, "interval ignored: vendor re-polled inside window"
-        await rewind_device_poll(repository)
-        ready = client.get(STATUS_PATH, headers=headers)
-        assert ready.json()["status"] == "ready", ready.text[:300]
-        assert stub_server.poll_calls == 2, "slow_down flow must converge on one more poll"
-    finally:
-        client.__exit__(None, None, None)
+async def test_refresh_invalid_grant_unpairs_without_hotloop(oauth_case):
+    """Origin test_adv_oauth_lifecycle.py::test_refresh_invalid_grant_unpairs_without_hotloop."""
+    case = oauth_case
+    await case.connect()
+    case.stub.refresh_reject = "invalid_grant"
+    assert (await case.refresh()).status is OAuthGrantStatus.REFRESH_FAILED
+    assert not any((await case.slots()).values())
+    for _ in range(4):
+        await case.refresh()
+        await case.status()
+    assert case.stub.refresh_calls == 1
 
 
-async def test_balance_poll_single_flight(
-    repository: Any, secret_store: Any, stub_server: StubOAuthServer, auth_secret: str
-) -> None:
-    client = _open(repository, secret_store)
-    try:
-        # Use one Admin account for the OAuth flow.
-        headers = await admin_auth_headers(client, repository)
-        await connect_parallel(client, stub_server, repository, headers=headers)
-        stub_server.reset_counts()
-        clear_oauth_poll_state(repository)
-        snapshots = await asyncio.gather(
-            *[poll_balance(repository, stub_server, secret_store) for _ in range(8)]
-        )
-        assert stub_server.balance_calls == 1, (
-            f"thundering herd: {stub_server.balance_calls} polls for 8 concurrent reads"
-        )
-        assert snapshots[0] is not None, "winner must carry the snapshot"
-        assert all(item is None for item in snapshots[1:]), "losers must share, not re-poll"
-        quota = await repository.latest_quota("parallel")
-        assert quota is not None and quota.source.value == "authoritative"
-    finally:
-        client.__exit__(None, None, None)
+async def test_balance_401_unpairs_and_backs_off(oauth_case):
+    """Origin test_adv_oauth_lifecycle.py::test_balance_401_unpairs_and_backs_off."""
+    case = oauth_case
+    await case.connect()
+    case.stub.balance_status = 401
+    with pytest.raises(OAuthUnpaired):
+        await case.balance()
+    await case.disconnect()
+    for _ in range(4):
+        await case.status()
+        await refresh_quotas(case.repository, [])
+    assert case.stub.balance_calls == 1
+    assert not any((await case.slots()).values())
 
 
-async def test_refresh_single_flight_and_skew(
-    repository: Any, secret_store: Any, stub_server: StubOAuthServer, auth_secret: str
-) -> None:
-    client = _open(repository, secret_store)
-    try:
-        stub_server.token_expires_in = 3600
-        stub_server.refresh_expires_in = 3600
-        # Use one Admin account for all status reads.
-        headers = await admin_auth_headers(client, repository)
-        await connect_parallel(client, stub_server, repository, headers=headers)
-        await expire_access_token(repository)
-        stub_server.reset_counts()
-        # A start barrier forces all readers onto the refresh lock together so
-        # the single-flight claim is stressed, not merely sampled.
-        barrier = threading.Barrier(8)
-
-        def _raced_status(_: int) -> int:
-            barrier.wait(timeout=30)
-            return client.get(STATUS_PATH, headers=headers).status_code
-
-        with ThreadPoolExecutor(max_workers=8) as pool:
-            codes = list(pool.map(_raced_status, range(8)))
-        assert codes == [200] * 8, repr(codes)
-        refreshes = stub_server.refresh_calls
-        assert refreshes == 1, f"refresh herd: {refreshes} refreshes for 8 concurrent reads"
-        bodies = [client.get(STATUS_PATH, headers=headers).json()["status"] for _ in range(2)]
-        assert bodies == ["ready", "ready"], repr(bodies)
-        await poll_balance(repository, stub_server, secret_store)
-        auth_headers = [seen.get("auth") or "" for seen in stub_server.seen_requests]
-        assert any(ROTATED_ACCESS_TOKEN_VALUE in header for header in auth_headers), (
-            "post-rotation traffic must use the rotated bearer"
-        )
-    finally:
-        client.__exit__(None, None, None)
+async def test_device_interval_and_slow_down_honored(oauth_case):
+    """Origin test_adv_oauth_lifecycle.py::test_device_interval_and_slow_down_honored."""
+    case = oauth_case
+    case.stub.poll_script = ["authorization_pending", "slow_down", "success"]
+    start = await case.start()
+    assert start.interval == case.stub.device_interval
+    assert (await case.poll()).status is OAuthGrantStatus.PENDING
+    slow = await case.poll()
+    assert slow.status is OAuthGrantStatus.PENDING
+    assert slow.interval == start.interval + 5
+    for _ in range(4):
+        await case.status()
+    assert case.stub.poll_calls == 2
+    assert (await case.poll()).status is OAuthGrantStatus.CONNECTED
+    assert case.stub.poll_calls == 3
 
 
-async def test_restart_while_paired_returns_409_without_touching_pairing(
-    repository: Any, secret_store: Any, stub_server: StubOAuthServer, auth_secret: str
-) -> None:
-    # RULING F3 (round 2): a live bearer gates re-pairing with 409 before any
-    # HTTP or state change; the operator disconnects explicitly before re-pairing.
-    client = _open(repository, secret_store)
-    try:
-        # Use one Admin account for all OAuth routes.
-        headers = await admin_auth_headers(client, repository)
-        await connect_parallel(client, stub_server, repository, headers=headers)
-        old_access = secret_store.values.get("parallel:oauth:access")
-        assert old_access is not None
-        registers_before = stub_server.register_calls
-        restart = client.post("/api/v1/providers/parallel/oauth/device-code", headers=headers)
-        assert restart.status_code == 409, restart.text[:300]
-        assert "already paired" in restart.text.lower(), restart.text[:300]
-        assert stub_server.register_calls == registers_before, "409 must precede any vendor HTTP"
-        assert secret_store.values.get("parallel:oauth:access") == old_access
-        status = client.get(STATUS_PATH, headers=headers)
-        assert status.json()["status"] == "ready", status.text[:300]
-    finally:
-        client.__exit__(None, None, None)
+async def test_balance_poll_single_flight(oauth_case):
+    """Origin test_adv_oauth_lifecycle.py::test_balance_poll_single_flight."""
+    case = oauth_case
+    await case.connect()
+    await asyncio.gather(*(refresh_quotas(case.repository, []) for _ in range(6)))
+    assert case.stub.balance_calls == 0
+    # Explicit primitive invocation sends once; the fixture never adds a hidden retry.
+    assert await case.balance() is not None
+    assert case.stub.balance_calls == 1
 
 
-async def test_refresh_quotas_path_also_polls_oauth(
-    repository: Any, secret_store: Any, stub_server: StubOAuthServer, auth_secret: str
-) -> None:
-    # The documented dashboard path runs through monitoring.refresh_quotas;
-    # prove the OAuth hook fires there too (adapters list may stay empty).
-    client = _open(repository, secret_store)
-    try:
-        # Use one Admin account for the OAuth flow.
-        headers = await admin_auth_headers(client, repository)
-        await connect_parallel(client, stub_server, repository, headers=headers)
-        async with stub_client(stub_server) as http:
-            set_oauth_test_seams(secret_store=secret_store, http_client=http)
-            try:
-                snapshots = await refresh_quotas(repository, [])
-            finally:
-                clear_oauth_test_seams()
-        kinds = [snap.source.value for snap in snapshots if snap.provider == "parallel"]
-        assert "authoritative" in kinds, "refresh_quotas must surface the OAuth balance"
-    finally:
-        client.__exit__(None, None, None)
+async def test_refresh_single_flight_and_skew(oauth_case):
+    """Origin test_adv_oauth_lifecycle.py::test_refresh_single_flight_and_skew."""
+    case = oauth_case
+    await case.connect()
+    old = await case.grant()
+    for _ in range(4):
+        await case.status()
+    assert case.stub.refresh_calls == 0
+    await case.expire_access()
+    await asyncio.gather(case.refresh(), case.refresh())
+    assert (await case.grant()).token_generation > old.token_generation
+    assert await case.token() == ROTATED_ACCESS_TOKEN_VALUE
+    await case.disconnect()
+    await case.refresh()
+    assert (await case.status()).status is OAuthGrantStatus.DISCONNECTED
+    assert not any((await case.slots()).values())
+
+
+async def test_restart_while_paired_returns_409_without_touching_pairing(oauth_case):
+    """Origin singleton restart-conflict case: pairing survives a denied restart."""
+    case = oauth_case
+    await case.connect()
+    old = await case.token()
+    response = case.client.post(case.path + "/device", headers=case.headers)
+    assert response.status_code == 409
+    assert await case.token() == old
+    assert case.stub.register_calls == case.stub.device_calls == 1
+    await case.assert_no_leaks(response)
+
+
+async def test_refresh_quotas_path_also_polls_oauth(oauth_case):
+    """Origin test_adv_oauth_lifecycle.py::test_refresh_quotas_path_also_polls_oauth."""
+    case = oauth_case
+    await case.connect()
+    await refresh_quotas(case.repository, [])
+    assert case.stub.balance_calls == 0
+    assert await case.repository.latest_quota("parallel") is None
+    assert (await case.status()).status is OAuthGrantStatus.CONNECTED

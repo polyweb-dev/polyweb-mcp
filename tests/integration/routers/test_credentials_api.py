@@ -76,6 +76,11 @@ def _login(client: TestClient, email: str, password: str = TEMP_PASSWORD) -> dic
     return {"Authorization": f"Bearer {response.json()['access_token']}"}
 
 
+@pytest.fixture(autouse=True)
+def _configured_auth(auth_secret):
+    return auth_secret
+
+
 def _secret(tag: str) -> str:
     return f"fake-p08-secret-{tag}-{uuid4().hex[:8]}"
 

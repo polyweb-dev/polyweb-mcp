@@ -21,7 +21,7 @@ from freesearch.configuration.config import get_settings
 from freesearch.persistence.database_migrations import absolute_database_path
 
 _OLDER_REVISION = "0009_provider_credentials"
-_BASELINE = "0001_alpha_baseline"
+_HEAD = "0002_capacity_actor"
 
 
 def _older_database(directory: Path) -> Path:
@@ -52,7 +52,7 @@ def _assert_reset_on_stderr(captured: CaptureResult[str], database: Path) -> Non
     assert "Traceback" not in combined
     assert str(absolute_database_path(database)) in captured.err, captured.err
     assert _OLDER_REVISION in captured.err, captured.err
-    assert _BASELINE in captured.err, captured.err
+    assert _HEAD in captured.err, captured.err
     assert "FREESEARCH_DB" in captured.err, captured.err
     assert "-wal" in captured.err and "-shm" in captured.err, captured.err
 

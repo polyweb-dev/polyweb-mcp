@@ -68,7 +68,7 @@ from tests.fixtures.auth import (
     temp_principal,
     test_settings,
 )
-from tests.fixtures.execution import seed_execution_user
+from tests.fixtures.execution import bind_existing_project, seed_execution_user
 
 _UNUSED_PROJECT = "00000000-0000-4000-8000-0000000000aa"
 
@@ -180,10 +180,12 @@ async def _authed_direct(
     prefix: str,
     *,
     scopes: set[str] | None = None,
+    monkeypatch,
 ) -> tuple[FastMCP, ProjectKey, str]:
     """A direct (stdio-style) server whose process credential is one project key."""
 
     key = await issue_project_key(repository, prefix=prefix, scopes=scopes)
+    await bind_existing_project(repository, key.project_id, key.owner.id, [adapter], monkeypatch)
     server = create_server(
         [adapter],
         repository=repository,
@@ -245,12 +247,13 @@ async def _raw_tool_call(
 
 
 async def test_same_jwt_permits_rest_and_direct_tool_calls(
-    repository: SQLiteRepository, auth_secret: str
+    repository: SQLiteRepository, auth_secret: str, monkeypatch
 ) -> None:
     """A1 replacement: one project key serves REST and MCP; a human JWT serves neither MCP."""
 
     adapter = _RecordingAdapter("stubby")
     key = await issue_project_key(repository, prefix="mcp-same")
+    await bind_existing_project(repository, key.project_id, key.owner.id, [adapter], monkeypatch)
     pid = str(key.project_id)
     app = create_app([adapter], repository=repository)
     with TestClient(app) as client:
@@ -281,9 +284,12 @@ async def test_same_jwt_permits_rest_and_direct_tool_calls(
     assert adapter.search_calls == 2
 
 
-async def test_bad_tool_credential_causes_no_provider_call(repository: SQLiteRepository) -> None:
+async def test_bad_tool_credential_causes_no_provider_call(
+    repository: SQLiteRepository, monkeypatch
+) -> None:
     adapter = _RecordingAdapter("stubby")
     key = await issue_project_key(repository, prefix="mcp-bad")
+    await bind_existing_project(repository, key.project_id, key.owner.id, [adapter], monkeypatch)
     for bad in (
         "not-a-token",
         "fs_live_",
@@ -307,7 +313,7 @@ async def test_bad_tool_credential_causes_no_provider_call(repository: SQLiteRep
 
 
 async def test_refresh_credential_cannot_serve_tools(
-    repository: SQLiteRepository, auth_secret: str
+    repository: SQLiteRepository, auth_secret: str, monkeypatch
 ) -> None:
     """Neither human credential (refresh or access) is an MCP credential."""
 
@@ -329,12 +335,14 @@ async def test_refresh_credential_cannot_serve_tools(
 
 
 async def test_deactivated_account_loses_tool_access_at_once(
-    repository: SQLiteRepository,
+    repository: SQLiteRepository, monkeypatch
 ) -> None:
     """A1 replacement: a revoked key loses direct tool access on the very next call."""
 
     adapter = _RecordingAdapter("stubby")
-    server, key, pid = await _authed_direct(repository, adapter, "mcp-cutoff")
+    server, key, pid = await _authed_direct(
+        repository, adapter, "mcp-cutoff", monkeypatch=monkeypatch
+    )
     assert _direct_payload(await server.call_tool("search", _search(pid, "before")))
 
     await ApiKeyService(repository).revoke(key.owner, key.project_id, key.api_key_id)
@@ -348,10 +356,11 @@ async def test_deactivated_account_loses_tool_access_at_once(
 
 
 async def test_stdio_absent_credential_rejects_before_provider_call(
-    repository: SQLiteRepository,
+    repository: SQLiteRepository, monkeypatch
 ) -> None:
     adapter = _RecordingAdapter("stubby")
     key = await issue_project_key(repository, prefix="mcp-naked")
+    await bind_existing_project(repository, key.project_id, key.owner.id, [adapter], monkeypatch)
     server = create_server(
         [adapter], repository=repository, auth_service=auth_service_for(repository)
     )
@@ -367,19 +376,25 @@ async def test_stdio_absent_credential_rejects_before_provider_call(
 
 
 async def test_stdio_handoff_serves_with_explicit_process_token(
-    repository: SQLiteRepository,
+    repository: SQLiteRepository, monkeypatch
 ) -> None:
     adapter = _RecordingAdapter("stubby")
-    server, _key, pid = await _authed_direct(repository, adapter, "mcp-stdio")
+    server, _key, pid = await _authed_direct(
+        repository, adapter, "mcp-stdio", monkeypatch=monkeypatch
+    )
 
     payload = _direct_payload(await server.call_tool("search", _search(pid, "stdio handoff")))
     assert payload["provider"] == "stubby"
     assert adapter.search_calls == 1
 
 
-async def test_stdio_omitted_project_uses_the_key_project(repository: SQLiteRepository) -> None:
+async def test_stdio_omitted_project_uses_the_key_project(
+    repository: SQLiteRepository, monkeypatch
+) -> None:
     adapter = _RecordingAdapter("stubby")
-    server, _key, _pid = await _authed_direct(repository, adapter, "mcp-omit")
+    server, _key, _pid = await _authed_direct(
+        repository, adapter, "mcp-omit", monkeypatch=monkeypatch
+    )
 
     payload = _direct_payload(await server.call_tool("search", {"request": {"query": "no pid"}}))
     assert payload["provider"] == "stubby"
@@ -387,10 +402,12 @@ async def test_stdio_omitted_project_uses_the_key_project(repository: SQLiteRepo
 
 
 async def test_stdio_expired_credential_causes_no_provider_call(
-    repository: SQLiteRepository,
+    repository: SQLiteRepository, monkeypatch
 ) -> None:
     adapter = _RecordingAdapter("stubby")
-    server, key, pid = await _authed_direct(repository, adapter, "mcp-stale")
+    server, key, pid = await _authed_direct(
+        repository, adapter, "mcp-stale", monkeypatch=monkeypatch
+    )
     assert _direct_payload(await server.call_tool("search", _search(pid)))
 
     await expire_key(repository, key)
@@ -401,12 +418,14 @@ async def test_stdio_expired_credential_causes_no_provider_call(
 
 
 async def test_stdio_revoked_family_causes_no_provider_call(
-    repository: SQLiteRepository,
+    repository: SQLiteRepository, monkeypatch
 ) -> None:
     """A1 replacement: rotation with overlap 0 revokes the old process key at once."""
 
     adapter = _RecordingAdapter("stubby")
-    server, key, pid = await _authed_direct(repository, adapter, "mcp-revoked")
+    server, key, pid = await _authed_direct(
+        repository, adapter, "mcp-revoked", monkeypatch=monkeypatch
+    )
     assert _direct_payload(await server.call_tool("search", _search(pid, "before")))
 
     from freesearch.models.projects import ProjectApiKeyRotate
@@ -430,10 +449,12 @@ async def test_stdio_revoked_family_causes_no_provider_call(
 
 
 async def test_stdio_wrong_project_and_archived_project_fail_before_provider(
-    repository: SQLiteRepository,
+    repository: SQLiteRepository, monkeypatch
 ) -> None:
     adapter = _RecordingAdapter("stubby")
-    server, key, pid = await _authed_direct(repository, adapter, "mcp-scope")
+    server, key, pid = await _authed_direct(
+        repository, adapter, "mcp-scope", monkeypatch=monkeypatch
+    )
     other = await issue_project_key(repository, prefix="mcp-other")
 
     with pytest.raises(ToolError, match="project is unavailable"):
@@ -457,10 +478,11 @@ async def test_stdio_wrong_project_and_archived_project_fail_before_provider(
 
 
 async def test_stdio_tampered_secret_with_valid_prefix_is_denied_and_recorded(
-    repository: SQLiteRepository,
+    repository: SQLiteRepository, monkeypatch
 ) -> None:
     adapter = _RecordingAdapter("stubby")
     key = await issue_project_key(repository, prefix="mcp-tamper")
+    await bind_existing_project(repository, key.project_id, key.owner.id, [adapter], monkeypatch)
     last = key.raw[-1]
     tampered = key.raw[:-1] + ("A" if last != "A" else "B")
     server = create_server(
@@ -527,12 +549,14 @@ def test_main_stdio_dispatch_reads_process_token(
     assert calls == [("stdio", True)]
 
 
-async def test_admin_tool_role_keeps_search_access(repository: SQLiteRepository) -> None:
+async def test_admin_tool_role_keeps_search_access(
+    repository: SQLiteRepository, monkeypatch
+) -> None:
     """A1 replacement: a key holds exactly its scopes, whatever its creator holds later."""
 
     adapter = _RecordingAdapter("stubby")
     server, key, pid = await _authed_direct(
-        repository, adapter, "mcp-scoped", scopes={"search.execute"}
+        repository, adapter, "mcp-scoped", scopes={"search.execute"}, monkeypatch=monkeypatch
     )
     # The creator gains system authority after issuing the key.
     await grant_system_admin(repository, key.owner.id)
@@ -547,11 +571,11 @@ async def test_admin_tool_role_keeps_search_access(repository: SQLiteRepository)
 
 
 async def test_creator_demotion_and_removal_neither_kill_nor_widen_the_key(
-    repository: SQLiteRepository,
+    repository: SQLiteRepository, monkeypatch
 ) -> None:
     adapter = _RecordingAdapter("stubby")
     server, key, pid = await _authed_direct(
-        repository, adapter, "mcp-creator", scopes={"search.execute"}
+        repository, adapter, "mcp-creator", scopes={"search.execute"}, monkeypatch=monkeypatch
     )
     successor = temp_principal(await seed_execution_user(repository, "mcp-successor"))
     projects = ProjectService(repository)
@@ -579,7 +603,7 @@ async def test_creator_demotion_and_removal_neither_kill_nor_widen_the_key(
 
 
 async def test_mcp_http_session_rejects_anonymous_search_and_fetch(
-    repository: SQLiteRepository,
+    repository: SQLiteRepository, monkeypatch
 ) -> None:
     """No credential, a human JWT or a malformed key cannot even open the transport."""
 
@@ -614,10 +638,11 @@ async def test_mcp_http_session_rejects_anonymous_search_and_fetch(
 
 
 async def test_mcp_http_keeps_invalid_bearer_and_unknown_paths_guarded(
-    repository: SQLiteRepository, auth_secret: str
+    repository: SQLiteRepository, auth_secret: str, monkeypatch
 ) -> None:
     adapter = _RecordingAdapter("stubby")
     key = await issue_project_key(repository, prefix="mcp-paths")
+    await bind_existing_project(repository, key.project_id, key.owner.id, [adapter], monkeypatch)
     with TestClient(create_app([adapter], repository=repository)) as rest:
         pair = register_and_login(rest, temp_email("mcp-meta"))
     async with _http_app(repository, adapter) as (http_app, base_url):
@@ -647,7 +672,9 @@ async def test_mcp_http_keeps_invalid_bearer_and_unknown_paths_guarded(
     assert adapter.search_calls == 0
 
 
-async def test_mcp_port_holds_no_public_auth_exception(repository: SQLiteRepository) -> None:
+async def test_mcp_port_holds_no_public_auth_exception(
+    repository: SQLiteRepository, monkeypatch
+) -> None:
     adapter = _RecordingAdapter("stubby")
     async with _http_app(repository, adapter) as (http_app, base_url):
         transport = httpx.ASGITransport(app=http_app)
@@ -673,7 +700,7 @@ _SECOND_CALL_CASES = ["revoked", "expired", "archived", "wrong_project", "foreig
 
 @pytest.mark.parametrize("change", _SECOND_CALL_CASES)
 async def test_stateful_session_rechecks_family_after_logout(
-    repository: SQLiteRepository, change: str
+    repository: SQLiteRepository, change: str, monkeypatch
 ) -> None:
     """A1/AC6: every call of one persistent session re-verifies the key.
 
@@ -683,6 +710,7 @@ async def test_stateful_session_rechecks_family_after_logout(
 
     adapter = _RecordingAdapter("stubby")
     key = await issue_project_key(repository, prefix=f"mcp-session-{change}")
+    await bind_existing_project(repository, key.project_id, key.owner.id, [adapter], monkeypatch)
     other = await issue_project_key(repository, prefix=f"mcp-session-other-{change}")
     pid = str(key.project_id)
     async with _http_app(repository, adapter) as (http_app, base_url):
@@ -808,6 +836,7 @@ async def test_http_tool_call_does_not_verify_the_key_a_second_time(
 
     adapter = _RecordingAdapter("stubby")
     key = await issue_project_key(repository, prefix="r4-once")
+    await bind_existing_project(repository, key.project_id, key.owner.id, [adapter], monkeypatch)
     verifies: list[int] = []
     guard_runs: list[int] = []
     tool_verifies: list[int] = []
@@ -851,7 +880,7 @@ async def test_http_tool_call_does_not_verify_the_key_a_second_time(
 
 @pytest.mark.parametrize("injected", ["none", "human", "revoked_key"])
 async def test_http_tool_call_without_a_guard_key_principal_is_rejected(
-    repository: SQLiteRepository, injected: str
+    repository: SQLiteRepository, injected: str, monkeypatch
 ) -> None:
     """A valid key header alone never authenticates a tool call; only the guard does."""
 
@@ -862,6 +891,7 @@ async def test_http_tool_call_without_a_guard_key_principal_is_rejected(
 
     adapter = _RecordingAdapter("stubby")
     key = await issue_project_key(repository, prefix=f"r4-{injected}")
+    await bind_existing_project(repository, key.project_id, key.owner.id, [adapter], monkeypatch)
     principal: object = None
     if injected == "human":
         principal = UserPrincipal(

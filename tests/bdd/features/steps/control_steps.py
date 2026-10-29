@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import re
 import shutil
 import tempfile
 from collections.abc import Iterator
@@ -18,7 +17,6 @@ from behave import given, then, when  # type: ignore[import-untyped]
 from fastapi.testclient import TestClient
 
 from freesearch.adapters.base import ProviderAdapter
-from freesearch.mcp.server import create_server
 from freesearch.models.contracts import (
     CostEstimate,
     FetchedDocument,
@@ -36,7 +34,6 @@ from freesearch.models.contracts import (
 from freesearch.models.provider_access import is_operation_enabled
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
-from tests.fixtures.api_keys import mcp_key_credentials
 from tests.fixtures.auth import (
     TEMP_PASSWORD,
     configure_bdd_secret,
@@ -271,17 +268,12 @@ def _control_headers(context: Any) -> dict[str, str]:
 def _build_mcp_server(context: Any) -> Any:
     """Build one MCP tool server with a real project API key as its stdio credential."""
 
-    from pydantic import SecretStr
+    from tests.fixtures.execution import bdd_mcp_server
 
-    service, token, context.mcp_pid = context.loop.run_until_complete(
-        mcp_key_credentials(context.repository, "control-mcp")
+    server, context.mcp_pid = context.loop.run_until_complete(
+        bdd_mcp_server(context, context.adapters, "control-mcp")
     )
-    return create_server(
-        context.adapters,
-        repository=context.repository,
-        auth_service=service,
-        stdio_token=SecretStr(token.get_secret_value()),
-    )
+    return server
 
 
 @given("an offline control API with stub adapters")
@@ -413,24 +405,23 @@ def step_then_provider_disabled_after_reopen(context: Any) -> None:
 
 @when('I write a secret for "{provider}" through the control API')
 def step_when_write_secret(context: Any, provider: str) -> None:
-    # The store is injected only for this scenario; the default app path never
-    # reaches a platform keyring during offline BDD execution.
-    _build_app(context, include_secret_store=True)
     context.raw_key = "offline-control-secret"
     with _client(context) as client:
-        context.secret_write_response = client.put(
-            f"/api/v1/providers/{provider}/secret",
-            json={"key": context.raw_key},
+        context.secret_write_response = client.post(
+            "/api/v1/system/credentials",
+            json={"provider_type": provider, "label": "control secret", "secret": context.raw_key},
             headers=context.admin_headers,
         )
 
 
 @then("the secret response should be configured with a masked fingerprint")
 def step_then_secret_configured(context: Any) -> None:
-    assert context.secret_write_response.status_code == 200
+    from freesearch.models.projects import CredentialInstanceRead
+
+    assert context.secret_write_response.status_code == 201
     body = context.secret_write_response.json()
-    assert body["presence"] == "configured"
-    assert re.fullmatch(r"[A-Z]{3}_•{8}[0-9a-f]{4}", body["fingerprint"])
+    assert set(body) == set(CredentialInstanceRead.model_fields)
+    assert body["status"] == "active" and body["auth_mode"] == "api_key"
     assert context.raw_key not in context.secret_write_response.text
 
 
@@ -438,14 +429,14 @@ def step_then_secret_configured(context: Any) -> None:
 def step_when_delete_secret(context: Any, provider: str) -> None:
     with _client(context) as client:
         context.secret_delete_response = client.delete(
-            f"/api/v1/providers/{provider}/secret", headers=context.admin_headers
+            f"/api/v1/system/credentials/{context.secret_write_response.json()['id']}",
+            headers=context.admin_headers,
         )
 
 
 @then("the secret response should report missing and contain no raw key")
 def step_then_secret_missing(context: Any) -> None:
-    assert context.secret_delete_response.status_code == 200
-    assert context.secret_delete_response.json()["presence"] == "missing"
+    assert context.secret_delete_response.status_code == 204
     assert context.raw_key not in context.secret_delete_response.text
 
 

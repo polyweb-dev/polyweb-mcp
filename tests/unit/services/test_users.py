@@ -182,6 +182,13 @@ def test_auth_token_constants() -> None:
     assert SecretStr("x").get_secret_value() == "x"
 
 
+@pytest.mark.parametrize("legacy_role", ["admin", "developer", "agent", "owner", "", "ADMIN"])
+def test_stored_role_falls_back_to_agent_for_broken_values(legacy_role: str) -> None:
+    """Stash origin: A1 refuses legacy role fields instead of deriving authority from them."""
+    with pytest.raises((TypeError, AttributeError)):
+        _row(role=legacy_role)
+
+
 @pytest.mark.parametrize("field,value", [("role", "admin"), ("is_superuser", True)])
 def test_stored_role_never_raises_for_a_database_row_value(field: str, value: object) -> None:
     """A1 replacement: the account row refuses a role or privilege flag outright."""

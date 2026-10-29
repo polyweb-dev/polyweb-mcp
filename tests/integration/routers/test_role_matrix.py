@@ -20,6 +20,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
 import pytest_asyncio
 from fastapi.testclient import TestClient
 
@@ -105,7 +106,9 @@ class _StubAdapter(ProviderAdapter):
 
 
 @pytest_asyncio.fixture
-async def matrix_client(tmp_path: Path, auth_secret: str) -> TestClient:
+async def matrix_client(
+    tmp_path: Path, auth_secret: str, monkeypatch: pytest.MonkeyPatch
+) -> TestClient:
     repository = await SQLiteRepository.open(tmp_path / "matrix.db")
     app = create_app([_StubAdapter("tavily")], repository=repository)
     with TestClient(app) as client:
@@ -122,6 +125,16 @@ async def matrix_client(tmp_path: Path, auth_secret: str) -> TestClient:
             project_id=project.project_id,
             user_id=account_id_from_pair(agent),
             granted_by=account_id_from_pair(developer),
+        )
+        from tests.fixtures.execution import bind_existing_project
+
+        await bind_existing_project(
+            repository,
+            project.project_id,
+            project.actor_id,
+            app.state._routes,
+            monkeypatch,
+            app.state.secret_store,
         )
         client.agent_pid = str(project.project_id)  # type: ignore[attr-defined]
         yield client
@@ -179,11 +192,17 @@ def test_admin_only_surfaces_reject_developer_and_agent(matrix_client: TestClien
     assert probe.status_code == 200
 
     assert (
-        matrix_client.get("/api/v1/providers/tavily/oauth/status", headers=developer).status_code
+        matrix_client.get(
+            "/api/v1/system/credentials/00000000-0000-4000-8000-000000000001/oauth",
+            headers=developer,
+        ).status_code
         == 403
     )
     assert (
-        matrix_client.get("/api/v1/providers/tavily/oauth/status", headers=agent).status_code == 403
+        matrix_client.get(
+            "/api/v1/system/credentials/00000000-0000-4000-8000-000000000001/oauth", headers=agent
+        ).status_code
+        == 403
     )
 
     assert (
@@ -192,13 +211,17 @@ def test_admin_only_surfaces_reject_developer_and_agent(matrix_client: TestClien
     assert matrix_client.put("/api/v1/routing/config", json={}, headers=agent).status_code == 403
 
     assert (
-        matrix_client.put(
-            "/api/v1/providers/tavily/secret", json={"secret": "x" * 16}, headers=agent
+        matrix_client.post(
+            "/api/v1/system/credentials",
+            json={"provider_type": "tavily", "label": "denied", "secret": "x" * 16},
+            headers=agent,
         ).status_code
         == 403
     )
     assert (
-        matrix_client.delete("/api/v1/providers/tavily/secret", headers=developer).status_code
+        matrix_client.delete(
+            "/api/v1/system/credentials/00000000-0000-4000-8000-000000000001", headers=developer
+        ).status_code
         == 403
     )
 

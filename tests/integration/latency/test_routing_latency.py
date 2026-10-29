@@ -4,7 +4,7 @@ Harness: REST mixes drive the FastAPI app through ``httpx.ASGITransport``
 (in-process, not network); MCP mixes call ``server.call_tool`` in-process.
 A real temporary SQLite repository and seven offline stub adapters back
 every mix. Each request records wall time via ``time.perf_counter()`` and
-a foreground SELECT count. Reports land in repo-root ``test_reports/``.
+a foreground SELECT count. Reports land in repo-root ``test_reports/a2-takeover/latency/``.
 
 The offline adapter, payloads, seeding, cache warming, draining, SELECT
 counter, and percentile method are shared with the Behave routing-latency
@@ -26,14 +26,20 @@ import httpx
 import pytest
 from pydantic import SecretStr
 
+from freesearch.configuration.config import get_settings
+from freesearch.infrastructure.encrypted_store import EncryptedDbSecretStore, load_secret_codec
 from freesearch.mcp.server import create_server
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
-from freesearch.routers.control import clear_config_cache
 from freesearch.services.monitoring import clear_quota_poll_cache
-from tests.fixtures.api_keys import mcp_key_credentials
+from freesearch.services.provider_runtime import clear_config_cache
+from tests.fixtures.api_keys import mcp_project_key
 from tests.fixtures.auth import TEMP_PASSWORD, temp_email
-from tests.fixtures.execution import seed_member_project
+from tests.fixtures.execution import (
+    install_adapter_map,
+    seed_member_project,
+    seed_provider_bindings,
+)
 from tests.fixtures.latency import (
     REPO_ROOT,
     OfflineAdapter,
@@ -46,6 +52,7 @@ from tests.fixtures.latency import (
     seed_repository,
     warm_route_caches,
 )
+from tests.fixtures.latency_servers import ProviderClock
 
 SEVEN_PROVIDERS = ["exa", "firecrawl", "tavily", "parallel", "you", "brave", "keenable"]
 
@@ -60,6 +67,9 @@ _CSV_COLUMNS = (
     "phase",
     "request_index",
     "wall_time_ms",
+    "provider_time_ms",
+    "added_time_ms",
+    "provider_calls",
     "route_plan_reads",
     "trace_id",
     "status",
@@ -68,12 +78,14 @@ _CSV_COLUMNS = (
 
 _WARMUP_PER_MIX = 10
 _MEASURED_PER_MIX = 30
-_EXPECTED_TOTAL_ROWS = 328  # 8 mixes x (1 cold + 10 warmup + 30 measured)
+_EXPECTED_TOTAL_ROWS = 410  # 10 mixes x (1 cold + 10 warmup + 30 measured)
 
 _MIX_ORDER: tuple[tuple[str, str, str, str], ...] = (
     ("rest-inprocess", "search", "require", "exa"),
     ("rest-inprocess", "search", "auto", "all"),
     ("rest-inprocess", "search", "fanout", "exa+tavily"),
+    ("rest-inprocess", "fetch", "require", "exa"),
+    ("rest-inprocess", "fetch", "auto", "all"),
     ("mcp-inprocess", "search", "require", "exa"),
     ("mcp-inprocess", "search", "auto", "all"),
     ("mcp-inprocess", "search", "fanout", "exa+tavily"),
@@ -81,11 +93,61 @@ _MIX_ORDER: tuple[tuple[str, str, str, str], ...] = (
     ("mcp-inprocess", "fetch", "auto", "all"),
 )
 
-_REPRO_COMMAND = (
-    "uv run --with matplotlib pytest tests/integration/latency/test_routing_latency.py -q"
-)
+_REPRO_COMMAND = "uv run --with matplotlib pytest tests/integration/latency -q -rs"
 
 _READS_UNAVAILABLE_REASONS: list[str] = []
+_PROVIDER_CLOCK = ProviderClock()
+
+
+def _latency_store(repository: SQLiteRepository) -> EncryptedDbSecretStore:
+    """Return the encrypted runtime store both transports build for this database."""
+
+    return EncryptedDbSecretStore(repository, load_secret_codec(get_settings()))
+
+
+async def _bind_seven_providers(
+    repository: SQLiteRepository,
+    store: EncryptedDbSecretStore,
+    monkeypatch: pytest.MonkeyPatch,
+    adapters: Sequence[Any],
+    *,
+    project_id: Any,
+    actor_id: Any,
+) -> None:
+    """A2: execution runs only on enabled project bindings; bind all seven fakes.
+
+    Without bindings every sample is a fast 503, so the mix would measure the
+    refusal path instead of routing.
+    """
+
+    secrets: dict[str, str] = {}
+    await seed_provider_bindings(
+        repository,
+        project_id=project_id,
+        actor_id=actor_id,
+        store=store,
+        providers=tuple(SEVEN_PROVIDERS),
+        secrets=secrets,
+    )
+    for adapter in adapters:
+        _PROVIDER_CLOCK.instrument(adapter)
+    install_adapter_map(monkeypatch, adapters, secrets=secrets)
+
+
+def _assert_measured_samples_succeeded(
+    rows: Sequence[dict[str, Any]], *, transport: str, operation: str
+) -> None:
+    """Every measured sample of these mixes must be a real, successful request."""
+
+    failures = [
+        (row["routing_mode"], row["status"], row["error"])
+        for row in rows
+        if row["transport"] == transport
+        and row["operation"] == operation
+        and row["phase"] == "measured"
+        and row["status"] != "ok"
+    ]
+    assert failures == [], f"latency samples measured failures, not routing: {failures[:3]}"
 
 
 async def _record_request(
@@ -104,6 +166,7 @@ async def _record_request(
 ) -> None:
     if selects is not None:
         selects[0] = 0
+    _PROVIDER_CLOCK.reset()
     start = time.perf_counter()
     try:
         await call()
@@ -114,6 +177,7 @@ async def _record_request(
         status = "ok"
         error = ""
     elapsed_ms = (time.perf_counter() - start) * 1000.0
+    provider_ms, provider_calls = _PROVIDER_CLOCK.snapshot()
     reads: int | str = selects[0] if selects is not None else ""
     await drain_background_tasks()
     rows.append(
@@ -128,6 +192,9 @@ async def _record_request(
             "phase": phase,
             "request_index": request_index,
             "wall_time_ms": f"{elapsed_ms:.6f}",
+            "provider_time_ms": f"{provider_ms:.6f}",
+            "added_time_ms": f"{elapsed_ms - provider_ms:.6f}",
+            "provider_calls": provider_calls,
             "route_plan_reads": reads,
             "trace_id": "",
             "status": status,
@@ -261,6 +328,8 @@ def _write_latency_report(rows: Sequence[dict[str, Any]], output_dir: Path) -> N
         group = [r for r in measured if _mix_key(r) == (transport, operation, mode, providers)]
         ok_rows = [r for r in group if r.get("status") == "ok"]
         walls = sorted(_wall_value(r) for r in ok_rows)
+        provider_times = sorted(float(r["provider_time_ms"]) for r in ok_rows)
+        added_times = sorted(float(r["added_time_ms"]) for r in ok_rows)
         reads: list[float] = []
         for item in ok_rows:
             value = _reads_value(item)
@@ -277,6 +346,8 @@ def _write_latency_report(rows: Sequence[dict[str, Any]], output_dir: Path) -> N
                 "failures": len(group) - len(ok_rows),
                 "median_ms": percentile(walls, 50.0),
                 "p95_ms": percentile(walls, 95.0),
+                "provider_p95_ms": percentile(provider_times, 95.0),
+                "added_p95_ms": percentile(added_times, 95.0),
                 "max_ms": max(walls) if walls else 0.0,
                 "median_reads": percentile(reads, 50.0) if reads else None,
             }
@@ -325,9 +396,15 @@ def _write_latency_report(rows: Sequence[dict[str, Any]], output_dir: Path) -> N
         "## Method",
         "Direct latency measurement. Each sample wraps one complete API request with",
         "time.perf_counter(): an in-process REST POST via httpx.ASGITransport or an",
-        "in-process MCP server.call_tool call. Route-plan reads count foreground",
-        "SELECT statements observed on the repository engine during the request.",
-        "Telemetry and provider writes are INSERTs, so SELECTs isolate the plan.",
+        "in-process MCP server.call_tool call. The legacy route_plan_reads field",
+        "counts all SELECTs on the repository engine during the request window.",
+        "Each adapter instance uses ProviderClock around search/fetch. Each row",
+        "records its summed fake-provider duration and added_time_ms = wall_time_ms",
+        "minus provider_time_ms. Added p95 uses the per-request differences, not",
+        "a difference between percentiles. Fanout sums both fake calls.",
+        "These counts include authorization, binding, and capacity reads. Any",
+        "background SELECT during that window also contributes. They are a",
+        "diagnostic, not a pure route-planner count or a pass/fail limit.",
         "",
         "## Harness",
         "In-process harness, NOT network latency. REST uses httpx.ASGITransport",
@@ -364,6 +441,10 @@ def _write_latency_report(rows: Sequence[dict[str, Any]], output_dir: Path) -> N
             'call_tool search {"query", "fanout": true, "routing": {"mode": "fanout", '
             '"providers": ["exa", "tavily"]}}'
         ),
+        ("rest-inprocess", "fetch", "require", "exa"): (
+            'POST /fetch {"url", "routing": {"mode": "require", "providers": ["exa"]}}'
+        ),
+        ("rest-inprocess", "fetch", "auto", "all"): 'POST /fetch {"url"}',
         ("mcp-inprocess", "fetch", "require", "exa"): (
             'call_tool fetch {"url", "routing": {"mode": "require", "providers": ["exa"]}}'
         ),
@@ -401,8 +482,9 @@ def _write_latency_report(rows: Sequence[dict[str, Any]], output_dir: Path) -> N
         "## Measured results",
         "Statistics cover successful (status ok) measured rows only; failures are",
         "counted separately.",
-        "| mix | measured | failures | median ms | p95 ms | max ms | median reads |",
-        "|---|---|---|---|---|---|---|",
+        "| mix | measured | failures | median total ms | total p95 ms | provider p95 ms | "
+        "added p95 ms | max total ms | median reads |",
+        "|---|---|---|---|---|---|---|---|---|",
     ]
     for entry in table:
         reads_cell = (
@@ -412,6 +494,7 @@ def _write_latency_report(rows: Sequence[dict[str, Any]], output_dir: Path) -> N
             f"| {entry['transport']} {entry['operation']} {entry['mode']} "
             f"{entry['providers']} | {entry['n']} | {entry['failures']} | "
             f"{entry['median_ms']:.3f} | {entry['p95_ms']:.3f} | "
+            f"{entry['provider_p95_ms']:.3f} | {entry['added_p95_ms']:.3f} | "
             f"{entry['max_ms']:.3f} | {reads_cell} |"
         )
     lines += [
@@ -429,6 +512,9 @@ def _write_latency_report(rows: Sequence[dict[str, Any]], output_dir: Path) -> N
         "- Expired-TTL probes were not collected in this run.",
         "- trace_id is empty: the in-process harness has no distributed trace.",
         "- In-process wall time is not network latency.",
+        "- The baseline is fake-adapter call time in the same request, not an earlier commit.",
+        "- Added time includes the in-process client/tool stack outside the fake adapter.",
+        "- The user deferred the 80 ms target. This measurement imposes no new ceiling.",
         "- No before/after speedup is claimed from these samples.",
         f"- {reads_note}",
         "",
@@ -453,7 +539,7 @@ def _assert_report(rows: Sequence[dict[str, Any]], output_dir: Path) -> None:
         data_rows = list(reader)
     assert len(data_rows) == len(rows)
     if len(rows) == _EXPECTED_TOTAL_ROWS:
-        assert len(data_rows) == 328
+        assert len(data_rows) == 410
     for key in {_mix_key(row) for row in rows}:
         subset = [row for row in data_rows if _mix_key(row) == key]
         assert sum(1 for row in subset if row["phase"] == "cold") == 1
@@ -463,6 +549,11 @@ def _assert_report(rows: Sequence[dict[str, Any]], output_dir: Path) -> None:
     assert measured
     for row in measured:
         assert float(row["wall_time_ms"]) > 0
+        assert float(row["provider_time_ms"]) > 0
+        assert int(row["provider_calls"]) == (2 if row["routing_mode"] == "fanout" else 1)
+        assert float(row["added_time_ms"]) == pytest.approx(
+            float(row["wall_time_ms"]) - float(row["provider_time_ms"]), abs=0.000002
+        )
     md_text = md_path.read_text(encoding="utf-8")
     assert "![API wall time](routing_latency_wall_time.png)" in md_text
     assert "![Route-plan reads](routing_latency_route_reads.png)" in md_text
@@ -472,11 +563,16 @@ def _assert_report(rows: Sequence[dict[str, Any]], output_dir: Path) -> None:
 
 @pytest.fixture(scope="session")
 def latency_rows() -> list[dict[str, Any]]:
-    """Session-owned sample collection shared by the three latency tests."""
+    """Session-owned sample collection shared by the four latency tests."""
     return []
 
 
-async def test_rest_search_latency(tmp_path: Path, latency_rows: list[dict[str, Any]]) -> None:
+async def test_rest_search_latency(
+    tmp_path: Path,
+    latency_rows: list[dict[str, Any]],
+    auth_secret: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     clear_config_cache()
     clear_quota_poll_cache()
     repository = await SQLiteRepository.open(tmp_path / "rest-latency.db")
@@ -487,10 +583,16 @@ async def test_rest_search_latency(tmp_path: Path, latency_rows: list[dict[str, 
         detach = attach_select_counter(repository, selects, _READS_UNAVAILABLE_REASONS)
         measured_selects = selects if detach is not None else None
         adapters = [OfflineAdapter(name) for name in SEVEN_PROVIDERS]
-        app = create_app(adapters, repository=repository)
+        store = _latency_store(repository)
+        app = create_app(adapters, repository=repository, secret_store=store)
         commit = git_commit()
         transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        # A2: the shared execution service is composed by the app lifespan;
+        # without it every request fails closed with 503 before routing.
+        async with (
+            app.router.lifespan_context(app),
+            httpx.AsyncClient(transport=transport, base_url="http://test") as client,
+        ):
             email = temp_email("latency-rest")
             registered = await client.post(
                 "/auth/register", json={"email": email, "password": TEMP_PASSWORD}
@@ -501,7 +603,16 @@ async def test_rest_search_latency(tmp_path: Path, latency_rows: list[dict[str, 
             )
             assert logged_in.status_code == 200
             headers = {"Authorization": f"Bearer {logged_in.json()['access_token']}"}
-            pid = str((await seed_member_project(repository, headers)).project_id)
+            project = await seed_member_project(repository, headers)
+            pid = str(project.project_id)
+            await _bind_seven_providers(
+                repository,
+                store,
+                monkeypatch,
+                adapters,
+                project_id=project.project_id,
+                actor_id=project.actor_id,
+            )
 
             async def _require_search() -> None:
                 response = await client.post(
@@ -560,7 +671,10 @@ async def test_rest_search_latency(tmp_path: Path, latency_rows: list[dict[str, 
                 selects=measured_selects,
                 call=_fanout_search,
             )
-        report_dir = tmp_path / "latency-rest-search"
+        _assert_measured_samples_succeeded(
+            latency_rows, transport="rest-inprocess", operation="search"
+        )
+        report_dir = REPO_ROOT / "test_reports" / "a2-takeover" / "latency"
         _write_latency_report(latency_rows, report_dir)
         _assert_report(latency_rows, report_dir)
     finally:
@@ -572,7 +686,100 @@ async def test_rest_search_latency(tmp_path: Path, latency_rows: list[dict[str, 
         await repository.close()
 
 
-async def test_mcp_search_latency(tmp_path: Path, latency_rows: list[dict[str, Any]]) -> None:
+async def test_rest_fetch_latency(
+    tmp_path: Path,
+    latency_rows: list[dict[str, Any]],
+    auth_secret: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clear_config_cache()
+    clear_quota_poll_cache()
+    repository = await SQLiteRepository.open(tmp_path / "rest-fetch-latency.db")
+    selects: list[int] = [0]
+    detach: Callable[[], None] | None = None
+    try:
+        await seed_repository(repository, SEVEN_PROVIDERS)
+        detach = attach_select_counter(repository, selects, _READS_UNAVAILABLE_REASONS)
+        measured_selects = selects if detach is not None else None
+        adapters = [OfflineAdapter(name) for name in SEVEN_PROVIDERS]
+        store = _latency_store(repository)
+        app = create_app(adapters, repository=repository, secret_store=store)
+        commit = git_commit()
+        transport = httpx.ASGITransport(app=app)
+        # A2: the shared execution service is composed by the app lifespan;
+        # without it every request fails closed with 503 before routing.
+        async with (
+            app.router.lifespan_context(app),
+            httpx.AsyncClient(transport=transport, base_url="http://test") as client,
+        ):
+            email = temp_email("latency-rest-fetch")
+            registered = await client.post(
+                "/auth/register", json={"email": email, "password": TEMP_PASSWORD}
+            )
+            assert registered.status_code == 201
+            logged_in = await client.post(
+                "/auth/jwt/login", data={"username": email, "password": TEMP_PASSWORD}
+            )
+            assert logged_in.status_code == 200
+            headers = {"Authorization": f"Bearer {logged_in.json()['access_token']}"}
+            project = await seed_member_project(repository, headers)
+            pid = str(project.project_id)
+            await _bind_seven_providers(
+                repository,
+                store,
+                monkeypatch,
+                adapters,
+                project_id=project.project_id,
+                actor_id=project.actor_id,
+            )
+
+            async def _require_fetch() -> None:
+                response = await client.post(
+                    "/fetch",
+                    headers=headers,
+                    json=fetch_payload("require", ["exa"], project_id=pid),
+                )
+                response.raise_for_status()
+
+            async def _auto_fetch() -> None:
+                response = await client.post(
+                    "/fetch", headers=headers, json=fetch_payload("auto", None, project_id=pid)
+                )
+                response.raise_for_status()
+
+            for mode, providers, call in (
+                ("require", "exa", _require_fetch),
+                ("auto", "all", _auto_fetch),
+            ):
+                await _run_mix(
+                    latency_rows,
+                    commit=commit,
+                    transport="rest-inprocess",
+                    operation="fetch",
+                    routing_mode=mode,
+                    providers=providers,
+                    repository=repository,
+                    selects=measured_selects,
+                    call=call,
+                )
+        _assert_measured_samples_succeeded(
+            latency_rows, transport="rest-inprocess", operation="fetch"
+        )
+        report_dir = REPO_ROOT / "test_reports" / "a2-takeover" / "latency"
+        _write_latency_report(latency_rows, report_dir)
+        _assert_report(latency_rows, report_dir)
+    finally:
+        if detach is not None:
+            detach()
+        await drain_background_tasks()
+        clear_config_cache()
+        clear_quota_poll_cache()
+        await repository.close()
+
+
+async def test_mcp_search_latency(
+    tmp_path: Path, latency_rows: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch
+) -> None:
     clear_config_cache()
     clear_quota_poll_cache()
     repository = await SQLiteRepository.open(tmp_path / "mcp-search-latency.db")
@@ -583,12 +790,21 @@ async def test_mcp_search_latency(tmp_path: Path, latency_rows: list[dict[str, A
         detach = attach_select_counter(repository, selects, _READS_UNAVAILABLE_REASONS)
         measured_selects = selects if detach is not None else None
         adapters = [OfflineAdapter(name) for name in SEVEN_PROVIDERS]
-        service, token, pid = await mcp_key_credentials(repository, "latency-mcp")
+        service, key = await mcp_project_key(repository, "latency-mcp")
+        pid = str(key.project_id)
+        await _bind_seven_providers(
+            repository,
+            _latency_store(repository),
+            monkeypatch,
+            adapters,
+            project_id=key.project_id,
+            actor_id=key.owner.id,
+        )
         server = create_server(
             adapters,
             repository=repository,
             auth_service=service,
-            stdio_token=SecretStr(token.get_secret_value()),
+            stdio_token=SecretStr(key.raw),
         )
         commit = git_commit()
 
@@ -646,7 +862,10 @@ async def test_mcp_search_latency(tmp_path: Path, latency_rows: list[dict[str, A
             selects=measured_selects,
             call=_fanout_search,
         )
-        report_dir = tmp_path / "latency-mcp-search"
+        _assert_measured_samples_succeeded(
+            latency_rows, transport="mcp-inprocess", operation="search"
+        )
+        report_dir = REPO_ROOT / "test_reports" / "a2-takeover" / "latency"
         _write_latency_report(latency_rows, report_dir)
         _assert_report(latency_rows, report_dir)
     finally:
@@ -658,7 +877,9 @@ async def test_mcp_search_latency(tmp_path: Path, latency_rows: list[dict[str, A
         await repository.close()
 
 
-async def test_mcp_fetch_latency(tmp_path: Path, latency_rows: list[dict[str, Any]]) -> None:
+async def test_mcp_fetch_latency(
+    tmp_path: Path, latency_rows: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch
+) -> None:
     clear_config_cache()
     clear_quota_poll_cache()
     repository = await SQLiteRepository.open(tmp_path / "mcp-fetch-latency.db")
@@ -669,12 +890,21 @@ async def test_mcp_fetch_latency(tmp_path: Path, latency_rows: list[dict[str, An
         detach = attach_select_counter(repository, selects, _READS_UNAVAILABLE_REASONS)
         measured_selects = selects if detach is not None else None
         adapters = [OfflineAdapter(name) for name in SEVEN_PROVIDERS]
-        service, token, pid = await mcp_key_credentials(repository, "latency-mcp-fetch")
+        service, key = await mcp_project_key(repository, "latency-mcp-fetch")
+        pid = str(key.project_id)
+        await _bind_seven_providers(
+            repository,
+            _latency_store(repository),
+            monkeypatch,
+            adapters,
+            project_id=key.project_id,
+            actor_id=key.owner.id,
+        )
         server = create_server(
             adapters,
             repository=repository,
             auth_service=service,
-            stdio_token=SecretStr(token.get_secret_value()),
+            stdio_token=SecretStr(key.raw),
         )
         commit = git_commit()
 
@@ -711,7 +941,10 @@ async def test_mcp_fetch_latency(tmp_path: Path, latency_rows: list[dict[str, An
             selects=measured_selects,
             call=_auto_fetch,
         )
-        report_dir = tmp_path / "latency-mcp-fetch"
+        _assert_measured_samples_succeeded(
+            latency_rows, transport="mcp-inprocess", operation="fetch"
+        )
+        report_dir = REPO_ROOT / "test_reports" / "a2-takeover" / "latency"
         _write_latency_report(latency_rows, report_dir)
         _assert_report(latency_rows, report_dir)
     finally:
