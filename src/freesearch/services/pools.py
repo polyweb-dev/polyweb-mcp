@@ -18,6 +18,7 @@ allocation changes also append an event in the allocated project.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Iterable
+from fractions import Fraction
 from typing import Any, Final
 from uuid import UUID
 
@@ -125,17 +126,33 @@ def _constraint_payload(constraints: Iterable[RateConstraint]) -> list[dict[str,
 def _require_feasible(
     constraints: Iterable[RateConstraint], allocations: Iterable[StoredAllocation | AllocationPut]
 ) -> None:
-    """Reject base rates whose sum exceeds a pool constraint of the same window."""
+    """Reject base rates whose sum exceeds any pool constraint of any window.
 
+    Same-window sums are checked exactly, and every window is also compared as
+    a per-second rate so mixed windows (for example a 4/s guarantee plus a
+    600/m guarantee against a 10/s pool) cannot overcommit through arithmetic
+    that only compares equal windows.
+    """
+
+    items = list(allocations)
     totals: dict[int, int] = {}
-    for allocation in allocations:
+    for allocation in items:
         window = allocation.rate_window_seconds
         totals[window] = totals.get(window, 0) + allocation.base_rate
+    per_second = sum(
+        (Fraction(allocation.base_rate, allocation.rate_window_seconds) for allocation in items),
+        Fraction(0),
+    )
     for constraint in constraints:
         if totals.get(constraint.window_seconds, 0) > constraint.limit:
             raise ResourceConflict(
                 ALLOCATION_INFEASIBLE,
                 "the promised base rates exceed the pool's rate constraint for this window",
+            )
+        if per_second > Fraction(constraint.limit, constraint.window_seconds):
+            raise ResourceConflict(
+                ALLOCATION_INFEASIBLE,
+                "the promised base rates exceed the pool's per-second rate envelope",
             )
 
 

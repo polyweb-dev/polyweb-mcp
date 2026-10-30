@@ -220,6 +220,22 @@ def store_principal(scope: Scope, principal: VerifiedPrincipal) -> None:
     state["user"] = principal
 
 
+def store_forwarding_credential(scope: Scope, token: str) -> None:
+    """Keep the verified project key in-process for forwarding-signature checks.
+
+    Only a verified project API key reaches this cell; the value never enters a
+    response, a log, or a span attribute. The trace middleware uses it to
+    authenticate the MCP forwarding envelope, so an ordinary REST caller's
+    ``x-trace-id`` is never trusted as continuation provenance.
+    """
+
+    state = scope.get("state")
+    if not isinstance(state, dict):
+        state = {}
+        scope["state"] = state
+    state["forwarding_credential"] = token
+
+
 def _replay_receive(messages: list[Message], receive: Receive) -> Receive:
     """Return a receive that replays buffered body messages, then defers."""
 
@@ -357,6 +373,8 @@ class BearerAuthMiddleware:
             await _reject_unauthorized(send)
             return
         store_principal(scope, principal)
+        if isinstance(principal, ProjectApiKeyPrincipal) and token is not None:
+            store_forwarding_credential(scope, token)
         body_limit: int | None = None
         if (method, path) == PROVISION_ROUTE:
             body_limit = MAX_PUBLIC_AUTH_BODY_BYTES

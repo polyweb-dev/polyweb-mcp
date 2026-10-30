@@ -78,7 +78,7 @@ from freesearch.persistence.oauth_grants import (
 from freesearch.persistence.projects import ProjectRepository
 from freesearch.persistence.scoped import ProjectScopedRepository
 from freesearch.persistence.storage import SQLiteRepository
-from freesearch.persistence.transactions import run_serialized
+from freesearch.persistence.transactions import begin_read_snapshot, run_serialized
 from freesearch.services.audit_events import record_project_event, record_system_event
 from freesearch.services.authorization import (
     AuthorizationDenied,
@@ -676,32 +676,60 @@ class CredentialService:
             raise ValueError("project context account does not match the installation account")
         try:
             async with self._repository.session() as session:
-                usable = await self.usable_credential_in_session(
+                await begin_read_snapshot(session)
+                return await self.resolve_material_in_session(
                     session,
-                    project_id=context.project_id,
-                    credential_id=credential_id,
+                    context,
+                    credential_id,
                     operation=operation,
-                )
-                if usable is None:
-                    return None
-                if expected_generation is not None and usable.generation != expected_generation:
-                    return None
-                material = await self._load_material(session, usable)
-                if material is None:
-                    return None
-                plaintext, token_generation = material
-                operations = await self._resolved_operations(session, usable, context.project_id)
-                return ResolvedCredential(
-                    credential_id=usable.id,
-                    provider_type=usable.provider_type,
-                    generation=usable.generation,
-                    permitted_operations=operations,
-                    secret=SecretStr(plaintext),
-                    auth_mode=usable.auth_mode,
-                    token_generation=token_generation,
+                    expected_generation=expected_generation,
                 )
         except OperationalError as error:
             raise CredentialStorageUnavailable("the credential store is unavailable") from error
+
+    async def resolve_material_in_session(
+        self,
+        session: AsyncSession,
+        context: ProjectContext,
+        credential_id: UUID,
+        *,
+        operation: CredentialOperation,
+        expected_generation: int | None = None,
+    ) -> ResolvedCredential | None:
+        """Load one credential's secret inside the caller's read snapshot.
+
+        Execution resolution shares its binding snapshot with this read, so a
+        burst of concurrent requests never nests a second pooled connection
+        per attempt (which could deadlock a bounded SQLite pool).
+        """
+
+        self._rollout.require_management()
+        if context.account_id != self._account_id:
+            raise ValueError("project context account does not match the installation account")
+        usable = await self.usable_credential_in_session(
+            session,
+            project_id=context.project_id,
+            credential_id=credential_id,
+            operation=operation,
+        )
+        if usable is None:
+            return None
+        if expected_generation is not None and usable.generation != expected_generation:
+            return None
+        material = await self._load_material(session, usable)
+        if material is None:
+            return None
+        plaintext, token_generation = material
+        operations = await self._resolved_operations(session, usable, context.project_id)
+        return ResolvedCredential(
+            credential_id=usable.id,
+            provider_type=usable.provider_type,
+            generation=usable.generation,
+            permitted_operations=operations,
+            secret=SecretStr(plaintext),
+            auth_mode=usable.auth_mode,
+            token_generation=token_generation,
+        )
 
     async def _load_material(
         self, session: AsyncSession, credential: CredentialInstanceRead

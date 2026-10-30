@@ -305,8 +305,8 @@ async def test_unscoped_pool_window_is_shared_by_search_and_fetch(
             constraints=[constraint],
             operations=(CredentialOperation.SEARCH, CredentialOperation.FETCH),
             allocations=(CredentialOperation.SEARCH, CredentialOperation.FETCH),
-            base_rate=100,
-            rate_window_seconds=60,
+            base_rate=1,
+            rate_window_seconds=120,
         ),
     )
     adapter = world.adapters["a1"]
@@ -355,6 +355,7 @@ async def test_malformed_or_unsupported_pool_constraints_fail_closed(
         limits=False,
         pool=PoolSpec(
             constraints=constraints,
+            base_rate=1,
             operations=(CredentialOperation.SEARCH,),
             allocations=(CredentialOperation.SEARCH,),
         ),

@@ -367,13 +367,16 @@ async def test_dispatch_chained_fallback_on_provider_error_all_fail(
 @pytest.mark.parametrize("refusal", ["required_provider", "binding", "capacity"])
 async def test_denied_requests_never_schedule_vendor_quota_io(tmp_path, monkeypatch, refusal):
     """AC7 includes request-triggered observers, not only search/fetch wire calls."""
+    from uuid import uuid4
+
     from freesearch.models.contracts import ProviderCapabilities, RoutingMode
-    from freesearch.models.provider_limits import LimitDeniedError
+    from freesearch.models.provider_limits import AuthMode, LimitDeniedError, LimitOperation
     from freesearch.persistence.bindings import ProjectBindingRepository
+    from freesearch.persistence.limit_repository import StrictAttemptSpec, StrictWindowSpec
     from freesearch.services.execution import ExecutionBindingMissing
     from tests.fixtures.a2_execution import RecordingAdapter
 
-    pool = PoolSpec(constraints=[{"window": 60, "limit": 0}])
+    pool = PoolSpec(constraints=[{"window": 60, "limit": 1}], base_rate=1)
     world = await build_execution_world(
         tmp_path, monkeypatch, limits=False, pool=pool if refusal == "capacity" else None
     )
@@ -390,6 +393,26 @@ async def test_denied_requests_never_schedule_vendor_quota_io(tmp_path, monkeypa
     )
     monkeypatch.setattr(RecordingAdapter, "quota", quota)
     try:
+        if refusal == "capacity":
+            assert world.pool is not None
+            credential = world.credentials["a1"]
+            attempt_id = f"preconsume-{uuid4().hex}"
+            await world.repository.limits.reserve_strict(
+                attempt_id=attempt_id,
+                provider="exa",
+                operation=LimitOperation.SEARCH,
+                auth_mode=AuthMode.KEYED,
+                spec=StrictAttemptSpec(
+                    project_id=world.project.project_id,
+                    credential_id=credential.credential_id,
+                    binding_id=credential.binding_id,
+                    pool_id=world.pool.id,
+                    windows=(StrictWindowSpec(f"pool:{world.pool.id}:60", 60, 1),),
+                    actor_type=world.project.actor_type,
+                    actor_id=world.project.actor_id,
+                ),
+            )
+            await world.repository.limits.settle_strict(attempt_id=attempt_id, outcome="completed")
         request = search_request(world)
         if refusal == "required_provider":
             request = search_request(

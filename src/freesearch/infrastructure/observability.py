@@ -41,13 +41,17 @@ from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import SpanProcessor, TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.trace import (
+    NonRecordingSpan,
     Span,
+    SpanContext,
     SpanKind,
     Status,
     StatusCode,
+    TraceFlags,
     Tracer,
     format_trace_id,
     get_current_span,
+    set_span_in_context,
 )
 
 from freesearch.configuration.config import Settings
@@ -264,11 +268,15 @@ class ObservabilityRuntime(Protocol):
         *,
         kind: SpanKindName = SpanKindName.INTERNAL,
         attributes: Mapping[str, object] | None = None,
+        trace_id: str | None = None,
+        parent_span_id: str | None = None,
     ) -> AbstractContextManager[SpanHandle]: ...
 
     def annotate_root(self, attributes: Mapping[str, object]) -> None: ...
 
     def current_trace_id(self) -> str | None: ...
+
+    def current_span_id(self) -> str | None: ...
 
     def force_flush(self, timeout_millis: int = DEFAULT_FLUSH_TIMEOUT_MILLIS) -> bool: ...
 
@@ -338,14 +346,19 @@ class NoOpObservability:
         *,
         kind: SpanKindName = SpanKindName.INTERNAL,
         attributes: Mapping[str, object] | None = None,
+        trace_id: str | None = None,
+        parent_span_id: str | None = None,
     ) -> Iterator[SpanHandle]:
-        del name, kind, attributes
+        del name, kind, attributes, trace_id, parent_span_id
         yield NO_OP_SPAN
 
     def annotate_root(self, attributes: Mapping[str, object]) -> None:
         del attributes
 
     def current_trace_id(self) -> str | None:
+        return None
+
+    def current_span_id(self) -> str | None:
         return None
 
     def force_flush(self, timeout_millis: int = DEFAULT_FLUSH_TIMEOUT_MILLIS) -> bool:
@@ -515,6 +528,38 @@ class _OtelSpan:
             self._span.set_status(Status(StatusCode.ERROR))
 
 
+def _remote_parent(trace_id: str | None, parent_span_id: str | None) -> Any | None:
+    """Build an OTel parent context for a verified remote parent span.
+
+    Both ids must be well-formed nonzero lowercase hex: the trace (32) and the
+    real parent span (16). A missing/invalid parent starts a fresh root rather
+    than inventing a synthetic span id that Activity cannot resolve.
+    """
+
+    if trace_id is None or len(trace_id) != 32 or trace_id != trace_id.lower():
+        return None
+    if (
+        parent_span_id is None
+        or len(parent_span_id) != 16
+        or parent_span_id != parent_span_id.lower()
+    ):
+        return None
+    try:
+        parsed_trace = int(trace_id, 16)
+        parsed_span = int(parent_span_id, 16)
+    except ValueError:
+        return None
+    if parsed_trace <= 0 or parsed_span <= 0:
+        return None
+    context = SpanContext(
+        trace_id=parsed_trace,
+        span_id=parsed_span,
+        is_remote=True,
+        trace_flags=TraceFlags(TraceFlags.SAMPLED),
+    )
+    return set_span_in_context(NonRecordingSpan(context))
+
+
 class OtelObservability:
     """Runtime backed by an app-scoped SDK ``TracerProvider``."""
 
@@ -531,13 +576,17 @@ class OtelObservability:
         *,
         kind: SpanKindName = SpanKindName.INTERNAL,
         attributes: Mapping[str, object] | None = None,
+        trace_id: str | None = None,
+        parent_span_id: str | None = None,
     ) -> Iterator[SpanHandle]:
         initial: dict[str, object] = {TraceAttribute.SCHEMA_VERSION: TRACE_SCHEMA_VERSION}
         initial.update(attributes or {})
+        parent = _remote_parent(trace_id, parent_span_id) if kind is SpanKindName.SERVER else None
         with self._tracer.start_as_current_span(
             name,
             kind=_SPAN_KINDS[kind],
             attributes=cast("Mapping[str, Any]", _span_attributes(initial)),
+            context=parent,
             record_exception=False,
             set_status_on_exception=False,
         ) as span:
@@ -570,6 +619,10 @@ class OtelObservability:
     def current_trace_id(self) -> str | None:
         context = get_current_span().get_span_context()
         return format_trace_id(context.trace_id) if context.is_valid else None
+
+    def current_span_id(self) -> str | None:
+        context = get_current_span().get_span_context()
+        return format(context.span_id, "016x") if context.is_valid else None
 
     def force_flush(self, timeout_millis: int = DEFAULT_FLUSH_TIMEOUT_MILLIS) -> bool:
         try:

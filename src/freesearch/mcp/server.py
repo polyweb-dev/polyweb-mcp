@@ -12,6 +12,7 @@ attribution the REST transport stamps.
 
 import asyncio
 import logging
+import time
 import weakref
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager, suppress
@@ -61,6 +62,7 @@ from freesearch.mcp.auth import (
     resolve_tool_principal,
     run_http_server,
     run_stdio_server,
+    tool_credential,
 )
 from freesearch.models.contracts import (
     FetchRequest,
@@ -82,6 +84,11 @@ from freesearch.services.execution import (
     ExecutionError,
     ExecutionRequestInvalid,
     ExecutionService,
+)
+from freesearch.services.execution_forward import (
+    ExecutionForwarder,
+    ExecutionForwardError,
+    deadline_from_timeout,
 )
 from freesearch.services.execution_scope import (
     ExecutionForbidden,
@@ -122,6 +129,7 @@ class _ServerState(TypedDict):
     limits_task: "asyncio.Task[None] | None"
     limits_stop: asyncio.Event | None
     execution: "ExecutionService | None"
+    forwarder: "ExecutionForwarder | None"
     observability: ObservabilityRuntime
 
 
@@ -317,7 +325,12 @@ async def _build_generation(
             await initialize_provider_configs(repository)
         store = state["secret_store"]
         await _start_limits_generation(state, owned_routes)
-        if isinstance(repository, SQLiteRepository) and isinstance(store, EncryptedDbSecretStore):
+        if (
+            isinstance(repository, SQLiteRepository)
+            and isinstance(store, EncryptedDbSecretStore)
+            and get_settings().execution_authority_url is None
+            and (get_settings().execution_mcp_standalone or database is not None)
+        ):
             state["execution"] = ExecutionService(
                 repository=repository,
                 secret_store=store,
@@ -430,16 +443,23 @@ async def _tool_body(
     trace_policy: ProjectTracePolicy,
     context: ProjectContext,
     operation: Literal["search", "fetch"],
+    credential: SecretStr | None,
+    deadline_ms: int | None = None,
 ) -> dict[str, Any]:
     """Run one tool body around its root span over the shared execution path.
 
     ``context`` carries the verified principal resolved by the boundary (over
     HTTP the guard's principal of this request, over stdio a fresh per-call
     verification); the execution service authorizes against live state from it.
+    When a forwarding target is configured, the call goes to the API-hosted
+    authority with the original credential, the admission deadline established
+    before scope resolution, and the trace id of this tool call; this process
+    never opens a provider call for it.
     """
 
+    forwarder = state["forwarder"]
     execution = state["execution"]
-    if execution is None:
+    if forwarder is None and execution is None:
         raise RuntimeError("execution is temporarily unavailable")
     observability = state["observability"]
     response: SearchResponse | FetchResponse
@@ -451,14 +471,54 @@ async def _tool_body(
         trace_policy=trace_policy,
     ):
         try:
-            if operation == "search":
-                response = await execution.search(
-                    cast(SearchRequest, request), attribution=attribution, context=context
-                )
+            if forwarder is not None:
+                if credential is None:
+                    raise McpAuthenticationError(MCP_AUTH_ERROR)
+                if deadline_ms is None:
+                    deadline_ms = deadline_from_timeout(
+                        get_settings().execution_forward_timeout_seconds
+                    )
+                trace_id = observability.current_trace_id()
+                parent_span_id = observability.current_span_id()
+                if operation == "search":
+                    response = await forwarder.search(
+                        cast(SearchRequest, request),
+                        credential=credential,
+                        trace_id=trace_id,
+                        parent_span_id=parent_span_id,
+                        deadline_ms=deadline_ms,
+                    )
+                else:
+                    response = await forwarder.fetch(
+                        cast(FetchRequest, request),
+                        credential=credential,
+                        trace_id=trace_id,
+                        parent_span_id=parent_span_id,
+                        deadline_ms=deadline_ms,
+                    )
             else:
-                response = await execution.fetch(
-                    cast(FetchRequest, request), attribution=attribution, context=context
+                remaining = (
+                    None
+                    if deadline_ms is None
+                    else max(0.001, (deadline_ms - int(time.time() * 1000)) / 1000.0)
                 )
+                deadline = None if remaining is None else time.monotonic() + remaining
+                if operation == "search":
+                    response = await execution.search(  # type: ignore[union-attr]
+                        cast(SearchRequest, request),
+                        attribution=attribution,
+                        context=context,
+                        deadline=deadline,
+                    )
+                else:
+                    response = await execution.fetch(  # type: ignore[union-attr]
+                        cast(FetchRequest, request),
+                        attribution=attribution,
+                        context=context,
+                        deadline=deadline,
+                    )
+        except ExecutionForwardError as error:
+            raise RuntimeError(str(error)) from error
         except ExecutionError as error:
             raise _mapped_execution_error(error) from error
         _annotate_root(observability, request, response)
@@ -509,9 +569,16 @@ def _register_tools(
         ctx: Context,  # type: ignore[type-arg]
     ) -> dict[str, Any]:
         """Search the web through the best available provider or all providers concurrently."""
-        attribution, trace_policy, context = await _resolve_scope(
-            request, PermissionAction.SEARCH_EXECUTE, ctx
-        )
+        deadline_ms = deadline_from_timeout(get_settings().execution_forward_timeout_seconds)
+        try:
+            async with asyncio.timeout(
+                max(0.001, (deadline_ms - int(time.time() * 1000)) / 1000.0)
+            ):
+                attribution, trace_policy, context = await _resolve_scope(
+                    request, PermissionAction.SEARCH_EXECUTE, ctx
+                )
+        except TimeoutError as error:
+            raise RuntimeError("the execution request deadline expired before dispatch") from error
         return await _tool_body(
             state,
             request,
@@ -520,6 +587,8 @@ def _register_tools(
             trace_policy=trace_policy,
             context=context,
             operation="search",
+            credential=tool_credential(ctx, stdio_key=stdio_key),
+            deadline_ms=deadline_ms,
         )
 
     @server.tool()
@@ -528,9 +597,16 @@ def _register_tools(
         ctx: Context,  # type: ignore[type-arg]
     ) -> dict[str, Any]:
         """Fetch a URL's content through the best available provider."""
-        attribution, trace_policy, context = await _resolve_scope(
-            request, PermissionAction.FETCH_EXECUTE, ctx
-        )
+        deadline_ms = deadline_from_timeout(get_settings().execution_forward_timeout_seconds)
+        try:
+            async with asyncio.timeout(
+                max(0.001, (deadline_ms - int(time.time() * 1000)) / 1000.0)
+            ):
+                attribution, trace_policy, context = await _resolve_scope(
+                    request, PermissionAction.FETCH_EXECUTE, ctx
+                )
+        except TimeoutError as error:
+            raise RuntimeError("the execution request deadline expired before dispatch") from error
         return await _tool_body(
             state,
             request,
@@ -539,6 +615,8 @@ def _register_tools(
             trace_policy=trace_policy,
             context=context,
             operation="fetch",
+            credential=tool_credential(ctx, stdio_key=stdio_key),
+            deadline_ms=deadline_ms,
         )
 
 
@@ -578,13 +656,37 @@ def create_server(
     encrypted_store: AsyncSecretStore | None = (
         _encrypted_store(repository) if isinstance(repository, SQLiteRepository) else None
     )
+    settings = get_settings()
+    authority_url = settings.execution_authority_url
+    # Topology is explicit: a forwarded deployment uses the API-hosted
+    # authority and never builds a local one. Local hosting is reserved for an
+    # explicit exclusive deployment (the setting) or for an in-process
+    # embedding that explicitly supplied its own repository/database, which is
+    # never the production MCP launch path.
+    standalone_authority = (
+        bool(settings.execution_mcp_standalone)
+        or not owns_client
+        or repository is not None
+        or database is not None
+    )
     execution: ExecutionService | None = (
         ExecutionService(
             repository=repository,
             secret_store=encrypted_store,
+            host_authority=True,
         )
         if isinstance(repository, SQLiteRepository)
         and isinstance(encrypted_store, EncryptedDbSecretStore)
+        and authority_url is None
+        and standalone_authority
+        else None
+    )
+    forwarder = (
+        ExecutionForwarder(
+            authority_url,
+            timeout_seconds=settings.execution_forward_timeout_seconds,
+        )
+        if authority_url
         else None
     )
     state: _ServerState = {
@@ -597,6 +699,7 @@ def create_server(
         "limits_task": None,
         "limits_stop": None,
         "execution": execution,
+        "forwarder": forwarder,
         # An injected composition has no generation lifecycle, so its trace
         # runtime is built here and lives as long as the injected repository.
         # The owned path builds a fresh runtime per generation instead.
@@ -626,6 +729,13 @@ def create_server(
                     )
                 else:
                     await _start_injected_limits(state, routes or [])
+                if state["forwarder"] is None:
+                    authority_url = get_settings().execution_authority_url
+                    if authority_url:
+                        state["forwarder"] = ExecutionForwarder(
+                            authority_url,
+                            timeout_seconds=get_settings().execution_forward_timeout_seconds,
+                        )
             refcount += 1
         try:
             yield
@@ -633,6 +743,7 @@ def create_server(
             limit_stop: asyncio.Event | None = None
             limit_task: asyncio.Task[None] | None = None
             retiring_execution: ExecutionService | None = None
+            retiring_forwarder: ExecutionForwarder | None = None
             async with lock:
                 refcount -= 1
                 last_exit = refcount == 0
@@ -643,6 +754,9 @@ def create_server(
                     limit_stop, limit_task = _take_limit_cells(state)
                     retiring_execution = state["execution"]
                     state["execution"] = None
+                if last_exit:
+                    retiring_forwarder = state["forwarder"]
+                    state["forwarder"] = None
             if owns_client:
                 # Teardown happens outside the lock, exactly once, on the
                 # last exit: intermediate exits keep everything usable, and
@@ -666,6 +780,8 @@ def create_server(
                 # bookkeeping is drained at each session exit.
                 await flush_traces(state["observability"])
                 await DEFAULT_USE_RECORDER.drain()
+            if retiring_forwarder is not None:
+                await retiring_forwarder.aclose()
 
     server = FastMCP(
         "freesearch",
