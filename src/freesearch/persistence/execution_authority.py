@@ -184,6 +184,8 @@ class StoredLease:
     expires_at: datetime | None
     recovery_until: datetime | None
     version: int
+    #: Dispatch attempts this acquisition fenced into uncertainty.
+    uncertain_attempt_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -206,7 +208,9 @@ class StoredDispatch:
     resolved_at: datetime | None
 
 
-def _stored_lease(row: ExecutionAuthorityLeaseRow) -> StoredLease:
+def _stored_lease(
+    row: ExecutionAuthorityLeaseRow, uncertain_attempt_ids: tuple[str, ...] = ()
+) -> StoredLease:
     return StoredLease(
         authority_key=row.authority_key,
         holder_id=row.holder_id,
@@ -217,6 +221,7 @@ def _stored_lease(row: ExecutionAuthorityLeaseRow) -> StoredLease:
         expires_at=parse_optional_timestamp(row.expires_at),
         recovery_until=parse_optional_timestamp(row.recovery_until),
         version=row.version,
+        uncertain_attempt_ids=uncertain_attempt_ids,
     )
 
 
@@ -257,15 +262,20 @@ class ExecutionAuthorityRepository:
         now: datetime,
         ttl: timedelta,
         recovery: timedelta,
+        pool_id: UUID | None = None,
     ) -> StoredLease | None:
         """Take the authority when it is absent, vacant, expired, or already ours.
 
         The fencing token advances by one. Every still-dispatched row of an
         older token becomes ``uncertain``; when any did, the lease starts in
-        ``recovering`` until ``now + recovery``. Returns ``None`` while another
-        holder's lease is live. Re-acquiring by the same holder starts a new
-        incarnation and fences the old one: its open dispatches become
-        ``uncertain`` and its token can no longer record dispatches.
+        ``recovering`` until ``now + recovery``. ``pool_id`` lets the caller
+        identify open dispatch rows by the shared pool they were recorded for:
+        the quiet ledger identity may differ from the pool-scoped fence key, so
+        recovery follows the pool row rather than guessing a key namespace.
+        Returns ``None`` while another holder's lease is live. Re-acquiring by
+        the same holder starts a new incarnation and fences the old one: its
+        open dispatches become ``uncertain`` and its token can no longer record
+        dispatches.
         """
 
         stamp = stored_timestamp(now)
@@ -280,6 +290,48 @@ class ExecutionAuthorityRepository:
             .on_conflict_do_nothing(index_elements=[ExecutionAuthorityLeaseRow.authority_key])
         )
         lease = ExecutionAuthorityLeaseRow
+        # A repeated acquisition during the same recovering incarnation keeps
+        # that incarnation and its persisted recovery deadline. Resetting the
+        # lease to ACTIVE here would let an immediate second request bypass the
+        # conservative pause while the predecessor's dispatches are uncertain.
+        existing = await self._session.scalar(
+            select(lease)
+            .where(lease.authority_key == authority_key)
+            .execution_options(populate_existing=True)
+        )
+        if existing is not None:
+            recovery_until = parse_optional_timestamp(existing.recovery_until)
+            expires_at = parse_optional_timestamp(existing.expires_at)
+            if (
+                existing.state == AuthorityState.RECOVERING.value
+                and existing.holder_id == holder_id
+                and recovery_until is not None
+                and recovery_until > now
+                and expires_at is not None
+                and expires_at > now
+            ):
+                kept = await self._session.scalar(
+                    update(lease)
+                    .where(
+                        lease.authority_key == authority_key,
+                        lease.holder_id == holder_id,
+                        lease.fencing_token == existing.fencing_token,
+                    )
+                    .values(
+                        renewed_at=stamp,
+                        expires_at=stored_timestamp(now + ttl),
+                        version=lease.version + 1,
+                    )
+                    .returning(lease)
+                    .execution_options(populate_existing=True)
+                )
+                kept_uncertain = (
+                    await self._list_uncertain_attempt_ids(pool_id=pool_id)
+                    if pool_id is not None
+                    else ()
+                )
+                await self._session.flush()
+                return None if kept is None else _stored_lease(kept, kept_uncertain)
         row = await self._session.scalar(
             update(lease)
             .where(
@@ -306,7 +358,22 @@ class ExecutionAuthorityRepository:
         if row is None:
             await self._session.flush()
             return None
-        if await self._mark_uncertain(authority_key=authority_key, token=row.fencing_token):
+        uncertain_ids: tuple[str, ...] = ()
+        if pool_id is not None:
+            uncertain_ids = await self._mark_pool_uncertain(
+                pool_id=pool_id, token=row.fencing_token
+            )
+        uncertain = bool(uncertain_ids) or await self._mark_uncertain(
+            authority_key=authority_key, token=row.fencing_token
+        )
+        if pool_id is not None:
+            # Include rows an earlier takeover already fenced: their funds
+            # settlement is idempotent, so a crash between the fence commit
+            # and the debit retention cannot leave a reserved admission behind
+            # forever.
+            existing_uncertain = await self._list_uncertain_attempt_ids(pool_id=pool_id)
+            uncertain_ids = tuple(dict.fromkeys((*uncertain_ids, *existing_uncertain)))
+        if uncertain:
             row = await self._session.scalar(
                 update(lease)
                 .where(lease.authority_key == authority_key)
@@ -318,7 +385,7 @@ class ExecutionAuthorityRepository:
                 .execution_options(populate_existing=True)
             )
         await self._session.flush()
-        return None if row is None else _stored_lease(row)
+        return None if row is None else _stored_lease(row, uncertain_ids)
 
     async def renew(
         self,
@@ -395,6 +462,62 @@ class ExecutionAuthorityRepository:
         )
         return None if row is None else _stored_lease(row)
 
+    async def _ensure_row(self, *, authority_key: str) -> None:
+        """Create an empty lease row for a ledger identity if it is absent."""
+
+        await self._session.execute(
+            sqlite_insert(ExecutionAuthorityLeaseRow)
+            .values(
+                authority_key=authority_key,
+                fencing_token=0,
+                state=AuthorityState.VACANT.value,
+                version=1,
+            )
+            .on_conflict_do_nothing(index_elements=[ExecutionAuthorityLeaseRow.authority_key])
+        )
+        await self._session.flush()
+
+    async def _mark_pool_uncertain(self, *, pool_id: UUID, token: int) -> tuple[str, ...]:
+        """Mark this pool's still-dispatched rows of older tokens uncertain.
+
+        Returns the attempt ids this takeover fenced, so recovery can retain
+        each one's native debit exactly once in the same takeover boundary.
+        """
+
+        rows = await self._session.scalars(
+            select(ExecutionDispatchRow.attempt_id).where(
+                ExecutionDispatchRow.pool_id == str(pool_id),
+                ExecutionDispatchRow.state == DispatchState.DISPATCHED.value,
+                ExecutionDispatchRow.fencing_token < token,
+            )
+        )
+        attempt_ids = tuple(rows)
+        if not attempt_ids:
+            return ()
+        await self._session.execute(
+            update(ExecutionDispatchRow)
+            .where(
+                ExecutionDispatchRow.pool_id == str(pool_id),
+                ExecutionDispatchRow.state == DispatchState.DISPATCHED.value,
+                ExecutionDispatchRow.fencing_token < token,
+            )
+            .values(state=DispatchState.UNCERTAIN.value)
+            .execution_options(synchronize_session=False)
+        )
+        await self._session.flush()
+        return attempt_ids
+
+    async def _list_uncertain_attempt_ids(self, *, pool_id: UUID) -> tuple[str, ...]:
+        """Return the attempt ids this pool holds in uncertainty."""
+
+        rows = await self._session.scalars(
+            select(ExecutionDispatchRow.attempt_id).where(
+                ExecutionDispatchRow.pool_id == str(pool_id),
+                ExecutionDispatchRow.state == DispatchState.UNCERTAIN.value,
+            )
+        )
+        return tuple(rows)
+
     async def record_dispatch(
         self,
         *,
@@ -410,8 +533,13 @@ class ExecutionAuthorityRepository:
         credential_id: UUID | None = None,
         binding_id: UUID | None = None,
         now: datetime,
+        ledger_key: str | None = None,
     ) -> bool:
-        """Record one dispatch only under this token of a live, active lease."""
+        """Record one dispatch only under this token of a live, active lease.
+
+        ``ledger_key`` names a stable ledger identity for the row while the
+        fence that authorizes the write stays the pool's own lease key.
+        """
 
         stamp = stored_timestamp(now)
         lease = ExecutionAuthorityLeaseRow
@@ -425,7 +553,7 @@ class ExecutionAuthorityRepository:
             "operation": CredentialOperation(operation).value,
             "actor_type": ActorType(actor_type).value,
             "actor_id": str(actor_id),
-            "authority_key": authority_key,
+            "authority_key": ledger_key or authority_key,
             "fencing_token": fencing_token,
             "state": DispatchState.DISPATCHED.value,
             "dispatched_at": stamp,

@@ -12,6 +12,7 @@ storage layer.
 
 import asyncio
 import contextlib
+import contextvars
 import inspect
 import logging
 import math
@@ -52,6 +53,7 @@ from freesearch.models.contracts import (
     UsageStatus,
     is_soft_quota_zero,
 )
+from freesearch.models.execution_failures import ExecutionError
 from freesearch.models.observability import AttemptBinding, ExecutionAttribution
 from freesearch.models.projects import PermissionAction
 from freesearch.models.provider_limits import (
@@ -75,6 +77,27 @@ if TYPE_CHECKING:
     from freesearch.services.provider_limits import ProviderLimitsService
 
 logger = logging.getLogger(__name__)
+
+#: Queue wait accumulated by the authority for the attempt in this task.
+_QUEUE_WAIT_MS: contextvars.ContextVar[int] = contextvars.ContextVar(
+    "freesearch_queue_wait_ms", default=-1
+)
+
+
+def add_queue_wait(milliseconds: int) -> None:
+    """Accumulate one scheduler grant's wait for the current request task."""
+
+    current = _QUEUE_WAIT_MS.get()
+    _QUEUE_WAIT_MS.set(max(0, current) + max(0, milliseconds))
+
+
+def consume_queue_wait() -> int | None:
+    """Return and clear the request task's accumulated queue wait."""
+
+    value = _QUEUE_WAIT_MS.get()
+    _QUEUE_WAIT_MS.set(-1)
+    return None if value < 0 else value
+
 
 CANONICAL_PROVIDER_NAMES: frozenset[str] = frozenset(provider.value for provider in ProviderName)
 
@@ -320,6 +343,7 @@ async def record_response_telemetry(
     latency_ms: int | None = None,
     status: UsageStatus = UsageStatus.SUCCESS,
     binding: AttemptBinding | None = None,
+    queue_wait_ms: int | None = None,
 ) -> None:
     """Persist ``response.usage`` and a healthy observation; never raise.
 
@@ -339,7 +363,12 @@ async def record_response_telemetry(
     try:
         usage = response.usage or _estimated_gap_event(response)
         if usage is not None:
-            measured = usage.model_copy(update={"latency_ms": latency_ms, "status": status})
+            metadata = dict(usage.metadata)
+            if queue_wait_ms is not None:
+                metadata["queue_wait_ms"] = max(0, queue_wait_ms)
+            measured = usage.model_copy(
+                update={"latency_ms": latency_ms, "status": status, "metadata": metadata}
+            )
             await repository.record_usage(
                 measured,
                 attribution=attribution,
@@ -402,12 +431,14 @@ async def _record_failure_usage(
     operation: UsageOperation,
     latency_ms: int | None,
     binding: AttemptBinding | None = None,
+    queue_wait_ms: int | None = None,
 ) -> None:
     """Persist a zero-unit failure usage event for a failed call; never raise."""
 
     if repository is None:
         return
     try:
+        metadata = {"queue_wait_ms": max(0, queue_wait_ms)} if queue_wait_ms is not None else {}
         await repository.record_usage(
             UsageEvent(
                 provider=provider,
@@ -416,6 +447,7 @@ async def _record_failure_usage(
                 observed_at=datetime.now(UTC),
                 latency_ms=latency_ms,
                 status=UsageStatus.FAILURE,
+                metadata=metadata,
             ),
             attribution=attribution,
             trace_id=current_observability().current_trace_id(),
@@ -425,12 +457,6 @@ async def _record_failure_usage(
         )
     except Exception:
         logger.warning("failure usage telemetry could not be persisted")
-
-
-def _elapsed_ms(started_at: float) -> int:
-    """Return whole milliseconds elapsed since ``started_at`` (never negative)."""
-
-    return int((time.perf_counter() - started_at) * 1000)
 
 
 def _measured_latency_ms(adapter_name: str, latency_ms: int) -> int | None:
@@ -446,14 +472,67 @@ def _measured_latency_ms(adapter_name: str, latency_ms: int) -> int | None:
     return latency_ms if adapter_name in CANONICAL_PROVIDER_NAMES else None
 
 
+class ProviderTiming:
+    """Actual provider-send time shared across retries and child tasks.
+
+    The mutable object travels with the attempt, so an adapter runner's send
+    observations update the same accumulator the parent task reads. Queue
+    wait, admission, retry backoff, and settlement are never included.
+    """
+
+    __slots__ = ("_open_started", "first_send_at", "seconds")
+
+    def __init__(self) -> None:
+        self.seconds = 0.0
+        self.first_send_at: float | None = None
+        self._open_started: float | None = None
+
+    def begin_send(self) -> None:
+        """Mark one actual send as started."""
+
+        now = time.perf_counter()
+        if self.first_send_at is None:
+            self.first_send_at = now
+        self._open_started = now
+
+    def end_send(self) -> None:
+        """Finish the currently open send and accumulate its duration."""
+
+        if self._open_started is None:
+            return
+        self.seconds += max(0.0, time.perf_counter() - self._open_started)
+        self._open_started = None
+
+    def finish_open_send(self) -> None:
+        """Close an unresolved send at its current elapsed time."""
+
+        self.end_send()
+
+    @property
+    def latency_ms(self) -> int:
+        """Return the accumulated actual send duration in whole milliseconds."""
+
+        return int(max(0.0, self.seconds) * 1000)
+
+
 class _DispatchSend:
     """One actual upstream send observed inside an adapter call."""
 
-    __slots__ = ("error", "finalized", "outcome", "reservation", "response")
+    __slots__ = (
+        "error",
+        "finalized",
+        "outcome",
+        "reservation",
+        "resolved",
+        "response",
+        "started",
+    )
 
     def __init__(self, reservation: Any) -> None:
         self.reservation = reservation
         self.finalized = False
+        self.resolved = False
+        self.started = False
         self.outcome = "open"
         self.response: Any = None
         self.error: BaseException | None = None
@@ -481,16 +560,40 @@ class _CapacityCharger:
         *,
         reserve: Callable[[], Awaitable[Any]],
         settle: Callable[[str], Awaitable[None]] | None,
+        release: Callable[[Any], Awaitable[None]] | None,
         limits: "ProviderLimitsService | None",
         request: SearchRequest | FetchRequest | None,
+        resolve_dispatch: Callable[[str, str], Awaitable[None]] | None = None,
+        timing: ProviderTiming | None = None,
     ) -> None:
         self._reserve = reserve
         self._settle = settle
+        self._release = release
         self._limits = limits
         self._request = request
+        self._resolve_dispatch = resolve_dispatch
+        self._timing = timing or ProviderTiming()
         self._sends: list[_DispatchSend] = []
+        #: ``perf_counter`` instant of the first actual provider send (after
+        #: admission/queue wait), so measured latency excludes queue time.
+        self.provider_started_at: float | None = None
 
-    async def begin(self) -> object:
+    @property
+    def timing(self) -> ProviderTiming:
+        """The shared actual-send accumulator of this attempt."""
+
+        return self._timing
+
+    def mark_started(self, token: object) -> None:
+        """Mark a non-runner send as actually starting now."""
+
+        if isinstance(token, _DispatchSend):
+            token.started = True
+            self._timing.begin_send()
+            if self.provider_started_at is None:
+                self.provider_started_at = time.perf_counter()
+
+    async def begin(self, *, mark_started: bool = True) -> object:
         reservation = await _reserve_attempt(self._reserve)
         if getattr(reservation, "idempotent", False):
             native = getattr(reservation, "admission", None)
@@ -506,7 +609,15 @@ class _CapacityCharger:
             charge_next = getattr(reservation, "charge_next_dispatch", None)
             if callable(charge_next):
                 reservation = await charge_next()
+        if self.provider_started_at is None:
+            self.provider_started_at = time.perf_counter()
         send = _DispatchSend(reservation)
+        # The runner observer calls begin immediately before the actual HTTP
+        # operation, so this send has started. The non-runner path marks the
+        # send explicitly after its pre-send deadline check instead.
+        if mark_started:
+            send.started = True
+            self._timing.begin_send()
         self._sends.append(send)
         return send
 
@@ -520,6 +631,7 @@ class _CapacityCharger:
     ) -> None:
         if not isinstance(token, _DispatchSend):
             return
+        self._timing.end_send()
         if error is not None or retryable:
             token.outcome = "failure"
             token.error = error or ProviderOperationError(
@@ -531,8 +643,16 @@ class _CapacityCharger:
                     status_code=getattr(result, "status_code", None),
                 )
             )
-            # A received HTTP response proves that this send completed. End
-            # its concurrency obligation before the runner attempts a retry.
+            if not token.started:
+                # The deadline/pre-send check refused before any provider
+                # operation: release the reservation and close its recovery
+                # record as failed, never as an uncertain upstream attempt.
+                await self._release_unsent(token)
+                return
+            # A received HTTP response proves that this send completed. Settle
+            # its own debit and release both durable and fair-queue
+            # concurrency before the runner attempts a retry; otherwise the
+            # retry queues behind the slot this send already finished holding.
             # Transport failures have uncertain receipts and retain their hold.
             if retryable and (
                 result is not None
@@ -540,10 +660,17 @@ class _CapacityCharger:
             ):
                 complete = getattr(token.reservation, "complete_dispatch", None)
                 if getattr(token.reservation, "admission", None) is None and callable(complete):
+                    # Keep the strict reservation replayable for the runner's
+                    # same-identity retry, but mark the known completed send
+                    # dispatch-complete so durable concurrency is free, and
+                    # release the fair-queue slot it was holding.
                     await complete()
+                    token.finalized = True
+                    await self._resolve(token, "failed")
                 else:
                     await self._failure(token, token.error)
                     token.finalized = True
+                    await self._resolve(token, "failed")
             elif (
                 error is not None
                 and getattr(getattr(error, "error", None), "status_code", None) is None
@@ -566,11 +693,46 @@ class _CapacityCharger:
             if send.finalized:
                 continue
             if send.outcome == "open":
+                if not send.started:
+                    await self._release_unsent(send)
+                    continue
+                self._timing.finish_open_send()
                 await self._uncertain(send, error=error)
+                await self._resolve(send, "uncertain")
             elif send.outcome == "success":
                 await self._success(send, response)
+                await self._resolve(send, "completed")
             else:
                 await self._failure(send, send.error or error)
+                await self._resolve(send, "failed")
+
+    async def _release_unsent(self, send: _DispatchSend) -> None:
+        """Undo a reservation that provably never began a provider send."""
+
+        if send.finalized:
+            return
+        send.finalized = True
+        send.outcome = "released"
+        if self._release is not None:
+            with contextlib.suppress(Exception):
+                await self._release(send.reservation)
+        await self._resolve(send, "failed")
+
+    async def _resolve(self, send: _DispatchSend, outcome: str) -> None:
+        """Resolve the authority recovery record and free the fair-queue slot."""
+
+        if send.resolved:
+            return
+        send.resolved = True
+        try:
+            attempt_id = send.attempt_id
+            if attempt_id and self._resolve_dispatch is not None:
+                with contextlib.suppress(Exception):
+                    await self._resolve_dispatch(attempt_id, outcome)
+        finally:
+            finish = getattr(send.reservation, "finish", None)
+            if callable(finish):
+                finish()
 
     async def _success(
         self, send: _DispatchSend, response: SearchResponse | FetchResponse | None
@@ -685,6 +847,44 @@ async def _finalize_capacity_path(
             await asyncio.shield(limits.record_success(admission, response, request=request))
 
 
+async def _dispatch_provider_call[ResponseT](
+    *,
+    charger: _CapacityCharger | None,
+    runner: object | None,
+    adapter: ProviderAdapter,
+    call: Callable[[ProviderAdapter], Awaitable[ResponseT]],
+    pre_send: Callable[[], None] | None,
+) -> ResponseT:
+    """Run one adapter call with the correct per-send charging shape."""
+
+    if charger is not None and runner is not None:
+        if pre_send is not None:
+            pre_send()
+        observer_token = install_dispatch_observer(charger)
+        try:
+            return await call(adapter)
+        finally:
+            reset_dispatch_observer(observer_token)
+    if charger is not None:
+        send = await charger.begin(mark_started=False)
+        try:
+            if pre_send is not None:
+                pre_send()
+            charger.mark_started(send)
+            response = await call(adapter)
+        except asyncio.CancelledError:
+            raise
+        except BaseException as exc:
+            await charger.end(send, error=exc, retryable=False)
+            raise
+        else:
+            await charger.end(send, result=response)
+            return response
+    if pre_send is not None:
+        pre_send()
+    return await call(adapter)
+
+
 async def tracked_call[ResponseT: (SearchResponse, FetchResponse)](
     repository: SQLiteRepository | None,
     adapter: ProviderAdapter,
@@ -699,6 +899,9 @@ async def tracked_call[ResponseT: (SearchResponse, FetchResponse)](
     settle: Callable[[str], Awaitable[None]] | None = None,
     release: Callable[[Any], Awaitable[None]] | None = None,
     context: "LimitCallContext | None" = None,
+    resolve_dispatch: Callable[[str, str], Awaitable[None]] | None = None,
+    timing: ProviderTiming | None = None,
+    pre_send: Callable[[], None] | None = None,
 ) -> ResponseT:
     """Await ``call(adapter)`` recording success and failure telemetry around it.
 
@@ -722,7 +925,7 @@ async def tracked_call[ResponseT: (SearchResponse, FetchResponse)](
     provably non-dispatched reservation is released.
     """
 
-    started_at = time.perf_counter()
+    provider_timing = timing or ProviderTiming()
     credential_id = binding.credential_id if binding is not None else None
     upstream_pool_id = (
         context.upstream_pool_id
@@ -733,36 +936,28 @@ async def tracked_call[ResponseT: (SearchResponse, FetchResponse)](
     charger: _CapacityCharger | None = None
     if reserve is None:
         admission = await _admit_call(limits, adapter, operation, request, context=context)
+        provider_timing.begin_send()
     else:
         charger = _CapacityCharger(
             reserve=reserve,
             settle=settle,
+            release=release,
             limits=limits,
             request=request,
+            resolve_dispatch=resolve_dispatch,
+            timing=provider_timing,
         )
     response: ResponseT | None = None
     cancelled = False
     runner = getattr(adapter, "dispatch_runner", None)
     try:
-        if charger is not None and runner is not None:
-            observer_token = install_dispatch_observer(charger)
-            try:
-                response = await call(adapter)
-            finally:
-                reset_dispatch_observer(observer_token)
-        elif charger is not None:
-            send = await charger.begin()
-            try:
-                response = await call(adapter)
-            except asyncio.CancelledError:
-                raise
-            except BaseException as exc:
-                await charger.end(send, error=exc, retryable=False)
-                raise
-            else:
-                await charger.end(send, result=response)
-        else:
-            response = await call(adapter)
+        response = await _dispatch_provider_call(
+            charger=charger,
+            runner=runner,
+            adapter=adapter,
+            call=call,
+            pre_send=pre_send,
+        )
     except asyncio.CancelledError:
         cancelled = True
         await _finalize_capacity_path(
@@ -785,17 +980,19 @@ async def tracked_call[ResponseT: (SearchResponse, FetchResponse)](
             response=None,
             request=request,
         )
-        if isinstance(exc, (LimitDeniedError, LimitStoreUnavailable)):
-            # A local admission/store failure is not provider health and
+        if isinstance(exc, (ExecutionError, LimitDeniedError, LimitStoreUnavailable)):
+            # A local admission/store/queue failure is not provider health and
             # writes no usage event, whether it happened before the first send
             # or before a retry.
             raise
+        if charger is None:
+            provider_timing.end_send()
         await _record_failure_telemetry_for(
             repository,
             adapter,
             attribution,
             operation,
-            started_at,
+            provider_timing.latency_ms,
             binding,
             exc,
             request=request,
@@ -815,12 +1012,14 @@ async def tracked_call[ResponseT: (SearchResponse, FetchResponse)](
     )
     if response is None:  # pragma: no cover - a completed call always has one
         raise LimitStoreUnavailable(adapter.name)
+    if charger is None:
+        provider_timing.end_send()
     await _record_success_telemetry_for(
         repository,
         adapter,
         attribution,
         operation,
-        started_at,
+        provider_timing.latency_ms,
         binding,
         response,
         request=request,
@@ -836,7 +1035,7 @@ async def _record_success_telemetry_for(
     adapter: ProviderAdapter,
     attribution: ExecutionAttribution,
     operation: UsageOperation,
-    started_at: float,
+    latency_ms: int,
     binding: AttemptBinding | None,
     response: SearchResponse | FetchResponse,
     *,
@@ -851,8 +1050,9 @@ async def _record_success_telemetry_for(
         repository,
         response,
         attribution=attribution,
-        latency_ms=_measured_latency_ms(adapter.name, _elapsed_ms(started_at)),
+        latency_ms=_measured_latency_ms(adapter.name, latency_ms),
         binding=binding,
+        queue_wait_ms=consume_queue_wait(),
     )
     await _record_adapter_quota(
         repository,
@@ -870,7 +1070,7 @@ async def _record_failure_telemetry_for(
     adapter: ProviderAdapter,
     attribution: ExecutionAttribution,
     operation: UsageOperation,
-    started_at: float,
+    latency_ms: int,
     binding: AttemptBinding | None,
     failure: BaseException,
     *,
@@ -889,8 +1089,9 @@ async def _record_failure_telemetry_for(
         attribution=attribution,
         provider=adapter.name,
         operation=operation,
-        latency_ms=_measured_latency_ms(adapter.name, _elapsed_ms(started_at)),
+        latency_ms=_measured_latency_ms(adapter.name, latency_ms),
         binding=binding,
+        queue_wait_ms=consume_queue_wait(),
     )
     await record_failure_telemetry(
         repository,
@@ -937,6 +1138,10 @@ async def _reserve_attempt(reserve: Callable[[], Awaitable[Any]] | None) -> Any:
     try:
         return await reserve()
     except LimitStoreUnavailable:
+        raise
+    except ExecutionError:
+        # A typed local refusal (queue expiry, revoked authority, changed
+        # binding) keeps its own shape so transports can project it.
         raise
     except LimitDeniedError:
         raise

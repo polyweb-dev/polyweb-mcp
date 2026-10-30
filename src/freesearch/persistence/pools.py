@@ -27,9 +27,14 @@ The caller owns the transaction; methods flush and never commit.
 
 from __future__ import annotations
 
+import asyncio
 import json
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
+from fractions import Fraction
+from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -437,31 +442,59 @@ class UpstreamPoolRepository:
     ) -> StoredPool | None:
         """Replace one pool's tunable fields; ``None`` when absent in this account.
 
-        The provider type and native balance link never change here.
+        The provider type and native balance link never change here. A
+        constraint write that would promise less capacity than the standing
+        base allocations is refused in this same transaction, so a pool can
+        never be tightened below its already-published guarantees.
         """
 
-        row = await self._session.scalar(
-            update(UpstreamQuotaPoolRow)
-            .where(
-                UpstreamQuotaPoolRow.id == str(pool_id),
-                UpstreamQuotaPoolRow.account_id == str(account_id),
+        async with _feasibility_guard(self._session):
+            await self._require_current_allocations_feasible(
+                pool_id=pool_id, constraints=constraints
             )
-            .values(
-                upstream_scope=UpstreamScope(upstream_scope).value,
-                pool_key=pool_key,
-                label=label,
-                constraints=json.dumps(constraints, separators=(",", ":"), sort_keys=True),
-                max_concurrency=max_concurrency,
-                max_queued_requests=max_queued_requests,
-                status=PoolStatus(status).value,
-                updated_at=stored_timestamp(resolve_now(now)),
-                version=UpstreamQuotaPoolRow.version + 1,
+            row = await self._session.scalar(
+                update(UpstreamQuotaPoolRow)
+                .where(
+                    UpstreamQuotaPoolRow.id == str(pool_id),
+                    UpstreamQuotaPoolRow.account_id == str(account_id),
+                )
+                .values(
+                    upstream_scope=UpstreamScope(upstream_scope).value,
+                    pool_key=pool_key,
+                    label=label,
+                    constraints=json.dumps(constraints, separators=(",", ":"), sort_keys=True),
+                    max_concurrency=max_concurrency,
+                    max_queued_requests=max_queued_requests,
+                    status=PoolStatus(status).value,
+                    updated_at=stored_timestamp(resolve_now(now)),
+                    version=UpstreamQuotaPoolRow.version + 1,
+                )
+                .returning(UpstreamQuotaPoolRow)
+                .execution_options(populate_existing=True)
             )
-            .returning(UpstreamQuotaPoolRow)
-            .execution_options(populate_existing=True)
-        )
-        await self._session.flush()
+            await self._session.flush()
         return None if row is None else _stored_pool(row)
+
+    async def _require_current_allocations_feasible(
+        self, *, pool_id: UUID, constraints: list[dict[str, Any]]
+    ) -> None:
+        """Refuse a pool write that would underfund its standing base promises."""
+
+        pool = await self._session.get(UpstreamQuotaPoolRow, str(pool_id))
+        if pool is None:
+            return
+        rows = await self._session.scalars(
+            select(ProjectPoolAllocationRow).where(ProjectPoolAllocationRow.pool_id == str(pool_id))
+        )
+        allocations = [
+            (
+                row.base_rate,
+                row.rate_window_seconds,
+                CredentialOperation(row.operation_scope),
+            )
+            for row in rows
+        ]
+        _require_allocations_feasible(constraints, allocations)
 
     async def get_pools(self, *, account_id: UUID, pool_ids: set[UUID]) -> dict[UUID, StoredPool]:
         """Return the named pools of this account keyed by id."""
@@ -572,6 +605,150 @@ class UpstreamPoolRepository:
         return [_stored_link(row) for row in rows]
 
 
+class AllocationInfeasibleError(ValueError):
+    """A promised base allocation would overcommit a shared pool constraint."""
+
+
+def _constraint_windows(
+    constraints: list[dict[str, Any]],
+) -> list[tuple[int, int, frozenset[str] | None]]:
+    """Return readable window/limit/operation scopes of a pool declaration."""
+
+    windows: list[tuple[int, int, frozenset[str] | None]] = []
+    for entry in constraints:
+        try:
+            raw_window = entry.get("window_seconds", entry.get("window"))
+            if isinstance(raw_window, str):
+                seconds = {"1s": 1, "1m": 60, "1h": 3600, "1d": 86400}.get(raw_window)
+            elif isinstance(raw_window, int) and not isinstance(raw_window, bool):
+                seconds = raw_window
+            else:
+                seconds = None
+            limit = int(entry["limit"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if seconds is None or seconds <= 0 or limit < 0:
+            continue
+        raw_operations = entry.get("operations")
+        operations: frozenset[str] | None = None
+        if isinstance(raw_operations, list):
+            selected = {item for item in raw_operations if isinstance(item, str) and item}
+            if not selected:
+                continue
+            operations = frozenset(selected)
+        windows.append((seconds, limit, operations))
+    return windows
+
+
+def _require_allocations_feasible(
+    constraints: list[dict[str, Any]],
+    allocations: list[tuple[int, int, CredentialOperation]],
+) -> None:
+    """Reject base rates that exceed any relevant declared pool window.
+
+    Each constraint is evaluated only against allocations in its own
+    operation scope, so independent search and fetch allowances cannot reject
+    a valid promise from the other operation. Both the exact same-window sum
+    and the per-second envelope are checked, so mixed windows cannot
+    overcommit through arithmetic that only compares equal windows.
+    """
+
+    for seconds, limit, operations in _constraint_windows(constraints):
+        relevant = [
+            (base_rate, window)
+            for base_rate, window, operation in allocations
+            if operations is None or operation.value in operations
+        ]
+        per_second = sum(
+            (Fraction(base_rate, max(1, window)) for base_rate, window in relevant),
+            Fraction(0),
+        )
+        total = sum(base_rate for base_rate, window in relevant if window == seconds)
+        if total > limit:
+            raise AllocationInfeasibleError(
+                "the promised base rates exceed the pool's rate constraint for this window"
+            )
+        if per_second > Fraction(limit, seconds):
+            raise AllocationInfeasibleError(
+                "the promised base rates exceed the pool's per-second rate envelope"
+            )
+
+
+#: Serializes the feasibility read and write of one database inside a process.
+_FEASIBILITY_LOCKS: dict[str, asyncio.Lock] = {}
+
+
+def _feasibility_lock(session: AsyncSession) -> asyncio.Lock:
+    """Return the process-wide feasibility lock of this session's database."""
+
+    try:
+        bind = session.get_bind()
+        url = getattr(bind, "url", None)
+        database = getattr(url, "database", None)
+        key = str(Path(database).resolve()) if database else str(url if url is not None else bind)
+    except Exception:
+        key = str(id(session))
+    lock = _FEASIBILITY_LOCKS.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _FEASIBILITY_LOCKS[key] = lock
+    return lock
+
+
+@asynccontextmanager
+async def _feasibility_guard(session: AsyncSession) -> AsyncIterator[None]:
+    """Hold one database write lock across the feasibility read and its write.
+
+    A fresh session takes ``BEGIN IMMEDIATE`` before the first read, so two
+    repository writers cannot both observe the same pre-write promises. A
+    caller that already owns a serialized transaction (the admin service)
+    keeps that transaction; the process lock still serializes in-process
+    writers against it.
+    """
+
+    lock = _feasibility_lock(session)
+    async with lock:
+        if not session.in_transaction():
+            await session.execute(text("BEGIN IMMEDIATE"))
+        yield
+
+
+def _allocation_values_valid(
+    *,
+    base_rate: int,
+    rate_window_seconds: int,
+    borrow_enabled: bool,
+    max_rate: int | None,
+    weight: int,
+    best_effort: bool,
+    max_concurrency: int | None,
+    max_queued_requests: int | None,
+    max_queued_bytes: int | None,
+    max_queue_wait_ms: int | None,
+) -> bool:
+    """Return whether a proposed allocation is schema-valid on its own.
+
+    Feasibility is a promise check, not a replacement for the settled schema
+    constraints. A payload that the schema already refuses must reach that
+    refusal (``IntegrityError``) instead of being pre-empted by the feasibility
+    error.
+    """
+
+    if base_rate < 0 or weight < 1 or rate_window_seconds <= 0:
+        return False
+    if base_rate == 0 and not best_effort:
+        return False
+    if borrow_enabled:
+        if max_rate is None or max_rate < base_rate:
+            return False
+    elif max_rate is not None and max_rate != base_rate:
+        return False
+    for value in (max_concurrency, max_queued_requests, max_queued_bytes, max_queue_wait_ms):
+        if value is not None and value < 0:
+            return False
+    return max_concurrency is None or max_concurrency > 0
+
+
 class PoolAllocationRepository:
     """Project allocation queries; project reads take the owning project id."""
 
@@ -600,27 +777,47 @@ class PoolAllocationRepository:
         """Insert one allocation; strict caps with loans disabled by default."""
 
         timestamp = stored_timestamp(resolve_now(now))
-        row = ProjectPoolAllocationRow(
-            project_id=str(project_id),
-            pool_id=str(pool_id),
-            operation_scope=CredentialOperation(operation).value,
-            base_rate=base_rate,
-            rate_window_seconds=rate_window_seconds,
-            borrow_enabled=borrow_enabled,
-            max_rate=max_rate,
-            weight=weight,
-            best_effort=best_effort,
-            max_concurrency=max_concurrency,
-            max_queued_requests=max_queued_requests,
-            max_queued_bytes=max_queued_bytes,
-            max_queue_wait_ms=max_queue_wait_ms,
-            granted_by=str(granted_by),
-            created_at=timestamp,
-            updated_at=timestamp,
-            version=1,
-        )
-        self._session.add(row)
-        await self._session.flush()
+        async with _feasibility_guard(self._session):
+            if _allocation_values_valid(
+                base_rate=base_rate,
+                rate_window_seconds=rate_window_seconds,
+                borrow_enabled=borrow_enabled,
+                max_rate=max_rate,
+                weight=weight,
+                best_effort=best_effort,
+                max_concurrency=max_concurrency,
+                max_queued_requests=max_queued_requests,
+                max_queued_bytes=max_queued_bytes,
+                max_queue_wait_ms=max_queue_wait_ms,
+            ):
+                await self._require_feasible(
+                    pool_id=pool_id,
+                    base_rate=base_rate,
+                    rate_window_seconds=rate_window_seconds,
+                    operation=CredentialOperation(operation),
+                    exclude=None,
+                )
+            row = ProjectPoolAllocationRow(
+                project_id=str(project_id),
+                pool_id=str(pool_id),
+                operation_scope=CredentialOperation(operation).value,
+                base_rate=base_rate,
+                rate_window_seconds=rate_window_seconds,
+                borrow_enabled=borrow_enabled,
+                max_rate=max_rate,
+                weight=weight,
+                best_effort=best_effort,
+                max_concurrency=max_concurrency,
+                max_queued_requests=max_queued_requests,
+                max_queued_bytes=max_queued_bytes,
+                max_queue_wait_ms=max_queue_wait_ms,
+                granted_by=str(granted_by),
+                created_at=timestamp,
+                updated_at=timestamp,
+                version=1,
+            )
+            self._session.add(row)
+            await self._session.flush()
         return _stored_allocation(row)
 
     async def update(
@@ -661,17 +858,37 @@ class PoolAllocationRepository:
         }
         if granted_by is not None:
             values["granted_by"] = str(granted_by)
-        row = await self._session.scalar(
-            update(ProjectPoolAllocationRow)
-            .where(
-                *self._key(project_id=project_id, pool_id=pool_id, operation=operation),
-                ProjectPoolAllocationRow.version == expected_version,
+        async with _feasibility_guard(self._session):
+            if _allocation_values_valid(
+                base_rate=base_rate,
+                rate_window_seconds=rate_window_seconds,
+                borrow_enabled=borrow_enabled,
+                max_rate=max_rate,
+                weight=weight,
+                best_effort=best_effort,
+                max_concurrency=max_concurrency,
+                max_queued_requests=max_queued_requests,
+                max_queued_bytes=max_queued_bytes,
+                max_queue_wait_ms=max_queue_wait_ms,
+            ):
+                await self._require_feasible(
+                    pool_id=pool_id,
+                    base_rate=base_rate,
+                    rate_window_seconds=rate_window_seconds,
+                    operation=CredentialOperation(operation),
+                    exclude=(project_id, operation),
+                )
+            row = await self._session.scalar(
+                update(ProjectPoolAllocationRow)
+                .where(
+                    *self._key(project_id=project_id, pool_id=pool_id, operation=operation),
+                    ProjectPoolAllocationRow.version == expected_version,
+                )
+                .values(**values)
+                .returning(ProjectPoolAllocationRow)
+                .execution_options(populate_existing=True)
             )
-            .values(**values)
-            .returning(ProjectPoolAllocationRow)
-            .execution_options(populate_existing=True)
-        )
-        await self._session.flush()
+            await self._session.flush()
         return None if row is None else _stored_allocation(row)
 
     async def get(
@@ -726,6 +943,38 @@ class PoolAllocationRepository:
             ProjectPoolAllocationRow.pool_id == str(pool_id),
             ProjectPoolAllocationRow.operation_scope == CredentialOperation(operation).value,
         )
+
+    async def _require_feasible(
+        self,
+        *,
+        pool_id: UUID,
+        base_rate: int,
+        rate_window_seconds: int,
+        operation: CredentialOperation,
+        exclude: tuple[UUID, CredentialOperation] | None,
+    ) -> None:
+        """Reject a write that would overcommit the pool's promised base rates."""
+
+        pool = await self._session.get(UpstreamQuotaPoolRow, str(pool_id))
+        if pool is None:
+            return
+        constraints, valid = _decode_constraints(pool.constraints)
+        if not valid:
+            return
+        existing = await self.list_for_pool(pool_id=pool_id)
+        allocations = [
+            (allocation.base_rate, allocation.rate_window_seconds, allocation.operation)
+            for allocation in existing
+            if exclude is None
+            or not (
+                allocation.project_id == exclude[0]
+                and allocation.operation == CredentialOperation(exclude[1])
+            )
+        ]
+        allocations.append(
+            (max(0, base_rate), max(1, rate_window_seconds), CredentialOperation(operation))
+        )
+        _require_allocations_feasible(constraints, allocations)
 
 
 __all__ = [

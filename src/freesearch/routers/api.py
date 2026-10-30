@@ -18,6 +18,7 @@ enabled credentials.
 
 import asyncio
 import logging
+import time
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
@@ -48,7 +49,11 @@ from freesearch.infrastructure.observability import (
     bind_trace_capture,
     build_observability,
 )
-from freesearch.infrastructure.observability_asgi import ProviderTraceMiddleware
+from freesearch.infrastructure.observability_asgi import (
+    INGRESS_MONOTONIC_STATE_KEY,
+    IngressDeadlineMiddleware,
+    ProviderTraceMiddleware,
+)
 from freesearch.infrastructure.resilience import ProviderOperationError
 from freesearch.infrastructure.secrets import AsyncSecretStore
 from freesearch.models.contracts import (
@@ -56,6 +61,11 @@ from freesearch.models.contracts import (
     FetchResponse,
     SearchRequest,
     SearchResponse,
+)
+from freesearch.models.execution_failures import (
+    ExecutionAuthorityUnavailable,
+    ExecutionQueueExpired,
+    ExecutionQueueSaturated,
 )
 from freesearch.models.observability import ExecutionAttribution, TraceRootSpan
 from freesearch.models.projects import PermissionAction, ProjectApiKeyPrincipal, ProjectContext
@@ -351,6 +361,9 @@ def create_app(
         api_key_routes=OPERATION_ROUTES,
         registration_limit=lambda peer: _reserve_registration(app, peer),
     )
+    # Added last, so arrival time is stamped before authentication and body
+    # processing as well as before the handler's own deadline logic.
+    app.add_middleware(IngressDeadlineMiddleware)
     register_auth_routes(app)
     register_project_routes(app)
     register_api_key_routes(app)
@@ -376,25 +389,73 @@ def create_app(
 
         return JSONResponse(status_code=503, content={"detail": str(exc)})
 
+    @app.exception_handler(ExecutionQueueSaturated)
+    async def _queue_saturated(_: Any, exc: ExecutionQueueSaturated) -> JSONResponse:
+        """Queue saturation is its own bounded-capacity refusal."""
+
+        return JSONResponse(
+            status_code=429,
+            content={"detail": exc.detail},
+            headers={"Retry-After": str(exc.retry_after_seconds)},
+        )
+
+    @app.exception_handler(ExecutionQueueExpired)
+    async def _queue_expired(_: Any, exc: ExecutionQueueExpired) -> JSONResponse:
+        """An expired queue wait is retriable and distinct from rate denial."""
+
+        return JSONResponse(
+            status_code=429,
+            content={"detail": exc.detail},
+            headers={"Retry-After": str(exc.retry_after_seconds)},
+        )
+
+    @app.exception_handler(ExecutionAuthorityUnavailable)
+    async def _authority_unavailable(_: Any, exc: ExecutionAuthorityUnavailable) -> JSONResponse:
+        """No authority may dispatch a borrowed pool: fail closed, no bypass."""
+
+        return JSONResponse(status_code=503, content={"detail": exc.detail})
+
     # Module-level handler: a terminal Tavily out-of-Credits error is a 402;
     # every other ProviderOperationError re-raises into the standard 500 flow.
     app.add_exception_handler(ProviderOperationError, _provider_operation_error)
 
-    async def search(request: SearchRequest) -> SearchResponse:
+    async def search(request: SearchRequest, http_request: Request) -> SearchResponse:
         """Search through the project's best available provider or all concurrently."""
 
-        attribution, context = await _resolve_execution(
-            app, request.project_id, PermissionAction.SEARCH_EXECUTE
-        )
-        return await _search_route(app, request, attribution=attribution, context=context)
+        deadline = _request_deadline(http_request)
+        try:
+            async with asyncio.timeout(max(0.001, deadline - time.monotonic())):
+                attribution, context = await _resolve_execution(
+                    app, request.project_id, PermissionAction.SEARCH_EXECUTE
+                )
+                return await _search_route(
+                    app,
+                    request,
+                    attribution=attribution,
+                    context=context,
+                    deadline=deadline,
+                )
+        except TimeoutError as error:
+            raise _deadline_expired() from error
 
-    async def fetch(request: FetchRequest) -> FetchResponse | JSONResponse:
+    async def fetch(request: FetchRequest, http_request: Request) -> FetchResponse | JSONResponse:
         """Fetch a URL's content through the project's best available provider."""
 
-        attribution, context = await _resolve_execution(
-            app, request.project_id, PermissionAction.FETCH_EXECUTE
-        )
-        return await _fetch_route(app, request, attribution=attribution, context=context)
+        deadline = _request_deadline(http_request)
+        try:
+            async with asyncio.timeout(max(0.001, deadline - time.monotonic())):
+                attribution, context = await _resolve_execution(
+                    app, request.project_id, PermissionAction.FETCH_EXECUTE
+                )
+                return await _fetch_route(
+                    app,
+                    request,
+                    attribution=attribution,
+                    context=context,
+                    deadline=deadline,
+                )
+        except TimeoutError as error:
+            raise _deadline_expired() from error
 
     app.post("/search", response_model=SearchResponse)(search)
     app.post("/fetch", response_model=FetchResponse)(fetch)
@@ -444,6 +505,7 @@ async def _search_route(
     *,
     attribution: ExecutionAttribution,
     context: ProjectContext,
+    deadline: float | None = None,
 ) -> SearchResponse:
     """REST search body: the shared execution service with one mapping layer."""
 
@@ -453,7 +515,9 @@ async def _search_route(
         # fail closed before any binding or provider read happens.
         raise HTTPException(status_code=503, detail="execution is temporarily unavailable")
     try:
-        return await execution.search(request, attribution=attribution, context=context)
+        return await execution.search(
+            request, attribution=attribution, context=context, deadline=deadline
+        )
     except ExecutionAllFailed as error:
         raise HTTPException(status_code=500, detail=error.detail) from error
     except ExecutionRequestInvalid as error:
@@ -461,6 +525,12 @@ async def _search_route(
     except ExecutionNotPermitted as error:
         # Live authority was revoked after the boundary admitted the request.
         raise HTTPException(status_code=403, detail="execution is not permitted") from error
+    except (ExecutionQueueSaturated, ExecutionQueueExpired) as error:
+        raise HTTPException(
+            status_code=429,
+            detail=error.detail,
+            headers={"Retry-After": str(error.retry_after_seconds)},
+        ) from error
     except ExecutionError as error:
         raise HTTPException(status_code=503, detail=error.detail) from error
 
@@ -471,6 +541,7 @@ async def _fetch_route(
     *,
     attribution: ExecutionAttribution,
     context: ProjectContext,
+    deadline: float | None = None,
 ) -> FetchResponse | JSONResponse:
     """REST fetch body: the shared execution service with one mapping layer."""
 
@@ -478,12 +549,20 @@ async def _fetch_route(
     if execution is None:
         raise HTTPException(status_code=503, detail="execution is temporarily unavailable")
     try:
-        return await execution.fetch(request, attribution=attribution, context=context)
+        return await execution.fetch(
+            request, attribution=attribution, context=context, deadline=deadline
+        )
     except ExecutionRequestInvalid as error:
         raise HTTPException(status_code=422, detail=error.detail) from error
     except ExecutionNotPermitted as error:
         # Live authority was revoked after the boundary admitted the request.
         raise HTTPException(status_code=403, detail="execution is not permitted") from error
+    except (ExecutionQueueSaturated, ExecutionQueueExpired) as error:
+        raise HTTPException(
+            status_code=429,
+            detail=error.detail,
+            headers={"Retry-After": str(error.retry_after_seconds)},
+        ) from error
     except ExecutionError as error:
         raise HTTPException(status_code=503, detail=error.detail) from error
     except ProviderOperationError as exc:
@@ -629,6 +708,48 @@ def _trace_database(repo: SQLiteRepository | None, database: str | Path | None) 
     return resolve_database_path(database)
 
 
+_DEADLINE_HEADER = "x-freesearch-deadline-ms"
+
+
+def _deadline_expired() -> HTTPException:
+    """Return the retriable REST refusal for an elapsed logical deadline."""
+
+    return HTTPException(
+        status_code=429,
+        detail="the execution request deadline expired before dispatch",
+        headers={"Retry-After": "1"},
+    )
+
+
+def _request_deadline(request: Request) -> float:
+    """Translate the ingress instant and forwarded deadline to monotonic time.
+
+    The server's configured logical request timeout is the outer bound and it
+    starts at arrival, before authentication and body processing. A client
+    deadline can only shorten it. An absent, malformed, non-positive, or
+    oversized header therefore falls back to the server bound instead of
+    extending the request or raising ``OverflowError``. A deadline already in
+    the past maps to "now", so queued work expires before any provider attempt.
+    """
+
+    settings = get_settings()
+    server_ms = max(1, int(settings.execution_request_timeout_seconds * 1000))
+    ingress = getattr(request.state, INGRESS_MONOTONIC_STATE_KEY, None)
+    elapsed_ms = (
+        0 if not isinstance(ingress, (int, float)) else int((time.monotonic() - ingress) * 1000)
+    )
+    remaining_ms = max(0, server_ms - elapsed_ms)
+    raw = request.headers.get(_DEADLINE_HEADER)
+    if raw is not None and len(raw) <= 32:
+        try:
+            deadline_ms = int(raw)
+        except (TypeError, ValueError):
+            deadline_ms = 0
+        if deadline_ms > 0:
+            remaining_ms = min(remaining_ms, deadline_ms - int(time.time() * 1000))
+    return time.monotonic() + max(0.0, remaining_ms / 1000.0)
+
+
 def _execution_scope_http_error(error: ExecutionScopeError) -> HTTPException:
     """Map one scope failure onto its generic REST status without the reason."""
 
@@ -686,11 +807,17 @@ async def _resolve_execution(
 def _provider_operation_error(request: Request, exc: Exception) -> Response:
     """Transport one :class:`ProviderOperationError` through its REST contract.
 
-    A terminal provider out-of-credits error (e.g. Tavily, Firecrawl) is an HTTP 402
-    with the safe message and named provider. Every other error re-raises, so
-    FastAPI's standard 500 flow stays untouched for all providers.
+    A terminal provider out-of-credits error (e.g. Tavily, Firecrawl) is an HTTP
+    402, and a normalized upstream rate error is a 429 carrying its parsed
+    Retry-After delay. Every other provider error re-raises into the standard
+    500 flow.
     """
 
+    del request
+    if isinstance(exc, ProviderOperationError):
+        rate = _provider_rate_response(exc)
+        if rate is not None:
+            return rate
     return _provider_operation_error_response(exc)
 
 
@@ -703,12 +830,12 @@ def _provider_operation_error_response(exc: Exception) -> JSONResponse:
     """
 
     terminal = _terminal_out_of_credits(exc)
-    if terminal is None:
-        raise exc
-    return JSONResponse(
-        status_code=402,
-        content={"detail": terminal.error.message, "provider": terminal.error.provider},
-    )
+    if terminal is not None:
+        return JSONResponse(
+            status_code=402,
+            content={"detail": terminal.error.message, "provider": terminal.error.provider},
+        )
+    raise exc
 
 
 def _fetch_provider_error_response(exc: ProviderOperationError) -> JSONResponse:
@@ -726,16 +853,9 @@ def _fetch_provider_error_response(exc: ProviderOperationError) -> JSONResponse:
             status_code=402,
             content={"detail": terminal.error.message, "provider": terminal.error.provider},
         )
-    if exc.error.status_code == 429 or exc.error.code == "rate_limited":
-        return JSONResponse(
-            status_code=429,
-            content={
-                "detail": exc.error.message,
-                "provider": exc.error.provider,
-                "code": exc.error.code,
-                "status_code": 429,
-            },
-        )
+    rate = _provider_rate_response(exc)
+    if rate is not None:
+        return rate
     return JSONResponse(
         status_code=502,
         content={
@@ -745,6 +865,42 @@ def _fetch_provider_error_response(exc: ProviderOperationError) -> JSONResponse:
             "status_code": exc.error.status_code,
         },
     )
+
+
+def _provider_rate_response(exc: ProviderOperationError) -> JSONResponse | None:
+    """Project one normalized upstream rate error into a safe HTTP 429.
+
+    The delay comes only from the adapter's parsed numeric Retry-After detail;
+    an absent or malformed value keeps the response retriable without inventing
+    a delay. Provider message content is not reflected beyond the normalized
+    error object already used for local denials.
+    """
+
+    if exc.error.status_code != 429 and exc.error.code != "rate_limited":
+        return None
+    retry_after = _provider_retry_after_seconds(exc)
+    headers = None if retry_after is None else {"Retry-After": str(retry_after)}
+    return JSONResponse(
+        status_code=429,
+        content={
+            "detail": exc.error.message,
+            "provider": exc.error.provider,
+            "code": exc.error.code,
+            "status_code": 429,
+        },
+        headers=headers,
+    )
+
+
+def _provider_retry_after_seconds(exc: ProviderOperationError) -> int | None:
+    """Return a positive whole-second upstream Retry-After delay, else ``None``."""
+
+    details = exc.error.details if isinstance(exc.error.details, dict) else {}
+    raw = details.get("retry_after_seconds")
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return None
+    value = int(raw)
+    return value if value >= 1 else None
 
 
 def main(argv: Sequence[str] | None = None) -> None:

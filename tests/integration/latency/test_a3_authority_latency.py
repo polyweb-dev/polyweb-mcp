@@ -1,0 +1,510 @@
+"""A3 authority routing-latency gate (TASK-000045 DoD #4).
+
+FreeSearch must add under 80 ms at p95 per provider, end to end, over REST
+and MCP, measured in-process exactly like the A2 routing-latency harness:
+REST drives the FastAPI app through ``httpx.ASGITransport``, MCP mixes call
+``server.call_tool`` in-process, offline instant adapters carry fake-provider
+time (``ProviderClock``), and a real temporary SQLite repository stores the
+seeded quota, bindings, and the shared pool the execution authority must
+fence.
+
+The added latency is ``wall_time_ms - provider_time_ms``. Every measured
+sample must itself succeed; the report lands in ``test_reports/a3-authority/
+latency/`` (CSV and Markdown; read counts are a diagnostic, not a limit).
+"""
+
+from __future__ import annotations
+
+import csv
+import platform
+import sqlite3
+import sys
+import time
+from collections.abc import Awaitable, Callable, Sequence
+from pathlib import Path
+from typing import Any
+from uuid import uuid4
+
+import httpx
+import pytest
+from pydantic import SecretStr
+
+from freesearch.configuration.config import get_settings
+from freesearch.infrastructure.encrypted_store import EncryptedDbSecretStore, load_secret_codec
+from freesearch.mcp.server import create_server
+from freesearch.models.credentials import CredentialOperation
+from freesearch.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID
+from freesearch.models.schema_enums import UpstreamScope
+from freesearch.persistence.pools import (
+    PoolAllocationRepository,
+    UpstreamPoolRepository,
+)
+from freesearch.persistence.storage import SQLiteRepository
+from freesearch.routers.api import create_app
+from freesearch.services.monitoring import clear_quota_poll_cache
+from freesearch.services.provider_runtime import clear_config_cache
+from tests.fixtures.api_keys import mcp_project_key
+from tests.fixtures.auth import TEMP_PASSWORD, temp_email
+from tests.fixtures.execution import (
+    install_adapter_map,
+    seed_member_project,
+    seed_provider_bindings,
+)
+from tests.fixtures.latency import (
+    REPO_ROOT,
+    OfflineAdapter,
+    drain_background_tasks,
+    fetch_payload,
+    git_commit,
+    percentile,
+    search_payload,
+    seed_repository,
+    warm_route_caches,
+)
+from tests.fixtures.latency_servers import ProviderClock
+
+SEVEN_PROVIDERS = ["exa", "firecrawl", "tavily", "parallel", "you", "brave", "keenable"]
+
+_WARMUP_PER_MIX = 10
+_MEASURED_PER_MIX = 30
+
+_MIXES: tuple[tuple[str, str, str, str], ...] = (
+    ("rest-inprocess", "search", "require", "exa"),
+    ("rest-inprocess", "search", "auto", "all"),
+    ("rest-inprocess", "fetch", "require", "exa"),
+    ("mcp-inprocess", "search", "require", "exa"),
+    ("mcp-inprocess", "search", "auto", "all"),
+    ("mcp-inprocess", "fetch", "require", "exa"),
+)
+
+_ADDED_P95_LIMIT_MS = 80.0
+
+_REPORT_DIR = REPO_ROOT / "test_reports" / "a3-authority" / "latency"
+
+_COLUMNS = (
+    "commit",
+    "transport",
+    "operation",
+    "routing_mode",
+    "providers",
+    "phase",
+    "request_index",
+    "wall_time_ms",
+    "provider_time_ms",
+    "added_time_ms",
+    "provider_calls",
+    "status",
+    "error",
+)
+
+_PROVIDER_CLOCK = ProviderClock()
+
+
+def _latency_store(repository: SQLiteRepository) -> EncryptedDbSecretStore:
+    """Return the encrypted runtime store both transports build for this database."""
+
+    return EncryptedDbSecretStore(repository, load_secret_codec(get_settings()))
+
+
+async def _seed_exa_pool(
+    repository: SQLiteRepository,
+    *,
+    project_id: Any,
+    actor_id: Any,
+) -> Any:
+    """Bind the exa credential to one pool so the authority queue is exercised.
+
+    A generous envelope keeps the latency samples routing instead of refusing;
+    the point of the mix is the per-provider added time of the authoritative
+    (fenced, pool-admitted) path, not a rate-limit stress.
+    """
+
+    constraints = [
+        {
+            "kind": "rate",
+            "algorithm": "trailing_window",
+            "window": 3600,
+            "limit": 10_000,
+        }
+    ]
+    async with repository.session() as session:
+        pools = UpstreamPoolRepository(session)
+        pool = await pools.create_pool(
+            account_id=DEFAULT_INSTALLATION_ACCOUNT_ID,
+            provider_type="exa",
+            upstream_scope=UpstreamScope.ACCOUNT,
+            pool_key=f"a3-latency-{uuid4().hex[:8]}",
+            label="a3 latency pool",
+            constraints=constraints,
+        )
+        await PoolAllocationRepository(session).create(
+            project_id=project_id,
+            pool_id=pool.id,
+            operation=CredentialOperation.SEARCH,
+            base_rate=100,
+            rate_window_seconds=3600,
+            granted_by=actor_id,
+            borrow_enabled=True,
+            max_rate=10_000,
+            weight=4,
+        )
+        await session.commit()
+    return pool
+
+
+async def _bind_seven_providers(
+    repository: SQLiteRepository,
+    store: EncryptedDbSecretStore,
+    monkeypatch: pytest.MonkeyPatch,
+    adapters: Sequence[Any],
+    *,
+    project_id: Any,
+    actor_id: Any,
+) -> None:
+    """Bind the seven offline adapters; the exa binding joins the seeded pool."""
+
+    secrets: dict[str, str] = {}
+    await seed_provider_bindings(
+        repository,
+        project_id=project_id,
+        actor_id=actor_id,
+        store=store,
+        providers=tuple(SEVEN_PROVIDERS),
+        secrets=secrets,
+    )
+    await _seed_exa_pool(repository, project_id=project_id, actor_id=actor_id)
+    for adapter in adapters:
+        _PROVIDER_CLOCK.instrument(adapter)
+    install_adapter_map(monkeypatch, adapters, secrets=secrets)
+
+
+async def _record_request(
+    rows: list[dict[str, Any]],
+    *,
+    commit: str,
+    transport: str,
+    operation: str,
+    routing_mode: str,
+    providers: str,
+    phase: str,
+    request_index: int,
+    call: Callable[[], Awaitable[Any]],
+) -> None:
+    _PROVIDER_CLOCK.reset()
+    start = time.perf_counter()
+    try:
+        await call()
+    except Exception as exc:  # per-request isolation: never fail the mix on one sample
+        status = f"error:{type(exc).__name__}"
+        error = str(exc)
+    else:
+        status = "ok"
+        error = ""
+    elapsed_ms = (time.perf_counter() - start) * 1000.0
+    provider_ms, provider_calls = _PROVIDER_CLOCK.snapshot()
+    await drain_background_tasks()
+    rows.append(
+        {
+            "commit": commit,
+            "transport": transport,
+            "operation": operation,
+            "routing_mode": routing_mode,
+            "providers": providers,
+            "phase": phase,
+            "request_index": request_index,
+            "wall_time_ms": f"{elapsed_ms:.6f}",
+            "provider_time_ms": f"{provider_ms:.6f}",
+            "added_time_ms": f"{elapsed_ms - provider_ms:.6f}",
+            "provider_calls": provider_calls,
+            "status": status,
+            "error": error,
+        }
+    )
+
+
+async def _run_mix(
+    rows: list[dict[str, Any]],
+    *,
+    commit: str,
+    transport: str,
+    operation: str,
+    routing_mode: str,
+    providers: str,
+    repository: SQLiteRepository,
+    call: Callable[[], Awaitable[Any]],
+) -> None:
+    clear_config_cache()
+    clear_quota_poll_cache()
+    await _record_request(
+        rows,
+        commit=commit,
+        transport=transport,
+        operation=operation,
+        routing_mode=routing_mode,
+        providers=providers,
+        phase="cold",
+        request_index=0,
+        call=call,
+    )
+    await warm_route_caches(repository, SEVEN_PROVIDERS)
+    for index in range(_WARMUP_PER_MIX):
+        await _record_request(
+            rows,
+            commit=commit,
+            transport=transport,
+            operation=operation,
+            routing_mode=routing_mode,
+            providers=providers,
+            phase="warmup",
+            request_index=index,
+            call=call,
+        )
+    for index in range(_MEASURED_PER_MIX):
+        await _record_request(
+            rows,
+            commit=commit,
+            transport=transport,
+            operation=operation,
+            routing_mode=routing_mode,
+            providers=providers,
+            phase="measured",
+            request_index=index,
+            call=call,
+        )
+
+
+def _assert_mixes_routed(
+    rows: Sequence[dict[str, Any]],
+) -> None:
+    """Every measured sample of every mix must be a real, successful request."""
+
+    failures = [
+        (row["transport"], row["operation"], row["status"], row["error"])
+        for row in rows
+        if row["phase"] == "measured" and row["status"] != "ok"
+    ]
+    assert failures == [], f"latency samples measured failures, not routing: {failures[:4]}"
+
+
+def _assert_added_p95_under_limit(
+    rows: Sequence[dict[str, Any]],
+) -> dict[tuple[str, str, str, str], float]:
+    """Compute the added p95 per mix; the DoD gate is 80 ms per provider."""
+
+    table: dict[tuple[str, str, str, str], float] = {}
+    for transport, operation, routing_mode, providers in _MIXES:
+        added = sorted(
+            float(row["added_time_ms"])
+            for row in rows
+            if row["phase"] == "measured"
+            and row["transport"] == transport
+            and row["operation"] == operation
+            and row["routing_mode"] == routing_mode
+            and row["providers"] == providers
+            and row["status"] == "ok"
+        )
+        measured_p95 = percentile(added, 95.0)
+        table[(transport, operation, routing_mode, providers)] = measured_p95
+        assert measured_p95 < _ADDED_P95_LIMIT_MS, (
+            f"{transport} {operation} {routing_mode} {providers}: added p95 "
+            f"{measured_p95:.3f} ms exceeds the 80 ms DoD gate"
+        )
+    return table
+
+
+def _write_report(
+    rows: Sequence[dict[str, Any]],
+    table: dict[tuple[str, str, str, str], float],
+) -> None:
+    """Write the CSV and Markdown artifacts of this run."""
+    _REPORT_DIR.mkdir(parents=True, exist_ok=True)
+    csv_path = _REPORT_DIR / "routing_latency.csv"
+    md_path = _REPORT_DIR / "routing_latency.md"
+    with open(csv_path, "w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(_COLUMNS))
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(
+                {key: ("" if row.get(key) is None else row.get(key)) for key in _COLUMNS}
+            )
+    commit = str(rows[0].get("commit")) if rows else git_commit()
+    lines = [
+        "# A3 authority routing-latency report",
+        "",
+        f"- commit: {commit}",
+        f"- python: {sys.version.splitlines()[0]}",
+        f"- platform: {platform.platform()}",
+        f"- sqlite: {sqlite3.sqlite_version}",
+        "",
+        "Added p95 per measured mix (wall time minus fake-provider time):",
+        "",
+        "| transport | operation | routing | providers | added p95 ms | gate |",
+        "|---|---|---|---|---|---|",
+    ]
+    for transport, operation, mode, providers in _MIXES:
+        value = table[(transport, operation, mode, providers)]
+        lines.append(
+            f"| {transport} | {operation} | {mode} | {providers} | "
+            f"{value:.3f} | {_ADDED_P95_LIMIT_MS:.1f} |"
+        )
+    lines += [
+        "",
+        "In-process harness (httpx.ASGITransport / server.call_tool); wall",
+        "times exclude network wire cost. Read counts are a diagnostic, not a",
+        "pass/fail limit. Fake adapters and a temporary database only.",
+    ]
+    md_path.write_text("\n".join(lines), encoding="utf-8")
+
+
+async def test_a3_rest_and_mcp_authority_latency(
+    tmp_path: Path, auth_secret: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    del auth_secret
+    clear_config_cache()
+    clear_quota_poll_cache()
+    repository = await SQLiteRepository.open(tmp_path / "a3-authority-latency.db")
+    rows: list[dict[str, Any]] = []
+    adapters = [OfflineAdapter(name) for name in SEVEN_PROVIDERS]
+    try:
+        await seed_repository(repository, SEVEN_PROVIDERS)
+        store = _latency_store(repository)
+        app = create_app(adapters, repository=repository, secret_store=store)
+        commit = git_commit()
+        transport = httpx.ASGITransport(app=app)
+        # The shared execution service is composed by the app lifespan; the
+        # A3 authority fence and pool admission ride that composition.
+        async with (
+            app.router.lifespan_context(app),
+            httpx.AsyncClient(transport=transport, base_url="http://test") as client,
+        ):
+            email = temp_email("a3-latency")
+            registered = await client.post(
+                "/auth/register", json={"email": email, "password": TEMP_PASSWORD}
+            )
+            assert registered.status_code == 201
+            logged_in = await client.post(
+                "/auth/jwt/login", data={"username": email, "password": TEMP_PASSWORD}
+            )
+            assert logged_in.status_code == 200
+            headers = {"Authorization": f"Bearer {logged_in.json()['access_token']}"}
+            project = await seed_member_project(repository, headers)
+            pid = str(project.project_id)
+            await _bind_seven_providers(
+                repository,
+                store,
+                monkeypatch,
+                adapters,
+                project_id=project.project_id,
+                actor_id=project.actor_id,
+            )
+
+            async def rest_search_require() -> None:
+                response = await client.post(
+                    "/search",
+                    json=search_payload("require", ["exa"], project_id=pid),
+                    headers=headers,
+                )
+                response.raise_for_status()
+
+            async def rest_search_auto() -> None:
+                response = await client.post(
+                    "/search",
+                    json=search_payload("auto", None, project_id=pid),
+                    headers=headers,
+                )
+                response.raise_for_status()
+
+            async def rest_fetch_require() -> None:
+                response = await client.post(
+                    "/fetch",
+                    headers=headers,
+                    json=fetch_payload("require", ["exa"], project_id=pid),
+                )
+                response.raise_for_status()
+
+            rest_calls = {
+                ("search", "require"): rest_search_require,
+                ("search", "auto"): rest_search_auto,
+                ("fetch", "require"): rest_fetch_require,
+            }
+
+            # REST mixes run against the live app.
+            for transport_name, operation, mode, providers in _MIXES:
+                if transport_name != "rest-inprocess":
+                    continue
+                await _run_mix(
+                    rows,
+                    commit=commit,
+                    transport=transport_name,
+                    operation=operation,
+                    routing_mode=mode,
+                    providers=providers,
+                    repository=repository,
+                    call=rest_calls[(operation, mode)],
+                )
+
+        # MCP mixes run against a separate stdio composition of the same DB.
+        service, key = await mcp_project_key(repository, "a3-latency-mcp")
+        pid_mcp = str(key.project_id)
+        await _bind_seven_providers(
+            repository,
+            _latency_store(repository),
+            monkeypatch,
+            adapters,
+            project_id=key.project_id,
+            actor_id=key.owner.id,
+        )
+        server = create_server(
+            adapters,
+            repository=repository,
+            auth_service=service,
+            stdio_token=SecretStr(key.raw),
+        )
+
+        async def mcp_search_require() -> None:
+            await server.call_tool(
+                "search",
+                {"request": search_payload("require", ["exa"], project_id=pid_mcp)},
+            )
+
+        async def mcp_search_auto() -> None:
+            await server.call_tool(
+                "search", {"request": search_payload("auto", None, project_id=pid_mcp)}
+            )
+
+        async def mcp_fetch_require() -> None:
+            await server.call_tool(
+                "fetch",
+                {"request": fetch_payload("require", ["exa"], project_id=pid_mcp)},
+            )
+
+        for transport_name, operation, mode, providers in _MIXES:
+            if transport_name != "mcp-inprocess":
+                continue
+            if operation == "search" and mode == "require":
+                call_mcp: Callable[[], Awaitable[Any]] = mcp_search_require
+            elif operation == "search":
+                call_mcp = mcp_search_auto
+            else:
+                call_mcp = mcp_fetch_require
+            await _run_mix(
+                rows,
+                commit=commit,
+                transport=transport_name,
+                operation=operation,
+                routing_mode=mode,
+                providers=providers,
+                repository=repository,
+                call=call_mcp,
+            )
+
+        _assert_mixes_routed(rows)
+        table = _assert_added_p95_under_limit(rows)
+        _write_report(rows, table)
+        assert (_REPORT_DIR / "routing_latency.csv").exists()
+        assert (_REPORT_DIR / "routing_latency.md").exists()
+    finally:
+        await drain_background_tasks()
+        clear_config_cache()
+        clear_quota_poll_cache()
+        await repository.close()

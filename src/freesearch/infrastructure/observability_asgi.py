@@ -26,7 +26,10 @@ visibility while holding the caller's response open.
 """
 
 import asyncio
+import hashlib
+import hmac
 import logging
+import time
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import ExitStack
 from typing import Any
@@ -42,6 +45,7 @@ from freesearch.models.observability import (
     TraceAttribute,
     TraceSpanName,
 )
+from freesearch.models.projects import ProjectApiKeyPrincipal
 from freesearch.models.users import UserPrincipal
 
 logger = logging.getLogger(__name__)
@@ -54,8 +58,77 @@ ASGIApp = Callable[[Scope, Receive, Send], Awaitable[None]]
 RuntimeGetter = Callable[[], ObservabilityRuntime]
 
 TRACE_HEADER: str = "x-trace-id"
-# Bounded wait: observability must never hold a user response hostage.
+PARENT_SPAN_HEADER: str = "x-freesearch-parent-span-id"
+FORWARD_SIGNATURE_HEADER: str = "x-freesearch-forward-signature"
+FORWARD_TIMESTAMP_HEADER: str = "x-freesearch-forwarded-at"
+INGRESS_MONOTONIC_STATE_KEY: str = "freesearch_ingress_monotonic"
+#: Bounded wait: observability must never hold a user response hostage.
 FLUSH_TIMEOUT_MILLIS: int = 500
+#: A forwarded trace envelope older than this is rejected as a replay.
+FORWARD_ENVELOPE_SECONDS: int = 60
+
+
+def _strict_hex(value: str | None, length: int) -> str | None:
+    """Return one non-zero lowercase hex identifier of exactly ``length``."""
+
+    if value is None or len(value) != length or value != value.lower():
+        return None
+    if any(character not in "0123456789abcdef" for character in value):
+        return None
+    return value if int(value, 16) > 0 else None
+
+
+def forwarded_trace_payload(
+    *,
+    trace_id: str,
+    parent_span_id: str,
+    project_id: str,
+    timestamp: int,
+    method: str,
+    path: str,
+) -> str:
+    """Return the canonical signed material of one forwarding envelope."""
+
+    return "\n".join((trace_id, parent_span_id, project_id, str(timestamp), method.upper(), path))
+
+
+def sign_forwarded_trace(
+    credential: str,
+    *,
+    trace_id: str,
+    parent_span_id: str,
+    project_id: str,
+    timestamp: int,
+    method: str,
+    path: str,
+) -> str:
+    """Sign a forwarding envelope with the verified project credential."""
+
+    payload = forwarded_trace_payload(
+        trace_id=trace_id,
+        parent_span_id=parent_span_id,
+        project_id=project_id,
+        timestamp=timestamp,
+        method=method,
+        path=path,
+    )
+    return hmac.new(credential.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+class IngressDeadlineMiddleware:
+    """Stamp the arrival instant before authentication and body processing."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope.get("type") == "http":
+            state = scope.get("state")
+            if not isinstance(state, dict):
+                state = {}
+                scope["state"] = state
+            state.setdefault(INGRESS_MONOTONIC_STATE_KEY, time.monotonic())
+        await self.app(scope, receive, send)
 
 
 class _ResponseRecorder:
@@ -163,10 +236,13 @@ class ProviderTraceMiddleware:
         recorder: _ResponseRecorder | None = None
         with use_observability(runtime):
             try:
+                trace_id, parent_span_id = trusted_trace_parent(scope) or (None, None)
                 with runtime.span(
                     span_name,
                     kind=SpanKindName.SERVER,
                     attributes=self._request_attributes(scope),
+                    trace_id=trace_id,
+                    parent_span_id=parent_span_id,
                 ) as root:
                     recorder = _ResponseRecorder(runtime, root)
                     await self.app(scope, receive, recorder.wrap(send))
@@ -206,6 +282,73 @@ class ProviderTraceMiddleware:
         }
 
 
+def _header(scope: Scope, name: str) -> str | None:
+    """Return one header value decoded strictly as ASCII."""
+
+    target = name.encode("ascii")
+    values = [value for header, value in (scope.get("headers") or []) if header.lower() == target]
+    if len(values) != 1 or not isinstance(values[0], (bytes, bytearray)):
+        return None
+    try:
+        return bytes(values[0]).decode("ascii")
+    except (UnicodeDecodeError, AttributeError):
+        return None
+
+
+def incoming_trace_id(scope: Scope) -> str | None:
+    """Return a well-formed inbound ``x-trace-id``, without trusting it.
+
+    Shape validation is not provenance: callers that continue a trace must use
+    :func:`trusted_trace_parent`, which also verifies the forwarding signature.
+    """
+
+    return _strict_hex(_header(scope, TRACE_HEADER), 32)
+
+
+def trusted_trace_parent(scope: Scope) -> tuple[str, str] | None:
+    """Return ``(trace_id, parent_span_id)`` for a trusted forwarding hop.
+
+    Continuation requires all of: a verified project API key on this request,
+    a signed envelope bound to that key and project, a fresh timestamp, and
+    strict hexadecimal trace/parent ids. An ordinary REST caller's trace header
+    (with no valid forwarding provenance) starts a fresh root instead.
+    """
+
+    if scope.get("type") != "http":
+        return None
+    state = scope.get("state")
+    if not isinstance(state, dict):
+        return None
+    principal = state.get("user")
+    credential = state.get("forwarding_credential")
+    if not isinstance(principal, ProjectApiKeyPrincipal) or not isinstance(credential, str):
+        return None
+    trace_id = _strict_hex(_header(scope, TRACE_HEADER), 32)
+    parent_span_id = _strict_hex(_header(scope, PARENT_SPAN_HEADER), 16)
+    signature = _strict_hex(_header(scope, FORWARD_SIGNATURE_HEADER), 64)
+    timestamp_raw = _header(scope, FORWARD_TIMESTAMP_HEADER)
+    if trace_id is None or parent_span_id is None or signature is None:
+        return None
+    try:
+        timestamp = int(timestamp_raw or "")
+    except (TypeError, ValueError):
+        return None
+    if abs(int(time.time()) - timestamp) > FORWARD_ENVELOPE_SECONDS:
+        return None
+    expected = sign_forwarded_trace(
+        credential,
+        trace_id=trace_id,
+        parent_span_id=parent_span_id,
+        project_id=str(principal.project_id),
+        timestamp=timestamp,
+        method=str(scope.get("method", "")),
+        path=str(scope.get("path", "")),
+    )
+    if not hmac.compare_digest(signature, expected):
+        return None
+    return trace_id, parent_span_id
+
+
 def principal_id(scope: Scope) -> str | None:
     """Return the verified account UUID of a guarded scope, else ``None``.
 
@@ -220,8 +363,17 @@ def principal_id(scope: Scope) -> str | None:
 
 __all__ = [
     "FLUSH_TIMEOUT_MILLIS",
+    "FORWARD_SIGNATURE_HEADER",
+    "FORWARD_TIMESTAMP_HEADER",
+    "INGRESS_MONOTONIC_STATE_KEY",
+    "PARENT_SPAN_HEADER",
     "TRACE_HEADER",
+    "IngressDeadlineMiddleware",
     "ProviderTraceMiddleware",
     "flush_traces",
+    "forwarded_trace_payload",
+    "incoming_trace_id",
     "principal_id",
+    "sign_forwarded_trace",
+    "trusted_trace_parent",
 ]

@@ -69,6 +69,59 @@ def reset_dispatch_observer(token: object) -> None:
     _DISPATCH_OBSERVER.reset(token)  # type: ignore[arg-type]
 
 
+class RetryBudget:
+    """One logical request's shared retry allowance.
+
+    A service retry, a fallback leg, a fanout sibling, and an adapter runner
+    all consume the same counter, so a request that already retried once never
+    gets a second free retry inside another layer. The object is mutable and
+    travels with the request task; ContextVar rebinding is not required.
+    """
+
+    __slots__ = ("remaining",)
+
+    def __init__(self, remaining: int) -> None:
+        self.remaining = max(0, remaining)
+
+    def consume(self) -> bool:
+        """Take one retry from the budget, reporting whether it was available."""
+
+        if self.remaining <= 0:
+            return False
+        self.remaining -= 1
+        return True
+
+
+_LOGICAL_RETRY_BUDGET: ContextVar[RetryBudget | None] = ContextVar(
+    "freesearch_logical_retry_budget", default=None
+)
+
+
+def set_retry_budget(budget: RetryBudget | None) -> object:
+    """Bind the logical request's retry budget for this task context."""
+
+    return _LOGICAL_RETRY_BUDGET.set(budget)
+
+
+def reset_retry_budget(token: object) -> None:
+    """Restore the previous retry budget binding."""
+
+    _LOGICAL_RETRY_BUDGET.reset(token)  # type: ignore[arg-type]
+
+
+def consume_retry_budget() -> bool:
+    """Consume one retry when a logical budget is bound.
+
+    Runner unit tests that exercise resilience in isolation have no logical
+    budget and keep their constructor ``max_attempts`` behavior.
+    """
+
+    budget = _LOGICAL_RETRY_BUDGET.get()
+    if budget is None:
+        return True
+    return budget.consume()
+
+
 # Credential-like key tokens, compared against keys with all non-alphanumeric
 # characters removed and lowercased, so ``api_key``, ``x-api-key``, ``access
 # key``, and ``bearer_token`` all match.
@@ -128,6 +181,10 @@ __all__ = [
     "CircuitOpenError",
     "ProviderOperationError",
     "ResilientRunner",
+    "RetryBudget",
+    "consume_retry_budget",
+    "reset_retry_budget",
+    "set_retry_budget",
 ]
 
 
@@ -649,12 +706,19 @@ class ResilientRunner:
                     return result
 
             delay = self._backoff_delay(attempt)
+            if retry_after is not None:
+                # A vendor Retry-After applies to any retryable response, not
+                # only 429; a 503 can carry an authoritative delay too.
+                delay = retry_after
             if status == 429:
-                delay = retry_after if retry_after is not None else delay
                 cooldown_until = self._clock() + delay
                 await breaker.record_rate_limit(cooldown_until)
                 rate_limit_slept = cooldown_until
             if attempt + 1 >= self._max_attempts:
+                await breaker.finish(probe, success=False, retryable=True)
+                assert last is not None
+                raise last
+            if not consume_retry_budget():
                 await breaker.finish(probe, success=False, retryable=True)
                 assert last is not None
                 raise last

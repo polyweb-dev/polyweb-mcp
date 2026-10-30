@@ -34,9 +34,11 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import random
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import suppress
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -58,7 +60,13 @@ from freesearch.infrastructure.observability import (
     SpanKindName,
     current_observability,
 )
-from freesearch.infrastructure.resilience import ProviderOperationError
+from freesearch.infrastructure.resilience import (
+    ProviderOperationError,
+    RetryBudget,
+    consume_retry_budget,
+    reset_retry_budget,
+    set_retry_budget,
+)
 from freesearch.infrastructure.secrets import ProviderName
 from freesearch.infrastructure.trace_payloads import (
     _annotate_root,
@@ -85,6 +93,16 @@ from freesearch.models.contracts import (
     is_soft_quota_zero,
 )
 from freesearch.models.credentials import CredentialOperation
+from freesearch.models.execution_failures import (
+    ExecutionAllFailed,
+    ExecutionAuthorityUnavailable,
+    ExecutionBindingMissing,
+    ExecutionError,
+    ExecutionNotPermitted,
+    ExecutionQueueExpired,
+    ExecutionRequestInvalid,
+    ExecutionStorageUnavailable,
+)
 from freesearch.models.observability import (
     TRACE_EVENT_PROVIDER_REQUEST,
     TRACE_EVENT_PROVIDER_RESPONSE,
@@ -138,10 +156,18 @@ from freesearch.services.credentials import (
     CredentialStorageUnavailable,
     ResolvedCredential,
 )
+from freesearch.services.execution_authority import (
+    DEFAULT_MAX_CONCURRENCY,
+    DispatchGrant,
+    ExecutionAuthority,
+    QueuePolicy,
+)
 from freesearch.services.execution_scope import execution_attribution
 from freesearch.services.monitoring import (
+    ProviderTiming,
     _adapter_auth_mode,
     _terminal_quota_402,
+    add_queue_wait,
     normalize_degenerate_quota,
     tracked_call,
 )
@@ -158,43 +184,35 @@ logger = logging.getLogger(__name__)
 _DEFAULT_ADAPTER_CACHE_SIZE = 32
 _WINDOW_NAMES: dict[str, int] = {"1s": 1, "1m": 60, "1h": 3600, "1d": 86400}
 
-
-class ExecutionError(Exception):
-    """Execution failure before or around the provider call.
-
-    ``detail`` is a caller-safe message without request data or secrets.
-    """
-
-    def __init__(self, detail: str) -> None:
-        super().__init__(detail)
-        self.detail = detail
+#: Adapter cache identity: provider, credential, credential generation,
+#: OAuth token generation (0 for API keys), and transport config.
+_AdapterKey = tuple[str, UUID, int, int, str]
 
 
-class ExecutionStorageUnavailable(ExecutionError):
-    """The service was composed without a repository or secret store."""
+@dataclass
+class _AdmissionGate:
+    """Per-project admission order gate released when the queue admits work."""
+
+    lock: asyncio.Lock
+    started_at: float
+    released: bool = False
+    on_release: Callable[[], None] | None = None
+    admission_key: tuple[str, UUID, UUID] | None = None
+
+    def release(self) -> None:
+        if not self.released:
+            self.released = True
+            if self.on_release is not None:
+                self.on_release()
+            self.lock.release()
 
 
-class ExecutionBindingMissing(ExecutionError):
-    """No enabled usable binding exists for this project and operation."""
-
-
-class ExecutionNotPermitted(ExecutionBindingMissing):
-    """The verified actor no longer holds live authority for this execution.
-
-    Raised when the live re-authorization (account, user, membership and
-    role, or API key revocation, expiry, project and scopes, plus an active
-    project) fails after the boundary admitted the request. It subclasses
-    :class:`ExecutionBindingMissing` because, like a missing binding, no
-    provider is reachable; transports project it as a permission failure.
-    """
-
-
-class ExecutionAllFailed(ExecutionError):
-    """Every provider leg of a fanout failed with a handled provider error."""
-
-
-class ExecutionRequestInvalid(ExecutionError):
-    """The request shape cannot be executed (transports map this to 4xx)."""
+_ADMISSION_GATE: ContextVar[_AdmissionGate | None] = ContextVar(
+    "freesearch_admission_gate", default=None
+)
+_RETRY_NOT_BEFORE: ContextVar[float | None] = ContextVar(
+    "freesearch_retry_not_before", default=None
+)
 
 
 def _terminal_out_of_credits(exc: BaseException) -> ProviderOperationError | None:
@@ -360,6 +378,8 @@ class _Leg:
     config: ProviderConfig
     lease: _AdapterLease
     context: ProjectContext
+    #: Strictest project concurrency across every pool/operation allocation.
+    project_max_concurrency: int | None = None
 
     @property
     def adapter(self) -> ProviderAdapter:
@@ -397,7 +417,7 @@ class _AdapterLease:
     def __init__(
         self,
         cache: CredentialAdapterCache,
-        key: tuple[str, UUID, int, str],
+        key: _AdapterKey,
         adapter: ProviderAdapter,
     ) -> None:
         self._cache = cache
@@ -437,13 +457,13 @@ class CredentialAdapterCache:
     def __init__(self, max_entries: int = _DEFAULT_ADAPTER_CACHE_SIZE) -> None:
         self._lock = asyncio.Lock()
         self._max_entries = max(1, max_entries)
-        self._entries: dict[tuple[str, UUID, int, str], _CacheEntry] = {}
-        self._order: list[tuple[str, UUID, int, str]] = []
+        self._entries: dict[_AdapterKey, _CacheEntry] = {}
+        self._order: list[_AdapterKey] = []
         self._closing: set[asyncio.Task[None]] = set()
 
     async def lease(
         self,
-        key: tuple[str, UUID, int, str],
+        key: _AdapterKey,
         builder: Callable[[], ProviderAdapter],
     ) -> _AdapterLease:
         async with self._lock:
@@ -460,7 +480,7 @@ class CredentialAdapterCache:
             self._trim_locked()
             return _AdapterLease(self, key, entry.adapter)
 
-    def release(self, key: tuple[str, UUID, int, str]) -> None:
+    def release(self, key: _AdapterKey) -> None:
         entry = self._entries.get(key)
         if entry is None:
             return
@@ -473,7 +493,7 @@ class CredentialAdapterCache:
         self._trim_locked()
 
     def retire_other_configs(
-        self, provider: str, credential_id: UUID, generation: int, keep: tuple[str, UUID, int, str]
+        self, provider: str, credential_id: UUID, generation: int, keep: _AdapterKey
     ) -> None:
         """Retire adapter entries of one credential/generation with another config."""
 
@@ -483,7 +503,7 @@ class CredentialAdapterCache:
             self._retire_entry(key)
 
     def retire_other_generations(
-        self, credential_id: UUID, generation: int, keep: tuple[str, UUID, int, str]
+        self, credential_id: UUID, generation: int, keep: _AdapterKey
     ) -> None:
         """Retire every older generation adapter of one credential."""
 
@@ -492,7 +512,17 @@ class CredentialAdapterCache:
                 continue
             self._retire_entry(key)
 
-    def _retire_entry(self, key: tuple[str, UUID, int, str]) -> None:
+    def retire_other_tokens(
+        self, credential_id: UUID, token_generation: int, keep: _AdapterKey
+    ) -> None:
+        """Retire adapters built for an older OAuth token generation."""
+
+        for key in list(self._entries):
+            if key == keep or key[1] != credential_id or key[3] == token_generation:
+                continue
+            self._retire_entry(key)
+
+    def _retire_entry(self, key: _AdapterKey) -> None:
         entry = self._entries.get(key)
         if entry is None or entry.retired:
             return
@@ -585,11 +615,37 @@ class ExecutionService:
         observability: ObservabilityRuntime = NO_OP_OBSERVABILITY,
         max_cache_adapters: int = _DEFAULT_ADAPTER_CACHE_SIZE,
         rollout_state: ProjectRolloutState | None = None,
+        authority: ExecutionAuthority | None = None,
+        host_authority: bool = True,
+        retry_backoff: Callable[[], float] | None = None,
+        retry_sleep: Callable[[float], Awaitable[None]] | None = None,
     ) -> None:
         self._repository = repository
         self._secret_store = secret_store
         self._limits = limits
         self._account_id = account_id
+        # One authority per database. A standalone transport that must forward
+        # instead of hosting passes ``host_authority=False``; a borrowed pool
+        # then fails closed rather than starting a second fair queue.
+        self._authority = (
+            authority
+            if authority is not None
+            else ExecutionAuthority(
+                repository,
+                limits=limits,
+                default_max_wait_ms=get_settings().execution_queue_max_wait_ms,
+                default_max_requests=get_settings().execution_queue_max_requests,
+                default_max_bytes=get_settings().execution_queue_max_bytes,
+                default_max_concurrency=get_settings().execution_queue_max_concurrency,
+                default_project_max_concurrency=(get_settings().execution_project_max_concurrency),
+                lease_seconds=get_settings().execution_authority_lease_seconds,
+                recovery_seconds=get_settings().execution_authority_recovery_seconds,
+            )
+            if host_authority
+            else None
+        )
+        self._retry_backoff = retry_backoff or (lambda: random.uniform(0.01, 0.05))
+        self._retry_sleep = retry_sleep or asyncio.sleep
         # The credential seam enforces the configured projects rollout gate on
         # every resolution; an unknown rollout state fails execution closed.
         self._credentials = CredentialService(
@@ -605,8 +661,10 @@ class ExecutionService:
         self._authorization = ScopedAuthorizationService(repository, account_id=account_id)
         self._adapter_cache = CredentialAdapterCache(max_entries=max_cache_adapters)
         self._client = client
+        self._admission_locks: dict[UUID, asyncio.Lock] = {}
         self._quota_tasks: set[asyncio.Task[Any]] = set()
         self._owns_client = client is None
+        self._closed = False
         # The observability argument exists for compositions that pre-build a
         # runtime; every span call resolves the active runtime per request, so
         # a root span bound to a request is never replaced.
@@ -617,10 +675,15 @@ class ExecutionService:
     async def aclose(self) -> None:
         """Close cached credential adapters and any owned HTTP client."""
 
+        self._closed = True
         tasks = list(self._quota_tasks)
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
+        authority = self._authority
+        self._authority = None
+        if authority is not None:
+            await authority.aclose()
         await self._adapter_cache.aclose()
         client = self._client
         self._client = None
@@ -659,19 +722,44 @@ class ExecutionService:
         *,
         attribution: ExecutionAttribution,
         context: ProjectContext,
+        deadline: float | None = None,
     ) -> SearchResponse:
-        """Execute one search request inside the verified ``context``."""
+        """Execute one search request inside the verified ``context``.
 
-        observability = current_observability()
-        with observability.span(TraceSpanName.BACKEND, attributes=_request_attributes(request)):
-            if request.fanout or request.routing.mode is RoutingMode.FANOUT:
-                return await self._fanout_search(request, attribution=attribution, context=context)
-            return cast(
-                SearchResponse,
-                await self._single(
-                    request, UsageOperation.SEARCH, attribution=attribution, context=context
-                ),
+        ``deadline`` is one monotonic end-to-end instant shared by queue wait,
+        every retry, and every fallback leg of this logical request.
+        """
+
+        deadline = self._logical_deadline(deadline)
+        budget_token = set_retry_budget(RetryBudget(1))
+
+        async def run() -> SearchResponse:
+            observability = current_observability()
+            with observability.span(TraceSpanName.BACKEND, attributes=_request_attributes(request)):
+                if request.fanout or request.routing.mode is RoutingMode.FANOUT:
+                    return await self._fanout_search(
+                        request, attribution=attribution, context=context, deadline=deadline
+                    )
+                return cast(
+                    SearchResponse,
+                    await self._single(
+                        request,
+                        UsageOperation.SEARCH,
+                        attribution=attribution,
+                        context=context,
+                        deadline=deadline,
+                    ),
+                )
+
+        try:
+            return await self._admitted(
+                context.project_id,
+                run,
+                deadline=deadline,
+                payload_bytes=len(request.model_dump_json().encode("utf-8")),
             )
+        finally:
+            reset_retry_budget(budget_token)
 
     async def fetch(
         self,
@@ -679,21 +767,167 @@ class ExecutionService:
         *,
         attribution: ExecutionAttribution,
         context: ProjectContext,
+        deadline: float | None = None,
     ) -> FetchResponse:
         """Execute one fetch request inside the verified ``context``."""
 
         if request.url_count != 1:
             raise ExecutionRequestInvalid("this release executes exactly one URL per fetch request")
-        observability = current_observability()
-        with observability.span(TraceSpanName.BACKEND, attributes=_request_attributes(request)):
-            return cast(
-                FetchResponse,
-                await self._single(
-                    request, UsageOperation.FETCH, attribution=attribution, context=context
-                ),
+        deadline = self._logical_deadline(deadline)
+        budget_token = set_retry_budget(RetryBudget(1))
+
+        async def run() -> FetchResponse:
+            observability = current_observability()
+            with observability.span(TraceSpanName.BACKEND, attributes=_request_attributes(request)):
+                return cast(
+                    FetchResponse,
+                    await self._single(
+                        request,
+                        UsageOperation.FETCH,
+                        attribution=attribution,
+                        context=context,
+                        deadline=deadline,
+                    ),
+                )
+
+        try:
+            return await self._admitted(
+                context.project_id,
+                run,
+                deadline=deadline,
+                payload_bytes=len(request.model_dump_json().encode("utf-8")),
             )
+        finally:
+            reset_retry_budget(budget_token)
+
+    async def _admitted[ResultT](
+        self,
+        project_id: UUID,
+        operation: Callable[[], Awaitable[ResultT]],
+        *,
+        deadline: float,
+        payload_bytes: int,
+    ) -> ResultT:
+        """Serialize one project's admission through its first queue entry.
+
+        Resolution is slower than enqueueing, so without this gate a later
+        request could reach the bounded queue before an earlier one and steal
+        its slot. The gate orders admission, not dispatch: it is released the
+        moment the first queue entry is appended, and all provider work stays
+        concurrent. A genuine admission waiter is counted in the same
+        authority-wide count/byte budget as queued work and is bounded by the
+        logical request deadline and the configured queue wait; the count
+        transfers to the queue entry rather than being released in a gap.
+        """
+
+        lock = self._admission_locks.get(project_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._admission_locks[project_id] = lock
+        reservation = (
+            self._authority.reserve_admission(project_id=project_id, payload_bytes=payload_bytes)
+            if self._authority is not None and lock.locked()
+            else None
+        )
+        wait_seconds = (
+            self._authority.default_max_wait_seconds
+            if self._authority is not None
+            else get_settings().execution_queue_max_wait_ms / 1000.0
+        )
+        remaining = self._remaining_before_deadline(deadline)
+        timeout = wait_seconds if remaining is None else max(0.0, min(wait_seconds, remaining))
+        gate = _AdmissionGate(
+            lock=lock,
+            started_at=(self._authority.now() if self._authority is not None else time.monotonic()),
+            on_release=(None if reservation is None else reservation.release),
+            admission_key=(None if reservation is None else reservation.key),
+        )
+        try:
+            await asyncio.wait_for(lock.acquire(), timeout=timeout)
+        except TimeoutError as error:
+            if reservation is not None:
+                reservation.release()
+            raise ExecutionQueueExpired(
+                "the execution admission wait bound expired before dispatch"
+            ) from error
+        except BaseException:
+            if reservation is not None:
+                reservation.release()
+            raise
+        token = _ADMISSION_GATE.set(gate)
+        try:
+            return await operation()
+        finally:
+            _ADMISSION_GATE.reset(token)
+            if reservation is not None:
+                reservation.release()
+            gate.release()
+
+    def _logical_deadline(self, deadline: float | None) -> float:
+        """Return one server-bounded deadline for the whole logical request."""
+
+        now = self._authority.now() if self._authority is not None else time.monotonic()
+        server = now + max(0.001, get_settings().execution_request_timeout_seconds)
+        return server if deadline is None else min(deadline, server)
+
+    def _remaining_before_deadline(self, deadline: float | None) -> float | None:
+        """Return remaining seconds until ``deadline``, or ``None`` when absent."""
+
+        if deadline is None:
+            return None
+        now = self._authority.now() if self._authority is not None else time.monotonic()
+        return deadline - now
 
     # ---------------------------------------------------------- resolution
+
+    @staticmethod
+    def _retry_allowed(error: ProviderOperationError) -> bool:
+        """Return whether this logical request may retry one provider attempt."""
+
+        return bool(error.error.retryable) and not _terminal_out_of_credits(error)
+
+    @staticmethod
+    def _retry_after_seconds(error: ProviderOperationError) -> float | None:
+        """Return the provider's declared Retry-After delay, or ``None``."""
+
+        details = error.error.details if isinstance(error.error.details, dict) else {}
+        retry_after = details.get("retry_after_seconds")
+        if isinstance(retry_after, bool) or not isinstance(retry_after, (int, float)):
+            return None
+        return max(0.0, float(retry_after))
+
+    def _retry_delay(self, error: ProviderOperationError) -> tuple[float, bool]:
+        """Return ``(delay, announced)`` for one retry.
+
+        ``announced`` is true when the vendor supplied Retry-After, so the
+        delay is exact and must never be shortened or jittered; otherwise the
+        delay is the bounded injectable backoff. A missing header uses real
+        time, leaving the virtual queue clock untouched.
+        """
+
+        retry_after = self._retry_after_seconds(error)
+        if retry_after is not None:
+            return retry_after, True
+        return max(0.0, self._retry_backoff()), False
+
+    def _deadline_passed(self, deadline: float | None) -> bool:
+        remaining = self._remaining_before_deadline(deadline)
+        return remaining is not None and remaining <= 0
+
+    async def _defer_retry(self, leg: _Leg, delay: float, announced: bool) -> None:
+        """Defer one retry on the queue clock or a bounded real backoff.
+
+        A pooled leg requeues on the authority's injected monotonic clock, so
+        the delay is observable to the scheduler. An unpooled leg has no
+        scheduler, so an announced Retry-After waits in real time; a missing
+        header always uses the bounded injectable backoff and never moves the
+        virtual clock.
+        """
+
+        if announced and leg.pool is not None and self._authority is not None:
+            _RETRY_NOT_BEFORE.set(self._authority.now() + delay)
+            return
+        await self._retry_sleep(delay)
 
     @staticmethod
     def _provider_subset(request: SearchRequest | FetchRequest) -> frozenset[str] | None:
@@ -791,83 +1025,99 @@ class ExecutionService:
         """
 
         legs: list[_Leg] = []
-        async with self._repository.session() as session:
-            await begin_read_snapshot(session)
-            context = await self._live_context_in_session(session, context, operation)
-            bindings = await ProjectBindingRepository(session).list_for_project(
-                project_id=context.project_id
-            )
-            try:
-                for binding in bindings:
-                    leg = await self._resolve_binding(
-                        session,
-                        binding,
-                        context,
-                        operation,
-                        providers=providers,
-                    )
-                    if leg is not None:
-                        legs.append(leg)
-            except BaseException:
-                _release_legs(legs)
-                raise
+        try:
+            async with self._repository.session() as session:
+                await begin_read_snapshot(session)
+                context = await self._live_context_in_session(session, context, operation)
+                bindings = await ProjectBindingRepository(session).list_for_project(
+                    project_id=context.project_id
+                )
+                allocations = await PoolAllocationRepository(session).list_for_project(
+                    project_id=context.project_id
+                )
+            caps = [
+                allocation.max_concurrency
+                for allocation in allocations
+                if allocation.max_concurrency is not None
+            ]
+            project_cap = min(caps) if caps else None
+            for binding in bindings:
+                leg = await self._resolve_binding(
+                    context,
+                    binding,
+                    operation,
+                    providers=providers,
+                    project_max_concurrency=project_cap,
+                )
+                if leg is not None:
+                    legs.append(leg)
+        except BaseException:
+            _release_legs(legs)
+            raise
         return legs
 
     async def _resolve_binding(
         self,
-        session: Any,
-        binding: StoredBinding,
         context: ProjectContext,
+        binding: StoredBinding,
         operation: CredentialOperation,
         *,
         providers: frozenset[str] | None,
+        project_max_concurrency: int | None = None,
     ) -> _Leg | None:
         """Resolve one enabled binding, or return ``None`` when it is unusable."""
 
         if operation not in binding.enabled_operations:
             return None
-        credential = await self._credentials.usable_credential_in_session(
-            session,
-            project_id=context.project_id,
-            credential_id=binding.credential_id,
-            operation=operation,
-        )
-        if credential is None:
-            return None
-        if providers is not None and credential.provider_type not in providers:
-            return None
-        if adapter_factory(credential.provider_type) is None:
-            return None
-        pools = UpstreamPoolRepository(session)
+        credential: ResolvedCredential | None = None
         pool: StoredPool | None = None
-        link = await pools.pool_for_credential(credential_id=credential.id, operation=operation)
-        if link is not None:
-            try:
-                pool = await pools.get_pool(account_id=self._account_id, pool_id=link.pool_id)
-            except ValueError as error:
-                raise ExecutionError("the upstream pool declares unreadable constraints") from error
-            if pool is None or pool.status is not PoolStatus.ACTIVE:
-                return None
-            if not pool.constraints_valid:
-                raise ExecutionError("the upstream pool declares unreadable constraints")
         allocation: StoredAllocation | None = None
-        if pool is not None:
-            allocation = await PoolAllocationRepository(session).get(
+        # One short session resolves the credential, its pool link and the
+        # project allocation. The provider configuration lookup runs after it
+        # closes: it opens its own settings sessions, and nesting that lookup
+        # under this one could exhaust a bounded SQLite pool at high
+        # concurrency.
+        async with self._repository.session() as session:
+            await begin_read_snapshot(session)
+            usable = await self._credentials.usable_credential_in_session(
+                session,
                 project_id=context.project_id,
-                pool_id=pool.id,
+                credential_id=binding.credential_id,
                 operation=operation,
             )
-        # ``resolve_material`` grants no actor authority: every caller of
-        # this method has already run ``_live_context_in_session`` for
-        # ``context`` against current state (initial resolution and every
-        # pre-send revalidation).
-        resolved = await self._credentials.resolve_material(
-            context,
-            credential.id,
-            operation=operation,
-            expected_generation=credential.generation,
-        )
-        if resolved is None:
+            if usable is None:
+                return None
+            if providers is not None and usable.provider_type not in providers:
+                return None
+            if adapter_factory(usable.provider_type) is None:
+                return None
+            pools = UpstreamPoolRepository(session)
+            link = await pools.pool_for_credential(credential_id=usable.id, operation=operation)
+            if link is not None:
+                try:
+                    pool = await pools.get_pool(account_id=self._account_id, pool_id=link.pool_id)
+                except ValueError as error:
+                    raise ExecutionError(
+                        "the upstream pool declares unreadable constraints"
+                    ) from error
+                if pool is None or pool.status is not PoolStatus.ACTIVE:
+                    return None
+                if not pool.constraints_valid:
+                    raise ExecutionError("the upstream pool declares unreadable constraints")
+            if pool is not None:
+                allocation = await PoolAllocationRepository(session).get(
+                    project_id=context.project_id,
+                    pool_id=pool.id,
+                    operation=operation,
+                )
+            credential = await self._credentials.resolve_material_in_session(
+                session,
+                context,
+                usable.id,
+                operation=operation,
+                expected_generation=usable.generation,
+            )
+        if credential is None:
             return None
         try:
             config = await effective_config_for_name(
@@ -877,12 +1127,13 @@ class ExecutionService:
             raise ExecutionError(str(error)) from error
         return _Leg(
             binding=binding,
-            credential=resolved,
+            credential=credential,
             pool=pool,
             allocation=allocation,
             config=config,
-            lease=await self._lease_adapter(resolved, config),
+            lease=await self._lease_adapter(credential, config),
             context=context,
+            project_max_concurrency=project_max_concurrency,
         )
 
     async def _lease_adapter(
@@ -891,10 +1142,12 @@ class ExecutionService:
         """Lease the cached adapter of one credential and configuration."""
 
         fingerprint = _config_fingerprint(config)
+        token_generation = credential.token_generation or 0
         key = (
             credential.provider_type,
             credential.credential_id,
             credential.generation,
+            token_generation,
             fingerprint,
         )
 
@@ -921,6 +1174,11 @@ class ExecutionService:
         )
         self._adapter_cache.retire_other_generations(
             credential.credential_id, credential.generation, key
+        )
+        self._adapter_cache.retire_other_tokens(
+            credential.credential_id,
+            token_generation,
+            key,
         )
         return lease
 
@@ -1177,18 +1435,32 @@ class ExecutionService:
         Windows come from the project allocation (its effective ceiling) plus
         the pool's declared rate constraints (the strictest declared limit per
         window wins); concurrency caps come from the pool row and the
-        allocation. Without any window or cap the leg is unconstrained at
-        strict scope and the provider rails still apply.
+        allocation, with finite defaults when the configuration declares none.
+        Without any window or cap the leg is unconstrained at strict scope and
+        the provider rails still apply.
+
+        With loans enabled the allocation's base rate is a contention
+        entitlement, not a service bucket: every actual attempt debits ONE
+        durable absolute-ceiling window whose limit is ``max_rate``. Base and
+        loan grants alike are bounded by it, so an authority replacement
+        cannot partition the ceiling. Strict mode uses the base rate, which is
+        also its effective ceiling, on the same single bucket.
         """
 
         windows: list[StrictWindowSpec] = []
         pool_id = leg.pool.id if leg.pool is not None else None
-        if leg.allocation is not None and pool_id is not None:
+        allocation = leg.allocation
+        if allocation is not None and pool_id is not None:
+            # One stable absolute-ceiling identity for both loans modes. The
+            # ceiling value may change with the policy, but the bucket cannot:
+            # toggling loans must not hide the current window's earlier
+            # attempts from the new policy's accounting.
+            bucket = f"project:{allocation.project_id}:{pool_id}:{operation.value}"
             windows.append(
                 StrictWindowSpec(
-                    bucket_id=(f"project:{leg.allocation.project_id}:{pool_id}:{operation.value}"),
-                    window_seconds=leg.allocation.rate_window_seconds,
-                    limit_units=leg.allocation.effective_max_rate,
+                    bucket_id=f"{bucket}:ceiling",
+                    window_seconds=allocation.rate_window_seconds,
+                    limit_units=allocation.effective_max_rate,
                 )
             )
         if pool_id is not None and leg.pool is not None:
@@ -1210,9 +1482,14 @@ class ExecutionService:
             pool_id=pool_id,
             request_id=trace_id,
             windows=tuple(windows),
-            pool_max_concurrency=(None if leg.pool is None else leg.pool.max_concurrency),
+            pool_max_concurrency=(
+                DEFAULT_MAX_CONCURRENCY if leg.pool is None else leg.pool.max_concurrency
+            )
+            or DEFAULT_MAX_CONCURRENCY,
             project_max_concurrency=(
-                None if leg.allocation is None else leg.allocation.max_concurrency
+                DEFAULT_MAX_CONCURRENCY
+                if leg.allocation is None or leg.allocation.max_concurrency is None
+                else leg.allocation.max_concurrency
             ),
             units_per_attempt=Decimal("1"),
             lease_seconds=DEFAULT_ATTEMPT_LEASE_SECONDS,
@@ -1266,142 +1543,64 @@ class ExecutionService:
             raise ExecutionNotPermitted("execution is no longer permitted")
         return live
 
-    async def _revalidate_leg(
-        self,
-        leg: _Leg,
-        request: SearchRequest | FetchRequest,
-        operation: UsageOperation,
-        attribution: ExecutionAttribution,
-    ) -> _Leg:
-        """Recheck live authority, binding, and credential before one send.
-
-        Runs before every actual upstream send (the first dispatch, each
-        resilience-runner retry, and every fanout leg), so a retry never
-        reuses a binding, credential generation, or actor authority that was
-        disabled, rotated, or revoked since the leg was planned. The live
-        authorization and the binding read share one snapshot.
-        """
-
-        try:
-            async with self._repository.session() as session:
-                await begin_read_snapshot(session)
-                context = await self._live_context_in_session(session, leg.context, operation)
-                if execution_attribution(context) != attribution:
-                    raise ExecutionNotPermitted("execution is no longer permitted")
-                binding = await ProjectBindingRepository(session).get(
-                    project_id=context.project_id, binding_id=leg.binding.id
-                )
-                current = (
-                    None
-                    if binding is None
-                    else await self._resolve_binding(
-                        session, binding, context, _operation_code(operation), providers=None
-                    )
-                )
-        except (CredentialStorageUnavailable, ProjectStorageUnavailable, OperationalError) as error:
-            raise ExecutionStorageUnavailable("the credential store is unavailable") from error
-        if current is None:
-            raise ExecutionBindingMissing("the binding is no longer enabled and usable")
-        if (
-            current.adapter is not leg.adapter
-            or current.credential.credential_id != leg.credential.credential_id
-            or current.credential.generation != leg.credential.generation
-            or current.config != leg.config
-            or not self._leg_allows(current, request, operation)
-        ):
-            current.lease.release()
-            raise ExecutionBindingMissing("the provider configuration changed before dispatch")
-        return current
-
     def _capacity_hooks(
         self,
         leg: _Leg,
         request: SearchRequest | FetchRequest,
         operation: UsageOperation,
         attribution: ExecutionAttribution,
+        deadline: float | None = None,
     ) -> tuple[
         LimitCallContext,
         Callable[[], Awaitable[Any]],
         Callable[[str], Awaitable[None]],
         Callable[[Any], Awaitable[None]],
+        Callable[[str, str], Awaitable[None]],
     ]:
-        """Return the attempt seam: one atomic native-plus-strict reservation.
+        """Return the attempt seam: fair grant, then one atomic reservation."""
 
-        Every actual dispatch gets a fresh attempt id and one transaction that
-        covers native funds/rate capacity and the strict project/pool windows
-        and concurrency slot. The no-op triple serves a leg with no native or
-        strict obligation.
-        """
+        return _AttemptSeam(self, leg, request, operation, attribution, deadline=deadline).hooks()
 
-        rails_context = self._rails_context(leg, request, operation, attribution)
-        self._strict_spec(leg, request, operation, attribution)
-        limits = self._limits
-        auth_mode = rails_context.auth_mode
-        supports_native = limits is not None and limits.supports(
-            leg.provider, rails_context.operation, auth_mode
+    def _queue_policy(
+        self,
+        leg: _Leg,
+        request: SearchRequest | FetchRequest,
+        operation: UsageOperation,
+        attribution: ExecutionAttribution,
+        *,
+        deadline: float | None,
+    ) -> QueuePolicy:
+        """Describe one attempt's queue bounds and fairness entitlement."""
+
+        allocation = leg.allocation
+        payload_bytes = len(request.model_dump_json().encode("utf-8"))
+        gate = _ADMISSION_GATE.get()
+        not_before = _RETRY_NOT_BEFORE.get()
+        _RETRY_NOT_BEFORE.set(None)
+        return QueuePolicy(
+            provider=leg.provider,
+            project_id=attribution.project_id,
+            operation=_operation_code(operation),
+            weight=1 if allocation is None else max(1, allocation.weight),
+            base_rate=0 if allocation is None else max(0, allocation.base_rate),
+            rate_window_seconds=3600 if allocation is None else allocation.rate_window_seconds,
+            max_rate=None if allocation is None else allocation.max_rate,
+            borrow_enabled=False if allocation is None else allocation.borrow_enabled,
+            best_effort=False if allocation is None else allocation.best_effort,
+            max_concurrency=None if allocation is None else allocation.max_concurrency,
+            max_queued_requests=None if allocation is None else allocation.max_queued_requests,
+            max_queued_bytes=None if allocation is None else allocation.max_queued_bytes,
+            max_queue_wait_ms=None if allocation is None else allocation.max_queue_wait_ms,
+            pool_max_concurrency=None if leg.pool is None else leg.pool.max_concurrency,
+            pool_max_queued_requests=None if leg.pool is None else leg.pool.max_queued_requests,
+            project_max_concurrency=leg.project_max_concurrency,
+            payload_bytes=payload_bytes,
+            deadline=deadline,
+            admitted_at=None if gate is None else gate.started_at,
+            not_before=not_before,
+            on_admitted=(None if gate is None or gate.released else gate.release),
+            admission_key=None if gate is None else gate.admission_key,
         )
-        repository_limits = self._repository.limits
-
-        async def reserve() -> Any:
-            current = await self._revalidate_leg(leg, request, operation, attribution)
-            reservation: Any = None
-            try:
-                reservation = await reserve_current(current)
-                # The capacity store may wait for another writer. Recheck live
-                # authority after that wait before returning a dispatch permit.
-                verified = await self._revalidate_leg(current, request, operation, attribution)
-                try:
-                    if self._strict_spec(
-                        verified, request, operation, attribution
-                    ) != self._strict_spec(current, request, operation, attribution):
-                        raise ExecutionBindingMissing(
-                            "capacity configuration changed before dispatch"
-                        )
-                finally:
-                    verified.lease.release()
-                return reservation
-            except BaseException:
-                if reservation is not None:
-                    await asyncio.shield(
-                        repository_limits.release_strict(
-                            attempt_id=reservation.attempt_id,
-                            bucket_ids=tuple(getattr(reservation, "bucket_ids", ())),
-                        )
-                    )
-                raise
-            finally:
-                current.lease.release()
-
-        async def reserve_current(current: _Leg) -> Any:
-            spec = self._strict_spec(current, request, operation, attribution)
-            attempt_id = uuid4().hex
-            attempt_context = self._rails_context(
-                current, request, operation, attribution, attempt_id=attempt_id
-            )
-            if supports_native:
-                assert limits is not None
-                return await limits.admit_attempt(attempt_context, spec)
-            if spec is None:
-                return None
-            strict = await repository_limits.reserve_strict(
-                attempt_id=attempt_id,
-                provider=leg.provider,
-                operation=_limit_operation(operation),
-                auth_mode=auth_mode,
-                spec=spec,
-            )
-            if strict.state != "reserved":
-                raise ExecutionError(
-                    "the capacity reservation replayed as settled; a fresh attempt is required"
-                )
-            return _AttemptCapacity(
-                attempt_id=attempt_id,
-                admission=None,
-                strict=strict,
-                repository_limits=repository_limits,
-            )
-
-        return rails_context, reserve, _noop_settle, _noop_release
 
     async def _single(
         self,
@@ -1410,6 +1609,7 @@ class ExecutionService:
         *,
         attribution: ExecutionAttribution,
         context: ProjectContext,
+        deadline: float | None = None,
     ) -> SearchResponse | FetchResponse:
         """Run one dispatched attempt chain over the project's bindings.
 
@@ -1432,16 +1632,73 @@ class ExecutionService:
             with observable.span(TraceSpanName.ROUTE, attributes=_request_attributes(request)):
                 chain = await self._plan(request, operation, legs)
             last_error: ProviderOperationError | None = None
+            # One logical retry budget is shared by service retries, adapter
+            # runners, fallback legs, and fanout siblings. A request that has
+            # already retried once never gets another free retry downstream.
             for index, (leg, _adapter) in enumerate(chain):
                 is_last = index == len(chain) - 1
-                try:
-                    response = await self._invoke_attempt(
-                        leg,
-                        request,
-                        operation,
-                        attribution=attribution,
-                        candidates=len(chain),
-                    )
+                retried = False
+                while True:
+                    try:
+                        response = await self._invoke_attempt(
+                            leg,
+                            request,
+                            operation,
+                            attribution=attribution,
+                            candidates=len(chain),
+                            deadline=deadline,
+                        )
+                    except ProviderOperationError as error:
+                        if (
+                            not retried
+                            and self._retry_allowed(error)
+                            and not self._deadline_passed(deadline)
+                        ):
+                            delay, announced = self._retry_delay(error)
+                            remaining = self._remaining_before_deadline(deadline)
+                            if announced and remaining is not None and delay >= remaining:
+                                # The vendor's own delay would outlive the
+                                # logical request: refuse the retry instead of
+                                # shortening Retry-After.
+                                last_error = error
+                                if is_last:
+                                    _annotate_root_error(observable, error)
+                                    _annotate_attempt_identity(
+                                        observable, request, leg, _operation_name(request).value
+                                    )
+                                    raise
+                                break
+                            if not consume_retry_budget():
+                                last_error = error
+                                if is_last:
+                                    _annotate_root_error(observable, error)
+                                    _annotate_attempt_identity(
+                                        observable, request, leg, _operation_name(request).value
+                                    )
+                                    raise
+                                break
+                            retried = True
+                            await self._defer_retry(leg, delay, announced)
+                            continue
+                        last_error = error
+                        if is_last:
+                            _annotate_root_error(observable, error)
+                            _annotate_attempt_identity(
+                                observable, request, leg, _operation_name(request).value
+                            )
+                            raise
+                        break
+                    except Exception as error:
+                        # Only a normalized provider failure is a routing candidate
+                        # for the next binding. An unexpected crash (for example a
+                        # local programming error) propagates immediately: silently
+                        # treating it as a failed leg could turn a broken primary
+                        # into a successful fallback answer.
+                        _annotate_root_error(observable, error)
+                        _annotate_attempt_identity(
+                            observable, request, leg, _operation_name(request).value
+                        )
+                        raise
                     with observable.span(
                         TraceSpanName.RESULTS,
                         attributes={
@@ -1453,26 +1710,7 @@ class ExecutionService:
                     ):
                         _annotate_root(observable, request, response)
                     return response
-                except ProviderOperationError as error:
-                    last_error = error
-                    if is_last:
-                        _annotate_root_error(observable, error)
-                        _annotate_attempt_identity(
-                            observable, request, leg, _operation_name(request).value
-                        )
-                        raise
-                    continue
-                except Exception as error:
-                    # Only a normalized provider failure is a routing candidate
-                    # for the next binding. An unexpected crash (for example a
-                    # local programming error) propagates immediately: silently
-                    # treating it as a failed leg could turn a broken primary
-                    # into a successful fallback answer.
-                    _annotate_root_error(observable, error)
-                    _annotate_attempt_identity(
-                        observable, request, leg, _operation_name(request).value
-                    )
-                    raise
+                continue
             # The chain guarantees at least one attempt, so this is unreachable.
             if last_error is not None:
                 raise last_error
@@ -1488,6 +1726,7 @@ class ExecutionService:
         *,
         attribution: ExecutionAttribution,
         context: ProjectContext,
+        deadline: float | None = None,
     ) -> SearchResponse:
         """Execute concurrent search across every eligible leg and fuse results.
 
@@ -1527,6 +1766,7 @@ class ExecutionService:
                         request,
                         attribution=attribution,
                         candidates_count=len(candidates),
+                        deadline=deadline,
                     )
                 )
                 for leg in candidates
@@ -1593,6 +1833,7 @@ class ExecutionService:
         *,
         attribution: ExecutionAttribution,
         candidates_count: int,
+        deadline: float | None = None,
     ) -> tuple[str, SearchResponse | None, int, str, int, str | None]:
         """Run one fanout leg, converting handled failures to the outcome tuple.
 
@@ -1601,57 +1842,56 @@ class ExecutionService:
         fanout contract.
         """
 
-        call_start = time.perf_counter()
-        observable = current_observability()
-        provider_span: Any | None = None
-        try:
+        timing = ProviderTiming()
+        attributes = {
+            TraceAttribute.OPERATION: TraceOperation.SEARCH.value,
+            TraceAttribute.PROVIDER: leg.provider,
+            TraceAttribute.ROUTING_MODE: RoutingMode.FANOUT.value,
+            TraceAttribute.ROUTING_CANDIDATE_COUNT: candidates_count,
+        }
+
+        async def call(target: ProviderAdapter) -> SearchResponse:
+            observable = current_observability()
             with observable.span(
                 TraceSpanName.PROVIDER,
                 kind=SpanKindName.CLIENT,
-                attributes={
-                    TraceAttribute.OPERATION: TraceOperation.SEARCH.value,
-                    TraceAttribute.PROVIDER: leg.provider,
-                    TraceAttribute.ROUTING_MODE: RoutingMode.FANOUT.value,
-                    TraceAttribute.ROUTING_CANDIDATE_COUNT: candidates_count,
-                },
+                attributes=attributes,
             ) as span:
-                provider_span = span
                 span.add_event(
                     TRACE_EVENT_PROVIDER_REQUEST,
                     attributes=_provider_request_event(request),
                 )
-                try:
-                    response = await self._tracked_attempt(
-                        leg,
-                        request,
-                        UsageOperation.SEARCH,
-                        lambda target: target.search(request),
-                        attribution=attribution,
-                    )
-                except Exception as exc:
-                    elapsed = int((time.perf_counter() - call_start) * 1000)
-                    if _escapes_fanout(exc):
-                        raise
-                    span.record_exception(exc)
-                    return _handled_outcome(leg.provider, exc, elapsed)
+                response = await target.search(request)
                 span.add_event(
                     TRACE_EVENT_PROVIDER_RESPONSE,
                     attributes=_provider_response_event(response),
                 )
-                elapsed = int((time.perf_counter() - call_start) * 1000)
-                return (
-                    leg.provider,
-                    response,
-                    elapsed,
-                    "success",
-                    len(response.results),
-                    None,
-                )
+                return response
+
+        try:
+            response = await self._tracked_attempt(
+                leg,
+                request,
+                UsageOperation.SEARCH,
+                call,
+                attribution=attribution,
+                deadline=deadline,
+                timing=timing,
+            )
         except Exception as exc:
-            elapsed = int((time.perf_counter() - call_start) * 1000)
+            elapsed = timing.latency_ms
             if _escapes_fanout(exc):
                 raise
-            return _handled_outcome(leg.provider, exc, elapsed, provider_span=provider_span)
+            return _handled_outcome(leg.provider, exc, elapsed)
+        elapsed = timing.latency_ms
+        return (
+            leg.provider,
+            response,
+            elapsed,
+            "success",
+            len(response.results),
+            None,
+        )
 
     async def _tracked_attempt[ResponseT: (SearchResponse, FetchResponse)](
         self,
@@ -1661,17 +1901,37 @@ class ExecutionService:
         call: Callable[[ProviderAdapter], Awaitable[ResponseT]],
         *,
         attribution: ExecutionAttribution,
+        deadline: float | None = None,
+        timing: ProviderTiming | None = None,
     ) -> ResponseT:
         """Run one attempt around the shared telemetry-and-capacity wrapper."""
 
-        rails_context, reserve, settle, release = self._capacity_hooks(
-            leg, request, operation, attribution
+        rails_context, reserve, settle, release, resolve_dispatch = self._capacity_hooks(
+            leg, request, operation, attribution, deadline=deadline
         )
+
+        def require_deadline() -> None:
+            if self._deadline_passed(deadline):
+                raise ExecutionQueueExpired(
+                    "the execution request deadline expired before the provider call"
+                )
+
+        async def bounded_call(target: ProviderAdapter) -> ResponseT:
+            remaining = self._remaining_before_deadline(deadline)
+            if remaining is None:
+                return await call(target)
+            try:
+                return await asyncio.wait_for(call(target), timeout=remaining)
+            except TimeoutError as error:
+                raise ExecutionQueueExpired(
+                    "the execution request deadline expired during the provider call"
+                ) from error
+
         try:
             response = await tracked_call(
                 self._repository,
                 leg.adapter,
-                call,
+                bounded_call,
                 operation=operation,
                 attribution=attribution,
                 request=request,
@@ -1681,6 +1941,9 @@ class ExecutionService:
                 settle=settle,
                 release=release,
                 context=rails_context,
+                resolve_dispatch=resolve_dispatch,
+                timing=timing,
+                pre_send=require_deadline,
             )
             # A request-triggered observer runs only after a dispatched,
             # admitted leg succeeded. Denied scopes/plans/capacity never poll.
@@ -1703,48 +1966,437 @@ class ExecutionService:
         *,
         attribution: ExecutionAttribution,
         candidates: int,
+        deadline: float | None = None,
     ) -> SearchResponse | FetchResponse:
         """Run one attempt under its provider client span with request/response events.
 
-        The span always records the failure before it propagates, so a
+        The provider span opens inside the send closure, after queue wait and
+        admission, so its duration measures the actual provider operation. The
+        span always records the failure before it propagates, so a
         per-credential child stays observable whichever error shape arrives.
         """
 
-        observable = current_observability()
-        with observable.span(
-            TraceSpanName.PROVIDER,
-            kind=SpanKindName.CLIENT,
-            attributes={
-                TraceAttribute.OPERATION: _operation_name(request).value,
-                TraceAttribute.PROVIDER: leg.provider,
-                TraceAttribute.ROUTING_MODE: request.routing.mode.value,
-                TraceAttribute.ROUTING_CANDIDATE_COUNT: candidates,
-            },
-        ) as provider_span:
-            provider_span.add_event(
-                TRACE_EVENT_PROVIDER_REQUEST, attributes=_provider_request_event(request)
-            )
-            response: SearchResponse | FetchResponse
+        attributes = {
+            TraceAttribute.OPERATION: _operation_name(request).value,
+            TraceAttribute.PROVIDER: leg.provider,
+            TraceAttribute.ROUTING_MODE: request.routing.mode.value,
+            TraceAttribute.ROUTING_CANDIDATE_COUNT: candidates,
+        }
+
+        async def span_call(target: ProviderAdapter) -> SearchResponse | FetchResponse:
+            observable = current_observability()
+            with observable.span(
+                TraceSpanName.PROVIDER,
+                kind=SpanKindName.CLIENT,
+                attributes=attributes,
+            ) as provider_span:
+                provider_span.add_event(
+                    TRACE_EVENT_PROVIDER_REQUEST, attributes=_provider_request_event(request)
+                )
+                return await self._span_provider_call(provider_span, target, request)
+
+        return cast(
+            SearchResponse | FetchResponse,
+            await self._tracked_attempt(
+                leg,
+                request,
+                operation,
+                span_call,
+                attribution=attribution,
+                deadline=deadline,
+            ),
+        )
+
+    @staticmethod
+    async def _span_provider_call[ResultT](
+        provider_span: Any, target: ProviderAdapter, request: SearchRequest | FetchRequest
+    ) -> ResultT:
+        """Run the provider operation and annotate its span without queue time."""
+
+        response: SearchResponse | FetchResponse
+        try:
             if isinstance(request, SearchRequest):
-                response = await self._tracked_attempt(
-                    leg,
-                    request,
-                    operation,
-                    lambda target: target.search(request),
-                    attribution=attribution,
-                )
+                response = await target.search(request)
             else:
-                response = await self._tracked_attempt(
-                    leg,
-                    request,
-                    operation,
-                    lambda target: target.fetch(request),
-                    attribution=attribution,
+                response = await target.fetch(request)
+        except Exception as error:
+            provider_span.record_exception(error)
+            raise
+        provider_span.add_event(
+            TRACE_EVENT_PROVIDER_RESPONSE, attributes=_provider_response_event(response)
+        )
+        return cast(ResultT, response)
+
+
+class _GrantedReservation:
+    """One reservation that also owns its fair-queue grant lifetime."""
+
+    __slots__ = ("grant", "inner")
+
+    def __init__(self, inner: Any, grant: DispatchGrant) -> None:
+        self.inner = inner
+        self.grant = grant
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.inner, name)
+
+    def finish(self) -> None:
+        """Release the queue's in-flight slot after the send settles."""
+
+        self.grant.finish()
+
+
+class _AttemptSeam:
+    """One leg's fair-queue and atomic-capacity seam for a single send."""
+
+    def __init__(
+        self,
+        service: ExecutionService,
+        leg: _Leg,
+        request: SearchRequest | FetchRequest,
+        operation: UsageOperation,
+        attribution: ExecutionAttribution,
+        *,
+        deadline: float | None,
+    ) -> None:
+        self._service = service
+        self._leg = leg
+        self._request = request
+        self._operation = operation
+        self._attribution = attribution
+        self._deadline = deadline
+        self._rails_context = service._rails_context(leg, request, operation, attribution)
+        self._limits = service._limits
+        self._auth_mode = self._rails_context.auth_mode
+        self._supports_native = self._limits is not None and self._limits.supports(
+            leg.provider, self._rails_context.operation, self._auth_mode
+        )
+        self._repository_limits = service._repository.limits
+        self._authority = service._authority
+        self._pool_id = leg.pool.id if leg.pool is not None else None
+
+    def hooks(
+        self,
+    ) -> tuple[
+        LimitCallContext,
+        Callable[[], Awaitable[Any]],
+        Callable[[str], Awaitable[None]],
+        Callable[[Any], Awaitable[None]],
+        Callable[[str, str], Awaitable[None]],
+    ]:
+        return (
+            self._rails_context,
+            self.reserve,
+            _noop_settle,
+            self.release,
+            self.resolve_dispatch,
+        )
+
+    async def reserve(self) -> Any:
+        """Enter the fair queue, reserve capacity, and recheck live authority."""
+
+        service = self._service
+        if service._closed:
+            raise ExecutionAuthorityUnavailable("the execution authority is stopped")
+        if self._pool_id is None:
+            gate = _ADMISSION_GATE.get()
+            if gate is not None:
+                gate.release()
+        reservation: Any = None
+        try:
+            reservation = await self._granted(self._leg)
+            return reservation
+        except LimitStoreUnavailable as error:
+            raise ExecutionAuthorityUnavailable(
+                "the execution authority capacity store is unavailable"
+            ) from error
+        except BaseException:
+            if reservation is not None:
+                await asyncio.shield(
+                    _release_capacity(reservation, self._repository_limits, self._limits)
                 )
-            provider_span.add_event(
-                TRACE_EVENT_PROVIDER_RESPONSE, attributes=_provider_response_event(response)
+            raise
+
+    async def _granted(self, current: _Leg) -> Any:
+        if self._pool_id is not None and self._authority is not None:
+            policy = self._service._queue_policy(
+                current,
+                self._request,
+                self._operation,
+                self._attribution,
+                deadline=self._deadline,
             )
-        return response
+            return await self._authority.dispatch(
+                pool_id=self._pool_id,
+                operation=_operation_code(self._operation),
+                policy=policy,
+                attempt=lambda grant: self._dispatch_current(current, grant),
+            )
+        if self._pool_id is not None:
+            # Pool capacity must never be dispatched without the one fenced
+            # authority; a composition without it fails closed.
+            raise ExecutionAuthorityUnavailable(
+                "the execution authority is not hosted by this process"
+            )
+        return await self._dispatch_current(current, None)
+
+    async def _live_leg_check(self, leg: _Leg) -> None:
+        """Recheck the complete dispatch-relevant snapshot before one send.
+
+        This is the single final pre-send gate (there is no second, partial
+        revalidation path). It re-reads live actor authority, the binding's
+        revision and enabled operations, the credential identity/generation,
+        the credential's pool link, the pool's status/revision/limits, the
+        project allocation revision/limits, and the effective provider
+        configuration. A queued call whose policy changed while it waited
+        therefore fails closed instead of dispatching a stale plan.
+        """
+
+        service = self._service
+        operation = _operation_code(self._operation)
+        try:
+            async with service._repository.session() as session:
+                await begin_read_snapshot(session)
+                context = await service._live_context_in_session(
+                    session, leg.context, self._operation
+                )
+                if execution_attribution(context) != self._attribution:
+                    raise ExecutionNotPermitted("execution is no longer permitted")
+                binding = await ProjectBindingRepository(session).get(
+                    project_id=context.project_id, binding_id=leg.binding.id
+                )
+                if (
+                    binding is None
+                    or operation not in binding.enabled_operations
+                    or binding.version != leg.binding.version
+                ):
+                    raise ExecutionBindingMissing("the binding is no longer enabled and usable")
+                usable = await service._credentials.usable_credential_in_session(
+                    session,
+                    project_id=context.project_id,
+                    credential_id=leg.credential.credential_id,
+                    operation=operation,
+                )
+                if usable is None or usable.generation != leg.credential.generation:
+                    raise ExecutionBindingMissing(
+                        "the credential is no longer usable for this attempt"
+                    )
+                material = await service._credentials.resolve_material_in_session(
+                    session,
+                    context,
+                    usable.id,
+                    operation=operation,
+                    expected_generation=usable.generation,
+                )
+                if (
+                    material is None
+                    or material.generation != leg.credential.generation
+                    or material.token_generation != leg.credential.token_generation
+                    or material.secret.get_secret_value()
+                    != leg.credential.secret.get_secret_value()
+                ):
+                    raise ExecutionBindingMissing("the credential material changed before dispatch")
+                project_allocations = await PoolAllocationRepository(session).list_for_project(
+                    project_id=context.project_id
+                )
+                caps = [
+                    allocation.max_concurrency
+                    for allocation in project_allocations
+                    if allocation.max_concurrency is not None
+                ]
+                if service._authority is not None:
+                    service._authority.update_project_cap(
+                        context.project_id, min(caps) if caps else None
+                    )
+                pools = UpstreamPoolRepository(session)
+                link = await pools.pool_for_credential(credential_id=usable.id, operation=operation)
+                if leg.pool is None:
+                    if link is not None:
+                        raise ExecutionBindingMissing(
+                            "the provider configuration changed before dispatch"
+                        )
+                else:
+                    if link is None or link.pool_id != leg.pool.id:
+                        raise ExecutionBindingMissing(
+                            "the provider configuration changed before dispatch"
+                        )
+                    pool = await pools.get_pool(account_id=service._account_id, pool_id=leg.pool.id)
+                    if pool is None or pool.status is not PoolStatus.ACTIVE:
+                        raise ExecutionBindingMissing(
+                            "the provider configuration changed before dispatch"
+                        )
+                    if pool != leg.pool:
+                        raise ExecutionBindingMissing(
+                            "the provider configuration changed before dispatch"
+                        )
+                    allocation = await PoolAllocationRepository(session).get(
+                        project_id=context.project_id,
+                        pool_id=leg.pool.id,
+                        operation=operation,
+                    )
+                    if allocation != leg.allocation:
+                        raise ExecutionBindingMissing(
+                            "the provider configuration changed before dispatch"
+                        )
+        except (
+            CredentialStorageUnavailable,
+            ProjectStorageUnavailable,
+            OperationalError,
+        ) as error:
+            raise ExecutionStorageUnavailable("the credential store is unavailable") from error
+        try:
+            config = await effective_config_for_name(service._repository, leg.provider, strict=True)
+        except ProviderConfigError as error:
+            raise ExecutionError(str(error)) from error
+        if config != leg.config or not service._leg_allows(leg, self._request, self._operation):
+            raise ExecutionBindingMissing("the provider configuration changed before dispatch")
+
+    async def _dispatch_current(self, current: _Leg, grant: DispatchGrant | None) -> Any:
+        reservation: Any = None
+        completed = False
+        try:
+            if self._service._closed:
+                raise ExecutionAuthorityUnavailable("the execution authority is stopped")
+            # Final live permission, binding, credential, pool/allocation
+            # revision, and configuration check immediately before the atomic
+            # capacity admission.
+            await self._live_leg_check(current)
+            self._require_deadline()
+            reservation = await self._reserve_current(current, grant)
+            # The admission itself can consume time; a request whose logical
+            # deadline passed while reserving must not reach the provider. The
+            # reservation is provably unsent, so it is released.
+            if self._service._deadline_passed(self._deadline):
+                await _release_capacity(reservation, self._repository_limits, self._limits)
+                raise ExecutionQueueExpired(
+                    "the execution queue wait bound expired before dispatch"
+                )
+            await self._record_dispatch(current, _attempt_id(reservation), reservation)
+            # The recovery record write is the last await before the provider
+            # send begins. A deadline that elapsed during that write proves the
+            # send never started, so release the reservation instead of
+            # charging an uncertain upstream attempt.
+            if self._service._deadline_passed(self._deadline):
+                await _release_capacity(reservation, self._repository_limits, self._limits)
+                await self.resolve_dispatch(_attempt_id(reservation), "failed")
+                raise ExecutionQueueExpired(
+                    "the execution request deadline expired before the provider call"
+                )
+            completed = True
+            if grant is not None and reservation is not None:
+                return _GrantedReservation(reservation, grant)
+            if grant is not None:
+                grant.finish()
+            return reservation
+        except BaseException:
+            if reservation is not None:
+                await asyncio.shield(
+                    _release_capacity(reservation, self._repository_limits, self._limits)
+                )
+            raise
+        finally:
+            if grant is not None:
+                grant.started.set()
+                if not completed:
+                    grant.finish()
+
+    def _require_deadline(self) -> None:
+        """Refuse dispatch when the logical request deadline already passed."""
+
+        if self._service._deadline_passed(self._deadline):
+            raise ExecutionQueueExpired("the execution request deadline expired before dispatch")
+
+    async def _reserve_current(self, current: _Leg, grant: DispatchGrant | None) -> Any:
+        if grant is not None:
+            add_queue_wait(grant.queue_wait_ms)
+        self._require_deadline()
+        spec = self._service._strict_spec(
+            current, self._request, self._operation, self._attribution
+        )
+        attempt_id = uuid4().hex
+        attempt_context = self._service._rails_context(
+            current,
+            self._request,
+            self._operation,
+            self._attribution,
+            attempt_id=attempt_id,
+        )
+        reservation = await self._admit(current, attempt_context, spec, attempt_id)
+        return reservation
+
+    async def _admit(
+        self,
+        current: _Leg,
+        attempt_context: LimitCallContext,
+        spec: StrictAttemptSpec | None,
+        attempt_id: str,
+    ) -> Any:
+        limits = self._limits
+        if self._supports_native:
+            assert limits is not None
+            return await limits.admit_attempt(attempt_context, spec)
+        if spec is None:
+            return None
+        strict = await self._repository_limits.reserve_strict(
+            attempt_id=attempt_id,
+            provider=self._leg.provider,
+            operation=_limit_operation(self._operation),
+            auth_mode=self._auth_mode,
+            spec=spec,
+        )
+        if strict.state != "reserved":
+            raise ExecutionError(
+                "the capacity reservation replayed as settled; a fresh attempt is required"
+            )
+        return _AttemptCapacity(
+            attempt_id=attempt_id,
+            admission=None,
+            strict=strict,
+            repository_limits=self._repository_limits,
+        )
+
+    async def _record_dispatch(self, current: _Leg, attempt_id: str, reservation: Any) -> None:
+        if self._pool_id is None or self._authority is None or reservation is None:
+            return
+        await self._authority.record_dispatch(
+            attempt_id=attempt_id,
+            request_id=(
+                current_observability().current_trace_id() or self._attribution.project_id.hex
+            ),
+            project_id=self._attribution.project_id,
+            pool_id=self._pool_id,
+            operation=_operation_code(self._operation),
+            actor_type=self._attribution.actor_type,
+            actor_id=self._attribution.actor_id,
+            credential_id=current.credential.credential_id,
+            binding_id=current.binding.id,
+        )
+
+    async def release(self, reservation: Any) -> None:
+        """Undo a reservation proven never to reach the vendor."""
+
+        await _release_capacity(reservation, self._repository_limits, self._limits)
+
+    async def resolve_dispatch(self, attempt_id: str, outcome: str) -> None:
+        """Resolve the authority recovery record after the attempt settles."""
+
+        if self._pool_id is not None and self._authority is not None:
+            await self._authority.resolve_dispatch(
+                project_id=self._attribution.project_id,
+                attempt_id=attempt_id,
+                outcome=outcome,
+            )
+
+
+def _attempt_id(reservation: Any) -> str:
+    """Return the attempt identity of a native or strict reservation."""
+
+    if reservation is None:
+        return ""
+    strict = getattr(reservation, "strict", None)
+    return str(
+        getattr(reservation, "attempt_id", None) or getattr(strict, "attempt_id", None) or ""
+    )
 
 
 def _release_legs(legs: Sequence[_Leg]) -> None:
@@ -1752,6 +2404,33 @@ def _release_legs(legs: Sequence[_Leg]) -> None:
 
     for leg in legs:
         leg.lease.release()
+
+
+async def _release_capacity(reservation: Any, repository_limits: Any, limits: Any) -> None:
+    """Undo a reservation that provably never reached the vendor."""
+
+    try:
+        strict = getattr(reservation, "strict", None)
+        if strict is not None:
+            await repository_limits.release_strict(
+                attempt_id=strict.attempt_id,
+                bucket_ids=tuple(getattr(strict, "bucket_ids", ())),
+            )
+        admission = getattr(reservation, "admission", None)
+        if admission is not None and limits is not None:
+            with suppress(Exception):
+                await limits.release_admission(admission)
+        if strict is None and admission is None:
+            attempt_id = getattr(reservation, "attempt_id", None)
+            if attempt_id:
+                await repository_limits.release_strict(
+                    attempt_id=attempt_id,
+                    bucket_ids=tuple(getattr(reservation, "bucket_ids", ())),
+                )
+    except Exception:
+        # The durable row stays open; restart treats it as uncertain rather
+        # than pretending it never happened.
+        return
 
 
 async def _noop_settle(_outcome: str) -> None:
@@ -1924,6 +2603,7 @@ async def _collect_fanout_outcomes[T](tasks: list[asyncio.Task[T]]) -> list[T]:
 
 __all__ = [
     "ExecutionAllFailed",
+    "ExecutionAuthorityUnavailable",
     "ExecutionBindingMissing",
     "ExecutionError",
     "ExecutionNotPermitted",
