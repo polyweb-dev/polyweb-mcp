@@ -4,6 +4,7 @@ title: Projects U2 - Activity, usage and playground UI
 status: To Do
 assignee: []
 created_date: '2026-10-26T09:47:00Z'
+updated_date: '2026-10-30T19:47:00Z'
 labels:
   - projects-first
   - step-3-ui
@@ -15,6 +16,7 @@ documentation:
   - doc-000003
   - doc-000005
   - doc-000002
+  - doc-000008
 priority: high
 type: feature
 ordinal: 31000
@@ -33,6 +35,8 @@ Step rules and the shared Definition of Done: doc-000003. Card map and worktree 
 - [ ] #1 Activity, usage, dashboard and playground under a project route show only that project's data.
 - [ ] #2 Switching projects cancels in-flight requests and ignores late results.
 - [ ] #3 The playground runs through the human session and never stores an API key in browser state.
+- [ ] #4 Activity lists newest-first traces with operation and outcome filters and cursor pagination. The list retains its filters and loaded rows after trace detail closes.
+- [ ] #5 Activity detail retains the results, provider-attempt and span-timeline views, with failures and timing. It explains absent or redacted payloads without a global lookup.
 <!-- AC:END -->
 
 ## Definition of Done

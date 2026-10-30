@@ -4,6 +4,7 @@ title: Projects U1 - Project shell, members and API keys UI
 status: To Do
 assignee: []
 created_date: '2026-10-26T09:47:00Z'
+updated_date: '2026-10-30T19:47:00Z'
 labels:
   - projects-first
   - step-3-ui
@@ -14,6 +15,7 @@ documentation:
   - doc-000003
   - doc-000005
   - doc-000002
+  - doc-000008
 priority: high
 type: feature
 ordinal: 30000
@@ -33,6 +35,7 @@ Step rules and the shared Definition of Done: doc-000003. Card map and worktree 
 - [ ] #2 Permitted system users create projects and name the first administrator; project administrators manage members and roles; last-administrator refusals are explained.
 - [ ] #3 API-key screens issue keys with a No expiration option, show the raw key once, list creator, expiry and last use, and rotate and revoke keys.
 - [ ] #4 Two tabs in different projects never share drafts, results or access rights.
+- [ ] #5 Project screens retain the shared colors, typography and controls. The selected project and active screen remain visible at 1280x800 and 1440x900.
 <!-- AC:END -->
 
 ## Definition of Done
