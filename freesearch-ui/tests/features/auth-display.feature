@@ -1,7 +1,8 @@
 Feature: Auth display errors and brand
   The login, register, and confirmation screens show friendly error text,
   the repository brand, and the configuration state. No screen shows a raw
-  server body.
+  server body. Accounts carry no role, so neither signup nor administration
+  offers an account-type choice and both send exactly {email, password}.
 
   @stub
   Scenario: Register shows the friendly password rule without raw JSON
@@ -11,6 +12,8 @@ Feature: Auth display errors and brand
     And I submit a registration with a weak password
     Then the register screen shows the password rule text
     And the register screen shows no raw JSON body
+    And the register screen offers no account-type choice
+    And the registration request carried only email and password
 
   @stub
   Scenario: Login shows friendly bad-credentials text without raw JSON
@@ -38,3 +41,13 @@ Feature: Auth display errors and brand
     When I open the login screen
     And I submit a login with any credentials
     Then the login screen shows the configuration state text
+
+  @stub
+  Scenario: Administration creates an account with only email and password
+    Given the sidebar session belongs to a system administrator
+    And the account provisioning backend accepts new accounts
+    When I open the account administration screen
+    Then the account administration screen offers no account-type choice
+    When I create the account from the administration screen
+    Then the account provisioning request carried only email and password
+    And the administration receipt names the account without a role

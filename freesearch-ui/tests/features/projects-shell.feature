@@ -1,7 +1,9 @@
 Feature: Project shell and membership UX
   The desktop shell gains a project selector, project-scoped URLs, and
   membership administration driven by live backend permissions. Drafts and
-  access state are isolated per (account, project) and per tab.
+  access state are isolated per (account, project) and per tab. Accounts carry
+  no role: system permissions come from GET /api/v1/system/access and project
+  permissions from GET /api/v1/projects/{id}/access.
 
   Background:
     Given the projects backend is stubbed
@@ -12,6 +14,7 @@ Feature: Project shell and membership UX
     When I open the workspace page "/projects"
     Then I see "You are not a member of any project."
     And I see "Ask a system administrator to add you."
+    And the create project form is absent
     When I open the workspace page "/p/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
     Then I see "Project unavailable"
 
@@ -59,3 +62,36 @@ Feature: Project shell and membership UX
     When I open the workspace page "/p/cccccccc-3333-4333-8333-cccccccccccc/usage"
     Then the page URL path should be "/p/cccccccc-3333-4333-8333-cccccccccccc"
     And the heading "Usage" is absent
+
+  @stub
+  Scenario: Only project.create offers the create project form
+    Given the projects backend is stubbed with system permissions "system.projects.create, system.settings.read"
+    And I am a member of project Alpha with role project_member
+    When I open the workspace page "/projects"
+    Then I see the heading "Projects"
+    And I see "Alpha"
+    And the create project form is absent
+
+  @stub
+  Scenario: The root path reopens the last explicitly selected project
+    Given I am a member of project Alpha with role project_member
+    And I am a member of project Beta with role project_member
+    When I open the workspace page "/projects"
+    And I select project Beta from the project selector
+    Then the page URL path should be "/p/bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb"
+    When I open the workspace page "/"
+    Then the page URL path should be "/p/bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb"
+    And I see the heading "Beta"
+
+  @stub
+  Scenario Outline: The selected project and active screen stay visible at <width> by <height>
+    Given I am a member of project Alpha with role project_admin
+    When I open the workspace page "/p/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/api-keys" at <width> by <height>
+    Then the project selector names "Alpha" within the viewport
+    And the active Project link "API keys" is current within the viewport
+    And the heading "API keys" is within the viewport
+
+    Examples:
+      | width | height |
+      | 1280  | 800    |
+      | 1440  | 900    |

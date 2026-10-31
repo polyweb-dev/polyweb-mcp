@@ -14,7 +14,7 @@ const NOT_A_MEMBER_MESSAGE = "Project created. You are not a member of it."
 /**
  * Project creation form.
  *
- * Renders only when the page gates it behind `project.create`. After a
+ * Renders only when the page gates it behind project creation. After a
  * successful create the provider reloads the list once; the effect that
  * watches it then decides: a member lands on the new overview, a creator
  * without membership (a system administrator) gets a neutral note instead —
@@ -51,7 +51,9 @@ export function ProjectCreateForm({ defaultAdminEmail }: { defaultAdminEmail: st
         setMessage(NOT_A_MEMBER_MESSAGE)
       }
     } catch (error) {
-      setMessage(projectMutationMessage(error, "The project could not be created."))
+      setMessage(
+        projectMutationMessage(error, "The project could not be created.", { emailLookup: true })
+      )
     } finally {
       setPending(false)
     }

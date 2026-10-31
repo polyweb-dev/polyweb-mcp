@@ -3,11 +3,25 @@ import { render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { MemoryRouter, Route, Routes, useLocation } from "react-router"
 import { err, installFetchStub, ok } from "@/test/fetchMock"
-import { ProjectsProvider } from "@/domains/projects"
+import { ProjectsProvider, lastProjectKey } from "@/domains/projects"
+import { parseProjectPath, projectIdFromPath, projectPath } from "@/app/routes"
 import { ProjectSelector } from "./ProjectSelector"
 
 const P_A = { id: "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa", account_id: "acc", name: "Alpha", slug: "alpha", status: "active", created_by: "u", created_at: "t", version: 1 }
 const P_B = { id: "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb", account_id: "acc", name: "Beta", slug: "beta", status: "archived", created_by: "u", created_at: "t", version: 1 }
+
+/** Mirror of the shell wiring: the URL project and a section-keeping path builder. */
+function SelectorAtRoute() {
+  const { pathname } = useLocation()
+  const section = parseProjectPath(pathname)?.section ?? "overview"
+  return (
+    <ProjectSelector
+      collapsed={false}
+      currentProjectId={projectIdFromPath(pathname)}
+      pathForProject={(id) => projectPath(id, section)}
+    />
+  )
+}
 
 function PathProbe() {
   const { pathname } = useLocation()
@@ -26,7 +40,7 @@ function renderSelector(route: string, systemOk = true) {
     <MemoryRouter initialEntries={[route]}>
       <ProjectsProvider accountId="acc">
         <Routes>
-          <Route path="*" element={<><ProjectSelector collapsed={false} /><PathProbe /></>} />
+          <Route path="*" element={<><SelectorAtRoute /><PathProbe /></>} />
         </Routes>
       </ProjectsProvider>
     </MemoryRouter>
@@ -57,6 +71,20 @@ describe("ProjectSelector", () => {
     await waitFor(() =>
       expect(screen.getByTestId("path").textContent).toBe(`/p/${P_B.id}/members`)
     )
+  })
+
+  it("keeps the API keys section on a switch and remembers only the explicit choice", async () => {
+    const user = userEvent.setup()
+    renderSelector(`/p/${P_A.id}/api-keys`)
+    await screen.findByRole("navigation", { name: "Projects" })
+    expect(window.localStorage.getItem(lastProjectKey("acc"))).toBeNull()
+
+    await user.click(screen.getByRole("button", { name: /Select project/ }))
+    await user.click(screen.getByRole("menuitem", { name: /Beta/ }))
+    await waitFor(() =>
+      expect(screen.getByTestId("path").textContent).toBe(`/p/${P_B.id}/api-keys`)
+    )
+    expect(window.localStorage.getItem(lastProjectKey("acc"))).toBe(P_B.id)
   })
 
   it("names the trigger with the current project for assistive tech", async () => {

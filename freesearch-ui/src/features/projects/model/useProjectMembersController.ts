@@ -102,16 +102,12 @@ export function useProjectMembersController(
     [draftKey]
   )
 
-  const fail = useCallback(
-    (error: unknown, fallback: string) => {
-      setMessage(projectMutationMessage(error, fallback))
-      if (error instanceof ApiError && error.status === 403) refreshAccess()
-    },
-    [refreshAccess]
-  )
-
   const mutate = useCallback(
-    async (action: () => Promise<unknown>, fallback = "The change could not be saved.") => {
+    async (
+      action: () => Promise<unknown>,
+      fallback = "The change could not be saved.",
+      emailLookup = false
+    ) => {
       setPending(true)
       setMessage(null)
       try {
@@ -119,12 +115,13 @@ export function useProjectMembersController(
         reloadMembers()
         refreshAccess()
       } catch (error) {
-        fail(error, fallback)
+        setMessage(projectMutationMessage(error, fallback, { emailLookup }))
+        if (error instanceof ApiError && error.status === 403) refreshAccess()
       } finally {
         setPending(false)
       }
     },
-    [reloadMembers, refreshAccess, fail]
+    [reloadMembers, refreshAccess]
   )
 
   const add = useCallback(async () => {
@@ -137,7 +134,7 @@ export function useProjectMembersController(
       await addProjectMember(projectId, { email, initial_role: draft.role })
       setDraft({ ...EMPTY_DRAFT })
       clearProjectDraft(draftKey)
-    }, "The member could not be added.")
+    }, "The member could not be added.", true)
   }, [draft, projectId, draftKey, mutate])
 
   const setStatus = useCallback(

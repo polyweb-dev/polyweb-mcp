@@ -15,7 +15,6 @@ export function AdminAccountFacts({ account }: { account: UserAccount }) {
     <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2">
       {factRow("Email", account.email)}
       {factRow("Account id", account.id)}
-      {factRow("Role", account.role)}
       {factRow("Active", account.is_active ? "Active" : "Inactive")}
       {factRow("Verification", account.is_verified ? "Verified" : "Not verified")}
     </dl>

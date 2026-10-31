@@ -330,8 +330,9 @@ Then("the header navigation should expose zero tab roles", async ({ page }) => {
   const navigation = page.getByRole("navigation", { name: "Primary" })
   await expect(navigation.getByRole("tab")).toHaveCount(0)
   await expect(navigation.getByRole("tablist")).toHaveCount(0)
-  // P1-FINAL: standalone Providers page retired — five workspace links.
-  await expect(navigation.getByRole("link")).toHaveCount(5)
+  // P1-FINAL retired the Providers page; U1: the default stubbed session is a
+  // system administrator, so every permitted workspace link shows (eight).
+  await expect(navigation.getByRole("link")).toHaveCount(8)
 })
 
 Then("the page URL should be unchanged", async ({ page }) => {

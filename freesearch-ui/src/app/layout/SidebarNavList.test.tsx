@@ -2,11 +2,11 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { screen, within } from "@testing-library/react"
 import { NavList } from "@/app/layout/SidebarNavList"
 import { renderAuthenticated } from "@/test/renderAuthenticated"
+import { adminAccountFixture } from "@/test/authFixtures"
 import {
-  adminAccountFixture,
-  agentAccountFixture,
-  developerAccountFixture,
-} from "@/test/authFixtures"
+  SETTINGS_READER_PERMISSIONS,
+  SYSTEM_ADMIN_PERMISSIONS,
+} from "@/test/accessFixtures"
 
 const ADMIN_LABELS = [
   "Playground",
@@ -14,6 +14,7 @@ const ADMIN_LABELS = [
   "Usage",
   "Activity",
   "Settings",
+  "Projects",
   "Account",
   "Admin",
 ]
@@ -24,6 +25,7 @@ const ADMIN_HREFS = [
   "/usage",
   "/activity",
   "/settings",
+  "/projects",
   "/account",
   "/admin/users",
 ]
@@ -38,36 +40,40 @@ function ariaLabels(links: HTMLElement[]): Array<string | null> {
   return links.map((link) => link.getAttribute("aria-label"))
 }
 
+function renderNav(systemPermissions: readonly string[] | undefined, collapsed = false) {
+  return renderAuthenticated(<NavList collapsed={collapsed} />, {
+    account: adminAccountFixture(),
+    ...(systemPermissions === undefined ? {} : { systemPermissions }),
+  })
+}
+
 afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-describe("NavList role filter", () => {
-  it("shows all seven links in order with exact hrefs for admin", () => {
-    renderAuthenticated(<NavList collapsed={false} />, {
-      account: adminAccountFixture(),
-    })
+describe("NavList permission filter", () => {
+  it("shows all eight links in order with exact hrefs for the system administrator", () => {
+    renderNav(SYSTEM_ADMIN_PERMISSIONS)
 
     const links = navLinks()
-    expect(links).toHaveLength(7)
+    expect(links).toHaveLength(8)
     expect(ariaLabels(links)).toEqual(ADMIN_LABELS)
     expect(links.map((link) => link.getAttribute("href"))).toEqual(ADMIN_HREFS)
     expect(links[0]?.getAttribute("title")).toBeNull()
   })
 
-  it("shows six links without Admin for developer", () => {
-    renderAuthenticated(<NavList collapsed={false} />, {
-      account: developerAccountFixture(),
-    })
+  it("shows seven links without Admin with system.settings.read only", () => {
+    renderNav(SETTINGS_READER_PERMISSIONS)
 
     const links = navLinks()
-    expect(links).toHaveLength(6)
+    expect(links).toHaveLength(7)
     expect(ariaLabels(links)).toEqual([
       "Playground",
       "Routing",
       "Usage",
       "Activity",
       "Settings",
+      "Projects",
       "Account",
     ])
     expect(
@@ -75,14 +81,12 @@ describe("NavList role filter", () => {
     ).not.toBeInTheDocument()
   })
 
-  it("shows exactly Playground, Activity, and Account for agent", () => {
-    renderAuthenticated(<NavList collapsed={false} />, {
-      account: agentAccountFixture(),
-    })
+  it("shows exactly Playground, Activity, Projects, and Account without system permissions", () => {
+    renderNav([])
 
     const links = navLinks()
-    expect(links).toHaveLength(3)
-    expect(ariaLabels(links)).toEqual(["Playground", "Activity", "Account"])
+    expect(links).toHaveLength(4)
+    expect(ariaLabels(links)).toEqual(["Playground", "Activity", "Projects", "Account"])
     expect(
       screen.queryByRole("link", { name: "Routing" })
     ).not.toBeInTheDocument()
@@ -91,10 +95,20 @@ describe("NavList role filter", () => {
     ).not.toBeInTheDocument()
   })
 
+  it("hides every gated link while the system access is unknown", () => {
+    renderNav(undefined)
+
+    expect(ariaLabels(navLinks())).toEqual(["Playground", "Activity", "Projects", "Account"])
+  })
+
+  it("shows Admin with system.settings.write alone, without the settings links", () => {
+    renderNav(["system.settings.write"])
+
+    expect(ariaLabels(navLinks())).toEqual(["Playground", "Activity", "Projects", "Account", "Admin"])
+  })
+
   it("points the Admin link at /admin/users", () => {
-    renderAuthenticated(<NavList collapsed={false} />, {
-      account: adminAccountFixture(),
-    })
+    renderNav(SYSTEM_ADMIN_PERMISSIONS)
 
     expect(
       screen.getByRole("link", { name: "Admin" })
@@ -104,12 +118,10 @@ describe("NavList role filter", () => {
 
 describe("NavList collapsed mode", () => {
   it("keeps every aria-label and title without visible text", () => {
-    renderAuthenticated(<NavList collapsed />, {
-      account: adminAccountFixture(),
-    })
+    renderNav(SYSTEM_ADMIN_PERMISSIONS, true)
 
     const links = navLinks()
-    expect(links).toHaveLength(7)
+    expect(links).toHaveLength(8)
     for (const label of ADMIN_LABELS) {
       const link = screen.getByRole("link", { name: label })
       expect(link.getAttribute("aria-label")).toBe(label)

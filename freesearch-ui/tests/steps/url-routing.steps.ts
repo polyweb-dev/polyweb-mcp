@@ -67,13 +67,32 @@ Then("the shell should expose no header element", async ({ page }) => {
   await expect(page.locator("header")).toHaveCount(0)
 })
 
-Then("the sidebar navigation should expose five links", async ({ page }) => {
-  const nav = page.getByRole("navigation", { name: "Primary" })
-  await expect(nav).toBeVisible()
-  await expect(nav.getByRole("link")).toHaveCount(5)
-  // P1-FINAL: standalone Providers page retired into Settings — no link.
-  await expect(nav.getByRole("link", { name: "Providers", exact: true })).toHaveCount(0)
-  for (const label of ["Playground", "Routing", "Usage", "Activity", "Settings"]) {
-    await expect(nav.getByRole("link", { name: label, exact: true })).toHaveCount(1)
+/**
+ * Primary links of the default stubbed session, a system administrator (every
+ * system permission), in the U1 contract order.
+ */
+const SYSTEM_ADMINISTRATOR_LINKS = [
+  "Playground",
+  "Routing",
+  "Usage",
+  "Activity",
+  "Settings",
+  "Projects",
+  "Account",
+  "Admin",
+]
+
+Then(
+  "the sidebar navigation should expose the system administrator links",
+  async ({ page }) => {
+    const nav = page.getByRole("navigation", { name: "Primary" })
+    await expect(nav).toBeVisible()
+    const links = nav.getByRole("link")
+    await expect(links).toHaveCount(SYSTEM_ADMINISTRATOR_LINKS.length)
+    // P1-FINAL: standalone Providers page retired into Settings — no link.
+    await expect(nav.getByRole("link", { name: "Providers", exact: true })).toHaveCount(0)
+    for (const [index, label] of SYSTEM_ADMINISTRATOR_LINKS.entries()) {
+      await expect(links.nth(index)).toHaveAccessibleName(label)
+    }
   }
-})
+)

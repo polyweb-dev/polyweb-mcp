@@ -1,5 +1,10 @@
 import { Link } from "react-router"
-import { PROJECT_ROLE_LABELS, useProjectScope } from "@/domains/projects"
+import {
+  PROJECT_PERMISSIONS,
+  PROJECT_ROLE_LABELS,
+  hasPermission,
+  useProjectScope,
+} from "@/domains/projects"
 import type { ProjectRoleKey } from "@/domains/projects"
 
 const PREVIEW_NOTICE =
@@ -19,7 +24,8 @@ function roleLabel(role: string): string {
  */
 export function ProjectOverviewPage() {
   const { project, projectId, accessState } = useProjectScope()
-  const roles = accessState.status === "ready" ? accessState.data.roles : []
+  const access = accessState.status === "ready" ? accessState.data : null
+  const roles = access?.roles ?? []
 
   return (
     <section className="flex flex-1 flex-col space-y-6">
@@ -50,14 +56,16 @@ export function ProjectOverviewPage() {
         )}
       </div>
 
-      <p className="text-[13px]">
-        <Link
-          to={`/p/${projectId}/members`}
-          className="text-[var(--signal)] hover:underline"
-        >
-          Members
-        </Link>
-      </p>
+      {hasPermission(access, PROJECT_PERMISSIONS.membersRead) && (
+        <p className="text-[13px]">
+          <Link
+            to={`/p/${projectId}/members`}
+            className="text-[var(--signal)] hover:underline"
+          >
+            Members
+          </Link>
+        </p>
+      )}
 
       <p role="note" className="max-w-xl text-[13px] text-[var(--muted)]">
         {PREVIEW_NOTICE}

@@ -1,6 +1,7 @@
 import { expect } from "@playwright/test"
 import { Given, When, Then } from "./fixtures"
 import { setStubbedCrdTotals, setStubbedProviderLimits } from "./backendStub"
+import { userAccountBody } from "./accountStub"
 
 /**
  * Keenable card shared bar (@keenable-cr1).
@@ -257,14 +258,13 @@ Given(
       return route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify({
-          id: "11111111-1111-4111-8111-111111111111",
-          email: "admin@example.com",
-          role: "admin",
-          is_active: true,
-          is_superuser: true,
-          is_verified: true,
-        }),
+        // Role-less account; the Before hook's system access serves the
+        // system administrator permission set.
+        body: JSON.stringify(
+          userAccountBody("11111111-1111-4111-8111-111111111111", "admin@example.com", {
+            username: "admin",
+          })
+        ),
       })
     })
     setStubbedProviderLimits(keenableCreditLimits(access, capacity))

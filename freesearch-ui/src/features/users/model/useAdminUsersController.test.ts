@@ -22,14 +22,14 @@ describe("useAdminUsersController", () => {
     vi.unstubAllGlobals()
   })
 
-  it("starts with empty drafts, Agent role, and no receipt", () => {
+  it("starts with empty drafts, no role draft, and no receipt", () => {
     stubProvision()
     const { result } = renderHook(() => useAdminUsersController())
 
     expect(result.current.email).toBe("")
     expect(result.current.password).toBe("")
     expect(result.current.confirmation).toBe("")
-    expect(result.current.roleDraft).toBe("agent")
+    expect("roleDraft" in result.current).toBe(false)
     expect(result.current.pending).toBe(false)
     expect(result.current.created).toBeNull()
     expect(result.current.error).toBeNull()
@@ -52,6 +52,45 @@ describe("useAdminUsersController", () => {
     expect(stub.requests).toHaveLength(0)
   })
 
+  it.each([
+    ["short", "a".repeat(11), "Use at least 12 characters for the password."],
+    ["overlong", "a".repeat(129), "Use no more than 128 characters for the password."],
+  ])("rejects a %s password with the registration copy and no fetch", async (_case, password, message) => {
+    const stub = stubProvision()
+    const { result } = renderHook(() => useAdminUsersController())
+
+    act(() => {
+      result.current.setEmail("new@example.com")
+      result.current.setPassword(password)
+      result.current.setConfirmation(password)
+    })
+    await act(async () => {
+      await result.current.create()
+    })
+
+    expect(result.current.error).toBe(message)
+    expect(result.current.created).toBeNull()
+    expect(stub.requests).toHaveLength(0)
+  })
+
+  it("accepts the 12 and 128 character bounds", async () => {
+    const stub = stubProvision()
+    const { result } = renderHook(() => useAdminUsersController())
+
+    for (const password of ["a".repeat(12), "a".repeat(128)]) {
+      act(() => {
+        result.current.setEmail("new@example.com")
+        result.current.setPassword(password)
+        result.current.setConfirmation(password)
+      })
+      await act(async () => {
+        await result.current.create()
+      })
+      expect(result.current.error).toBeNull()
+    }
+    expect(stub.requests).toHaveLength(2)
+  })
+
   it("reports a mismatch without a fetch", async () => {
     const stub = stubProvision()
     const { result } = renderHook(() => useAdminUsersController())
@@ -69,18 +108,14 @@ describe("useAdminUsersController", () => {
     expect(stub.requests).toHaveLength(0)
   })
 
-  it("creates the selected role with the exact JSON and clears passwords", async () => {
-    const stub = stubProvision((body) => {
-      const typed = body as { role: string }
-      return ok(adminAccountFixture({ email: "new@example.com", role: typed.role as "admin" }))
-    })
+  it("creates the account with exactly the email and password JSON and clears passwords", async () => {
+    const stub = stubProvision(() => ok(adminAccountFixture({ email: "new@example.com" })))
     const { result } = renderHook(() => useAdminUsersController())
 
     act(() => {
       result.current.setEmail("new@example.com")
       result.current.setPassword("correct-horse-battery-99")
       result.current.setConfirmation("correct-horse-battery-99")
-      result.current.setRoleDraft("admin")
     })
     await act(async () => {
       await result.current.create()
@@ -91,16 +126,15 @@ describe("useAdminUsersController", () => {
     expect(stub.requests[0]?.body).toEqual({
       email: "new@example.com",
       password: "correct-horse-battery-99",
-      role: "admin",
     })
-    expect(result.current.created?.role).toBe("admin")
+    expect(result.current.created?.email).toBe("new@example.com")
     expect(result.current.password).toBe("")
     expect(result.current.confirmation).toBe("")
     expect(result.current.error).toBeNull()
     expect(result.current.pending).toBe(false)
   })
 
-  it("changes the role draft and drops the old receipt", async () => {
+  it("changes the email draft and drops the old receipt", async () => {
     stubProvision(() => ok(agentAccountFixture({ email: "new@example.com" })))
     const { result } = renderHook(() => useAdminUsersController())
 
@@ -115,9 +149,9 @@ describe("useAdminUsersController", () => {
     expect(result.current.created).not.toBeNull()
 
     act(() => {
-      result.current.setRoleDraft("developer")
+      result.current.setEmail("other@example.com")
     })
-    expect(result.current.roleDraft).toBe("developer")
+    expect(result.current.email).toBe("other@example.com")
     expect(result.current.created).toBeNull()
   })
 

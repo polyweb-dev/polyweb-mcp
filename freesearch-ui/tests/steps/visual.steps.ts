@@ -69,13 +69,17 @@ Then("reduced-motion transitions should be disabled", async ({ page }) => {
 
 When("I walk from the header through Routing with keyboard only", async ({ page }) => {
   // Sidebar redesign: the collapse control is the first focus stop, then the
-  // seven navigation links in order, then the account row trigger.
+  // project selector (U1), then the eight Primary links of a system
+  // administrator in order, then the account row trigger.
   const collapseButton = page.getByRole("button", {
     name: "Collapse sidebar",
     exact: true,
   })
   await page.keyboard.press("Tab")
   await expectFocusVisible(collapseButton)
+
+  await page.keyboard.press("Tab")
+  await expectFocusVisible(page.getByRole("button", { name: /^Select project/ }))
 
   for (const label of ["Playground", "Routing"]) {
     await page.keyboard.press("Tab")
@@ -87,7 +91,7 @@ When("I walk from the header through Routing with keyboard only", async ({ page 
   await expect(page.getByRole("heading", { name: "Routing", exact: true })).toBeVisible()
   await expectFocusVisible(routingLink)
 
-  for (const label of ["Usage", "Activity", "Settings", "Account", "Admin"]) {
+  for (const label of ["Usage", "Activity", "Settings", "Projects", "Account", "Admin"]) {
     await page.keyboard.press("Tab")
     await expectFocusVisible(page.getByRole("link", { name: label, exact: true }))
   }
@@ -114,8 +118,11 @@ When("I walk from the header through Routing with keyboard only", async ({ page 
 
 When("I move to the {string} view using keyboard only", async ({ page }, view: string) => {
   let navigationLink = page.getByRole("link", { name: view, exact: true })
+  const openNavigation = page.getByRole("button", { name: "Open navigation", exact: true })
+  // Permission-gated links appear once system access has loaded (U1).
+  await expect(navigationLink.or(openNavigation).first()).toBeVisible()
   if (!(await navigationLink.isVisible())) {
-    await page.getByRole("button", { name: "Open navigation", exact: true }).click()
+    await openNavigation.click()
     navigationLink = page
       .getByRole("dialog", { name: "Navigation" })
       .getByRole("link", { name: view, exact: true })

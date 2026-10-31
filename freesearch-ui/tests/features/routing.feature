@@ -38,7 +38,7 @@ Feature: Routing workbench
 
   @stub
   Scenario: Tavily rate tier changes from dev to prod with one partial PATCH
-    Given the sidebar session belongs to an admin account
+    Given the sidebar session belongs to a system administrator
     And the Tavily stored key environment is "dev"
     And the Tavily dashboard shows dev minute headroom
     When I reload the web application
@@ -65,7 +65,7 @@ Feature: Routing workbench
 
   @stub
   Scenario: Tavily rate tier changes from prod to dev with one partial PATCH
-    Given the sidebar session belongs to an admin account
+    Given the sidebar session belongs to a system administrator
     And the Tavily stored key environment is "prod"
     And the Tavily dashboard shows prod minute headroom
     When I reload the web application
@@ -92,7 +92,7 @@ Feature: Routing workbench
 
   @stub
   Scenario: Tavily rate tier PATCH rejection keeps the stored value
-    Given the sidebar session belongs to an admin account
+    Given the sidebar session belongs to a system administrator
     And the Tavily stored key environment is "dev"
     And the provider PATCH for "Tavily" will fail with "db down"
     When I reload the web application
@@ -107,7 +107,7 @@ Feature: Routing workbench
 
   @stub
   Scenario: Tavily rate tier with absent state shows Unknown and sends no PATCH
-    Given the sidebar session belongs to an admin account
+    Given the sidebar session belongs to a system administrator
     And the Tavily stored key environment is absent
     When I reload the web application
     And I select the "Settings" header tab
@@ -120,7 +120,7 @@ Feature: Routing workbench
 
   @stub
   Scenario: Tavily rate tier with keyless access shows keyless text and sends no PATCH
-    Given the sidebar session belongs to an admin account
+    Given the sidebar session belongs to a system administrator
     And the Tavily key is keyless
     When I reload the web application
     And I select the "Settings" header tab
@@ -132,8 +132,8 @@ Feature: Routing workbench
     And no Tavily force-sync requests should exist
 
   @stub
-  Scenario: Tavily rate tier with a read-only role shows text and sends no PATCH
-    Given the sidebar session belongs to a developer account
+  Scenario: Tavily rate tier with read-only settings access shows text and sends no PATCH
+    Given the sidebar session belongs to the "settings reader" account
     And the Tavily stored key environment is "dev"
     When I reload the web application
     And I select the "Settings" header tab
@@ -146,7 +146,7 @@ Feature: Routing workbench
 
   @stub
   Scenario: Tavily rate tier keeps the saved value when refresh fails after save
-    Given the sidebar session belongs to an admin account
+    Given the sidebar session belongs to a system administrator
     And the Tavily stored key environment is "dev"
     And the Tavily dashboard shows dev minute headroom
     When I reload the web application
@@ -163,7 +163,7 @@ Feature: Routing workbench
 
   @stub
   Scenario: Tavily rate tier select keeps keyboard access without a registry drag
-    Given the sidebar session belongs to an admin account
+    Given the sidebar session belongs to a system administrator
     And the Tavily stored key environment is "dev"
     When I reload the web application
     And I select the "Settings" header tab
@@ -178,7 +178,7 @@ Feature: Routing workbench
 
   @stub
   Scenario: Tavily card tier slot shows compact labels beside buttons with no numeric rate text
-    Given the sidebar session belongs to an admin account
+    Given the sidebar session belongs to a system administrator
     And the Tavily stored key environment is "dev"
     And the stubbed provider limits show "Tavily finite credits"
     When I navigate directly to "/usage"
@@ -196,7 +196,7 @@ Feature: Routing workbench
 
   @stub
   Scenario: Tavily card tier changes from dev to prod without reload with immediate confirmed ceiling
-    Given the sidebar session belongs to an admin account
+    Given the sidebar session belongs to a system administrator
     And the Tavily stored key environment is "dev"
     And the stubbed provider limits show "Tavily finite credits"
     When I navigate directly to "/usage"
@@ -220,7 +220,7 @@ Feature: Routing workbench
 
   @stub
   Scenario: Tavily card tier changes from prod to dev without reload with immediate confirmed ceiling
-    Given the sidebar session belongs to an admin account
+    Given the sidebar session belongs to a system administrator
     And the Tavily stored key environment is "prod"
     And the stubbed provider limits show "Tavily prod credits"
     When I navigate directly to "/usage"
@@ -244,7 +244,7 @@ Feature: Routing workbench
 
   @stub
   Scenario: Tavily card tier keeps the confirmed ceiling while the dashboard refresh is deferred
-    Given the sidebar session belongs to an admin account
+    Given the sidebar session belongs to a system administrator
     And the Tavily stored key environment is "dev"
     And the stubbed provider limits show "Tavily finite credits"
     And the Tavily dashboard refresh is held for 2000 milliseconds
@@ -262,7 +262,7 @@ Feature: Routing workbench
 
   @stub
   Scenario: Tavily card tier keeps zero PATCH writes for an unchanged selection
-    Given the sidebar session belongs to an admin account
+    Given the sidebar session belongs to a system administrator
     And the Tavily stored key environment is "dev"
     And the stubbed provider limits show "Tavily finite credits"
     When I navigate directly to "/usage"
@@ -277,7 +277,7 @@ Feature: Routing workbench
 
   @stub
   Scenario: Tavily card tier with invalid state shows Unknown lock and sends no PATCH
-    Given the sidebar session belongs to an admin account
+    Given the sidebar session belongs to a system administrator
     And the Tavily stored key environment is invalid
     And the stubbed provider limits show "Tavily finite credits"
     When I navigate directly to "/usage"
@@ -290,7 +290,7 @@ Feature: Routing workbench
 
   @stub
   Scenario: Tavily card tier with absent state shows Unknown lock and sends no PATCH
-    Given the sidebar session belongs to an admin account
+    Given the sidebar session belongs to a system administrator
     And the Tavily stored key environment is absent
     And the stubbed provider limits show "Tavily finite credits"
     When I navigate directly to "/usage"
@@ -302,8 +302,8 @@ Feature: Routing workbench
     And no Tavily force-sync requests should exist
 
   @stub
-  Scenario: Tavily card tier with a read-only role shows compact text and sends no PATCH
-    Given the sidebar session belongs to a developer account
+  Scenario: Tavily card tier with read-only settings access shows compact text and sends no PATCH
+    Given the sidebar session belongs to the "settings reader" account
     And the Tavily stored key environment is "dev"
     And the stubbed provider limits show "Tavily finite credits"
     When I navigate directly to "/usage"
@@ -317,7 +317,7 @@ Feature: Routing workbench
 
   @stub
   Scenario: Tavily card tier with keyless access shows compact text and sends no PATCH
-    Given the sidebar session belongs to an admin account
+    Given the sidebar session belongs to a system administrator
     And the Tavily key is keyless
     And the stubbed provider limits show "Tavily keyless credits"
     When I navigate directly to "/usage"
@@ -331,7 +331,7 @@ Feature: Routing workbench
 
   @stub
   Scenario: Tavily card tier PATCH rejection keeps the stored value
-    Given the sidebar session belongs to an admin account
+    Given the sidebar session belongs to a system administrator
     And the Tavily stored key environment is "dev"
     And the stubbed provider limits show "Tavily finite credits"
     And the provider PATCH for "Tavily" will fail with "db down"
@@ -346,7 +346,7 @@ Feature: Routing workbench
 
   @stub
   Scenario: Tavily card tier with missing PATCH readback shows Confirmation unavailable
-    Given the sidebar session belongs to an admin account
+    Given the sidebar session belongs to a system administrator
     And the Tavily stored key environment is "dev"
     And the stubbed provider limits show "Tavily finite credits"
     And the Tavily provider PATCH readback will be missing
@@ -363,7 +363,7 @@ Feature: Routing workbench
 
   @stub
   Scenario: Tavily card tier disables the select while a delayed PATCH is pending
-    Given the sidebar session belongs to an admin account
+    Given the sidebar session belongs to a system administrator
     And the Tavily stored key environment is "dev"
     And the stubbed provider limits show "Tavily finite credits"
     And the Tavily rate tier PATCH is delayed by 1500 milliseconds
@@ -380,7 +380,7 @@ Feature: Routing workbench
 
   @stub
   Scenario: Tavily card tier ignores a PATCH response after unmount
-    Given the sidebar session belongs to an admin account
+    Given the sidebar session belongs to a system administrator
     And the Tavily stored key environment is "dev"
     And the stubbed provider limits show "Tavily finite credits"
     And the Tavily rate tier PATCH is delayed by 1200 milliseconds
@@ -397,7 +397,7 @@ Feature: Routing workbench
 
   @stub
   Scenario: Tavily card tier converges after credential replacement during a delayed PATCH
-    Given the sidebar session belongs to an admin account
+    Given the sidebar session belongs to a system administrator
     And the Tavily stored key environment is "dev"
     And the stubbed provider limits show "Tavily finite credits"
     And the Tavily rate tier PATCH is delayed by 1200 milliseconds
@@ -416,7 +416,7 @@ Feature: Routing workbench
 
   @stub
   Scenario: Tavily card tier keeps the saved value when refresh fails after save
-    Given the sidebar session belongs to an admin account
+    Given the sidebar session belongs to a system administrator
     And the Tavily stored key environment is "dev"
     And the stubbed provider limits show "Tavily finite credits"
     When I navigate directly to "/usage"
@@ -432,7 +432,7 @@ Feature: Routing workbench
 
   @stub
   Scenario: Tavily card tier keeps keyboard access with a delayed PATCH
-    Given the sidebar session belongs to an admin account
+    Given the sidebar session belongs to a system administrator
     And the Tavily stored key environment is "dev"
     And the stubbed provider limits show "Tavily finite credits"
     When I navigate directly to "/usage"
@@ -448,7 +448,7 @@ Feature: Routing workbench
   @stub
   Scenario: Tavily card quota details keep Escape and focus return at a narrow viewport
     Given I use a narrow viewport
-    And the sidebar session belongs to an admin account
+    And the sidebar session belongs to a system administrator
     And the Tavily stored key environment is "dev"
     And the stubbed provider limits show "Tavily finite credits"
     When I navigate directly to "/usage"
@@ -468,7 +468,7 @@ Feature: Routing workbench
 
   @stub
   Scenario: Tavily card quota details show consumed dev headroom without a PATCH
-    Given the sidebar session belongs to an admin account
+    Given the sidebar session belongs to a system administrator
     And the Tavily stored key environment is "dev"
     And the Tavily dashboard shows consumed dev headroom
     When I navigate directly to "/usage"
@@ -484,7 +484,7 @@ Feature: Routing workbench
 
   @stub
   Scenario: Tavily card quota details show consumed prod headroom without a PATCH
-    Given the sidebar session belongs to an admin account
+    Given the sidebar session belongs to a system administrator
     And the Tavily stored key environment is "prod"
     And the Tavily dashboard shows consumed prod headroom
     When I navigate directly to "/usage"

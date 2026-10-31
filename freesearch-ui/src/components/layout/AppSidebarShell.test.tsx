@@ -18,6 +18,7 @@ import {
   agentAccountFixture,
 } from "@/test/authFixtures"
 import type { UserAccount } from "@/domains/auth"
+import { answerWorkspaceAccess, personaSystemPermissions } from "@/test/accessFixtures"
 import {
   allProvidersFixture,
   routingConfigFixture,
@@ -71,6 +72,10 @@ async function renderApp(route = "/playground", account: UserAccount = adminAcco
   installImmediateLocks()
   installFakeChannel()
   const backendHandler: FetchHandler = (req) => {
+    const access = answerWorkspaceAccess(req, {
+      systemPermissions: personaSystemPermissions(account),
+    })
+    if (access !== null) return access
     if (req.url === "/api/v1/providers" && req.method === "GET") {
       return ok(allProvidersFixture())
     }
@@ -88,6 +93,9 @@ async function renderApp(route = "/playground", account: UserAccount = adminAcco
     </MemoryRouter>
   )
   await screen.findByRole("navigation", { name: "Primary" })
+  // The project selector renders once the system access and the project list
+  // have loaded, so every permitted link is present from here on.
+  await screen.findByRole("navigation", { name: "Projects" })
   return result
 }
 
@@ -101,8 +109,9 @@ const EXPECTED_VIEWS: Array<{ link: string; heading: string; path: string }> = [
   { link: "Usage", heading: "Usage", path: "/usage" },
   { link: "Activity", heading: "Activity", path: "/activity" },
   { link: "Settings", heading: "Settings", path: "/settings" },
+  { link: "Projects", heading: "Projects", path: "/projects" },
   { link: "Account", heading: "Account", path: "/account" },
-  { link: "Admin", heading: "Account roles", path: "/admin/users" },
+  { link: "Admin", heading: "Accounts", path: "/admin/users" },
 ]
 
 beforeEach(() => {
@@ -158,8 +167,8 @@ describe("AC-SB-8b: legacy header topbar is gone", () => {
   })
 })
 
-describe("AC-SB-8c (C4, P1-FINAL, R-UI): seven sidebar links swap intact views via the URL", () => {
-  it("sidebar exposes all seven workspaces as links with exact route hrefs", async () => {
+describe("AC-SB-8c (C4, P1-FINAL, R-UI, U1): eight sidebar links swap intact views via the URL", () => {
+  it("sidebar exposes all eight workspaces as links with exact route hrefs", async () => {
     await renderApp()
     const nav = screen.getByRole("navigation", { name: "Primary" })
     for (const { link, path } of EXPECTED_VIEWS) {
@@ -219,7 +228,7 @@ describe("AC-SB-8d (C4): shell keeps the link+router contract", () => {
     await renderApp()
     const aside = document.querySelector("aside") as HTMLElement
     const nav = within(aside).getByRole("navigation", { name: "Primary" })
-    expect(within(nav).getAllByRole("link")).toHaveLength(7)
+    expect(within(nav).getAllByRole("link")).toHaveLength(EXPECTED_VIEWS.length)
     expect(within(nav).queryByRole("button")).not.toBeInTheDocument()
     expect(within(aside).queryByRole("tab")).not.toBeInTheDocument()
     expect(within(aside).queryByRole("tablist")).not.toBeInTheDocument()
@@ -271,14 +280,17 @@ describe("AC-SB-8d (C4): shell keeps the link+router contract", () => {
       "/usage",
       "/activity",
       "/settings",
+      "/projects",
       "/account",
       "/admin/users",
     ]) {
       expect(routesSource).toContain(`"${routePath}"`)
     }
-    // Root redirect and unknown-path fallback both land on the playground.
+    // U1: the root and unknown paths land on the last valid project, else
+    // the project list; the legacy /providers redirect stays a Navigate.
     expect(dashboardShellSource).toMatch(/<Navigate/)
-    expect(dashboardShellSource).toContain('"/playground"')
+    expect(dashboardShellSource).toMatch(/path="\/"[^>]*element=\{<WorkspaceLanding/)
+    expect(dashboardShellSource).toMatch(/path="\*"[^>]*element=\{<WorkspaceLanding/)
     // Thin App shim renders the shell that owns the table.
     expect(appSource).toContain("DashboardShell")
   })
@@ -365,13 +377,13 @@ describe("AC-SB-8f: App source wires Sidebar into the flex-row shell", () => {
   })
 })
 
-describe("AC4/AC5 (R-UI): auth session gate filters Admin by role", () => {
-  it("admin direct /admin/users URL renders the creation screen", async () => {
+describe("AC4/AC5 (R-UI, U1): the session gate filters Admin by system permission", () => {
+  it("system.settings.write direct /admin/users URL renders the creation screen", async () => {
     await renderApp("/admin/users", adminAccountFixture())
     await waitFor(() => {
       expect(
         within(screen.getByRole("main")).getByRole("heading", {
-          name: "Account roles",
+          name: "Accounts",
         })
       ).toBeInTheDocument()
     })
@@ -383,18 +395,18 @@ describe("AC4/AC5 (R-UI): auth session gate filters Admin by role", () => {
       )
     ).toBeInTheDocument()
     expect(screen.getByLabelText("Email")).toBeInTheDocument()
-    expect(screen.getByLabelText("Account role")).toBeInTheDocument()
+    expect(screen.queryByLabelText("Account role")).not.toBeInTheDocument()
     expect(screen.queryByLabelText("Account UUID")).not.toBeInTheDocument()
   })
 
-  it("agent sees no Admin link and direct /admin/users URL renders no creation form", async () => {
+  it("without system permissions: no Admin link, and the direct URL redirects to the landing", async () => {
     await renderApp("/admin/users", agentAccountFixture())
     await waitFor(() => {
       expect(
-        screen.getByRole("heading", { name: "Search Playground" })
+        within(screen.getByRole("main")).getByRole("heading", { name: "Projects" })
       ).toBeInTheDocument()
     })
-    expect(testPath()).toBe("/playground")
+    expect(testPath()).toBe("/projects")
     expect(
       within(screen.getByRole("navigation", { name: "Primary" })).queryByRole(
         "link",

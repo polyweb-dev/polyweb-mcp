@@ -13,6 +13,7 @@ import { SettingsView } from "./SettingsView"
 import { installFetchStub, ok, err, deferred, type FetchStub } from "@/test/fetchMock"
 import { allProvidersFixture, routingConfigFixture, dashboardFixture } from "@/test/fixtures"
 import { type WireProviderStatus } from "@/test/backendFixtures"
+import { answerWorkspaceAccess } from "@/test/accessFixtures"
 
 describe("SettingsProviders.p1-final.test.tsx", () => {
 
@@ -199,6 +200,8 @@ async function renderAppAt(route: string): Promise<FetchStub> {
     if (req.url === "/users/me" && req.method === "GET") {
       return ok(adminAccountFixture())
     }
+    const access = answerWorkspaceAccess(req)
+    if (access !== null) return access
     if (req.url === "/api/v1/providers" && req.method === "GET") {
       return ok(allProvidersFixture())
     }
@@ -621,7 +624,7 @@ describe("P1F-6: Providers page retired — redirect + no providers nav", () => 
       expect(screen.getByRole("heading", { name: "Settings" })).toBeInTheDocument()
     })
     const nav = screen.getByRole("navigation", { name: "Primary" })
-    expect(within(nav).getAllByRole("link")).toHaveLength(7)
+    expect(within(nav).getAllByRole("link")).toHaveLength(8)
     expect(within(nav).queryByRole("link", { name: "Providers", exact: true })).not.toBeInTheDocument()
     for (const label of ["Playground", "Routing", "Usage", "Activity", "Settings"]) {
       expect(within(nav).getByRole("link", { name: label, exact: true })).toBeInTheDocument()

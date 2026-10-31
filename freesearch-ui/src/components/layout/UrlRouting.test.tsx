@@ -16,6 +16,7 @@ import {
   agentAccountFixture,
 } from "@/test/authFixtures"
 import type { UserAccount } from "@/domains/auth"
+import { answerWorkspaceAccess, personaSystemPermissions } from "@/test/accessFixtures"
 import {
   allProvidersFixture,
   routingConfigFixture,
@@ -62,6 +63,10 @@ async function renderAt(route: string, account: UserAccount = adminAccountFixtur
   installImmediateLocks()
   installFakeChannel()
   const backendHandler: FetchHandler = (req) => {
+    const access = answerWorkspaceAccess(req, {
+      systemPermissions: personaSystemPermissions(account),
+    })
+    if (access !== null) return access
     if (req.url === "/api/v1/providers" && req.method === "GET") {
       return ok(allProvidersFixture())
     }
@@ -79,6 +84,9 @@ async function renderAt(route: string, account: UserAccount = adminAccountFixtur
     </MemoryRouter>
   )
   await screen.findByRole("navigation", { name: "Primary" })
+  // The project selector renders once the system access and the project list
+  // have loaded, so every permitted link is present from here on.
+  await screen.findByRole("navigation", { name: "Projects" })
   return result
 }
 
@@ -120,8 +128,9 @@ const ROUTE_TABLE: Array<{ link: string; heading: string; path: string }> = [
   { link: "Usage", heading: "Usage", path: "/usage" },
   { link: "Activity", heading: "Activity", path: "/activity" },
   { link: "Settings", heading: "Settings", path: "/settings" },
+  { link: "Projects", heading: "Projects", path: "/projects" },
   { link: "Account", heading: "Account", path: "/account" },
-  { link: "Admin", heading: "Account roles", path: "/admin/users" },
+  { link: "Admin", heading: "Accounts", path: "/admin/users" },
 ]
 
 beforeEach(() => {
@@ -154,24 +163,14 @@ describe("C4-1: router install + URL changes on nav", () => {
 })
 
 describe("C4-2: route table + / redirect + catch-all", () => {
-  it("root path redirects to /playground", async () => {
+  it("root path lands on /projects when no last project is remembered", async () => {
     await renderAt("/")
-    await waitFor(() => {
-      expect(
-        screen.getByRole("heading", { name: "Search Playground" })
-      ).toBeInTheDocument()
-    })
-    expect(testPath()).toBe("/playground")
+    await expectView("Projects", "Projects", "/projects")
   })
 
-  it("unknown paths fall back to /playground", async () => {
+  it("unknown paths fall back to the project-first landing", async () => {
     await renderAt("/no-such-view")
-    await waitFor(() => {
-      expect(
-        screen.getByRole("heading", { name: "Search Playground" })
-      ).toBeInTheDocument()
-    })
-    expect(testPath()).toBe("/playground")
+    await expectView("Projects", "Projects", "/projects")
   })
 
   it("legacy /providers redirects to the merged Settings registry", async () => {
@@ -189,12 +188,8 @@ describe("C4-2: route table + / redirect + catch-all", () => {
 
   it("there is no /quotas route — quotas renders at /usage", async () => {
     await renderAt("/quotas")
-    await waitFor(() => {
-      expect(
-        screen.getByRole("heading", { name: "Search Playground" })
-      ).toBeInTheDocument()
-    })
-    expect(testPath()).toBe("/playground")
+    await expectView("Projects", "Projects", "/projects")
+    expect(within(screen.getByRole("main")).queryByRole("heading", { name: "Usage" })).toBeNull()
   })
 })
 
@@ -379,16 +374,16 @@ describe("C4-7: no regression — shell, providers, views", () => {
   })
 })
 
-describe("AC4/AC5 (R-UI): auth session gate filters Admin by role", () => {
-  it("admin direct /admin/users URL renders the creation screen", async () => {
+describe("AC4/AC5 (R-UI, U1): the session gate filters Admin by system permission", () => {
+  it("system.settings.write direct /admin/users URL renders the creation screen", async () => {
     await renderAt("/admin/users", adminAccountFixture())
-    await expectView("Admin", "Account roles", "/admin/users")
+    await expectView("Admin", "Accounts", "/admin/users")
     expect(screen.getByLabelText("Email")).toBeInTheDocument()
-    expect(screen.getByLabelText("Account role")).toBeInTheDocument()
+    expect(screen.queryByLabelText("Account role")).not.toBeInTheDocument()
     expect(screen.queryByLabelText("Account UUID")).not.toBeInTheDocument()
   })
 
-  it("agent sees no Admin link and direct /admin/users URL renders no creation form", async () => {
+  it("a caller without system permissions sees no Admin link", async () => {
     await renderAt("/playground", agentAccountFixture())
     expect(
       within(screen.getByRole("navigation", { name: "Primary" })).queryByRole(
@@ -398,14 +393,9 @@ describe("AC4/AC5 (R-UI): auth session gate filters Admin by role", () => {
     ).not.toBeInTheDocument()
   })
 
-  it("agent direct /admin/users URL is rejected without the creation form", async () => {
+  it("a direct /admin/users URL without system.settings.write redirects to the landing", async () => {
     await renderAt("/admin/users", agentAccountFixture())
-    await waitFor(() => {
-      expect(
-        screen.getByRole("heading", { name: "Search Playground" })
-      ).toBeInTheDocument()
-    })
-    expect(testPath()).toBe("/playground")
+    await expectView("Projects", "Projects", "/projects")
     expect(screen.queryByLabelText("Account role")).not.toBeInTheDocument()
     expect(screen.queryByLabelText("Account UUID")).not.toBeInTheDocument()
   })

@@ -14,9 +14,9 @@ Feature: Providers settings merge (P1-FINAL)
     And I should see the "Settings" heading
     And I should see the "Provider registry" heading
 
-  Scenario: Sidebar drops the Providers link and exposes five links
+  Scenario: Sidebar drops the Providers link and exposes the system administrator links
     Then the sidebar should not expose a "Providers" link
-    And the sidebar navigation should expose five links
+    And the sidebar navigation should expose the system administrator links
 
   Scenario: Settings registry is one merged table with fleet columns
     When I navigate directly to "/settings"

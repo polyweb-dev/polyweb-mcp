@@ -34,7 +34,7 @@ export function ProjectMembersPage({ accountId }: { accountId: string }) {
       </header>
 
       {controller.message !== null && (
-        <p role="alert" className="text-[13px] text-[var(--muted)]">
+        <p role="alert" className="text-[13px] text-[var(--status-danger)]">
           {controller.message}
         </p>
       )}

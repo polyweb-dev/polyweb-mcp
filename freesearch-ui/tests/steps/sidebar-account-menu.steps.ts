@@ -1,14 +1,24 @@
 import { expect, type Page, type Route } from "@playwright/test"
 import { Given, When, Then } from "./fixtures"
+import { setStubbedSystemPermissions } from "./backendStub"
+import {
+  ROLE_LABEL_PATTERN,
+  SYSTEM_ADMIN_PERMISSIONS,
+  type StubUserAccount,
+  userAccountBody,
+} from "./accountStub"
 
 /**
- * Sidebar account menu acceptance (PLAN Sections 25 and 30, B1-B13 and R1-R8).
+ * Sidebar account menu acceptance (PLAN Sections 25 and 30, B1-B13 and R1-R8),
+ * rewritten to the permission model (TASK-000046 U1).
  *
  * Each scenario uses a scenario-local auth stub: POST /auth/jwt/refresh
- * returns one browser access projection, GET /users/me returns the role
- * account, DELETE /auth/jwt/refresh answers the logout. The shared
- * deterministic backend stub (fixtures.ts Before hook) serves all data
- * routes. No step changes the global fixture role and no step sleeps.
+ * returns one browser access projection, GET /users/me returns a role-less
+ * account, DELETE /auth/jwt/refresh answers the logout. The account carries no
+ * role: every navigation gate follows the system permissions served by
+ * GET /api/v1/system/access (backendStub.ts), set per account kind below. The
+ * shared deterministic backend stub (fixtures.ts Before hook) serves all data
+ * routes. No step sleeps.
  */
 
 const ACCESS_BODY = {
@@ -18,46 +28,71 @@ const ACCESS_BODY = {
   refresh_expires_in: 604800,
 }
 
-const ACCOUNT_IDS: Record<string, string> = {
-  admin: "11111111-1111-4111-8111-111111111111",
-  developer: "22222222-2222-4222-8222-222222222222",
-  agent: "33333333-3333-4333-8333-333333333333",
+const LONG_EMAIL = "very-long-identity-local-part-that-must-truncate@example.com"
+const LONG_LOCAL_PART = LONG_EMAIL.slice(0, LONG_EMAIL.indexOf("@"))
+
+/**
+ * Account kinds of the sidebar scenarios. `name` is the display name the UI
+ * must show: "first last" when present, otherwise the username.
+ */
+interface SidebarAccount {
+  body: StubUserAccount
+  name: string
+  systemPermissions: readonly string[]
 }
 
-const LONG_EMAIL = "very-long-identity-local-part-that-must-truncate@example.com"
-const LONG_ID = "44444444-4444-4444-8444-444444444444"
+const SIDEBAR_ACCOUNTS: Record<string, SidebarAccount> = {
+  // Every system permission: Routing, Usage, Settings, edits and Admin.
+  "system administrator": {
+    body: userAccountBody("11111111-1111-4111-8111-111111111111", "admin@example.com", {
+      username: "admin",
+    }),
+    name: "admin",
+    systemPermissions: SYSTEM_ADMIN_PERMISSIONS,
+  },
+  // Read-only control access: Routing, Usage and Settings, no edits, no Admin.
+  "settings reader": {
+    body: userAccountBody("22222222-2222-4222-8222-222222222222", "reader@example.com", {
+      username: "reader",
+    }),
+    name: "reader",
+    systemPermissions: ["system.settings.read"],
+  },
+  // No system permission at all: Playground, Activity, Projects, Account only.
+  member: {
+    body: userAccountBody("33333333-3333-4333-8333-333333333333", "member@example.com", {
+      first_name: "Ada",
+      last_name: "Lovelace",
+    }),
+    name: "Ada Lovelace",
+    systemPermissions: [],
+  },
+  "long-identity": {
+    body: userAccountBody("44444444-4444-4444-8444-444444444444", LONG_EMAIL, {
+      username: LONG_LOCAL_PART,
+    }),
+    name: LONG_LOCAL_PART,
+    systemPermissions: SYSTEM_ADMIN_PERMISSIONS,
+  },
+}
+
+/** Session-storage key that tells later steps which account kind is signed in. */
+const ACCOUNT_KEY = "sidebar-test-account"
 
 type LogoutMode = "success" | "pending" | "failure"
 
 let logoutMode: LogoutMode = "success"
 let logoutRequests = 0
 
-function accountBody(role: string): Record<string, unknown> {
-  if (role === "long-identity") {
-    return {
-      id: LONG_ID,
-      email: LONG_EMAIL,
-      role: "admin",
-      is_active: true,
-      is_superuser: true,
-      is_verified: true,
-    }
-  }
-  return {
-    id: ACCOUNT_IDS[role] ?? ACCOUNT_IDS["admin"],
-    email: `${role}@example.com`,
-    role,
-    is_active: true,
-    is_superuser: role === "admin",
-    is_verified: true,
-  }
+function sidebarAccount(kind: string): SidebarAccount {
+  const account = SIDEBAR_ACCOUNTS[kind]
+  if (account === undefined) throw new Error(`unknown sidebar account kind: ${kind}`)
+  return account
 }
 
-function expectedIdentity(role: string): { name: string; email: string } {
-  if (role === "long-identity") {
-    return { name: LONG_EMAIL.slice(0, LONG_EMAIL.indexOf("@")), email: LONG_EMAIL }
-  }
-  return { name: role, email: `${role}@example.com` }
+async function currentAccount(page: Page): Promise<SidebarAccount> {
+  const kind = await page.evaluate((key) => window.sessionStorage.getItem(key), ACCOUNT_KEY)
+  return sidebarAccount(kind ?? "system administrator")
 }
 
 async function json(route: Route, body: unknown, status = 200): Promise<void> {
@@ -68,9 +103,11 @@ async function json(route: Route, body: unknown, status = 200): Promise<void> {
   })
 }
 
-async function installSidebarAuth(page: Page, role: string): Promise<void> {
+async function installSidebarAuth(page: Page, kind: string): Promise<void> {
+  const account = sidebarAccount(kind)
   logoutMode = "success"
   logoutRequests = 0
+  setStubbedSystemPermissions(account.systemPermissions)
   await page.unroute("**/auth/jwt/refresh").catch(() => {})
   await page.unroute("**/users/me").catch(() => {})
   await page.route("**/auth/jwt/refresh", (route) => {
@@ -92,11 +129,14 @@ async function installSidebarAuth(page: Page, role: string): Promise<void> {
   })
   await page.route("**/users/me", (route) => {
     if (route.request().method() !== "GET") return route.fallback()
-    return json(route, accountBody(role))
+    return json(route, account.body)
   })
-  await page.addInitScript((value) => {
-    window.sessionStorage.setItem("sidebar-test-role", value as string)
-  }, role)
+  await page.addInitScript(
+    ([key, value]) => {
+      window.sessionStorage.setItem(key as string, value as string)
+    },
+    [ACCOUNT_KEY, kind]
+  )
 }
 
 function userMenuTrigger(page: Page): ReturnType<Page["getByRole"]> {
@@ -114,12 +154,12 @@ async function openWorkspace(page: Page, path: string): Promise<void> {
   })
 }
 
-Given("the sidebar session belongs to an admin account", async ({ page }) => {
-  await installSidebarAuth(page, "admin")
+Given("the sidebar session belongs to a system administrator", async ({ page }) => {
+  await installSidebarAuth(page, "system administrator")
 })
 
-Given("the sidebar session belongs to a {word} account", async ({ page }, role: string) => {
-  await installSidebarAuth(page, role)
+Given("the sidebar session belongs to the {string} account", async ({ page }, kind: string) => {
+  await installSidebarAuth(page, kind)
 })
 
 Given("the sidebar session belongs to the long-identity account", async ({ page }) => {
@@ -233,25 +273,45 @@ When("I choose Sign out for the outcome check", async ({ page }) => {
   await page.getByRole("button", { name: "Sign out", exact: true }).click()
 })
 
-Then("the sidebar shows seven links in order with exact hrefs", async ({ page }) => {
+/** Every Primary link of a system administrator, in contract order. */
+const ALL_PRIMARY_LINKS: Array<[string, string]> = [
+  ["Playground", "/playground"],
+  ["Routing", "/routing"],
+  ["Usage", "/usage"],
+  ["Activity", "/activity"],
+  ["Settings", "/settings"],
+  ["Projects", "/projects"],
+  ["Account", "/account"],
+  ["Admin", "/admin/users"],
+]
+
+async function expectPrimaryLinks(page: Page, labels: string[]): Promise<void> {
+  const links = page.getByRole("navigation", { name: "Primary" }).getByRole("link")
+  await expect(links).toHaveCount(labels.length)
+  for (const [index, label] of labels.entries()) {
+    await expect(links.nth(index)).toHaveAccessibleName(label)
+  }
+}
+
+Then("the sidebar shows eight links in order with exact hrefs", async ({ page }) => {
   const nav = page.getByRole("navigation", { name: "Primary" })
-  const links = nav.getByRole("link")
-  await expect(links).toHaveCount(7)
-  const expected: Array<[string, string]> = [
-    ["Playground", "/playground"],
-    ["Routing", "/routing"],
-    ["Usage", "/usage"],
-    ["Activity", "/activity"],
-    ["Settings", "/settings"],
-    ["Account", "/account"],
-    ["Admin", "/admin/users"],
-  ]
-  for (const [label, href] of expected) {
+  await expectPrimaryLinks(
+    page,
+    ALL_PRIMARY_LINKS.map(([label]) => label)
+  )
+  for (const [label, href] of ALL_PRIMARY_LINKS) {
     await expect(nav.getByRole("link", { name: label, exact: true })).toHaveAttribute(
       "href",
       href
     )
   }
+})
+
+Then("the Primary navigation lists exactly {string}", async ({ page }, list: string) => {
+  await expectPrimaryLinks(
+    page,
+    list.split(",").map((label) => label.trim())
+  )
 })
 
 Then("the sidebar shows the Account and Admin links", async ({ page }) => {
@@ -274,14 +334,13 @@ Then("the sidebar shows no Admin link", async ({ page }) => {
 Then(
   "the account popup shows the approved identity values and Sign out",
   async ({ page }) => {
-    const role = await page.evaluate(() =>
-      window.sessionStorage.getItem("sidebar-test-role")
-    )
-    const { name, email } = expectedIdentity(role ?? "admin")
+    const { name, body } = await currentAccount(page)
     const dialog = accountDialog(page)
     await expect(dialog).toBeVisible()
     await expect(dialog.getByText(name, { exact: true }).first()).toBeVisible()
-    await expect(dialog.getByText(email, { exact: true }).first()).toBeVisible()
+    await expect(dialog.getByText(body.email, { exact: true }).first()).toBeVisible()
+    // No role or account-type label: authority is never a property of the account.
+    expect((await dialog.textContent()) ?? "").not.toMatch(ROLE_LABEL_PATTERN)
     await expect(
       page.getByRole("button", { name: "Sign out", exact: true })
     ).toHaveCount(1)
@@ -301,11 +360,8 @@ Then("the sidebar shows no separate Sign out button", async ({ page }) => {
 Then("the collapsed trigger keeps a complete accessible name", async ({ page }) => {
   const trigger = userMenuTrigger(page)
   await expect(trigger).toHaveAttribute("aria-label", "Open user menu")
-  const role = await page.evaluate(() =>
-    window.sessionStorage.getItem("sidebar-test-role")
-  )
-  const { email } = expectedIdentity(role ?? "admin")
-  await expect(trigger).toHaveAttribute("title", email)
+  const { body } = await currentAccount(page)
+  await expect(trigger).toHaveAttribute("title", body.email)
 })
 
 Then("the account popup closes and trigger focus returns", async ({ page }) => {
@@ -359,14 +415,20 @@ Then("each permitted sidebar link keeps its route and view", async ({ page }) =>
     { link: "Usage", heading: "Usage", path: "/usage" },
     { link: "Activity", heading: "Activity", path: "/activity" },
     { link: "Settings", heading: "Settings", path: "/settings" },
+    { link: "Projects", heading: "Projects", path: "/projects" },
     { link: "Account", heading: "Account", path: "/account" },
-    { link: "Admin", heading: "Account roles", path: "/admin/users" },
   ]
   for (const { link, heading, path } of expected) {
     await page.getByRole("link", { name: link, exact: true }).click()
     await expect(page.getByRole("heading", { name: heading, exact: true })).toBeVisible()
     expect(new URL(page.url()).pathname).toBe(path)
   }
+  // Admin: the account-creation view renders with its "Accounts" heading and
+  // its creation form.
+  await page.getByRole("link", { name: "Admin", exact: true }).click()
+  await expect(page.getByRole("heading", { name: "Accounts", exact: true })).toBeVisible()
+  await expect(page.getByRole("button", { name: "Create account", exact: true })).toBeVisible()
+  expect(new URL(page.url()).pathname).toBe("/admin/users")
 })
 
 Then("mobile navigation still closes the drawer on follow", async ({ page }) => {
@@ -442,25 +504,46 @@ Then("the account popup closes without stale identity", async ({ page }) => {
 })
 
 Then("the account page keeps facts without Sign out", async ({ page }) => {
-  const role = await page.evaluate(() =>
-    window.sessionStorage.getItem("sidebar-test-role")
-  )
-  const current = role ?? "admin"
-  const { email } = expectedIdentity(current)
-  await expect(page.getByText(email, { exact: true }).first()).toBeVisible()
+  const { body } = await currentAccount(page)
+  await expect(page.getByText(body.email, { exact: true }).first()).toBeVisible()
   await expect(
     page.getByRole("button", { name: "Sign out", exact: true })
   ).toHaveCount(0)
 })
 
-Then("the Admin creation link condition holds for {word}", async ({ page }, role: string) => {
-  if (role === "admin") {
+Then("the account page shows no role", async ({ page }) => {
+  const main = page.locator("main")
+  await expect(main.getByText("Role", { exact: true })).toHaveCount(0)
+  expect((await main.textContent()) ?? "").not.toMatch(ROLE_LABEL_PATTERN)
+})
+
+Then(
+  "the account creation link follows system.settings.write for the {string} account",
+  async ({ page }, kind: string) => {
     const link = page.getByRole("link", { name: "Create accounts" })
-    await expect(link).toBeVisible()
-    await expect(link).toHaveAttribute("href", "/admin/users")
-    return
+    if (sidebarAccount(kind).systemPermissions.includes("system.settings.write")) {
+      await expect(link).toBeVisible()
+      await expect(link).toHaveAttribute("href", "/admin/users")
+      return
+    }
+    await expect(link).toHaveCount(0)
   }
-  await expect(page.getByRole("link", { name: "Create accounts" })).toHaveCount(0)
+)
+
+When("I open the gated page {string} for the sidebar check", async ({ page }, path: string) => {
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(path)
+})
+
+Then("the gated page redirects home to the projects list", async ({ page }) => {
+  // An unauthorized direct URL redirects to "/", which lands on the last
+  // project or, with none stored, on /projects.
+  await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible({
+    timeout: 15_000,
+  })
+  expect(new URL(page.url()).pathname).toBe("/projects")
+  await expect(page.getByRole("button", { name: "Create account", exact: true })).toHaveCount(0)
+  await expect(page.getByRole("heading", { name: "Accounts", exact: true })).toHaveCount(0)
 })
 
 function expansionButton(page: Page): ReturnType<Page["getByRole"]> {
@@ -603,28 +686,14 @@ Then("the drawer account row keeps the same inset divider", async ({ page }) => 
   }
 })
 
-Then("the outside row shows the username and role without email", async ({ page }) => {
-  const stored = await page.evaluate(() =>
-    window.sessionStorage.getItem("sidebar-test-role")
-  )
-  const current = stored ?? "admin"
-  const roleLabels: Record<string, string> = {
-    admin: "Admin",
-    developer: "Developer",
-    agent: "Agent",
-    "long-identity": "Admin",
-  }
+Then("the outside row shows the display name and email without a role", async ({ page }) => {
+  const { name, body } = await currentAccount(page)
   const trigger = userMenuTrigger(page)
   await expect(trigger).toBeVisible()
-  if (current === "long-identity") {
-    await expect(trigger).toContainText(LONG_EMAIL.slice(0, LONG_EMAIL.indexOf("@")))
-    await expect(trigger).toContainText(roleLabels[current])
-    expect(await trigger.textContent()).not.toContain(LONG_EMAIL)
-    return
-  }
-  await expect(trigger).toContainText(current)
-  await expect(trigger).toContainText(roleLabels[current])
-  expect(await trigger.textContent()).not.toContain(`${current}@example.com`)
+  // Display name: "first last" when present, otherwise the username.
+  await expect(trigger).toContainText(name)
+  await expect(trigger).toContainText(body.email)
+  expect((await trigger.textContent()) ?? "").not.toMatch(ROLE_LABEL_PATTERN)
 })
 
 Then("the sidebar keeps the stored collapse choice", async ({ page }) => {

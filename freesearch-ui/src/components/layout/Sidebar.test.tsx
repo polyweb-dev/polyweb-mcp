@@ -8,7 +8,14 @@ import { MemoryRouter, useLocation } from "react-router"
 import { Sidebar } from "./Sidebar"
 import type { TabId } from "./Sidebar"
 import { AuthContext } from "@/domains/auth/state/context"
+import type { AuthContextValue } from "@/domains/auth/state/context"
+import { ProjectsContext } from "@/domains/projects/state/context"
 import { authenticatedContextValue } from "@/test/renderAuthenticated"
+import {
+  personaSystemPermissions,
+  projectsContextFixture,
+  systemAccessFixture,
+} from "@/test/accessFixtures"
 import {
   adminAccountFixture,
   agentAccountFixture,
@@ -56,10 +63,12 @@ const sidebarOwnerSource = readFileSync(
   path.resolve(testDir, "../../app/layout/Sidebar.tsx"),
   "utf8"
 )
-const sidebarNavSource = readFileSync(
-  path.resolve(testDir, "../../app/layout/SidebarNavList.tsx"),
-  "utf8"
-)
+// U1: the shared link class list (active signal token, focus ring and
+// reduced-motion handling) lives in navLinkClass.ts, used by both nav groups.
+const sidebarNavSource = [
+  readFileSync(path.resolve(testDir, "../../app/layout/SidebarNavList.tsx"), "utf8"),
+  readFileSync(path.resolve(testDir, "../../app/layout/navLinkClass.ts"), "utf8"),
+].join("\n")
 const sidebarStateSource = readFileSync(
   path.resolve(testDir, "../../app/layout/useSidebarState.ts"),
   "utf8"
@@ -92,6 +101,7 @@ const EXPECTED_NAV: Array<{ label: string; id: TabId; href: string }> = [
   { label: "Usage", id: "quotas", href: "/usage" },
   { label: "Activity", id: "activity", href: "/activity" },
   { label: "Settings", id: "settings", href: "/settings" },
+  { label: "Projects", id: "projects", href: "/projects" },
   { label: "Account", id: "account", href: "/account" },
   { label: "Admin", id: "adminUsers", href: "/admin/users" },
 ]
@@ -102,6 +112,7 @@ const ADMIN_LINK_LABELS = [
   "Usage",
   "Activity",
   "Settings",
+  "Projects",
   "Account",
   "Admin",
 ]
@@ -112,12 +123,28 @@ const DEVELOPER_LINK_LABELS = [
   "Usage",
   "Activity",
   "Settings",
+  "Projects",
   "Account",
 ]
 
-const AGENT_LINK_LABELS = ["Playground", "Activity", "Account"]
+const AGENT_LINK_LABELS = ["Playground", "Activity", "Projects", "Account"]
 
 const STORAGE_KEY = "freesearch.sidebar.collapsed"
+
+/**
+ * Auth plus the persona's live system access, as the workspace shell provides
+ * both: the navigation filters on effective permissions, never on a role.
+ */
+function PersonaAuth({ value, children }: { value: AuthContextValue; children: React.ReactNode }) {
+  const projects = projectsContextFixture({
+    systemAccess: systemAccessFixture(personaSystemPermissions(value.account)),
+  })
+  return (
+    <AuthContext.Provider value={value}>
+      <ProjectsContext.Provider value={projects}>{children}</ProjectsContext.Provider>
+    </AuthContext.Provider>
+  )
+}
 
 function LocationProbe() {
   const location = useLocation()
@@ -149,9 +176,9 @@ function renderSidebar(
 ) {
   return render(
     <MemoryRouter initialEntries={[route]}>
-      <AuthContext.Provider value={authenticatedContextValue(account)}>
+      <PersonaAuth value={authenticatedContextValue(account)}>
         <Sidebar {...props} />
-      </AuthContext.Provider>
+      </PersonaAuth>
       <LocationProbe />
     </MemoryRouter>
   )
@@ -204,7 +231,7 @@ describe("AC-SB-1: Sidebar module contract", () => {
     expect(sidebarSource).toMatch(/from\s+["']@\/app\/routes["']/)
   })
 
-  it("declares navItems with all seven tab ids (P1-FINAL: no providers; R-UI: Account + Admin in scope)", () => {
+  it("declares navItems with all eight tab ids (P1-FINAL: no providers; R-UI: Account + Admin in scope; U1: Projects)", () => {
     expect(sidebarNavSource).toMatch(/navItems/)
     for (const { id } of EXPECTED_NAV) {
       expect(sidebarNavSource).toContain(`"${id}"`)
@@ -247,14 +274,14 @@ describe("AC-SB-1: Sidebar module contract", () => {
   it("renders a vector icon inside every nav link (asserted structurally, never by snapshot)", () => {
     renderSidebar()
     const links = within(primaryNav()).getAllByRole("link")
-    expect(links).toHaveLength(7)
+    expect(links).toHaveLength(EXPECTED_NAV.length)
     for (const link of links) {
       expect(link.querySelector("svg")).not.toBeNull()
     }
   })
 })
 
-describe("AC-SB-2 (C4, P1-FINAL, R-UI): landmark + seven router links, URL changes on nav", () => {
+describe("AC-SB-2 (C4, P1-FINAL, R-UI, U1): landmark + eight router links, URL changes on nav", () => {
   it("renders a sticky full-height aside landmark", () => {
     renderSidebar()
     const aside = asideEl()
@@ -272,13 +299,13 @@ describe("AC-SB-2 (C4, P1-FINAL, R-UI): landmark + seven router links, URL chang
     ).toHaveLength(1)
   })
 
-  it("renders exactly seven nav links in order with exact accessible names", () => {
+  it("renders exactly eight nav links in order with exact accessible names", () => {
     renderSidebar()
     const links = within(primaryNav()).getAllByRole("link")
-    expect(links).toHaveLength(7)
+    expect(links).toHaveLength(EXPECTED_NAV.length)
     expect(
       links.map((l) => l.getAttribute("aria-label") ?? l.textContent?.trim())
-    ).toEqual(["Playground", "Routing", "Usage", "Activity", "Settings", "Account", "Admin"])
+    ).toEqual(["Playground", "Routing", "Usage", "Activity", "Settings", "Projects", "Account", "Admin"])
     for (const link of links) {
       expect(link.tagName).toBe("A")
       expect(link.getAttribute("href")).toMatch(/^\//)
@@ -328,7 +355,7 @@ describe("AC-SB-2 (C4, P1-FINAL, R-UI): landmark + seven router links, URL chang
   it("primary nav contains links, not buttons (controls stay buttons)", () => {
     renderSidebar()
     const nav = primaryNav()
-    expect(within(nav).getAllByRole("link")).toHaveLength(7)
+    expect(within(nav).getAllByRole("link")).toHaveLength(EXPECTED_NAV.length)
     expect(within(nav).queryByRole("button")).not.toBeInTheDocument()
     // Aside-level controls remain plain buttons outside the Primary nav.
     expect(
@@ -354,6 +381,7 @@ describe("AC-SB-2 (C4, P1-FINAL, R-UI): landmark + seven router links, URL chang
       "/usage",
       "/activity",
       "/settings",
+      "/projects",
       "/account",
       "/admin/users",
     ])
@@ -379,7 +407,7 @@ describe("AC-SB-3: single active indicator tracks the router", () => {
         exact: true,
       })
     ).toHaveAttribute("aria-current", "page")
-    for (const label of ["Routing", "Usage", "Activity", "Settings", "Account", "Admin"]) {
+    for (const label of ["Routing", "Usage", "Activity", "Settings", "Projects", "Account", "Admin"]) {
       expect(
         within(primaryNav()).getByRole("link", { name: label, exact: true })
       ).not.toHaveAttribute("aria-current")
@@ -438,7 +466,7 @@ describe("AC-SB-4: keyboard focus ring + reduced-motion", () => {
   it("every nav link exposes a signal focus ring", () => {
     renderSidebar()
     const links = within(primaryNav()).getAllByRole("link")
-    expect(links).toHaveLength(7)
+    expect(links).toHaveLength(EXPECTED_NAV.length)
     for (const link of links) {
       expect(link.className).toMatch(/focus-visible:/)
       expect(link.className.toLowerCase()).toMatch(/signal|ring/)
@@ -459,7 +487,7 @@ describe("AC-SB-4: keyboard focus ring + reduced-motion", () => {
   it("nav links stay keyboard-focusable", () => {
     renderSidebar()
     const links = within(primaryNav()).getAllByRole("link")
-    expect(links).toHaveLength(7)
+    expect(links).toHaveLength(EXPECTED_NAV.length)
     for (const link of links) {
       expect(link.tagName).toBe("A")
       expect(link.hasAttribute("disabled")).toBe(false)
@@ -485,7 +513,7 @@ describe("AC-SB-5: collapsed w-16 icon rail", () => {
   it("collapsed links keep exact aria-label + title accessible names", () => {
     renderSidebar({ collapsed: true, onCollapsedChange: () => {} })
     const links = within(primaryNav()).getAllByRole("link")
-    expect(links).toHaveLength(7)
+    expect(links).toHaveLength(EXPECTED_NAV.length)
     const seen: string[] = []
     for (const { label } of EXPECTED_NAV) {
       const link = within(primaryNav()).getByRole("link", {
@@ -502,6 +530,7 @@ describe("AC-SB-5: collapsed w-16 icon rail", () => {
       "Usage",
       "Activity",
       "Settings",
+      "Projects",
       "Account",
       "Admin",
     ])
@@ -524,12 +553,12 @@ describe("AC-SB-6: collapse toggle — controlled + uncontrolled", () => {
     const adminValue = authenticatedContextValue(adminAccountFixture())
     const { rerender } = render(
       <MemoryRouter initialEntries={["/playground"]}>
-        <AuthContext.Provider value={adminValue}>
+        <PersonaAuth value={adminValue}>
           <Sidebar
             collapsed={false}
             onCollapsedChange={onCollapsedChange}
           />
-        </AuthContext.Provider>
+        </PersonaAuth>
       </MemoryRouter>
     )
     await user.click(
@@ -540,12 +569,12 @@ describe("AC-SB-6: collapse toggle — controlled + uncontrolled", () => {
     // Controlled: DOM follows the prop, not the click.
     rerender(
       <MemoryRouter initialEntries={["/playground"]}>
-        <AuthContext.Provider value={adminValue}>
+        <PersonaAuth value={adminValue}>
           <Sidebar
             collapsed={false}
             onCollapsedChange={onCollapsedChange}
           />
-        </AuthContext.Provider>
+        </PersonaAuth>
       </MemoryRouter>
     )
     expect(asideEl().className).not.toMatch(/w-16/)
@@ -556,14 +585,14 @@ describe("AC-SB-6: collapse toggle — controlled + uncontrolled", () => {
     const onCollapsedChange = vi.fn()
     render(
       <MemoryRouter initialEntries={["/playground"]}>
-        <AuthContext.Provider
+        <PersonaAuth
           value={authenticatedContextValue(adminAccountFixture())}
         >
           <Sidebar
             collapsed
             onCollapsedChange={onCollapsedChange}
           />
-        </AuthContext.Provider>
+        </PersonaAuth>
       </MemoryRouter>
     )
     await user.click(
@@ -577,11 +606,11 @@ describe("AC-SB-6: collapse toggle — controlled + uncontrolled", () => {
     const user = userEvent.setup()
     render(
       <MemoryRouter initialEntries={["/playground"]}>
-        <AuthContext.Provider
+        <PersonaAuth
           value={authenticatedContextValue(adminAccountFixture())}
         >
           <Sidebar defaultCollapsed />
-        </AuthContext.Provider>
+        </PersonaAuth>
       </MemoryRouter>
     )
     expect(asideEl().className).toMatch(/w-16/)
@@ -709,11 +738,11 @@ describe("AC-SB-9: persistence in freesearch.sidebar.collapsed", () => {
     window.localStorage.setItem(STORAGE_KEY, "1")
     render(
       <MemoryRouter initialEntries={["/playground"]}>
-        <AuthContext.Provider
+        <PersonaAuth
           value={authenticatedContextValue(adminAccountFixture())}
         >
           <Sidebar />
-        </AuthContext.Provider>
+        </PersonaAuth>
       </MemoryRouter>
     )
     expect(asideEl().className).toMatch(/w-16/)
@@ -723,11 +752,11 @@ describe("AC-SB-9: persistence in freesearch.sidebar.collapsed", () => {
     window.localStorage.setItem(STORAGE_KEY, "0")
     render(
       <MemoryRouter initialEntries={["/playground"]}>
-        <AuthContext.Provider
+        <PersonaAuth
           value={authenticatedContextValue(adminAccountFixture())}
         >
           <Sidebar />
-        </AuthContext.Provider>
+        </PersonaAuth>
       </MemoryRouter>
     )
     expect(asideEl().className).not.toMatch(/w-16/)
@@ -738,11 +767,11 @@ describe("AC-SB-9: persistence in freesearch.sidebar.collapsed", () => {
     expect(() =>
       render(
         <MemoryRouter initialEntries={["/playground"]}>
-          <AuthContext.Provider
+          <PersonaAuth
             value={authenticatedContextValue(adminAccountFixture())}
           >
             <Sidebar />
-          </AuthContext.Provider>
+          </PersonaAuth>
         </MemoryRouter>
       )
     ).not.toThrow()
@@ -753,11 +782,11 @@ describe("AC-SB-9: persistence in freesearch.sidebar.collapsed", () => {
     const user = userEvent.setup()
     render(
       <MemoryRouter initialEntries={["/playground"]}>
-        <AuthContext.Provider
+        <PersonaAuth
           value={authenticatedContextValue(adminAccountFixture())}
         >
           <Sidebar />
-        </AuthContext.Provider>
+        </PersonaAuth>
       </MemoryRouter>
     )
     expect(window.localStorage.getItem(STORAGE_KEY)).toBeNull()
@@ -777,13 +806,13 @@ describe("AC-SB-9: persistence in freesearch.sidebar.collapsed", () => {
     window.localStorage.setItem(STORAGE_KEY, "banana")
     render(
       <MemoryRouter initialEntries={["/playground"]}>
-        <AuthContext.Provider
+        <PersonaAuth
           value={authenticatedContextValue(adminAccountFixture())}
         >
           <Sidebar
             defaultCollapsed
           />
-        </AuthContext.Provider>
+        </PersonaAuth>
       </MemoryRouter>
     )
     expect(asideEl().className).toMatch(/w-16/)
@@ -793,14 +822,14 @@ describe("AC-SB-9: persistence in freesearch.sidebar.collapsed", () => {
     window.localStorage.setItem(STORAGE_KEY, "1")
     render(
       <MemoryRouter initialEntries={["/playground"]}>
-        <AuthContext.Provider
+        <PersonaAuth
           value={authenticatedContextValue(adminAccountFixture())}
         >
           <Sidebar
             collapsed={false}
             onCollapsedChange={() => {}}
           />
-        </AuthContext.Provider>
+        </PersonaAuth>
       </MemoryRouter>
     )
     expect(asideEl().className).not.toMatch(/w-16/)
@@ -813,11 +842,11 @@ describe("AC-SB-9: persistence in freesearch.sidebar.collapsed", () => {
     expect(() =>
       render(
         <MemoryRouter initialEntries={["/playground"]}>
-          <AuthContext.Provider
+          <PersonaAuth
             value={authenticatedContextValue(adminAccountFixture())}
           >
             <Sidebar />
-          </AuthContext.Provider>
+          </PersonaAuth>
         </MemoryRouter>
       )
     ).not.toThrow()
@@ -832,13 +861,13 @@ describe("AC-SB-9: persistence in freesearch.sidebar.collapsed", () => {
     })
     render(
       <MemoryRouter initialEntries={["/playground"]}>
-        <AuthContext.Provider
+        <PersonaAuth
           value={authenticatedContextValue(adminAccountFixture())}
         >
           <Sidebar
             onCollapsedChange={onCollapsedChange}
           />
-        </AuthContext.Provider>
+        </PersonaAuth>
       </MemoryRouter>
     )
     await user.click(
@@ -851,11 +880,11 @@ describe("AC-SB-9: persistence in freesearch.sidebar.collapsed", () => {
   })
 })
 
-describe("AC5 (R-UI): nav filters by confirmed role via canAccessRoute", () => {
-  it("admin sees all seven links in order including Account and Admin", () => {
+describe("AC5 (R-UI, U1): nav filters by effective system permissions via canAccessRoute", () => {
+  it("the system administrator sees all eight links in order including Account and Admin", () => {
     renderSidebarAs(adminAccountFixture())
     const links = within(primaryNav()).getAllByRole("link")
-    expect(links).toHaveLength(7)
+    expect(links).toHaveLength(EXPECTED_NAV.length)
     expect(
       links.map((l) => l.getAttribute("aria-label") ?? l.textContent?.trim())
     ).toEqual(ADMIN_LINK_LABELS)
@@ -864,10 +893,10 @@ describe("AC5 (R-UI): nav filters by confirmed role via canAccessRoute", () => {
     ).toHaveAttribute("href", "/admin/users")
   })
 
-  it("developer sees six links and no Admin link", () => {
+  it("system.settings.read sees seven links and no Admin link", () => {
     renderSidebarAs(developerAccountFixture())
     const links = within(primaryNav()).getAllByRole("link")
-    expect(links).toHaveLength(6)
+    expect(links).toHaveLength(DEVELOPER_LINK_LABELS.length)
     expect(
       links.map((l) => l.getAttribute("aria-label") ?? l.textContent?.trim())
     ).toEqual(DEVELOPER_LINK_LABELS)
@@ -876,10 +905,10 @@ describe("AC5 (R-UI): nav filters by confirmed role via canAccessRoute", () => {
     ).not.toBeInTheDocument()
   })
 
-  it("agent sees exactly Playground, Activity, Account and no Admin link", () => {
+  it("no system permission sees exactly Playground, Activity, Projects, Account and no Admin link", () => {
     renderSidebarAs(agentAccountFixture())
     const links = within(primaryNav()).getAllByRole("link")
-    expect(links).toHaveLength(3)
+    expect(links).toHaveLength(4)
     expect(
       links.map((l) => l.getAttribute("aria-label") ?? l.textContent?.trim())
     ).toEqual(AGENT_LINK_LABELS)

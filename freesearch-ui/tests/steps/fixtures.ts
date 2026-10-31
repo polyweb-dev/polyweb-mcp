@@ -1,5 +1,5 @@
 import { test as base, createBdd } from "playwright-bdd"
-import { installBackendStub } from "./backendStub"
+import { installBackendStub, resetStubbedSystemPermissions } from "./backendStub"
 
 /**
  * Keep the BDD fixture surface in one place so every generated scenario uses
@@ -16,10 +16,15 @@ export const { Given, When, Then, Before, After } = createBdd(test)
  * provider PATCH) stay in memory — the real backend is never mutated, and
  * screenshots/counts render from deterministic state.
  *
+ * Session: the stub signs the browser in as a role-less system administrator
+ * (all system permissions from GET /api/v1/system/access). Account steps
+ * narrow the system permissions or replace the session after this hook.
+ *
  * Tagging contract: `@visual` marks screenshot/keyboard scenarios, `@stub`
  * marks stubbed non-visual scenarios. Live-integration coverage stays real:
  * the playground live-search and activity-privacy scenarios carry neither tag.
  */
 Before({ tags: "@visual or @stub" }, async ({ page }) => {
+  resetStubbedSystemPermissions()
   await installBackendStub(page)
 })

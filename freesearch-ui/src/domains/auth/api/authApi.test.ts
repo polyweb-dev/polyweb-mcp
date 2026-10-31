@@ -122,12 +122,12 @@ describe("login", () => {
 })
 
 describe("registerAccount", () => {
-  it("posts JSON credentials with the exact role to /auth/register in public mode", async () => {
+  it("posts exactly the email and the password to /auth/register in public mode", async () => {
     const { authApi } = await loadAuth()
     const account = adminAccountFixture()
     const stub = installFetchStub(() => ok(account))
 
-    const result = await authApi.registerAccount({ ...CREDENTIALS, role: "admin" })
+    const result = await authApi.registerAccount({ ...CREDENTIALS })
 
     expect(result).toEqual(account)
     expect(stub.requests).toHaveLength(1)
@@ -138,34 +138,28 @@ describe("registerAccount", () => {
     expect(stub.requests[0]?.headers["content-type"]).toContain("application/json")
     expect(stub.requests[0]?.headers["authorization"]).toBeUndefined()
     expect(stub.requests[0]?.headers["x-freesearch-client"]).toBeUndefined()
-    expect(stub.requests[0]?.body).toEqual({ ...CREDENTIALS, role: "admin" })
+    expect(stub.requests[0]?.body).toEqual({ ...CREDENTIALS })
+    expect(Object.keys(stub.requests[0]?.body as object).sort()).toEqual(["email", "password"])
   })
 
-  it("sends each role value without caller credentials", async () => {
+  it("never sends a role or account-type field, whatever the caller passes", async () => {
     const { authApi } = await loadAuth()
-    const stub = installFetchStub((req) => {
-      if (req.url === "/auth/register" && req.method === "POST") {
-        const role = (req.body as { role: string }).role
-        return ok({ ...agentAccountFixture(), role })
-      }
-      return err(404, { detail: "unhandled test route" })
-    })
+    const stub = installFetchStub(() => ok(agentAccountFixture()))
+    const smuggled = { ...CREDENTIALS, role: "admin", account_type: "installation" }
 
-    for (const role of ["admin", "developer", "agent"] as const) {
-      const result = await authApi.registerAccount({ ...CREDENTIALS, role })
-      expect(result.role).toBe(role)
-    }
-    expect(stub.requests).toHaveLength(3)
+    await authApi.registerAccount(smuggled)
+
+    expect(stub.requests[0]?.body).toEqual({ ...CREDENTIALS })
     expect(stub.requests.every((req) => req.headers["authorization"] === undefined)).toBe(true)
   })
 
-  it("rejects an account body with a bad role", async () => {
+  it("rejects an account body without the verification flag", async () => {
     const { authApi } = await loadAuth()
-    installFetchStub(() => ok({ ...adminAccountFixture(), role: "owner" }))
+    const partial: Record<string, unknown> = { ...adminAccountFixture() }
+    delete partial.is_verified
+    installFetchStub(() => ok(partial))
 
-    await expect(
-      authApi.registerAccount({ ...CREDENTIALS, role: "agent" })
-    ).rejects.toMatchObject({
+    await expect(authApi.registerAccount({ ...CREDENTIALS })).rejects.toMatchObject({
       status: 0,
       detail: INVALID_RESPONSE,
     })
@@ -173,7 +167,7 @@ describe("registerAccount", () => {
 })
 
 describe("provisionAccount", () => {
-  it("posts the exact role JSON to /api/v1/users in access mode", async () => {
+  it("posts exactly the email and the password to /api/v1/users in access mode", async () => {
     const { authApi } = await loadAuth()
     const account = developerAccountFixture()
     const stub = installFetchStub((req) => {
@@ -184,7 +178,6 @@ describe("provisionAccount", () => {
     const result = await authApi.provisionAccount({
       email: "new@example.com",
       password: "correct-horse-battery-99",
-      role: "developer",
     })
 
     expect(result).toEqual(account)
@@ -194,17 +187,17 @@ describe("provisionAccount", () => {
     expect(stub.requests[0]?.body).toEqual({
       email: "new@example.com",
       password: "correct-horse-battery-99",
-      role: "developer",
     })
   })
 
-  it("rejects a provisioned body with a bad role", async () => {
+  it("rejects a provisioned body with a bad auth provider", async () => {
     const { authApi } = await loadAuth()
-    installFetchStub(() => ok({ ...adminAccountFixture(), role: "superadmin" }))
+    installFetchStub(() => ok({ ...adminAccountFixture(), auth_provider: "ldap" }))
 
-    await expect(
-      authApi.provisionAccount({ ...CREDENTIALS, role: "admin" })
-    ).rejects.toMatchObject({ status: 0, detail: INVALID_RESPONSE })
+    await expect(authApi.provisionAccount({ ...CREDENTIALS })).rejects.toMatchObject({
+      status: 0,
+      detail: INVALID_RESPONSE,
+    })
   })
 })
 
@@ -359,6 +352,55 @@ describe("getMe", () => {
     expect(stub.requests).toHaveLength(1)
     expect(stub.requests[0]).toMatchObject({ url: "/users/me", method: "GET" })
     expect(stub.requests[0]?.headers["authorization"]).toBeUndefined()
+  })
+
+  it("decodes the backend account shape without a role and keeps the profile", async () => {
+    const { authApi } = await loadAuth()
+    const wire = {
+      id: "44444444-4444-4444-8444-444444444444",
+      email: "ada@example.com",
+      auth_provider: "workos",
+      auth_provider_id: "user_01",
+      username: "ada",
+      first_name: "Ada",
+      last_name: "Lovelace",
+      is_active: true,
+      is_verified: false,
+    }
+    installFetchStub(() => ok(wire))
+
+    const result = await authApi.getMe()
+
+    expect(result).toEqual(wire)
+    expect("role" in result).toBe(false)
+  })
+
+  it("reads absent profile fields as null and ignores unknown fields", async () => {
+    const { authApi } = await loadAuth()
+    installFetchStub(() =>
+      ok({ id: "a1", email: "a@example.com", is_active: true, is_verified: true, role: "admin" })
+    )
+
+    const result = await authApi.getMe()
+
+    expect(result).toEqual({
+      id: "a1",
+      email: "a@example.com",
+      auth_provider: "local",
+      auth_provider_id: null,
+      username: null,
+      first_name: null,
+      last_name: null,
+      is_active: true,
+      is_verified: true,
+    })
+  })
+
+  it("rejects a profile field of the wrong type", async () => {
+    const { authApi } = await loadAuth()
+    installFetchStub(() => ok({ ...adminAccountFixture(), username: 42 }))
+
+    await expect(authApi.getMe()).rejects.toMatchObject({ status: 0, detail: INVALID_RESPONSE })
   })
 
   it("rejects a non-object account body", async () => {

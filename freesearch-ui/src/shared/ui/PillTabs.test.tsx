@@ -13,6 +13,8 @@ import { AuthContext } from "@/domains/auth/state/context"
 import { authenticatedContextValue } from "@/test/renderAuthenticated"
 import { installFetchStub, ok, err } from "@/test/fetchMock"
 import { ADMIN_ACCOUNT_ID, adminAccountFixture } from "@/test/authFixtures"
+import { ProjectsContext } from "@/domains/projects/state/context"
+import { projectsContextFixture } from "@/test/accessFixtures"
 import { allProvidersFixture, routingConfigFixture, dashboardFixture, searchResponseFixture, fetchResponseFixture } from "@/test/backendFixtures"
 
 describe("PillTabs.c2r.test.tsx", () => {
@@ -372,7 +374,7 @@ describe("C2-REWORK AC-C2R-4: no filter/Header regression", () => {
   // filter-preservation case is RETIRED. Filter narrowing is covered by the
   // merged Settings registry suite (SettingsProviders.p1-final.test.tsx).
 
-  it("Header compatibility shim exposes seven router links and zero tab roles", async () => {
+  it("Header compatibility shim exposes eight router links and zero tab roles", async () => {
     const user = userEvent.setup()
 
     function LocationProbe() {
@@ -382,16 +384,20 @@ describe("C2-REWORK AC-C2R-4: no filter/Header regression", () => {
     render(
       <MemoryRouter initialEntries={["/playground"]}>
         <AuthContext.Provider value={authenticatedContextValue(adminAccountFixture())}>
-          <Header />
-          <LocationProbe />
+          {/* U1: the navigation filters on the live system access, not a role. */}
+          <ProjectsContext.Provider value={projectsContextFixture()}>
+            <Header />
+            <LocationProbe />
+          </ProjectsContext.Provider>
         </AuthContext.Provider>
       </MemoryRouter>
     )
 
     // P1-FINAL: standalone Providers page retired — five workspace links.
-    // R-UI: Account and Admin screens entered scope, so an Admin sees seven.
+    // R-UI: Account and Admin screens entered scope; U1 adds Projects, so the
+    // system administrator sees eight.
     const headerNav = screen.getByRole("navigation", { name: "Primary" })
-    expect(within(headerNav).getAllByRole("link")).toHaveLength(7)
+    expect(within(headerNav).getAllByRole("link")).toHaveLength(8)
     expect(
       within(headerNav).queryByRole("link", { name: "Providers", exact: true })
     ).not.toBeInTheDocument()
@@ -401,6 +407,7 @@ describe("C2-REWORK AC-C2R-4: no filter/Header regression", () => {
       "Usage",
       "Activity",
       "Settings",
+      "Projects",
       "Account",
       "Admin",
     ]) {
