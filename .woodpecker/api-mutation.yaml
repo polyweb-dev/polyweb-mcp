@@ -1,0 +1,12 @@
+when:
+  - event: manual
+
+steps:
+  - name: mutation-tests
+    image: ghcr.io/astral-sh/uv:python3.12-bookworm-slim
+    environment:
+      - PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring
+    commands:
+      - test -f .env || cp .env.example .env
+      - uv sync --frozen
+      - uv run pytest --gremlins --gremlin-workers=2 --gremlin-targets=src/freesearch --gremlin-report=console,json --gremlin-cache
