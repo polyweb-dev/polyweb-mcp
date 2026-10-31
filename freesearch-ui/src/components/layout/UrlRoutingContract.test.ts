@@ -13,7 +13,8 @@ import { describe, it, expect } from "vitest"
  * runtime history; this suite pins the wiring the plan requires:
  *   C4-1  react-router v7 installed; main.tsx renders BrowserRouter.
  *   C4-2  App.tsx Routes table with the exact paths, root redirect, and
- *         unknown-path catch-all to /playground; quotas maps to /usage.
+ *         unknown-path catch-all; quotas maps to /usage. U1: the root and
+ *         unknown paths land on the last valid project, else /projects.
  *   C4-5  Sidebar renders NavLink (role link) with exact `to` targets and
  *         no plain-button nav items.
  *
@@ -85,13 +86,12 @@ describe("C4-2: App.tsx Routes table + redirects", () => {
     }
   })
 
-  it("redirects the root path to the playground", () => {
-    expect(dashboardShellSource).toContain('"/playground"')
-    expect(dashboardShellSource).toMatch(/path="\/"[^>]*element=\{[^}]*Navigate/)
+  it("U1: lands the root path on the project-first entry", () => {
+    expect(dashboardShellSource).toMatch(/path="\/"[^>]*element=\{<WorkspaceLanding/)
   })
 
-  it("catches unknown paths back to the playground", () => {
-    expect(dashboardShellSource).toMatch(/path="\*"[^>]*element=\{[^}]*Navigate/)
+  it("U1: catches unknown paths with the project-first entry", () => {
+    expect(dashboardShellSource).toMatch(/path="\*"[^>]*element=\{<WorkspaceLanding/)
   })
 
   it("maps the quotas TabId to the /usage path (no /quotas route)", () => {

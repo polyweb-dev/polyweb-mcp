@@ -1,16 +1,19 @@
 import { Link } from "react-router"
-import { hasPermission, resolveLastProject, useProjects } from "@/domains/projects"
+import { Button } from "@/shared/ui/button"
+import { canCreateProjects, resolveLastProject, useProjects } from "@/domains/projects"
 import { ProjectCreateForm } from "./ProjectCreateForm"
 
 /**
  * Projects overview of the workspace.
  *
  * The list shows every project the caller can read. The create form appears
- * only when the live system access grants `project.create`; it is never
- * inferred from the account role.
+ * only when the live system access grants `project.create`, the permission the
+ * backend enforces; it is never inferred from an account role. The shell
+ * mounts it behind the workspace access gate; rendered on its own, a failed
+ * load still shows an error with Retry instead of hiding the page.
  */
 export function ProjectsPage({ defaultAdminEmail }: { defaultAdminEmail: string }) {
-  const { accountId, availability, systemAccess, projects } = useProjects()
+  const { accountId, availability, systemAccess, projects, reloadProjects } = useProjects()
   const lastProjectId = resolveLastProject(accountId, projects)
   const lastProject = projects.find((project) => project.id === lastProjectId) ?? null
 
@@ -21,7 +24,16 @@ export function ProjectsPage({ defaultAdminEmail }: { defaultAdminEmail: string 
       </p>
     )
   }
-  if (availability === "unavailable") return null
+  if (availability === "unavailable") {
+    return (
+      <div role="alert" className="space-y-3 text-[13px] text-[var(--status-danger)]">
+        <p>The project list could not be loaded.</p>
+        <Button type="button" variant="outline" onClick={() => void reloadProjects()}>
+          Retry
+        </Button>
+      </div>
+    )
+  }
 
   return (
     <section className="flex flex-1 flex-col space-y-6">
@@ -65,7 +77,7 @@ export function ProjectsPage({ defaultAdminEmail }: { defaultAdminEmail: string 
         </ul>
       )}
 
-      {hasPermission(systemAccess, "project.create") && (
+      {canCreateProjects(systemAccess) && (
         <ProjectCreateForm defaultAdminEmail={defaultAdminEmail} />
       )}
     </section>

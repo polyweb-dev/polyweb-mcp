@@ -18,6 +18,28 @@ export {
   setProjectMemberStatus,
 } from "./api/projectsApi"
 export {
+  apiKeyMutationMessage,
+  issueProjectApiKey,
+  listProjectApiKeys,
+  revokeProjectApiKey,
+  rotateProjectApiKey,
+} from "./api/apiKeysApi"
+export { API_KEY_SCOPES, API_KEY_SCOPE_LABELS, isApiKeyScope } from "./model/apiKeys"
+export type {
+  ApiKeyExpiry,
+  ApiKeyScope,
+  ApiKeyStatus,
+  IssueApiKeyInput,
+  IssuedApiKey,
+  ProjectApiKey,
+  RotateApiKeyInput,
+} from "./model/apiKeys"
+export {
+  PROJECT_PERMISSIONS,
+  SYSTEM_PERMISSIONS,
+  canCreateProjects,
+} from "./model/permissions"
+export {
   clearProjectDraft,
   projectStorageKey,
   readProjectDraft,
@@ -51,6 +73,6 @@ export { ProjectsProvider } from "./state/ProjectsProvider"
 export { ProjectScopeProvider } from "./state/ProjectScopeProvider"
 export { useProjects } from "./state/useProjects"
 export { useProjectsOptional } from "./state/useProjects"
-export { useProjectScope } from "./state/useProjectScope"
+export { useProjectScope, useProjectScopeOptional } from "./state/useProjectScope"
 export type { ProjectsAvailability, ProjectsContextValue } from "./state/context"
 export type { ProjectScopeContextValue } from "./state/context"

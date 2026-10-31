@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { render, screen } from "@testing-library/react"
+import { render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { MemoryRouter } from "react-router"
 import { err, installFetchStub, ok } from "@/test/fetchMock"
@@ -76,7 +76,65 @@ describe("ProjectMembersPage", () => {
     )
     const user = userEvent.setup()
     await user.click(await screen.findByRole("button", { name: "Suspend" }))
-    await screen.findByText("A project must keep at least one active administrator.")
+    const alert = await screen.findByRole("alert")
+    expect(alert).toHaveTextContent(
+      "A project must keep at least one active administrator. Make another active member a project admin first."
+    )
+  })
+
+  it("explains an archived-project refusal instead of showing the raw conflict", async () => {
+    installFetchStub((req) => {
+      if (req.url === "/api/v1/system/access") return ok({ rollout_state: "preview", permissions: [] })
+      if (req.url === "/api/v1/projects?include_archived=true") return ok([])
+      if (req.url === "/api/v1/projects/p1/access") return ok(access(["members.read", "members.manage"]))
+      if (req.url === "/api/v1/projects/p1/members" && req.method === "GET") return ok([MEMBER])
+      if (req.method === "PATCH") return err(409, { detail: { code: "PROJECT_ARCHIVED", message: "x" } })
+      return err(404, null)
+    })
+    render(
+      <MemoryRouter>
+        <ProjectsProvider accountId="acc">
+          <ProjectScopeProvider accountId="acc" projectId="p1">
+            <ProjectMembersPage accountId="acc" />
+          </ProjectScopeProvider>
+        </ProjectsProvider>
+      </MemoryRouter>
+    )
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole("button", { name: "Suspend" }))
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "An archived project cannot change its members."
+    )
+  })
+
+  it("maps a bare 400 to the unknown-email copy on add, and not on suspend", async () => {
+    installFetchStub((req) => {
+      if (req.url === "/api/v1/system/access") return ok({ rollout_state: "preview", permissions: [] })
+      if (req.url === "/api/v1/projects?include_archived=true") return ok([])
+      if (req.url === "/api/v1/projects/p1/access") return ok(access(["members.read", "members.manage"]))
+      if (req.url === "/api/v1/projects/p1/members" && req.method === "GET") return ok([MEMBER])
+      if (req.method === "POST" || req.method === "PATCH") return err(400, null)
+      return err(404, null)
+    })
+    render(
+      <MemoryRouter>
+        <ProjectsProvider accountId="acc">
+          <ProjectScopeProvider accountId="acc" projectId="p1">
+            <ProjectMembersPage accountId="acc" />
+          </ProjectScopeProvider>
+        </ProjectsProvider>
+      </MemoryRouter>
+    )
+    const user = userEvent.setup()
+    await user.type(await screen.findByLabelText("Account email"), "ghost@example.com")
+    await user.click(screen.getByRole("button", { name: "Add member" }))
+    expect(await screen.findByRole("alert")).toHaveTextContent("No active account uses that email address.")
+
+    await user.click(screen.getByRole("button", { name: "Suspend" }))
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent("The change could not be saved.")
+    )
+    expect(screen.getByRole("alert")).not.toHaveTextContent("email")
   })
 
   it("keeps the add draft under the project-scoped key", async () => {

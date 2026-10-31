@@ -3,7 +3,9 @@ Feature: App-shell URL routing (C4)
   Sidebar workspaces are router links (NavLink) over a real BrowserRouter
   history: the URL tracks the view, deep-links render, back/forward/refresh
   restore the view, and pill tabs never touch the URL. TabId is unchanged —
-  the "quotas" tab renders at the "/usage" path.
+  the "quotas" tab renders at the "/usage" path. The workspace is project
+  first (U1): the root and unknown paths land on the last valid project, else
+  on the projects list. The stubbed session is a system administrator.
 
   Background:
     Given I navigate to the web application
@@ -22,15 +24,15 @@ Feature: App-shell URL routing (C4)
     Then the page URL path should be "/settings"
     And I should see the "Settings" heading
 
-  Scenario: C4-2 root path redirects to the playground
+  Scenario: C4-2 root path without a stored project redirects to the projects list
     When I navigate directly to "/"
-    Then the page URL path should be "/playground"
-    And I should see the "Search Playground" heading
+    Then the page URL path should be "/projects"
+    And I should see the "Projects" heading
 
-  Scenario: C4-2 unknown path falls back to the playground
+  Scenario: C4-2 unknown path without a stored project falls back to the projects list
     When I navigate directly to "/no-such-view"
-    Then the page URL path should be "/playground"
-    And I should see the "Search Playground" heading
+    Then the page URL path should be "/projects"
+    And I should see the "Projects" heading
 
   Scenario Outline: C4-3 deep links render their view with the current marker
     When I navigate directly to "<path>"
@@ -76,7 +78,7 @@ Feature: App-shell URL routing (C4)
     And I should see the "Usage" heading
     And the "Usage" sidebar link should be marked current
     And the "Usage" sidebar link should point to "/usage"
-    And the sidebar navigation should expose five links
+    And the sidebar navigation should expose the system administrator links
 
   Scenario: C4-6 routing pill tabs leave the URL unchanged
     When I navigate directly to "/routing"
@@ -97,8 +99,10 @@ Feature: App-shell URL routing (C4)
     Then the page URL path should still be "/settings"
 
   Scenario: C4-7 shell keeps the sidebar shell with no legacy header topbar
-    Then the shell should expose no header element
-    And the sidebar navigation should expose five links
+    When I navigate directly to "/playground"
+    Then I should see the "Search Playground" heading
+    And the shell should expose no header element
+    And the sidebar navigation should expose the system administrator links
     When I navigate directly to "/activity"
     Then I should see the "Activity" heading
     And the page URL path should be "/activity"

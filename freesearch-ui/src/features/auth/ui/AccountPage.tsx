@@ -1,17 +1,32 @@
 import { Link } from "react-router"
-import { ROLE_LABELS, useAuth } from "@/domains/auth"
+import { accountDisplayName, useAuth } from "@/domains/auth"
+import { SYSTEM_PERMISSIONS, hasPermission, useProjectsOptional } from "@/domains/projects"
 import { TAB_PATHS } from "@/app/routes"
+
+function fact(label: string, value: string, numeric = false) {
+  return (
+    <div className="rounded border border-[var(--border-subtle)] px-3 py-2">
+      <dt className="text-[12px] text-[var(--muted)]">{label}</dt>
+      <dd className={numeric ? "text-[13px] text-[var(--text)] tnum" : "text-[13px] text-[var(--text)]"}>
+        {value}
+      </dd>
+    </div>
+  )
+}
 
 /**
  * Account status view.
  *
  * Every value comes from `GET /users/me`. The screen shows no access token, no
- * refresh credential, and no session family identifier, and it offers the Admin
- * link to an Admin account only. Sign out lives in the sidebar account popup.
+ * refresh credential, no session family identifier, and no role. The account
+ * creation link appears only when the live system access grants
+ * `system.settings.write`. Sign out lives in the sidebar account popup.
  */
 export function AccountPage() {
   const { account } = useAuth()
+  const { systemAccess } = useProjectsOptional()
   if (account === null) return null
+  const name = accountDisplayName(account)
 
   return (
     <section className="flex flex-1 flex-col space-y-6">
@@ -19,10 +34,10 @@ export function AccountPage() {
         <div>
           <h2 className="text-[var(--text-strong)]">Account</h2>
           <p className="mt-0.5 text-[13px] text-[var(--muted)]">
-            The identity and the role of this session.
+            The identity of this session.
           </p>
         </div>
-        {account.role === "admin" && (
+        {hasPermission(systemAccess, SYSTEM_PERMISSIONS.settingsWrite) && (
           <Link
             to={TAB_PATHS.adminUsers}
             className="text-[13px] underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--signal)]"
@@ -33,30 +48,11 @@ export function AccountPage() {
       </header>
 
       <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <div className="rounded border border-[var(--border-subtle)] px-3 py-2">
-          <dt className="text-[12px] text-[var(--muted)]">Email</dt>
-          <dd className="text-[13px] text-[var(--text)]">{account.email}</dd>
-        </div>
-        <div className="rounded border border-[var(--border-subtle)] px-3 py-2">
-          <dt className="text-[12px] text-[var(--muted)]">Account id</dt>
-          <dd className="text-[13px] text-[var(--text)] tnum">{account.id}</dd>
-        </div>
-        <div className="rounded border border-[var(--border-subtle)] px-3 py-2">
-          <dt className="text-[12px] text-[var(--muted)]">Role</dt>
-          <dd className="text-[13px] text-[var(--text)]">{ROLE_LABELS[account.role]}</dd>
-        </div>
-        <div className="rounded border border-[var(--border-subtle)] px-3 py-2">
-          <dt className="text-[12px] text-[var(--muted)]">Active</dt>
-          <dd className="text-[13px] text-[var(--text)]">
-            {account.is_active ? "Active" : "Inactive"}
-          </dd>
-        </div>
-        <div className="rounded border border-[var(--border-subtle)] px-3 py-2">
-          <dt className="text-[12px] text-[var(--muted)]">Verification</dt>
-          <dd className="text-[13px] text-[var(--text)]">
-            {account.is_verified ? "Verified" : "Not verified"}
-          </dd>
-        </div>
+        {fact("Email", account.email)}
+        {name !== null && fact("Name", name)}
+        {fact("Account id", account.id, true)}
+        {fact("Active", account.is_active ? "Active" : "Inactive")}
+        {fact("Verification", account.is_verified ? "Verified" : "Not verified")}
       </dl>
 
       <p className="text-[12px] text-[var(--muted)]">

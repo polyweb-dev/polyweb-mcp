@@ -37,26 +37,25 @@ function fillForm(email: string, password: string, confirmation: string): void {
 }
 
 describe("RegisterPage", () => {
-  it("renders the three labels, the role select, and the 12-128 password hint", () => {
+  it("renders the three labels and the 12-128 password hint", () => {
     stubUnreachable()
     renderRegister()
 
     expect(screen.getByLabelText("Email")).toBeInTheDocument()
     expect(screen.getByLabelText("Password")).toBeInTheDocument()
     expect(screen.getByLabelText("Confirm password")).toBeInTheDocument()
-    expect(screen.getByLabelText("Role")).toBeInTheDocument()
     expect(screen.getByText("Use 12 to 128 characters.")).toBeInTheDocument()
   })
 
-  it("starts on Agent and offers all three role options", () => {
+  it("offers no role or account-type choice", () => {
     stubUnreachable()
     renderRegister()
 
-    expect((screen.getByLabelText("Role") as HTMLSelectElement).value).toBe("agent")
-    const values = screen
-      .getAllByRole("option")
-      .map((option) => (option as HTMLOptionElement).value)
-    expect(values).toEqual(["admin", "developer", "agent"])
+    expect(screen.queryByLabelText(/role/i)).toBeNull()
+    expect(screen.queryByLabelText(/account type/i)).toBeNull()
+    expect(screen.queryByRole("combobox")).toBeNull()
+    expect(screen.queryByRole("option")).toBeNull()
+    expect(document.body.textContent ?? "").not.toMatch(/\b(Admin|Developer|Agent)\b/)
   })
 
   it("rejects an empty email address without a fetch", async () => {
@@ -112,7 +111,7 @@ describe("RegisterPage", () => {
     expect(stub.requests).toHaveLength(0)
   })
 
-  it("creates an Agent account by default and sends the exact role JSON", async () => {
+  it("creates the account and sends exactly the email and the password", async () => {
     const user = userEvent.setup()
     const stub = installFetchStub((req) => {
       if (req.url === "/auth/register" && req.method === "POST") {
@@ -126,36 +125,35 @@ describe("RegisterPage", () => {
     await user.click(screen.getByRole("button", { name: "Create account" }))
 
     expect(await screen.findByText("Account created")).toBeInTheDocument()
-    expect(screen.getByText(/Your Agent account is ready/)).toBeInTheDocument()
+    expect(screen.getByText("Your account is ready.")).toBeInTheDocument()
     const signIn = screen.getByRole("link", { name: "Go to sign in" })
     expect(signIn).toHaveAttribute("href", "/login")
     expect(stub.requests).toHaveLength(1)
     const [only] = stub.requests
     expect(only?.url).toBe("/auth/register")
     expect(only?.method).toBe("POST")
-    expect(only?.body).toEqual({ email: EMAIL, password: PASSWORD, role: "agent" })
+    expect(only?.body).toEqual({ email: EMAIL, password: PASSWORD })
     expect(stub.requests.every((req) => req.url === "/auth/register")).toBe(true)
   })
 
-  it("creates the selected role and confirms it without automatic login", async () => {
+  it("confirms the creation without role text and without automatic login", async () => {
     const user = userEvent.setup()
     const stub = installFetchStub((req) => {
       if (req.url === "/auth/register" && req.method === "POST") {
-        const role = (req.body as { role: "admin" | "developer" | "agent" }).role
-        return ok(agentAccountFixture({ email: EMAIL, role }))
+        return ok(agentAccountFixture({ email: EMAIL }))
       }
       return err(404, { detail: "unhandled test route" })
     })
     renderRegister()
 
     fillForm(EMAIL, PASSWORD, PASSWORD)
-    await user.selectOptions(screen.getByLabelText("Role"), "developer")
     await user.click(screen.getByRole("button", { name: "Create account" }))
 
-    expect(await screen.findByText(/Your Developer account is ready/)).toBeInTheDocument()
+    expect(await screen.findByText("Account created")).toBeInTheDocument()
+    expect(document.body.textContent ?? "").not.toMatch(/\b(Admin|Developer|Agent)\b/)
     expect(screen.getByRole("link", { name: "Go to sign in" })).toBeInTheDocument()
     expect(stub.requests).toHaveLength(1)
-    expect(stub.requests[0]?.body).toEqual({ email: EMAIL, password: PASSWORD, role: "developer" })
+    expect(stub.requests.some((req) => req.url.startsWith("/auth/jwt"))).toBe(false)
   })
 
   it("shows the safe server message for a duplicate email", async () => {

@@ -3,8 +3,10 @@ import { useLocation } from "react-router"
 import { cn } from "cn"
 import { useAuth } from "@/domains/auth"
 import { ProjectSelector } from "@/features/projects/ui/ProjectSelector"
+import { parseProjectPath, projectIdFromPath, projectPath } from "../routes"
 import { Brand } from "./SidebarBrand"
 import { NavList } from "./SidebarNavList"
+import { ProjectNav } from "./SidebarProjectNav"
 import { SidebarAccountMenu } from "./SidebarAccountMenu"
 import { useSidebarState } from "./useSidebarState"
 
@@ -30,6 +32,18 @@ function accountMenuKey(
 ): string {
   const mode = isCollapsed ? "collapsed" : "expanded"
   return `${pathname}|${accountId ?? "anonymous"}|${mode}`
+}
+
+/**
+ * Project selection of the current URL: the open project and a path builder
+ * that keeps the current section on a project switch.
+ */
+function projectSelection(pathname: string) {
+  const section = parseProjectPath(pathname)?.section ?? "overview"
+  return {
+    currentProjectId: projectIdFromPath(pathname),
+    pathForProject: (projectId: string) => projectPath(projectId, section),
+  }
 }
 
 /**
@@ -63,7 +77,8 @@ function renderBrandRow(isCollapsed: boolean, onToggle: () => void) {
 function renderDrawer(
   menuKey: string,
   drawerOpen: boolean,
-  onClose: (returnFocus?: boolean) => void
+  onClose: (returnFocus?: boolean) => void,
+  pathname: string
 ) {
   return (
     <div className="fixed inset-0 z-50 md:hidden">
@@ -91,7 +106,12 @@ function renderDrawer(
             <X aria-hidden="true" className="size-5" />
           </button>
         </div>
-        <ProjectSelector collapsed={false} onNavigate={() => onClose()} />
+        <ProjectSelector
+          collapsed={false}
+          onNavigate={() => onClose()}
+          {...projectSelection(pathname)}
+        />
+        <ProjectNav collapsed={false} onNavigate={() => onClose()} />
         <NavList collapsed={false} onNavigate={() => onClose()} />
         <div className="shrink-0 p-2">
           <SidebarAccountMenu key={`drawer|${drawerOpen}|${menuKey}`} collapsed={false} />
@@ -144,7 +164,9 @@ export function Sidebar({
       >
         {renderBrandRow(isCollapsed, toggleCollapsed)}
 
-        <ProjectSelector collapsed={isCollapsed} />
+        <ProjectSelector collapsed={isCollapsed} {...projectSelection(pathname)} />
+
+        <ProjectNav collapsed={isCollapsed} />
 
         <NavList collapsed={isCollapsed} />
 
@@ -153,7 +175,7 @@ export function Sidebar({
         </div>
       </aside>
 
-      {drawerOpen && renderDrawer(menuKey, drawerOpen, closeDrawer)}
+      {drawerOpen && renderDrawer(menuKey, drawerOpen, closeDrawer, pathname)}
     </>
   )
 }

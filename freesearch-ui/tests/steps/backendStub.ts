@@ -12,6 +12,10 @@ import {
   traceDetailFixture,
   traceListFixture,
 } from "../../src/test/fixtures/activity"
+import { SYSTEM_ADMIN_PERMISSIONS, userAccountBody } from "./accountStub"
+
+/** Account id of the default stubbed session (a system administrator). */
+const DEFAULT_ACCOUNT_ID = "11111111-1111-4111-8111-111111111111"
 
 /**
  * Deterministic in-memory backend stub for state-neutral E2E.
@@ -66,6 +70,24 @@ interface StubRouting {
  * the current per-scenario state; writes via PUT persist for the scenario.
  */
 const stubbedManualQuotas: Record<string, Record<string, unknown>> = {}
+
+/**
+ * System permissions served by GET /api/v1/system/access. Accounts carry no
+ * role, so every system gate (Routing, Usage, Settings, Admin, control edits)
+ * follows this list. The fixtures.ts Before hook resets it to the system
+ * administrator set once per scenario (not per tab), and account steps narrow
+ * it afterwards. The list is read per request, so a change applies to every
+ * later system access read of every tab.
+ */
+let stubbedSystemPermissions: string[] = [...SYSTEM_ADMIN_PERMISSIONS]
+
+export function setStubbedSystemPermissions(permissions: readonly string[]): void {
+  stubbedSystemPermissions = [...permissions]
+}
+
+export function resetStubbedSystemPermissions(): void {
+  stubbedSystemPermissions = [...SYSTEM_ADMIN_PERMISSIONS]
+}
 
 export function setStubbedManualQuota(
   provider: string,
@@ -2733,18 +2755,56 @@ export async function installBackendStub(page: Page): Promise<void> {
     }
   )
 
-  // Projects surface: absent by default, so every scenario keeps the hidden
-  // project UI (the selector renders nothing) unless a project stub overrides.
+  // Default browser session: a role-less system administrator account (the
+  // backend account has no role; its authority is the system access below).
+  // Scenario steps that need another account or an anonymous session
+  // register their own handlers later, which take precedence (or unroute
+  // these by the same glob first).
+  await page.route("**/auth/jwt/refresh", (route) => {
+    const method = route.request().method()
+    if (method === "POST") {
+      return json(route, {
+        access_token: "stub-access-token",
+        token_type: "bearer",
+        expires_in: 900,
+        refresh_expires_in: 604800,
+      })
+    }
+    if (method === "DELETE") return route.fulfill({ status: 204, body: "" })
+    return route.fallback()
+  })
+  await page.route("**/users/me", (route) => {
+    if (route.request().method() !== "GET") return route.fallback()
+    return json(
+      route,
+      userAccountBody(DEFAULT_ACCOUNT_ID, "admin@example.com", { username: "admin" })
+    )
+  })
+
+  // Projects surface. Navigation follows effective permissions, so system
+  // access is always served (a failed read is an error state with Retry, not
+  // a hidden UI). The default account holds no project membership: the list
+  // is empty and every project resource answers the backend's uniform 404.
+  // projectStub.ts overrides these routes for project scenarios.
   await page.route(
     (url) => url.pathname === "/api/v1/system/access",
     (route) => {
       if (route.request().method() !== "GET") return route.fallback()
-      return json(route, { detail: "projects surface unavailable" }, 404)
+      return json(route, {
+        rollout_state: "preview",
+        permissions: [...stubbedSystemPermissions].sort(),
+      })
     }
   )
   await page.route(
     (url) => url.pathname === "/api/v1/projects" || url.pathname.startsWith("/api/v1/projects/"),
-    (route) => json(route, { detail: "projects surface unavailable" }, 404)
+    (route) => {
+      const url = new URL(route.request().url())
+      if (url.pathname === "/api/v1/projects" && route.request().method() === "GET") {
+        return json(route, [])
+      }
+      return json(route, { detail: "Project not found" }, 404)
+    }
   )
 }
 

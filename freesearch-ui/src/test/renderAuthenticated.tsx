@@ -6,12 +6,36 @@ import type { ReactElement } from "react"
 import { AuthContext } from "@/domains/auth/state/context"
 import type { AuthContextValue } from "@/domains/auth/state/context"
 import type { AuthStatus, UserAccount } from "@/domains/auth/model/types"
+import { ProjectsContext } from "@/domains/projects/state/context"
+import type { ProjectsContextValue } from "@/domains/projects"
+import { projectsContextFixture, systemAccessFixture } from "./accessFixtures"
 import { adminAccountFixture } from "./authFixtures"
 
 export interface AuthenticatedRenderOptions extends Omit<RenderOptions, "wrapper"> {
   account?: UserAccount | null
   status?: AuthStatus
   route?: string
+  /**
+   * Effective system permissions of a ready projects context. When set (or
+   * when `projects` is set), the screen renders inside a `ProjectsContext`
+   * provider, the way the workspace shell provides it.
+   */
+  systemPermissions?: readonly string[]
+  projects?: Partial<ProjectsContextValue>
+}
+
+/** Wrap one screen in a ready projects context when the options ask for one. */
+function withProjects(
+  ui: ReactElement,
+  systemPermissions: readonly string[] | undefined,
+  projects: Partial<ProjectsContextValue> | undefined
+): ReactElement {
+  if (systemPermissions === undefined && projects === undefined) return ui
+  const value = projectsContextFixture({
+    ...(systemPermissions === undefined ? {} : { systemAccess: systemAccessFixture(systemPermissions) }),
+    ...projects,
+  })
+  return <ProjectsContext.Provider value={value}>{ui}</ProjectsContext.Provider>
 }
 
 /** Build one confirmed auth context value for tests. */
@@ -46,7 +70,14 @@ export function renderAuthenticated(
   ui: ReactElement,
   options?: AuthenticatedRenderOptions
 ): AuthenticatedRenderResult {
-  const { account = adminAccountFixture(), status, route = "/", ...renderOptions } = options ?? {}
+  const {
+    account = adminAccountFixture(),
+    status,
+    route = "/",
+    systemPermissions,
+    projects,
+    ...renderOptions
+  } = options ?? {}
   const login = vi.fn(async () => {})
   const logout = vi.fn(async () => {})
   const restore = vi.fn(async () => {})
@@ -60,7 +91,9 @@ export function renderAuthenticated(
   }
   const result = render(
     <MemoryRouter initialEntries={[route]}>
-      <AuthContext.Provider value={value}>{ui}</AuthContext.Provider>
+      <AuthContext.Provider value={value}>
+        {withProjects(ui, systemPermissions, projects)}
+      </AuthContext.Provider>
     </MemoryRouter>,
     renderOptions
   )

@@ -1,25 +1,24 @@
 /**
- * Role capabilities of the workspace.
+ * Effective-permission capabilities of the workspace.
  *
- * These flags mirror the shipped backend policy: the control plane accepts a
- * read from an Admin or a Developer, and a mutation from an Admin only. The
- * composition passes the flags into the domain providers, so a domain never
- * imports the auth domain and every call site shares one policy.
+ * Every flag reads the live system access descriptor of
+ * `GET /api/v1/system/access`, never an account role. The backend accepts a
+ * control-plane read with `system.settings.read` and a mutation or an account
+ * provisioning with `system.settings.write`. The composition passes the flags
+ * into the domain providers, so a domain never imports the auth domain and
+ * every call site shares one policy.
  */
-import type { UserRole } from "@/domains/auth"
+import { SYSTEM_PERMISSIONS, hasPermission } from "@/domains/projects"
+import type { PermissionAccess } from "@/domains/projects"
 
-/** Roles allowed to read provider, routing, and dashboard control data. */
-const CONTROL_READ_ROLES: readonly UserRole[] = ["admin", "developer"]
+type SystemAccessLike = PermissionAccess | null | undefined
 
-/** Roles allowed to mutate provider, routing, and quota control data. */
-const CONTROL_EDIT_ROLES: readonly UserRole[] = ["admin"]
-
-/** Return whether one role may read the control plane. */
-export function canReadControls(role: UserRole): boolean {
-  return CONTROL_READ_ROLES.includes(role)
+/** Return whether the caller may read the global control plane. */
+export function canReadControls(systemAccess: SystemAccessLike): boolean {
+  return hasPermission(systemAccess, SYSTEM_PERMISSIONS.settingsRead)
 }
 
-/** Return whether one role may mutate the control plane. */
-export function canEditControls(role: UserRole): boolean {
-  return CONTROL_EDIT_ROLES.includes(role)
+/** Return whether the caller may mutate the global control plane. */
+export function canEditControls(systemAccess: SystemAccessLike): boolean {
+  return hasPermission(systemAccess, SYSTEM_PERMISSIONS.settingsWrite)
 }

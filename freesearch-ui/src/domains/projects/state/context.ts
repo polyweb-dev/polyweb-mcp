@@ -12,7 +12,8 @@ export type ProjectsAvailability = "loading" | "available" | "unavailable"
 
 /**
  * Account-scope projects surface: the live system access descriptor and the
- * readable project list. `unavailable` hides the entire project UI.
+ * readable project list. `unavailable` means the load failed; the shell shows
+ * an error with Retry (`reloadProjects`) instead of hiding the UI.
  */
 export interface ProjectsContextValue {
   accountId: string
@@ -27,8 +28,9 @@ export interface ProjectsContextValue {
 export const ProjectsContext = createContext<ProjectsContextValue | undefined>(undefined)
 
 /**
- * Fallback value for surfaces that render where the provider may be absent.
- * `unavailable` hides the project UI, which matches the no-provider case.
+ * Fallback value for surfaces that render where the provider may be absent:
+ * no system access and no projects, so optional chrome (the project selector)
+ * renders nothing and no gated affordance appears.
  */
 export const PROJECTS_UNAVAILABLE: ProjectsContextValue = {
   accountId: "",

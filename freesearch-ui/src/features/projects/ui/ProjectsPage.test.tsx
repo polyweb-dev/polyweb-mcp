@@ -65,6 +65,40 @@ describe("ProjectsPage", () => {
     expect(screen.getByLabelText("First administrator email")).toHaveValue("me@example.com")
   })
 
+  it("shows an error with Retry instead of hiding the page when the load fails", async () => {
+    let fail = true
+    installFetchStub((req) => {
+      if (req.url === "/api/v1/system/access") {
+        return fail ? err(503, null) : ok({ rollout_state: "preview", permissions: [] })
+      }
+      if (req.url === "/api/v1/projects?include_archived=true") return ok([PROJECT])
+      return err(404, null)
+    })
+    render(
+      <MemoryRouter>
+        <ProjectsProvider accountId="acc">
+          <ProjectsPage defaultAdminEmail="me@example.com" />
+        </ProjectsProvider>
+      </MemoryRouter>
+    )
+    expect(await screen.findByRole("alert")).toHaveTextContent("The project list could not be loaded.")
+    fail = false
+    await userEvent.setup().click(screen.getByRole("button", { name: "Retry" }))
+    expect(await screen.findByRole("link", { name: "Alpha" })).toBeInTheDocument()
+  })
+
+  it("hides the create form with system.projects.create alone", async () => {
+    renderPage(["system.projects.create"])
+    await screen.findByText("You are not a member of any project.")
+    expect(screen.queryByRole("form", { name: "Create project" })).toBeNull()
+  })
+
+  it("hides the create form without a creation permission", async () => {
+    renderPage(["system.settings.write"])
+    await screen.findByText("You are not a member of any project.")
+    expect(screen.queryByRole("form", { name: "Create project" })).toBeNull()
+  })
+
   it("reports a created project the caller is not a member of", async () => {
     const stub = installFetchStub((req) => {
       if (req.url === "/api/v1/system/access") return ok({ rollout_state: "preview", permissions: ["project.create"] })
@@ -85,5 +119,25 @@ describe("ProjectsPage", () => {
     await user.click(screen.getByRole("button", { name: "Create project" }))
     await screen.findByText("Project created. You are not a member of it.")
     expect(stub.requests.filter((r) => r.method === "POST")).toHaveLength(1)
+  })
+
+  it("names an unknown first-administrator email on a bare 400 from create", async () => {
+    installFetchStub((req) => {
+      if (req.url === "/api/v1/system/access") return ok({ rollout_state: "preview", permissions: ["project.create"] })
+      if (req.url === "/api/v1/projects?include_archived=true" && req.method === "GET") return ok([])
+      if (req.method === "POST" && req.url === "/api/v1/projects") return err(400, null)
+      return err(404, null)
+    })
+    const user = userEvent.setup()
+    render(
+      <MemoryRouter>
+        <ProjectsProvider accountId="acc">
+          <ProjectsPage defaultAdminEmail="ghost@example.com" />
+        </ProjectsProvider>
+      </MemoryRouter>
+    )
+    await user.type(await screen.findByLabelText("Project name"), "New")
+    await user.click(screen.getByRole("button", { name: "Create project" }))
+    expect(await screen.findByText("No active account uses that email address.")).toBeInTheDocument()
   })
 })

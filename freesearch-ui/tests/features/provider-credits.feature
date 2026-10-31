@@ -397,7 +397,7 @@ Feature: Provider credit units display honestly
   Scenario: U7-T14 Out-of-Credits 402 reaches the user at once
     Given the stubbed provider limits show "Tavily finite credits"
     And the stubbed credit totals show "Tavily no use"
-    When I navigate directly to "/"
+    When I navigate directly to "/playground"
     And I pin the playground provider to "Tavily"
     And I submit the playground search query "tavily out of credits probe"
     Then the playground search error should show "Tavily is out of Credits. Wait until reset or upgrade."
@@ -444,7 +444,7 @@ Feature: Provider credit units display honestly
 
   @stub @ui7 @tavily @tier
   Scenario: U7-T18 Confirmed prod ceiling shows unknown headroom before dashboard confirms
-    Given the sidebar session belongs to an admin account
+    Given the sidebar session belongs to a system administrator
     And the Tavily stored key environment is "dev"
     And the stubbed provider limits show "Tavily finite credits"
     And the stubbed credit totals show "Tavily no use"
@@ -460,7 +460,7 @@ Feature: Provider credit units display honestly
 
   @stub @ui7 @tavily @tier
   Scenario: U7-T19 Deferred dashboard still shows confirmed ceiling at once
-    Given the sidebar session belongs to an admin account
+    Given the sidebar session belongs to a system administrator
     And the Tavily stored key environment is "dev"
     And the stubbed provider limits show "Tavily finite credits"
     And the stubbed credit totals show "Tavily no use"
@@ -476,7 +476,7 @@ Feature: Provider credit units display honestly
 
   @stub @ui7 @tavily @tier
   Scenario: U7-T20 Card PATCH rejection keeps stored dev value
-    Given the sidebar session belongs to an admin account
+    Given the sidebar session belongs to a system administrator
     And the Tavily stored key environment is "dev"
     And the stubbed provider limits show "Tavily finite credits"
     And the stubbed credit totals show "Tavily no use"
@@ -488,7 +488,7 @@ Feature: Provider credit units display honestly
 
   @stub @ui7 @tavily @tier
   Scenario: U7-T21 Missing PATCH readback shows confirmation unavailable
-    Given the sidebar session belongs to an admin account
+    Given the sidebar session belongs to a system administrator
     And the Tavily stored key environment is "dev"
     And the stubbed provider limits show "Tavily finite credits"
     And the stubbed credit totals show "Tavily no use"
@@ -499,7 +499,7 @@ Feature: Provider credit units display honestly
 
   @stub @ui7 @tavily @tier
   Scenario: U7-T22 Obsolete PATCH after unmount writes no state
-    Given the sidebar session belongs to an admin account
+    Given the sidebar session belongs to a system administrator
     And the Tavily stored key environment is "dev"
     And the stubbed provider limits show "Tavily finite credits"
     And the stubbed credit totals show "Tavily no use"
@@ -513,7 +513,7 @@ Feature: Provider credit units display honestly
 
   @stub @ui7 @tavily @tier
   Scenario: U7-T23 Credential replacement ignores obsolete PATCH response
-    Given the sidebar session belongs to an admin account
+    Given the sidebar session belongs to a system administrator
     And the Tavily stored key environment is "dev"
     And the stubbed provider limits show "Tavily finite credits"
     And the stubbed credit totals show "Tavily no use"
@@ -527,7 +527,7 @@ Feature: Provider credit units display honestly
 
   @stub @ui7 @tavily @tier
   Scenario: U7-T24 Confirmed save stays after refresh failure
-    Given the sidebar session belongs to an admin account
+    Given the sidebar session belongs to a system administrator
     And the Tavily stored key environment is "dev"
     And the stubbed provider limits show "Tavily finite credits"
     And the stubbed credit totals show "Tavily no use"
@@ -540,8 +540,8 @@ Feature: Provider credit units display honestly
     And no Tavily provider test requests should exist
 
   @stub @ui7 @tavily @tier
-  Scenario: U7-T25 Reader role shows read-only tier text with zero PATCH
-    Given the sidebar session belongs to a developer account
+  Scenario: U7-T25 Settings reader shows read-only tier text with zero PATCH
+    Given the sidebar session belongs to the "settings reader" account
     And the Tavily stored key environment is "dev"
     And the stubbed provider limits show "Tavily finite credits"
     And the stubbed credit totals show "Tavily no use"
@@ -553,7 +553,7 @@ Feature: Provider credit units display honestly
 
   @stub @ui7 @tavily @tier
   Scenario: U7-T26 Keyless card shows keyless access without numeric rate
-    Given the sidebar session belongs to an admin account
+    Given the sidebar session belongs to a system administrator
     And the Tavily key is keyless
     And the stubbed provider limits show "Tavily keyless credits"
     And the stubbed credit totals show "Tavily no use"

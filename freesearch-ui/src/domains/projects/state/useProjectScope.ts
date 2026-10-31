@@ -10,3 +10,13 @@ export function useProjectScope(): ProjectScopeContextValue {
   }
   return value
 }
+
+/**
+ * Return the open project scope, or `null` on a global route.
+ *
+ * Shell chrome such as the sidebar project group renders on every route, so
+ * it uses this variant instead of rejecting a missing scope.
+ */
+export function useProjectScopeOptional(): ProjectScopeContextValue | null {
+  return useContext(ProjectScopeContext) ?? null
+}

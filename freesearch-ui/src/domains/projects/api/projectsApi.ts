@@ -33,20 +33,28 @@ export const LAST_PROJECT_ADMIN_CODE = "LAST_PROJECT_ADMIN"
 
 /** User-facing copy for the mapped project failures. */
 export const LAST_PROJECT_ADMIN_MESSAGE =
-  "A project must keep at least one active administrator."
+  "A project must keep at least one active administrator. " +
+  "Make another active member a project admin first."
 export const UNKNOWN_ACCOUNT_EMAIL_MESSAGE = "No active account uses that email address."
 export const PERMISSION_LOST_MESSAGE = "You no longer have permission for this action."
 export const PROJECT_UNAVAILABLE_MESSAGE =
   "You do not have access to this project, or it does not exist."
+const PROJECT_ARCHIVED_MEMBERS_MESSAGE = "An archived project cannot change its members."
+
+/** Return the `detail.code` of a 409 conflict body, or `null` for any other failure. */
+export function projectConflictCode(error: unknown): string | null {
+  if (!(error instanceof ApiError) || error.status !== 409) return null
+  const body = error.raw
+  if (typeof body !== "object" || body === null) return null
+  const detail = (body as { detail?: unknown }).detail
+  if (typeof detail !== "object" || detail === null) return null
+  const code = (detail as { code?: unknown }).code
+  return typeof code === "string" ? code : null
+}
 
 /** Return whether the failure is the backend last-administrator conflict. */
 export function isLastProjectAdminError(error: unknown): boolean {
-  if (!(error instanceof ApiError) || error.status !== 409) return false
-  const body = error.raw
-  if (typeof body !== "object" || body === null) return false
-  const detail = (body as { detail?: unknown }).detail
-  if (typeof detail !== "object" || detail === null) return false
-  return (detail as { code?: unknown }).code === LAST_PROJECT_ADMIN_CODE
+  return projectConflictCode(error) === LAST_PROJECT_ADMIN_CODE
 }
 
 /** Return whether the failure is an inaccessible-or-unknown project read. */
@@ -54,21 +62,41 @@ export function isProjectUnavailableError(error: unknown): boolean {
   return error instanceof ApiError && error.status === 404
 }
 
+/** Options of one mapped project mutation failure. */
+export interface ProjectMutationMessageOptions {
+  /**
+   * The request named an account by email (add member, first administrator
+   * of a new project), so a bare 400 means that email has no active account.
+   */
+  emailLookup?: boolean
+}
+
+/** Return the server's detail when the failure carried a body, else the fallback. */
+function serverDetail(error: ApiError, fallback: string): string {
+  const hasBody = error.raw !== undefined && error.raw !== null
+  return hasBody && error.detail ? error.detail : fallback
+}
+
 /**
  * Map a project mutation failure to safe user-facing copy.
  *
- * The mapping is identical for an email and an id path: a 400 means the named
- * account does not exist or is inactive, a 403 means the caller lost the
- * permission, and a last-admin conflict keeps its own message.
+ * A 403 means the caller lost the permission, a last-admin conflict explains
+ * the next step, and an archived project names why it refused. The backend
+ * answers many validation failures with a bare 400, so a 400 reads as an
+ * unknown email only on an email lookup; elsewhere it shows the server's
+ * detail when there is one, else the call's fallback.
  */
-export function projectMutationMessage(error: unknown, fallback: string): string {
+export function projectMutationMessage(
+  error: unknown,
+  fallback: string,
+  options: ProjectMutationMessageOptions = {}
+): string {
   if (isLastProjectAdminError(error)) return LAST_PROJECT_ADMIN_MESSAGE
-  if (error instanceof ApiError) {
-    if (error.status === 403) return PERMISSION_LOST_MESSAGE
-    if (error.status === 400) return UNKNOWN_ACCOUNT_EMAIL_MESSAGE
-    if (error.detail) return error.detail
-  }
-  return fallback
+  if (projectConflictCode(error) === "PROJECT_ARCHIVED") return PROJECT_ARCHIVED_MEMBERS_MESSAGE
+  if (!(error instanceof ApiError)) return fallback
+  if (error.status === 403) return PERMISSION_LOST_MESSAGE
+  if (error.status === 400 && options.emailLookup === true) return UNKNOWN_ACCOUNT_EMAIL_MESSAGE
+  return serverDetail(error, fallback)
 }
 
 /** Return the caller's live system-scope access descriptor. */

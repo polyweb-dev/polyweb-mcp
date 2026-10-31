@@ -6,26 +6,24 @@
  * `shared/api/session.ts`, not in React state and not in persisted storage.
  */
 
-/** Account class that authorizes each control-plane surface. */
-export type UserRole = "admin" | "developer" | "agent"
+/** Identity provider that owns an account. */
+export type AuthProviderKind = "local" | "workos"
 
-/** The three roles, in display order, for a role control. */
-export const USER_ROLES: readonly UserRole[] = ["admin", "developer", "agent"]
-
-/** Display label of each role, in a role control and in a creation receipt. */
-export const ROLE_LABELS: Record<UserRole, string> = {
-  admin: "Admin",
-  developer: "Developer",
-  agent: "Agent",
-}
-
-/** Safe account projection. It holds no password hash and no session family. */
+/**
+ * Safe account projection of `GET /users/me`, registration and provisioning.
+ *
+ * It holds no password hash, no session family, and no role or privilege
+ * flag: authority comes from the live system and project access descriptors.
+ */
 export interface UserAccount {
   id: string
   email: string
-  role: UserRole
+  auth_provider: AuthProviderKind
+  auth_provider_id: string | null
+  username: string | null
+  first_name: string | null
+  last_name: string | null
   is_active: boolean
-  is_superuser: boolean
   is_verified: boolean
 }
 
@@ -43,10 +41,8 @@ export interface AuthCredentials {
   password: string
 }
 
-/** Submitted credentials of an account creation, with the selected role. */
-export interface RegistrationCredentials extends AuthCredentials {
-  role: UserRole
-}
+/** Submitted credentials of an account creation: the email and the password only. */
+export type RegistrationCredentials = AuthCredentials
 
 /**
  * Session status of the browser client.
@@ -62,7 +58,15 @@ export interface AuthState {
   error: string | null
 }
 
-/** Return whether an unknown value is one of the three roles. */
-export function isUserRole(value: unknown): value is UserRole {
-  return value === "admin" || value === "developer" || value === "agent"
+/**
+ * Return the display name of one account, or `null` when it has none.
+ *
+ * The full name wins over the username; the email stays the identity line.
+ */
+export function accountDisplayName(account: UserAccount): string | null {
+  const fullName = [account.first_name, account.last_name]
+    .filter((part): part is string => part !== null && part.trim() !== "")
+    .join(" ")
+  if (fullName !== "") return fullName
+  return account.username !== null && account.username.trim() !== "" ? account.username : null
 }

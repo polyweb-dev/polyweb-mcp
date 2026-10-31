@@ -1,29 +1,35 @@
 import { useEffect, useRef, useState } from "react"
-import { useLocation, useNavigate } from "react-router"
+import { useNavigate } from "react-router"
 import { useProjectsOptional, writeLastProject } from "@/domains/projects"
 import { ProjectSelectorMenu } from "./ProjectSelectorMenu"
 import { ProjectSelectorTrigger } from "./ProjectSelectorTrigger"
 
-/** `/p/<id>` or `/p/<id>/members` — the project section of the current URL. */
-const PROJECT_URL_RE = /^\/p\/([^/]+?)(\/members)?$/
-
 export interface ProjectSelectorProps {
   collapsed: boolean
   onNavigate?: () => void
+  /** Project of the current URL, or `null` on a global route. */
+  currentProjectId: string | null
+  /** Destination of one project choice; the shell keeps the current section. */
+  pathForProject: (projectId: string) => string
 }
 
 /**
  * Project switcher of the sidebar.
  *
- * The control renders only while the projects surface is available; an
- * unavailable rollout hides it entirely. Choosing a project keeps the current
- * section (`members` stays on members) and remembers the choice as the
- * account's last project. Escape and outside clicks dismiss the menu; Escape
- * returns focus to the trigger.
+ * The control renders only once the projects surface has loaded; while it
+ * loads or after a failure, the shell's main area shows the status or the
+ * error with Retry. Choosing a project goes to the path
+ * the shell builds (it keeps the current section) and remembers the choice as
+ * the account's last project: an explicit choice is the only writer. Escape
+ * and outside clicks dismiss the menu; Escape returns focus to the trigger.
  */
-export function ProjectSelector({ collapsed, onNavigate }: ProjectSelectorProps) {
+export function ProjectSelector({
+  collapsed,
+  onNavigate,
+  currentProjectId,
+  pathForProject,
+}: ProjectSelectorProps) {
   const { accountId, availability, rolloutState, projects } = useProjectsOptional()
-  const { pathname } = useLocation()
   const navigate = useNavigate()
   const [open, setOpen] = useState(false)
   const navRef = useRef<HTMLElement>(null)
@@ -42,10 +48,7 @@ export function ProjectSelector({ collapsed, onNavigate }: ProjectSelectorProps)
 
   if (availability !== "available") return null
 
-  const match = PROJECT_URL_RE.exec(pathname)
-  const currentId = match?.[1] ?? null
-  const section = match?.[2] === "/members" ? "members" : null
-  const current = projects.find((project) => project.id === currentId) ?? null
+  const current = projects.find((project) => project.id === currentProjectId) ?? null
   const label = current?.name ?? "Select project"
   const accessibleName =
     current !== null ? `Select project (current: ${current.name})` : "Select project"
@@ -59,7 +62,7 @@ export function ProjectSelector({ collapsed, onNavigate }: ProjectSelectorProps)
     writeLastProject(accountId, projectId)
     setOpen(false)
     onNavigate?.()
-    navigate(section === "members" ? `/p/${projectId}/members` : `/p/${projectId}`)
+    navigate(pathForProject(projectId))
   }
 
   const goToList = () => {
@@ -87,7 +90,7 @@ export function ProjectSelector({ collapsed, onNavigate }: ProjectSelectorProps)
         <ProjectSelectorMenu
           collapsed={collapsed}
           projects={projects}
-          currentId={currentId}
+          currentId={currentProjectId}
           onChoose={choose}
           onList={goToList}
           onDismiss={dismiss}

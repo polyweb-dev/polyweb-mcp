@@ -2,19 +2,30 @@ import { useState } from "react"
 import { Popover as PopoverPrimitive } from "@base-ui/react/popover"
 import { LogOut } from "lucide-react"
 import { cn } from "cn"
-import { ROLE_LABELS, authErrorText, useAuth } from "@/domains/auth"
+import { accountDisplayName, authErrorText, useAuth } from "@/domains/auth"
 
 const SIGN_OUT_FAILURE = "Sign out failed. Try again."
 
-/** Account name presentation: the local part of the confirmed email address. */
-function accountName(email: string): string {
-  const separator = email.indexOf("@")
-  return separator > 0 ? email.slice(0, separator) : email
+/** One letter of the text avatar: the display name's, else the email's. */
+function avatarLetter(name: string | null, email: string): string {
+  return (name ?? email).trim().slice(0, 1).toUpperCase() || "?"
 }
 
-/** One letter of the text avatar. */
-function avatarLetter(email: string): string {
-  return accountName(email).slice(0, 1).toUpperCase() || "?"
+/**
+ * Identity lines of the account row and popup: the display name above the
+ * email when the account has a name or username, else the email alone.
+ */
+function identityLines(name: string | null, email: string) {
+  return (
+    <span className="flex min-w-0 flex-col text-left">
+      <span className="truncate text-[13px] font-medium text-[var(--text-strong)]">
+        {name ?? email}
+      </span>
+      {name !== null && (
+        <span className="truncate text-[11px] text-[var(--muted)]">{email}</span>
+      )}
+    </span>
+  )
 }
 
 /**
@@ -56,9 +67,9 @@ interface SidebarAccountMenuProps {
 /**
  * Account row of the sidebar foot and its account popover.
  *
- * One inset divider sits above the whole expanded account row. The row shows
- * the account name above the account role. The popup shows the account name
- * above the email address, then the Sign out action. The component reads the
+ * One inset divider sits above the whole expanded account row. The row and
+ * the popup show the email, with the full name or username above it when the
+ * account has one; no role text appears. The popup ends with Sign out. The component reads the
  * safe account projection and the logout action from the auth barrel; it holds
  * no credential, and it renders nothing without a confirmed account.
  */
@@ -70,7 +81,7 @@ export function SidebarAccountMenu({ collapsed }: SidebarAccountMenuProps) {
 
   if (account === null) return null
 
-  const name = accountName(account.email)
+  const name = accountDisplayName(account)
 
   /** One accepted Sign out action on the current logout seam. */
   async function handleSignOut(): Promise<void> {
@@ -109,19 +120,9 @@ export function SidebarAccountMenu({ collapsed }: SidebarAccountMenuProps) {
           aria-hidden="true"
           className="grid size-8 shrink-0 place-items-center rounded-full border border-[var(--border-subtle)] bg-[var(--secondary)] text-[11px] font-semibold leading-none text-[var(--text-strong)]"
         >
-          {avatarLetter(account.email)}
+          {avatarLetter(name, account.email)}
         </span>
-        {!collapsed && (
-          <span className="flex min-w-0 flex-col text-left">
-            <span className="truncate text-[13px] font-medium text-[var(--text-strong)]">
-              {name}
-            </span>
-            {/* The row shows the display label of the role, not the code value. */}
-            <span className="truncate text-[11px] text-[var(--muted)]">
-              {ROLE_LABELS[account.role]}
-            </span>
-          </span>
-        )}
+        {!collapsed && identityLines(name, account.email)}
       </PopoverPrimitive.Trigger>
 
       <PopoverPrimitive.Portal>
@@ -146,16 +147,9 @@ export function SidebarAccountMenu({ collapsed }: SidebarAccountMenuProps) {
                 aria-hidden="true"
                 className="grid size-10 shrink-0 place-items-center rounded-full border border-[var(--border-subtle)] bg-[var(--secondary)] text-[13px] font-semibold leading-none text-[var(--text-strong)]"
               >
-                {avatarLetter(account.email)}
+                {avatarLetter(name, account.email)}
               </span>
-              <span className="flex min-w-0 flex-col text-left">
-                <span className="truncate text-[13px] font-medium text-[var(--text-strong)]">
-                  {name}
-                </span>
-                <span className="truncate text-[11px] text-[var(--muted)]">
-                  {account.email}
-                </span>
-              </span>
+              {identityLines(name, account.email)}
             </div>
 
             <div className="mx-2 my-1.5 h-px bg-[var(--border-subtle)]" />

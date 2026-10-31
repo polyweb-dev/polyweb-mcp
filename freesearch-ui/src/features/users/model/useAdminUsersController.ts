@@ -1,29 +1,28 @@
 import { useCallback, useState } from "react"
-import { authErrorText, provisionAccount } from "@/domains/auth"
-import type { UserAccount, UserRole } from "@/domains/auth"
+import { authErrorText, passwordLengthProblem, provisionAccount } from "@/domains/auth"
+import type { UserAccount } from "@/domains/auth"
 
 const CREATE_FAILURE = "The account could not be created. Check the email address and the password rule."
 
 /**
- * Controller of the Admin account-creation screen.
+ * Controller of the account-creation screen.
  *
- * The screen creates one standalone account in the selected role and shows the
- * safe projection of that new account. It holds no authority over an existing
- * account, so it never loads a target and never changes a stored role. The
- * caller's own session, credential, and store stay unchanged.
+ * The screen creates one standalone account from an email and a password only
+ * and shows the safe projection of that new account. There is no role or
+ * account-type choice: authority comes from explicit assignments. It never
+ * loads an existing account. The caller's own session, credential, and store
+ * stay unchanged.
  */
 export interface AdminUsersController {
   email: string
   password: string
   confirmation: string
-  roleDraft: UserRole
   pending: boolean
   created: UserAccount | null
   error: string | null
   setEmail: (value: string) => void
   setPassword: (value: string) => void
   setConfirmation: (value: string) => void
-  setRoleDraft: (value: UserRole) => void
   create: () => Promise<void>
 }
 
@@ -31,7 +30,6 @@ export function useAdminUsersController(): AdminUsersController {
   const [email, setEmailState] = useState("")
   const [password, setPassword] = useState("")
   const [confirmation, setConfirmation] = useState("")
-  const [roleDraft, setRoleDraft] = useState<UserRole>("agent")
   const [pending, setPending] = useState(false)
   const [created, setCreated] = useState<UserAccount | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -42,15 +40,15 @@ export function useAdminUsersController(): AdminUsersController {
     setError(null)
   }, [])
 
-  const setRoleDraftValue = useCallback((value: UserRole) => {
-    setRoleDraft(value)
-    setCreated(null)
-  }, [])
-
   const create = useCallback(async () => {
     if (pending) return
     if (!email.trim()) {
       setError("Enter an email address.")
+      return
+    }
+    const lengthProblem = passwordLengthProblem(password)
+    if (lengthProblem !== null) {
+      setError(lengthProblem)
       return
     }
     if (password !== confirmation) {
@@ -60,7 +58,7 @@ export function useAdminUsersController(): AdminUsersController {
     setPending(true)
     setError(null)
     try {
-      const account = await provisionAccount({ email, password, role: roleDraft })
+      const account = await provisionAccount({ email, password })
       setPassword("")
       setConfirmation("")
       setCreated(account)
@@ -69,20 +67,18 @@ export function useAdminUsersController(): AdminUsersController {
     } finally {
       setPending(false)
     }
-  }, [pending, email, password, confirmation, roleDraft])
+  }, [pending, email, password, confirmation])
 
   return {
     email,
     password,
     confirmation,
-    roleDraft,
     pending,
     created,
     error,
     setEmail,
     setPassword,
     setConfirmation,
-    setRoleDraft: setRoleDraftValue,
     create,
   }
 }

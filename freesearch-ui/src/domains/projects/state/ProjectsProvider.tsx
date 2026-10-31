@@ -20,9 +20,10 @@ async function loadSnapshot(signal: AbortSignal): Promise<ProjectsSnapshot> {
  * Account-scoped owner of the projects surface.
  *
  * The provider loads the live system access descriptor and the readable
- * project list once per account. A failed load resolves to `unavailable`,
- * which hides the entire project UI — this is the rollout gate of the web
- * client, and it is driven by the backend, never by the account role.
+ * project list once per account. A failed load resolves to `unavailable`:
+ * the shell then shows an error with Retry (`reloadProjects`) on every
+ * surface that needs the access descriptor or the list, instead of hiding the
+ * UI. Every gate is driven by the backend, never by an account role.
  */
 export function ProjectsProvider({
   accountId,
