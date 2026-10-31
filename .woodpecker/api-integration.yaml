@@ -2,10 +2,10 @@ when:
   - event: manual
 
 steps:
-  - name: integration-tests
+  integration-tests:
     image: ghcr.io/astral-sh/uv:python3.12-bookworm-slim
     environment:
-      - PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring
+      PYTHON_KEYRING_BACKEND: keyring.backends.null.Keyring
     commands:
       - test -f .env || cp .env.example .env
       - uv sync --frozen

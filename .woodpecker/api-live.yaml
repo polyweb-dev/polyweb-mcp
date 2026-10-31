@@ -2,11 +2,11 @@ when:
   - event: manual
 
 steps:
-  - name: live-provider-tests
+  live-provider-tests:
     image: ghcr.io/astral-sh/uv:python3.12-bookworm-slim
     environment:
-      - PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring
-      - FREESEARCH_RUN_LIVE=1
+      PYTHON_KEYRING_BACKEND: keyring.backends.null.Keyring
+      FREESEARCH_RUN_LIVE: "1"
     commands:
       - test -f .env || cp .env.example .env
       - uv sync --frozen
