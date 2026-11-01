@@ -4,12 +4,10 @@ import {
   PROJECT_ROLE_LABELS,
   hasPermission,
   useProjectScope,
+  useProjects,
 } from "@/domains/projects"
 import type { ProjectRoleKey } from "@/domains/projects"
-
-const PREVIEW_NOTICE =
-  "Project playground, usage and activity are not available in this preview. " +
-  "The account workspace keeps working as before."
+import { ProjectUsageSummary } from "./ProjectUsageSummary"
 
 function roleLabel(role: string): string {
   return PROJECT_ROLE_LABELS[role as ProjectRoleKey] ?? role
@@ -18,11 +16,11 @@ function roleLabel(role: string): string {
 /**
  * Landing page of one project.
  *
- * The page shows the project status and the caller's role labels only. No
- * execution, usage, or activity data appears here; account-scoped surfaces
- * keep their existing routes.
+ * The page shows the project status, the caller's role labels and, with
+ * `usage.read`, a compact summary of this project's own usage.
  */
 export function ProjectOverviewPage() {
+  const { accountId } = useProjects()
   const { project, projectId, accessState } = useProjectScope()
   const access = accessState.status === "ready" ? accessState.data : null
   const roles = access?.roles ?? []
@@ -67,9 +65,9 @@ export function ProjectOverviewPage() {
         </p>
       )}
 
-      <p role="note" className="max-w-xl text-[13px] text-[var(--muted)]">
-        {PREVIEW_NOTICE}
-      </p>
+      {hasPermission(access, PROJECT_PERMISSIONS.usageRead) && (
+        <ProjectUsageSummary accountId={accountId} projectId={projectId} />
+      )}
     </section>
   )
 }

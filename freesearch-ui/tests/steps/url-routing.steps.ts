@@ -69,13 +69,13 @@ Then("the shell should expose no header element", async ({ page }) => {
 
 /**
  * Primary links of the default stubbed session, a system administrator (every
- * system permission), in the U1 contract order.
+ * system permission), in the U2 contract order: Playground and Activity moved
+ * to the Project navigation and the installation usage link is "Provider
+ * usage".
  */
 const SYSTEM_ADMINISTRATOR_LINKS = [
-  "Playground",
   "Routing",
-  "Usage",
-  "Activity",
+  "Provider usage",
   "Settings",
   "Projects",
   "Account",

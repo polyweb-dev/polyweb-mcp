@@ -35,6 +35,9 @@ function panelView(state: TraceLoadState | undefined): PanelView {
       showRetry: true,
     }
   }
+  if (state.status === "missing") {
+    return { kind: "message", tone: "quiet", text: state.error ?? "", showRetry: false }
+  }
   if (state.detail === null) {
     return { kind: "message", tone: "quiet", text: "Loading provider responses...", showRetry: false }
   }

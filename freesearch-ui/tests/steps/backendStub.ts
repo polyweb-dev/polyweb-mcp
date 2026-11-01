@@ -15,7 +15,10 @@ import {
 import { SYSTEM_ADMIN_PERMISSIONS, userAccountBody } from "./accountStub"
 
 /** Account id of the default stubbed session (a system administrator). */
-const DEFAULT_ACCOUNT_ID = "11111111-1111-4111-8111-111111111111"
+export const DEFAULT_ACCOUNT_ID = "11111111-1111-4111-8111-111111111111"
+
+/** Email of the default stubbed session. */
+export const DEFAULT_ACCOUNT_EMAIL = "admin@example.com"
 
 /**
  * Deterministic in-memory backend stub for state-neutral E2E.
@@ -1489,9 +1492,196 @@ export function traceListRequests(): string[] {
   return [...stubbedTraceListRequests]
 }
 
-/** Trace ids requested through `GET /api/v1/traces/{id}`, in order. */
+/** Trace ids requested through `GET /api/v1/projects/{id}/traces/{trace_id}`, in order. */
 export function traceDetailRequests(): string[] {
   return [...stubbedTraceDetailRequests]
+}
+
+/** Record one project trace list read (query string with its leading `?`). */
+export function recordTraceListRequest(search: string): void {
+  stubbedTraceListRequests.push(search)
+}
+
+/** Record one project trace detail read. */
+export function recordTraceDetailRequest(traceId: string): void {
+  stubbedTraceDetailRequests.push(traceId)
+}
+
+/** Injected trace list failure message, or null. */
+export function traceListFailureMessage(): string | null {
+  return stubbedTraceListFailure
+}
+
+/** Injected failure message of one trace detail, or null. */
+export function traceDetailFailureMessage(traceId: string): string | null {
+  return stubbedTraceDetailFailures[traceId] ?? null
+}
+
+/**
+ * Calls of the removed global trace read (`/api/v1/traces[/{id}]`). The
+ * backend no longer serves it, so the stub answers 404 and any call is a
+ * regression a scenario can assert against.
+ */
+const legacyTraceCalls: string[] = []
+
+export function legacyTraceRequests(): string[] {
+  return [...legacyTraceCalls]
+}
+
+/**
+ * The trace fixture list Activity has always rendered, now owned by the
+ * project Alpha (see projectActivityStub.ts): the seven-provider fanout, the
+ * legacy fixture list (aggregate, single-provider search, error fetch), then
+ * the null-source and the fusion long-snippet traces. Unfiltered; the project
+ * route applies the `operation` and `outcome` filters like the backend.
+ */
+export function activityTraceFixtures(): Record<string, unknown>[] {
+  const list = traceListFixture() as { items: Record<string, unknown>[] }
+  return [
+    sevenProviderTraceSummaryFixture(),
+    ...list.items,
+    nullSourceTraceSummaryFixture(),
+    fusionLongTraceSummaryFixture(),
+  ]
+}
+
+/** A fresh copy of the success (search) trace detail fixture. */
+export function successTraceDetailFixtureForStub(): Record<string, unknown> {
+  return traceDetailFixture()
+}
+
+/** A fresh copy of the error (fetch) trace detail fixture. */
+export function errorTraceDetailFixtureForStub(): Record<string, unknown> {
+  return errorTraceDetailFixture()
+}
+
+/** Disclosed detail of one fixture trace, or null for an unknown id. */
+export function activityTraceFixtureDetail(traceId: string): Record<string, unknown> | null {
+  if (traceId === SUCCESS_TRACE_ID) return traceDetailFixture()
+  if (traceId === ERROR_TRACE_ID) return errorTraceDetailFixture()
+  if (traceId === AGGREGATED_TRACE_ID) return aggregatedTraceDetailFixture()
+  if (traceId === SEVEN_PROVIDER_TRACE_ID) return sevenProviderTraceDetailFixture()
+  if (traceId === NULL_SOURCE_TRACE_ID) return nullSourceTraceDetailFixture()
+  if (traceId === FUSION_LONG_TRACE_ID) return fusionLongTraceDetailFixture()
+  return null
+}
+
+// ---------------------------------------------------------------------------
+// Project-scoped execution (POST /search, POST /fetch).
+//
+// Every request body must carry `project_id`; the project gate (installed by
+// projectStub.ts) answers 404 for a project the caller cannot use and 403
+// without the execution permission, like the backend. Each request is logged
+// with its parsed body and headers so scenarios can assert the project id and
+// the absence of any API key. A search can be held open (slow provider) to
+// prove that a project switch aborts it or drops its late result.
+// ---------------------------------------------------------------------------
+
+export type ExecutionPermission = "search.execute" | "fetch.execute"
+
+export type ExecutionGateResult = { status: 200; projectName: string } | { status: 403 | 404 }
+
+/** Resolve one execution request against the project stub. */
+export type ExecutionGate = (projectId: string, permission: ExecutionPermission) => ExecutionGateResult
+
+let executionGate: ExecutionGate = () => ({ status: 404 })
+
+/** Install the project gate (projectStub.ts calls this from installProjectStub). */
+export function setExecutionGate(gate: ExecutionGate): void {
+  executionGate = gate
+}
+
+export interface ExecutionRecord {
+  operation: "search" | "fetch"
+  body: Record<string, unknown>
+  headers: Record<string, string>
+  status: number | null
+  /** "fulfilled" once answered, "aborted" when the browser dropped it first. */
+  outcome: "pending" | "fulfilled" | "aborted"
+}
+
+const executionRecords: ExecutionRecord[] = []
+
+/** Every search and fetch request of the scenario, oldest first. */
+export function executionTraffic(): ExecutionRecord[] {
+  return [...executionRecords]
+}
+
+/** Cleared once per scenario by the fixtures Before hook (not per tab). */
+export function resetExecutionTraffic(): void {
+  executionRecords.length = 0
+  heldSearch.query = undefined
+  releaseHeldSearches()
+}
+
+/**
+ * Held search latch. `query` undefined holds nothing, null holds every search,
+ * a string holds only searches for that query.
+ */
+const heldSearch: { query: string | null | undefined; waiters: Array<() => void> } = {
+  query: undefined,
+  waiters: [],
+}
+
+/** Hold matching search responses open until released (slow provider). */
+export function holdStubbedSearches(query: string | null): void {
+  heldSearch.query = query
+}
+
+/** Release every held search response and stop holding new ones. */
+export function releaseHeldSearches(): void {
+  heldSearch.query = undefined
+  const waiters = heldSearch.waiters.splice(0)
+  for (const release of waiters) release()
+}
+
+/** Number of search responses currently held open. */
+export function heldSearchCount(): number {
+  return heldSearch.waiters.length
+}
+
+/** Query marker that makes the stub return project-named results. */
+export const ISOLATION_QUERY_MARKER = "isolation probe"
+
+/** Title of the first result a project returns for an isolation query. */
+export function isolationResultTitle(projectName: string): string {
+  return `${projectName} isolation result`
+}
+
+function gateExecution(
+  body: Record<string, unknown>,
+  permission: ExecutionPermission
+): { ok: true; projectName: string } | { ok: false; status: number; detail: unknown } {
+  const projectId = body.project_id
+  if (typeof projectId !== "string" || projectId === "") {
+    return {
+      ok: false,
+      status: 422,
+      detail: [{ loc: ["body", "project_id"], msg: "Field required", type: "missing" }],
+    }
+  }
+  const gate = executionGate(projectId, permission)
+  if (gate.status === 200) return { ok: true, projectName: gate.projectName }
+  return {
+    ok: false,
+    status: gate.status,
+    detail: gate.status === 404 ? "Project not found" : "Forbidden",
+  }
+}
+
+async function fulfillRecorded(
+  route: Route,
+  record: ExecutionRecord,
+  body: unknown,
+  status: number
+): Promise<void> {
+  record.status = status
+  try {
+    await json(route, body, status)
+    record.outcome = "fulfilled"
+  } catch {
+    record.outcome = "aborted"
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -2198,6 +2388,22 @@ const SECRET_PRESENCE: Record<string, SecretPresence> = {
 
 const PROVIDER_ORDER = ["brave", "keenable", "tavily", "exa", "firecrawl", "you", "parallel", "tinyfish"]
 
+/** Global registry row as the project provider view needs it. */
+export interface StubRegistryRow {
+  provider_id: string
+  enable_mask: number
+  support_mask: number
+  priority: number
+  secret_presence: SecretPresence
+}
+
+let currentProviderRows: () => StubRegistryRow[] = () => initialProviders()
+
+/** Current in-memory global provider registry of the scenario. */
+export function stubbedProviderRows(): StubRegistryRow[] {
+  return currentProviderRows()
+}
+
 const SUPPORT_MASKS: Record<string, number> = {
   brave: 3,
   keenable: 7,
@@ -2331,7 +2537,17 @@ export async function installBackendStub(page: Page): Promise<void> {
   stubbedTavilyPatchReadback = { armed: false, value: undefined }
   stubbedTavilyKeyEnvironment = "dev"
   for (const key of Object.keys(stubbedSecretPresence)) delete stubbedSecretPresence[key]
+  legacyTraceCalls.length = 0
   let providers = initialProviders()
+  // The project provider view (projectStub.ts) reads the live in-memory
+  // registry, so a Settings PATCH shows up in every project's picker.
+  currentProviderRows = () =>
+    providers.map((row) => ({
+      ...row,
+      ...(stubbedSecretPresence[row.provider_id] !== undefined
+        ? { secret_presence: stubbedSecretPresence[row.provider_id] }
+        : {}),
+    }))
   let routing: StubRouting = {
     fallback_policy: "chained",
     cost_optimization_preset: "balanced",
@@ -2644,114 +2860,97 @@ export async function installBackendStub(page: Page): Promise<void> {
 
   // Deterministic search: echoes the pinned provider from routing.providers
   // and serves a fixed two-result payload (with scores so "% match" renders).
-  await page.route("**/search", (route) => {
+  // The search body must name a project the session can use (project gate).
+  // An isolation query returns results named after that project, so a
+  // scenario can tell which project's answer rendered.
+  await page.route("**/search", async (route) => {
     if (route.request().method() !== "POST") return route.fallback()
     const body = readJsonBody(route)
+    const record: ExecutionRecord = {
+      operation: "search",
+      body,
+      headers: await route.request().allHeaders(),
+      status: null,
+      outcome: "pending",
+    }
+    executionRecords.push(record)
+    const gate = gateExecution(body, "search.execute")
+    if (!gate.ok) return fulfillRecorded(route, record, { detail: gate.detail }, gate.status)
     const routing = (body.routing ?? {}) as { providers?: unknown }
     const providers = Array.isArray(routing.providers) ? routing.providers : []
     const pinned = typeof providers[0] === "string" ? (providers[0] as string) : "brave"
     const query = typeof body.query === "string" ? (body.query as string) : "stubbed query"
+    if (heldSearch.query === null || (heldSearch.query !== undefined && heldSearch.query === query)) {
+      await new Promise<void>((resolve) => heldSearch.waiters.push(resolve))
+    }
     if (query === TAVILY_402_QUERY) {
-      return json(route, { detail: TAVILY_402_MESSAGE, provider: "tavily" }, 402)
+      return fulfillRecorded(route, record, { detail: TAVILY_402_MESSAGE, provider: "tavily" }, 402)
     }
     if (query === "doomed query") {
-      return json(route, { detail: "stubbed provider unavailable" }, 503)
+      return fulfillRecorded(route, record, { detail: "stubbed provider unavailable" }, 503)
     }
-    return json(
-      route,
-      canonicalSearchFixture({ query, provider: pinned })
-    )
+    const response = canonicalSearchFixture({ query, provider: pinned }) as {
+      results: Record<string, unknown>[]
+    }
+    if (query.includes(ISOLATION_QUERY_MARKER)) {
+      const title = isolationResultTitle(gate.projectName)
+      response.results = response.results.map((result, index) => ({
+        ...result,
+        title: index === 0 ? title : `${title} ${index + 1}`,
+        url: `https://${gate.projectName.toLowerCase()}.example.com/isolation/${index + 1}`,
+      }))
+    }
+    return fulfillRecorded(route, record, response, 200)
   })
 
   // Deterministic fetch: echoes the pinned provider and target URL with
-  // non-empty markdown content.
-  await page.route("**/fetch", (route) => {
+  // non-empty markdown content, behind the same project gate.
+  await page.route("**/fetch", async (route) => {
     if (route.request().method() !== "POST") return route.fallback()
     const body = readJsonBody(route)
+    const record: ExecutionRecord = {
+      operation: "fetch",
+      body,
+      headers: await route.request().allHeaders(),
+      status: null,
+      outcome: "pending",
+    }
+    executionRecords.push(record)
+    const gate = gateExecution(body, "fetch.execute")
+    if (!gate.ok) return fulfillRecorded(route, record, { detail: gate.detail }, gate.status)
     const routing = (body.routing ?? {}) as { providers?: unknown }
     const providers = Array.isArray(routing.providers) ? routing.providers : []
     const pinned = typeof providers[0] === "string" ? (providers[0] as string) : "keenable"
     const url = typeof body.url === "string" ? (body.url as string) : "https://example.com"
     if (url === TAVILY_402_URL) {
-      return json(route, { detail: TAVILY_402_MESSAGE, provider: "tavily" }, 402)
+      return fulfillRecorded(route, record, { detail: TAVILY_402_MESSAGE, provider: "tavily" }, 402)
     }
     const base = canonicalFetchFixture() as {
       provider: string
       document: Record<string, unknown>
       usage: Record<string, unknown>
     }
-    return json(route, {
-      ...base,
-      provider: pinned,
-      document: { ...base.document, url },
-      usage: { ...(base.usage as Record<string, unknown>), provider: pinned },
-    })
+    return fulfillRecorded(
+      route,
+      record,
+      {
+        ...base,
+        provider: pinned,
+        document: { ...base.document, url },
+        usage: { ...(base.usage as Record<string, unknown>), provider: pinned },
+      },
+      200
+    )
   })
 
-  // Trace read API (Activity). The list is summary-only by contract — no
-  // query text or results — and honors the `operation` filter server-side.
-  // Pathname-exact matchers keep these from colliding with each other or
-  // with the Vite module graph.
+  // The global trace read is gone (TASK-000044): Activity reads the project
+  // routes served by projectStub.ts. A call here is logged and 404s like the
+  // backend, so a UI still on the old path fails visibly.
   await page.route(
-    (url) => url.pathname === "/api/v1/traces",
+    (url) => url.pathname === "/api/v1/traces" || url.pathname.startsWith("/api/v1/traces/"),
     (route) => {
-      if (route.request().method() !== "GET") return route.fallback()
-      const requestUrl = new URL(route.request().url())
-      stubbedTraceListRequests.push(requestUrl.search)
-      if (stubbedTraceListFailure !== null) {
-        return json(route, { detail: stubbedTraceListFailure }, 500)
-      }
-      const operation = requestUrl.searchParams.get("operation")
-      const list = traceListFixture() as {
-        items: Record<string, unknown>[]
-        generated_at: string
-      }
-      const base =
-        operation === null
-          ? list.items
-          : list.items.filter((item) => item.operation === operation)
-      // The seven-provider acceptance trace leads the list (it is a search
-      // fanout, so the fetch filter still excludes it, like the backend).
-      // The two current-data traces close the list (both are searches): the
-      // null-source single-provider trace, then the fusion long-snippet trace.
-      const items =
-        operation === null || operation === "search"
-          ? [
-              sevenProviderTraceSummaryFixture(),
-              ...base,
-              nullSourceTraceSummaryFixture(),
-              fusionLongTraceSummaryFixture(),
-            ]
-          : base
-      return json(route, { items, generated_at: list.generated_at })
-    }
-  )
-
-  // Disclosed detail: full input, tagged output, and stage timeline for the
-  // two fixture traces; unknown ids 404 like the backend.
-  await page.route(
-    (url) => url.pathname.startsWith("/api/v1/traces/"),
-    (route) => {
-      if (route.request().method() !== "GET") return route.fallback()
-      const traceId = decodeURIComponent(
-        new URL(route.request().url()).pathname.split("/").pop() ?? ""
-      )
-      stubbedTraceDetailRequests.push(traceId)
-      const failure = stubbedTraceDetailFailures[traceId]
-      if (failure !== undefined) return json(route, { detail: failure }, 500)
-      if (traceId === SUCCESS_TRACE_ID) return json(route, traceDetailFixture())
-      if (traceId === ERROR_TRACE_ID) return json(route, errorTraceDetailFixture())
-      if (traceId === AGGREGATED_TRACE_ID) return json(route, aggregatedTraceDetailFixture())
-      if (traceId === SEVEN_PROVIDER_TRACE_ID) {
-        return json(route, sevenProviderTraceDetailFixture())
-      }
-      if (traceId === NULL_SOURCE_TRACE_ID) {
-        return json(route, nullSourceTraceDetailFixture())
-      }
-      if (traceId === FUSION_LONG_TRACE_ID) {
-        return json(route, fusionLongTraceDetailFixture())
-      }
-      return json(route, { detail: `unknown trace '${traceId}'` }, 404)
+      legacyTraceCalls.push(new URL(route.request().url()).pathname)
+      return json(route, { detail: "Not Found" }, 404)
     }
   )
 
@@ -2777,7 +2976,7 @@ export async function installBackendStub(page: Page): Promise<void> {
     if (route.request().method() !== "GET") return route.fallback()
     return json(
       route,
-      userAccountBody(DEFAULT_ACCOUNT_ID, "admin@example.com", { username: "admin" })
+      userAccountBody(DEFAULT_ACCOUNT_ID, DEFAULT_ACCOUNT_EMAIL, { username: "admin" })
     )
   })
 

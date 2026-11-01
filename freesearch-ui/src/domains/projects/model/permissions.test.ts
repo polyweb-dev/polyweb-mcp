@@ -14,6 +14,11 @@ describe("permission names", () => {
       membersManage: "members.manage",
       rolesAssign: "roles.assign",
       tokensManage: "tokens.manage",
+      searchExecute: "search.execute",
+      fetchExecute: "fetch.execute",
+      tracesRead: "traces.read",
+      usageRead: "usage.read",
+      providersRead: "providers.read",
     })
   })
 })

@@ -18,6 +18,7 @@ function controller() {
     copyToClipboard: vi.fn(),
     isSearching: false,
     isFetching: false,
+    canFetch: true,
     handleFetchResult: vi.fn(() => Promise.resolve()),
   }
 }

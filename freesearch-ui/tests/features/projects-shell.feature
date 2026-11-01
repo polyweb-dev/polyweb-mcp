@@ -59,9 +59,9 @@ Feature: Project shell and membership UX
     When I submit the create project form
     Then I see the heading "Gamma"
     And the page URL path should be "/p/cccccccc-3333-4333-8333-cccccccccccc"
-    When I open the workspace page "/p/cccccccc-3333-4333-8333-cccccccccccc/usage"
+    When I open the workspace page "/p/cccccccc-3333-4333-8333-cccccccccccc/routing"
     Then the page URL path should be "/p/cccccccc-3333-4333-8333-cccccccccccc"
-    And the heading "Usage" is absent
+    And the heading "Routing" is absent
 
   @stub
   Scenario: Only project.create offers the create project form

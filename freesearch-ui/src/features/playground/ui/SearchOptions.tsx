@@ -20,8 +20,8 @@ const providerFieldClass =
 export function SearchOptions({ controller }: { controller: PlaygroundController }) {
   const { setQuery, selectedProviderId, setSelectedProviderId, eligibleProviders, resultCount, setResultCount } = controller
   const providerOptions = [
-    { value: "all", label: "All Providers (Ranked Fusion)" },
-    { value: "auto", label: "Auto arbitration" },
+    { value: "auto", label: "Auto" },
+    { value: "all", label: "All providers" },
     ...eligibleProviders.map((provider) => ({ value: provider.id, label: provider.name })),
   ]
   return (

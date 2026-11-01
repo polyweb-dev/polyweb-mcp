@@ -1,16 +1,15 @@
 import React from "react"
 import { describe, it, expect, afterEach, vi } from "vitest"
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react"
-import { FreeSearchProvider } from "@/context/FreeSearchContext"
-import { PlaygroundPage as SearchPlayground } from "@/features/playground/ui/PlaygroundPage"
+import { PlaygroundHarness } from "@/test/renderPlayground"
+import { PLAYGROUND_PROJECT_ID, answerProjectProviders } from "@/test/projectPlayground"
 import { installFetchStub, ok, err, deferred } from "@/test/fetchMock"
 import type { FetchStub } from "@/test/fetchMock"
 import { allProvidersFixture, routingConfigFixture, dashboardFixture, searchResponseFixture, fetchResponseFixture } from "@/test/backendFixtures"
 import userEvent from "@testing-library/user-event"
 import { readFileSync, existsSync, readdirSync } from "node:fs"
 import path from "node:path"
-import { PlaygroundPage } from "./PlaygroundPage"
-import { playgroundPersistKey } from "@/store/playgroundPersistence"
+import { PLAYGROUND_PERSIST_VERSION, playgroundPersistKey } from "@/store/playgroundPersistence"
 import { ADMIN_ACCOUNT_ID } from "@/test/authFixtures"
 import { initialPlaygroundState } from "@/store/playgroundSlice"
 import type { SearchResponse } from "@/domains/execution"
@@ -41,6 +40,8 @@ function renderWithBackend(
   fetchHandler?: (req: { url: string }) => Response
 ) {
   const stub = installFetchStub((req) => {
+    const projectView = answerProjectProviders(req)
+    if (projectView !== null) return projectView
     if (req.url === "/api/v1/providers" && req.method === "GET") {
       return ok(allProvidersFixture())
     }
@@ -57,9 +58,7 @@ function renderWithBackend(
     return err(404, { detail: "unhandled test route" })
   })
   const view = render(
-    <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
-      <SearchPlayground />
-    </FreeSearchProvider>
+    <PlaygroundHarness />
   )
   return { stub, ...view }
 }
@@ -193,7 +192,7 @@ describe("SearchPlayground (live backend)", () => {
     fireEvent.click(screen.getByRole("tab", { name: "Fetch", exact: true }))
 
     const fetchTrigger = screen.getByTestId("playground-fetch-provider")
-    expect(fetchTrigger.textContent).toContain("Auto arbitration")
+    expect(fetchTrigger.textContent).toContain("Auto")
 
     const urlInput = screen.getByPlaceholderText(
       /Enter a URL to fetch/i
@@ -205,6 +204,7 @@ describe("SearchPlayground (live backend)", () => {
       expect(stub.requestsTo("/fetch")).toHaveLength(1)
     })
     expect(stub.requestsTo("/fetch")[0].body).toEqual({
+      project_id: PLAYGROUND_PROJECT_ID,
       url: "https://example.com/doc",
       max_chars: null,
       routing: { mode: "auto", providers: [], allow_fallback: true },
@@ -298,9 +298,9 @@ describe("SearchPlayground (live backend)", () => {
 
     const searchTrigger = await pinProvider(
       "playground-search-provider",
-      "All Providers (Ranked Fusion)"
+      "All providers"
     )
-    expect(searchTrigger.textContent).toContain("All Providers")
+    expect(searchTrigger.textContent).toContain("All providers")
 
     await submitQuery("fanout test")
 
@@ -418,6 +418,8 @@ describe("SearchPlayground.c2.test.tsx", () => {
  */
 function renderPlayground() {
   installFetchStub((req) => {
+    const projectView = answerProjectProviders(req)
+    if (projectView !== null) return projectView
     if (req.url === "/api/v1/providers" && req.method === "GET") {
       return ok(allProvidersFixture())
     }
@@ -434,9 +436,7 @@ function renderPlayground() {
     return err(404, { detail: "unhandled test route" })
   })
   return render(
-    <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
-      <SearchPlayground />
-    </FreeSearchProvider>
+    <PlaygroundHarness />
   )
 }
 
@@ -772,7 +772,7 @@ const playgroundSource = playgroundOwnerFiles
   .map((file) => readFileSync(path.resolve(testDir, file), "utf8"))
   .join("\n")
 const dashboardShellSource = readFileSync(
-  path.resolve(testDir, "../../../app/DashboardShell.tsx"),
+  path.resolve(testDir, "../../../app/ProjectWorkspace.tsx"),
   "utf8"
 )
 const contextSource = readFileSync(
@@ -822,6 +822,8 @@ function renderWithBackend(
   fetchHandler?: (req: { url: string }) => Response | Promise<Response>
 ) {
   const stub = installFetchStub((req) => {
+    const projectView = answerProjectProviders(req)
+    if (projectView !== null) return projectView
     if (req.url === "/api/v1/providers" && req.method === "GET") {
       return ok(allProvidersFixture())
     }
@@ -838,9 +840,7 @@ function renderWithBackend(
     return err(404, { detail: "unhandled test route" })
   })
   const view = render(
-    <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
-      <SearchPlayground />
-    </FreeSearchProvider>
+    <PlaygroundHarness />
   )
   return { stub, ...view }
 }
@@ -1048,6 +1048,7 @@ describe("PG-F1 AC-PG-F1-3: Fetch errors pin docked-top; start-clear wipes stale
       expect(stub.requestsTo("/fetch")).toHaveLength(1)
     })
     expect(stub.requestsTo("/fetch")[0].body).toEqual({
+      project_id: PLAYGROUND_PROJECT_ID,
       url: "https://example.com/doc",
       max_chars: null,
       routing: { mode: "auto", providers: [], allow_fallback: true },
@@ -1234,10 +1235,10 @@ describe("PG-F1 AC-PG-F1-5: Fetch composer via shared ComposerShell (Fetch ONLY)
     expect(footer.textContent).toMatch(/Provider:/)
     const trigger = within(footer).getByTestId("playground-fetch-provider")
     expect(trigger).toHaveAccessibleName("Provider:")
-    expect(trigger.textContent).toContain("Auto arbitration")
+    expect(trigger.textContent).toContain("Auto")
     fireEvent.click(trigger)
     expect(
-      await within(footer).findByRole("option", { name: "Auto arbitration" })
+      await within(footer).findByRole("option", { name: "Auto" })
     ).toBeInTheDocument()
     // Fetch footer carries no Search-only controls.
     expect(
@@ -1471,6 +1472,7 @@ describe("PG-F1 AC-PG-F1-6 regressions: PG-S1..S5 + header + Simulator + logic u
       expect(stub.requestsTo("/fetch")).toHaveLength(1)
     })
     expect(stub.requestsTo("/fetch")[0].body).toEqual({
+      project_id: PLAYGROUND_PROJECT_ID,
       url: "https://example.com/one",
       max_chars: null,
       routing: { mode: "auto", providers: [], allow_fallback: true },
@@ -1508,6 +1510,7 @@ describe("PG-F1 AC-PG-F1-6 regressions: PG-S1..S5 + header + Simulator + logic u
       expect(stub.requestsTo("/search")).toHaveLength(1)
     })
     expect(stub.requestsTo("/search")[0].body).toEqual({
+      project_id: PLAYGROUND_PROJECT_ID,
       query: "pg-s5 guard query",
       limit: 6,
       language: null,
@@ -1576,7 +1579,7 @@ describe("Slice 5 shim compatibility: shells re-export the feature owners", () =
 
   it("DashboardShell imports PlaygroundPage directly (SearchPlayground shim removed)", () => {
     expect(dashboardShellSource).toContain("PlaygroundPage")
-    expect(dashboardShellSource).toContain("features/playground/ui/PlaygroundPage")
+    expect(dashboardShellSource).toContain("features/playground/ui/ProjectPlaygroundPage")
     expect(dashboardShellSource).not.toContain("components/search/SearchPlayground")
   })
 
@@ -1615,6 +1618,8 @@ function renderWithBackend(
   fetchHandler?: (req: { url: string }) => Response | Promise<Response>
 ) {
   const stub = installFetchStub((req) => {
+    const projectView = answerProjectProviders(req)
+    if (projectView !== null) return projectView
     if (req.url === "/api/v1/providers" && req.method === "GET") {
       return ok(allProvidersFixture())
     }
@@ -1631,9 +1636,7 @@ function renderWithBackend(
     return err(404, { detail: "unhandled test route" })
   })
   const view = render(
-    <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
-      <SearchPlayground />
-    </FreeSearchProvider>
+    <PlaygroundHarness />
   )
   return { stub, ...view }
 }
@@ -1963,7 +1966,7 @@ const playgroundSource = playgroundOwnerFiles
   .map((file) => readFileSync(path.resolve(testDir, file), "utf8"))
   .join("\n")
 const dashboardShellSource = readFileSync(
-  path.resolve(testDir, "../../../app/DashboardShell.tsx"),
+  path.resolve(testDir, "../../../app/ProjectWorkspace.tsx"),
   "utf8"
 )
 const packageJson = JSON.parse(
@@ -1978,6 +1981,8 @@ function renderWithBackend(
   fetchHandler?: (req: { url: string }) => Response | Promise<Response>
 ) {
   const stub = installFetchStub((req) => {
+    const projectView = answerProjectProviders(req)
+    if (projectView !== null) return projectView
     if (req.url === "/api/v1/providers" && req.method === "GET") {
       return ok(allProvidersFixture())
     }
@@ -1994,9 +1999,7 @@ function renderWithBackend(
     return err(404, { detail: "unhandled test route" })
   })
   const view = render(
-    <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
-      <SearchPlayground />
-    </FreeSearchProvider>
+    <PlaygroundHarness />
   )
   return { stub, ...view }
 }
@@ -2292,7 +2295,7 @@ describe("Slice 5 shim compatibility: DashboardShell renders the canonical featu
 
   it("imports PlaygroundPage from features/playground directly (SearchPlayground shim removed)", () => {
     expect(dashboardShellSource).toContain("PlaygroundPage")
-    expect(dashboardShellSource).toContain("features/playground/ui/PlaygroundPage")
+    expect(dashboardShellSource).toContain("features/playground/ui/ProjectPlaygroundPage")
     expect(dashboardShellSource).not.toContain("components/search/SearchPlayground")
   })
 })
@@ -2395,7 +2398,7 @@ const playgroundSource = playgroundOwnerFiles
   .map((file) => readFileSync(path.resolve(testDir, file), "utf8"))
   .join("\n")
 const dashboardShellSource = readFileSync(
-  path.resolve(testDir, "../../../app/DashboardShell.tsx"),
+  path.resolve(testDir, "../../../app/ProjectWorkspace.tsx"),
   "utf8"
 )
 const searchDir = path.resolve(testDir, "../../../components/search")
@@ -2405,6 +2408,8 @@ function renderWithBackend(
   fetchHandler?: (req: { url: string }) => Response | Promise<Response>
 ) {
   const stub = installFetchStub((req) => {
+    const projectView = answerProjectProviders(req)
+    if (projectView !== null) return projectView
     if (req.url === "/api/v1/providers" && req.method === "GET") {
       return ok(allProvidersFixture())
     }
@@ -2421,9 +2426,7 @@ function renderWithBackend(
     return err(404, { detail: "unhandled test route" })
   })
   const view = render(
-    <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
-      <SearchPlayground />
-    </FreeSearchProvider>
+    <PlaygroundHarness />
   )
   return { stub, ...view }
 }
@@ -2820,7 +2823,7 @@ describe("Slice 5 shim compatibility: DashboardShell renders the canonical featu
 
   it("imports PlaygroundPage from features/playground directly (SearchPlayground shim removed)", () => {
     expect(dashboardShellSource).toContain("PlaygroundPage")
-    expect(dashboardShellSource).toContain("features/playground/ui/PlaygroundPage")
+    expect(dashboardShellSource).toContain("features/playground/ui/ProjectPlaygroundPage")
     expect(dashboardShellSource).not.toContain("components/search/SearchPlayground")
   })
 })
@@ -2910,7 +2913,7 @@ const playgroundSource = playgroundOwnerFiles
   .map((file) => readFileSync(path.resolve(testDir, file), "utf8"))
   .join("\n")
 const dashboardShellSource = readFileSync(
-  path.resolve(testDir, "../../../app/DashboardShell.tsx"),
+  path.resolve(testDir, "../../../app/ProjectWorkspace.tsx"),
   "utf8"
 )
 const searchDir = path.resolve(testDir, "../../../components/search")
@@ -2927,6 +2930,8 @@ function renderWithBackend(
   fetchHandler?: (req: { url: string }) => Response | Promise<Response>
 ) {
   const stub = installFetchStub((req) => {
+    const projectView = answerProjectProviders(req)
+    if (projectView !== null) return projectView
     if (req.url === "/api/v1/providers" && req.method === "GET") {
       return ok(allProvidersFixture())
     }
@@ -2943,9 +2948,7 @@ function renderWithBackend(
     return err(404, { detail: "unhandled test route" })
   })
   const view = render(
-    <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
-      <SearchPlayground />
-    </FreeSearchProvider>
+    <PlaygroundHarness />
   )
   return { stub, ...view }
 }
@@ -3135,6 +3138,7 @@ describe("PG-S4 AC-PG-S4-3: auto-fetch POST + Executing + result render", () => 
       expect(stub.requestsTo("/fetch")).toHaveLength(1)
     })
     expect(stub.requestsTo("/fetch")[0].body).toEqual({
+      project_id: PLAYGROUND_PROJECT_ID,
       url: "https://example.com/one",
       max_chars: null,
       routing: { mode: "auto", providers: [], allow_fallback: true },
@@ -3447,6 +3451,7 @@ describe("PG-S4 AC-PG-S4-6: eligible-inherit else auto + markdown/4000ms contrac
       expect(stub.requestsTo("/fetch")).toHaveLength(1)
     })
     expect(stub.requestsTo("/fetch")[0].body).toEqual({
+      project_id: PLAYGROUND_PROJECT_ID,
       url: "https://example.com/one",
       max_chars: null,
       routing: { mode: "require", providers: ["firecrawl"], allow_fallback: true },
@@ -3473,13 +3478,14 @@ describe("PG-S4 AC-PG-S4-6: eligible-inherit else auto + markdown/4000ms contrac
       expect(stub.requestsTo("/fetch")).toHaveLength(1)
     })
     expect(stub.requestsTo("/fetch")[0].body).toEqual({
+      project_id: PLAYGROUND_PROJECT_ID,
       url: "https://example.com/one",
       max_chars: null,
       routing: { mode: "auto", providers: [], allow_fallback: true },
     })
     expect(
       screen.getByTestId("playground-fetch-provider").textContent
-    ).toContain("Auto arbitration")
+    ).toContain("Auto")
   })
 
   it("calls runFetch directly with markdown + 15000ms inside handleFetchResult", () => {
@@ -3487,7 +3493,7 @@ describe("PG-S4 AC-PG-S4-6: eligible-inherit else auto + markdown/4000ms contrac
     expect(idx).toBeGreaterThanOrEqual(0)
     const tail = playgroundSource.slice(idx, idx + 8000)
     // Eligible-inherit else auto: consults fetch eligibility before runFetch.
-    expect(tail).toMatch(/isEligibleForOperation|fetchEnabled|capabilities/)
+    expect(tail).toMatch(/effectiveOperations\.includes\("fetch"\)/)
     // Direct runFetch with the Fetch-tab contract.
     expect(tail).toContain("setFetchUrl")
     expect(tail).toContain("runFetch")
@@ -3712,7 +3718,7 @@ describe("Slice 5 shim compatibility: DashboardShell renders the canonical featu
 
   it("imports PlaygroundPage from features/playground directly (SearchPlayground shim removed)", () => {
     expect(dashboardShellSource).toContain("PlaygroundPage")
-    expect(dashboardShellSource).toContain("features/playground/ui/PlaygroundPage")
+    expect(dashboardShellSource).toContain("features/playground/ui/ProjectPlaygroundPage")
     expect(dashboardShellSource).not.toContain("components/search/SearchPlayground")
   })
 })
@@ -3811,7 +3817,7 @@ const playgroundSource = playgroundOwnerFiles
   .map((file) => readFileSync(path.resolve(testDir, file), "utf8"))
   .join("\n")
 const dashboardShellSource = readFileSync(
-  path.resolve(testDir, "../../../app/DashboardShell.tsx"),
+  path.resolve(testDir, "../../../app/ProjectWorkspace.tsx"),
   "utf8"
 )
 const typesSource = readFileSync(
@@ -3826,6 +3832,7 @@ const requestUtilsSource = readFileSync(path.resolve(testDir, "../../../domains/
 const executionRunnerFiles = [
   "../../../domains/execution/state/useSearchRunner.ts",
   "../../../domains/execution/state/useFetchRunner.ts",
+  "../../../domains/execution/state/ProjectExecutionProvider.tsx",
 ];
 const executionStateSource = executionRunnerFiles
   .map((file) => readFileSync(path.resolve(testDir, file), "utf8"))
@@ -3844,6 +3851,8 @@ function renderWithBackend(
   fetchHandler?: (req: { url: string }) => Response | Promise<Response>
 ) {
   const stub = installFetchStub((req) => {
+    const projectView = answerProjectProviders(req)
+    if (projectView !== null) return projectView
     if (req.url === "/api/v1/providers" && req.method === "GET") {
       return ok(allProvidersFixture())
     }
@@ -3860,9 +3869,7 @@ function renderWithBackend(
     return err(404, { detail: "unhandled test route" })
   })
   const view = render(
-    <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
-      <SearchPlayground />
-    </FreeSearchProvider>
+    <PlaygroundHarness />
   )
   return { stub, ...view }
 }
@@ -3967,10 +3974,10 @@ describe("PG-S5 AC-PG-S5-1: footer Results number input replaces Depth", () => {
     const trigger = within(footer).getByTestId("playground-search-provider")
     expect(trigger).toBeInTheDocument()
     expect(trigger).toHaveAccessibleName("Provider:")
-    expect(trigger.textContent).toContain("Auto arbitration")
+    expect(trigger.textContent).toContain("Auto")
     fireEvent.click(trigger)
     expect(
-      await within(footer).findByRole("option", { name: "Auto arbitration" })
+      await within(footer).findByRole("option", { name: "Auto" })
     ).toBeInTheDocument()
     expect(footer.textContent).toMatch(/Provider:/)
   })
@@ -4009,6 +4016,7 @@ describe("PG-S5 AC-PG-S5-2: /search limit + routing wiring", () => {
       expect(stub.requestsTo("/search")).toHaveLength(1)
     })
     expect(stub.requestsTo("/search")[0].body).toEqual({
+      project_id: PLAYGROUND_PROJECT_ID,
       query: "default count query",
       limit: 6,
       language: null,
@@ -4033,6 +4041,7 @@ describe("PG-S5 AC-PG-S5-2: /search limit + routing wiring", () => {
       expect(stub.requestsTo("/search")).toHaveLength(1)
     })
     expect(stub.requestsTo("/search")[0].body).toEqual({
+      project_id: PLAYGROUND_PROJECT_ID,
       query: "pinned default query",
       limit: 6,
       language: null,
@@ -4056,6 +4065,7 @@ describe("PG-S5 AC-PG-S5-2: /search limit + routing wiring", () => {
       expect(stub.requestsTo("/search")).toHaveLength(1)
     })
     expect(stub.requestsTo("/search")[0].body).toEqual({
+      project_id: PLAYGROUND_PROJECT_ID,
       query: "edited count query",
       limit: 25,
       language: null,
@@ -4274,6 +4284,7 @@ describe("PG-S5 AC-PG-S5-4 regressions: per-card fetch + composer + 422", () => 
       expect(stub.requestsTo("/fetch")).toHaveLength(1)
     })
     expect(stub.requestsTo("/fetch")[0].body).toEqual({
+      project_id: PLAYGROUND_PROJECT_ID,
       url: "https://example.com/one",
       max_chars: null,
       routing: { mode: "auto", providers: [], allow_fallback: true },
@@ -4354,7 +4365,7 @@ describe("Slice 5 shim compatibility: DashboardShell renders the canonical featu
 
   it("imports PlaygroundPage from features/playground directly (SearchPlayground shim removed)", () => {
     expect(dashboardShellSource).toContain("PlaygroundPage")
-    expect(dashboardShellSource).toContain("features/playground/ui/PlaygroundPage")
+    expect(dashboardShellSource).toContain("features/playground/ui/ProjectPlaygroundPage")
     expect(dashboardShellSource).not.toContain("components/search/SearchPlayground")
   })
 })
@@ -4413,11 +4424,11 @@ function seedStorage(state: Record<string, unknown>): void {
   for (const [field, value] of Object.entries({
     ...initialPlaygroundState,
     ...state,
-    _persist: { version: 1, rehydrated: false },
+    _persist: { version: PLAYGROUND_PERSIST_VERSION, rehydrated: false },
   })) {
     encoded[field] = JSON.stringify(value)
   }
-  window.localStorage.setItem(playgroundPersistKey(ADMIN_ACCOUNT_ID), JSON.stringify(encoded))
+  window.localStorage.setItem(playgroundPersistKey(ADMIN_ACCOUNT_ID, PLAYGROUND_PROJECT_ID), JSON.stringify(encoded))
 }
 
 function stubBackend(
@@ -4425,6 +4436,8 @@ function stubBackend(
   fetchHandler?: (req: { url: string }) => Response
 ): FetchStub {
   return installFetchStub((req) => {
+    const projectView = answerProjectProviders(req)
+    if (projectView !== null) return projectView
     if (req.url === "/api/v1/providers" && req.method === "GET") {
       return ok(allProvidersFixture())
     }
@@ -4487,9 +4500,7 @@ describe("PlaygroundPage persistence", () => {
     })
     const stub = refuseNetwork()
     render(
-      <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
-        <PlaygroundPage />
-      </FreeSearchProvider>
+      <PlaygroundHarness />
     )
 
     // Search tab: rehydrated draft, options, and mapped result.
@@ -4524,9 +4535,7 @@ describe("PlaygroundPage persistence", () => {
   it("keeps executed search and fetch state across a page remount with the same root store", async () => {
     const stub = stubBackend()
     const { rerender } = render(
-      <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
-        <PlaygroundPage />
-      </FreeSearchProvider>
+      <PlaygroundHarness />
     )
 
     await submitSearch("remount probe")
@@ -4537,15 +4546,11 @@ describe("PlaygroundPage persistence", () => {
 
     // Remount the page while the root provider (and its store) stays mounted.
     rerender(
-      <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
-        <span data-testid="interstitial" />
-      </FreeSearchProvider>
+      <span data-testid="interstitial" />
     )
     expect(await screen.findByTestId("interstitial")).toBeInTheDocument()
     rerender(
-      <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
-        <PlaygroundPage />
-      </FreeSearchProvider>
+      <PlaygroundHarness />
     )
 
     // Fetch tab state survived (mode persisted as fetch).
@@ -4569,9 +4574,7 @@ describe("PlaygroundPage persistence", () => {
   it("reloads executed state in a recreated provider from localStorage without refetching", async () => {
     const liveStub = stubBackend()
     const first = render(
-      <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
-        <PlaygroundPage />
-      </FreeSearchProvider>
+      <PlaygroundHarness />
     )
 
     await submitSearch("reload probe")
@@ -4580,7 +4583,7 @@ describe("PlaygroundPage persistence", () => {
     // Wait for the bounded storage adapter to flush the completed run to disk.
     await waitFor(
       () => {
-        expect(window.localStorage.getItem(playgroundPersistKey(ADMIN_ACCOUNT_ID)) ?? "").toContain(
+        expect(window.localStorage.getItem(playgroundPersistKey(ADMIN_ACCOUNT_ID, PLAYGROUND_PROJECT_ID)) ?? "").toContain(
           "reload probe"
         )
       },
@@ -4592,9 +4595,7 @@ describe("PlaygroundPage persistence", () => {
     // through PersistGate with no /search or /fetch request.
     const stub = refuseNetwork()
     render(
-      <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
-        <PlaygroundPage />
-      </FreeSearchProvider>
+      <PlaygroundHarness />
     )
     expect(await screen.findByPlaceholderText(/Search across all providers/i)).toHaveValue(
       "reload probe"

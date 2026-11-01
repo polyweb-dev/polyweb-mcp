@@ -1,5 +1,21 @@
 import type { Page, Route } from "@playwright/test"
 import { SYSTEM_ADMIN_PERMISSIONS } from "./accountStub"
+import {
+  recordTraceDetailRequest,
+  recordTraceListRequest,
+  setExecutionGate,
+  traceDetailFailureMessage,
+  traceListFailureMessage,
+} from "./backendStub"
+import {
+  ALPHA_PROJECT_ID,
+  BETA_PROJECT_ID,
+  projectProviders,
+  projectTraceDetail,
+  projectTraceList,
+  projectUsage,
+  resetProjectActivityStub,
+} from "./projectActivityStub"
 
 /**
  * In-memory projects backend for project-shell and project API key scenarios.
@@ -17,10 +33,16 @@ import { SYSTEM_ADMIN_PERMISSIONS } from "./accountStub"
  * 409 {"detail": {"code": "API_KEY_INACTIVE"}}, an omitted `expires_at` on issue
  * means +90 days and an explicit null means no expiration. Stub raw keys are
  * obviously fake (`fs_live_stubprefixNN_FAKE...`).
+ *
+ * Project reads of U2 (TASK-000047) follow the same membership rule: traces
+ * (traces.read), usage and dashboard (usage.read) and the provider view
+ * (providers.read) answer 404 for a non-member and 403 without the
+ * permission; their data comes from projectActivityStub.ts. POST /search and
+ * POST /fetch resolve their `project_id` through the gate installed here.
  */
 
-export const ALPHA_ID = "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
-export const BETA_ID = "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb"
+export const ALPHA_ID = ALPHA_PROJECT_ID
+export const BETA_ID = BETA_PROJECT_ID
 export const GAMMA_ID = "cccccccc-3333-4333-8333-cccccccccccc"
 export const USER_ID = "33333333-3333-4333-8333-333333333333"
 const PEER_ID = "44444444-4444-4444-8444-444444444444"
@@ -108,6 +130,8 @@ interface StubProject {
 interface ProjectStubState {
   /** Email of the signed-in account; empty means no memberships resolve. */
   userEmail: string
+  /** Account id the signed-in session reports from GET /users/me. */
+  accountId: string
   /** System-scope permission list of the signed-in account. */
   systemPermissions: string[]
   projects: StubProject[]
@@ -118,6 +142,7 @@ interface ProjectStubState {
 
 const state: ProjectStubState = {
   userEmail: "",
+  accountId: USER_ID,
   systemPermissions: [],
   projects: [],
   alphaMembersDelayMs: 0,
@@ -139,7 +164,10 @@ export const apiKeyTraffic: {
 
 export function resetProjectStub(): void {
   state.userEmail = ""
+  state.accountId = USER_ID
   state.systemPermissions = []
+  resetProjectActivityStub()
+  projectReadTraffic.length = 0
   state.alphaMembersDelayMs = 0
   state.apiKeySeq = 0
   apiKeyTraffic.issueBodies.length = 0
@@ -168,14 +196,31 @@ export function resetProjectStub(): void {
 }
 
 /** Point the stub at one signed-in account email and its system permissions. */
-export function setProjectStubAccount(email: string, systemPermissions: readonly string[] = []): void {
+export function setProjectStubAccount(
+  email: string,
+  systemPermissions: readonly string[] = [],
+  accountId: string = USER_ID
+): void {
   state.userEmail = email
+  state.accountId = accountId
   state.systemPermissions = [...systemPermissions]
   for (const project of state.projects) {
     for (const member of project.members) {
       if (member.email === "") member.email = email
     }
   }
+}
+
+/** Account id of the signed-in session (the owner of persisted playground keys). */
+export function projectStubAccountId(): string {
+  return state.accountId
+}
+
+/** Id of one stub project by its name. */
+export function projectStubId(projectName: string): string {
+  const project = state.projects.find((p) => p.name === projectName)
+  if (project === undefined) throw new Error(`unknown stub project ${projectName}`)
+  return project.id
 }
 
 /** Grant the signed-in account the system administrator permission set. */
@@ -493,12 +538,57 @@ async function handleRotate(
   return oneTime(route, { ...keyWire(replacement, now), key: material.raw })
 }
 
+/** Pages (tabs) that registered the project routes. */
+const installedPages = new WeakSet<Page>()
+
+/** Whether this tab already serves the project routes. */
+export function isProjectStubInstalled(page: Page): boolean {
+  return installedPages.has(page)
+}
+
+/** Resolve one POST /search or /fetch `project_id` like the backend. */
+function executionGate(
+  projectId: string,
+  permission: "search.execute" | "fetch.execute"
+): { status: 200; projectName: string } | { status: 403 | 404 } {
+  const project = state.projects.find((p) => p.id === projectId) ?? null
+  const member = project === null ? null : memberOf(project)
+  if (project === null || member === null) return { status: 404 }
+  if (!permissionsOf(member).includes(permission)) return { status: 403 }
+  return { status: 200, projectName: project.name }
+}
+
+/**
+ * Resolve one project read: the uniform 404 for an unknown project or a
+ * non-member, 403 without the permission, otherwise the project.
+ */
+function readableProject(
+  url: URL,
+  permission: string
+): { ok: true; project: StubProject } | { ok: false; status: 403 | 404 } {
+  const project = projectOf(url)
+  const member = project === null ? null : memberOf(project)
+  if (project === null || member === null) return { ok: false, status: 404 }
+  if (!permissionsOf(member).includes(permission)) return { ok: false, status: 403 }
+  return { ok: true, project }
+}
+
 /**
  * Install the project routes after the default backend stub so they override
- * its answers for every tab that registers them.
+ * its answers for every tab that registers them. `systemAccess: false` keeps
+ * the backend stub's system access read (setStubbedSystemPermissions), for
+ * scenarios that add project membership to the default session.
  */
-export async function installProjectStub(page: Page): Promise<void> {
-  await page.unroute((url) => url.pathname === "/api/v1/system/access").catch(() => {})
+export async function installProjectStub(
+  page: Page,
+  options: { systemAccess?: boolean } = {}
+): Promise<void> {
+  const serveSystemAccess = options.systemAccess ?? true
+  installedPages.add(page)
+  setExecutionGate(executionGate)
+  if (serveSystemAccess) {
+    await page.unroute((url) => url.pathname === "/api/v1/system/access").catch(() => {})
+  }
   await page
     .unroute(
       (url) =>
@@ -506,16 +596,18 @@ export async function installProjectStub(page: Page): Promise<void> {
     )
     .catch(() => {})
 
-  await page.route(
-    (url) => url.pathname === "/api/v1/system/access",
-    (route) => {
-      if (route.request().method() !== "GET") return route.fallback()
-      return json(route, {
-        rollout_state: "preview",
-        permissions: [...state.systemPermissions].sort(),
-      })
-    }
-  )
+  if (serveSystemAccess) {
+    await page.route(
+      (url) => url.pathname === "/api/v1/system/access",
+      (route) => {
+        if (route.request().method() !== "GET") return route.fallback()
+        return json(route, {
+          rollout_state: "preview",
+          permissions: [...state.systemPermissions].sort(),
+        })
+      }
+    )
+  }
 
   await page.route((url) => url.pathname === "/api/v1/projects", (route) => {
     const method = route.request().method()
@@ -648,4 +740,67 @@ export async function installProjectStub(page: Page): Promise<void> {
       return empty(route, 204)
     }
   )
+
+  // Activity list: newest first, filters and an opaque project-bound cursor.
+  await page.route(
+    (url) => /^\/api\/v1\/projects\/[0-9a-f-]{36}\/traces$/.test(url.pathname),
+    (route) => {
+      if (route.request().method() !== "GET") return route.fallback()
+      const url = new URL(route.request().url())
+      const access = readableProject(url, "traces.read")
+      if (!access.ok) return empty(route, access.status)
+      recordTraceListRequest(url.search)
+      const failure = traceListFailureMessage()
+      if (failure !== null) return json(route, { detail: failure }, 500)
+      const answer = projectTraceList(access.project.id, url.searchParams)
+      return json(route, answer.body, answer.status)
+    }
+  )
+
+  // Activity detail: 404 for an unknown trace or a trace of another project.
+  await page.route(
+    (url) => /^\/api\/v1\/projects\/[0-9a-f-]{36}\/traces\/[^/]+$/.test(url.pathname),
+    (route) => {
+      if (route.request().method() !== "GET") return route.fallback()
+      const url = new URL(route.request().url())
+      const access = readableProject(url, "traces.read")
+      if (!access.ok) return empty(route, access.status)
+      const traceId = decodeURIComponent(url.pathname.split("/").pop() ?? "")
+      recordTraceDetailRequest(traceId)
+      const failure = traceDetailFailureMessage(traceId)
+      if (failure !== null) return json(route, { detail: failure }, 500)
+      const detail = projectTraceDetail(access.project.id, traceId)
+      if (detail === null) return json(route, { detail: "Trace not found" }, 404)
+      return json(route, detail)
+    }
+  )
+
+  // Project usage and the project dashboard share one wire shape.
+  await page.route(
+    (url) => /^\/api\/v1\/projects\/[0-9a-f-]{36}\/(usage|dashboard)$/.test(url.pathname),
+    (route) => {
+      if (route.request().method() !== "GET") return route.fallback()
+      const url = new URL(route.request().url())
+      const access = readableProject(url, "usage.read")
+      if (!access.ok) return empty(route, access.status)
+      projectReadTraffic.push(url.pathname)
+      return json(route, projectUsage(access.project.id, url.searchParams))
+    }
+  )
+
+  // Project provider view (effective operations per provider type).
+  await page.route(
+    (url) => /^\/api\/v1\/projects\/[0-9a-f-]{36}\/providers$/.test(url.pathname),
+    (route) => {
+      if (route.request().method() !== "GET") return route.fallback()
+      const url = new URL(route.request().url())
+      const access = readableProject(url, "providers.read")
+      if (!access.ok) return empty(route, access.status)
+      projectReadTraffic.push(url.pathname)
+      return json(route, projectProviders(access.project.id))
+    }
+  )
 }
+
+/** Paths of the project usage, dashboard and provider reads, in order. */
+export const projectReadTraffic: string[] = []

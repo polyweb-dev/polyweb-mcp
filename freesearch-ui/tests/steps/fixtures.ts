@@ -1,5 +1,9 @@
 import { test as base, createBdd } from "playwright-bdd"
-import { installBackendStub, resetStubbedSystemPermissions } from "./backendStub"
+import {
+  installBackendStub,
+  resetExecutionTraffic,
+  resetStubbedSystemPermissions,
+} from "./backendStub"
 
 /**
  * Keep the BDD fixture surface in one place so every generated scenario uses
@@ -26,5 +30,8 @@ export const { Given, When, Then, Before, After } = createBdd(test)
  */
 Before({ tags: "@visual or @stub" }, async ({ page }) => {
   resetStubbedSystemPermissions()
+  // Per scenario, not per tab: a second tab's installBackendStub must keep
+  // the search and fetch log of the first tab.
+  resetExecutionTraffic()
   await installBackendStub(page)
 })

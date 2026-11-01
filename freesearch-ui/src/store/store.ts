@@ -4,17 +4,17 @@ import { createPlaygroundPersistConfig } from "./playgroundPersistence"
 import { playgroundReducer } from "./playgroundSlice"
 
 /**
- * Builds one application store for one confirmed account.
+ * Builds one playground store for one project of one confirmed account.
  *
  * The persisted playground reducer is created inside this factory, so the
- * account-specific storage key exists before rehydration starts. A remount for
- * another account therefore cannot read the previous account's snapshot. Only
+ * project-specific storage key exists before rehydration starts. A remount for
+ * another account or project therefore cannot read the previous snapshot. Only
  * the playground slice is persisted, so a future page adds one slice file plus
  * one reducer-map entry here — never a second store or Provider.
  */
-export function makeStore(accountId: string) {
+export function makeStore(accountId: string, projectId: string) {
   const persistedPlaygroundReducer = persistReducer(
-    createPlaygroundPersistConfig(accountId),
+    createPlaygroundPersistConfig(accountId, projectId),
     playgroundReducer
   )
   return configureStore({

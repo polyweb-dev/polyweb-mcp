@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import {
+  LEGACY_SECTION_PATHS,
   PROJECT_SECTIONS,
   TAB_PATHS,
   canAccessProjectSection,
@@ -23,10 +24,8 @@ import {
 } from "@/test/accessFixtures"
 
 const ALL_TABS: TabId[] = [
-  "playground",
   "routing",
   "quotas",
-  "activity",
   "settings",
   "projects",
   "account",
@@ -34,16 +33,14 @@ const ALL_TABS: TabId[] = [
 ]
 
 const SETTINGS_READER_TABS: TabId[] = [
-  "playground",
   "routing",
   "quotas",
-  "activity",
   "settings",
   "projects",
   "account",
 ]
 
-const OPEN_TABS: TabId[] = ["playground", "activity", "projects", "account"]
+const OPEN_TABS: TabId[] = ["projects", "account"]
 const SETTINGS_TABS: TabId[] = ["routing", "quotas", "settings"]
 
 const PROJECT_ID = "11111111-1111-4111-8111-111111111111"
@@ -51,10 +48,8 @@ const PROJECT_ID = "11111111-1111-4111-8111-111111111111"
 describe("TAB_PATHS", () => {
   it("maps every tab id to its exact path", () => {
     expect(TAB_PATHS).toEqual({
-      playground: "/playground",
       routing: "/routing",
       quotas: "/usage",
-      activity: "/activity",
       settings: "/settings",
       projects: "/projects",
       account: "/account",
@@ -105,17 +100,32 @@ describe("isGatedRoute", () => {
 })
 
 describe("project section registry", () => {
-  it("lists overview, members and API keys in order with their permissions", () => {
-    expect(PROJECT_SECTIONS.map(({ id, segment, label, permission }) => ({ id, segment, label, permission }))).toEqual([
-      { id: "overview", segment: "", label: "Overview", permission: "project.read" },
-      { id: "members", segment: "members", label: "Members", permission: "members.read" },
-      { id: "apiKeys", segment: "api-keys", label: "API keys", permission: "tokens.manage" },
+  it("lists the project sections in sidebar order with their any-of permissions", () => {
+    expect(PROJECT_SECTIONS.map(({ id, segment, label, permissions }) => ({ id, segment, label, permissions }))).toEqual([
+      { id: "overview", segment: "", label: "Overview", permissions: ["project.read"] },
+      {
+        id: "playground",
+        segment: "playground",
+        label: "Playground",
+        permissions: ["search.execute", "fetch.execute"],
+      },
+      { id: "activity", segment: "activity", label: "Activity", permissions: ["traces.read"] },
+      { id: "usage", segment: "usage", label: "Usage", permissions: ["usage.read"] },
+      { id: "members", segment: "members", label: "Members", permissions: ["members.read"] },
+      { id: "apiKeys", segment: "api-keys", label: "API keys", permissions: ["tokens.manage"] },
     ])
+  })
+
+  it("maps the former global paths to their project sections", () => {
+    expect(LEGACY_SECTION_PATHS).toEqual({ "/playground": "playground", "/activity": "activity" })
   })
 
   it("builds the path of every registered section", () => {
     expect(projectPath(PROJECT_ID)).toBe(`/p/${PROJECT_ID}`)
     expect(projectPath(PROJECT_ID, "overview")).toBe(`/p/${PROJECT_ID}`)
+    expect(projectPath(PROJECT_ID, "playground")).toBe(`/p/${PROJECT_ID}/playground`)
+    expect(projectPath(PROJECT_ID, "activity")).toBe(`/p/${PROJECT_ID}/activity`)
+    expect(projectPath(PROJECT_ID, "usage")).toBe(`/p/${PROJECT_ID}/usage`)
     expect(projectPath(PROJECT_ID, "members")).toBe(`/p/${PROJECT_ID}/members`)
     expect(projectPath(PROJECT_ID, "apiKeys")).toBe(`/p/${PROJECT_ID}/api-keys`)
   })
@@ -123,7 +133,8 @@ describe("project section registry", () => {
   it("parses a registered section and rejects an unknown one", () => {
     expect(parseProjectPath(`/p/${PROJECT_ID}`)).toEqual({ projectId: PROJECT_ID, section: "overview" })
     expect(parseProjectPath(`/p/${PROJECT_ID}/api-keys`)).toEqual({ projectId: PROJECT_ID, section: "apiKeys" })
-    expect(parseProjectPath(`/p/${PROJECT_ID}/usage`)).toBeNull()
+    expect(parseProjectPath(`/p/${PROJECT_ID}/usage`)).toEqual({ projectId: PROJECT_ID, section: "usage" })
+    expect(parseProjectPath(`/p/${PROJECT_ID}/settings`)).toBeNull()
     expect(parseProjectPath("/playground")).toBeNull()
   })
 
@@ -142,6 +153,17 @@ describe("project section registry", () => {
     expect(canAccessProjectSection("members", member)).toBe(true)
     expect(canAccessProjectSection("overview", projectAccessFixture(PROJECT_ID, ["tokens.manage"]))).toBe(false)
     expect(canAccessProjectSection("overview", null)).toBe(false)
+  })
+
+  it("opens the playground with either execution permission (any-of)", () => {
+    const search = projectAccessFixture(PROJECT_ID, ["project.read", "search.execute"])
+    const fetch = projectAccessFixture(PROJECT_ID, ["project.read", "fetch.execute"])
+    const neither = projectAccessFixture(PROJECT_ID, ["project.read", "traces.read"])
+    expect(canAccessProjectSection("playground", search)).toBe(true)
+    expect(canAccessProjectSection("playground", fetch)).toBe(true)
+    expect(canAccessProjectSection("playground", neither)).toBe(false)
+    expect(canAccessProjectSection("activity", neither)).toBe(true)
+    expect(canAccessProjectSection("usage", neither)).toBe(false)
   })
 })
 
@@ -175,6 +197,9 @@ describe("isInternalPath", () => {
     "/p/11111111-1111-4111-8111-111111111111",
     "/p/11111111-1111-4111-8111-111111111111/members",
     "/p/11111111-1111-4111-8111-111111111111/api-keys",
+    "/p/11111111-1111-4111-8111-111111111111/playground",
+    "/p/11111111-1111-4111-8111-111111111111/activity",
+    "/p/11111111-1111-4111-8111-111111111111/usage",
   ])("accepts the project path %s", (path) => {
     expect(isInternalPath(path)).toBe(true)
   })
@@ -182,7 +207,7 @@ describe("isInternalPath", () => {
   it.each([
     "/p/not-a-uuid",
     "/p/not-a-uuid/api-keys",
-    "/p/11111111-1111-4111-8111-111111111111/usage",
+    "/p/11111111-1111-4111-8111-111111111111/settings",
     "/p/11111111-1111-4111-8111-111111111111/members/extra",
     "/projects/create",
   ])("rejects the non-project path %s", (path) => {

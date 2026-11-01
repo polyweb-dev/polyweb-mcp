@@ -37,7 +37,7 @@ export const DashboardProvider: React.FC<{
   const refreshDashboard = useCallback(async () => {
     if (!canReadControls) {
       // A role without control-read access keeps an empty telemetry state and a
-      // clear busy flag. This covers the startup read and the post-search read.
+      // clear busy flag.
       setUsageEvents([]);
       setUsageTotals([]);
       setDashboardQuotas([]);
@@ -90,8 +90,6 @@ export const DashboardProvider: React.FC<{
       canReadControls,
       canEditControls,
       refreshDashboard,
-      prependUsageEvent: (event: UsageEvent) =>
-        setUsageEvents((previous) => [event, ...previous]),
     }),
     [
       usageEvents,

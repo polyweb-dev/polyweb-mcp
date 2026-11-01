@@ -130,10 +130,8 @@ describe("C4-5: Sidebar NavLink contract in source", () => {
       routesSource.indexOf("WorkspaceRoute")
     )
     for (const [id, routePath] of [
-      ["playground", "/playground"],
       ["routing", "/routing"],
       ["quotas", "/usage"],
-      ["activity", "/activity"],
       ["settings", "/settings"],
     ]) {
       expect(tabPathsBlock).toContain(`"${routePath}"`)

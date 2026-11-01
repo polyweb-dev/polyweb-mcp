@@ -5,11 +5,15 @@ Feature: C2 tab unification
   look for view-switching. Scope is freesearch-ui/ only: the Header nav stays plain
   buttons and no router is introduced.
 
+  Playground and Activity are project sections (U2); the default stubbed
+  session works in project Alpha.
+
   Background:
     Given I navigate to the web application
+    And the stubbed session works in project Alpha
 
   Scenario: Playground Search/Fetch switcher uses canonical pill tabs
-    When I select the "Playground" header tab
+    When I open the "playground" section of project Alpha
     Then the playground view tabs should be canonical pill tabs "Search" and "Fetch"
     And the playground tab "Search" should be selected
     And the playground tab "Fetch" should not be selected
@@ -17,7 +21,7 @@ Feature: C2 tab unification
     And the playground should show the "Search" panel
 
   Scenario: Fetch tab swaps the playground hero input (pill switcher)
-    When I select the "Playground" header tab
+    When I open the "playground" section of project Alpha
     And I open the playground tab "Fetch"
     Then the playground tab "Fetch" should be selected
     And the fetch URL input should be visible
@@ -26,7 +30,7 @@ Feature: C2 tab unification
     Then the playground should show the "Search" panel
 
   Scenario: Arrow keys move between the playground tabs
-    When I select the "Playground" header tab
+    When I open the "playground" section of project Alpha
     And I arrow right from the playground tab "Search"
     Then the playground tab "Fetch" should have focus
     And the playground tab "Search" should be selected
@@ -47,7 +51,7 @@ Feature: C2 tab unification
   #   Then the depth filter should be an exclusive group of "Fast", "Balanced" and "Deep" with "Deep" pressed
 
   Scenario: Results count is a number input and no Depth filter remains
-    When I select the "Playground" header tab
+    When I open the "playground" section of project Alpha
     Then the results count should be a number input defaulting to "6"
     And the playground should expose no depth filter
 
@@ -67,11 +71,11 @@ Feature: C2 tab unification
   #   And the providers matrix should not contain "Brave Search"
 
   Scenario: Activity filter is an exclusive segmented group
-    When I select the "Activity" header tab
+    When I open the "activity" section of project Alpha
     Then the activity filter should be an exclusive group of "All", "Search" and "Fetch" with "All" pressed
 
   Scenario: Activity Fetch filter keeps only fetch events
-    When I select the "Activity" header tab
+    When I open the "activity" section of project Alpha
     And I choose "Fetch" in the activity filter
     Then the activity list should contain provider "Keenable"
     And the activity list should not contain provider "Brave Search"
@@ -83,12 +87,12 @@ Feature: C2 tab unification
     Then the settings tabs should remain canonical pill tabs "Providers", "Keys" and "Failover"
 
   Scenario: No hand-rolled mimics in tab and filter slots
-    When I select the "Playground" header tab
+    When I open the "playground" section of project Alpha
     Then the playground should expose no button named "Fetch" while in search mode
     And every playground filter toggle should live inside a group
 
   Scenario: Header nav stays plain buttons and tab switches never change the URL
-    When I select the "Playground" header tab
+    When I open the "playground" section of project Alpha
     Then the header navigation should expose zero tab roles
     When I open the playground tab "Fetch"
     Then the page URL should be unchanged

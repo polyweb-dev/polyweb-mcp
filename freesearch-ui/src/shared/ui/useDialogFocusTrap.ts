@@ -59,20 +59,22 @@ function wrapTab(container: HTMLElement, backwards: boolean): void {
  * Moves focus to the dialog's first control. The body's controls do not exist
  * on the frame the popup mounts, so this retries briefly; a timer rather than
  * `requestAnimationFrame` because frames do not run in a backgrounded
- * document, where the dialog is otherwise perfectly usable.
+ * document, where the dialog is otherwise perfectly usable. Every retry hands
+ * its timer to `schedule`, so the owner can cancel the pending one on close or
+ * unmount.
  */
-function focusEntry(container: HTMLElement): number {
-  const attempt = (remaining: number): number => {
-    if (!document.contains(container)) return 0
+function focusEntry(container: HTMLElement, schedule: (timer: number) => void): void {
+  const attempt = (remaining: number): void => {
+    if (!document.contains(container)) return
     const target = entryTarget(container)
     if (target !== null) {
       target.focus()
-      return 0
+      return
     }
-    if (remaining <= 1) return 0
-    return window.setTimeout(() => attempt(remaining - 1), ENTRY_RETRY_MS)
+    if (remaining <= 1) return
+    schedule(window.setTimeout(() => attempt(remaining - 1), ENTRY_RETRY_MS))
   }
-  return attempt(ENTRY_ATTEMPTS)
+  attempt(ENTRY_ATTEMPTS)
 }
 
 /**
@@ -106,7 +108,10 @@ export function useDialogFocusTrap(): (node: HTMLElement | null) => void {
   return (node) => {
     containerRef.current = node
     window.clearTimeout(timerRef.current)
+    timerRef.current = 0
     if (node === null) return
-    timerRef.current = focusEntry(node)
+    focusEntry(node, (timer) => {
+      timerRef.current = timer
+    })
   }
 }

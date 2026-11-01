@@ -1,20 +1,23 @@
 import { PillTabs } from "@/shared/ui/PillTabs"
 import { PillTabsPanel } from "@/shared/ui/PillTabsPanel"
 import { usePlaygroundController } from "../model/usePlaygroundController"
+import type { PlaygroundScope } from "../model/usePlaygroundController"
 import { FetchSection } from "./FetchSection"
 import { SearchSection } from "./SearchSection"
 
-const PLAYGROUND_VIEW_OPTIONS = [
-  { value: "search", label: "Search" },
-  { value: "fetch", label: "Fetch" },
-] as const
-
-/** Search playground page: Search/Fetch pill views over one controller. */
-export function PlaygroundPage() {
-  const controller = usePlaygroundController()
+/**
+ * Search playground page: Search/Fetch pill views over one controller. A mode
+ * the caller lacks permission for stays visible but disabled.
+ */
+export function PlaygroundPage({ scope }: { scope: PlaygroundScope }) {
+  const controller = usePlaygroundController(scope)
+  const viewOptions = [
+    { value: "search", label: "Search", disabled: !controller.canSearch },
+    { value: "fetch", label: "Fetch", disabled: !controller.canFetch },
+  ]
   return (
     <PillTabs
-      options={PLAYGROUND_VIEW_OPTIONS}
+      options={viewOptions}
       value={controller.mode}
       onValueChange={(value) => controller.switchMode(value as "search" | "fetch")}
       ariaLabel="Playground view"
@@ -26,7 +29,7 @@ export function PlaygroundPage() {
         <div>
           <h2 className="text-[var(--text-strong)]">Search Playground</h2>
           <p className="text-[13px] text-[var(--muted)] mt-0.5">
-            Run queries and fetches across the provider fleet with live arbitration.
+            Run queries and fetches through this project's providers.
           </p>
         </div>
       </div>

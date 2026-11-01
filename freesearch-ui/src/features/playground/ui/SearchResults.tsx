@@ -44,6 +44,7 @@ export function SearchResults({ controller, result: activeSearch }: SearchResult
     copyToClipboard,
     isSearching,
     isFetching,
+    canFetch,
     handleFetchResult,
   } = controller
   const resolvedIdentity = providerIdentity(activeSearch.selectedProviderId)
@@ -118,6 +119,7 @@ export function SearchResults({ controller, result: activeSearch }: SearchResult
                   selected={selectedResultForPreview?.id === res.id}
                   isSearching={isSearching}
                   isFetching={isFetching}
+                  canFetch={canFetch}
                   onSelect={setSelectedResultForPreview}
                   onFetch={(selected) => void handleFetchResult(selected)}
                 />

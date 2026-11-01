@@ -3,6 +3,8 @@ import { createContext, useContext } from "react"
 export interface PillTabOption {
   value: string
   label: string
+  /** A disabled option stays visible but cannot be selected. */
+  disabled?: boolean
 }
 
 export interface PillTabsContextValue {

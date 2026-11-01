@@ -1,6 +1,9 @@
 import { describe, expect, it, afterEach, vi } from "vitest"
 import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
+import { MemoryRouter, Route, Routes, useLocation } from "react-router"
+import { ProjectScopeContext } from "@/domains/projects/state/context"
+import { PROJECT_ALPHA_ID, projectScopeValue } from "@/test/accessFixtures"
 import { mapTraceDetail, mapTraceList } from "@/domains/activity"
 import type { TraceSummary } from "@/domains/activity"
 import { ActivityList } from "./ActivityList"
@@ -13,7 +16,31 @@ import {
   aggregatedTraceDetailFixture,
   traceDetailFixture,
   traceListFixture,
+  traceSummaryFixture,
 } from "@/test/fixtures/activity"
+
+const TRACES = `/api/v1/projects/${PROJECT_ALPHA_ID}/traces`
+const TRACE_LIST_RE = /^\/api\/v1\/projects\/[^/]+\/traces(\?|$)/
+const TRACE_DETAIL_RE = /^\/api\/v1\/projects\/[^/]+\/traces\//
+
+function LocationProbe() {
+  const location = useLocation()
+  return <p data-testid="location-probe">{`${location.pathname}${location.search}`}</p>
+}
+
+/** Render the Activity page of the alpha project at one query string. */
+function renderActivityPage(search = "") {
+  return render(
+    <MemoryRouter initialEntries={[`/p/${PROJECT_ALPHA_ID}/activity${search}`]}>
+      <ProjectScopeContext.Provider value={projectScopeValue()}>
+        <Routes>
+          <Route path="/p/:projectId/activity" element={<ActivityPage />} />
+        </Routes>
+        <LocationProbe />
+      </ProjectScopeContext.Provider>
+    </MemoryRouter>
+  )
+}
 
 /**
  * The Activity list is a scannable, payload-free table: seven visible headers
@@ -282,12 +309,12 @@ describe("ActivityPage list states", () => {
 
   function stubActivity(listPayload: unknown = traceListFixture()) {
     return installFetchStub((req) => {
-      if (req.method === "GET" && req.url.startsWith("/api/v1/traces/")) {
+      if (req.method === "GET" && TRACE_DETAIL_RE.test(req.url)) {
         const traceId = decodeURIComponent(req.url.split("/").pop() ?? "")
         if (traceId === AGGREGATED_TRACE_ID) return ok(aggregatedTraceDetailFixture())
         return ok(traceDetailFixture())
       }
-      if (req.method === "GET" && req.url.startsWith("/api/v1/traces")) {
+      if (req.method === "GET" && TRACE_LIST_RE.test(req.url)) {
         return ok(listPayload)
       }
       return err(404, { detail: "unhandled test route" })
@@ -297,12 +324,12 @@ describe("ActivityPage list states", () => {
   it("shows a loading state while traces are in flight", () => {
     const gate = deferred<Response>()
     installFetchStub((req) => {
-      if (req.method === "GET" && req.url.startsWith("/api/v1/traces")) {
+      if (req.method === "GET" && TRACE_LIST_RE.test(req.url)) {
         return gate.promise
       }
       return err(404, { detail: "unhandled test route" })
     })
-    render(<ActivityPage />)
+    renderActivityPage()
 
     expect(screen.getByRole("status")).toHaveTextContent(/loading activity/i)
     gate.resolve(ok(traceListFixture()))
@@ -310,12 +337,12 @@ describe("ActivityPage list states", () => {
 
   it("shows an error state with retry when the list fails", async () => {
     installFetchStub((req) => {
-      if (req.method === "GET" && req.url.startsWith("/api/v1/traces")) {
+      if (req.method === "GET" && TRACE_LIST_RE.test(req.url)) {
         return err(503, { detail: "traces unavailable" })
       }
       return err(404, { detail: "unhandled test route" })
     })
-    render(<ActivityPage />)
+    renderActivityPage()
 
     await waitFor(() => {
       expect(screen.getByRole("alert")).toHaveTextContent(/traces unavailable/i)
@@ -325,7 +352,7 @@ describe("ActivityPage list states", () => {
 
   it("shows an empty state when no traces were recorded", async () => {
     stubActivity({ items: [], generated_at: "2026-09-29T09:25:00.000000Z" })
-    render(<ActivityPage />)
+    renderActivityPage()
 
     await waitFor(() => {
       expect(screen.getByText(/no traces recorded yet/i)).toBeInTheDocument()
@@ -336,12 +363,12 @@ describe("ActivityPage list states", () => {
   it("filters the list through the Search/Fetch segmented control", async () => {
     const stub = stubActivity()
     const user = userEvent.setup()
-    render(<ActivityPage />)
+    renderActivityPage()
 
     await waitFor(() => {
       expect(screen.getAllByText("Keenable").length).toBeGreaterThan(0)
     })
-    const group = screen.getByRole("group", { name: /operation filter/i })
+    const group = screen.getByRole("group", { name: "Operation" })
     expect(
       within(group).getByRole("button", { name: "All" }).getAttribute("aria-pressed")
     ).toBe("true")
@@ -349,14 +376,14 @@ describe("ActivityPage list states", () => {
     await user.click(within(group).getByRole("button", { name: "Fetch" }))
     await waitFor(() => {
       expect(
-        stub.requestsTo("/api/v1/traces?limit=50&operation=fetch")
+        stub.requestsTo(`${TRACES}?limit=50&operation=fetch`)
       ).toHaveLength(1)
     })
 
     await user.click(within(group).getByRole("button", { name: "Search" }))
     await waitFor(() => {
       expect(
-        stub.requestsTo("/api/v1/traces?limit=50&operation=search")
+        stub.requestsTo(`${TRACES}?limit=50&operation=search`)
       ).toHaveLength(1)
     })
   })
@@ -364,7 +391,7 @@ describe("ActivityPage list states", () => {
   it("keeps the success trace selectable after the fixture grew to three rows", async () => {
     stubActivity()
     const user = userEvent.setup()
-    render(<ActivityPage />)
+    renderActivityPage()
 
     await waitFor(() => {
       expect(screen.getAllByRole("button", { name: "View details" })).toHaveLength(3)
@@ -375,6 +402,62 @@ describe("ActivityPage list states", () => {
     })
     expect(screen.getByText("distributed consensus algorithms")).toBeInTheDocument()
     expect(SUCCESS_TRACE_ID).toContain("e1c2")
+  })
+
+  it("holds Operation and Outcome in the URL query and reloads page one", async () => {
+    const stub = stubActivity()
+    const user = userEvent.setup()
+    renderActivityPage("?operation=fetch")
+
+    await waitFor(() => {
+      expect(stub.requestsTo(`${TRACES}?limit=50&operation=fetch`)).toHaveLength(1)
+    })
+    const outcome = screen.getByRole("group", { name: "Outcome" })
+    expect(
+      within(outcome)
+        .getAllByRole("button")
+        .map((button) => button.textContent)
+    ).toEqual(["All", "Success", "Partial", "Error"])
+
+    await user.click(within(outcome).getByRole("button", { name: "Error" }))
+    await waitFor(() => {
+      expect(stub.requestsTo(`${TRACES}?limit=50&operation=fetch&outcome=error`)).toHaveLength(1)
+    })
+    expect(screen.getByTestId("location-probe")).toHaveTextContent(
+      `/p/${PROJECT_ALPHA_ID}/activity?operation=fetch&outcome=error`
+    )
+  })
+
+  it("appends the next page with Load more and keeps the rows after the detail closes", async () => {
+    const stub = installFetchStub((req) => {
+      if (req.method === "GET" && TRACE_DETAIL_RE.test(req.url)) return ok(traceDetailFixture())
+      if (req.method === "GET" && TRACE_LIST_RE.test(req.url)) {
+        if (!req.url.includes("cursor=")) return ok(traceListFixture({ next_cursor: "page-2" }))
+        return ok({
+          items: [{ ...traceSummaryFixture(), trace_id: "f".repeat(32) }],
+          generated_at: "2026-09-29T09:25:00.000000Z",
+          next_cursor: null,
+        })
+      }
+      return err(404, { detail: "unhandled test route" })
+    })
+    const user = userEvent.setup()
+    renderActivityPage()
+
+    await user.click(await screen.findByRole("button", { name: "Load more" }))
+    await waitFor(() => {
+      expect(screen.getAllByRole("button", { name: "View details" })).toHaveLength(4)
+    })
+    expect(screen.queryByRole("button", { name: "Load more" })).not.toBeInTheDocument()
+    expect(stub.requestsTo(`${TRACES}?limit=50&cursor=page-2`)).toHaveLength(1)
+
+    await user.click(screen.getAllByRole("button", { name: "View details" })[1]!)
+    await screen.findByRole("dialog")
+    await user.keyboard("{Escape}")
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
+    })
+    expect(screen.getAllByRole("button", { name: "View details" })).toHaveLength(4)
   })
 })
 

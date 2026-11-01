@@ -31,7 +31,7 @@ export const SegmentedControl: React.FC<SegmentedControlProps> = ({
     <div
       role="group"
       aria-label={ariaLabel}
-      className="inline-flex items-center gap-0.5 rounded-md border border-[var(--border-subtle)] p-0.5"
+      className="inline-flex max-w-full flex-wrap items-center gap-0.5 rounded-md border border-[var(--border-subtle)] p-0.5"
     >
       {options.map((option) => {
         const isSelected = option === value

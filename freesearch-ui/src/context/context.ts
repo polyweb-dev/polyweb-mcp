@@ -5,12 +5,6 @@ import type {
 } from "@/domains/providers"
 import type { FallbackConfig, RoutingPreset } from "@/domains/routing"
 import type {
-  FetchRequest,
-  FetchResponse,
-  SearchRequest,
-  SearchResponse,
-} from "@/domains/execution"
-import type {
   CRDUsageTotal,
   DashboardQuota,
   ProviderLimits,
@@ -33,12 +27,6 @@ export interface FreeSearchContextType {
   routingError: string | null
   routingPreset: RoutingPreset
   costOptimizationPreset: "balanced" | "free_first"
-  activeSearch: SearchResponse | null
-  activeFetch: FetchResponse | null
-  isSearching: boolean
-  isFetching: boolean
-  searchError: string | null
-  fetchError: string | null
   usageEvents: UsageEvent[]
   usageLoading: boolean
   usageError: string | null
@@ -66,9 +54,6 @@ export interface FreeSearchContextType {
   updateFallbackConfig: (partial: Partial<FallbackConfig>) => Promise<void>
   updateCostPreset: (preset: "balanced" | "free_first") => Promise<void>
   setRoutingPreset: (preset: RoutingPreset) => void
-  runSearch: (request: SearchRequest) => Promise<SearchResponse | null>
-  runFetch: (request: FetchRequest) => Promise<FetchResponse | null>
-  clearActiveResults: () => void
   refreshProviders: () => Promise<void>
   refreshDashboard: () => Promise<void>
   showToast: (message: string, type?: ToastNotification["type"]) => void

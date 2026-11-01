@@ -16,7 +16,14 @@ import {
   agentAccountFixture,
 } from "@/test/authFixtures"
 import type { UserAccount } from "@/domains/auth"
-import { answerWorkspaceAccess, personaSystemPermissions } from "@/test/accessFixtures"
+import {
+  PROJECT_ADMIN_PERMISSIONS,
+  PROJECT_ALPHA_ID,
+  answerWorkspaceAccess,
+  personaSystemPermissions,
+  projectFixture,
+} from "@/test/accessFixtures"
+import { answerProjectProviders } from "@/test/projectPlayground"
 import {
   allProvidersFixture,
   routingConfigFixture,
@@ -65,8 +72,12 @@ async function renderAt(route: string, account: UserAccount = adminAccountFixtur
   const backendHandler: FetchHandler = (req) => {
     const access = answerWorkspaceAccess(req, {
       systemPermissions: personaSystemPermissions(account),
+      projects: [projectFixture()],
+      projectPermissions: { [PROJECT_ALPHA_ID]: PROJECT_ADMIN_PERMISSIONS },
     })
     if (access !== null) return access
+    const projectView = answerProjectProviders(req)
+    if (projectView !== null) return projectView
     if (req.url === "/api/v1/providers" && req.method === "GET") {
       return ok(allProvidersFixture())
     }
@@ -123,10 +134,8 @@ async function expectView(label: string, heading: string, path: string) {
 }
 
 const ROUTE_TABLE: Array<{ link: string; heading: string; path: string }> = [
-  { link: "Playground", heading: "Search Playground", path: "/playground" },
   { link: "Routing", heading: "Routing", path: "/routing" },
-  { link: "Usage", heading: "Usage", path: "/usage" },
-  { link: "Activity", heading: "Activity", path: "/activity" },
+  { link: "Provider usage", heading: "Usage", path: "/usage" },
   { link: "Settings", heading: "Settings", path: "/settings" },
   { link: "Projects", heading: "Projects", path: "/projects" },
   { link: "Account", heading: "Account", path: "/account" },
@@ -145,14 +154,14 @@ afterEach(() => {
 
 describe("C4-1: router install + URL changes on nav", () => {
   it("clicking a sidebar link moves the router location and swaps the view", async () => {
-    await renderAt("/playground")
-    await expectView("Playground", "Search Playground", "/playground")
+    await renderAt("/account")
+    await expectView("Account", "Account", "/account")
     await followLink("Routing")
     await expectView("Routing", "Routing", "/routing")
   })
 
   it("every sidebar link advertises its exact route href", async () => {
-    await renderAt("/playground")
+    await renderAt("/account")
     const nav = screen.getByRole("navigation", { name: "Primary" })
     for (const { link, path } of ROUTE_TABLE) {
       expect(
@@ -209,8 +218,8 @@ describe("C4-4: navigation restores view + exactly one current marker", () => {
     await expectView("Settings", "Settings", "/settings")
     await followLink("Routing")
     await expectView("Routing", "Routing", "/routing")
-    await followLink("Usage")
-    await expectView("Usage", "Usage", "/usage")
+    await followLink("Provider usage")
+    await expectView("Provider usage", "Usage", "/usage")
     await followLink("Settings")
     await expectView("Settings", "Settings", "/settings")
   })
@@ -218,7 +227,7 @@ describe("C4-4: navigation restores view + exactly one current marker", () => {
 
 describe("C4-5: sidebar active sync, collapse/drawer/persistence preserved", () => {
   it("exactly one link is current after every navigation", async () => {
-    await renderAt("/playground")
+    await renderAt("/account")
     for (const { link, heading, path } of ROUTE_TABLE) {
       await followLink(link)
       await waitFor(() => {
@@ -258,30 +267,30 @@ describe("C4-5: sidebar active sync, collapse/drawer/persistence preserved", () 
 
   it("selecting a drawer item navigates and closes the drawer", async () => {
     const user = userEvent.setup()
-    await renderAt("/playground")
-    await expectView("Playground", "Search Playground", "/playground")
+    await renderAt("/account")
+    await expectView("Account", "Account", "/account")
     await user.click(
       screen.getByRole("button", { name: "Open navigation", exact: true })
     )
     expect(screen.getByRole("dialog")).toBeInTheDocument()
     await user.click(
       within(screen.getByRole("dialog")).getByRole("link", {
-        name: "Activity",
+        name: "Routing",
         exact: true,
       })
     )
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
-    await expectView("Activity", "Activity", "/activity")
+    await expectView("Routing", "Routing", "/routing")
   })
 
   it("collapse persistence key survives the router migration", async () => {
     const user = userEvent.setup()
-    await renderAt("/playground")
+    await renderAt("/account")
     await user.click(
       screen.getByRole("button", { name: "Collapse sidebar", exact: true })
     )
     expect(window.localStorage.getItem("freesearch.sidebar.collapsed")).toBe("1")
-    expect(testPath()).toBe("/playground")
+    expect(testPath()).toBe("/account")
   })
 })
 
@@ -315,18 +324,29 @@ describe("C4-6: PillTabs switching leaves the URL unchanged", () => {
 
   it("Playground Search/Fetch tabs switch without pushing history", async () => {
     const user = userEvent.setup()
-    await renderAt("/playground")
-    await expectView("Playground", "Search Playground", "/playground")
+    const playgroundPath = `/p/${PROJECT_ALPHA_ID}/playground`
+    await renderAt(playgroundPath)
+    await waitFor(() => {
+      expect(
+        within(screen.getByRole("main")).getByRole("heading", { name: "Search Playground" })
+      ).toBeInTheDocument()
+    })
+    expect(
+      within(screen.getByRole("navigation", { name: "Project" })).getByRole("link", {
+        name: "Playground",
+        exact: true,
+      })
+    ).toHaveAttribute("aria-current", "page")
     await user.click(screen.getByRole("tab", { name: "Fetch", exact: true }))
-    expect(testPath()).toBe("/playground")
+    expect(testPath()).toBe(playgroundPath)
     await user.click(screen.getByRole("tab", { name: "Search", exact: true }))
-    expect(testPath()).toBe("/playground")
+    expect(testPath()).toBe(playgroundPath)
   })
 })
 
 describe("C4-7: no regression — shell, providers, views", () => {
   it("shell keeps the flex-row aside+main layout with no header", async () => {
-    await renderAt("/playground")
+    await renderAt("/routing")
     const aside = document.querySelector("aside")
     expect(aside).not.toBeNull()
     expect((aside!.parentElement as HTMLElement).className).toMatch(/flex-row/)
@@ -384,7 +404,7 @@ describe("AC4/AC5 (R-UI, U1): the session gate filters Admin by system permissio
   })
 
   it("a caller without system permissions sees no Admin link", async () => {
-    await renderAt("/playground", agentAccountFixture())
+    await renderAt("/account", agentAccountFixture())
     expect(
       within(screen.getByRole("navigation", { name: "Primary" })).queryByRole(
         "link",

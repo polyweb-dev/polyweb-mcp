@@ -4,7 +4,6 @@ import { ProvidersProvider } from "@/domains/providers/state/ProvidersContext";
 import { RoutingProvider } from "@/domains/routing/state/RoutingContext";
 import { DashboardProvider } from "@/domains/dashboard/state/DashboardContext";
 import { catalogNameOf } from "@/domains/providers";
-import { ExecutionScope } from "./ExecutionScope";
 import { FreeSearchAdapter } from "./FreeSearchAdapter";
 
 /**
@@ -35,9 +34,7 @@ export const FreeSearchInner: React.FC<{
           canReadControls={canReadControls}
           canEditControls={canEditControls}
         >
-          <ExecutionScope showToast={showToast}>
-            <FreeSearchAdapter>{children}</FreeSearchAdapter>
-          </ExecutionScope>
+          <FreeSearchAdapter>{children}</FreeSearchAdapter>
         </DashboardProvider>
       </RoutingProvider>
     </ProvidersProvider>

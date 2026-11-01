@@ -25,6 +25,8 @@ function renderLanding(route: string, overrides: Partial<ProjectsContextValue>) 
         <Routes>
           <Route path="/projects" element={<PathProbe />} />
           <Route path="/p/:projectId" element={<PathProbe />} />
+          <Route path="/p/:projectId/activity" element={<PathProbe />} />
+          <Route path="/activity" element={<WorkspaceLanding section="activity" />} />
           <Route path="*" element={<WorkspaceLanding />} />
         </Routes>
       </ProjectsContext.Provider>
@@ -41,6 +43,19 @@ describe("WorkspaceLanding", () => {
       projects: [projectFixture(), projectFixture({ id: PROJECT_BETA_ID, name: "Beta" })],
     })
     expect(screen.getByTestId("path").textContent).toBe(`/p/${PROJECT_BETA_ID}`)
+  })
+
+  it("lands a former global section on the same section of the remembered project", () => {
+    window.localStorage.setItem(lastProjectKey(ACCOUNT), PROJECT_BETA_ID)
+    renderLanding("/activity", {
+      projects: [projectFixture(), projectFixture({ id: PROJECT_BETA_ID, name: "Beta" })],
+    })
+    expect(screen.getByTestId("path").textContent).toBe(`/p/${PROJECT_BETA_ID}/activity`)
+  })
+
+  it("lands a former global section on the project list without a remembered project", () => {
+    renderLanding("/activity", { projects: [projectFixture()] })
+    expect(screen.getByTestId("path").textContent).toBe("/projects")
   })
 
   it("falls back to the project list for a stale remembered project", () => {

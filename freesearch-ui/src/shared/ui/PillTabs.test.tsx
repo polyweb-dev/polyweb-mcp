@@ -5,7 +5,8 @@ import userEvent from "@testing-library/user-event"
 import { MemoryRouter, useLocation } from "react-router"
 import { FreeSearchProvider } from "@/context/FreeSearchContext"
 import { Header } from "@/components/layout/Header"
-import { PlaygroundPage as SearchPlayground } from "@/features/playground/ui/PlaygroundPage"
+import { PlaygroundHarness } from "@/test/renderPlayground"
+import { answerProjectProviders } from "@/test/projectPlayground"
 import { RoutingEngine } from "@/components/routing/RoutingEngine"
 import { SettingsView } from "@/components/settings/SettingsView"
 import { tabsListVariants } from "@/shared/ui/tabs"
@@ -42,6 +43,8 @@ describe("PillTabs.c2r.test.tsx", () => {
  */
 function renderWithBackend(ui: React.ReactElement) {
   installFetchStub((req) => {
+    const projectView = answerProjectProviders(req)
+    if (projectView !== null) return projectView
     if (req.url === "/api/v1/providers" && req.method === "GET") {
       return ok(allProvidersFixture())
     }
@@ -146,7 +149,7 @@ describe("C2-REWORK AC-C2R-1/2/3: SearchPlayground pill switcher", () => {
   })
 
   async function ready() {
-    renderWithBackend(<SearchPlayground />)
+    renderWithBackend(<PlaygroundHarness />)
     await waitFor(() => {
       expect(
         screen.getByPlaceholderText(/Search across all providers/i)
@@ -343,7 +346,7 @@ describe("C2-REWORK AC-C2R-4: no filter/Header regression", () => {
   })
 
   it("no line variant remains in any view-switcher slot", async () => {
-    renderWithBackend(<SearchPlayground />)
+    renderWithBackend(<PlaygroundHarness />)
     await waitFor(() => {
       expect(
         screen.getByPlaceholderText(/Search across all providers/i)
@@ -374,7 +377,7 @@ describe("C2-REWORK AC-C2R-4: no filter/Header regression", () => {
   // filter-preservation case is RETIRED. Filter narrowing is covered by the
   // merged Settings registry suite (SettingsProviders.p1-final.test.tsx).
 
-  it("Header compatibility shim exposes eight router links and zero tab roles", async () => {
+  it("Header compatibility shim exposes six router links and zero tab roles", async () => {
     const user = userEvent.setup()
 
     function LocationProbe() {
@@ -382,7 +385,7 @@ describe("C2-REWORK AC-C2R-4: no filter/Header regression", () => {
     }
 
     render(
-      <MemoryRouter initialEntries={["/playground"]}>
+      <MemoryRouter initialEntries={["/account"]}>
         <AuthContext.Provider value={authenticatedContextValue(adminAccountFixture())}>
           {/* U1: the navigation filters on the live system access, not a role. */}
           <ProjectsContext.Provider value={projectsContextFixture()}>
@@ -395,17 +398,16 @@ describe("C2-REWORK AC-C2R-4: no filter/Header regression", () => {
 
     // P1-FINAL: standalone Providers page retired — five workspace links.
     // R-UI: Account and Admin screens entered scope; U1 adds Projects, so the
-    // system administrator sees eight.
+    // system administrator sees eight. U2 moves Playground and Activity under
+    // projects, so six global links remain.
     const headerNav = screen.getByRole("navigation", { name: "Primary" })
-    expect(within(headerNav).getAllByRole("link")).toHaveLength(8)
+    expect(within(headerNav).getAllByRole("link")).toHaveLength(6)
     expect(
       within(headerNav).queryByRole("link", { name: "Providers", exact: true })
     ).not.toBeInTheDocument()
     for (const label of [
-      "Playground",
       "Routing",
-      "Usage",
-      "Activity",
+      "Provider usage",
       "Settings",
       "Projects",
       "Account",
