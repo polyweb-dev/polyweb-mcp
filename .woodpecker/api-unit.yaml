@@ -1,3 +1,6 @@
+labels:
+  size: standard
+
 when:
   - event: manual
 

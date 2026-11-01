@@ -1,3 +1,6 @@
+labels:
+  size: heavy
+
 when:
   - event: manual
 
@@ -9,4 +12,4 @@ steps:
     commands:
       - test -f .env || cp .env.example .env
       - uv sync --frozen
-      - uv run pytest --gremlins --gremlin-workers=2 --gremlin-targets=src/freesearch --gremlin-report=console,json --gremlin-cache
+      - uv run pytest --gremlins --gremlin-workers=auto --gremlin-targets=src/freesearch --gremlin-report=console,json --gremlin-cache
