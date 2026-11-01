@@ -12,20 +12,16 @@ import { PROJECT_PERMISSIONS, SYSTEM_PERMISSIONS, hasPermission } from "@/domain
 import type { PermissionAccess } from "@/domains/projects"
 
 export type TabId =
-  | "playground"
   | "routing"
   | "quotas"
-  | "activity"
   | "settings"
   | "projects"
   | "account"
   | "adminUsers"
 
 export const TAB_PATHS: Record<TabId, string> = {
-  playground: "/playground",
   routing: "/routing",
   quotas: "/usage",
-  activity: "/activity",
   settings: "/settings",
   projects: "/projects",
   account: "/account",
@@ -48,10 +44,8 @@ export interface WorkspaceRoute {
 }
 
 export const workspaceRoutes: WorkspaceRoute[] = [
-  { id: "playground", path: TAB_PATHS.playground },
   { id: "routing", path: TAB_PATHS.routing },
   { id: "quotas", path: TAB_PATHS.quotas },
-  { id: "activity", path: TAB_PATHS.activity },
   { id: "settings", path: TAB_PATHS.settings },
   { id: "projects", path: TAB_PATHS.projects },
   { id: "account", path: TAB_PATHS.account },
@@ -63,12 +57,9 @@ export const workspaceRoutes: WorkspaceRoute[] = [
  *
  * Routing, usage and settings read the global control plane, which the
  * backend gates on `system.settings.read`. Account provisioning needs
- * `system.settings.write`. Playground and activity stay open until they move
- * under projects.
+ * `system.settings.write`. Playground and activity live under projects.
  */
 const ROUTE_PERMISSIONS: Record<TabId, string | null> = {
-  playground: null,
-  activity: null,
   projects: null,
   account: null,
   routing: SYSTEM_PERMISSIONS.settingsRead,
@@ -91,8 +82,14 @@ export function canAccessRoute(
   return permission === null || hasPermission(systemAccess, permission)
 }
 
-/** Identifier of one project-scoped section. U2 and U3 extend this union. */
-export type ProjectSectionId = "overview" | "members" | "apiKeys"
+/** Identifier of one project-scoped section. U3 extends this union. */
+export type ProjectSectionId =
+  | "overview"
+  | "playground"
+  | "activity"
+  | "usage"
+  | "members"
+  | "apiKeys"
 
 /** One entry of the project section registry. */
 export interface ProjectSection {
@@ -101,26 +98,51 @@ export interface ProjectSection {
   segment: string
   /** Sidebar label and accessible name of the section link. */
   label: string
-  /** Project permission the section needs, from the project access descriptor. */
-  permission: string
+  /**
+   * Project permissions that open the section, any of them (any-of), from the
+   * project access descriptor.
+   */
+  permissions: readonly string[]
 }
 
 /** Project section registry, in sidebar order. */
 export const PROJECT_SECTIONS: readonly ProjectSection[] = [
-  { id: "overview", segment: "", label: "Overview", permission: PROJECT_PERMISSIONS.read },
+  { id: "overview", segment: "", label: "Overview", permissions: [PROJECT_PERMISSIONS.read] },
+  {
+    id: "playground",
+    segment: "playground",
+    label: "Playground",
+    permissions: [PROJECT_PERMISSIONS.searchExecute, PROJECT_PERMISSIONS.fetchExecute],
+  },
+  {
+    id: "activity",
+    segment: "activity",
+    label: "Activity",
+    permissions: [PROJECT_PERMISSIONS.tracesRead],
+  },
+  { id: "usage", segment: "usage", label: "Usage", permissions: [PROJECT_PERMISSIONS.usageRead] },
   {
     id: "members",
     segment: "members",
     label: "Members",
-    permission: PROJECT_PERMISSIONS.membersRead,
+    permissions: [PROJECT_PERMISSIONS.membersRead],
   },
   {
     id: "apiKeys",
     segment: "api-keys",
     label: "API keys",
-    permission: PROJECT_PERMISSIONS.tokensManage,
+    permissions: [PROJECT_PERMISSIONS.tokensManage],
   },
 ]
+
+/**
+ * Former global paths of sections that moved under projects. Each one
+ * redirects to the same section of the validated last project.
+ */
+export const LEGACY_SECTION_PATHS: Readonly<Record<string, ProjectSectionId>> = {
+  "/playground": "playground",
+  "/activity": "activity",
+}
 
 const PROJECT_UUID_RE =
   /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
@@ -160,7 +182,10 @@ export function canAccessProjectSection(
   access: PermissionAccess | null | undefined
 ): boolean {
   const section = PROJECT_SECTIONS.find((entry) => entry.id === id)
-  return section !== undefined && hasPermission(access, section.permission)
+  return (
+    section !== undefined &&
+    section.permissions.some((permission) => hasPermission(access, permission))
+  )
 }
 
 /**
@@ -173,6 +198,7 @@ export function canAccessProjectSection(
 export function isInternalPath(value: string | null | undefined): value is string {
   if (!value || !value.startsWith("/") || value.startsWith("//")) return false
   if (Object.values(TAB_PATHS).includes(value)) return true
+  if (Object.keys(LEGACY_SECTION_PATHS).includes(value)) return true
   const parsed = parseProjectPath(value)
   return parsed !== null && PROJECT_UUID_RE.test(parsed.projectId)
 }

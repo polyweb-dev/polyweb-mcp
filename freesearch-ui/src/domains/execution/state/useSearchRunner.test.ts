@@ -2,60 +2,23 @@ import React from "react"
 import { describe, expect, it, vi, beforeEach } from "vitest"
 import { act, renderHook } from "@testing-library/react"
 import { Provider } from "react-redux"
-import { useSearchRunner } from "./useSearchRunner"
+import { searchBody, useSearchRunner } from "./useSearchRunner"
 import { apiService } from "@/services/api/freesearchApi"
 import { ApiError } from "@/shared/api/http"
 import { makeStore, type AppStore } from "@/store/store"
 import { ADMIN_ACCOUNT_ID } from "@/test/authFixtures"
+import { PROJECT_ALPHA_ID } from "@/test/accessFixtures"
 import { searchResponseFixture } from "@/test/backendFixtures"
-import type { ProviderConfig } from "@/domains/providers/model/types"
 
 vi.mock("@/services/api/freesearchApi", () => ({
   apiService: { search: vi.fn() },
 }))
 
 /**
- * Tavily terminal 402: the safe out-of-Credits error fails fast before the
- * client fallback walk, while every other provider keeps its fallback.
+ * Project search runner: every body carries the URL project, the server owns
+ * provider fallback (no client retry, a Tavily 402 included), and an unmount
+ * aborts the request so a late result never lands.
  */
-
-function provider(id: string, priority: number): ProviderConfig {
-  return {
-    id,
-    name: id,
-    description: id,
-    baseUrl: "https://example.com",
-    isCustom: false,
-    capabilities: ["search"],
-    enableMask: 7,
-    supportMask: 7,
-    globalEnabled: true,
-    searchEnabled: true,
-    fetchEnabled: false,
-    priority,
-    healthStatus: "healthy",
-    circuitBreaker: "closed",
-    consecutiveFailures: 0,
-    latencyP95Ms: null,
-    hasKey: true,
-    keyMasked: "—",
-    keyVaultStatus: "configured",
-    quota: {
-      used: null,
-      limit: null,
-      unit: "units",
-      confidence: "estimated",
-      resetPeriod: null,
-      nextReset: null,
-      remaining: null,
-      remainingPercent: null,
-      unitKind: null,
-      displayUnit: null,
-      observedAt: null,
-      window: null,
-    },
-  } as ProviderConfig
-}
 
 function wrapper(store: AppStore) {
   return function Wrapper({ children }: { children: React.ReactNode }) {
@@ -63,17 +26,16 @@ function wrapper(store: AppStore) {
   }
 }
 
-function deps(overrides: Record<string, unknown> = {}) {
+function deps() {
   return {
+    projectId: PROJECT_ALPHA_ID,
     showToast: vi.fn(),
-    fallbackEnabled: true,
     catalogNameOf: (id: string) => id,
-    refreshDashboard: vi.fn(() => Promise.resolve()),
-    prependUsageEvent: vi.fn(),
-    providers: [provider("tavily", 1), provider("brave", 2), provider("exa", 3)],
-    routingPreset: "priority" as const,
-    ...overrides,
   }
+}
+
+function freshStore(): AppStore {
+  return makeStore(ADMIN_ACCOUNT_ID, PROJECT_ALPHA_ID)
 }
 
 const searchMock = vi.mocked(apiService.search)
@@ -83,7 +45,7 @@ describe("useSearchRunner Tavily 402", () => {
     searchMock.mockReset()
   })
 
-  it("fails fast on a Tavily 402 before the fallback walk", async () => {
+  it("fails fast on a Tavily 402 with the backend message and no retry", async () => {
     searchMock.mockRejectedValueOnce(
       new ApiError(402, "Tavily is out of Credits. Wait until reset or upgrade.", {
         detail: "Tavily is out of Credits. Wait until reset or upgrade.",
@@ -91,13 +53,12 @@ describe("useSearchRunner Tavily 402", () => {
       }),
     )
     const args = deps()
-    const { result } = renderHook(() => useSearchRunner(args as never), {
-      wrapper: wrapper(makeStore(ADMIN_ACCOUNT_ID)),
-    })
+    const store = freshStore()
+    const { result } = renderHook(() => useSearchRunner(args), { wrapper: wrapper(store) })
 
     let outcome: unknown
     await act(async () => {
-      outcome = await result.current.runSearch({
+      outcome = await result.current({
         query: "hello",
         providerIds: ["tavily"],
         maxResults: 5,
@@ -107,77 +68,151 @@ describe("useSearchRunner Tavily 402", () => {
 
     expect(outcome).toBeNull()
     expect(searchMock).toHaveBeenCalledTimes(1)
-    expect(args.prependUsageEvent).not.toHaveBeenCalled()
-    expect(args.refreshDashboard).not.toHaveBeenCalled()
     expect(args.showToast).toHaveBeenCalledTimes(1)
-    expect(result.current.searchError).toContain("Tavily is out of Credits")
+    expect(store.getState().playground.searchError).toContain("Tavily is out of Credits")
   })
 
-  it("fails fast when the provider sits under detail", async () => {
-    searchMock.mockRejectedValueOnce(
-      new ApiError(402, "Tavily is out of Credits. Wait until reset or upgrade.", {
-        detail: { provider: "tavily" },
-      }),
-    )
-    const args = deps()
-    const { result } = renderHook(() => useSearchRunner(args as never), {
-      wrapper: wrapper(makeStore(ADMIN_ACCOUNT_ID)),
-    })
+  it("never retries another provider on the client after a failure", async () => {
+    searchMock.mockRejectedValueOnce(new ApiError(500, "brave failed", { provider: "brave" }))
+    searchMock.mockResolvedValueOnce(searchResponseFixture({ provider: "exa" }) as never)
+    const store = freshStore()
+    const { result } = renderHook(() => useSearchRunner(deps()), { wrapper: wrapper(store) })
 
+    let outcome: unknown
     await act(async () => {
-      await result.current.runSearch({
+      outcome = await result.current({
         query: "hello",
-        providerIds: ["tavily"],
+        providerIds: ["brave"],
         maxResults: 5,
         timeoutMs: 1000,
       })
     })
 
+    expect(outcome).toBeNull()
     expect(searchMock).toHaveBeenCalledTimes(1)
+    expect(store.getState().playground.searchStatus).toBe("failed")
+  })
+})
+
+describe("useSearchRunner project request", () => {
+  beforeEach(() => {
+    searchMock.mockReset()
   })
 
-  it("keeps fallback intact for other providers", async () => {
-    searchMock.mockRejectedValueOnce(new ApiError(500, "brave failed", { provider: "brave" }))
+  it("sends the URL project with server-side fallback for every routing mode", () => {
+    const base = { query: " hello ", maxResults: 5, timeoutMs: 1000 }
+    expect(searchBody(PROJECT_ALPHA_ID, base)).toEqual({
+      project_id: PROJECT_ALPHA_ID,
+      query: "hello",
+      limit: 5,
+      language: null,
+      country_code: null,
+      domains: [],
+      routing: { mode: "auto", providers: [], allow_fallback: true },
+    })
+    expect(searchBody(PROJECT_ALPHA_ID, { ...base, providerIds: ["youcom"] }).routing).toEqual({
+      mode: "require",
+      providers: ["you"],
+      allow_fallback: true,
+    })
+    expect(
+      searchBody(PROJECT_ALPHA_ID, { ...base, providerIds: ["brave", "exa"], fanout: true }),
+    ).toMatchObject({
+      routing: { mode: "fanout", providers: ["brave", "exa"], allow_fallback: true },
+      fanout: true,
+    })
+  })
+
+  it("stores the mapped response of a successful search", async () => {
     searchMock.mockResolvedValueOnce(searchResponseFixture({ provider: "exa" }) as never)
-    const args = deps({ providers: [provider("brave", 1), provider("exa", 2)] })
-    const { result } = renderHook(() => useSearchRunner(args as never), {
-      wrapper: wrapper(makeStore(ADMIN_ACCOUNT_ID)),
-    })
+    const store = freshStore()
+    const { result } = renderHook(() => useSearchRunner(deps()), { wrapper: wrapper(store) })
 
-    let outcome: { selectedProviderId: string } | null = null
     await act(async () => {
-      outcome = (await result.current.runSearch({
-        query: "hello",
-        providerIds: ["brave"],
-        maxResults: 5,
-        timeoutMs: 1000,
-      })) as unknown as { selectedProviderId: string }
+      await result.current({ query: "hello", maxResults: 5, timeoutMs: 1000 })
     })
 
-    expect(searchMock).toHaveBeenCalledTimes(2)
-    expect((outcome as unknown as { selectedProviderId: string } | null)?.selectedProviderId).toBe("exa")
-    expect(args.prependUsageEvent).toHaveBeenCalledTimes(1)
+    expect(searchMock.mock.calls[0]?.[0]).toMatchObject({ project_id: PROJECT_ALPHA_ID })
+    expect(store.getState().playground.searchStatus).toBe("succeeded")
+    expect(store.getState().playground.activeSearch?.selectedProviderId).toBe("exa")
   })
 
-  it("keeps fallback for a non-402 Tavily error", async () => {
-    searchMock.mockRejectedValueOnce(new ApiError(429, "limited", { provider: "tavily" }))
-    searchMock.mockResolvedValueOnce(searchResponseFixture({ provider: "brave" }) as never)
-    const args = deps({ providers: [provider("tavily", 1), provider("brave", 2)] })
-    const { result } = renderHook(() => useSearchRunner(args as never), {
-      wrapper: wrapper(makeStore(ADMIN_ACCOUNT_ID)),
+  it("aborts the in-flight search on unmount and never dispatches its late result", async () => {
+    let resolveSearch: (value: unknown) => void = () => {}
+    let signal: AbortSignal | undefined
+    searchMock.mockImplementationOnce((_body, requestSignal) => {
+      signal = requestSignal
+      return new Promise((resolve) => {
+        resolveSearch = resolve
+      }) as never
+    })
+    const store = freshStore()
+    const args = deps()
+    const { result, unmount } = renderHook(() => useSearchRunner(args), {
+      wrapper: wrapper(store),
     })
 
-    let outcome: { selectedProviderId: string } | null = null
+    let pending: Promise<unknown> = Promise.resolve()
+    act(() => {
+      pending = result.current({ query: "hello", maxResults: 5, timeoutMs: 10_000 })
+    })
+    expect(store.getState().playground.searchStatus).toBe("loading")
+
+    unmount()
+    expect(signal?.aborted).toBe(true)
+
+    const before = store.getState().playground
     await act(async () => {
-      outcome = (await result.current.runSearch({
-        query: "hello",
-        providerIds: ["tavily"],
-        maxResults: 5,
-        timeoutMs: 1000,
-      })) as unknown as { selectedProviderId: string }
+      resolveSearch(searchResponseFixture({ provider: "exa" }))
+      await pending
     })
 
-    expect(searchMock).toHaveBeenCalledTimes(2)
-    expect((outcome as unknown as { selectedProviderId: string } | null)?.selectedProviderId).toBe("brave")
+    expect(store.getState().playground).toBe(before)
+    expect(store.getState().playground.activeSearch).toBeNull()
+    expect(args.showToast).not.toHaveBeenCalled()
+  })
+
+  it("keeps the UI id of a pinned provider and the last-good result after a failure", async () => {
+    searchMock.mockResolvedValueOnce(searchResponseFixture({ provider: "you" }) as never)
+    searchMock.mockRejectedValueOnce(new ApiError(503, "no provider is configured", null))
+    const store = freshStore()
+    const { result } = renderHook(() => useSearchRunner(deps()), { wrapper: wrapper(store) })
+
+    await act(async () => {
+      await result.current({ query: "first", providerIds: ["youcom"], maxResults: 500, timeoutMs: 1000 })
+    })
+    expect(searchMock.mock.calls[0]?.[0]).toMatchObject({
+      limit: 100,
+      routing: { mode: "require", providers: ["you"], allow_fallback: true },
+    })
+    expect(store.getState().playground.activeSearch?.selectedProviderId).toBe("youcom")
+
+    await act(async () => {
+      await result.current({ query: "second", maxResults: 6, timeoutMs: 1000 })
+    })
+    expect(store.getState().playground.activeSearch?.selectedProviderId).toBe("youcom")
+    expect(store.getState().playground.searchError).toContain("no provider is configured")
+    expect(store.getState().playground.searchStatus).toBe("failed")
+  })
+
+  it("reports a timeout as a friendly error instead of a silent cancel", async () => {
+    searchMock.mockImplementationOnce(
+      (_body, signal) =>
+        new Promise((_resolve, reject) => {
+          signal?.addEventListener("abort", () => {
+            reject(new DOMException("The operation was aborted due to timeout", "TimeoutError"))
+          })
+        }) as never,
+    )
+    const store = freshStore()
+    const { result } = renderHook(() => useSearchRunner(deps()), { wrapper: wrapper(store) })
+
+    await act(async () => {
+      await result.current({ query: "hung query", maxResults: 6, timeoutMs: 20 })
+    })
+
+    expect(store.getState().playground.searchStatus).toBe("failed")
+    expect(store.getState().playground.searchError).toMatch(/timed out|timeout/i)
+    expect(store.getState().playground.searchError).not.toMatch(/was aborted|AbortError|DOMException/i)
   })
 })

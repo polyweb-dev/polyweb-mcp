@@ -8,6 +8,8 @@ export interface ResultCardProps {
   selected: boolean
   isSearching: boolean
   isFetching: boolean
+  /** The caller holds `fetch.execute` in the project; without it the fetch action is disabled. */
+  canFetch: boolean
   onSelect: (result: SearchResult) => void
   onFetch: (result: SearchResult) => void
 }
@@ -22,6 +24,7 @@ export function ResultCard({
   selected,
   isSearching,
   isFetching,
+  canFetch,
   onSelect,
   onFetch,
 }: ResultCardProps) {
@@ -35,9 +38,9 @@ export function ResultCard({
           <button
             type="button"
             data-testid={"fetch-result-" + result.id}
-            title="Fetch this page"
+            title={canFetch ? "Fetch this page" : "Fetch is not permitted in this project"}
             aria-label={"Fetch " + result.title}
-            disabled={isSearching || isFetching}
+            disabled={!canFetch || isSearching || isFetching}
             onClick={(e) => {
               e.stopPropagation()
               void onFetch(result)

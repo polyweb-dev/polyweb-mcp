@@ -3,11 +3,16 @@ Feature: Live provider fetch smoke coverage
   One live fetch per fetch-capable provider against the real backend
   (no stub). Brave Search has no fetch capability so it is skipped here.
   Each scenario captures the FIRST-fetch outcome, retries the same URL,
-  and asserts the retry renders content with no API-failure alert.
+  and asserts the retry renders content with no API-failure alert. The
+  playground is a project section: the run selects the project named by
+  FREESEARCH_E2E_PROJECT (default "Local E2E").
 
   Background:
     Given I navigate to the web application
-    When I navigate directly to "/playground"
+    When I open the projects list
+    And I choose the live e2e project in the project selector
+    And I follow the "Playground" link of the Project navigation
+    Then I should see the "Search Playground" heading
 
   @live @fetch
   Scenario Outline: Live fetch via <provider> renders content on retry without API failure

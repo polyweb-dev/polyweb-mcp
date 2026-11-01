@@ -1,5 +1,6 @@
 import {
   deriveProviderAttempts,
+  tracePayloadNotice,
   type TraceDetail,
   type TraceOutput,
   type TraceProviderAttempt,
@@ -15,7 +16,8 @@ import { TraceInspectionWorkspace } from "./TraceInspectionWorkspace"
 export interface TraceDetailDialogProps {
   trace: TraceDetail | null
   isOpen: boolean
-  status: "loading" | "ready" | "error"
+  /** `missing` is the project's 404: the trace is not in this project. */
+  status: "loading" | "ready" | "error" | "missing"
   error: string | null
   /** Provider span this dialog is scoped to; null shows the whole trace. */
   providerSpanId?: string | null
@@ -53,6 +55,7 @@ function readyView({ trace, attempt, providerSpanId }: ReadyViewOptions) {
   // (or one provider picked out of a fanout) shows that provider's own order.
   const mode: RankingMode =
     attempt !== null || trace.provider !== "aggregated" ? "provider" : "fusion"
+  const payloadNotice = tracePayloadNotice(trace)
   return (
     // Exactly the height of the scrolling body, so the workspace below the rail
     // and the query can be handed what is left and share it. The height must be
@@ -71,6 +74,11 @@ function readyView({ trace, attempt, providerSpanId }: ReadyViewOptions) {
         <TraceDetailSummary trace={trace} attempt={attempt} />
       </div>
       <TraceDetailError trace={trace} />
+      {payloadNotice !== null && (
+        <p role="note" className="shrink-0 text-[13px] text-[var(--muted)]">
+          {payloadNotice}
+        </p>
+      )}
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <TraceInspectionWorkspace
@@ -127,6 +135,12 @@ export function TraceDetailDialog({
             Retry
           </Button>
         </div>
+      )}
+
+      {status === "missing" && (
+        <p role="alert" className="text-[13px] text-[var(--muted)]">
+          {error}
+        </p>
       )}
 
       {status === "ready" && trace !== null && readyView({ trace, attempt, providerSpanId })}

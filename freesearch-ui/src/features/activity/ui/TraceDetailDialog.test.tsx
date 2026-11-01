@@ -1,6 +1,9 @@
 import { describe, expect, it, afterEach, vi } from "vitest"
 import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
+import { MemoryRouter } from "react-router"
+import { ProjectScopeContext } from "@/domains/projects/state/context"
+import { projectScopeValue } from "@/test/accessFixtures"
 import { mapTraceDetail } from "@/domains/activity"
 import type { TraceDetail } from "@/domains/activity"
 import { TraceDetailDialog } from "./TraceDetailDialog"
@@ -301,6 +304,37 @@ describe("TraceDetailDialog", () => {
     expect(screen.getByText(/no results were recorded/i)).toBeInTheDocument()
   })
 
+  it("explains a metadata-only trace without a settings lookup", () => {
+    renderDialog({ ...searchDetail(), input: null, output: null })
+
+    expect(
+      screen.getByText(
+        "This trace stored metadata only. The project's trace policy did not capture the query or the results."
+      )
+    ).toBeInTheDocument()
+  })
+
+  it("says the results were not stored for a success without output", () => {
+    renderDialog({ ...searchDetail(), output: null })
+
+    expect(screen.getByText("The results of this trace were not stored.")).toBeInTheDocument()
+    expect(screen.queryByText(/stored metadata only/)).not.toBeInTheDocument()
+  })
+
+  it("shows no payload notice when the query and results were captured", () => {
+    renderDialog(searchDetail())
+
+    expect(screen.queryByText(/stored metadata only/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/were not stored/)).not.toBeInTheDocument()
+  })
+
+  it("shows the project copy without retry for a trace outside the project", () => {
+    renderDialog(null, { status: "missing", error: "This trace is not available in this project." })
+
+    expect(screen.getByRole("alert")).toHaveTextContent("This trace is not available in this project.")
+    expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument()
+  })
+
   it("shows a loading state while detail is in flight", () => {
     renderDialog(null, { status: "loading" })
 
@@ -321,18 +355,24 @@ describe("TraceDetailDialog", () => {
 
   it("closes on Escape and returns focus to the invoking control", async () => {
     installFetchStub((req) => {
-      if (req.method === "GET" && req.url.startsWith("/api/v1/traces/")) {
+      if (req.method === "GET" && /^\/api\/v1\/projects\/[^/]+\/traces\//.test(req.url)) {
         const traceId = decodeURIComponent(req.url.split("/").pop() ?? "")
         if (traceId === AGGREGATED_TRACE_ID) return ok(aggregatedTraceDetailFixture())
         return ok(traceDetailFixture())
       }
-      if (req.method === "GET" && req.url.startsWith("/api/v1/traces")) {
+      if (req.method === "GET" && /^\/api\/v1\/projects\/[^/]+\/traces/.test(req.url)) {
         return ok(traceListFixture())
       }
       return err(404, { detail: "unhandled test route" })
     })
     const user = userEvent.setup()
-    render(<ActivityPage />)
+    render(
+      <MemoryRouter>
+        <ProjectScopeContext.Provider value={projectScopeValue()}>
+          <ActivityPage />
+        </ProjectScopeContext.Provider>
+      </MemoryRouter>
+    )
 
     await waitFor(() => {
       expect(screen.getAllByRole("button", { name: "View details" })).toHaveLength(3)

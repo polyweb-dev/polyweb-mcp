@@ -3,9 +3,12 @@ Feature: App-shell URL routing (C4)
   Sidebar workspaces are router links (NavLink) over a real BrowserRouter
   history: the URL tracks the view, deep-links render, back/forward/refresh
   restore the view, and pill tabs never touch the URL. TabId is unchanged —
-  the "quotas" tab renders at the "/usage" path. The workspace is project
-  first (U1): the root and unknown paths land on the last valid project, else
-  on the projects list. The stubbed session is a system administrator.
+  the "quotas" tab renders at the "/usage" path behind the "Provider usage"
+  link. The workspace is project first (U1): the root and unknown paths land
+  on the last valid project, else on the projects list. Playground and
+  Activity are project sections (U2): their former global paths redirect to
+  the last project's section, else to the projects list. The stubbed session
+  is a system administrator.
 
   Background:
     Given I navigate to the web application
@@ -15,7 +18,7 @@ Feature: App-shell URL routing (C4)
     When I follow the "Routing" sidebar link
     Then I should see the "Routing" heading
     And the page URL path should be "/routing"
-    When I follow the "Usage" sidebar link
+    When I follow the "Provider usage" sidebar link
     Then I should see the "Usage" heading
     And the page URL path should be "/usage"
 
@@ -41,12 +44,20 @@ Feature: App-shell URL routing (C4)
     And the "<link>" sidebar link should be marked current
 
     Examples:
-      | path        | heading           | link       |
-      | /playground | Search Playground | Playground |
-      | /routing    | Routing           | Routing    |
-      | /usage      | Usage             | Usage      |
-      | /activity   | Activity          | Activity   |
-      | /settings   | Settings          | Settings   |
+      | path      | heading  | link           |
+      | /routing  | Routing  | Routing        |
+      | /usage    | Usage    | Provider usage |
+      | /settings | Settings | Settings       |
+
+  Scenario Outline: C4-3 former global <path> without a stored project lands on the projects list
+    When I navigate directly to "<path>"
+    Then the page URL path should be "/projects"
+    And I should see the "Projects" heading
+
+    Examples:
+      | path        |
+      | /playground |
+      | /activity   |
 
   @smoke
   Scenario: C4-4 back and forward restore the view and the current marker
@@ -73,11 +84,11 @@ Feature: App-shell URL routing (C4)
     And the "Routing" sidebar link should be marked current
 
   Scenario: C4-5 quotas tab maps to the usage path with router-driven active state
-    When I follow the "Usage" sidebar link
+    When I follow the "Provider usage" sidebar link
     Then the page URL path should be "/usage"
     And I should see the "Usage" heading
-    And the "Usage" sidebar link should be marked current
-    And the "Usage" sidebar link should point to "/usage"
+    And the "Provider usage" sidebar link should be marked current
+    And the "Provider usage" sidebar link should point to "/usage"
     And the sidebar navigation should expose the system administrator links
 
   Scenario: C4-6 routing pill tabs leave the URL unchanged
@@ -99,10 +110,11 @@ Feature: App-shell URL routing (C4)
     Then the page URL path should still be "/settings"
 
   Scenario: C4-7 shell keeps the sidebar shell with no legacy header topbar
-    When I navigate directly to "/playground"
+    Given the stubbed session works in project Alpha
+    When I open the "playground" section of project Alpha
     Then I should see the "Search Playground" heading
     And the shell should expose no header element
     And the sidebar navigation should expose the system administrator links
-    When I navigate directly to "/activity"
+    When I open the "activity" section of project Alpha
     Then I should see the "Activity" heading
-    And the page URL path should be "/activity"
+    And the page URL path should be the "activity" section of project Alpha

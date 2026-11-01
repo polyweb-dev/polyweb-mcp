@@ -36,15 +36,25 @@ function links(): HTMLElement[] {
 
 describe("ProjectNav", () => {
   it("renders nothing on a global route", () => {
-    renderNav(undefined, "/playground")
+    renderNav(undefined, "/projects")
     expect(screen.queryByRole("navigation", { name: "Project" })).toBeNull()
   })
 
-  it("lists Overview, Members and API keys for a project administrator", () => {
+  it("lists every project section in order for a project administrator", () => {
     renderNav(scope(ready(PROJECT_ADMIN_PERMISSIONS)), `/p/${PROJECT_ALPHA_ID}/members`)
-    expect(links().map((link) => link.getAttribute("aria-label"))).toEqual(["Overview", "Members", "API keys"])
+    expect(links().map((link) => link.getAttribute("aria-label"))).toEqual([
+      "Overview",
+      "Playground",
+      "Activity",
+      "Usage",
+      "Members",
+      "API keys",
+    ])
     expect(links().map((link) => link.getAttribute("href"))).toEqual([
       `/p/${PROJECT_ALPHA_ID}`,
+      `/p/${PROJECT_ALPHA_ID}/playground`,
+      `/p/${PROJECT_ALPHA_ID}/activity`,
+      `/p/${PROJECT_ALPHA_ID}/usage`,
       `/p/${PROJECT_ALPHA_ID}/members`,
       `/p/${PROJECT_ALPHA_ID}/api-keys`,
     ])
@@ -58,6 +68,22 @@ describe("ProjectNav", () => {
 
   it("hides a section whose permission is absent", () => {
     renderNav(scope(ready(PROJECT_MEMBER_PERMISSIONS)), `/p/${PROJECT_ALPHA_ID}`)
+    expect(links().map((link) => link.getAttribute("aria-label"))).toEqual([
+      "Overview",
+      "Playground",
+      "Activity",
+      "Usage",
+      "Members",
+    ])
+  })
+
+  it("shows the Playground with either execution permission and hides it with neither", () => {
+    renderNav(scope(ready(["project.read", "fetch.execute"])), `/p/${PROJECT_ALPHA_ID}`)
+    expect(links().map((link) => link.getAttribute("aria-label"))).toEqual(["Overview", "Playground"])
+  })
+
+  it("hides Playground, Activity and Usage without their permissions", () => {
+    renderNav(scope(ready(["project.read", "members.read"])), `/p/${PROJECT_ALPHA_ID}`)
     expect(links().map((link) => link.getAttribute("aria-label"))).toEqual(["Overview", "Members"])
   })
 

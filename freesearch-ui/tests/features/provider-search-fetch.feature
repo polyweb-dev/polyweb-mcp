@@ -1,13 +1,14 @@
 @stub
 Feature: Provider search and fetch against the stubbed backend
   Pinned provider search and fetch go through deterministic /search and
-  /fetch stubs. Search asserts results-or-error; fetch asserts
+  /fetch stubs from the project playground; the picker lists the providers
+  whose project effective operations include the mode. Search asserts results-or-error; fetch asserts
   content-or-error — except Brave fetch, which has no fetch capability and
   must be absent from the fetch picker.
 
   Background:
-    Given I navigate to the web application
-    When I navigate directly to "/playground"
+    Given the stubbed session works in project Alpha
+    When I open the "playground" section of project Alpha
 
   @stub @brave @search
   Scenario: Brave pinned search returns stubbed results or an honest error

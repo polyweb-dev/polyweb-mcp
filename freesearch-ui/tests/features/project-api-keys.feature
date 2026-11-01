@@ -48,7 +48,7 @@ Feature: Project API keys
   Scenario: A member without tokens.manage has no API keys screen
     Given I am a member of project Alpha with role project_member
     When I open the workspace page "/p/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
-    Then the Project navigation lists exactly "Overview, Members"
+    Then the Project navigation lists exactly "Overview, Playground, Activity, Usage, Members"
     When I open the workspace page "/p/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/api-keys"
     Then the page URL path should be "/p/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
     And I see the heading "Alpha"

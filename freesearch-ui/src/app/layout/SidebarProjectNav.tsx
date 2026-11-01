@@ -1,5 +1,5 @@
 import type { LucideIcon } from "lucide-react"
-import { KeyRound, LayoutDashboard, Users } from "lucide-react"
+import { Activity, Gauge, KeyRound, LayoutDashboard, Search, Users } from "lucide-react"
 import { NavLink } from "react-router"
 import { useProjectScopeOptional } from "@/domains/projects"
 import {
@@ -13,6 +13,9 @@ import { navLinkClass } from "./navLinkClass"
 /** Icon of each registered project section. A new section adds its icon here. */
 const SECTION_ICONS: Record<ProjectSectionId, LucideIcon> = {
   overview: LayoutDashboard,
+  playground: Search,
+  activity: Activity,
+  usage: Gauge,
   members: Users,
   apiKeys: KeyRound,
 }

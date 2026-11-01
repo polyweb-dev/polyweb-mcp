@@ -4,27 +4,23 @@ import { Navigate, Route, Routes, useLocation } from "react-router"
 import { Sidebar } from "@/app/layout/Sidebar"
 import { ProjectWorkspace } from "./ProjectWorkspace"
 import { ProjectsPage } from "@/features/projects/ui/ProjectsPage"
-import { PlaygroundPage } from "@/features/playground/ui/PlaygroundPage"
 import { RoutingEngine } from "@/components/routing/RoutingEngine"
 import { QuotaAnalytics } from "@/components/quota/QuotaAnalytics"
-import { ActivityPage } from "@/features/activity/ui/ActivityPage"
 import { SettingsView } from "@/components/settings/SettingsView"
 import { AccountPage } from "@/features/auth/ui/AccountPage"
 import { AdminUsersPage } from "@/features/users/ui/AdminUsersPage"
 import { ToastContainer } from "@/components/common/ToastContainer"
 import { useAuth } from "@/domains/auth"
 import { ProjectScopeProvider } from "@/domains/projects"
-import { projectIdFromPath, workspaceRoutes, type TabId } from "./routes"
+import { LEGACY_SECTION_PATHS, projectIdFromPath, workspaceRoutes, type TabId } from "./routes"
 import { WorkspaceAccessGate } from "./WorkspaceAccessGate"
 import { WorkspaceLanding } from "./WorkspaceLanding"
 import { WorkspaceRouteGate } from "./WorkspaceRouteGate"
 
 function routeElements(adminEmail: string): Record<TabId, ReactNode> {
   return {
-    playground: <PlaygroundPage />,
     routing: <RoutingEngine />,
     quotas: <QuotaAnalytics />,
-    activity: <ActivityPage />,
     settings: <SettingsView />,
     projects: (
       <WorkspaceAccessGate>
@@ -43,8 +39,9 @@ function routeElements(adminEmail: string): Record<TabId, ReactNode> {
  * descriptor, project sections the project access descriptor. The project
  * scope sits above the sidebar and the page, keyed by `accountId:projectId`
  * from the URL, so both read one access state. `/` and unknown paths land on
- * the last valid project, else the project list. The legacy `/providers`
- * redirect stays verbatim.
+ * the last valid project, else the project list; the former global
+ * `/playground` and `/activity` land on that project's section. The legacy
+ * `/providers` redirect stays verbatim.
  */
 export function DashboardShell() {
   const { account } = useAuth()
@@ -66,6 +63,9 @@ export function DashboardShell() {
             <Routes>
               <Route path="/" element={<WorkspaceLanding />} />
               <Route path="/providers" element={<Navigate to="/settings" replace />} />
+              {Object.entries(LEGACY_SECTION_PATHS).map(([path, section]) => (
+                <Route key={path} path={path} element={<WorkspaceLanding section={section} />} />
+              ))}
               <Route
                 path="/p/:projectId/*"
                 element={

@@ -2,6 +2,7 @@ import type {
   Project,
   ProjectAccess,
   ProjectApiKey,
+  ProjectScopeContextValue,
   ProjectsContextValue,
   SystemAccess,
 } from "@/domains/projects"
@@ -102,6 +103,19 @@ export function projectAccessFixture(
     permissions: [...permissions],
     roles: [],
     policy_revision: 1,
+  }
+}
+
+/** Build one ready project scope with the given effective permissions. */
+export function projectScopeValue(
+  projectId: string = PROJECT_ALPHA_ID,
+  permissions: readonly string[] = PROJECT_ADMIN_PERMISSIONS
+): ProjectScopeContextValue {
+  return {
+    projectId,
+    project: null,
+    accessState: { status: "ready", data: projectAccessFixture(projectId, permissions) },
+    refreshAccess: () => {},
   }
 }
 

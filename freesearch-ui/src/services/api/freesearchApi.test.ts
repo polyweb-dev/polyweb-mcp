@@ -11,8 +11,6 @@ import {
   providerTestFixture,
   secretStatusFixture,
   breakerResetFixture,
-  traceDetailFixture,
-  traceListFixture,
 } from "@/test/backendFixtures"
 
 /**
@@ -61,6 +59,9 @@ describe("FreeSearchApiService (live HTTP)", () => {
       "testConnection",
       "generateMockSearchResults",
       "generateMockFetchedDocument",
+      // The account-wide trace reads are gone; Activity reads project routes.
+      "listTraces",
+      "getTrace",
     ]) {
       expect(
         (service as unknown as Record<string, unknown>)[removed]
@@ -425,126 +426,5 @@ describe("FreeSearchApiService (live HTTP)", () => {
     expect(failure).toBeInstanceOf(ApiError)
     expect(failure!.status).toBe(0)
     expect(failure!.detail).toContain("API unreachable")
-  })
-})
-
-/**
- * Trace read API: the Activity list stays summary-only while detail carries
- * the disclosed query, results, and stage timeline. Exact relative URLs,
- * query encoding, AbortSignal forwarding, and 404/error mapping.
- */
-describe("FreeSearchApiService traces", () => {
-  const service = new FreeSearchApiService()
-
-  afterEach(() => {
-    vi.unstubAllGlobals()
-  })
-
-  it("listTraces() GETs relative /api/v1/traces with no query by default", async () => {
-    const wire = traceListFixture()
-    const stub = installFetchStub(() => ok(wire))
-
-    const result = await service.listTraces()
-
-    expect(stub.requests).toHaveLength(1)
-    expect(stub.requests[0].url).toBe("/api/v1/traces")
-    expect(stub.requests[0].method).toBe("GET")
-    expect(stub.requests[0].bodyText).toBeUndefined()
-    expect(result).toEqual(wire)
-  })
-
-  it("listTraces() encodes limit/operation/outcome filters as query params", async () => {
-    const stub = installFetchStub(() => ok(traceListFixture()))
-
-    await service.listTraces({ limit: 50, operation: "fetch", outcome: "error" })
-
-    expect(stub.requests[0].url).toBe(
-      "/api/v1/traces?limit=50&operation=fetch&outcome=error"
-    )
-    expect(stub.requests[0].method).toBe("GET")
-  })
-
-  it("listTraces() forwards the AbortSignal", async () => {
-    const stub = installFetchStub(() => ok(traceListFixture()))
-    const controller = new AbortController()
-
-    await service.listTraces({ limit: 10 }, controller.signal)
-
-    expect(stub.requests[0].url).toBe("/api/v1/traces?limit=10")
-    expect(stub.requests[0].signal).toBe(controller.signal)
-  })
-
-  it("getTrace() GETs the URL-encoded detail path", async () => {
-    const wire = traceDetailFixture()
-    const stub = installFetchStub((req) => {
-      expect(req.url).toBe(
-        `/api/v1/traces/${encodeURIComponent("e1c2d3a4b5c6d7e8f9012345678abcde")}`
-      )
-      expect(req.method).toBe("GET")
-      return ok(wire)
-    })
-
-    const result = await service.getTrace("e1c2d3a4b5c6d7e8f9012345678abcde")
-
-    expect(stub.requests).toHaveLength(1)
-    expect(result).toEqual(wire)
-  })
-
-  it("getTrace() encodes hostile trace ids instead of building path segments", async () => {
-    const stub = installFetchStub(() => ok(traceDetailFixture()))
-
-    await service.getTrace("a/b?c=d&e=f")
-
-    expect(stub.requests[0].url).toBe(`/api/v1/traces/${encodeURIComponent("a/b?c=d&e=f")}`)
-    expect(stub.requests[0].url).not.toContain("?")
-  })
-
-  it("getTrace() forwards the AbortSignal", async () => {
-    const stub = installFetchStub(() => ok(traceDetailFixture()))
-    const controller = new AbortController()
-
-    await service.getTrace("e1c2d3a4b5c6d7e8f9012345678abcde", controller.signal)
-
-    expect(stub.requests[0].signal).toBe(controller.signal)
-  })
-
-  it("maps a 404 detail miss to ApiError with status and detail", async () => {
-    installFetchStub(() => err(404, { detail: "unknown trace 'deadbeef'" }))
-
-    const failure = await service.getTrace("deadbeef").then(
-      () => null,
-      (error: unknown) => error as ApiError
-    )
-
-    expect(failure).toBeInstanceOf(ApiError)
-    expect(failure!.status).toBe(404)
-    expect(failure!.detail).toContain("unknown trace")
-  })
-
-  it("maps a 500 trace failure to ApiError", async () => {
-    installFetchStub(() => err(500, { detail: "trace store unavailable" }))
-
-    const failure = await service.listTraces().then(
-      () => null,
-      (error: unknown) => error as ApiError
-    )
-
-    expect(failure).toBeInstanceOf(ApiError)
-    expect(failure!.status).toBe(500)
-    expect(failure!.detail).toBe("trace store unavailable")
-  })
-
-  it("never calls an absolute backend host literal for trace routes", async () => {
-    installFetchStub(() => ok(traceListFixture()))
-
-    await service.listTraces({ limit: 50 })
-    await service.getTrace("e1c2d3a4b5c6d7e8f9012345678abcde")
-
-    const fetchMock = vi.mocked(globalThis.fetch)
-    for (const call of fetchMock.mock.calls) {
-      const url = String(call[0])
-      expect(url).not.toContain("127.0.0.1")
-      expect(url.startsWith("/")).toBe(true)
-    }
   })
 })

@@ -1,11 +1,9 @@
 import type { LucideIcon } from "lucide-react"
 import { NavLink } from "react-router"
 import {
-  Activity,
   FolderKanban,
   Gauge,
   Route,
-  Search,
   Settings,
   ShieldCheck,
   UserRound,
@@ -21,10 +19,8 @@ interface NavItem {
 }
 
 const navItems: NavItem[] = [
-  { id: "playground", label: "Playground", icon: Search },
   { id: "routing", label: "Routing", icon: Route },
-  { id: "quotas", label: "Usage", icon: Gauge },
-  { id: "activity", label: "Activity", icon: Activity },
+  { id: "quotas", label: "Provider usage", icon: Gauge },
   { id: "settings", label: "Settings", icon: Settings },
   { id: "projects", label: "Projects", icon: FolderKanban },
   { id: "account", label: "Account", icon: UserRound },

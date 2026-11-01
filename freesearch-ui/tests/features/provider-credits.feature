@@ -397,7 +397,8 @@ Feature: Provider credit units display honestly
   Scenario: U7-T14 Out-of-Credits 402 reaches the user at once
     Given the stubbed provider limits show "Tavily finite credits"
     And the stubbed credit totals show "Tavily no use"
-    When I navigate directly to "/playground"
+    And the stubbed session works in project Alpha
+    When I open the "playground" section of project Alpha
     And I pin the playground provider to "Tavily"
     And I submit the playground search query "tavily out of credits probe"
     Then the playground search error should show "Tavily is out of Credits. Wait until reset or upgrade."

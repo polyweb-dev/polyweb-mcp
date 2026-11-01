@@ -69,8 +69,10 @@ Then("reduced-motion transitions should be disabled", async ({ page }) => {
 
 When("I walk from the header through Routing with keyboard only", async ({ page }) => {
   // Sidebar redesign: the collapse control is the first focus stop, then the
-  // project selector (U1), then the eight Primary links of a system
-  // administrator in order, then the account row trigger.
+  // project selector (U1), then the six Primary links of a system
+  // administrator in order (U2: Playground and Activity moved to the Project
+  // navigation, which a global route does not render), then the account row
+  // trigger.
   const collapseButton = page.getByRole("button", {
     name: "Collapse sidebar",
     exact: true,
@@ -81,17 +83,15 @@ When("I walk from the header through Routing with keyboard only", async ({ page 
   await page.keyboard.press("Tab")
   await expectFocusVisible(page.getByRole("button", { name: /^Select project/ }))
 
-  for (const label of ["Playground", "Routing"]) {
-    await page.keyboard.press("Tab")
-    await expectFocusVisible(page.getByRole("link", { name: label, exact: true }))
-  }
-
   const routingLink = page.getByRole("link", { name: "Routing", exact: true })
+  await page.keyboard.press("Tab")
+  await expectFocusVisible(routingLink)
+
   await page.keyboard.press("Enter")
   await expect(page.getByRole("heading", { name: "Routing", exact: true })).toBeVisible()
   await expectFocusVisible(routingLink)
 
-  for (const label of ["Usage", "Activity", "Settings", "Projects", "Account", "Admin"]) {
+  for (const label of ["Provider usage", "Settings", "Projects", "Account", "Admin"]) {
     await page.keyboard.press("Tab")
     await expectFocusVisible(page.getByRole("link", { name: label, exact: true }))
   }

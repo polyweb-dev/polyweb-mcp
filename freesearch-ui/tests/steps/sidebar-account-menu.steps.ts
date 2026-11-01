@@ -42,7 +42,7 @@ interface SidebarAccount {
 }
 
 const SIDEBAR_ACCOUNTS: Record<string, SidebarAccount> = {
-  // Every system permission: Routing, Usage, Settings, edits and Admin.
+  // Every system permission: Routing, Provider usage, Settings, edits and Admin.
   "system administrator": {
     body: userAccountBody("11111111-1111-4111-8111-111111111111", "admin@example.com", {
       username: "admin",
@@ -50,7 +50,7 @@ const SIDEBAR_ACCOUNTS: Record<string, SidebarAccount> = {
     name: "admin",
     systemPermissions: SYSTEM_ADMIN_PERMISSIONS,
   },
-  // Read-only control access: Routing, Usage and Settings, no edits, no Admin.
+  // Read-only control access: Routing, Provider usage and Settings, no edits, no Admin.
   "settings reader": {
     body: userAccountBody("22222222-2222-4222-8222-222222222222", "reader@example.com", {
       username: "reader",
@@ -58,7 +58,8 @@ const SIDEBAR_ACCOUNTS: Record<string, SidebarAccount> = {
     name: "reader",
     systemPermissions: ["system.settings.read"],
   },
-  // No system permission at all: Playground, Activity, Projects, Account only.
+  // No system permission at all: Projects and Account only (Playground and
+  // Activity are project sections since U2).
   member: {
     body: userAccountBody("33333333-3333-4333-8333-333333333333", "member@example.com", {
       first_name: "Ada",
@@ -181,16 +182,18 @@ Given("the sidebar logout fails safely for the outcome check", async () => {
   logoutMode = "failure"
 })
 
-When("I open the playground workspace for the sidebar check", async ({ page }) => {
+// The projects list is the workspace every account can open (the former
+// global playground moved under projects in U2).
+When("I open the workspace for the sidebar check", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 })
-  await openWorkspace(page, "/playground")
+  await openWorkspace(page, "/projects")
 })
 
 When(
-  "I open the playground workspace for the sidebar check at short height",
+  "I open the workspace for the sidebar check at short height",
   async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 400 })
-    await openWorkspace(page, "/playground")
+    await openWorkspace(page, "/projects")
   }
 )
 
@@ -273,12 +276,10 @@ When("I choose Sign out for the outcome check", async ({ page }) => {
   await page.getByRole("button", { name: "Sign out", exact: true }).click()
 })
 
-/** Every Primary link of a system administrator, in contract order. */
+/** Every Primary link of a system administrator, in the U2 contract order. */
 const ALL_PRIMARY_LINKS: Array<[string, string]> = [
-  ["Playground", "/playground"],
   ["Routing", "/routing"],
-  ["Usage", "/usage"],
-  ["Activity", "/activity"],
+  ["Provider usage", "/usage"],
   ["Settings", "/settings"],
   ["Projects", "/projects"],
   ["Account", "/account"],
@@ -293,7 +294,7 @@ async function expectPrimaryLinks(page: Page, labels: string[]): Promise<void> {
   }
 }
 
-Then("the sidebar shows eight links in order with exact hrefs", async ({ page }) => {
+Then("the sidebar shows six links in order with exact hrefs", async ({ page }) => {
   const nav = page.getByRole("navigation", { name: "Primary" })
   await expectPrimaryLinks(
     page,
@@ -410,10 +411,8 @@ Then("the drawer closes and Open navigation keeps focus", async ({ page }) => {
 
 Then("each permitted sidebar link keeps its route and view", async ({ page }) => {
   const expected: Array<{ link: string; heading: string; path: string }> = [
-    { link: "Playground", heading: "Search Playground", path: "/playground" },
     { link: "Routing", heading: "Routing", path: "/routing" },
-    { link: "Usage", heading: "Usage", path: "/usage" },
-    { link: "Activity", heading: "Activity", path: "/activity" },
+    { link: "Provider usage", heading: "Usage", path: "/usage" },
     { link: "Settings", heading: "Settings", path: "/settings" },
     { link: "Projects", heading: "Projects", path: "/projects" },
     { link: "Account", heading: "Account", path: "/account" },
@@ -429,6 +428,43 @@ Then("each permitted sidebar link keeps its route and view", async ({ page }) =>
   await expect(page.getByRole("heading", { name: "Accounts", exact: true })).toBeVisible()
   await expect(page.getByRole("button", { name: "Create account", exact: true })).toBeVisible()
   expect(new URL(page.url()).pathname).toBe("/admin/users")
+})
+
+/**
+ * Project links of a project member (project_member: project.read,
+ * search.execute, fetch.execute, traces.read, usage.read, members.read; no
+ * tokens.manage), in the U2 contract order with their headings.
+ */
+const PROJECT_MEMBER_LINKS: Array<{ link: string; heading: string; segment: string }> = [
+  { link: "Overview", heading: "Alpha", segment: "" },
+  { link: "Playground", heading: "Search Playground", segment: "/playground" },
+  { link: "Activity", heading: "Activity", segment: "/activity" },
+  { link: "Usage", heading: "Usage", segment: "/usage" },
+  { link: "Members", heading: "Members", segment: "/members" },
+]
+
+Then("each Project link of a project member keeps its route and view", async ({ page }) => {
+  const nav = page.getByRole("navigation", { name: "Project" })
+  const links = nav.getByRole("link")
+  await expect(links).toHaveCount(PROJECT_MEMBER_LINKS.length, { timeout: 15_000 })
+  for (const [index, { link }] of PROJECT_MEMBER_LINKS.entries()) {
+    await expect(links.nth(index)).toHaveAccessibleName(link)
+  }
+  const projectRoot = new URL(page.url()).pathname
+  expect(projectRoot).toMatch(/^\/p\/[0-9a-f-]{36}$/)
+  for (const { link, heading, segment } of PROJECT_MEMBER_LINKS) {
+    await expect(nav.getByRole("link", { name: link, exact: true })).toHaveAttribute(
+      "href",
+      `${projectRoot}${segment}`
+    )
+    await nav.getByRole("link", { name: link, exact: true }).click()
+    await expect(page.getByRole("heading", { name: heading, exact: true }).first()).toBeVisible()
+    expect(new URL(page.url()).pathname).toBe(`${projectRoot}${segment}`)
+    // A project link never shares its name with a Primary link.
+    await expect(
+      page.getByRole("navigation", { name: "Primary" }).getByRole("link", { name: link, exact: true })
+    ).toHaveCount(0)
+  }
 })
 
 Then("mobile navigation still closes the drawer on follow", async ({ page }) => {
@@ -704,7 +740,7 @@ Then("the sidebar keeps the stored collapse choice", async ({ page }) => {
 
 When("I open the compact workspace at 320 pixels", async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 400 })
-  await page.goto("/playground")
+  await page.goto("/projects")
   await expect(
     page.getByRole("button", { name: "Open navigation", exact: true })
   ).toBeVisible({ timeout: 15_000 })

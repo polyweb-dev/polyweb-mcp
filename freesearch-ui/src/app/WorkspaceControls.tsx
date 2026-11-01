@@ -10,7 +10,8 @@ import { canEditControls, canReadControls } from "./permissions"
  * caller without `system.settings.read` makes no control read and one without
  * `system.settings.write` gets no edit affordance. While the descriptor loads
  * both flags stay off; the domain providers start their reads once it grants
- * them. The account UUID keys the store, so an account switch remounts it.
+ * them. The account UUID keys the composition, so an account switch remounts
+ * it.
  */
 export function WorkspaceControls({
   accountId,

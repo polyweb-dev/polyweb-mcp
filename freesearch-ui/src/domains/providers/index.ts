@@ -2,6 +2,9 @@ export { toBackendId, toUiId } from "./api/idMapping";
 export { PROVIDER_CATALOG, catalogNameOf, catalogEntryForId } from "./model/catalog";
 export type { StaticProviderMeta } from "./model/catalog";
 export { providerIdentity } from "./model/providerIdentity";
+export { getProjectProviders } from "./api/projectProvidersApi";
+export { providersForOperation } from "./model/projectProviders";
+export type { ProjectProvider, ProviderOperation } from "./model/projectProviders";
 export type { ProviderIdentity } from "./model/providerIdentity";
 export {
   FETCH_BIT,

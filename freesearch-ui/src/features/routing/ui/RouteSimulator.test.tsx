@@ -558,9 +558,9 @@ describe("Slice 5 shim compatibility: routing shells re-export feature owners", 
   })
 
   it("DashboardShell imports the playground feature directly (SearchPlayground shim removed)", () => {
-    const shell = readFileSync(path.resolve(testDir, "../../../app/DashboardShell.tsx"), "utf8")
+    const shell = readFileSync(path.resolve(testDir, "../../../app/ProjectWorkspace.tsx"), "utf8")
     expect(shell).toContain("PlaygroundPage")
-    expect(shell).toContain("features/playground/ui/PlaygroundPage")
+    expect(shell).toContain("features/playground/ui/ProjectPlaygroundPage")
     expect(shell).not.toContain("components/search/SearchPlayground")
   })
 })

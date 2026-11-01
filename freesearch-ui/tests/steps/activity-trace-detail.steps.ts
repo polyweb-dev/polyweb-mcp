@@ -42,7 +42,12 @@ Then(
     await expect(results.getByText("Second live snippet.")).toBeVisible()
     await expect(results.getByText("Brave Search", { exact: true }).first()).toBeVisible()
     await expect(results.getByText("92% match")).toBeVisible()
-    await expect(results.getByText("0% match")).toBeVisible()
+    // The second hit recorded no score (null): the shared ResultScore shows
+    // nothing rather than inventing "0% match".
+    const second = results.getByRole("button", { name: /Live backend result two/ }).first()
+    await expect(second).toBeVisible()
+    await expect(second).not.toContainText("% match")
+    await expect(results.getByText("0% match")).toHaveCount(0)
     await expect(results.getByText("2026-09-05")).toBeVisible()
     // Two-line preview: one clamped snippet paragraph per card.
     await expect(results.locator("p.line-clamp-2")).toHaveCount(2)

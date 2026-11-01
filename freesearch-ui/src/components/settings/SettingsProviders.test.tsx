@@ -624,9 +624,9 @@ describe("P1F-6: Providers page retired — redirect + no providers nav", () => 
       expect(screen.getByRole("heading", { name: "Settings" })).toBeInTheDocument()
     })
     const nav = screen.getByRole("navigation", { name: "Primary" })
-    expect(within(nav).getAllByRole("link")).toHaveLength(8)
+    expect(within(nav).getAllByRole("link")).toHaveLength(6)
     expect(within(nav).queryByRole("link", { name: "Providers", exact: true })).not.toBeInTheDocument()
-    for (const label of ["Playground", "Routing", "Usage", "Activity", "Settings"]) {
+    for (const label of ["Routing", "Provider usage", "Settings"]) {
       expect(within(nav).getByRole("link", { name: label, exact: true })).toBeInTheDocument()
     }
   })
@@ -1408,10 +1408,8 @@ describe("S-P1-6: P1-FINAL merge guards (inverted — page merged, RED)", () => 
       routesSource.indexOf("WorkspaceRoute")
     )
     for (const [id, href] of [
-      ["playground", "/playground"],
       ["routing", "/routing"],
       ["quotas", "/usage"],
-      ["activity", "/activity"],
       ["settings", "/settings"],
     ]) {
       expect(tabPathsBlock).toContain(`"${href}"`)

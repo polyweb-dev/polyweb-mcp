@@ -3,67 +3,46 @@ import { describe, it, expect, vi } from "vitest"
 import { renderHook, act } from "@testing-library/react"
 import { Provider } from "react-redux"
 import { usePlaygroundController } from "./usePlaygroundController"
-import type { ProviderConfig } from "@/domains/providers"
+import type { PlaygroundScope } from "./usePlaygroundController"
+import type { ProjectProvider } from "@/domains/providers"
 import { makeStore } from "@/store/store"
 import type { AppStore } from "@/store/store"
 import { AppStoreProvider } from "@/store/AppStoreProvider"
+import { PlaygroundPersistGate } from "@/store/PlaygroundPersistGate"
 import { ADMIN_ACCOUNT_ID } from "@/test/authFixtures"
+import { PROJECT_ALPHA_ID } from "@/test/accessFixtures"
 
-const mockProviders: ProviderConfig[] = [
-  {
-    id: "brave",
-    name: "Brave",
-    capabilities: ["search"],
-    priority: 1,
-    enableMask: 3,
-    supportMask: 3,
-    globalEnabled: true,
-    searchEnabled: true,
-    fetchEnabled: false,
-    hasKey: true,
-  } as ProviderConfig,
+const mockProviders: ProjectProvider[] = [
+  { id: "brave", name: "Brave Search", available: true, enabled: true, effectiveOperations: ["search"] },
   {
     id: "keenable",
     name: "Keenable",
-    capabilities: ["search", "fetch", "keyless_tier"],
-    priority: 2,
-    enableMask: 7,
-    supportMask: 7,
-    globalEnabled: true,
-    searchEnabled: true,
-    fetchEnabled: true,
-    hasKey: false,
-  } as ProviderConfig,
-  {
-    id: "exa",
-    name: "Exa",
-    capabilities: ["search", "fetch"],
-    priority: 3,
-    enableMask: 7,
-    supportMask: 7,
-    globalEnabled: true,
-    searchEnabled: true,
-    fetchEnabled: true,
-    hasKey: false,
-  } as ProviderConfig,
+    available: true,
+    enabled: true,
+    effectiveOperations: ["search", "fetch"],
+  },
+  { id: "exa", name: "Exa", available: true, enabled: false, effectiveOperations: [] },
 ]
 
 let currentProviders = [...mockProviders]
 
-vi.mock("@/context/useFreeSearch", () => ({
-  useFreeSearch: () => ({
+vi.mock("@/domains/execution/state/useProjectExecution", () => ({
+  useProjectExecution: () => ({ projectId: PROJECT_ALPHA_ID, runSearch: vi.fn(), runFetch: vi.fn() }),
+}))
+
+function scopeOf(overrides: Partial<PlaygroundScope> = {}): PlaygroundScope {
+  return {
     providers: currentProviders,
     providersLoading: false,
-    activeSearch: null,
-    activeFetch: null,
-    isSearching: false,
-    isFetching: false,
-    searchError: null,
-    fetchError: null,
-    runSearch: vi.fn(),
-    runFetch: vi.fn(),
-  }),
-}))
+    canSearch: true,
+    canFetch: true,
+    ...overrides,
+  }
+}
+
+function freshStore(): AppStore {
+  return makeStore(ADMIN_ACCOUNT_ID, PROJECT_ALPHA_ID)
+}
 
 /** One isolated Redux store per test — never shared across tests. */
 function isolatedWrapper(store: AppStore) {
@@ -72,25 +51,55 @@ function isolatedWrapper(store: AppStore) {
   }
 }
 
-describe("usePlaygroundController credential eligibility", () => {
-  it("filters out providers without a key and without keyless_tier", () => {
+describe("usePlaygroundController project provider eligibility", () => {
+  it("offers only the providers whose project effective operations hold the mode", () => {
     currentProviders = [...mockProviders]
-    const { result } = renderHook(() => usePlaygroundController(), {
-      wrapper: isolatedWrapper(makeStore(ADMIN_ACCOUNT_ID)),
+    const { result } = renderHook(() => usePlaygroundController(scopeOf()), {
+      wrapper: isolatedWrapper(freshStore()),
     })
 
     const eligibleIds = result.current.eligibleProviders.map((p) => p.id)
     expect(eligibleIds).toContain("brave")
     expect(eligibleIds).toContain("keenable")
     expect(eligibleIds).not.toContain("exa")
+
+    act(() => {
+      result.current.switchMode("fetch")
+    })
+    expect(result.current.eligibleProviders.map((p) => p.id)).toEqual(["keenable"])
   })
 
-  it("resets selectedProviderId to auto when the selected provider loses its key", () => {
+  it("offers no provider without a readable project view", () => {
+    currentProviders = []
+    const { result } = renderHook(() => usePlaygroundController(scopeOf()), {
+      wrapper: isolatedWrapper(freshStore()),
+    })
+    expect(result.current.eligibleProviders).toEqual([])
+  })
+
+  it("falls back to the permitted mode and refuses to switch into a denied one", () => {
+    currentProviders = [...mockProviders]
+    const store = freshStore()
+    const { result } = renderHook(() => usePlaygroundController(scopeOf({ canSearch: false })), {
+      wrapper: isolatedWrapper(store),
+    })
+    expect(result.current.mode).toBe("fetch")
+    expect(result.current.canSearch).toBe(false)
+
+    act(() => {
+      result.current.switchMode("search")
+    })
+    expect(result.current.mode).toBe("fetch")
+  })
+
+  it("resets selectedProviderId to auto when the selected provider loses its binding", () => {
     currentProviders = [
-      ...mockProviders.map((p) => (p.id === "exa" ? { ...p, hasKey: true } : p)),
+      ...mockProviders.map((p) =>
+        p.id === "exa" ? { ...p, effectiveOperations: ["search" as const] } : p
+      ),
     ]
-    const store = makeStore(ADMIN_ACCOUNT_ID)
-    const { result, rerender } = renderHook(() => usePlaygroundController(), {
+    const store = freshStore()
+    const { result, rerender } = renderHook(() => usePlaygroundController(scopeOf()), {
       wrapper: isolatedWrapper(store),
     })
 
@@ -99,9 +108,7 @@ describe("usePlaygroundController credential eligibility", () => {
     })
     expect(result.current.selectedProviderId).toBe("exa")
 
-    currentProviders = [
-      ...mockProviders.map((p) => (p.id === "exa" ? { ...p, hasKey: false } : p)),
-    ]
+    currentProviders = [...mockProviders]
     rerender()
 
     expect(result.current.selectedProviderId).toBe("auto")
@@ -112,8 +119,8 @@ describe("usePlaygroundController credential eligibility", () => {
 describe("usePlaygroundController Redux ownership (PLAN §4.1.4)", () => {
   it("dispatches draft and option setters into the store", () => {
     currentProviders = [...mockProviders]
-    const store = makeStore(ADMIN_ACCOUNT_ID)
-    const { result } = renderHook(() => usePlaygroundController(), {
+    const store = freshStore()
+    const { result } = renderHook(() => usePlaygroundController(scopeOf()), {
       wrapper: isolatedWrapper(store),
     })
 
@@ -136,9 +143,9 @@ describe("usePlaygroundController Redux ownership (PLAN §4.1.4)", () => {
 
   it("keeps controller state across unmount/remount with the same store", () => {
     currentProviders = [...mockProviders]
-    const store = makeStore(ADMIN_ACCOUNT_ID)
+    const store = freshStore()
     const wrapper = isolatedWrapper(store)
-    const first = renderHook(() => usePlaygroundController(), { wrapper })
+    const first = renderHook(() => usePlaygroundController(scopeOf()), { wrapper })
 
     act(() => {
       first.result.current.setQuery("surviving draft")
@@ -148,7 +155,7 @@ describe("usePlaygroundController Redux ownership (PLAN §4.1.4)", () => {
     expect(first.result.current.query).toBe("surviving draft")
     first.unmount()
 
-    const second = renderHook(() => usePlaygroundController(), { wrapper })
+    const second = renderHook(() => usePlaygroundController(scopeOf()), { wrapper })
     expect(second.result.current.query).toBe("surviving draft")
     expect(second.result.current.resultCount).toBe(12)
     expect(second.result.current.mode).toBe("fetch")
@@ -156,8 +163,8 @@ describe("usePlaygroundController Redux ownership (PLAN §4.1.4)", () => {
 
   it("starts each isolated store from the initial drafts", () => {
     currentProviders = [...mockProviders]
-    const { result } = renderHook(() => usePlaygroundController(), {
-      wrapper: isolatedWrapper(makeStore(ADMIN_ACCOUNT_ID)),
+    const { result } = renderHook(() => usePlaygroundController(scopeOf()), {
+      wrapper: isolatedWrapper(freshStore()),
     })
     expect(result.current.query).toBe("")
     expect(result.current.mode).toBe("search")
@@ -166,8 +173,8 @@ describe("usePlaygroundController Redux ownership (PLAN §4.1.4)", () => {
 
   it("maps all to auto when switching to Fetch, preserving current behavior", () => {
     currentProviders = [...mockProviders]
-    const { result } = renderHook(() => usePlaygroundController(), {
-      wrapper: isolatedWrapper(makeStore(ADMIN_ACCOUNT_ID)),
+    const { result } = renderHook(() => usePlaygroundController(scopeOf()), {
+      wrapper: isolatedWrapper(freshStore()),
     })
 
     act(() => {
@@ -184,9 +191,13 @@ describe("usePlaygroundController Redux ownership (PLAN §4.1.4)", () => {
 
   it("mounts through the real AppStoreProvider without crashing", async () => {
     currentProviders = [...mockProviders]
-    const { result } = renderHook(() => usePlaygroundController(), {
+    const { result } = renderHook(() => usePlaygroundController(scopeOf()), {
       wrapper: ({ children }: { children: React.ReactNode }) =>
-        React.createElement(AppStoreProvider, { accountId: ADMIN_ACCOUNT_ID, children }),
+        React.createElement(AppStoreProvider, {
+          accountId: ADMIN_ACCOUNT_ID,
+          projectId: PROJECT_ALPHA_ID,
+          children: React.createElement(PlaygroundPersistGate, { children }),
+        }),
     })
     // PersistGate rehydrates asynchronously; the controller appears after it.
     await vi.waitFor(() => {

@@ -33,7 +33,7 @@ function renderAt(id: TabId, path: string, overrides: Partial<ProjectsContextVal
 
 describe("WorkspaceRouteGate", () => {
   it("renders an open route at once, even while access loads", () => {
-    renderAt("playground", "/playground", { availability: "loading", systemAccess: null })
+    renderAt("account", "/account", { availability: "loading", systemAccess: null })
     expect(screen.getByText("Gated page")).toBeInTheDocument()
   })
 

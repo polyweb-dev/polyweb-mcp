@@ -23,7 +23,6 @@ export interface DashboardValue {
   canReadControls: boolean;
   canEditControls: boolean;
   refreshDashboard: () => Promise<void>;
-  prependUsageEvent: (event: UsageEvent) => void;
 }
 
 export const DashboardContext = createContext<DashboardValue | undefined>(undefined);

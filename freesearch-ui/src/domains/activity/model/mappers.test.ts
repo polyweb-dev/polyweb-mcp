@@ -3,6 +3,7 @@ import {
   TraceDecodeError,
   mapTraceDetail,
   mapTraceList,
+  mapTracePage,
   mapTraceSummary,
 } from "./mappers"
 import {
@@ -159,6 +160,20 @@ describe("mapTraceList", () => {
     for (const payload of [{}, { items: "nope" }, { items: null }, null, []]) {
       expect(() => mapTraceList(payload)).toThrow(TraceDecodeError)
     }
+  })
+})
+
+describe("mapTracePage", () => {
+  it("keeps the opaque next cursor beside the decoded rows", () => {
+    const page = mapTracePage(traceListFixture({ next_cursor: "opaque" }))
+    expect(page.items).toHaveLength(3)
+    expect(page.nextCursor).toBe("opaque")
+  })
+
+  it("reads a missing, null, or empty cursor as the last page", () => {
+    expect(mapTracePage(traceListFixture()).nextCursor).toBeNull()
+    expect(mapTracePage(traceListFixture({ next_cursor: null })).nextCursor).toBeNull()
+    expect(mapTracePage(traceListFixture({ next_cursor: "" })).nextCursor).toBeNull()
   })
 })
 

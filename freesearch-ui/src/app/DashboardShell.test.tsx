@@ -19,6 +19,7 @@ import {
 } from "@/test/accessFixtures"
 import type { WorkspaceAccessOptions } from "@/test/accessFixtures"
 import type { UserAccount } from "@/domains/auth"
+import { writeLastProject } from "@/domains/projects"
 
 const ALPHA = projectFixture({ id: PROJECT_ALPHA_ID, name: "Alpha" })
 const BETA = projectFixture({ id: PROJECT_BETA_ID, name: "Beta", slug: "beta" })
@@ -40,6 +41,13 @@ function controlRoutes(req: Parameters<FetchHandler>[0]): Response {
   if (req.url === "/api/v1/routing/config") return ok(routingConfigFixture())
   if (req.url.startsWith("/dashboard")) return ok(dashboardFixture())
   if (/\/api\/v1\/projects\/[^/]+\/(members|api-keys)$/.test(req.url)) return ok([])
+  const projectRead = /^\/api\/v1\/projects\/([^/]+)\/(providers|traces|usage|dashboard)/.exec(req.url)
+  if (projectRead !== null) {
+    const projectId = projectRead[1]
+    if (projectRead[2] === "providers") return ok({ project_id: projectId, providers: [], allocations: [] })
+    if (projectRead[2] === "traces") return ok({ items: [], generated_at: "2026-10-30T10:00:00Z", next_cursor: null })
+    return ok({ project_id: projectId, totals: [], recent_usage: [], generated_at: "2026-10-30T10:00:00Z" })
+  }
   return err(404, { detail: "unhandled test route" })
 }
 
@@ -80,6 +88,9 @@ describe("DashboardShell project scope", () => {
     await waitFor(() =>
       expect(within(projectNav).getAllByRole("link").map((link) => link.getAttribute("aria-label"))).toEqual([
         "Overview",
+        "Playground",
+        "Activity",
+        "Usage",
         "Members",
         "API keys",
       ])
@@ -111,10 +122,43 @@ describe("DashboardShell project scope", () => {
     await waitFor(() =>
       expect(within(projectNav).getAllByRole("link").map((link) => link.getAttribute("aria-label"))).toEqual([
         "Overview",
+        "Playground",
+        "Activity",
+        "Usage",
         "Members",
       ])
     )
     expect(screen.queryByRole("heading", { level: 1, name: "API keys" })).toBeNull()
+  })
+})
+
+describe("DashboardShell former global sections", () => {
+  it.each([
+    ["/playground", "playground", "Search Playground"],
+    ["/activity", "activity", "Activity"],
+  ])("redirects %s to the same section of the last project", async (path, segment, heading) => {
+    writeLastProject(adminAccountFixture().id, PROJECT_BETA_ID)
+    renderWithAccess(path)
+
+    await waitFor(() => expect(location()).toBe(`/p/${PROJECT_BETA_ID}/${segment}`))
+    expect(await within(screen.getByRole("main")).findByRole("heading", { name: heading })).toBeInTheDocument()
+  })
+
+  it.each(["/playground", "/activity"])("redirects %s to the project list without a last project", async (path) => {
+    renderWithAccess(path)
+    await waitFor(() => expect(location()).toBe("/projects"))
+  })
+
+  it("keeps the project section on a project switch from the playground", async () => {
+    const user = userEvent.setup()
+    renderWithAccess(`/p/${PROJECT_ALPHA_ID}/playground`)
+
+    expect(await screen.findByRole("heading", { name: "Search Playground" })).toBeInTheDocument()
+    await user.click(screen.getByRole("button", { name: "Select project (current: Alpha)" }))
+    await user.click(screen.getByRole("menuitem", { name: /Beta/ }))
+
+    await waitFor(() => expect(location()).toBe(`/p/${PROJECT_BETA_ID}/playground`))
+    expect(await screen.findByRole("heading", { name: "Search Playground" })).toBeInTheDocument()
   })
 })
 

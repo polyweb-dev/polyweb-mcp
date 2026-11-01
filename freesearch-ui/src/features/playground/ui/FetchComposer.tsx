@@ -68,7 +68,7 @@ export function FetchComposer({ controller }: { controller: PlaygroundController
                 className={providerFieldClass}
                 value={selectedProviderId}
                 options={[
-                  { value: "auto", label: "Auto arbitration" },
+                  { value: "auto", label: "Auto" },
                   ...eligibleProviders.map((provider) => ({
                     value: provider.id,
                     label: provider.name,

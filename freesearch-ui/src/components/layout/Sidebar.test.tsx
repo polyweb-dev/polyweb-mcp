@@ -96,10 +96,8 @@ const packageJson = JSON.parse(packageJsonRaw) as {
 const norm = (value: string): string => value.toLowerCase().replace(/\s+/g, "")
 
 const EXPECTED_NAV: Array<{ label: string; id: TabId; href: string }> = [
-  { label: "Playground", id: "playground", href: "/playground" },
   { label: "Routing", id: "routing", href: "/routing" },
-  { label: "Usage", id: "quotas", href: "/usage" },
-  { label: "Activity", id: "activity", href: "/activity" },
+  { label: "Provider usage", id: "quotas", href: "/usage" },
   { label: "Settings", id: "settings", href: "/settings" },
   { label: "Projects", id: "projects", href: "/projects" },
   { label: "Account", id: "account", href: "/account" },
@@ -107,10 +105,8 @@ const EXPECTED_NAV: Array<{ label: string; id: TabId; href: string }> = [
 ]
 
 const ADMIN_LINK_LABELS = [
-  "Playground",
   "Routing",
-  "Usage",
-  "Activity",
+  "Provider usage",
   "Settings",
   "Projects",
   "Account",
@@ -118,16 +114,14 @@ const ADMIN_LINK_LABELS = [
 ]
 
 const DEVELOPER_LINK_LABELS = [
-  "Playground",
   "Routing",
-  "Usage",
-  "Activity",
+  "Provider usage",
   "Settings",
   "Projects",
   "Account",
 ]
 
-const AGENT_LINK_LABELS = ["Playground", "Activity", "Projects", "Account"]
+const AGENT_LINK_LABELS = ["Projects", "Account"]
 
 const STORAGE_KEY = "freesearch.sidebar.collapsed"
 
@@ -171,7 +165,7 @@ function stubMatchMedia(matches: boolean): void {
 
 function renderSidebar(
   props: Partial<React.ComponentProps<typeof Sidebar>> = {},
-  route = "/playground",
+  route = "/projects",
   account: UserAccount = adminAccountFixture()
 ) {
   return render(
@@ -187,7 +181,7 @@ function renderSidebar(
 function renderSidebarAs(
   account: UserAccount,
   props: Partial<React.ComponentProps<typeof Sidebar>> = {},
-  route = "/playground"
+  route = "/projects"
 ) {
   return renderSidebar(props, route, account)
 }
@@ -216,10 +210,8 @@ describe("AC-SB-1: Sidebar module contract", () => {
   it("exports TabId verbatim including 'quotas'", () => {
     expect(routesSource).toMatch(/export\s+(type|interface)\s+TabId/)
     for (const id of [
-      "playground",
       "routing",
       "quotas",
-      "activity",
       "settings",
       "account",
       "adminUsers",
@@ -231,7 +223,7 @@ describe("AC-SB-1: Sidebar module contract", () => {
     expect(sidebarSource).toMatch(/from\s+["']@\/app\/routes["']/)
   })
 
-  it("declares navItems with all eight tab ids (P1-FINAL: no providers; R-UI: Account + Admin in scope; U1: Projects)", () => {
+  it("declares navItems with all six tab ids (P1-FINAL: no providers; R-UI: Account + Admin in scope; U1: Projects)", () => {
     expect(sidebarNavSource).toMatch(/navItems/)
     for (const { id } of EXPECTED_NAV) {
       expect(sidebarNavSource).toContain(`"${id}"`)
@@ -281,7 +273,7 @@ describe("AC-SB-1: Sidebar module contract", () => {
   })
 })
 
-describe("AC-SB-2 (C4, P1-FINAL, R-UI, U1): landmark + eight router links, URL changes on nav", () => {
+describe("AC-SB-2 (C4, P1-FINAL, R-UI, U1, U2): landmark + six router links, URL changes on nav", () => {
   it("renders a sticky full-height aside landmark", () => {
     renderSidebar()
     const aside = asideEl()
@@ -299,13 +291,13 @@ describe("AC-SB-2 (C4, P1-FINAL, R-UI, U1): landmark + eight router links, URL c
     ).toHaveLength(1)
   })
 
-  it("renders exactly eight nav links in order with exact accessible names", () => {
+  it("renders exactly six nav links in order with exact accessible names", () => {
     renderSidebar()
     const links = within(primaryNav()).getAllByRole("link")
     expect(links).toHaveLength(EXPECTED_NAV.length)
     expect(
       links.map((l) => l.getAttribute("aria-label") ?? l.textContent?.trim())
-    ).toEqual(["Playground", "Routing", "Usage", "Activity", "Settings", "Projects", "Account", "Admin"])
+    ).toEqual(["Routing", "Provider usage", "Settings", "Projects", "Account", "Admin"])
     for (const link of links) {
       expect(link.tagName).toBe("A")
       expect(link.getAttribute("href")).toMatch(/^\//)
@@ -365,8 +357,8 @@ describe("AC-SB-2 (C4, P1-FINAL, R-UI, U1): landmark + eight router links, URL c
 
   it("clicking every nav link moves the router location through the route table", async () => {
     const user = userEvent.setup()
-    renderSidebar({}, "/playground")
-    expect(testPath()).toBe("/playground")
+    renderSidebar({}, "/account")
+    expect(testPath()).toBe("/account")
     const seen: string[] = []
     for (const { label, href } of EXPECTED_NAV) {
       await user.click(
@@ -376,10 +368,8 @@ describe("AC-SB-2 (C4, P1-FINAL, R-UI, U1): landmark + eight router links, URL c
       seen.push(href)
     }
     expect(seen).toEqual([
-      "/playground",
       "/routing",
       "/usage",
-      "/activity",
       "/settings",
       "/projects",
       "/account",
@@ -403,11 +393,11 @@ describe("AC-SB-3: single active indicator tracks the router", () => {
     renderSidebar()
     expect(
       within(primaryNav()).getByRole("link", {
-        name: "Playground",
+        name: "Projects",
         exact: true,
       })
     ).toHaveAttribute("aria-current", "page")
-    for (const label of ["Routing", "Usage", "Activity", "Settings", "Projects", "Account", "Admin"]) {
+    for (const label of ["Routing", "Provider usage", "Settings", "Account", "Admin"]) {
       expect(
         within(primaryNav()).getByRole("link", { name: label, exact: true })
       ).not.toHaveAttribute("aria-current")
@@ -422,21 +412,21 @@ describe("AC-SB-3: single active indicator tracks the router", () => {
     renderSidebar()
     expect(
       within(primaryNav()).getByRole("link", {
-        name: "Playground",
+        name: "Projects",
         exact: true,
       })
     ).toHaveAttribute("aria-current", "page")
 
     await user.click(
-      within(primaryNav()).getByRole("link", { name: "Usage", exact: true })
+      within(primaryNav()).getByRole("link", { name: "Provider usage", exact: true })
     )
 
     expect(
-      within(primaryNav()).getByRole("link", { name: "Usage", exact: true })
+      within(primaryNav()).getByRole("link", { name: "Provider usage", exact: true })
     ).toHaveAttribute("aria-current", "page")
     expect(
       within(primaryNav()).getByRole("link", {
-        name: "Playground",
+        name: "Projects",
         exact: true,
       })
     ).not.toHaveAttribute("aria-current")
@@ -525,10 +515,8 @@ describe("AC-SB-5: collapsed w-16 icon rail", () => {
       seen.push(label)
     }
     expect(seen).toEqual([
-      "Playground",
       "Routing",
-      "Usage",
-      "Activity",
+      "Provider usage",
       "Settings",
       "Projects",
       "Account",
@@ -540,7 +528,7 @@ describe("AC-SB-5: collapsed w-16 icon rail", () => {
     const user = userEvent.setup()
     renderSidebar({ collapsed: true, onCollapsedChange: () => {} })
     await user.click(
-      within(primaryNav()).getByRole("link", { name: "Usage", exact: true })
+      within(primaryNav()).getByRole("link", { name: "Provider usage", exact: true })
     )
     expect(testPath()).toBe("/usage")
   })
@@ -881,7 +869,7 @@ describe("AC-SB-9: persistence in freesearch.sidebar.collapsed", () => {
 })
 
 describe("AC5 (R-UI, U1): nav filters by effective system permissions via canAccessRoute", () => {
-  it("the system administrator sees all eight links in order including Account and Admin", () => {
+  it("the system administrator sees all six links in order including Account and Admin", () => {
     renderSidebarAs(adminAccountFixture())
     const links = within(primaryNav()).getAllByRole("link")
     expect(links).toHaveLength(EXPECTED_NAV.length)
@@ -893,7 +881,7 @@ describe("AC5 (R-UI, U1): nav filters by effective system permissions via canAcc
     ).toHaveAttribute("href", "/admin/users")
   })
 
-  it("system.settings.read sees seven links and no Admin link", () => {
+  it("system.settings.read sees five links and no Admin link", () => {
     renderSidebarAs(developerAccountFixture())
     const links = within(primaryNav()).getAllByRole("link")
     expect(links).toHaveLength(DEVELOPER_LINK_LABELS.length)
@@ -905,10 +893,10 @@ describe("AC5 (R-UI, U1): nav filters by effective system permissions via canAcc
     ).not.toBeInTheDocument()
   })
 
-  it("no system permission sees exactly Playground, Activity, Projects, Account and no Admin link", () => {
+  it("no system permission sees exactly Projects, Account and no Admin link", () => {
     renderSidebarAs(agentAccountFixture())
     const links = within(primaryNav()).getAllByRole("link")
-    expect(links).toHaveLength(4)
+    expect(links).toHaveLength(2)
     expect(
       links.map((l) => l.getAttribute("aria-label") ?? l.textContent?.trim())
     ).toEqual(AGENT_LINK_LABELS)

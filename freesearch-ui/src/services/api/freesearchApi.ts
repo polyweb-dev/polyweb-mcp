@@ -16,10 +16,6 @@ import type {
 } from "@/domains/execution/api/wire"
 import type { BackendDashboard } from "@/domains/dashboard/api/wire"
 import type {
-  BackendTraceDetail,
-  BackendTraceList,
-} from "@/domains/activity/api/wire"
-import type {
   BackendManualQuota,
   BackendManualQuotaPayload,
 } from "@/domains/dashboard/api/manualQuotaWire"
@@ -39,13 +35,6 @@ type ProviderPatch = {
   fetch_enabled?: boolean
   priority?: number
   tavily_key_environment?: "dev" | "prod"
-}
-
-/** Optional Activity list filters; omitted values ask for the backend default. */
-export type TraceListFilters = {
-  limit?: number
-  operation?: "search" | "fetch"
-  outcome?: "success" | "partial" | "error"
 }
 
 export class FreeSearchApiService {
@@ -132,33 +121,6 @@ export class FreeSearchApiService {
 
   getDashboard(limit = 50): Promise<BackendDashboard> {
     return this.request<BackendDashboard>(`/dashboard?limit=${limit}`)
-  }
-
-  /**
-   * Trace summaries for the Activity list. Summary-only by contract: the
-   * backend never sends query text or results here, so the list stays fast and
-   * payload-free.
-   */
-  listTraces(
-    filters: TraceListFilters = {},
-    signal?: AbortSignal
-  ): Promise<BackendTraceList> {
-    const params = new URLSearchParams()
-    if (filters.limit !== undefined) params.set("limit", String(filters.limit))
-    if (filters.operation !== undefined) params.set("operation", filters.operation)
-    if (filters.outcome !== undefined) params.set("outcome", filters.outcome)
-    const query = params.toString()
-    return this.request<BackendTraceList>(`/api/v1/traces${query ? `?${query}` : ""}`, {
-      ...(signal !== undefined ? { signal } : {}),
-    })
-  }
-
-  /** Full detail for one trace, including query, results, and stage timeline. */
-  getTrace(traceId: string, signal?: AbortSignal): Promise<BackendTraceDetail> {
-    return this.request<BackendTraceDetail>(
-      `/api/v1/traces/${encodeURIComponent(traceId)}`,
-      { ...(signal !== undefined ? { signal } : {}) }
-    )
   }
 
   /**

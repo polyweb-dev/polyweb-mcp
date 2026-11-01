@@ -16,6 +16,29 @@ import { When, Then } from "./fixtures"
 
 const ERROR_RE = /unreachable|failed|error|unavailable|no provider|timed out|timeout/i
 
+/**
+ * Project of the live run (U2: the playground and Activity are project
+ * sections). Name it with FREESEARCH_E2E_PROJECT; the local seed script
+ * creates "Local E2E".
+ */
+const LIVE_PROJECT_NAME = process.env.FREESEARCH_E2E_PROJECT ?? "Local E2E"
+
+When("I open the projects list", async ({ page }) => {
+  await page.goto("/projects")
+  await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible({
+    timeout: 15_000,
+  })
+})
+
+When("I choose the live e2e project in the project selector", async ({ page }) => {
+  await page.getByRole("button", { name: /^Select project/ }).first().click()
+  await page.getByRole("menuitem", { name: LIVE_PROJECT_NAME, exact: false }).first().click()
+  await expect(page).toHaveURL(/\/p\/[0-9a-f-]{36}/, { timeout: 15_000 })
+  await expect(
+    page.getByRole("button", { name: `Select project (current: ${LIVE_PROJECT_NAME})` })
+  ).toBeVisible({ timeout: 15_000 })
+})
+
 function searchErrorBanner(page: import("@playwright/test").Page) {
   return page.locator("main").locator('p[style*="status-danger"]', { hasText: ERROR_RE })
 }

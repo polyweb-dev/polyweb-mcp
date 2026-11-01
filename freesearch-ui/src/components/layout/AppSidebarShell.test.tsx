@@ -68,7 +68,7 @@ function LocationProbe() {
   return <div data-testid="test-location">{location.pathname}</div>
 }
 
-async function renderApp(route = "/playground", account: UserAccount = adminAccountFixture()) {
+async function renderApp(route = "/account", account: UserAccount = adminAccountFixture()) {
   installImmediateLocks()
   installFakeChannel()
   const backendHandler: FetchHandler = (req) => {
@@ -104,10 +104,8 @@ function testPath(): string {
 }
 
 const EXPECTED_VIEWS: Array<{ link: string; heading: string; path: string }> = [
-  { link: "Playground", heading: "Search Playground", path: "/playground" },
   { link: "Routing", heading: "Routing", path: "/routing" },
-  { link: "Usage", heading: "Usage", path: "/usage" },
-  { link: "Activity", heading: "Activity", path: "/activity" },
+  { link: "Provider usage", heading: "Usage", path: "/usage" },
   { link: "Settings", heading: "Settings", path: "/settings" },
   { link: "Projects", heading: "Projects", path: "/projects" },
   { link: "Account", heading: "Account", path: "/account" },
@@ -131,7 +129,7 @@ describe("AC-SB-8a: App is a flex-row shell with aside + main", () => {
     expect(screen.getByRole("main")).toBeInTheDocument()
     await waitFor(() => {
       expect(
-        screen.getByRole("heading", { name: "Search Playground" })
+        within(screen.getByRole("main")).getByRole("heading", { name: "Account" })
       ).toBeInTheDocument()
     })
   })
@@ -157,7 +155,7 @@ describe("AC-SB-8a: App is a flex-row shell with aside + main", () => {
 
 describe("AC-SB-8b: legacy header topbar is gone", () => {
   it("renders no <header> element", async () => {
-    await renderApp()
+    await renderApp("/routing")
     expect(document.querySelector("header")).toBeNull()
   })
 
@@ -167,8 +165,8 @@ describe("AC-SB-8b: legacy header topbar is gone", () => {
   })
 })
 
-describe("AC-SB-8c (C4, P1-FINAL, R-UI, U1): eight sidebar links swap intact views via the URL", () => {
-  it("sidebar exposes all eight workspaces as links with exact route hrefs", async () => {
+describe("AC-SB-8c (C4, P1-FINAL, R-UI, U1, U2): six sidebar links swap intact views via the URL", () => {
+  it("sidebar exposes all six workspaces as links with exact route hrefs", async () => {
     await renderApp()
     const nav = screen.getByRole("navigation", { name: "Primary" })
     for (const { link, path } of EXPECTED_VIEWS) {
@@ -182,7 +180,7 @@ describe("AC-SB-8c (C4, P1-FINAL, R-UI, U1): eight sidebar links swap intact vie
     "sidebar '$link' navigates to '$path' showing the '$heading' view",
     async ({ link, heading, path }) => {
       const user = userEvent.setup()
-      await renderApp("/playground")
+      await renderApp("/account")
       await user.click(
         within(screen.getByRole("navigation", { name: "Primary" })).getByRole(
           "link",
@@ -202,7 +200,7 @@ describe("AC-SB-8c (C4, P1-FINAL, R-UI, U1): eight sidebar links swap intact vie
 
   it("full click-through visits every view with exactly one active marker", async () => {
     const user = userEvent.setup()
-    await renderApp("/playground")
+    await renderApp("/account")
     for (const { link, heading, path } of EXPECTED_VIEWS) {
       await user.click(
         within(screen.getByRole("navigation", { name: "Primary" })).getByRole(
@@ -237,8 +235,8 @@ describe("AC-SB-8d (C4): shell keeps the link+router contract", () => {
 
   it("switching views changes the URL through the route table", async () => {
     const user = userEvent.setup()
-    await renderApp("/playground")
-    expect(testPath()).toBe("/playground")
+    await renderApp("/account")
+    expect(testPath()).toBe("/account")
     for (const { link, path } of EXPECTED_VIEWS) {
       await user.click(
         within(screen.getByRole("navigation", { name: "Primary" })).getByRole(
@@ -299,7 +297,7 @@ describe("AC-SB-8d (C4): shell keeps the link+router contract", () => {
 describe("AC-SB-8e: PillTabs gold standard untouched", () => {
   it("Routing view still exposes Strategy/Simulator/Ranks/Resilience pill tabs", async () => {
     const user = userEvent.setup()
-    await renderApp("/playground")
+    await renderApp("/account")
     await user.click(
       within(screen.getByRole("navigation", { name: "Primary" })).getByRole(
         "link",
@@ -324,7 +322,7 @@ describe("AC-SB-8e: PillTabs gold standard untouched", () => {
 
   it("Settings view still exposes Providers/Keys/Failover pill tabs", async () => {
     const user = userEvent.setup()
-    await renderApp("/playground")
+    await renderApp("/account")
     await user.click(
       within(screen.getByRole("navigation", { name: "Primary" })).getByRole(
         "link",
@@ -421,7 +419,7 @@ describe("AC4/AC5 (R-UI, U1): the session gate filters Admin by system permissio
 describe("SB-ACTIONS (R-UI): shell Sign out exits the session", () => {
   it("Sign out from the account popup reaches the login screen", async () => {
     const user = userEvent.setup()
-    await renderApp("/playground", adminAccountFixture())
+    await renderApp("/account", adminAccountFixture())
 
     await user.click(
       screen.getByRole("button", { name: "Open user menu", exact: true })
@@ -441,7 +439,7 @@ describe("SB-ACTIONS (R-UI): shell Sign out exits the session", () => {
 
   it("a route change resets the open account popup", async () => {
     const user = userEvent.setup()
-    await renderApp("/playground", adminAccountFixture())
+    await renderApp("/account", adminAccountFixture())
 
     await user.click(
       screen.getByRole("button", { name: "Open user menu", exact: true })
@@ -466,7 +464,7 @@ describe("SB-ACTIONS (R-UI): shell Sign out exits the session", () => {
 describe("SB4-BRAND: shell header-control journey", () => {
   it("collapse then logo-button expansion restores the rail", async () => {
     const user = userEvent.setup()
-    await renderApp("/playground", adminAccountFixture())
+    await renderApp("/account", adminAccountFixture())
 
     await user.click(
       screen.getByRole("button", { name: "Collapse sidebar", exact: true })
@@ -488,12 +486,12 @@ describe("SB4-BRAND: shell header-control journey", () => {
     expect(
       (document.querySelector("aside") as HTMLElement).className
     ).not.toMatch(/w-16/)
-    expect(testPath()).toBe("/playground")
+    expect(testPath()).toBe("/account")
   })
 
   it("collapsed rail exposes exactly one expansion control", async () => {
     const user = userEvent.setup()
-    await renderApp("/playground", adminAccountFixture())
+    await renderApp("/account", adminAccountFixture())
 
     await user.click(
       screen.getByRole("button", { name: "Collapse sidebar", exact: true })

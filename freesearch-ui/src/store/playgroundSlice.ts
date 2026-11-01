@@ -117,6 +117,16 @@ const playgroundSlice = createSlice({
       state.fetchStatus = "idle"
     },
 
+    /**
+     * The scope closed (unmount or project switch) and aborted its requests:
+     * a pending run settles to idle, so the persisted snapshot never holds a
+     * request that no longer exists. Results and errors stay.
+     */
+    executionCancelled(state) {
+      if (state.searchStatus === "loading") state.searchStatus = "idle"
+      if (state.fetchStatus === "loading") state.fetchStatus = "idle"
+    },
+
     /** Explicit cleanup: never invoked on route navigation. */
     clearActiveResults(state) {
       state.activeSearch = null
@@ -150,6 +160,7 @@ export const {
   fetchFailed,
   fetchFinished,
   clearFetch,
+  executionCancelled,
   clearActiveResults,
   resetPlayground,
 } = playgroundSlice.actions

@@ -31,7 +31,9 @@ Feature: Routing workbench
 
   @smoke
   Scenario: Submit a playground search against the live backend
-    When I select the "Playground" header tab
+    When I open the projects list
+    And I choose the live e2e project in the project selector
+    And I follow the "Playground" link of the Project navigation
     And I submit the playground search query "distributed systems benchmarks"
     Then the playground should show search results or an error banner
     And the playground should not show multi-hop fallback text
@@ -53,7 +55,7 @@ Feature: Routing workbench
     And I select the "Settings" header tab
     When I open the "Providers" settings tab
     Then the Tavily rate tier should show "prod"
-    When I select the "Usage" header tab
+    When I select the "Provider usage" header tab
     Then the Tavily card should contain no outside rate text
     When I open the credit details for "Tavily"
     Then the Tavily rate row should show "Search and Fetch Rate Limit 1000 requests per minute"
@@ -80,7 +82,7 @@ Feature: Routing workbench
     And I select the "Settings" header tab
     When I open the "Providers" settings tab
     Then the Tavily rate tier should show "dev"
-    When I select the "Usage" header tab
+    When I select the "Provider usage" header tab
     Then the Tavily card should contain no outside rate text
     When I open the credit details for "Tavily"
     Then the Tavily rate row should show "Search and Fetch Rate Limit 100 requests per minute"
@@ -209,7 +211,7 @@ Feature: Routing workbench
     And the Tavily card should contain no outside rate text
     Given the stubbed provider limits show "Tavily prod credits"
     When I reload the web application
-    And I select the "Usage" header tab
+    And I select the "Provider usage" header tab
     When I open the credit details for "Tavily"
     Then the Tavily rate row should show "Search and Fetch Rate Limit 1000 requests per minute"
     And the Tavily card should contain no outside rate text
@@ -233,7 +235,7 @@ Feature: Routing workbench
     And the Tavily card should contain no outside rate text
     Given the stubbed provider limits show "Tavily finite credits"
     When I reload the web application
-    And I select the "Usage" header tab
+    And I select the "Provider usage" header tab
     When I open the credit details for "Tavily"
     Then the Tavily rate row should show "Search and Fetch Rate Limit 100 requests per minute"
     And the Tavily card should contain no outside rate text
@@ -408,7 +410,7 @@ Feature: Routing workbench
     And the Tavily key becomes keyless before the PATCH settles
     Then exactly one Tavily rate tier PATCH should carry "prod"
     When I reload the web application
-    And I select the "Usage" header tab
+    And I select the "Provider usage" header tab
     Then the Tavily card keyless rate text should show "Keyless access"
     And no Tavily usage requests should exist
     And no Tavily provider test requests should exist

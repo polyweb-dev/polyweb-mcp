@@ -3,13 +3,14 @@ Feature: Activity trace redesign acceptance
   trace discloses one nested row per provider attempt with span-recorded
   identities; View details opens a provider-scoped dialog; the detail explains
   ranking once in mode-appropriate words; results select into a side
-  inspector; a Trajectory view fuses timing into hierarchical rows with a
+  inspector; the "Trace" view (formerly Trajectory) fuses timing into rows with a
   side span inspector; the dialog holds its geometry and focus contract at
-  desktop and narrow widths.
+  desktop and narrow widths. Activity is a project section (U2): the list
+  and every detail come from the Alpha project trace routes.
 
   Background:
-    Given I navigate to the web application
-    When I select the "Activity" header tab
+    Given the stubbed session works in project Alpha
+    When I open the "activity" section of project Alpha
     Then I should see the "Activity" heading
 
   @stub
@@ -51,7 +52,7 @@ Feature: Activity trace redesign acceptance
     When I open the "View details" control in row 1
     And I select the result "Keenable acceptance result"
     Then the result inspector badges should number 1 and each show a logo
-    When I switch to the "Trajectory" trace view
+    When I switch to the "Trace" trace view
     Then the trajectory provider rows should show provider logos followed by names
 
   @stub
@@ -62,11 +63,11 @@ Feature: Activity trace redesign acceptance
     And the trace detail dialog width should be approximately "1200" pixels within "64" pixels
     And the dialog should stay within the viewport
     And the summary strip cells should share equal top and height
-    And the summary strip cells should have at least "15" pixels of horizontal inner padding
-    And the summary strip, query, and inspection workspace should align within "2" pixels
+    And the query and summary strip should share one row aligned to the inspection workspace within "2" pixels
     And the trace detail dialog should have no horizontal overflow
     And the document should have no horizontal overflow
     And the dialog header should stay visible after scrolling the body
+    And the summary strip cells should have at least "15" pixels of horizontal inner padding
 
   @stub
   Scenario: Parent detail explains the fusion order exactly once
@@ -155,14 +156,14 @@ Feature: Activity trace redesign acceptance
     Then the trace detail dialog should be visible
     When I select the result "Exa null-source acceptance result"
     Then the result inspector should show contributor "Exa"
-    And the result inspector should show "Unavailable"
+    And the result inspector should show "Not recorded"
     And the trace detail should not contain "Source not recorded"
 
   @stub
   Scenario: Trajectory fuses timing into rows with a side span inspector
     When I open the "View details" control in row 1
     Then the trace detail dialog should be visible
-    When I switch to the "Trajectory" trace view
+    When I switch to the "Trace" trace view
     Then the trajectory should show seven provider rows each with a duration and a latency bar
     And the trajectory should show a "Search request" row
     And the trajectory should show a "Backend handling" row
@@ -177,7 +178,7 @@ Feature: Activity trace redesign acceptance
   Scenario: Trajectory hides transport, parse, and function-level spans
     When I open the "View details" control in row 6
     Then the trace detail dialog should be visible
-    When I switch to the "Trajectory" trace view
+    When I switch to the "Trace" trace view
     Then the trajectory should show a "Search request" row
     And the trajectory should show a "Route selection" row
     And the trajectory should show a "Backend handling" row
@@ -192,24 +193,24 @@ Feature: Activity trace redesign acceptance
   Scenario: Trajectory ruler and bars share one time axis
     When I open the "View details" control in row 1
     Then the trace detail dialog should be visible
-    When I switch to the "Trajectory" trace view
+    When I switch to the "Trace" trace view
     Then the trajectory ruler and every row track should align within "2" pixels
     And the trajectory bars should match recorded offsets and durations within "2" pixels
-    And the trajectory ruler should mark the final tick in milliseconds
+    And the trajectory ruler should state its millisecond unit once
     And the trajectory row should show an inset focus ring at both edges after Tab
 
   @stub
   Scenario: Latency summary counts overlapping provider calls once
     When I open the "View details" control in row 1
     Then the trace detail dialog should be visible
-    When I switch to the "Trajectory" trace view
+    When I switch to the "Trace" trace view
     Then the latency summary should count overlapping provider calls once
 
   @stub
   Scenario: Trajectory row selection replaces request and response payloads
     When I open the "View details" control in row 6
     Then the trace detail dialog should be visible
-    When I switch to the "Trajectory" trace view
+    When I switch to the "Trace" trace view
     And I select the trajectory row "Brave Search request"
     Then the span inspector should show "https://e2e.freesearch.dev/fusion/brave"
     When I select the trajectory row "Keenable request"
@@ -220,7 +221,7 @@ Feature: Activity trace redesign acceptance
   Scenario: Fetch trajectory keeps the fetch total row
     When I open the error trace detail
     Then the trace detail dialog should be visible
-    When I switch to the "Trajectory" trace view
+    When I switch to the "Trace" trace view
     Then the trajectory should show a "Fetch request" row
     And the trajectory should show a "Keenable request" row
 
@@ -242,7 +243,7 @@ Feature: Activity trace redesign acceptance
     When I focus the result "Keenable acceptance result" and press Enter
     Then the result "Keenable acceptance result" should be marked as selected
     And the result inspector should show the full "Keenable" payload
-    When I switch to the "Trajectory" trace view
+    When I switch to the "Trace" trace view
     And I focus the trajectory row "Keenable request" and press Enter
     Then the span inspector should show provider "Keenable" with the recorded request and response payload
     When I press Escape
@@ -251,7 +252,7 @@ Feature: Activity trace redesign acceptance
   @stub
   Scenario: Narrow viewport keeps keyboard selection and focus return
     Given I use a narrow viewport
-    When I select the "Activity" header tab
+    When I open the "activity" section of project Alpha
     And I open the "View details" control in row 1
     Then the trace detail dialog should be visible
     When I focus the result "Keenable acceptance result" and press Enter
@@ -265,7 +266,7 @@ Feature: Activity trace redesign acceptance
   Scenario: Single-provider detail keeps provider order and recorded metadata
     When I open the single-provider trace detail
     Then the trace detail dialog should be visible
-    And the trace detail summary should show status "success" and provider "Keenable"
+    And the trace detail summary should show status "Success" and provider "Keenable"
     And the trace detail should show the query "distributed consensus algorithms"
     And the trace detail should mention result "https://docs.freesearch.dev/consensus" with title "Consensus algorithms explained"
     And the trace detail should explain "Results keep the order returned by Keenable. Recorded provider scores are shown as metadata; FreeSearch did not reorder this response." exactly once
@@ -281,8 +282,10 @@ Feature: Activity trace redesign acceptance
 
   @stub
   Scenario: Operation filter requests the filtered trace list
-    When I choose the "Fetch" activity filter
+    When I set the Activity "Operation" filter to "Fetch"
     Then the backend should have received a trace list request filtered by "fetch"
+    And the Activity URL query should be "operation=fetch"
+    And the removed global trace read should not have been called
 
   @stub
   Scenario: Trace list failure shows an error and recovers on retry
@@ -312,7 +315,7 @@ Feature: Activity trace redesign acceptance
   @stub
   Scenario: Narrow viewport keeps the dialog in bounds without horizontal scroll
     Given I use a narrow viewport
-    When I select the "Activity" header tab
+    When I open the "activity" section of project Alpha
     And I open the "View details" control in row 1
     Then the trace detail dialog should be visible
     And the dialog should stay within the viewport

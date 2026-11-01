@@ -74,6 +74,7 @@ Feature: Provider access flags against the stubbed backend
   Scenario: Disabled providers leave pickers
     When I set the "Tavily" "fetch" access flag off
     Then the "Tavily" "fetch" access flag should be off
-    When I select the "Playground" header tab
+    And the stubbed session works in project Alpha
+    When I open the "playground" section of project Alpha
     And I open the playground tab "Fetch"
     Then the "Fetch" operation picker should exclude "Tavily"
