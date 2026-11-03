@@ -65,14 +65,15 @@ The autoscaler deletes idle workers after its idle timeout.
 ## Mutation workers
 
 The mutation profile uses `n2-standard-64` Spot VMs with the `size=heavy` label.
-Set `GCP_MUTATION_MACHINE_TYPE="n2-standard-64"` and `GCP_MUTATION_REGIONS="us-west8,us-south1"` in the private `.env`.
+Set `GCP_MUTATION_MACHINE_TYPE="n2-standard-64"` and `GCP_MUTATION_REGIONS="asia-south2,us-south1"` in the private `.env`.
 
-The CLI checks available Compute zones in region order: Phoenix, then Dallas.
+The CLI checks available Compute zones in region order: Delhi (`asia-south2`), then Dallas (`us-south1`).
 It selects the first available zone in each region.
 If the API lists no zone for a preferred region, the CLI skips that region.
 An explicit `--zone` selects one zone without region discovery.
 
-On 2026-11-03, the Compute API listed no Phoenix region or zones for this project.
+On 2026-11-03, the Compute API confirmed Delhi zones `asia-south2-a`, `asia-south2-b`, and `asia-south2-c`.
+The previous Phoenix preference had no available Compute zones for this project.
 The Dallas N2 CPU quota was 200, with a total regional CPU quota of 100.
 Both reported zero usage before the allocation attempt.
 The N2 machine type has 64 vCPUs and 256 GiB of memory.
