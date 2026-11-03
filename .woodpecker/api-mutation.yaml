@@ -10,6 +10,7 @@ steps:
     image: ghcr.io/astral-sh/uv:python3.12-bookworm-slim
     environment:
       PYTHON_KEYRING_BACKEND: keyring.backends.null.Keyring
+      PYTHONUNBUFFERED: "1"
     commands:
       - |
         echo "=========================================================="
@@ -24,4 +25,10 @@ steps:
         echo "=========================================================="
       - test -f .env || cp .env.example .env
       - uv sync --frozen
-      - uv run pytest --gremlins -n auto --gremlin-workers=auto --gremlin-targets=src/freesearch --gremlin-report=console,json --gremlin-cache
+      # Woodpecker displays newline-delimited records. Preserve pytest failures
+      # while translating the plugin's carriage-return progress into live lines.
+      - |
+        bash -o pipefail -c '
+          uv run pytest --gremlins -n auto --gremlin-workers=auto --gremlin-targets=src/freesearch --gremlin-report=console,json --gremlin-cache 2>&1 |
+            stdbuf -oL tr "\r" "\n"
+        '
