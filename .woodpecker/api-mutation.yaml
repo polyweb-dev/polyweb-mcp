@@ -11,6 +11,17 @@ steps:
     environment:
       PYTHON_KEYRING_BACKEND: keyring.backends.null.Keyring
     commands:
+      - |
+        echo "=========================================================="
+        echo "               GCP SPOT CI WORKER INFO                    "
+        echo "=========================================================="
+        echo "Worker Host:   ${CI_MACHINE}"
+        echo "Worker Labels: ${CI_AGENT_LABELS}"
+        echo "OS / Platform: ${CI_SYSTEM_PLATFORM}"
+        echo "CPU Cores:     $(nproc) physical/virtual cores detected"
+        echo "Total Memory:  $(free -h | awk "/Mem:/ {print \$2}")"
+        echo "Free Disk:     $(df -h / | awk "NR==2 {print \$4}")"
+        echo "=========================================================="
       - test -f .env || cp .env.example .env
       - uv sync --frozen
       - uv run pytest --gremlins --gremlin-workers=auto --gremlin-targets=src/freesearch --gremlin-report=console,json --gremlin-cache
