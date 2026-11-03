@@ -1,3 +1,7 @@
+labels:
+  size: standard
+  provider: gcp
+
 when:
   - event: manual
 
