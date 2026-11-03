@@ -13,4 +13,4 @@ steps:
       - test -f .env || cp .env.example .env
       - uv sync --frozen
       - uv run freesearch-db upgrade
-      - uv run pytest tests/integration --ignore=tests/integration/latency -n 2 -q
+      - uv run pytest tests/integration --ignore=tests/integration/latency -n auto -q

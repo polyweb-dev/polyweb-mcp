@@ -12,4 +12,4 @@ steps:
     commands:
       - test -f .env || cp .env.example .env
       - uv sync --frozen
-      - uv run pytest tests/unit -q
+      - uv run pytest tests/unit -n auto -q
