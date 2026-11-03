@@ -65,9 +65,9 @@ The autoscaler deletes idle workers after its idle timeout.
 ## Mutation workers
 
 The mutation profile uses `n2-standard-64` Spot VMs with the `size=heavy` label.
-Set `GCP_MUTATION_MACHINE_TYPE="n2-standard-64"` and `GCP_MUTATION_REGIONS="asia-south2,us-south1"` in the private `.env`.
+Set `GCP_MUTATION_MACHINE_TYPE="n2-standard-64"` and `GCP_MUTATION_REGIONS="asia-south2,europe-west8,us-south1"` in the private `.env`.
 
-The CLI checks available Compute zones in region order: Delhi (`asia-south2`), then Dallas (`us-south1`).
+The CLI checks available Compute zones in region order: Delhi (`asia-south2`), Milan (`europe-west8`), then Dallas (`us-south1`).
 It selects the first available zone in each region.
 If the API lists no zone for a preferred region, the CLI skips that region.
 An explicit `--zone` selects one zone without region discovery.

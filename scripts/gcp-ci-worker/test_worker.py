@@ -134,15 +134,16 @@ class ZoneFallbackTests(unittest.TestCase):
                 self.assertEqual(create.call_args.args[2], expected)
                 self.assertIn("--machine-type=c3d-highcpu-8", create.call_args.args[0])
 
-    def test_mutation_prefers_delhi_then_dallas_regardless_of_api_order(self):
+    def test_mutation_prefers_delhi_milan_dallas_regardless_of_api_order(self):
         result = subprocess.CompletedProcess([], 0, stdout=json.dumps([
             {"name": "us-south1-b", "region": "regions/us-south1"},
+            {"name": "europe-west8-a", "region": "regions/europe-west8"},
             {"name": "us-south1-a", "region": "regions/us-south1"},
             {"name": "asia-south2-a", "region": "regions/asia-south2"},
         ]))
         with patch.object(worker, "run_gcloud", return_value=result):
             self.assertEqual(worker.worker_zones({"GCP_PROJECT_ID": "test"}, "mutation", None),
-                             ["asia-south2-a", "us-south1-a"])
+                             ["asia-south2-a", "europe-west8-a", "us-south1-a"])
 
     def test_unavailable_delhi_is_skipped(self):
         result = subprocess.CompletedProcess([], 0, stdout=json.dumps([
@@ -180,7 +181,7 @@ class ZoneFallbackTests(unittest.TestCase):
         error = subprocess.CalledProcessError(1, "gcloud", stderr="Quota 'CPUS_ALL_REGIONS' exceeded in all regions")
         with patch.object(worker, "run_gcloud", side_effect=error) as run:
             with self.assertRaises(subprocess.CalledProcessError):
-                worker.create_in_zones(["--zone=asia-south2-a"], {}, ["asia-south2-a", "us-south1-a"])
+                worker.create_in_zones(["--zone=asia-south2-a"], {}, ["asia-south2-a", "europe-west8-a", "us-south1-a"])
             self.assertEqual(run.call_count, 1)
 
     def test_regional_cpu_quota_stops_when_all_zones_share_region(self):

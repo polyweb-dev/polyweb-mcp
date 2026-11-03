@@ -34,7 +34,7 @@ PROFILES: dict[str, dict[str, Any]] = {
     },
     "mutation": {
         "machine_type": "n2-standard-64",
-        "regions": "asia-south2,us-south1",
+        "regions": "asia-south2,europe-west8,us-south1",
         "labels": "size=heavy,provider=gcp,spot=true",
         "lifetime": 30,
     },
