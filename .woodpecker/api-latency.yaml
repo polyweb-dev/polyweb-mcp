@@ -24,9 +24,7 @@ steps:
         echo "=========================================================="
       - test -f .env || cp .env.example .env
       - uv sync --frozen
-      - uv run freesearch-db upgrade
-      - uv run behave tests/bdd/features/routing_latency.feature
-      - uv run pytest tests/integration/latency/ -q
+      - bash scripts/ci-artifacts/run-latency.sh
       - |
         echo "=========================================================="
         echo "               ROUTING LATENCY REPORT                     "
@@ -35,3 +33,13 @@ steps:
           cat test_reports/routing_latency_offline.md
         fi
         find test_reports -name "*.md" -not -name "routing_latency_offline.md" -exec echo "--- {} ---" \; -exec cat {} \;
+
+  upload-reports:
+    image: ghcr.io/astral-sh/uv:python3.12-bookworm-slim
+    when:
+      - status: [success, failure]
+    environment:
+      CI_ARTIFACT_UPLOAD_TOKEN:
+        from_secret: ci_artifact_upload_token
+    commands:
+      - python scripts/ci-artifacts/upload.py test_reports routing-latency-tests.log

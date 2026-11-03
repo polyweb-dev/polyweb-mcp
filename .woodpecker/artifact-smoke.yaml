@@ -1,0 +1,22 @@
+# Synthetic report upload check. Select this workflow explicitly for a small smoke run.
+labels:
+  size: standard
+  provider: gcp
+when:
+  - event: manual
+steps:
+  create-smoke-report:
+    image: ghcr.io/astral-sh/uv:python3.12-bookworm-slim
+    commands:
+      - mkdir -p test_reports/artifact-smoke
+      - printf '%s\n' 'Synthetic CI artifact upload check' > test_reports/artifact-smoke/README.txt
+      - exit ${ARTIFACT_SMOKE_FAIL:-0}
+  upload-reports:
+    image: ghcr.io/astral-sh/uv:python3.12-bookworm-slim
+    when:
+      - status: [success, failure]
+    environment:
+      CI_ARTIFACT_UPLOAD_TOKEN:
+        from_secret: ci_artifact_upload_token
+    commands:
+      - python scripts/ci-artifacts/upload.py test_reports

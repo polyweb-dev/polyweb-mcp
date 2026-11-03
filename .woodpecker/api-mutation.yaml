@@ -29,6 +29,16 @@ steps:
       # while translating the plugin's carriage-return progress into live lines.
       - |
         bash -o pipefail -c '
-          uv run pytest --gremlins -n auto --gremlin-workers=auto --gremlin-targets=src/freesearch --gremlin-report=console,json --gremlin-cache 2>&1 |
+          uv run pytest --gremlins -n auto --gremlin-workers=auto --gremlin-targets=src/freesearch --gremlin-report=console,html,json --gremlin-cache 2>&1 | tee mutation-tests.log |
             stdbuf -oL tr "\r" "\n"
         '
+
+  upload-reports:
+    image: ghcr.io/astral-sh/uv:python3.12-bookworm-slim
+    when:
+      - status: [success, failure]
+    environment:
+      CI_ARTIFACT_UPLOAD_TOKEN:
+        from_secret: ci_artifact_upload_token
+    commands:
+      - python scripts/ci-artifacts/upload.py coverage/gremlins mutation-tests.log test_reports

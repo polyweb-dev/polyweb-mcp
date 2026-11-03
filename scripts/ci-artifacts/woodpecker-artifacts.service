@@ -1,0 +1,21 @@
+[Unit]
+Description=Woodpecker CI report archive
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/administrator/Programs/woodpecker-artifacts
+EnvironmentFile=/home/administrator/Programs/woodpecker-artifacts/.env
+ExecStart=/usr/bin/python3 /home/administrator/Programs/woodpecker-artifacts/server.py
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/administrator/Programs/woodpecker-artifacts/data
+PrivateTmp=true
+MemoryMax=512M
+
+[Install]
+WantedBy=default.target
