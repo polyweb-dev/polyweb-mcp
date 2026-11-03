@@ -83,8 +83,8 @@ Feature: C2 tab unification
   Scenario: Routing and Settings tabs stay canonical pill tabs
     When I select the "Routing" header tab
     Then the routing tabs should remain canonical pill tabs "Strategy", "Simulator", "Ranks" and "Resilience"
-    When I select the "Settings" header tab
-    Then the settings tabs should remain canonical pill tabs "Providers", "Keys" and "Failover"
+    When I select the "Provider settings" header tab
+    Then the settings tabs should remain canonical pill tabs "Providers" and "Failover"
 
   Scenario: No hand-rolled mimics in tab and filter slots
     When I open the "playground" section of project Alpha

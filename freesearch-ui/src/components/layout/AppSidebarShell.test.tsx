@@ -106,7 +106,9 @@ function testPath(): string {
 const EXPECTED_VIEWS: Array<{ link: string; heading: string; path: string }> = [
   { link: "Routing", heading: "Routing", path: "/routing" },
   { link: "Provider usage", heading: "Usage", path: "/usage" },
-  { link: "Settings", heading: "Settings", path: "/settings" },
+  { link: "System credentials", heading: "System credentials", path: "/system/credentials" },
+  { link: "Capacity", heading: "Capacity", path: "/system/capacity" },
+  { link: "Provider settings", heading: "Settings", path: "/settings" },
   { link: "Projects", heading: "Projects", path: "/projects" },
   { link: "Account", heading: "Account", path: "/account" },
   { link: "Admin", heading: "Accounts", path: "/admin/users" },
@@ -320,13 +322,13 @@ describe("AC-SB-8e: PillTabs gold standard untouched", () => {
     ).toEqual(["Strategy", "Simulator"])
   })
 
-  it("Settings view still exposes Providers/Keys/Failover pill tabs", async () => {
+  it("Settings view exposes Providers/Failover pill tabs (U3: Keys tab removed)", async () => {
     const user = userEvent.setup()
     await renderApp("/account")
     await user.click(
       within(screen.getByRole("navigation", { name: "Primary" })).getByRole(
         "link",
-        { name: "Settings", exact: true }
+        { name: "Provider settings", exact: true }
       )
     )
     await waitFor(() => {
@@ -342,7 +344,7 @@ describe("AC-SB-8e: PillTabs gold standard untouched", () => {
       within(pillList as HTMLElement)
         .getAllByRole("tab")
         .map((t) => t.textContent)
-    ).toEqual(["Providers", "Keys", "Failover"])
+    ).toEqual(["Providers", "Failover"])
   })
 })
 

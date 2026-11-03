@@ -27,6 +27,6 @@ Feature: Dashboard application shell
     When I follow the "Provider usage" sidebar link
     Then I should see the "Usage" heading
     And the page URL path should be "/usage"
-    When I follow the "Settings" sidebar link
+    When I follow the "Provider settings" sidebar link
     Then I should see the "Settings" heading
     And the page URL path should be "/settings"

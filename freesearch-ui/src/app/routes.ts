@@ -15,6 +15,8 @@ export type TabId =
   | "routing"
   | "quotas"
   | "settings"
+  | "systemCredentials"
+  | "systemCapacity"
   | "projects"
   | "account"
   | "adminUsers"
@@ -23,6 +25,8 @@ export const TAB_PATHS: Record<TabId, string> = {
   routing: "/routing",
   quotas: "/usage",
   settings: "/settings",
+  systemCredentials: "/system/credentials",
+  systemCapacity: "/system/capacity",
   projects: "/projects",
   account: "/account",
   adminUsers: "/admin/users",
@@ -47,25 +51,32 @@ export const workspaceRoutes: WorkspaceRoute[] = [
   { id: "routing", path: TAB_PATHS.routing },
   { id: "quotas", path: TAB_PATHS.quotas },
   { id: "settings", path: TAB_PATHS.settings },
+  { id: "systemCredentials", path: TAB_PATHS.systemCredentials },
+  { id: "systemCapacity", path: TAB_PATHS.systemCapacity },
   { id: "projects", path: TAB_PATHS.projects },
   { id: "account", path: TAB_PATHS.account },
   { id: "adminUsers", path: TAB_PATHS.adminUsers },
 ]
 
 /**
- * System permission each global route needs; `null` means always open.
+ * System permissions each global route needs, any of them (any-of); `null`
+ * means always open.
  *
  * Routing, usage and settings read the global control plane, which the
  * backend gates on `system.settings.read`. Account provisioning needs
- * `system.settings.write`. Playground and activity live under projects.
+ * `system.settings.write`. System credentials need
+ * `system.credentials.manage`; Capacity opens with either pool or allocation
+ * management. Playground and activity live under projects.
  */
-const ROUTE_PERMISSIONS: Record<TabId, string | null> = {
+const ROUTE_PERMISSIONS: Record<TabId, readonly string[] | null> = {
   projects: null,
   account: null,
-  routing: SYSTEM_PERMISSIONS.settingsRead,
-  quotas: SYSTEM_PERMISSIONS.settingsRead,
-  settings: SYSTEM_PERMISSIONS.settingsRead,
-  adminUsers: SYSTEM_PERMISSIONS.settingsWrite,
+  routing: [SYSTEM_PERMISSIONS.settingsRead],
+  quotas: [SYSTEM_PERMISSIONS.settingsRead],
+  settings: [SYSTEM_PERMISSIONS.settingsRead],
+  systemCredentials: [SYSTEM_PERMISSIONS.credentialsManage],
+  systemCapacity: [SYSTEM_PERMISSIONS.poolsManage, SYSTEM_PERMISSIONS.allocationsManage],
+  adminUsers: [SYSTEM_PERMISSIONS.settingsWrite],
 }
 
 /** Return whether one global route waits for the system access descriptor. */
@@ -78,16 +89,21 @@ export function canAccessRoute(
   id: TabId,
   systemAccess: PermissionAccess | null | undefined
 ): boolean {
-  const permission = ROUTE_PERMISSIONS[id]
-  return permission === null || hasPermission(systemAccess, permission)
+  const permissions = ROUTE_PERMISSIONS[id]
+  return (
+    permissions === null ||
+    permissions.some((permission) => hasPermission(systemAccess, permission))
+  )
 }
 
-/** Identifier of one project-scoped section. U3 extends this union. */
+/** Identifier of one project-scoped section. */
 export type ProjectSectionId =
   | "overview"
   | "playground"
   | "activity"
   | "usage"
+  | "providers"
+  | "settings"
   | "members"
   | "apiKeys"
 
@@ -121,6 +137,18 @@ export const PROJECT_SECTIONS: readonly ProjectSection[] = [
     permissions: [PROJECT_PERMISSIONS.tracesRead],
   },
   { id: "usage", segment: "usage", label: "Usage", permissions: [PROJECT_PERMISSIONS.usageRead] },
+  {
+    id: "providers",
+    segment: "providers",
+    label: "Providers",
+    permissions: [PROJECT_PERMISSIONS.providersRead],
+  },
+  {
+    id: "settings",
+    segment: "settings",
+    label: "Settings",
+    permissions: [PROJECT_PERMISSIONS.settingsRead],
+  },
   {
     id: "members",
     segment: "members",

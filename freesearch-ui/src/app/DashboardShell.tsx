@@ -9,6 +9,8 @@ import { QuotaAnalytics } from "@/components/quota/QuotaAnalytics"
 import { SettingsView } from "@/components/settings/SettingsView"
 import { AccountPage } from "@/features/auth/ui/AccountPage"
 import { AdminUsersPage } from "@/features/users/ui/AdminUsersPage"
+import { CapacityPage } from "@/features/providers/ui/CapacityPage"
+import { SystemCredentialsPage } from "@/features/providers/ui/SystemCredentialsPage"
 import { ToastContainer } from "@/components/common/ToastContainer"
 import { useAuth } from "@/domains/auth"
 import { ProjectScopeProvider } from "@/domains/projects"
@@ -22,6 +24,16 @@ function routeElements(adminEmail: string): Record<TabId, ReactNode> {
     routing: <RoutingEngine />,
     quotas: <QuotaAnalytics />,
     settings: <SettingsView />,
+    systemCredentials: (
+      <WorkspaceAccessGate>
+        <SystemCredentialsPage />
+      </WorkspaceAccessGate>
+    ),
+    systemCapacity: (
+      <WorkspaceAccessGate>
+        <CapacityPage />
+      </WorkspaceAccessGate>
+    ),
     projects: (
       <WorkspaceAccessGate>
         <ProjectsPage defaultAdminEmail={adminEmail} />

@@ -9,6 +9,8 @@ import { ProjectApiKeysPage } from "@/features/projects/ui/ProjectApiKeysPage"
 import { ProjectScopeGate } from "@/features/projects/ui/ProjectScopeGate"
 import { ProjectMembersPage } from "@/features/projects/ui/ProjectMembersPage"
 import { ProjectOverviewPage } from "@/features/projects/ui/ProjectOverviewPage"
+import { ProjectProvidersPage } from "@/features/providers/ui/ProjectProvidersPage"
+import { ProjectSettingsPage } from "@/features/settings/ui/ProjectSettingsPage"
 import { ProjectSectionGate } from "./ProjectSectionGate"
 import { PROJECT_SECTIONS, projectPath, type ProjectSectionId } from "./routes"
 
@@ -18,6 +20,8 @@ const SECTION_PAGES: Record<ProjectSectionId, (accountId: string) => ReactNode> 
   playground: (accountId) => <ProjectPlaygroundPage accountId={accountId} />,
   activity: () => <ActivityPage />,
   usage: () => <ProjectUsagePage />,
+  providers: (accountId) => <ProjectProvidersPage accountId={accountId} />,
+  settings: (accountId) => <ProjectSettingsPage accountId={accountId} />,
   members: (accountId) => <ProjectMembersPage accountId={accountId} />,
   apiKeys: (accountId) => <ProjectApiKeysPage accountId={accountId} />,
 }

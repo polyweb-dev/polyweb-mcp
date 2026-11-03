@@ -54,3 +54,12 @@ Then(
     await expect(bar).toHaveAttribute("aria-valuenow", value)
   }
 )
+
+Then("the usage view offers no OAuth pairing control", async ({ page }) => {
+  // U3: the provider-scoped pairing actions are gone; Parallel OAuth is
+  // connected from a credential row (Providers or System credentials).
+  const main = page.locator("main")
+  await expect(main.getByTestId(/^oauth-device-/)).toHaveCount(0)
+  await expect(main.getByRole("button", { name: /^(Connect|Pair|Disconnect)\b/ })).toHaveCount(0)
+  await expect(main.getByTestId("oauth-user-code")).toHaveCount(0)
+})

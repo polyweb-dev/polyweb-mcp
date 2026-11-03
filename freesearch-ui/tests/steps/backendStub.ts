@@ -26,7 +26,7 @@ export const DEFAULT_ACCOUNT_EMAIL = "admin@example.com"
  * `installBackendStub(page)` intercepts the app's backend traffic (which
  * otherwise flows through the Vite proxy to the LIVE backend at
  * 127.0.0.1:8001) and serves fixed fixtures instead. Writes (routing PUT,
- * provider PATCH, secret PUT/DELETE) mutate only per-scenario in-memory
+ * provider PATCH) mutate only per-scenario in-memory
  * variables, so toggle/save/delete interactions behave realistically inside
  * the scenario while the real backend is never touched.
  *
@@ -35,8 +35,9 @@ export const DEFAULT_ACCOUNT_EMAIL = "admin@example.com"
  * fixtures in `src/test/backendFixtures.ts`:
  * - 8 canonical providers (brave, keenable, tavily, exa, firecrawl, you,
  *   parallel, tinyfish) with stable priorities 1..8, fixed p95 latencies, and
- *   catalog-faithful secret presence (you/parallel start "missing" so the
- *   key-vault save flow starts from an empty vault).
+ *   catalog-faithful secret presence (you/parallel start "missing"). Provider
+ *   secrets are credential instances since U3 (providerConfigStub.ts); the
+ *   provider-scoped /secret and /oauth routes are gone and not stubbed.
  * - Routing starts chained/balanced/3 (master failover switch ON), so the
  *   K2 keyboard-toggle sequence is deterministic.
  */
@@ -100,55 +101,11 @@ export function setStubbedManualQuota(
   else stubbedManualQuotas[provider] = entry
 }
 
-// ---------------------------------------------------------------------------
-// Parallel OAuth device-flow stub (adversarial test-only, Phase 1).
-//
-// Per-scenario in-memory flow state for POST/GET/DELETE
-// /api/v1/providers/{id}/oauth[/device-code|/status]. Unpaired by default
-// (GET status 404s, mirroring the frozen getOAuthStatus 404->unpaired
-// mapping); steps mutate the flow so polling picks up transitions without
-// sleeps. Cleared per scenario at the top of installBackendStub.
-// ---------------------------------------------------------------------------
-
-export type StubbedOAuthStatus = "pending" | "ready" | "expired" | "denied"
-
-interface StubbedOAuthFlow {
-  hasFlow: boolean
-  status: StubbedOAuthStatus
-  beginFails: boolean
-}
-
-const stubbedOAuthFlows: Record<string, StubbedOAuthFlow> = {}
-
-function oauthFlowOf(provider: string): StubbedOAuthFlow {
-  return stubbedOAuthFlows[provider] ?? { hasFlow: false, status: "pending", beginFails: false }
-}
-
-function clearStubbedOAuthFlows(): void {
-  for (const key of Object.keys(stubbedOAuthFlows)) delete stubbedOAuthFlows[key]
-}
-
-export function setStubbedOAuthFlow(
-  provider: string,
-  status: "unpaired" | StubbedOAuthStatus
-): void {
-  if (status === "unpaired") {
-    delete stubbedOAuthFlows[provider]
-    return
-  }
-  const current = oauthFlowOf(provider)
-  stubbedOAuthFlows[provider] = { ...current, hasFlow: true, status }
-}
-
-export function failStubbedOAuthBegin(provider: string): void {
-  stubbedOAuthFlows[provider] = { ...oauthFlowOf(provider), beginFails: true }
-}
-
 /**
  * Mutable dashboard latest_quota override. overrideDashboardLatestQuota
  * installs a dashboard route that reads this per request (instead of
- * closing over fixed rows), so OAuth steps can flip pairing state and the
- * SUT's post-transition dashboard refresh deterministically sees it.
+ * closing over fixed rows), so a step can flip quota state and the SUT's
+ * next dashboard refresh deterministically sees it.
  */
 let dashboardQuotaOverride: unknown[] | null = null
 
@@ -472,7 +429,7 @@ export function unknownCreditLimits(): unknown[] {
   ]
 }
 
-/** Fund-less Parallel card so the relocated OAuth control mounts (NUDGE-5). */
+/** Fund-less Parallel card (no vendor budget configured). */
 export function parallelCardLimits(): unknown[] {
   return [
     {
@@ -550,7 +507,7 @@ export function parallelCardLimits(): unknown[] {
   ]
 }
 
-/** Brave funds plus a fund-less Parallel card for the OAuth pairing flow. */
+/** Brave funds plus a fund-less Parallel card (usage offers no OAuth pairing since U3). */
 export function bravePlusParallelLimits(): unknown[] {
   return [...braveCreditLimits(), ...parallelCardLimits()]
 }
@@ -2472,17 +2429,6 @@ function dashboardWithQuotaOverride(): Record<string, unknown> {
   return base
 }
 
-function secretFixture(provider: string, presence: SecretPresence): Record<string, unknown> {
-  return {
-    provider,
-    presence,
-    fingerprint:
-      presence === "configured" ? `${provider.slice(0, 3).toUpperCase()}_••••••••a1b2` : null,
-    updated_at: FIXED_AT,
-    source: presence === "configured" ? "keyring" : "none",
-  }
-}
-
 function json(route: Route, body: unknown, status = 200): Promise<void> {
   return route.fulfill({
     status,
@@ -2505,7 +2451,6 @@ function readJsonBody(route: Route): Record<string, unknown> {
  * the fixed fixtures. State is per-call, hence per-scenario isolation.
  */
 export async function installBackendStub(page: Page): Promise<void> {
-  clearStubbedOAuthFlows()
   // Hygiene: manual overlays are module-level and must not leak across
   // scenarios (e.g. Brave overlay into later quota rows).
   for (const key of Object.keys(stubbedManualQuotas)) delete stubbedManualQuotas[key]
@@ -2554,27 +2499,6 @@ export async function installBackendStub(page: Page): Promise<void> {
     max_attempts: 3,
   }
 
-  // Secret vault writes must land before the generic provider route (the
-  // `/secret` suffix also matches `providers/*`).
-  await page.route("**/api/v1/providers/*/secret", (route) => {
-    const method = route.request().method()
-    const segments = new URL(route.request().url()).pathname.split("/")
-    const backendId = segments[segments.length - 2] ?? ""
-    if (method === "PUT") {
-      providers = providers.map((row) =>
-        row.provider_id === backendId ? { ...row, secret_presence: "configured" } : row
-      )
-      return json(route, secretFixture(backendId, "configured"))
-    }
-    if (method === "DELETE") {
-      providers = providers.map((row) =>
-        row.provider_id === backendId ? { ...row, secret_presence: "missing" } : row
-      )
-      return json(route, secretFixture(backendId, "missing"))
-    }
-    return route.fallback()
-  })
-
   // Manual billing entries: GET 404s while unconfigured, PUT stores the window,
   // DELETE clears it again. Writes persist per scenario via stubbedManualQuotas.
   await page.route("**/api/v1/providers/*/manual-quota", (route) => {
@@ -2600,52 +2524,6 @@ export async function installBackendStub(page: Page): Promise<void> {
     return route.fallback()
   })
 
-  // OAuth device flow (see the stub-state block above). A POST begins (or
-  // restarts) the flow as pending with a 1s poll interval; GET serves the
-  // mutable flow state (404 while unpaired); DELETE revokes to unpaired and
-  // flips the next dashboard refresh back to the unbudgeted row.
-  await page.route("**/api/v1/providers/*/oauth/device-code", (route) => {
-    if (route.request().method() !== "POST") return route.fallback()
-    const parts = new URL(route.request().url()).pathname.split("/")
-    const backendId = parts[parts.length - 3] || ""
-    const flow = oauthFlowOf(backendId)
-    if (flow.beginFails) {
-      return json(route, { detail: backendId + " oauth unavailable" }, 503)
-    }
-    stubbedOAuthFlows[backendId] = { hasFlow: true, status: "pending", beginFails: false }
-    return json(route, {
-      provider: backendId,
-      user_code: "ABCD-EFGH",
-      verification_uri: "https://parallel.ai/activate",
-      verification_uri_complete: "https://parallel.ai/activate?code=ABCD-EFGH",
-      expires_in: 300,
-      interval: 1,
-    })
-  })
-
-  await page.route("**/api/v1/providers/*/oauth/status", (route) => {
-    if (route.request().method() !== "GET") return route.fallback()
-    const parts = new URL(route.request().url()).pathname.split("/")
-    const backendId = parts[parts.length - 3] || ""
-    const flow = stubbedOAuthFlows[backendId]
-    if (!flow || !flow.hasFlow) {
-      return json(route, { detail: "no oauth pairing for '" + backendId + "'" }, 404)
-    }
-    return json(route, {
-      provider: backendId,
-      status: flow.status,
-      expires_in: flow.status === "pending" ? 299 : null,
-    })
-  })
-
-  await page.route("**/api/v1/providers/*/oauth", (route) => {
-    if (route.request().method() !== "DELETE") return route.fallback()
-    const deleteParts = new URL(route.request().url()).pathname.split("/")
-    const backendId = deleteParts[deleteParts.length - 2] ?? ""
-    delete stubbedOAuthFlows[backendId]
-    dashboardQuotaOverride = parallelUnseededQuota()
-    return json(route, { provider: backendId, deleted: true })
-  })
   await page.route("**/api/v1/providers/*/test", (route) => {
     if (route.request().method() !== "POST") return route.fallback()
     const segments = new URL(route.request().url()).pathname.split("/")
@@ -3003,6 +2881,19 @@ export async function installBackendStub(page: Page): Promise<void> {
         return json(route, [])
       }
       return json(route, { detail: "Project not found" }, 404)
+    }
+  )
+
+  // System provider configuration (U3) is served by providerConfigStub.ts
+  // through installProjectStub. Without it, answer empty lists so a page that
+  // reads them never falls through the Vite proxy to the live backend.
+  await page.route(
+    (url) => /^\/api\/v1\/system\/(credentials|pools|projects)(\/|$)/.test(url.pathname),
+    (route) => {
+      if (route.request().method() === "GET" && !/\/[0-9a-f-]{36}$/.test(new URL(route.request().url()).pathname)) {
+        return json(route, [])
+      }
+      return route.fulfill({ status: 404, body: "" })
     }
   )
 }

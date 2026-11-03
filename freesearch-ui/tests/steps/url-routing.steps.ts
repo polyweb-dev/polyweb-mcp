@@ -76,7 +76,9 @@ Then("the shell should expose no header element", async ({ page }) => {
 const SYSTEM_ADMINISTRATOR_LINKS = [
   "Routing",
   "Provider usage",
-  "Settings",
+  "System credentials",
+  "Capacity",
+  "Provider settings",
   "Projects",
   "Account",
   "Admin",

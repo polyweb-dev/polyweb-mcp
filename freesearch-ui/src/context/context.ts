@@ -49,8 +49,6 @@ export interface FreeSearchContextType {
     latencyMs: number
     message: string
   }>
-  saveProviderKey: (id: string, rawKey: string) => Promise<boolean>
-  deleteProviderKey: (id: string) => Promise<boolean>
   updateFallbackConfig: (partial: Partial<FallbackConfig>) => Promise<void>
   updateCostPreset: (preset: "balanced" | "free_first") => Promise<void>
   setRoutingPreset: (preset: RoutingPreset) => void

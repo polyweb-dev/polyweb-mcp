@@ -4,7 +4,6 @@ import { ProvidersContext, type ShowToast } from "./context";
 import { useProviderStatus } from "./useProviderStatus";
 import { useProviderPriority } from "./useProviderPriority";
 import { useProviderHealth } from "./useProviderHealth";
-import { useProviderKeys } from "./useProviderKeys";
 
 export type { ShowToast } from "./context";
 
@@ -37,7 +36,6 @@ export const ProvidersProvider: React.FC<{
     setProviders,
     showToast,
   });
-  const { saveProviderKey, deleteProviderKey } = useProviderKeys({ setProviders, showToast });
 
   const value = React.useMemo(
     () => ({
@@ -55,8 +53,6 @@ export const ProvidersProvider: React.FC<{
       reorderProviderPriority,
       setCircuitBreaker,
       testProviderConnection,
-      saveProviderKey,
-      deleteProviderKey,
     }),
     [
       providers,
@@ -73,8 +69,6 @@ export const ProvidersProvider: React.FC<{
       reorderProviderPriority,
       setCircuitBreaker,
       testProviderConnection,
-      saveProviderKey,
-      deleteProviderKey,
     ],
   );
 

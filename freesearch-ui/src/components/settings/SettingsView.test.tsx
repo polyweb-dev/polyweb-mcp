@@ -11,16 +11,14 @@ import {
   allProvidersFixture,
   routingConfigFixture,
   dashboardFixture,
-  secretStatusFixture,
 } from "@/test/backendFixtures"
 
 /**
  * RED update: every control is async against the live backend (mocked fetch).
  * Global switches PATCH with pending/disabled states + error toasts,
- * per-operation switches stay local-only and capability-gated, the key vault
- * renders server fingerprints with a Delete button and NO environment/dotenv
- * hint of any kind (vault-only) plus the exact "Key stored in the encrypted
- * vault." toast, and the invented "3,000 ms" copy is gone.
+ * per-operation switches stay local-only and capability-gated, and the
+ * invented "3,000 ms" copy is gone. The global key vault is gone (U3):
+ * provider secrets live on credential instances, so no tab writes a secret.
  */
 const seedProviderNames = [
   "Brave Search",
@@ -32,11 +30,9 @@ const seedProviderNames = [
   "Parallel",
 ]
 
-let secretSource: string = "encrypted_db"
 let patchGate: Promise<Response> | null = null
 
 function renderSettings(): FetchStub {
-  secretSource = "encrypted_db"
   patchGate = null
   const stub = installFetchStub((req) => {
     if (req.url === "/api/v1/providers" && req.method === "GET") {
@@ -67,27 +63,6 @@ function renderSettings(): FetchStub {
       }
       const priority = typeof patch.priority === "number" ? patch.priority : base.priority
       return ok({ ...base, enable_mask: enableMask, enabled: (enableMask & 1) !== 0, priority })
-    }
-    if (req.url.endsWith("/secret") && req.method === "PUT") {
-      const provider = req.url.split("/").at(-2) ?? "unknown"
-      return ok(
-        secretStatusFixture({
-          provider,
-          fingerprint: `${provider.slice(0, 3).toUpperCase()}_••••••••a1b2`,
-          source: secretSource,
-        })
-      )
-    }
-    if (req.url.endsWith("/secret") && req.method === "DELETE") {
-      const provider = req.url.split("/").at(-2) ?? "unknown"
-      return ok(
-        secretStatusFixture({
-          provider,
-          presence: "missing",
-          fingerprint: null,
-          source: "none",
-        })
-      )
     }
     if (req.method === "POST" && req.url.endsWith("/test")) {
       return ok({
@@ -127,29 +102,19 @@ function findProviderRow(provider: string): HTMLElement {
   throw new Error(`Provider registry row not found for ${provider}`)
 }
 
-function findKeyCard(provider: string): HTMLElement {
-  const providerName = screen.getByText(provider, { exact: true })
-  let current = providerName.parentElement
-
-  while (current && current !== document.body) {
-    if (current.querySelector('input[type="password"]')) return current
-    current = current.parentElement
-  }
-
-  throw new Error(`Key card not found for ${provider}`)
-}
-
 describe("SettingsView (live backend)", () => {
   afterEach(() => {
     vi.unstubAllGlobals()
   })
 
-  it("renders exactly Providers, Keys, and Failover tabs", async () => {
+  it("renders exactly Providers and Failover tabs, with no Keys tab or secret input", async () => {
     renderSettings()
     await waitForProviders()
 
-    expect(screen.getAllByRole("tab")).toHaveLength(3)
-    for (const label of ["Providers", "Keys", "Failover"]) {
+    expect(screen.getAllByRole("tab")).toHaveLength(2)
+    expect(screen.queryByRole("tab", { name: /^Keys$/ })).not.toBeInTheDocument()
+    expect(document.body.querySelector('input[type="password"]')).toBeNull()
+    for (const label of ["Providers", "Failover"]) {
       expect(screen.getByRole("tab", { name: new RegExp(`^${label}$`) })).toBeInTheDocument()
     }
     expect(screen.queryByRole("tab", { name: /^Cache$/ })).not.toBeInTheDocument()
@@ -237,102 +202,10 @@ describe("SettingsView (live backend)", () => {
     expect(fetchSwitch).toBeDisabled()
   })
 
-  it("labels every key input with its provider name and disables Save on blank", async () => {
-    const user = userEvent.setup()
-    renderSettings()
-    await waitForProviders()
-    await user.click(screen.getByRole("tab", { name: /^Keys$/ }))
 
-    for (const provider of seedProviderNames) {
-      expect(
-        screen.getByRole("textbox", { name: `${provider} API key` })
-      ).toBeInTheDocument()
-    }
-    const card = findKeyCard("You.com")
-    expect(within(card).getByRole("button", { name: /^Save$/ })).toBeDisabled()
-  })
 
-  it("saves a key with the SERVER fingerprint and clears the write-only input", async () => {
-    const user = userEvent.setup()
-    const stub = renderSettings()
-    await waitForProviders()
-    await user.click(screen.getByRole("tab", { name: /^Keys$/ }))
 
-    const card = findKeyCard("You.com")
-    const input = card.querySelector('input[type="password"]') as HTMLInputElement
-    await user.type(input, "yc_live_secret_key_6789")
-    await user.click(within(card).getByRole("button", { name: /^Save$/ }))
 
-    // Fingerprint comes from the backend response — never locally computed
-    await waitFor(() => {
-      expect(within(card).getByText("YOU_••••••••a1b2", { exact: true })).toBeInTheDocument()
-    })
-    expect(within(card).getByText("Stored", { exact: true })).toBeInTheDocument()
-    expect(input).toHaveValue("")
-    expect(document.body.textContent).not.toContain("yc_live_secret_key_6789")
-    const puts = stub.requestsTo("/api/v1/providers/you/secret")
-    expect(puts).toHaveLength(1)
-    expect(puts[0].body).toEqual({ key: "yc_live_secret_key_6789" })
-  })
-
-  it("exposes a Delete secret button per key card", async () => {
-    const user = userEvent.setup()
-    const stub = renderSettings()
-    await waitForProviders()
-    await user.click(screen.getByRole("tab", { name: /^Keys$/ }))
-
-    const card = findKeyCard("Tavily")
-    const deleteButton = within(card).getByRole("button", { name: /^Delete/ })
-    await user.click(deleteButton)
-
-    await waitFor(() => {
-      expect(within(card).getByText("Missing", { exact: true })).toBeInTheDocument()
-    })
-    const deletes = stub.requestsTo("/api/v1/providers/tavily/secret")
-    expect(deletes).toHaveLength(1)
-    expect(deletes[0].method).toBe("DELETE")
-  })
-
-  it("shows no environment/dotenv hint and the exact vault toast after save", async () => {
-    const user = userEvent.setup()
-    secretSource = "encrypted_db"
-    renderSettings()
-    await waitForProviders()
-    await user.click(screen.getByRole("tab", { name: /^Keys$/ }))
-
-    secretSource = "environment"
-    const card = findKeyCard("Exa")
-    const input = card.querySelector('input[type="password"]') as HTMLInputElement
-    await user.type(input, "exa-live-key")
-    await user.click(within(card).getByRole("button", { name: /^Save$/ }))
-
-    await waitFor(() => {
-      expect(
-        within(card).getByText("EXA_••••••••a1b2", { exact: true })
-      ).toBeInTheDocument()
-    })
-    // Vault-only: no legacy-source hint may appear anywhere in the UI.
-    expect(card.textContent).not.toMatch(/environment|dotenv/i)
-    expect(document.body.textContent).not.toMatch(/shadow/i)
-    await waitFor(() => {
-      expect(
-        screen.getByText("Key stored in the encrypted vault.", { exact: true })
-      ).toBeInTheDocument()
-    })
-  })
-
-  it("renders the write-only key vault with no reveal actions", async () => {
-    const user = userEvent.setup()
-    renderSettings()
-    await waitForProviders()
-    await user.click(screen.getByRole("tab", { name: /^Keys$/ }))
-
-    expect(screen.getAllByText(/••••••••/).length).toBeGreaterThan(0)
-    const body = document.body.textContent ?? ""
-    for (const forbidden of ["Copy", "Burn", "Reveal", "shown once"]) {
-      expect(body).not.toContain(forbidden)
-    }
-  })
 
   it("renders failover switches with descriptions and honest timeout copy", async () => {
     const user = userEvent.setup()
@@ -367,23 +240,6 @@ describe("SettingsView (live backend)", () => {
     expect(screen.getByText(/session-only|not enforced/i)).toBeInTheDocument()
   })
 
-  it("masks a draft key as opaque bullets with no prefix/suffix leak (pre-save)", async () => {
-    const user = userEvent.setup()
-    renderSettings()
-    await waitForProviders()
-    await user.click(screen.getByRole("tab", { name: /^Keys$/ }))
-
-    const card = findKeyCard("You.com")
-    const input = card.querySelector('input[type="password"]') as HTMLInputElement
-    await user.type(input, "yc_live_secret_key_6789")
-
-    // Before save the card shows opaque bullets only: neither the typed
-    // prefix nor the last-4 suffix may appear in the card's rendered text.
-    expect(within(card).getByText(/••••••••/)).toBeInTheDocument()
-    const text = card.textContent ?? ""
-    expect(text).not.toContain("yc_l")
-    expect(text).not.toContain("6789")
-  })
 })
 
 describe("SettingsView Developer read-only (canReadControls, no edit)", () => {
@@ -411,7 +267,7 @@ describe("SettingsView Developer read-only (canReadControls, no edit)", () => {
     return stub
   }
 
-  it("hides the Keys tab so the key vault never mounts, keeps Providers/Failover, and sends no writes", async () => {
+  it("shows no Keys tab or key vault, keeps Providers/Failover, and sends no writes", async () => {
     const stub = renderDeveloperSettings()
     await waitForProviders()
 

@@ -42,7 +42,8 @@ interface SidebarAccount {
 }
 
 const SIDEBAR_ACCOUNTS: Record<string, SidebarAccount> = {
-  // Every system permission: Routing, Provider usage, Settings, edits and Admin.
+  // Every system permission: Routing, Provider usage, System credentials,
+  // Capacity, Provider settings, edits and Admin.
   "system administrator": {
     body: userAccountBody("11111111-1111-4111-8111-111111111111", "admin@example.com", {
       username: "admin",
@@ -50,7 +51,8 @@ const SIDEBAR_ACCOUNTS: Record<string, SidebarAccount> = {
     name: "admin",
     systemPermissions: SYSTEM_ADMIN_PERMISSIONS,
   },
-  // Read-only control access: Routing, Provider usage and Settings, no edits, no Admin.
+  // Read-only control access: Routing, Provider usage and Provider settings,
+  // no edits, no Admin.
   "settings reader": {
     body: userAccountBody("22222222-2222-4222-8222-222222222222", "reader@example.com", {
       username: "reader",
@@ -276,11 +278,17 @@ When("I choose Sign out for the outcome check", async ({ page }) => {
   await page.getByRole("button", { name: "Sign out", exact: true }).click()
 })
 
-/** Every Primary link of a system administrator, in the U2 contract order. */
+/**
+ * Every Primary link of a system administrator, in the U3 contract order:
+ * System credentials and Capacity follow Provider usage, and the global
+ * settings link is "Provider settings" (never the project "Settings" name).
+ */
 const ALL_PRIMARY_LINKS: Array<[string, string]> = [
   ["Routing", "/routing"],
   ["Provider usage", "/usage"],
-  ["Settings", "/settings"],
+  ["System credentials", "/system/credentials"],
+  ["Capacity", "/system/capacity"],
+  ["Provider settings", "/settings"],
   ["Projects", "/projects"],
   ["Account", "/account"],
   ["Admin", "/admin/users"],
@@ -294,7 +302,7 @@ async function expectPrimaryLinks(page: Page, labels: string[]): Promise<void> {
   }
 }
 
-Then("the sidebar shows six links in order with exact hrefs", async ({ page }) => {
+Then("the sidebar shows eight links in order with exact hrefs", async ({ page }) => {
   const nav = page.getByRole("navigation", { name: "Primary" })
   await expectPrimaryLinks(
     page,
@@ -413,7 +421,9 @@ Then("each permitted sidebar link keeps its route and view", async ({ page }) =>
   const expected: Array<{ link: string; heading: string; path: string }> = [
     { link: "Routing", heading: "Routing", path: "/routing" },
     { link: "Provider usage", heading: "Usage", path: "/usage" },
-    { link: "Settings", heading: "Settings", path: "/settings" },
+    { link: "System credentials", heading: "System credentials", path: "/system/credentials" },
+    { link: "Capacity", heading: "Capacity", path: "/system/capacity" },
+    { link: "Provider settings", heading: "Settings", path: "/settings" },
     { link: "Projects", heading: "Projects", path: "/projects" },
     { link: "Account", heading: "Account", path: "/account" },
   ]
@@ -440,6 +450,8 @@ const PROJECT_MEMBER_LINKS: Array<{ link: string; heading: string; segment: stri
   { link: "Playground", heading: "Search Playground", segment: "/playground" },
   { link: "Activity", heading: "Activity", segment: "/activity" },
   { link: "Usage", heading: "Usage", segment: "/usage" },
+  { link: "Providers", heading: "Providers", segment: "/providers" },
+  { link: "Settings", heading: "Settings", segment: "/settings" },
   { link: "Members", heading: "Members", segment: "/members" },
 ]
 

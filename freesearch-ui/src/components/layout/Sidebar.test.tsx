@@ -98,7 +98,9 @@ const norm = (value: string): string => value.toLowerCase().replace(/\s+/g, "")
 const EXPECTED_NAV: Array<{ label: string; id: TabId; href: string }> = [
   { label: "Routing", id: "routing", href: "/routing" },
   { label: "Provider usage", id: "quotas", href: "/usage" },
-  { label: "Settings", id: "settings", href: "/settings" },
+  { label: "System credentials", id: "systemCredentials", href: "/system/credentials" },
+  { label: "Capacity", id: "systemCapacity", href: "/system/capacity" },
+  { label: "Provider settings", id: "settings", href: "/settings" },
   { label: "Projects", id: "projects", href: "/projects" },
   { label: "Account", id: "account", href: "/account" },
   { label: "Admin", id: "adminUsers", href: "/admin/users" },
@@ -107,7 +109,9 @@ const EXPECTED_NAV: Array<{ label: string; id: TabId; href: string }> = [
 const ADMIN_LINK_LABELS = [
   "Routing",
   "Provider usage",
-  "Settings",
+  "System credentials",
+  "Capacity",
+  "Provider settings",
   "Projects",
   "Account",
   "Admin",
@@ -116,7 +120,7 @@ const ADMIN_LINK_LABELS = [
 const DEVELOPER_LINK_LABELS = [
   "Routing",
   "Provider usage",
-  "Settings",
+  "Provider settings",
   "Projects",
   "Account",
 ]
@@ -234,7 +238,14 @@ describe("AC-SB-1: Sidebar module contract", () => {
   })
 
   it("P1-FINAL: drops the providers TabId entirely (page retired)", () => {
-    expect(sidebarFeatureSource).not.toContain('"providers"')
+    // U3: "providers" is now a project section (/p/:id/providers); the retired
+    // global TabId must stay absent from the global route block and the shell.
+    const globalRouteBlock = routesSource.slice(
+      routesSource.indexOf("export type TabId"),
+      routesSource.indexOf("export type ProjectSectionId")
+    )
+    const globalShellSource = [globalRouteBlock, sidebarOwnerSource, sidebarNavSource, sidebarStateSource, sidebarBrandSource].join("\n")
+    expect(globalShellSource).not.toContain('"providers"')
     expect(sidebarFeatureSource).not.toContain('"/providers"')
     expect(sidebarSource).not.toContain('"providers"')
     expect(sidebarSource).not.toContain('"/providers"')
@@ -291,13 +302,13 @@ describe("AC-SB-2 (C4, P1-FINAL, R-UI, U1, U2): landmark + six router links, URL
     ).toHaveLength(1)
   })
 
-  it("renders exactly six nav links in order with exact accessible names", () => {
+  it("renders exactly eight nav links in order with exact accessible names", () => {
     renderSidebar()
     const links = within(primaryNav()).getAllByRole("link")
     expect(links).toHaveLength(EXPECTED_NAV.length)
     expect(
       links.map((l) => l.getAttribute("aria-label") ?? l.textContent?.trim())
-    ).toEqual(["Routing", "Provider usage", "Settings", "Projects", "Account", "Admin"])
+    ).toEqual(EXPECTED_NAV.map(({ label }) => label))
     for (const link of links) {
       expect(link.tagName).toBe("A")
       expect(link.getAttribute("href")).toMatch(/^\//)
@@ -370,6 +381,8 @@ describe("AC-SB-2 (C4, P1-FINAL, R-UI, U1, U2): landmark + six router links, URL
     expect(seen).toEqual([
       "/routing",
       "/usage",
+      "/system/credentials",
+      "/system/capacity",
       "/settings",
       "/projects",
       "/account",
@@ -397,7 +410,7 @@ describe("AC-SB-3: single active indicator tracks the router", () => {
         exact: true,
       })
     ).toHaveAttribute("aria-current", "page")
-    for (const label of ["Routing", "Provider usage", "Settings", "Account", "Admin"]) {
+    for (const label of ["Routing", "Provider usage", "System credentials", "Capacity", "Provider settings", "Account", "Admin"]) {
       expect(
         within(primaryNav()).getByRole("link", { name: label, exact: true })
       ).not.toHaveAttribute("aria-current")
@@ -517,7 +530,9 @@ describe("AC-SB-5: collapsed w-16 icon rail", () => {
     expect(seen).toEqual([
       "Routing",
       "Provider usage",
-      "Settings",
+      "System credentials",
+      "Capacity",
+      "Provider settings",
       "Projects",
       "Account",
       "Admin",
@@ -869,7 +884,7 @@ describe("AC-SB-9: persistence in freesearch.sidebar.collapsed", () => {
 })
 
 describe("AC5 (R-UI, U1): nav filters by effective system permissions via canAccessRoute", () => {
-  it("the system administrator sees all six links in order including Account and Admin", () => {
+  it("the system administrator sees all eight links in order including Account and Admin", () => {
     renderSidebarAs(adminAccountFixture())
     const links = within(primaryNav()).getAllByRole("link")
     expect(links).toHaveLength(EXPECTED_NAV.length)

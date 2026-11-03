@@ -22,6 +22,7 @@ import {
   tavilyUseTotals,
   ui7HistoryEvents,
   unknownCreditLimits,
+  bravePlusParallelLimits,
 } from "./backendStub"
 
 const EXPECTED_CRD_TEXT: Record<string, string> = {
@@ -276,6 +277,7 @@ Given("the stubbed provider limits show {string}", async ({}, kind: string) => {
   else if (kind === "Tavily grant credits") setStubbedProviderLimits(tavilyGrantLimits())
   else if (kind === "Tavily prod credits") setStubbedProviderLimits(tavilyProdCreditLimits())
   else if (kind === "Brave and Tavily finite credits") setStubbedProviderLimits(bravePlusTavilyLimits())
+  else if (kind === "Brave finite credits plus Parallel card") setStubbedProviderLimits(bravePlusParallelLimits())
   else throw new Error(`Unknown provider limits kind: ${kind}`)
 })
 

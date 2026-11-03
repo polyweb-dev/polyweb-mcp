@@ -11,7 +11,9 @@ import {
 const ADMIN_LABELS = [
   "Routing",
   "Provider usage",
-  "Settings",
+  "System credentials",
+  "Capacity",
+  "Provider settings",
   "Projects",
   "Account",
   "Admin",
@@ -20,6 +22,8 @@ const ADMIN_LABELS = [
 const ADMIN_HREFS = [
   "/routing",
   "/usage",
+  "/system/credentials",
+  "/system/capacity",
   "/settings",
   "/projects",
   "/account",
@@ -48,11 +52,11 @@ afterEach(() => {
 })
 
 describe("NavList permission filter", () => {
-  it("shows all six links in order with exact hrefs for the system administrator", () => {
+  it("shows all eight links in order with exact hrefs for the system administrator", () => {
     renderNav(SYSTEM_ADMIN_PERMISSIONS)
 
     const links = navLinks()
-    expect(links).toHaveLength(6)
+    expect(links).toHaveLength(8)
     expect(ariaLabels(links)).toEqual(ADMIN_LABELS)
     expect(links.map((link) => link.getAttribute("href"))).toEqual(ADMIN_HREFS)
     expect(links[0]?.getAttribute("title")).toBeNull()
@@ -66,7 +70,7 @@ describe("NavList permission filter", () => {
     expect(ariaLabels(links)).toEqual([
       "Routing",
       "Provider usage",
-      "Settings",
+      "Provider settings",
       "Projects",
       "Account",
     ])
@@ -87,7 +91,7 @@ describe("NavList permission filter", () => {
       screen.queryByRole("link", { name: "Routing" })
     ).not.toBeInTheDocument()
     expect(
-      screen.queryByRole("link", { name: "Settings" })
+      screen.queryByRole("link", { name: "Provider settings" })
     ).not.toBeInTheDocument()
   })
 
@@ -101,6 +105,16 @@ describe("NavList permission filter", () => {
     renderNav(["system.settings.write"])
 
     expect(ariaLabels(navLinks())).toEqual(["Projects", "Account", "Admin"])
+  })
+
+  it("shows System credentials and Capacity only with their system permissions", () => {
+    renderNav(["system.credentials.manage"])
+    expect(ariaLabels(navLinks())).toEqual(["System credentials", "Projects", "Account"])
+  })
+
+  it("shows Capacity with allocation management alone", () => {
+    renderNav(["system.allocations.manage"])
+    expect(ariaLabels(navLinks())).toEqual(["Capacity", "Projects", "Account"])
   })
 
   it("points the Admin link at /admin/users", () => {
@@ -117,7 +131,7 @@ describe("NavList collapsed mode", () => {
     renderNav(SYSTEM_ADMIN_PERMISSIONS, true)
 
     const links = navLinks()
-    expect(links).toHaveLength(6)
+    expect(links).toHaveLength(8)
     for (const label of ADMIN_LABELS) {
       const link = screen.getByRole("link", { name: label })
       expect(link.getAttribute("aria-label")).toBe(label)

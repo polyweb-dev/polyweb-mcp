@@ -3,6 +3,8 @@ import { NavLink } from "react-router"
 import {
   FolderKanban,
   Gauge,
+  KeyRound,
+  Layers,
   Route,
   Settings,
   ShieldCheck,
@@ -21,7 +23,9 @@ interface NavItem {
 const navItems: NavItem[] = [
   { id: "routing", label: "Routing", icon: Route },
   { id: "quotas", label: "Provider usage", icon: Gauge },
-  { id: "settings", label: "Settings", icon: Settings },
+  { id: "systemCredentials", label: "System credentials", icon: KeyRound },
+  { id: "systemCapacity", label: "Capacity", icon: Layers },
+  { id: "settings", label: "Provider settings", icon: Settings },
   { id: "projects", label: "Projects", icon: FolderKanban },
   { id: "account", label: "Account", icon: UserRound },
   { id: "adminUsers", label: "Admin", icon: ShieldCheck },

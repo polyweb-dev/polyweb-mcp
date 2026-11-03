@@ -47,6 +47,8 @@ describe("ProjectNav", () => {
       "Playground",
       "Activity",
       "Usage",
+      "Providers",
+      "Settings",
       "Members",
       "API keys",
     ])
@@ -55,6 +57,8 @@ describe("ProjectNav", () => {
       `/p/${PROJECT_ALPHA_ID}/playground`,
       `/p/${PROJECT_ALPHA_ID}/activity`,
       `/p/${PROJECT_ALPHA_ID}/usage`,
+      `/p/${PROJECT_ALPHA_ID}/providers`,
+      `/p/${PROJECT_ALPHA_ID}/settings`,
       `/p/${PROJECT_ALPHA_ID}/members`,
       `/p/${PROJECT_ALPHA_ID}/api-keys`,
     ])
@@ -73,6 +77,8 @@ describe("ProjectNav", () => {
       "Playground",
       "Activity",
       "Usage",
+      "Providers",
+      "Settings",
       "Members",
     ])
   })

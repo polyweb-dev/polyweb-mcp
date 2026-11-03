@@ -33,10 +33,3 @@ export interface BackendProviderTest {
   detail: string | null
 }
 
-export interface BackendSecretStatus {
-  provider: string
-  presence: BackendSecretPresence
-  fingerprint: string | null
-  updated_at: string | null
-  source: BackendSecretSource
-}

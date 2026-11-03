@@ -99,94 +99,12 @@ Then(
   }
 )
 
-Then("the keys tab should show a masked fingerprint containing bullets", async ({ page }) => {
-  await expect(page.locator("body")).toContainText("••••••••")
+Then("the settings page should expose no secret input", async ({ page }) => {
+  // Provider secrets moved to credential instances (U3): the global page
+  // never renders a write-only secret input.
+  await expect(page.getByRole("tab").first()).toBeVisible()
+  await expect(page.locator('input[type="password"]')).toHaveCount(0)
 })
-
-Then(
-  "the keys tab should not contain {string}, {string}, {string}, or {string}",
-  async ({ page }, first: string, second: string, third: string, fourth: string) => {
-    const body = await page.locator("body").innerText()
-    for (const forbidden of [first, second, third, fourth]) {
-      expect(body).not.toContain(forbidden)
-    }
-  }
-)
-
-When(
-  "I save the key {string} for {string}",
-  async ({ page }, rawKey: string, provider: string) => {
-    const card = getKeyCard(page, provider)
-    await card.locator('input[type="password"]').fill(rawKey)
-    await card.getByRole("button", { name: "Save", exact: true }).click()
-  }
-)
-
-When(
-  "I delete the key for {string}",
-  async ({ page }, provider: string) => {
-    await getKeyCard(page, provider)
-      .getByRole("button", { name: "Delete key", exact: true })
-      .click()
-  }
-)
-
-Then("the {string} key input should be empty", async ({ page }, provider: string) => {
-  // The vault clears the write-only input only after a successful save, so an
-  // empty input proves the PUT response flowed through (not just typed text).
-  await expect(getKeyCard(page, provider).locator('input[type="password"]')).toHaveValue("")
-})
-
-Then("the {string} key status should be {string}", async ({ page }, provider: string, status: string) => {
-  await expect(getKeyCard(page, provider).getByText(status, { exact: true })).toBeVisible()
-})
-
-Then(
-  "the {string} key fingerprint should be {string}",
-  async ({ page }, provider: string, fingerprint: string) => {
-    await expect(getKeyCard(page, provider).getByText(fingerprint, { exact: true })).toBeVisible()
-  }
-)
-
-Then(
-  "the {string} key fingerprint should contain bullets",
-  async ({ page }, provider: string) => {
-    // Backend-tolerant: the masked fingerprint is server-computed, so the
-    // suite asserts bullets-present-only, never an exact mask.
-    await expect(getKeyCard(page, provider).getByText(/••••••••/)).toBeVisible()
-  }
-)
-
-Then(
-  "the {string} key card should show a stored key indicator",
-  async ({ page }, provider: string) => {
-    // Backend-tolerant: after save the card shows either the "Stored" pill
-    // or a fingerprint-shaped value (bullets plus at least one alnum char).
-    const card = getKeyCard(page, provider)
-    await expect(async () => {
-      const storedCount = await card.getByText("Stored", { exact: true }).count()
-      const bulletCount = await card.getByText(/••••••••/).count()
-      expect(storedCount + bulletCount).toBeGreaterThan(0)
-    }).toPass({ timeout: 10_000 })
-    const bullets = card.getByText(/••••••••/)
-    if ((await bullets.count()) > 0) {
-      await expect(bullets.first()).toContainText(/[A-Za-z0-9]/)
-    }
-  }
-)
-
-Then(
-  "the key cards should expose at least one {string} button",
-  async ({ page }, buttonLabel: string) => {
-    // The vault renders "Delete key" per card; match the real accessible
-    // name tolerantly (bare "Delete" or the full "Delete key").
-    const buttons = page.getByRole("button", {
-      name: new RegExp(`^${escapeRegExp(buttonLabel)}( key)?$`, "i"),
-    })
-    expect(await buttons.count()).toBeGreaterThanOrEqual(1)
-    await expect(buttons.first()).toBeVisible()
-  }
-)
 
 Then("the failover switch {string} should be visible", async ({ page }, label: string) => {
   await expect(page.getByText(label, { exact: true })).toBeVisible()
@@ -243,16 +161,6 @@ function getSegmentButton(
   const row = getProviderRow(page, provider)
   const operationLabel = row.getByText(operation, { exact: true })
   return operationLabel.locator("xpath=..").getByRole("button", { name: value, exact: true })
-}
-
-function getKeyCard(page: Page, provider: string) {
-  // Precise per-card scope: the password input's aria-label
-  // ("{Provider} API key") is unique per card, so the card is its nearest
-  // ancestor holding the Save action. (Name-text ancestors are ambiguous:
-  // provider names also render in the Providers registry tab.)
-  return page
-    .getByRole("textbox", { name: `${provider} API key`, exact: true })
-    .locator("xpath=ancestor::*[.//button[normalize-space()='Save']][1]")
 }
 
 function escapeRegExp(value: string): string {

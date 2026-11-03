@@ -283,27 +283,29 @@ describe("C2-REWORK AC-C2R-1/2/3: SettingsView pill switcher", () => {
       expect(screen.getByRole("heading", { name: "Settings" })).toBeInTheDocument()
     })
     await waitFor(() => {
-      expect(screen.getByRole("tab", { name: "Keys" })).toBeInTheDocument()
+      expect(screen.getByRole("tab", { name: "Failover" })).toBeInTheDocument()
     })
   }
 
-  it("exposes the three settings views as pill tabs, docked top-right", async () => {
+  // U3: the Keys tab is gone (provider secrets live on credential
+  // instances), so the switcher has exactly two views.
+  it("exposes the two settings views as pill tabs, docked top-right", async () => {
     await ready()
-    const pillList = expectPillList(["Providers", "Keys", "Failover"])
+    const pillList = expectPillList(["Providers", "Failover"])
     expectTopRight("Settings", pillList)
     expect(screen.getByText("Provider registry")).toBeInTheDocument()
   })
 
-  it("switching pill tabs swaps panels (Keys vault, then back to Providers)", async () => {
+  it("switching pill tabs swaps panels (Failover, then back to Providers)", async () => {
     const user = userEvent.setup()
     await ready()
 
-    await user.click(screen.getByRole("tab", { name: "Keys" }))
-    expect(screen.getByRole("tab", { name: "Keys" })).toHaveAttribute(
+    await user.click(screen.getByRole("tab", { name: "Failover" }))
+    expect(screen.getByRole("tab", { name: "Failover" })).toHaveAttribute(
       "aria-selected",
       "true"
     )
-    expect(screen.getByText("Key vault")).toBeInTheDocument()
+    expect(screen.getByText("Failover policy")).toBeInTheDocument()
     expect(screen.queryByText("Provider registry")).not.toBeInTheDocument()
 
     await user.click(screen.getByRole("tab", { name: "Providers" }))
@@ -312,7 +314,7 @@ describe("C2-REWORK AC-C2R-1/2/3: SettingsView pill switcher", () => {
       "true"
     )
     expect(screen.getByText("Provider registry")).toBeInTheDocument()
-    expect(screen.queryByText("Key vault")).not.toBeInTheDocument()
+    expect(screen.queryByText("Failover policy")).not.toBeInTheDocument()
   })
 
   it("arrow keys move focus between pill tabs; Enter activates selection", async () => {
@@ -320,23 +322,23 @@ describe("C2-REWORK AC-C2R-1/2/3: SettingsView pill switcher", () => {
     await ready()
 
     const providersTab = screen.getByRole("tab", { name: "Providers" })
-    const keysTab = screen.getByRole("tab", { name: "Keys" })
+    const failoverTab = screen.getByRole("tab", { name: "Failover" })
     providersTab.focus()
     expect(providersTab).toHaveFocus()
 
     await user.keyboard("{ArrowRight}")
     await waitFor(() => {
-      expect(keysTab).toHaveFocus()
+      expect(failoverTab).toHaveFocus()
     })
     expect(providersTab).toHaveAttribute("aria-selected", "true")
-    expect(keysTab).toHaveAttribute("aria-selected", "false")
+    expect(failoverTab).toHaveAttribute("aria-selected", "false")
 
     await user.keyboard("{Enter}")
     await waitFor(() => {
-      expect(keysTab).toHaveAttribute("aria-selected", "true")
+      expect(failoverTab).toHaveAttribute("aria-selected", "true")
     })
     expect(providersTab).toHaveAttribute("aria-selected", "false")
-    expect(screen.getByText("Key vault")).toBeInTheDocument()
+    expect(screen.getByText("Failover policy")).toBeInTheDocument()
   })
 })
 
@@ -377,7 +379,7 @@ describe("C2-REWORK AC-C2R-4: no filter/Header regression", () => {
   // filter-preservation case is RETIRED. Filter narrowing is covered by the
   // merged Settings registry suite (SettingsProviders.p1-final.test.tsx).
 
-  it("Header compatibility shim exposes six router links and zero tab roles", async () => {
+  it("Header compatibility shim exposes eight router links and zero tab roles", async () => {
     const user = userEvent.setup()
 
     function LocationProbe() {
@@ -399,16 +401,19 @@ describe("C2-REWORK AC-C2R-4: no filter/Header regression", () => {
     // P1-FINAL: standalone Providers page retired — five workspace links.
     // R-UI: Account and Admin screens entered scope; U1 adds Projects, so the
     // system administrator sees eight. U2 moves Playground and Activity under
-    // projects, so six global links remain.
+    // projects, so six global links remain. U3 adds System credentials and
+    // Capacity and renames Settings to Provider settings: eight links.
     const headerNav = screen.getByRole("navigation", { name: "Primary" })
-    expect(within(headerNav).getAllByRole("link")).toHaveLength(6)
+    expect(within(headerNav).getAllByRole("link")).toHaveLength(8)
     expect(
       within(headerNav).queryByRole("link", { name: "Providers", exact: true })
     ).not.toBeInTheDocument()
     for (const label of [
       "Routing",
       "Provider usage",
-      "Settings",
+      "System credentials",
+      "Capacity",
+      "Provider settings",
       "Projects",
       "Account",
       "Admin",
@@ -421,7 +426,7 @@ describe("C2-REWORK AC-C2R-4: no filter/Header regression", () => {
 
     await user.click(screen.getByRole("link", { name: "Routing" }))
     expect(screen.getByTestId("header-route")).toHaveTextContent("/routing")
-    await user.click(screen.getByRole("link", { name: "Settings" }))
+    await user.click(screen.getByRole("link", { name: "Provider settings" }))
     expect(screen.getByTestId("header-route")).toHaveTextContent("/settings")
   })
 })
