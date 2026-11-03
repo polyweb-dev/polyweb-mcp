@@ -62,29 +62,79 @@ It performs no package installation or Docker image pull.
 A systemd timer shuts the worker down after the configured lifetime.
 The autoscaler deletes idle workers after its idle timeout.
 
-## Mutation workers
+## Current worker selection
 
-The mutation profile uses `n2-standard-64` Spot VMs with the `size=heavy` label.
-Set `GCP_MUTATION_MACHINE_TYPE="n2-standard-64"` and `GCP_MUTATION_REGIONS="asia-south2,europe-west8,us-south1"` in the private `.env`.
+The user selected these ordered Spot preferences on 2026-11-03.
+For an ordinary test run, the standard profile uses:
 
-The CLI checks available Compute zones in region order: Delhi (`asia-south2`), Milan (`europe-west8`), then Dallas (`us-south1`).
-It selects the first available zone in each region.
-If the API lists no zone for a preferred region, the CLI skips that region.
-An explicit `--zone` selects one zone without region discovery.
+1. `n2-highcpu-16` in `northamerica-northeast2`.
+2. `e2-highcpu-16` in `us-west4`.
+3. `n2-highcpu-16` in `asia-south2`.
 
-On 2026-11-03, the Compute API confirmed Delhi zones `asia-south2-a`, `asia-south2-b`, and `asia-south2-c`.
-The previous Phoenix preference had no available Compute zones for this project.
-The Dallas N2 CPU quota was 200, with a total regional CPU quota of 100.
-Both reported zero usage before the allocation attempt.
-The N2 machine type has 64 vCPUs and 256 GiB of memory.
-The standard profile uses `c3d-highcpu-8` and its separate Iowa zone configuration.
+For mutation tests, the mutation profile uses:
 
-The single N2 allocation attempt on 2026-11-03 selected `us-south1-a` after the Phoenix availability check.
-GCP rejected it with `CPUS_ALL_REGIONS`: the global CPU quota was 32.
-The request required 64 vCPUs. The mutation suite did not start.
+1. `n2-highcpu-64` in `northamerica-northeast2`.
+2. `n2-highcpu-64` in `asia-south2`.
+3. `n2-highcpu-64` in `europe-west8`.
 
-A sufficient global CPU quota is required before another attempt.
-No second allocation attempt or pipeline restart occurred.
+A pipeline with both ordinary and mutation workflows uses the combined profile.
+This profile uses the same 64-vCPU preferences as mutation.
+One agent advertises `size=*` and accepts both workflow labels.
+
+The agent processes one workflow at a time with `WOODPECKER_MAX_WORKFLOWS=1`.
+This prevents simultaneous auto-sized test processes from CPU oversubscription.
+The daemon retains the combined assignment until all tasks in that pipeline finish.
+It includes dependent workflows in the initial selection.
+Separate pipelines do not automatically form a combined run.
+
+The daemon releases an idle incompatible worker before a combined allocation.
+It preserves active workers. Separate concurrent pipelines can still exhaust the global CPU quota.
+The current global CPU quota is 64. The daemon does not increase quotas.
+
+The default lifetimes are 60 minutes for standard, 30 for mutation, and 120 for combined.
+The idle timeout remains 120 seconds.
+
+The worker CLI tries all available zones in a preferred region before the next machine/region pair.
+Only capacity shortages and regional CPU quota failures permit fallback.
+A regional CPU quota failure skips the remaining zones in that region.
+Permission failures and global CPU quota failures stop allocation.
+An explicit `--zone` disables fallback.
+
+An explicit `--machine-type` overrides the machine for each preferred region.
+
+Use `GCP_STANDARD_CANDIDATES` and `GCP_HEAVY_CANDIDATES` for ordered `machine@region` pairs.
+The former per-profile machine and zone variables no longer control worker allocation.
+See `worker.env.example` for the current values.
+The shared image family remains global. These profile changes do not require an image rebuild.
+
+## Install the autoscaler
+
+The repository now preserves `autoscaler.py` as well as the worker CLI.
+The user service uses `/home/administrator/Programs/gcp-ci-worker/autoscaler.py`.
+It reads private credentials and the current candidate lists from the adjacent `.env`.
+Do not copy credentials into the repository.
+
+```bash
+uv run --no-sync python -m unittest discover -s scripts/gcp-ci-worker -p 'test_*.py' -q
+install -m 755 scripts/gcp-ci-worker/worker.py /home/administrator/Programs/gcp-ci-worker/worker.py
+install -m 755 scripts/gcp-ci-worker/autoscaler.py /home/administrator/Programs/gcp-ci-worker/autoscaler.py
+systemctl --user restart gcp-ci-autoscaler
+systemctl --user is-active gcp-ci-autoscaler
+```
+
+Before an update, confirm that the queue and tracked worker state are empty.
+
+Preserve `.autoscaler_state.json` during an update. It contains worker ownership and combined pipeline assignments.
+The service definition does not require a change because its executable path stays the same.
+
+## Verification on 2026-11-03
+
+Read-only Compute API requests confirmed all six machine/region pairs and their available zones.
+The 16-vCPU options report 16 GiB of RAM. The 64-vCPU options report 64 GiB of RAM.
+
+The regional CPU limits cover one requested worker. The global CPU limit is 64.
+Machine type support and quota do not guarantee Spot capacity.
+No VM allocation or CI run formed part of this configuration verification.
 
 ## Global CPU quota request
 
@@ -103,35 +153,11 @@ Check `quotaConfig.grantedValue` and `reconciling` in the preference response.
 Check the effective `CPUS_ALL_REGIONS` quota in the Compute response before another allocation.
 The requested value does not mean that Google approved the increase.
 
-## Standard worker capacity fallback
+## Earlier capacity configuration
 
-Set `GCP_FALLBACK_ZONES="us-central1-b,us-central1-c,us-central1-f"` in the private `.env`.
-The worker CLI tries `GCP_ZONE` first, then each fallback zone in order.
-These zones use the Iowa regional price schedule.
-The Compute API confirmed `c3d-highcpu-60` support in all four zones on 2026-11-03.
-Machine type support does not guarantee free Spot capacity.
-
-Only a `ZONE_RESOURCE_POOL_EXHAUSTED` error or its canonical resource shortage message triggers another zone attempt.
-Permission, configuration, global quota, and connection errors stop the request.
-Regional CPU quota errors skip other zones in that region.
-They permit a subsequent attempt in a different configured region.
-The Iowa-only standard configuration stops on regional quota errors.
-
-An explicit `create --zone` selects one zone and disables fallback.
-The CLI reuses the startup script and Headscale key after confirmed capacity failures.
-
-The `destroy` command finds the worker zone through the Compute API.
-It does not assume the primary zone.
-If GCP already removed the Spot VM, the CLI still checks Headscale state.
-If multiple worker VMs have the same name, use `destroy --zone` to select one.
-
-The live check on 2026-11-03 exhausted capacity in `us-central1-a` and `us-central1-b`.
-The next attempt in `us-central1-c` returned `CPUS_PER_VM_FAMILY` with a regional C3D limit of 24.
-The former C3D mutation profile required 60 CPUs. A zone change cannot bypass a regional quota.
-
-Request a sufficient family quota before another 60-core C3D mutation run.
-Allow quota for the standard worker too if both profiles must run concurrently.
-The CLI stopped at the quota error. No test VM or disk remained.
+The earlier Iowa C3D zone list and Delhi/Milan/Dallas N2-standard list are obsolete.
+The ordered candidate pairs above replace them.
+The worker destroy command still discovers the actual VM zone and preserves ambiguous matches.
 
 ## Verify a new image
 

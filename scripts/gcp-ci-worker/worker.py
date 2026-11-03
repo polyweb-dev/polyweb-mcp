@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import shlex
 import shutil
 import subprocess
@@ -26,17 +25,31 @@ WOODPECKER_ENV = Path("/home/administrator/Programs/woodpecker/.env")
 HEADSCALE_URL = "https://headscale.thiocyanate.dev"
 TAILSCALE_SERVER_TARGET = "100.64.0.2:9000"
 
+STANDARD_CANDIDATES = (
+    ("n2-highcpu-16", "northamerica-northeast2"),
+    ("e2-highcpu-16", "us-west4"),
+    ("n2-highcpu-16", "asia-south2"),
+)
+HEAVY_CANDIDATES = (
+    ("n2-highcpu-64", "northamerica-northeast2"),
+    ("n2-highcpu-64", "asia-south2"),
+    ("n2-highcpu-64", "europe-west8"),
+)
 PROFILES: dict[str, dict[str, Any]] = {
     "standard": {
-        "machine_type": "c3d-highcpu-8",
+        "candidates": STANDARD_CANDIDATES,
         "labels": "size=standard,provider=gcp,spot=true",
         "lifetime": 60,
     },
     "mutation": {
-        "machine_type": "n2-standard-64",
-        "regions": "asia-south2,europe-west8,us-south1",
+        "candidates": HEAVY_CANDIDATES,
         "labels": "size=heavy,provider=gcp,spot=true",
         "lifetime": 30,
+    },
+    "combined": {
+        "candidates": HEAVY_CANDIDATES,
+        "labels": "size=*,provider=gcp,spot=true",
+        "lifetime": 120,
     },
 }
 
@@ -47,7 +60,7 @@ def load_env_file(path: Path) -> dict[str, str]:
     if not path.is_file():
         return env
 
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         for line in f:
             stripped = line.strip()
             if not stripped or stripped.startswith("#"):
@@ -73,19 +86,25 @@ def get_config() -> dict[str, str]:
     return config
 
 
-def run_gcloud(args: list[str], config: dict[str, str], input_data: str | None = None) -> subprocess.CompletedProcess[str]:
+def run_gcloud(
+    args: list[str], config: dict[str, str], input_data: str | None = None
+) -> subprocess.CompletedProcess[str]:
     """Execute a gcloud command, either natively or via Docker if gcloud is not in PATH."""
     gcloud_bin = shutil.which("gcloud")
 
     if gcloud_bin:
-        cmd = [gcloud_bin] + args
+        cmd = [gcloud_bin, *args]
     else:
         # Fall back to Docker containerized gcloud
         gcloud_config_dir = Path.home() / ".config" / "gcloud"
         gcloud_config_dir.mkdir(parents=True, exist_ok=True)
         cmd = [
-            "docker", "run", "--rm", "-i",
-            "-v", f"{gcloud_config_dir}:/root/.config/gcloud",
+            "docker",
+            "run",
+            "--rm",
+            "-i",
+            "-v",
+            f"{gcloud_config_dir}:/root/.config/gcloud",
         ]
         # If service account key is referenced, mount its parent directory
         sa_key = config.get("GCP_SERVICE_ACCOUNT_KEY")
@@ -102,13 +121,23 @@ def run_gcloud(args: list[str], config: dict[str, str], input_data: str | None =
 def generate_headscale_key() -> str:
     """Generate a single-use, ephemeral Headscale pre-auth key tagged tag:ci-worker."""
     cmd = [
-        "docker", "compose", "-f", str(HEADSCALE_COMPOSE),
-        "exec", "-T", "headscale",
-        "headscale", "preauthkeys", "create",
-        "--user", "1",
-        "--tags", "tag:ci-worker",
+        "docker",
+        "compose",
+        "-f",
+        str(HEADSCALE_COMPOSE),
+        "exec",
+        "-T",
+        "headscale",
+        "headscale",
+        "preauthkeys",
+        "create",
+        "--user",
+        "1",
+        "--tags",
+        "tag:ci-worker",
         "--ephemeral",
-        "--expiration", "1h",
+        "--expiration",
+        "1h",
     ]
     result = subprocess.run(cmd, capture_output=True, text=True, check=True)
     key = result.stdout.strip()
@@ -117,66 +146,97 @@ def generate_headscale_key() -> str:
     return key
 
 
-def create_in_zones(args: list[str], config: dict[str, str], zones: list[str]) -> subprocess.CompletedProcess[str]:
-    """Retry capacity failures or move to another region after a regional CPU quota failure."""
+def create_in_candidates(
+    args: list[str],
+    config: dict[str, str],
+    candidates: list[tuple[str, str]],
+) -> subprocess.CompletedProcess[str]:
+    """Keep each machine paired with its zone during capacity fallback."""
     quota_regions: set[str] = set()
-    for index, zone in enumerate(zones):
+    for index, (machine, zone) in enumerate(candidates):
         region = zone.rsplit("-", 1)[0]
         if region in quota_regions:
             continue
-        zoned_args = [f"--zone={zone}" if arg.startswith("--zone=") else arg for arg in args]
-        print(f"[*] Trying zone {zone}...")
+        overrides = {"--zone": zone, "--machine-type": machine}
+        request = [
+            f"{arg.split('=', 1)[0]}={overrides[arg.split('=', 1)[0]]}"
+            if arg.split("=", 1)[0] in overrides
+            else arg
+            for arg in args
+        ]
+        print(f"[*] Trying {machine} in {zone}...")
         try:
-            return run_gcloud(zoned_args, config)
+            return run_gcloud(request, config)
         except subprocess.CalledProcessError as error:
             detail = error.stderr or ""
             print(detail, file=sys.stderr)
-            # Some gcloud versions render the canonical message without the code.
             capacity_error = (
                 "ZONE_RESOURCE_POOL_EXHAUSTED" in detail
-                or "does not have enough resources available to fulfill the request" in " ".join(detail.split())
+                or "does not have enough resources available to fulfill the request"
+                in " ".join(detail.split())
             )
-            regional_cpu_quota = (
-                "quota" in detail.lower() and "exceeded" in detail.lower()
-                and "region" in detail.lower() and "cpu" in detail.lower()
+            regional_quota = (
+                "quota" in detail.lower()
+                and "exceeded" in detail.lower()
+                and "region" in detail.lower()
+                and "cpu" in detail.lower()
                 and "CPUS_ALL_REGIONS" not in detail
             )
-            if regional_cpu_quota:
+            if regional_quota:
                 quota_regions.add(region)
-            next_zones = [candidate for candidate in zones[index + 1:]
-                          if candidate.rsplit("-", 1)[0] not in quota_regions]
-            if not (capacity_error or regional_cpu_quota) or not next_zones:
+            remaining = [
+                pair
+                for pair in candidates[index + 1 :]
+                if pair[1].rsplit("-", 1)[0] not in quota_regions
+            ]
+            if not (capacity_error or regional_quota) or not remaining:
                 raise
-            print(f"[*] {'Regional CPU quota exceeded' if regional_cpu_quota else 'No capacity'} in {zone}; trying {next_zones[0]}.")
-    raise ValueError("At least one worker zone is required")
+    raise ValueError("At least one worker allocation candidate is required")
 
 
-def worker_zones(config: dict[str, str], profile: str | None, explicit_zone: str | None) -> list[str]:
-    """Keep standard zone settings separate from mutation's preferred regions."""
+def worker_candidates(
+    config: dict[str, str],
+    profile: str | None,
+    explicit_zone: str | None,
+    explicit_machine: str | None = None,
+) -> list[tuple[str, str]]:
+    """Resolve ordered machine/region pairs to available zones, without a VM allocation."""
+    profile = profile or "standard"
+    defaults = PROFILES[profile]["candidates"]
+    key = "GCP_STANDARD_CANDIDATES" if profile == "standard" else "GCP_HEAVY_CANDIDATES"
+    pairs = list(defaults)
+    if config.get(key):
+        pairs = []
+        for entry in config[key].split(","):
+            machine, separator, region = entry.strip().partition("@")
+            if not separator or not machine or not region:
+                raise ValueError(f"{key} must contain machine@region pairs")
+            pairs.append((machine, region))
     if explicit_zone:
-        return [explicit_zone]
-    if profile == "mutation":
-        regions = list(dict.fromkeys(region.strip() for region in config.get(
-            "GCP_MUTATION_REGIONS", PROFILES["mutation"]["regions"]).split(",") if region.strip()))
-        result = run_gcloud([
-            "compute", "zones", "list", f"--project={config['GCP_PROJECT_ID']}",
-            "--filter=status=UP", "--format=json(name,region)",
-        ], config)
-        available = json.loads(result.stdout)
-        zones = []
-        for region in regions:
-            matches = sorted(item["name"] for item in available
-                             if item["region"].rsplit("/", 1)[-1] == region)
-            if matches:
-                zones.append(matches[0])
-            else:
-                print(f"[*] No available Compute zone in preferred region {region}; skipping it.")
+        return [(explicit_machine or pairs[0][0], explicit_zone)]
+    result = run_gcloud(
+        [
+            "compute",
+            "zones",
+            "list",
+            f"--project={config['GCP_PROJECT_ID']}",
+            "--filter=status=UP",
+            "--format=json(name,region)",
+        ],
+        config,
+    )
+    available = json.loads(result.stdout)
+    candidates: list[tuple[str, str]] = []
+    for machine, region in pairs:
+        zones = sorted(
+            item["name"] for item in available if item["region"].rsplit("/", 1)[-1] == region
+        )
         if not zones:
-            raise RuntimeError("No Compute zones available in the configured mutation regions")
-        return zones
-    return list(dict.fromkeys([config.get("GCP_ZONE", "us-central1-a")] + [
-        zone.strip() for zone in config.get("GCP_FALLBACK_ZONES", "").split(",") if zone.strip()
-    ]))
+            print(f"[*] No available Compute zone in {region}; skipping it.")
+        candidates.extend((explicit_machine or machine, zone) for zone in zones)
+    if not candidates:
+        raise RuntimeError("No Compute zones available in the configured worker regions")
+    return list(dict.fromkeys(candidates))
 
 
 def generate_startup_script(
@@ -215,6 +275,7 @@ docker run -d \\
   -e {shlex.quote("WOODPECKER_SERVER=" + TAILSCALE_SERVER_TARGET)} \\
   -e {shlex.quote("WOODPECKER_AGENT_SECRET=" + agent_secret)} \\
   -e {shlex.quote("WOODPECKER_AGENT_LABELS=" + agent_labels)} \\
+  -e WOODPECKER_MAX_WORKFLOWS=1 \\
   woodpeckerci/woodpecker-agent:v3
 printf 'CI_WORKER_AGENT_STARTED uptime=%s\\n' "$(cut -d' ' -f1 /proc/uptime)"
 """
@@ -224,16 +285,10 @@ def cmd_create(args: argparse.Namespace) -> int:
     """Provision a new GCP Spot instance."""
     config = get_config()
 
-    # Apply profile defaults if specified
-    profile_cfg = PROFILES.get(getattr(args, "profile", None) or "")
-    default_machine = profile_cfg["machine_type"] if profile_cfg else config.get("GCP_MACHINE_TYPE", "c3d-highcpu-8")
-    if getattr(args, "profile", None) == "mutation":
-        default_machine = config.get("GCP_MUTATION_MACHINE_TYPE", default_machine)
-    default_labels = profile_cfg["labels"] if profile_cfg else config.get("WOODPECKER_AGENT_LABELS", "size=standard,provider=gcp,spot=true")
-    default_lifetime = profile_cfg["lifetime"] if profile_cfg else int(config.get("MAX_VM_LIFETIME_MINUTES", "120"))
-
+    profile_cfg = PROFILES[getattr(args, "profile", None) or "standard"]
+    default_labels = profile_cfg["labels"]
+    default_lifetime = profile_cfg["lifetime"]
     project_id = args.project or config.get("GCP_PROJECT_ID")
-    machine_type = args.machine_type or default_machine
     disk_size = config.get("GCP_BOOT_DISK_SIZE", "50GB")
     image_family = config.get("GCP_IMAGE_FAMILY", "woodpecker-ci-worker")
     image_project = config.get("GCP_IMAGE_PROJECT", "polyweb-513423")
@@ -243,7 +298,10 @@ def cmd_create(args: argparse.Namespace) -> int:
     agent_secret = config.get("WOODPECKER_AGENT_SECRET")
 
     if not project_id or project_id == "your-gcp-project-id":
-        print(f"Error: GCP_PROJECT_ID is not configured in {DEFAULT_ENV_FILE} or --project flag.", file=sys.stderr)
+        print(
+            f"Error: GCP_PROJECT_ID is not configured in {DEFAULT_ENV_FILE} or --project flag.",
+            file=sys.stderr,
+        )
         return 1
 
     if not agent_secret:
@@ -254,14 +312,23 @@ def cmd_create(args: argparse.Namespace) -> int:
     sa_key = config.get("GCP_SERVICE_ACCOUNT_KEY")
     if sa_key and Path(sa_key).is_file():
         print("[*] Activating GCP service account...")
-        run_gcloud([
-            "auth", "activate-service-account",
-            f"--key-file={sa_key}",
-            f"--project={project_id}",
-        ], config)
+        run_gcloud(
+            [
+                "auth",
+                "activate-service-account",
+                f"--key-file={sa_key}",
+                f"--project={project_id}",
+            ],
+            config,
+        )
 
-    zones = worker_zones({**config, "GCP_PROJECT_ID": project_id}, getattr(args, "profile", None), args.zone)
-    zone = zones[0]
+    candidates = worker_candidates(
+        {**config, "GCP_PROJECT_ID": project_id},
+        getattr(args, "profile", None),
+        args.zone,
+        args.machine_type,
+    )
+    machine_type, zone = candidates[0]
     instance_name = args.name or f"gcp-worker-{int(time.time())}"
 
     print(f"[*] Generating ephemeral Headscale pre-auth key for '{instance_name}'...")
@@ -283,7 +350,10 @@ def cmd_create(args: argparse.Namespace) -> int:
     try:
         print(f"[*] Provisioning GCP Spot VM '{instance_name}' ({machine_type}) in {zone}...")
         gcloud_args = [
-            "compute", "instances", "create", instance_name,
+            "compute",
+            "instances",
+            "create",
+            instance_name,
             f"--project={project_id}",
             f"--zone={zone}",
             f"--machine-type={machine_type}",
@@ -296,7 +366,7 @@ def cmd_create(args: argparse.Namespace) -> int:
             f"--metadata-from-file=startup-script={tmp_path}",
             "--labels=role=ci-worker,managed-by=woodpecker",
         ]
-        res = create_in_zones(gcloud_args, config, zones)
+        res = create_in_candidates(gcloud_args, config, candidates)
         print(res.stdout)
         print("=" * 70)
         print(f"[SUCCESS] Spot worker '{instance_name}' created successfully.")
@@ -318,7 +388,9 @@ def cmd_list(args: argparse.Namespace) -> int:
         return 1
 
     gcloud_args = [
-        "compute", "instances", "list",
+        "compute",
+        "instances",
+        "list",
         f"--project={project_id}",
         "--filter=labels.role=ci-worker",
         "--format=table(name,zone,machineType,status,creationTimestamp)",
@@ -339,25 +411,42 @@ def cmd_destroy(args: argparse.Namespace) -> int:
 
     instance_name = args.name
     # Resolve the actual zone rather than assuming the primary zone after fallback.
-    result = run_gcloud([
-        "compute", "instances", "list", f"--project={project_id}",
-        f"--filter=name={instance_name} AND labels.role=ci-worker", "--format=json(name,zone)",
-    ], config)
+    result = run_gcloud(
+        [
+            "compute",
+            "instances",
+            "list",
+            f"--project={project_id}",
+            f"--filter=name={instance_name} AND labels.role=ci-worker",
+            "--format=json(name,zone)",
+        ],
+        config,
+    )
     matches = [item for item in json.loads(result.stdout) if item["name"] == instance_name]
     if args.zone:
         matches_in_zone = [item for item in matches if item["zone"].rsplit("/", 1)[-1] == args.zone]
         if matches and not matches_in_zone:
-            raise RuntimeError(f"Worker {instance_name} exists in a different zone; omit --zone to discover it")
+            raise RuntimeError(
+                f"Worker {instance_name} exists in a different zone; omit --zone to discover it"
+            )
         matches = matches_in_zone
     if len(matches) > 1:
         raise RuntimeError(f"Multiple workers named {instance_name}; specify --zone")
     if matches:
         zone = matches[0]["zone"].rsplit("/", 1)[-1]
         print(f"[*] Deleting GCP instance '{instance_name}' in zone {zone}...")
-        res = run_gcloud([
-            "compute", "instances", "delete", instance_name,
-            f"--project={project_id}", f"--zone={zone}", "--quiet",
-        ], config)
+        res = run_gcloud(
+            [
+                "compute",
+                "instances",
+                "delete",
+                instance_name,
+                f"--project={project_id}",
+                f"--zone={zone}",
+                "--quiet",
+            ],
+            config,
+        )
         print(res.stdout)
     else:
         print(f"[*] GCP worker '{instance_name}' is already absent; checking Headscale state.")
@@ -365,21 +454,48 @@ def cmd_destroy(args: argparse.Namespace) -> int:
     # Check Headscale for leftover node record
     print(f"[*] Checking Headscale nodes for '{instance_name}'...")
     try:
-        nodes_res = subprocess.run([
-            "docker", "compose", "-f", str(HEADSCALE_COMPOSE),
-            "exec", "-T", "headscale",
-            "headscale", "nodes", "list", "-o", "json",
-        ], capture_output=True, text=True, check=True)
+        nodes_res = subprocess.run(
+            [
+                "docker",
+                "compose",
+                "-f",
+                str(HEADSCALE_COMPOSE),
+                "exec",
+                "-T",
+                "headscale",
+                "headscale",
+                "nodes",
+                "list",
+                "-o",
+                "json",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
         nodes: list[dict[str, Any]] = json.loads(nodes_res.stdout)
         for n in nodes:
             if n.get("name") == instance_name or n.get("givenName") == instance_name:
                 node_id = n.get("id")
                 print(f"[*] Purging node ID {node_id} from Headscale...")
-                subprocess.run([
-                    "docker", "compose", "-f", str(HEADSCALE_COMPOSE),
-                    "exec", "-T", "headscale",
-                    "headscale", "nodes", "delete", "-i", str(node_id), "--force",
-                ], check=False)
+                subprocess.run(
+                    [
+                        "docker",
+                        "compose",
+                        "-f",
+                        str(HEADSCALE_COMPOSE),
+                        "exec",
+                        "-T",
+                        "headscale",
+                        "headscale",
+                        "nodes",
+                        "delete",
+                        "-i",
+                        str(node_id),
+                        "--force",
+                    ],
+                    check=False,
+                )
     except Exception as e:
         print(f"Notice: Headscale node cleanup check skipped: {e}")
 
@@ -389,11 +505,21 @@ def cmd_destroy(args: argparse.Namespace) -> int:
 
 def cmd_status(args: argparse.Namespace) -> int:
     """Show status of Headscale nodes on the tailnet."""
-    subprocess.run([
-        "docker", "compose", "-f", str(HEADSCALE_COMPOSE),
-        "exec", "-T", "headscale",
-        "headscale", "nodes", "list",
-    ], check=True)
+    subprocess.run(
+        [
+            "docker",
+            "compose",
+            "-f",
+            str(HEADSCALE_COMPOSE),
+            "exec",
+            "-T",
+            "headscale",
+            "headscale",
+            "nodes",
+            "list",
+        ],
+        check=True,
+    )
     return 0
 
 
@@ -406,13 +532,21 @@ def main() -> int:
 
     # create
     p_create = subparsers.add_parser("create", help="Provision a new GCP Spot CI worker")
-    p_create.add_argument("--profile", choices=["standard", "mutation"], help="Preset profile (standard: c3d-highcpu-8 / size=standard; mutation: n2-standard-64 / size=heavy)")
+    p_create.add_argument(
+        "--profile",
+        choices=list(PROFILES),
+        help="Preset profile: standard16, mutation64, or combined64",
+    )
     p_create.add_argument("--name", help="Custom instance name (default: auto-timestamped)")
     p_create.add_argument("--project", help="GCP Project ID (overrides .env)")
     p_create.add_argument("--zone", help="GCP Zone (overrides .env)")
     p_create.add_argument("--machine-type", help="Machine type (e.g. e2-standard-4)")
-    p_create.add_argument("--labels", help="Woodpecker agent labels (e.g. 'size=large,provider=gcp')")
-    p_create.add_argument("--lifetime", type=int, help="Max lifetime in minutes before auto-shutdown")
+    p_create.add_argument(
+        "--labels", help="Woodpecker agent labels (e.g. 'size=large,provider=gcp')"
+    )
+    p_create.add_argument(
+        "--lifetime", type=int, help="Max lifetime in minutes before auto-shutdown"
+    )
     p_create.set_defaults(func=cmd_create)
 
     # list
@@ -432,7 +566,7 @@ def main() -> int:
     p_status.set_defaults(func=cmd_status)
 
     args = parser.parse_args()
-    return args.func(args)
+    return int(args.func(args))
 
 
 if __name__ == "__main__":
