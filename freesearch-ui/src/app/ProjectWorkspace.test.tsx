@@ -47,6 +47,10 @@ function renderWorkspace(route: string, accessStatus = 200, permissions: readonl
     if (req.url === `/api/v1/projects/${PROJECT.id}/providers`) {
       return ok({ project_id: PROJECT.id, providers: [], allocations: [] })
     }
+    if (req.url === `/api/v1/projects/${PROJECT.id}/credentials`) return ok([])
+    if (req.url === `/api/v1/projects/${PROJECT.id}/settings`) {
+      return ok({ namespace: "settings", fields: {}, effective_settings: {}, provenance_by_field: {}, system_revision: 1, project_revision: 0 })
+    }
     if (/\/(usage|dashboard)(\?|$)/.test(req.url)) {
       return ok({ project_id: PROJECT.id, totals: [], recent_usage: [], generated_at: "x" })
     }
@@ -105,6 +109,8 @@ describe("ProjectWorkspace", () => {
     ["playground", ["project.read", "fetch.execute"], "Search Playground"],
     ["activity", ["project.read", "traces.read"], "Activity"],
     ["usage", ["project.read", "usage.read"], "Usage"],
+    ["providers", ["project.read", "providers.read"], "Providers"],
+    ["settings", ["project.read", "settings.read"], "Settings"],
   ])("renders the %s section with its permission", async (segment, permissions, heading) => {
     renderWorkspace(`/p/${PROJECT.id}/${segment}`, 200, permissions)
     expect(await screen.findByRole("heading", { name: heading })).toBeInTheDocument()

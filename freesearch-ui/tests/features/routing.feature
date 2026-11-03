@@ -44,7 +44,7 @@ Feature: Routing workbench
     And the Tavily stored key environment is "dev"
     And the Tavily dashboard shows dev minute headroom
     When I reload the web application
-    And I select the "Settings" header tab
+    And I select the "Provider settings" header tab
     Then I should see the "Settings" heading
     When I open the "Providers" settings tab
     Then the Tavily rate tier should show "dev"
@@ -52,7 +52,7 @@ Feature: Routing workbench
     Then exactly one Tavily rate tier PATCH should carry "prod"
     Given the Tavily dashboard shows prod minute headroom
     When I reload the web application
-    And I select the "Settings" header tab
+    And I select the "Provider settings" header tab
     When I open the "Providers" settings tab
     Then the Tavily rate tier should show "prod"
     When I select the "Provider usage" header tab
@@ -71,7 +71,7 @@ Feature: Routing workbench
     And the Tavily stored key environment is "prod"
     And the Tavily dashboard shows prod minute headroom
     When I reload the web application
-    And I select the "Settings" header tab
+    And I select the "Provider settings" header tab
     Then I should see the "Settings" heading
     When I open the "Providers" settings tab
     Then the Tavily rate tier should show "prod"
@@ -79,7 +79,7 @@ Feature: Routing workbench
     Then exactly one Tavily rate tier PATCH should carry "dev"
     Given the Tavily dashboard shows dev minute headroom
     When I reload the web application
-    And I select the "Settings" header tab
+    And I select the "Provider settings" header tab
     When I open the "Providers" settings tab
     Then the Tavily rate tier should show "dev"
     When I select the "Provider usage" header tab
@@ -98,7 +98,7 @@ Feature: Routing workbench
     And the Tavily stored key environment is "dev"
     And the provider PATCH for "Tavily" will fail with "db down"
     When I reload the web application
-    And I select the "Settings" header tab
+    And I select the "Provider settings" header tab
     When I open the "Providers" settings tab
     Then the Tavily rate tier should show "dev"
     When I choose the Tavily rate tier "prod"
@@ -112,7 +112,7 @@ Feature: Routing workbench
     Given the sidebar session belongs to a system administrator
     And the Tavily stored key environment is absent
     When I reload the web application
-    And I select the "Settings" header tab
+    And I select the "Provider settings" header tab
     When I open the "Providers" settings tab
     Then the Tavily rate tier should show Unknown
     And no Tavily rate tier PATCH should exist
@@ -125,7 +125,7 @@ Feature: Routing workbench
     Given the sidebar session belongs to a system administrator
     And the Tavily key is keyless
     When I reload the web application
-    And I select the "Settings" header tab
+    And I select the "Provider settings" header tab
     When I open the "Providers" settings tab
     Then the Tavily keyless rate text should show "Keyless — numeric rate unknown"
     And no Tavily rate tier PATCH should exist
@@ -138,7 +138,7 @@ Feature: Routing workbench
     Given the sidebar session belongs to the "settings reader" account
     And the Tavily stored key environment is "dev"
     When I reload the web application
-    And I select the "Settings" header tab
+    And I select the "Provider settings" header tab
     When I open the "Providers" settings tab
     Then the Tavily read-only rate text should show "Development — 100 requests per minute"
     And no Tavily rate tier PATCH should exist
@@ -152,7 +152,7 @@ Feature: Routing workbench
     And the Tavily stored key environment is "dev"
     And the Tavily dashboard shows dev minute headroom
     When I reload the web application
-    And I select the "Settings" header tab
+    And I select the "Provider settings" header tab
     When I open the "Providers" settings tab
     Then the Tavily rate tier should show "dev"
     Given the Tavily dashboard refresh will fail with "dashboard down"
@@ -168,7 +168,7 @@ Feature: Routing workbench
     Given the sidebar session belongs to a system administrator
     And the Tavily stored key environment is "dev"
     When I reload the web application
-    And I select the "Settings" header tab
+    And I select the "Provider settings" header tab
     When I open the "Providers" settings tab
     Then the Tavily rate tier should show "dev"
     When I focus the Tavily rate tier select

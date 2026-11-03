@@ -21,7 +21,7 @@ Feature: Visual and keyboard regression
   Scenario: V3 mobile settings shell
     Given the sidebar session belongs to a system administrator
     And I open the visual app at 390 by 844
-    When I select the "Settings" header tab
+    When I select the "Provider settings" header tab
     And I open the "Providers" settings tab
     Then the visual page screenshot "settings-mobile.png" should match
 
@@ -45,7 +45,7 @@ Feature: Visual and keyboard regression
   Scenario: K2 keyboard toggles failover without trapping sub-switches
     Given the sidebar session belongs to a system administrator
     And I open the visual app at 390 by 844
-    When I move to the "Settings" view using keyboard only
+    When I move to the "Provider settings" view using keyboard only
     And I open the "Failover" settings tab using keyboard only
     And I focus the "Fallback chaining" switch using keyboard only
     And I press Space on the focused failover switch

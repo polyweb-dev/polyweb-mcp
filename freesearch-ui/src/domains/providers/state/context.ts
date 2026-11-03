@@ -24,8 +24,6 @@ export interface ProvidersValue {
     latencyMs: number;
     message: string;
   }>;
-  saveProviderKey: (id: string, rawKey: string) => Promise<boolean>;
-  deleteProviderKey: (id: string) => Promise<boolean>;
 }
 
 export const ProvidersContext = createContext<ProvidersValue | undefined>(undefined);

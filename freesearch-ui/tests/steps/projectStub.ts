@@ -16,6 +16,7 @@ import {
   projectUsage,
   resetProjectActivityStub,
 } from "./projectActivityStub"
+import { installProviderConfigRoutes, resetProviderConfigStub } from "./providerConfigStub"
 
 /**
  * In-memory projects backend for project-shell and project API key scenarios.
@@ -167,6 +168,7 @@ export function resetProjectStub(): void {
   state.accountId = USER_ID
   state.systemPermissions = []
   resetProjectActivityStub()
+  resetProviderConfigStub()
   projectReadTraffic.length = 0
   state.alphaMembersDelayMs = 0
   state.apiKeySeq = 0
@@ -800,6 +802,18 @@ export async function installProjectStub(
       return json(route, projectProviders(access.project.id))
     }
   )
+
+  // U3 provider configuration: credentials, bindings, settings and copy, and
+  // the system credential, pool and allocation routes (providerConfigStub.ts).
+  await installProviderConfigRoutes(page, {
+    access(projectId) {
+      const project = state.projects.find((p) => p.id === projectId) ?? null
+      const member = project === null ? null : memberOf(project)
+      if (project === null || member === null) return null
+      return { id: project.id, name: project.name, permissions: permissionsOf(member) }
+    },
+    systemPermissions: () => [...state.systemPermissions],
+  })
 }
 
 /** Paths of the project usage, dashboard and provider reads, in order. */

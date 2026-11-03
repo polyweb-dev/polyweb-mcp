@@ -7,13 +7,15 @@ Feature: Sidebar account menu
   every system permission, a settings reader holds only system.settings.read,
   and a member holds no system permission. Playground, Activity and Usage
   are project sections (U2), so the Primary navigation lists the global
-  workspaces only; the installation usage page is "Provider usage".
+  workspaces only; the installation usage page is "Provider usage". U3 adds
+  "System credentials" and "Capacity" and names the global settings link
+  "Provider settings", so it never shares a name with a project's "Settings".
 
   @sidebar-account-menu @stub
-  Scenario: B1 System administrator sidebar keeps six links in order
+  Scenario: B1 System administrator sidebar keeps eight links in order
     Given the sidebar session belongs to a system administrator
     When I open the workspace for the sidebar check
-    Then the sidebar shows six links in order with exact hrefs
+    Then the sidebar shows eight links in order with exact hrefs
     And the sidebar shows the Account and Admin links
 
   @sidebar-account-menu @stub
@@ -25,9 +27,9 @@ Feature: Sidebar account menu
     And the Primary navigation lists exactly "<links>"
 
     Examples:
-      | account         | count | links                                                |
-      | settings reader | 5     | Routing, Provider usage, Settings, Projects, Account |
-      | member          | 2     | Projects, Account                                    |
+      | account         | count | links                                                         |
+      | settings reader | 5     | Routing, Provider usage, Provider settings, Projects, Account |
+      | member          | 2     | Projects, Account                                             |
 
   @sidebar-account-menu @stub
   Scenario Outline: B2b A direct URL outside the system permissions redirects home
@@ -36,12 +38,14 @@ Feature: Sidebar account menu
     Then the gated page redirects home to the projects list
 
     Examples:
-      | account         | path         |
-      | settings reader | /admin/users |
-      | member          | /admin/users |
-      | member          | /routing     |
-      | member          | /usage       |
-      | member          | /settings    |
+      | account         | path                |
+      | settings reader | /admin/users        |
+      | member          | /admin/users        |
+      | member          | /routing            |
+      | member          | /usage              |
+      | member          | /settings           |
+      | settings reader | /system/credentials |
+      | settings reader | /system/capacity    |
 
   @sidebar-account-menu @stub
   Scenario: B3 Expanded account row opens the identity popup

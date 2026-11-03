@@ -1,63 +1,66 @@
 @stub @oauth
-Feature: Parallel OAuth device pairing stays honest
-  The Parallel quota row offers device-flow pairing while no vendor budget
-  is configured. A pending code polls the stubbed status endpoint; ready
-  auto-closes and the authoritative remaining-only USD balance takes over
-  the row. Denied, expired, and failed requests keep the dialog open with
-  an error and a retry. Disconnecting revokes the pairing and restores the
-  unbudgeted explainer.
+Feature: Parallel OAuth connects one credential
+  Parallel OAuth belongs to one credential instance: a project's private
+  Parallel credential (or a system credential, see system-credentials.feature)
+  starts the device flow from its own row. The dialog shows only the user code,
+  a link to the verification page and the connection status; nothing else from
+  the device response is rendered or stored. Polling follows the server
+  interval and stops when the flow ends or the dialog closes. An OAuth key is
+  created without a secret. Provider usage no longer offers pairing.
 
   Background:
-    Given I navigate to the web application
-    And the stubbed dashboard shows "Parallel unseeded quota"
-    And the stubbed OAuth flow for "parallel" is unpaired
+    Given the projects backend is stubbed
+    And the provider configuration is stubbed
+    And I am a member of project Alpha with role project_admin
 
-  @stub @oauth @ready
-  Scenario: Pairing completes and the authoritative balance takes over
-    When I navigate directly to "/usage"
-    And I start OAuth pairing for provider "parallel"
-    Then the OAuth pairing dialog should show the user code
-    And the OAuth pairing dialog should link to the verification URL
-    When the stubbed backend pairs "parallel" with balance "3.75"
-    Then the OAuth pairing dialog should close automatically
-    And the usage view should show "authoritative"
-    And the usage view should show "3.75"
-    And the usage view should not show "Budget not configured"
+  @ready
+  Scenario: Connecting shows only the user code and the verification link and reaches Connected
+    Given project Alpha has a private Parallel OAuth credential "Alpha Parallel"
+    When I open the Providers page of project Alpha
+    And I connect the credential "Alpha Parallel"
+    Then the OAuth dialog shows only the user code and the verification link
+    And the OAuth dialog status reads "Waiting for approval…"
+    When the Parallel account approves the device for "Alpha Parallel"
+    Then the OAuth dialog status reads "Connected"
+    And the OAuth state of "Alpha Parallel" is "connected"
+    And the OAuth user code is in neither browser storage nor the URL
+    And polling for "Alpha Parallel" has stopped
 
-  @stub @oauth @denied
-  Scenario: Denied pairing stays open and offers a retry
-    When I navigate directly to "/usage"
-    And I start OAuth pairing for provider "parallel"
-    And the stubbed OAuth flow for "parallel" becomes "denied"
-    Then the OAuth pairing should show an error
-    And I should be able to retry OAuth pairing
-    When I retry OAuth pairing
-    And the stubbed OAuth flow for "parallel" becomes "ready"
-    Then the OAuth pairing dialog should close automatically
+  @denied
+  Scenario: A denied device flow ends as not connected and stops polling
+    Given project Alpha has a private Parallel OAuth credential "Alpha Parallel"
+    When I open the Providers page of project Alpha
+    And I connect the credential "Alpha Parallel"
+    And the Parallel account denies the device for "Alpha Parallel"
+    Then the OAuth dialog status reads "Not connected"
+    And polling for "Alpha Parallel" has stopped
 
-  @stub @oauth @expired
-  Scenario: Expired code offers a retry that re-begins the flow
-    When I navigate directly to "/usage"
-    And I start OAuth pairing for provider "parallel"
-    And the stubbed OAuth flow for "parallel" becomes "expired"
-    Then the OAuth pairing should show an error
-    And I should be able to retry OAuth pairing
-    When I retry OAuth pairing
-    Then the OAuth pairing dialog should show the user code
+  @close
+  Scenario: Closing the dialog stops polling a pending flow
+    Given project Alpha has a private Parallel OAuth credential "Alpha Parallel"
+    When I open the Providers page of project Alpha
+    And I connect the credential "Alpha Parallel"
+    Then the OAuth dialog status reads "Waiting for approval…"
+    And the device flow of "Alpha Parallel" is being polled
+    When I close the OAuth dialog
+    Then polling for "Alpha Parallel" has stopped
 
-  @stub @oauth @error
-  Scenario: Failed device-code request surfaces an alert without polling
-    Given the stubbed OAuth device-code request for "parallel" fails
-    When I navigate directly to "/usage"
-    And I attempt OAuth pairing for provider "parallel" with a failing begin
-    Then the OAuth pairing should show an error
-    And I should be able to retry OAuth pairing
+  @revoke
+  Scenario: Disconnecting a connected credential offers Connect again
+    Given project Alpha has a private Parallel OAuth credential "Alpha Parallel"
+    When I open the Providers page of project Alpha
+    And I connect the credential "Alpha Parallel"
+    And the Parallel account approves the device for "Alpha Parallel"
+    Then the OAuth dialog status reads "Connected"
+    When I close the OAuth dialog
+    And I disconnect the credential "Alpha Parallel"
+    Then the OAuth state of "Alpha Parallel" is "disconnected"
+    And the credential "Alpha Parallel" offers "Connect Alpha Parallel"
 
-  @stub @oauth @revoke
-  Scenario: Disconnecting restores the unbudgeted explainer
-    Given the stubbed dashboard shows "Parallel paired quota"
-    And the stubbed OAuth flow for "parallel" is "ready"
-    When I navigate directly to "/usage"
-    And I disconnect OAuth pairing for provider "parallel"
-    Then the usage view should show "Budget not configured"
-    And the usage view should show "No API-key balance endpoint is available. Configure a local monthly USD budget to calculate remaining capacity."
+  @create
+  Scenario: Creating a private Parallel OAuth key sends no secret
+    When I open the Providers page of project Alpha
+    And I add a private OAuth key for "Parallel" labelled "Alpha Parallel"
+    Then the last credential create request used OAuth without a secret
+    And I see "Key saved for Alpha Parallel."
+    And the credential "Alpha Parallel" offers "Connect Alpha Parallel"

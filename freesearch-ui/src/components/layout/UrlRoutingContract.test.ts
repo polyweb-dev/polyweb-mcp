@@ -145,7 +145,13 @@ describe("C4-5: Sidebar NavLink contract in source", () => {
   it("P1-FINAL: sidebar drops the retired /providers target", () => {
     expect(sidebarNavSource).not.toContain('"/providers"')
     expect(sidebarNavSource).not.toContain('"providers"')
-    expect(routesSource).not.toContain('"providers"')
+    // U3: "providers" is now a project section; the global TabId block stays clean.
+    const globalRouteBlock = routesSource.slice(
+      routesSource.indexOf("export type TabId"),
+      routesSource.indexOf("export type ProjectSectionId")
+    )
+    expect(globalRouteBlock).not.toContain('"providers"')
+    expect(routesSource).not.toContain('"/providers"')
   })
 
   it("renders no plain-button nav items (controls stay buttons)", () => {

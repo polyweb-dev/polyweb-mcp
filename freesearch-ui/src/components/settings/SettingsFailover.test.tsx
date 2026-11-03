@@ -90,7 +90,7 @@ describe("SettingsFailover.f1f2.test.tsx", () => {
  *           Providers S-P4 intact (section w-full max-w-none, frame w-full
  *           max-w-none + overflow-hidden, table min-w-[880px]) (G-1); Keys K1
  *           intact (section w-full max-w-none, grid sm:grid-cols-2) (G-2);
- *           SettingsView pills (Providers/Keys/Failover pill variant) (G-3);
+ *           SettingsView pills (Providers/Failover pill variant) (G-3);
  *           Carbon Black tokens (#1e1e1e scale + #007acc, no oklch) (G-4); NO
  *           page merge + freesearch-ui ONLY (no backend/python paths,
  *           no absolute backend literals) (G-5).
@@ -124,7 +124,6 @@ const settingsFeatureSource = [
 // P1-FINAL (blessed inversion): ProviderMatrix.tsx is DELETED by the merge —
 // no test may read it (the file is gone Green). The G-5 guard below now pins
 // the merged end-state instead of the retired split.
-const keyVaultSource = readFileSync(path.resolve(testDir, "./SettingsKeyVault.tsx"), "utf8")
 const settingsViewSource = readFileSync(path.resolve(testDir, "./SettingsView.tsx"), "utf8")
 const indexCssSource = readFileSync(path.resolve(testDir, "../../index.css"), "utf8")
 
@@ -793,46 +792,15 @@ describe("G-1: Providers P1-FINAL merged table (inverted — 7 cols, min-w-960)"
 })
 
 // ---------------------------------------------------------------------------
-// G-2: Keys K1 intact (GREEN guard)
-// ---------------------------------------------------------------------------
-
-describe("G-2: Keys K1 stays full-width with a two-column grid", () => {
-  it("source keeps w-full max-w-none section plus sm:grid-cols-2 grid", () => {
-    expect(keyVaultSource).toMatch(/w-full/)
-    expect(keyVaultSource).toMatch(/max-w-none/)
-    expect(keyVaultSource).not.toMatch(/max-w-4xl/)
-    expect(keyVaultSource).toMatch(/sm:grid-cols-2/)
-  })
-
-  it("rendered Keys grid keeps sm:grid-cols-2 inside the full-width section", async () => {
-    const user = userEvent.setup()
-    renderSettings()
-    await waitForProviders()
-    await user.click(screen.getByRole("tab", { name: /^Keys$/ }))
-    await waitFor(() => {
-      expect(screen.getByRole("heading", { name: "Key vault" })).toBeInTheDocument()
-    })
-    const heading = screen.getByRole("heading", { name: "Key vault" })
-    const section = heading.closest("section") as HTMLElement
-    const sectionTokens = classTokens(section)
-    expect(sectionTokens).toContain("w-full")
-    expect(sectionTokens).toContain("max-w-none")
-    const grid = section.querySelector("div.grid") as HTMLElement
-    expect(grid, "Keys grid div.grid must exist").not.toBeNull()
-    expect(classTokens(grid)).toContain("sm:grid-cols-2")
-  })
-})
-
-// ---------------------------------------------------------------------------
 // G-3: pills intact (GREEN guard)
 // ---------------------------------------------------------------------------
 
-describe("G-3: SettingsView pills stay Providers/Keys/Failover", () => {
-  it("exactly 3 tabs on the pill variant, no line variant", async () => {
+describe("G-3: SettingsView pills stay Providers/Failover", () => {
+  it("exactly 2 tabs on the pill variant, no line variant", async () => {
     renderSettings()
     await waitForProviders()
-    expect(screen.getAllByRole("tab")).toHaveLength(3)
-    for (const label of ["Providers", "Keys", "Failover"]) {
+    expect(screen.getAllByRole("tab")).toHaveLength(2)
+    for (const label of ["Providers", "Failover"]) {
       expect(screen.getByRole("tab", { name: new RegExp(`^${label}$`) })).toBeInTheDocument()
     }
     const pillList = document.querySelector('[data-slot="tabs-list"][data-variant="pill"]')
@@ -841,7 +809,7 @@ describe("G-3: SettingsView pills stay Providers/Keys/Failover", () => {
       within(pillList as HTMLElement)
         .getAllByRole("tab")
         .map((t) => t.textContent)
-    ).toEqual(["Providers", "Keys", "Failover"])
+    ).toEqual(["Providers", "Failover"])
     expect(
       document.querySelectorAll('[data-slot="tabs-list"][data-variant="line"]')
     ).toHaveLength(0)
@@ -873,7 +841,7 @@ describe("G-5: P1-FINAL page merge (inverted — fleet merged, matrix retired)",
     expect(failoverSource).not.toMatch(/ProviderMatrix/)
     expect(failoverSource).not.toMatch(/ProviderTestModal/)
     expect(settingsViewSource).toContain("SettingsProviders")
-    expect(settingsViewSource).toContain("SettingsKeyVault")
+    expect(settingsViewSource).not.toContain("SettingsKeyVault")
     expect(settingsViewSource).toContain("SettingsFailover")
     for (const marker of ["Endpoint", "ProviderTestModal"]) {
       expect(settingsFeatureSource, `merged registry must carry ${marker}`).toContain(marker)

@@ -91,6 +91,8 @@ describe("DashboardShell project scope", () => {
         "Playground",
         "Activity",
         "Usage",
+        "Providers",
+        "Settings",
         "Members",
         "API keys",
       ])
@@ -125,6 +127,8 @@ describe("DashboardShell project scope", () => {
         "Playground",
         "Activity",
         "Usage",
+        "Providers",
+        "Settings",
         "Members",
       ])
     )
@@ -192,9 +196,26 @@ describe("DashboardShell access states", () => {
     expect(await within(screen.getByRole("main")).findByRole("heading", { name: "Routing" })).toBeInTheDocument()
   })
 
+  it.each([
+    ["/system/credentials", "System credentials"],
+    ["/system/capacity", "Capacity"],
+  ])("opens %s for the system administrator", async (path, heading) => {
+    renderWithAccess(path)
+    expect(await within(await screen.findByRole("main")).findByRole("heading", { level: 1, name: heading })).toBeInTheDocument()
+    expect(location()).toBe(path)
+  })
+
+  it("opens Capacity with allocation management alone and denies System credentials", async () => {
+    renderWithAccess("/system/credentials", { ...ACCESS, systemPermissions: ["system.allocations.manage"] }, agentAccountFixture())
+    await waitFor(() => expect(location()).toBe("/projects"))
+    const primary = screen.getByRole("navigation", { name: "Primary" })
+    expect(within(primary).getByRole("link", { name: "Capacity" })).toHaveAttribute("href", "/system/capacity")
+    expect(within(primary).queryByRole("link", { name: "System credentials" })).toBeNull()
+  })
+
   it("redirects an unauthorized direct URL through the landing to the project list", async () => {
     renderWithAccess("/settings", { ...ACCESS, systemPermissions: [] }, agentAccountFixture())
     await waitFor(() => expect(location()).toBe("/projects"))
-    expect(within(screen.getByRole("navigation", { name: "Primary" })).queryByRole("link", { name: "Settings" })).toBeNull()
+    expect(within(screen.getByRole("navigation", { name: "Primary" })).queryByRole("link", { name: "Provider settings" })).toBeNull()
   })
 })

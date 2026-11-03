@@ -2,7 +2,8 @@
 Feature: Provider quota display stays honest
   The usage view renders one credit bar per card with the exact CRD fraction.
   Unknown fields stay hidden and invented balances never appear.
-  Manual entry and OAuth pairing keep their action-only controls.
+  Manual entry keeps its action-only controls. Parallel OAuth moved to
+  credential rows (parallel-oauth-pairing.feature), so usage offers no pairing.
 
   Background:
     Given I navigate to the web application
@@ -44,15 +45,13 @@ Feature: Provider quota display stays honest
     Then the usage view should show "Brave"
 
   @stub @quota @oauth
-  Scenario: Parallel OAuth pairing keeps its connect controls
+  Scenario: Provider usage offers no Parallel pairing; OAuth belongs to credentials
     Given the stubbed provider limits show "Brave finite credits plus Parallel card"
     And the stubbed credit totals show "Brave no use"
-    And the stubbed OAuth pairing for "parallel" is empty
     When I navigate directly to "/usage"
-    And I open the OAuth pairing for provider "parallel"
-    Then the pairing code "ABCD-EFGH" should be visible
-    When the stubbed OAuth status for "parallel" becomes "ready"
-    Then the OAuth disconnect control should be visible
+    Then I should see the "Usage" heading
+    And the usage view should show "Parallel"
+    And the usage view offers no OAuth pairing control
     And the usage view should not show "∞"
 
   @stub @quota @keenable

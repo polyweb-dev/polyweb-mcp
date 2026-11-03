@@ -7,7 +7,7 @@ Feature: Provider access flags against the stubbed backend
 
   Background:
     Given I navigate to the web application
-    When I select the "Settings" header tab
+    When I select the "Provider settings" header tab
     And I open the "Providers" settings tab
 
   @stub @access

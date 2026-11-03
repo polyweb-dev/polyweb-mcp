@@ -13,7 +13,6 @@ import {
   searchResponseFixture,
   fetchResponseFixture,
   providerTestFixture,
-  secretStatusFixture,
   type WireProviderStatus,
 } from "@/test/backendFixtures"
 
@@ -24,7 +23,7 @@ import {
  * - mount: parallel GET /api/v1/providers + GET /api/v1/routing/config +
  *   GET /dashboard?limit=50, per-route failure tolerance (never invented rows)
  * - pessimistic PATCH toggles/priority, POST breaker reset (closed) vs
- *   local-only trip (open, ZERO fetch), PUT/DELETE secrets, PUT routing config
+ *   local-only trip (open, ZERO fetch), PUT routing config
  * - search and fetch execution moved to the project playground scope (U2)
  * - removeProvider + cacheStats are DELETED from the API
  */
@@ -116,24 +115,6 @@ function installBackend(server: FakeBackend): FetchStub {
         entry.circuit_breaker = { state: "closed", updated_at: "2026-09-06T10:06:00Z" }
       }
       return ok({ provider: id, state: "closed", updated_at: "2026-09-06T10:06:00Z" })
-    }
-    if (req.url.endsWith("/secret") && req.method === "PUT") {
-      const id = backendIdFromUrl(req.url)
-      return ok(
-        secretStatusFixture({ provider: id, fingerprint: `FP_${id}_a1b2`, source: "encrypted_db" })
-      )
-    }
-    if (req.url.endsWith("/secret") && req.method === "DELETE") {
-      const id = backendIdFromUrl(req.url)
-      return ok(
-        secretStatusFixture({
-          provider: id,
-          presence: "missing",
-          fingerprint: null,
-          updated_at: "2026-09-06T10:05:00Z",
-          source: "none",
-        })
-      )
     }
     if (req.method === "PUT" && req.url === "/api/v1/routing/config") {
       server.routing = { ...server.routing, ...((req.body as object) ?? {}) }
@@ -268,7 +249,9 @@ describe("FreeSearchContext (live backend)", () => {
     }
     expect(typeof result.current.refreshProviders).toBe("function")
     expect(typeof result.current.refreshDashboard).toBe("function")
-    expect(typeof result.current.deleteProviderKey).toBe("function")
+    // The global secret routes are gone: credentials are instances (U3).
+    expect("saveProviderKey" in result.current).toBe(false)
+    expect("deleteProviderKey" in result.current).toBe(false)
   })
 
   it("toggleProvider PATCHes exactly {enabled} and flips state only after 200", async () => {
@@ -449,46 +432,6 @@ describe("FreeSearchContext (live backend)", () => {
     expect(probe.success).toBe(true)
     expect(probe.latencyMs).toBe(142)
     expect(typeof probe.message).toBe("string")
-  })
-
-  it("saveProviderKey PUTs exactly {key}; blank input is ignored with zero fetch", async () => {
-    const { stub, result } = await mountLoaded()
-
-    await act(async () => {
-      await result.current.saveProviderKey("tavily", "tvly-live-key-123")
-    })
-
-    const puts = stub.requestsTo("/api/v1/providers/tavily/secret")
-    expect(puts).toHaveLength(1)
-    expect(puts[0].method).toBe("PUT")
-    expect(puts[0].body).toEqual({ key: "tvly-live-key-123" })
-    const row = result.current.providers.find((p) => p.id === "tavily")!
-    expect(row.hasKey).toBe(true)
-    expect(row.keyMasked).toBe("FP_tavily_a1b2")
-    expect(row.keySource).toBe("encrypted_db")
-    const successToast = result.current.toasts.find((t) => t.type === "success")
-    expect(successToast?.message).toBe("Key stored in the encrypted vault.")
-
-    const callsBefore = stub.requests.length
-    await act(async () => {
-      await result.current.saveProviderKey("tavily", "   ")
-    })
-    expect(stub.requests.length).toBe(callsBefore)
-  })
-
-  it("deleteProviderKey DELETEs the secret and marks the vault missing", async () => {
-    const { stub, result } = await mountLoaded()
-
-    await act(async () => {
-      await result.current.deleteProviderKey("tavily")
-    })
-
-    const deletes = stub.requestsTo("/api/v1/providers/tavily/secret")
-    expect(deletes).toHaveLength(1)
-    expect(deletes[0].method).toBe("DELETE")
-    const row = result.current.providers.find((p) => p.id === "tavily")!
-    expect(row.hasKey).toBe(false)
-    expect(row.keyVaultStatus).toBe("missing")
   })
 
   it("updateFallbackConfig PUTs the full routing body and keeps sub-flags local", async () => {

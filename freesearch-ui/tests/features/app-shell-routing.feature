@@ -44,10 +44,10 @@ Feature: App-shell URL routing (C4)
     And the "<link>" sidebar link should be marked current
 
     Examples:
-      | path      | heading  | link           |
-      | /routing  | Routing  | Routing        |
-      | /usage    | Usage    | Provider usage |
-      | /settings | Settings | Settings       |
+      | path      | heading  | link              |
+      | /routing  | Routing  | Routing           |
+      | /usage    | Usage    | Provider usage    |
+      | /settings | Settings | Provider settings |
 
   Scenario Outline: C4-3 former global <path> without a stored project lands on the projects list
     When I navigate directly to "<path>"
@@ -69,7 +69,7 @@ Feature: App-shell URL routing (C4)
     When I go back in history
     Then the page URL path should be "/settings"
     And I should see the "Settings" heading
-    And the "Settings" sidebar link should be marked current
+    And the "Provider settings" sidebar link should be marked current
     When I go forward in history
     Then the page URL path should be "/routing"
     And I should see the "Routing" heading
@@ -104,9 +104,9 @@ Feature: App-shell URL routing (C4)
   Scenario: C4-6 settings pill tabs leave the URL unchanged
     When I navigate directly to "/settings"
     Then I should see the "Settings" heading
-    When I open the "Keys" settings tab
-    Then the page URL path should still be "/settings"
     When I open the "Failover" settings tab
+    Then the page URL path should still be "/settings"
+    When I open the "Providers" settings tab
     Then the page URL path should still be "/settings"
 
   Scenario: C4-7 shell keeps the sidebar shell with no legacy header topbar

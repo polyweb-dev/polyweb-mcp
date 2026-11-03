@@ -624,9 +624,9 @@ describe("P1F-6: Providers page retired — redirect + no providers nav", () => 
       expect(screen.getByRole("heading", { name: "Settings" })).toBeInTheDocument()
     })
     const nav = screen.getByRole("navigation", { name: "Primary" })
-    expect(within(nav).getAllByRole("link")).toHaveLength(6)
+    expect(within(nav).getAllByRole("link")).toHaveLength(8)
     expect(within(nav).queryByRole("link", { name: "Providers", exact: true })).not.toBeInTheDocument()
-    for (const label of ["Routing", "Provider usage", "Settings"]) {
+    for (const label of ["Routing", "Provider usage", "Provider settings"]) {
       expect(within(nav).getByRole("link", { name: label, exact: true })).toBeInTheDocument()
     }
   })
@@ -735,7 +735,7 @@ describe("SettingsProviders.s-p1.test.tsx", () => {
  *           icon test button per row (aria-label + modal open, zero fetch) +
  *           modal Test states (Test/Testing... + POST).
  *   S-P1-6  regression guards (must stay GREEN before and after): Settings
- *           pills (Providers/Keys/Failover, pill variant, no line), URL/sidebar/
+ *           pills (Providers/Failover, pill variant, no line), URL/sidebar/
  *           theme (C1/C2R/C3R/C4 baseline), ProviderMatrix untouched, NO page
  *           merge (SettingsProviders never imports ProviderMatrix).
  *
@@ -1348,11 +1348,11 @@ describe("S-P1-5: all SettingsProviders contracts preserved in the table", () =>
 // ---------------------------------------------------------------------------
 
 describe("S-P1-6: P1-FINAL merge guards (inverted — page merged, RED)", () => {
-  it("Settings pills stay Providers/Keys/Failover on the pill variant", async () => {
+  it("Settings pills stay Providers/Failover on the pill variant", async () => {
     renderSettings()
     await waitForProviders()
-    expect(screen.getAllByRole("tab")).toHaveLength(3)
-    for (const label of ["Providers", "Keys", "Failover"]) {
+    expect(screen.getAllByRole("tab")).toHaveLength(2)
+    for (const label of ["Providers", "Failover"]) {
       expect(screen.getByRole("tab", { name: new RegExp(`^${label}$`) })).toBeInTheDocument()
     }
     const pillList = document.querySelector('[data-slot="tabs-list"][data-variant="pill"]')
@@ -1361,7 +1361,7 @@ describe("S-P1-6: P1-FINAL merge guards (inverted — page merged, RED)", () => 
       within(pillList as HTMLElement)
         .getAllByRole("tab")
         .map((t) => t.textContent)
-    ).toEqual(["Providers", "Keys", "Failover"])
+    ).toEqual(["Providers", "Failover"])
     expect(
       document.querySelectorAll('[data-slot="tabs-list"][data-variant="line"]')
     ).toHaveLength(0)
@@ -2632,7 +2632,7 @@ describe("SettingsProviders.s-p4.test.tsx", () => {
  *           scroller, nowrap), S-P2 ranks (P1..P7 never P100 + Dispatch
  *           order tooltip + shrink-0/min-w + px-3 + arrow boundaries),
  *           S-P3 Test affordance (ui/button outline sm box, states, one
- *           POST), SettingsView pills (Providers/Keys/Failover pill
+ *           POST), SettingsView pills (Providers/Failover pill
  *           variant), Carbon Black tokens, NO ProviderMatrix merge,
  *           sibling sections follow suit (KeyVault full width per K1, Failover per F1),
  *           freesearch-ui ONLY (no backend/python imports).
@@ -2671,7 +2671,6 @@ const settingsFeatureSource = [
 const indexCssSource = readFileSync(path.resolve(testDir, "../../index.css"), "utf8")
 // P1-FINAL (blessed inversion): ProviderMatrix.tsx is DELETED by the merge —
 // no test may read it (the file is gone Green).
-const keyVaultSource = readFileSync(path.resolve(testDir, "./SettingsKeyVault.tsx"), "utf8")
 const failoverSource = readFileSync(path.resolve(testDir, "./SettingsFailover.tsx"), "utf8")
 
 const norm = (value: string): string => value.toLowerCase().replace(/\s+/g, "")
@@ -3105,11 +3104,11 @@ describe("S-P4-5: no regression — S-P1 table, S-P2 ranks, S-P3 buttons, Settin
     expect(existsSync(removedButtonShimPath)).toBe(false)
   })
 
-  it("SettingsView pills stay Providers/Keys/Failover on the pill variant", async () => {
+  it("SettingsView pills stay Providers/Failover on the pill variant", async () => {
     renderSettings()
     await waitForProviders()
-    expect(screen.getAllByRole("tab")).toHaveLength(3)
-    for (const label of ["Providers", "Keys", "Failover"]) {
+    expect(screen.getAllByRole("tab")).toHaveLength(2)
+    for (const label of ["Providers", "Failover"]) {
       expect(screen.getByRole("tab", { name: new RegExp(`^${label}$`) })).toBeInTheDocument()
     }
     const pillList = document.querySelector('[data-slot="tabs-list"][data-variant="pill"]')
@@ -3118,7 +3117,7 @@ describe("S-P4-5: no regression — S-P1 table, S-P2 ranks, S-P3 buttons, Settin
       within(pillList as HTMLElement)
         .getAllByRole("tab")
         .map((t) => t.textContent)
-    ).toEqual(["Providers", "Keys", "Failover"])
+    ).toEqual(["Providers", "Failover"])
     expect(
       document.querySelectorAll('[data-slot="tabs-list"][data-variant="line"]')
     ).toHaveLength(0)
@@ -3132,10 +3131,7 @@ describe("S-P4-5: no regression — S-P1 table, S-P2 ranks, S-P3 buttons, Settin
     expect(norm(indexCssSource).includes("oklch(")).toBe(false)
   })
 
-  it("scope: Keys spans full width (K1) and Failover spans full width (F1)", () => {
-    expect(keyVaultSource).not.toMatch(/max-w-4xl/)
-    expect(keyVaultSource).toMatch(/w-full/)
-    expect(keyVaultSource).toMatch(/max-w-none/)
+  it("scope: Failover spans full width (F1)", () => {
     expect(failoverSource).not.toMatch(/max-w-3xl/)
     expect(failoverSource).toMatch(/w-full/)
     expect(failoverSource).toMatch(/max-w-none/)

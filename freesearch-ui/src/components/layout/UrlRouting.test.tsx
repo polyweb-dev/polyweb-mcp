@@ -136,7 +136,9 @@ async function expectView(label: string, heading: string, path: string) {
 const ROUTE_TABLE: Array<{ link: string; heading: string; path: string }> = [
   { link: "Routing", heading: "Routing", path: "/routing" },
   { link: "Provider usage", heading: "Usage", path: "/usage" },
-  { link: "Settings", heading: "Settings", path: "/settings" },
+  { link: "System credentials", heading: "System credentials", path: "/system/credentials" },
+  { link: "Capacity", heading: "Capacity", path: "/system/capacity" },
+  { link: "Provider settings", heading: "Settings", path: "/settings" },
   { link: "Projects", heading: "Projects", path: "/projects" },
   { link: "Account", heading: "Account", path: "/account" },
   { link: "Admin", heading: "Accounts", path: "/admin/users" },
@@ -215,13 +217,13 @@ describe("C4-3: deep links render their view", () => {
 describe("C4-4: navigation restores view + exactly one current marker", () => {
   it("sequential navigation keeps view, URL, and marker in sync", async () => {
     await renderAt("/settings")
-    await expectView("Settings", "Settings", "/settings")
+    await expectView("Provider settings", "Settings", "/settings")
     await followLink("Routing")
     await expectView("Routing", "Routing", "/routing")
     await followLink("Provider usage")
     await expectView("Provider usage", "Usage", "/usage")
-    await followLink("Settings")
-    await expectView("Settings", "Settings", "/settings")
+    await followLink("Provider settings")
+    await expectView("Provider settings", "Settings", "/settings")
   })
 })
 
@@ -313,8 +315,8 @@ describe("C4-6: PillTabs switching leaves the URL unchanged", () => {
   it("Settings pill tabs switch panels without pushing history", async () => {
     const user = userEvent.setup()
     await renderAt("/settings")
-    await expectView("Settings", "Settings", "/settings")
-    for (const tab of ["Keys", "Failover"]) {
+    await expectView("Provider settings", "Settings", "/settings")
+    for (const tab of ["Failover"]) {
       await user.click(screen.getByRole("tab", { name: tab, exact: true }))
       expect(testPath()).toBe("/settings")
     }
@@ -364,7 +366,7 @@ describe("C4-7: no regression — shell, providers, views", () => {
       },
       { timeout: 5000 },
     )
-    await expectView("Settings", "Settings", "/settings")
+    await expectView("Provider settings", "Settings", "/settings")
     await waitFor(() => {
       expect(screen.getByText("Brave Search")).toBeInTheDocument()
     })
@@ -383,14 +385,14 @@ describe("C4-7: no regression — shell, providers, views", () => {
         .map((t) => t.textContent)
     ).toEqual(["Strategy", "Simulator"])
 
-    await followLink("Settings")
-    await expectView("Settings", "Settings", "/settings")
+    await followLink("Provider settings")
+    await expectView("Provider settings", "Settings", "/settings")
     const settingsPills = within(screen.getByRole("main")).getByRole("tablist")
     expect(
       within(settingsPills as HTMLElement)
         .getAllByRole("tab")
         .map((t) => t.textContent)
-    ).toEqual(["Providers", "Keys", "Failover"])
+    ).toEqual(["Providers", "Failover"])
   })
 })
 

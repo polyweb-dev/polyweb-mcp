@@ -270,7 +270,7 @@ describe("QuotaAnalytics shell (UI7)", () => {
 /**
  * FIX shell: QuotaAnalytics composes the Tavily-only tier slot through the
  * page, the card list, and the card action row with actual provider state,
- * role access, and current refresh callbacks. OAuth composition stays intact.
+ * role access, and current refresh callbacks. No card pairs OAuth (U3).
  */
 
 describe("QuotaAnalytics rate-tier slot (FIX)", () => {
@@ -567,5 +567,13 @@ describe("QuotaAnalytics rate-tier slot (FIX)", () => {
     expect(within(tavilyArticle).queryByText(/connect/i)).toBeNull()
     const braveArticle = screen.getByRole("heading", { name: "Brave Search" }).closest("article") as HTMLElement
     expect(within(braveArticle).queryByText(/connect/i)).toBeNull()
+  })
+
+  it("mounts no Parallel OAuth pairing and calls no provider OAuth route", async () => {
+    const stub = renderTierShell(tierServer(), tierDashboard())
+    await waitForTavilyCard()
+    expect(screen.queryByRole("button", { name: /^Connect .* balance$/ })).toBeNull()
+    expect(screen.queryByTestId("oauth-device-open-parallel")).toBeNull()
+    expect(stub.requests.filter((r) => r.url.includes("/oauth"))).toHaveLength(0)
   })
 })

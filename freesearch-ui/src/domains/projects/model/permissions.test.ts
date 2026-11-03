@@ -7,6 +7,9 @@ describe("permission names", () => {
       settingsRead: "system.settings.read",
       settingsWrite: "system.settings.write",
       projectCreate: "project.create",
+      credentialsManage: "system.credentials.manage",
+      poolsManage: "system.pools.manage",
+      allocationsManage: "system.allocations.manage",
     })
     expect(PROJECT_PERMISSIONS).toEqual({
       read: "project.read",
@@ -19,6 +22,11 @@ describe("permission names", () => {
       tracesRead: "traces.read",
       usageRead: "usage.read",
       providersRead: "providers.read",
+      providersConfigure: "providers.configure",
+      credentialsManagePrivate: "credentials.manage_private",
+      settingsRead: "settings.read",
+      settingsWrite: "settings.write",
+      settingsCopy: "settings.copy",
     })
   })
 })

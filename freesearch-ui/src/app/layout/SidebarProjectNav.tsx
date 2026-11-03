@@ -1,5 +1,5 @@
 import type { LucideIcon } from "lucide-react"
-import { Activity, Gauge, KeyRound, LayoutDashboard, Search, Users } from "lucide-react"
+import { Activity, Gauge, KeyRound, LayoutDashboard, Plug, Search, SlidersHorizontal, Users } from "lucide-react"
 import { NavLink } from "react-router"
 import { useProjectScopeOptional } from "@/domains/projects"
 import {
@@ -16,6 +16,8 @@ const SECTION_ICONS: Record<ProjectSectionId, LucideIcon> = {
   playground: Search,
   activity: Activity,
   usage: Gauge,
+  providers: Plug,
+  settings: SlidersHorizontal,
   members: Users,
   apiKeys: KeyRound,
 }

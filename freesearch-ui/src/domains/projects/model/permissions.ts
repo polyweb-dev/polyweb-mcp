@@ -13,6 +13,12 @@ export const SYSTEM_PERMISSIONS = {
   settingsWrite: "system.settings.write",
   /** Backend gate of `POST /api/v1/projects` (system-scoped). */
   projectCreate: "project.create",
+  /** System-owned provider credentials and their project grants. */
+  credentialsManage: "system.credentials.manage",
+  /** Upstream quota pools and their credential links. */
+  poolsManage: "system.pools.manage",
+  /** Per-project allocations of shared pools. */
+  allocationsManage: "system.allocations.manage",
 } as const
 
 /** Project-scope actions. */
@@ -27,6 +33,11 @@ export const PROJECT_PERMISSIONS = {
   tracesRead: "traces.read",
   usageRead: "usage.read",
   providersRead: "providers.read",
+  providersConfigure: "providers.configure",
+  credentialsManagePrivate: "credentials.manage_private",
+  settingsRead: "settings.read",
+  settingsWrite: "settings.write",
+  settingsCopy: "settings.copy",
 } as const
 
 /**

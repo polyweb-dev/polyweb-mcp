@@ -3,15 +3,14 @@ import { useFreeSearch } from "@/context/useFreeSearch"
 import { QuotaPage } from "@/features/quota/ui/QuotaPage"
 import type { RateTierSlotArgs } from "@/features/quota/ui/ProviderLimitsCard"
 import { isManualQuotaEligible } from "@/features/quota/model/quotaEligibility"
-import { ParallelOAuthActions } from "../oauth/ParallelOAuthActions"
 import { TavilyRateTierSelect } from "../settings/TavilyRateTierSelect"
 
 /**
  * Compatibility shell: the usage route keeps rendering QuotaAnalytics while
- * the quota feature owns the page. OAuth pairing stays composed here (app
- * composition owns the quota overlay) so features never import each other.
- * The Tavily tier control stays composed here too, so the quota feature never
- * imports the Settings feature directly.
+ * the quota feature owns the page. The Tavily tier control stays composed
+ * here, so the quota feature never imports the Settings feature directly.
+ * Parallel OAuth no longer pairs from this page: OAuth belongs to one
+ * credential instance and connects from its credential row (U3).
  */
 export const QuotaAnalytics: FC<{
   manualQuotaEligible?: typeof isManualQuotaEligible
@@ -39,11 +38,6 @@ export const QuotaAnalytics: FC<{
   return (
     <QuotaPage
       manualQuotaEligible={manualQuotaEligible}
-      renderOAuthActions={(slotArgs) =>
-        slotArgs.providerId === "parallel" ? (
-          <ParallelOAuthActions {...slotArgs} />
-        ) : null
-      }
       renderRateTier={renderRateTier}
     />
   )
