@@ -116,6 +116,27 @@ def generate_headscale_key() -> str:
     return key
 
 
+def create_in_zones(args: list[str], config: dict[str, str], zones: list[str]) -> subprocess.CompletedProcess[str]:
+    """Try another zone only when GCP explicitly reports insufficient capacity."""
+    for index, zone in enumerate(zones):
+        zoned_args = [f"--zone={zone}" if arg.startswith("--zone=") else arg for arg in args]
+        print(f"[*] Trying zone {zone}...")
+        try:
+            return run_gcloud(zoned_args, config)
+        except subprocess.CalledProcessError as error:
+            detail = error.stderr or ""
+            print(detail, file=sys.stderr)
+            # Some gcloud versions render the canonical message without the code.
+            capacity_error = (
+                "ZONE_RESOURCE_POOL_EXHAUSTED" in detail
+                or "does not have enough resources available to fulfill the request" in " ".join(detail.split())
+            )
+            if not capacity_error or index == len(zones) - 1:
+                raise
+            print(f"[*] No capacity in {zone}; trying the next configured zone.")
+    raise ValueError("At least one worker zone is required")
+
+
 def generate_startup_script(
     instance_name: str,
     preauth_key: str,
@@ -169,6 +190,9 @@ def cmd_create(args: argparse.Namespace) -> int:
 
     project_id = args.project or config.get("GCP_PROJECT_ID")
     zone = args.zone or config.get("GCP_ZONE", "us-central1-a")
+    # An explicit --zone pins manual requests. The autoscaler uses this ordered list.
+    fallbacks = [] if args.zone else config.get("GCP_FALLBACK_ZONES", "").split(",")
+    zones = list(dict.fromkeys([zone] + [item.strip() for item in fallbacks if item.strip()]))
     machine_type = args.machine_type or default_machine
     disk_size = config.get("GCP_BOOT_DISK_SIZE", "50GB")
     image_family = config.get("GCP_IMAGE_FAMILY", "woodpecker-ci-worker")
@@ -230,7 +254,7 @@ def cmd_create(args: argparse.Namespace) -> int:
             f"--metadata-from-file=startup-script={tmp_path}",
             "--labels=role=ci-worker,managed-by=woodpecker",
         ]
-        res = run_gcloud(gcloud_args, config)
+        res = create_in_zones(gcloud_args, config, zones)
         print(res.stdout)
         print("=" * 70)
         print(f"[SUCCESS] Spot worker '{instance_name}' created successfully.")
@@ -266,22 +290,35 @@ def cmd_destroy(args: argparse.Namespace) -> int:
     """Destroy a GCP spot instance and clean up Headscale state."""
     config = get_config()
     project_id = args.project or config.get("GCP_PROJECT_ID")
-    zone = args.zone or config.get("GCP_ZONE", "us-central1-a")
 
     if not project_id:
         print("Error: GCP_PROJECT_ID not configured.", file=sys.stderr)
         return 1
 
     instance_name = args.name
-    print(f"[*] Deleting GCP instance '{instance_name}' in zone {zone}...")
-    gcloud_args = [
-        "compute", "instances", "delete", instance_name,
-        f"--project={project_id}",
-        f"--zone={zone}",
-        "--quiet",
-    ]
-    res = run_gcloud(gcloud_args, config)
-    print(res.stdout)
+    # Resolve the actual zone rather than assuming the primary zone after fallback.
+    result = run_gcloud([
+        "compute", "instances", "list", f"--project={project_id}",
+        f"--filter=name={instance_name} AND labels.role=ci-worker", "--format=json(name,zone)",
+    ], config)
+    matches = [item for item in json.loads(result.stdout) if item["name"] == instance_name]
+    if args.zone:
+        matches_in_zone = [item for item in matches if item["zone"].rsplit("/", 1)[-1] == args.zone]
+        if matches and not matches_in_zone:
+            raise RuntimeError(f"Worker {instance_name} exists in a different zone; omit --zone to discover it")
+        matches = matches_in_zone
+    if len(matches) > 1:
+        raise RuntimeError(f"Multiple workers named {instance_name}; specify --zone")
+    if matches:
+        zone = matches[0]["zone"].rsplit("/", 1)[-1]
+        print(f"[*] Deleting GCP instance '{instance_name}' in zone {zone}...")
+        res = run_gcloud([
+            "compute", "instances", "delete", instance_name,
+            f"--project={project_id}", f"--zone={zone}", "--quiet",
+        ], config)
+        print(res.stdout)
+    else:
+        print(f"[*] GCP worker '{instance_name}' is already absent; checking Headscale state.")
 
     # Check Headscale for leftover node record
     print(f"[*] Checking Headscale nodes for '{instance_name}'...")

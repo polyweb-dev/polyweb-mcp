@@ -62,6 +62,31 @@ It performs no package installation or Docker image pull.
 A systemd timer shuts the worker down after the configured lifetime.
 The autoscaler deletes idle workers after its idle timeout.
 
+## Capacity fallback
+
+Set `GCP_FALLBACK_ZONES="us-central1-b,us-central1-c,us-central1-f"` in the private `.env`.
+The worker CLI tries `GCP_ZONE` first, then each fallback zone in order.
+These zones use the Iowa regional price schedule.
+The Compute API confirmed `c3d-highcpu-60` support in all four zones on 2026-11-03.
+Machine type support does not guarantee free Spot capacity.
+
+Only a `ZONE_RESOURCE_POOL_EXHAUSTED` error or its canonical resource shortage message triggers another zone attempt.
+Quota, permission, configuration, and connection errors stop the request.
+An explicit `create --zone` selects one zone and disables fallback.
+The CLI reuses the startup script and Headscale key after confirmed capacity failures.
+
+The `destroy` command finds the worker zone through the Compute API.
+It does not assume the primary zone.
+If GCP already removed the Spot VM, the CLI still checks Headscale state.
+If multiple worker VMs have the same name, use `destroy --zone` to select one.
+
+The live check on 2026-11-03 exhausted capacity in `us-central1-a` and `us-central1-b`.
+The next attempt in `us-central1-c` returned `CPUS_PER_VM_FAMILY` with a regional C3D limit of 24.
+The mutation profile requires 60 CPUs. A zone change cannot bypass a regional quota.
+Request a sufficient family quota before another 60-core mutation run.
+Allow quota for the standard worker too if both profiles must run concurrently.
+The CLI stopped at the quota error. No test VM or disk remained.
+
 ## Verify a new image
 
 1. Trigger the `api-unit` workflow on `feature/project` through Woodpecker.
@@ -80,3 +105,4 @@ The fast startup script requires a golden image. A stock Ubuntu image requires t
 References: [GCP custom images](https://docs.cloud.google.com/compute/docs/images/create-custom),
 [Woodpecker workflow syntax](https://woodpecker-ci.org/docs/usage/workflow-syntax),
 [Woodpecker API](https://woodpecker-ci.org/api).
+Regional prices: [GCP Spot VM prices](https://cloud.google.com/spot-vms/pricing).
