@@ -22,21 +22,29 @@ steps:
         echo "Total Memory:  $(free -h | awk "/Mem:/ {print \$2}")"
         echo "Free Disk:     $(df -h / | awk "NR==2 {print \$4}")"
         echo "=========================================================="
-      - test -f .env || cp .env.example .env
-      - uv sync --frozen
       - |
-        bash -euo pipefail -c '
-          {
-            uv run freesearch-db upgrade
-            uv run behave tests/bdd/features/routing_latency.feature
-            uv run pytest tests/integration/latency/ -q
-          } 2>&1 | tee routing-latency-tests.log
+        bash scripts/ci/run-and-log.sh routing-latency-tests.log bash -euo pipefail -c '
+          test -f .env || cp .env.example .env
+          uv sync --frozen
+          uv run freesearch-db upgrade
+          uv run behave tests/bdd/features/routing_latency.feature
+          uv run pytest tests/integration/latency/ -q
+          echo "=========================================================="
+          echo "               ROUTING LATENCY REPORT                     "
+          echo "=========================================================="
+          if [ -f test_reports/routing_latency_offline.md ]; then
+            cat test_reports/routing_latency_offline.md
+          fi
+          find test_reports -name "*.md" -not -name "routing_latency_offline.md" -exec echo "--- {} ---" \; -exec cat {} \;
         '
-      - |
-        echo "=========================================================="
-        echo "               ROUTING LATENCY REPORT                     "
-        echo "=========================================================="
-        if [ -f test_reports/routing_latency_offline.md ]; then
-          cat test_reports/routing_latency_offline.md
-        fi
-        find test_reports -name "*.md" -not -name "routing_latency_offline.md" -exec echo "--- {} ---" \; -exec cat {} \;
+
+  upload-artifacts:
+    image: ghcr.io/astral-sh/uv:python3.12-bookworm-slim@sha256:e5b65587bce7de595f299855d7385fe7fca39b8a74baa261ba1b7147afa78e58
+    environment:
+      GITEA_UPLOAD_TOKEN:
+        from_secret: gitea_artifact_upload_token
+    commands:
+      - python scripts/ci/upload_gitea.py api-latency
+    when:
+      - event: manual
+        status: [success, failure]

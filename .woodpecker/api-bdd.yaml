@@ -22,7 +22,21 @@ steps:
         echo "Total Memory:  $(free -h | awk "/Mem:/ {print \$2}")"
         echo "Free Disk:     $(df -h / | awk "NR==2 {print \$4}")"
         echo "=========================================================="
-      - test -f .env || cp .env.example .env
-      - uv sync --frozen
-      - uv run freesearch-db upgrade
-      - uv run behave tests/bdd/features
+      - |
+        bash scripts/ci/run-and-log.sh bdd-acceptance-tests.log bash -euo pipefail -c '
+          test -f .env || cp .env.example .env
+          uv sync --frozen
+          uv run freesearch-db upgrade
+          uv run behave tests/bdd/features
+        '
+
+  upload-artifacts:
+    image: ghcr.io/astral-sh/uv:python3.12-bookworm-slim@sha256:e5b65587bce7de595f299855d7385fe7fca39b8a74baa261ba1b7147afa78e58
+    environment:
+      GITEA_UPLOAD_TOKEN:
+        from_secret: gitea_artifact_upload_token
+    commands:
+      - python scripts/ci/upload_gitea.py api-bdd
+    when:
+      - event: manual
+        status: [success, failure]
