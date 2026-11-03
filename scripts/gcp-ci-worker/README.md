@@ -62,7 +62,30 @@ It performs no package installation or Docker image pull.
 A systemd timer shuts the worker down after the configured lifetime.
 The autoscaler deletes idle workers after its idle timeout.
 
-## Capacity fallback
+## Mutation workers
+
+The mutation profile uses `n2-standard-64` Spot VMs with the `size=heavy` label.
+Set `GCP_MUTATION_MACHINE_TYPE="n2-standard-64"` and `GCP_MUTATION_REGIONS="us-west8,us-south1"` in the private `.env`.
+
+The CLI checks available Compute zones in region order: Phoenix, then Dallas.
+It selects the first available zone in each region.
+If the API lists no zone for a preferred region, the CLI skips that region.
+An explicit `--zone` selects one zone without region discovery.
+
+On 2026-11-03, the Compute API listed no Phoenix region or zones for this project.
+The Dallas N2 CPU quota was 200, with a total regional CPU quota of 100.
+Both reported zero usage before the allocation attempt.
+The N2 machine type has 64 vCPUs and 256 GiB of memory.
+The standard profile uses `c3d-highcpu-8` and its separate Iowa zone configuration.
+
+The single N2 allocation attempt on 2026-11-03 selected `us-south1-a` after the Phoenix availability check.
+GCP rejected it with `CPUS_ALL_REGIONS`: the global CPU quota was 32.
+The request required 64 vCPUs. The mutation suite did not start.
+
+A sufficient global CPU quota is required before another attempt.
+No second allocation attempt or pipeline restart occurred.
+
+## Standard worker capacity fallback
 
 Set `GCP_FALLBACK_ZONES="us-central1-b,us-central1-c,us-central1-f"` in the private `.env`.
 The worker CLI tries `GCP_ZONE` first, then each fallback zone in order.
@@ -71,7 +94,11 @@ The Compute API confirmed `c3d-highcpu-60` support in all four zones on 2026-11-
 Machine type support does not guarantee free Spot capacity.
 
 Only a `ZONE_RESOURCE_POOL_EXHAUSTED` error or its canonical resource shortage message triggers another zone attempt.
-Quota, permission, configuration, and connection errors stop the request.
+Permission, configuration, global quota, and connection errors stop the request.
+Regional CPU quota errors skip other zones in that region.
+They permit a subsequent attempt in a different configured region.
+The Iowa-only standard configuration stops on regional quota errors.
+
 An explicit `create --zone` selects one zone and disables fallback.
 The CLI reuses the startup script and Headscale key after confirmed capacity failures.
 
@@ -82,9 +109,9 @@ If multiple worker VMs have the same name, use `destroy --zone` to select one.
 
 The live check on 2026-11-03 exhausted capacity in `us-central1-a` and `us-central1-b`.
 The next attempt in `us-central1-c` returned `CPUS_PER_VM_FAMILY` with a regional C3D limit of 24.
-The mutation profile requires 60 CPUs. A zone change cannot bypass a regional quota.
+The former C3D mutation profile required 60 CPUs. A zone change cannot bypass a regional quota.
 
-Request a sufficient family quota before another 60-core mutation run.
+Request a sufficient family quota before another 60-core C3D mutation run.
 Allow quota for the standard worker too if both profiles must run concurrently.
 The CLI stopped at the quota error. No test VM or disk remained.
 

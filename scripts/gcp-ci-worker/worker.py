@@ -33,7 +33,8 @@ PROFILES: dict[str, dict[str, Any]] = {
         "lifetime": 60,
     },
     "mutation": {
-        "machine_type": "c3d-highcpu-60",
+        "machine_type": "n2-standard-64",
+        "regions": "us-west8,us-south1",
         "labels": "size=heavy,provider=gcp,spot=true",
         "lifetime": 30,
     },
@@ -117,8 +118,12 @@ def generate_headscale_key() -> str:
 
 
 def create_in_zones(args: list[str], config: dict[str, str], zones: list[str]) -> subprocess.CompletedProcess[str]:
-    """Try another zone only when GCP explicitly reports insufficient capacity."""
+    """Retry capacity failures or move to another region after a regional CPU quota failure."""
+    quota_regions: set[str] = set()
     for index, zone in enumerate(zones):
+        region = zone.rsplit("-", 1)[0]
+        if region in quota_regions:
+            continue
         zoned_args = [f"--zone={zone}" if arg.startswith("--zone=") else arg for arg in args]
         print(f"[*] Trying zone {zone}...")
         try:
@@ -131,10 +136,47 @@ def create_in_zones(args: list[str], config: dict[str, str], zones: list[str]) -
                 "ZONE_RESOURCE_POOL_EXHAUSTED" in detail
                 or "does not have enough resources available to fulfill the request" in " ".join(detail.split())
             )
-            if not capacity_error or index == len(zones) - 1:
+            regional_cpu_quota = (
+                "quota" in detail.lower() and "exceeded" in detail.lower()
+                and "region" in detail.lower() and "cpu" in detail.lower()
+                and "CPUS_ALL_REGIONS" not in detail
+            )
+            if regional_cpu_quota:
+                quota_regions.add(region)
+            next_zones = [candidate for candidate in zones[index + 1:]
+                          if candidate.rsplit("-", 1)[0] not in quota_regions]
+            if not (capacity_error or regional_cpu_quota) or not next_zones:
                 raise
-            print(f"[*] No capacity in {zone}; trying the next configured zone.")
+            print(f"[*] {'Regional CPU quota exceeded' if regional_cpu_quota else 'No capacity'} in {zone}; trying {next_zones[0]}.")
     raise ValueError("At least one worker zone is required")
+
+
+def worker_zones(config: dict[str, str], profile: str | None, explicit_zone: str | None) -> list[str]:
+    """Keep standard zone settings separate from mutation's preferred regions."""
+    if explicit_zone:
+        return [explicit_zone]
+    if profile == "mutation":
+        regions = list(dict.fromkeys(region.strip() for region in config.get(
+            "GCP_MUTATION_REGIONS", PROFILES["mutation"]["regions"]).split(",") if region.strip()))
+        result = run_gcloud([
+            "compute", "zones", "list", f"--project={config['GCP_PROJECT_ID']}",
+            "--filter=status=UP", "--format=json(name,region)",
+        ], config)
+        available = json.loads(result.stdout)
+        zones = []
+        for region in regions:
+            matches = sorted(item["name"] for item in available
+                             if item["region"].rsplit("/", 1)[-1] == region)
+            if matches:
+                zones.append(matches[0])
+            else:
+                print(f"[*] No available Compute zone in preferred region {region}; skipping it.")
+        if not zones:
+            raise RuntimeError("No Compute zones available in the configured mutation regions")
+        return zones
+    return list(dict.fromkeys([config.get("GCP_ZONE", "us-central1-a")] + [
+        zone.strip() for zone in config.get("GCP_FALLBACK_ZONES", "").split(",") if zone.strip()
+    ]))
 
 
 def generate_startup_script(
@@ -185,14 +227,12 @@ def cmd_create(args: argparse.Namespace) -> int:
     # Apply profile defaults if specified
     profile_cfg = PROFILES.get(getattr(args, "profile", None) or "")
     default_machine = profile_cfg["machine_type"] if profile_cfg else config.get("GCP_MACHINE_TYPE", "c3d-highcpu-8")
+    if getattr(args, "profile", None) == "mutation":
+        default_machine = config.get("GCP_MUTATION_MACHINE_TYPE", default_machine)
     default_labels = profile_cfg["labels"] if profile_cfg else config.get("WOODPECKER_AGENT_LABELS", "size=standard,provider=gcp,spot=true")
     default_lifetime = profile_cfg["lifetime"] if profile_cfg else int(config.get("MAX_VM_LIFETIME_MINUTES", "120"))
 
     project_id = args.project or config.get("GCP_PROJECT_ID")
-    zone = args.zone or config.get("GCP_ZONE", "us-central1-a")
-    # An explicit --zone pins manual requests. The autoscaler uses this ordered list.
-    fallbacks = [] if args.zone else config.get("GCP_FALLBACK_ZONES", "").split(",")
-    zones = list(dict.fromkeys([zone] + [item.strip() for item in fallbacks if item.strip()]))
     machine_type = args.machine_type or default_machine
     disk_size = config.get("GCP_BOOT_DISK_SIZE", "50GB")
     image_family = config.get("GCP_IMAGE_FAMILY", "woodpecker-ci-worker")
@@ -210,6 +250,18 @@ def cmd_create(args: argparse.Namespace) -> int:
         print("Error: WOODPECKER_AGENT_SECRET could not be found.", file=sys.stderr)
         return 1
 
+    # Optional service account authentication
+    sa_key = config.get("GCP_SERVICE_ACCOUNT_KEY")
+    if sa_key and Path(sa_key).is_file():
+        print("[*] Activating GCP service account...")
+        run_gcloud([
+            "auth", "activate-service-account",
+            f"--key-file={sa_key}",
+            f"--project={project_id}",
+        ], config)
+
+    zones = worker_zones({**config, "GCP_PROJECT_ID": project_id}, getattr(args, "profile", None), args.zone)
+    zone = zones[0]
     instance_name = args.name or f"gcp-worker-{int(time.time())}"
 
     print(f"[*] Generating ephemeral Headscale pre-auth key for '{instance_name}'...")
@@ -223,16 +275,6 @@ def cmd_create(args: argparse.Namespace) -> int:
         agent_labels=agent_labels,
         max_lifetime_min=lifetime_min,
     )
-
-    # Optional service account authentication
-    sa_key = config.get("GCP_SERVICE_ACCOUNT_KEY")
-    if sa_key and Path(sa_key).is_file():
-        print("[*] Activating GCP service account...")
-        run_gcloud([
-            "auth", "activate-service-account",
-            f"--key-file={sa_key}",
-            f"--project={project_id}",
-        ], config)
 
     with tempfile.NamedTemporaryFile("w", prefix="startup-", suffix=".sh", delete=False) as tmp:
         tmp.write(startup_content)
@@ -364,7 +406,7 @@ def main() -> int:
 
     # create
     p_create = subparsers.add_parser("create", help="Provision a new GCP Spot CI worker")
-    p_create.add_argument("--profile", choices=["standard", "mutation"], help="Preset profile (standard: c3d-highcpu-8 / size=standard; mutation: c3d-highcpu-60 / size=heavy)")
+    p_create.add_argument("--profile", choices=["standard", "mutation"], help="Preset profile (standard: c3d-highcpu-8 / size=standard; mutation: n2-standard-64 / size=heavy)")
     p_create.add_argument("--name", help="Custom instance name (default: auto-timestamped)")
     p_create.add_argument("--project", help="GCP Project ID (overrides .env)")
     p_create.add_argument("--zone", help="GCP Zone (overrides .env)")

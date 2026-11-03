@@ -125,13 +125,70 @@ class ZoneFallbackTests(unittest.TestCase):
                   "GCP_ZONE": "us-central1-a", "GCP_FALLBACK_ZONES": "us-central1-b, us-central1-c,us-central1-b"}
         for zone, expected in ((None, ["us-central1-a", "us-central1-b", "us-central1-c"]),
                                ("us-central1-f", ["us-central1-f"])):
-            args = argparse.Namespace(profile="mutation", project=None, zone=zone, machine_type=None,
+            args = argparse.Namespace(profile="standard", project=None, zone=zone, machine_type=None,
                                       labels=None, lifetime=None, name="test-worker")
             with patch.object(worker, "get_config", return_value=config), \
                     patch.object(worker, "generate_headscale_key", return_value="auth"), \
                     patch.object(worker, "create_in_zones", return_value=subprocess.CompletedProcess([], 0, stdout="")) as create:
                 self.assertEqual(worker.cmd_create(args), 0)
                 self.assertEqual(create.call_args.args[2], expected)
+                self.assertIn("--machine-type=c3d-highcpu-8", create.call_args.args[0])
+
+    def test_mutation_prefers_phoenix_then_dallas_regardless_of_api_order(self):
+        result = subprocess.CompletedProcess([], 0, stdout=json.dumps([
+            {"name": "us-south1-b", "region": "regions/us-south1"},
+            {"name": "us-south1-a", "region": "regions/us-south1"},
+            {"name": "us-west8-a", "region": "regions/us-west8"},
+        ]))
+        with patch.object(worker, "run_gcloud", return_value=result):
+            self.assertEqual(worker.worker_zones({"GCP_PROJECT_ID": "test"}, "mutation", None),
+                             ["us-west8-a", "us-south1-a"])
+
+    def test_unavailable_phoenix_is_skipped(self):
+        result = subprocess.CompletedProcess([], 0, stdout=json.dumps([
+            {"name": "us-south1-a", "region": "regions/us-south1"}]))
+        with patch.object(worker, "run_gcloud", return_value=result):
+            self.assertEqual(worker.worker_zones({"GCP_PROJECT_ID": "test"}, "mutation", None), ["us-south1-a"])
+
+    def test_mutation_explicit_zone_skips_region_discovery(self):
+        with patch.object(worker, "run_gcloud") as run:
+            self.assertEqual(worker.worker_zones({}, "mutation", "us-south1-c"), ["us-south1-c"])
+            run.assert_not_called()
+
+    def test_mutation_uses_n2_and_keeps_heavy_labels(self):
+        args = argparse.Namespace(profile="mutation", project=None, zone=None, machine_type=None,
+                                  labels=None, lifetime=None, name="test-worker")
+        with patch.object(worker, "get_config", return_value={"GCP_PROJECT_ID": "test", "WOODPECKER_AGENT_SECRET": "secret"}), \
+                patch.object(worker, "worker_zones", return_value=["us-south1-a"]), \
+                patch.object(worker, "generate_headscale_key", return_value="auth"), \
+                patch.object(worker, "generate_startup_script", return_value="#!/bin/bash\n") as startup, \
+                patch.object(worker, "create_in_zones", return_value=subprocess.CompletedProcess([], 0, stdout="")) as create:
+            self.assertEqual(worker.cmd_create(args), 0)
+            self.assertIn("--machine-type=n2-standard-64", create.call_args.args[0])
+            self.assertIn("--provisioning-model=SPOT", create.call_args.args[0])
+            self.assertEqual(startup.call_args.kwargs["agent_labels"], "size=heavy,provider=gcp,spot=true")
+            self.assertEqual(startup.call_args.kwargs["max_lifetime_min"], 30)
+
+    def test_regional_cpu_quota_skips_other_zones_in_same_region(self):
+        error = subprocess.CalledProcessError(1, "gcloud", stderr="Quota 'N2_CPUS' exceeded in region us-west8")
+        with patch.object(worker, "run_gcloud", side_effect=[error, subprocess.CompletedProcess([], 0, stdout="created")]) as run:
+            worker.create_in_zones(["--zone=us-west8-a"], {}, ["us-west8-a", "us-west8-b", "us-south1-a"])
+            self.assertEqual(run.call_count, 2)
+            self.assertIn("--zone=us-south1-a", run.call_args.args[0])
+
+    def test_global_cpu_quota_never_tries_another_region(self):
+        error = subprocess.CalledProcessError(1, "gcloud", stderr="Quota 'CPUS_ALL_REGIONS' exceeded in all regions")
+        with patch.object(worker, "run_gcloud", side_effect=error) as run:
+            with self.assertRaises(subprocess.CalledProcessError):
+                worker.create_in_zones(["--zone=us-west8-a"], {}, ["us-west8-a", "us-south1-a"])
+            self.assertEqual(run.call_count, 1)
+
+    def test_regional_cpu_quota_stops_when_all_zones_share_region(self):
+        error = subprocess.CalledProcessError(1, "gcloud", stderr="Quota 'CPUS_PER_VM_FAMILY' exceeded in region us-central1")
+        with patch.object(worker, "run_gcloud", side_effect=error) as run:
+            with self.assertRaises(subprocess.CalledProcessError):
+                worker.create_in_zones(["--zone=us-central1-a"], {}, ["us-central1-a", "us-central1-b"])
+            self.assertEqual(run.call_count, 1)
 
     def test_destroy_discovers_fallback_zone(self):
         result = subprocess.CompletedProcess([], 0, stdout=json.dumps([{"name": "test", "zone": "zones/us-central1-b"}]))
