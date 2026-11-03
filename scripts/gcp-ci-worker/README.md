@@ -83,6 +83,7 @@ If multiple worker VMs have the same name, use `destroy --zone` to select one.
 The live check on 2026-11-03 exhausted capacity in `us-central1-a` and `us-central1-b`.
 The next attempt in `us-central1-c` returned `CPUS_PER_VM_FAMILY` with a regional C3D limit of 24.
 The mutation profile requires 60 CPUs. A zone change cannot bypass a regional quota.
+
 Request a sufficient family quota before another 60-core mutation run.
 Allow quota for the standard worker too if both profiles must run concurrently.
 The CLI stopped at the quota error. No test VM or disk remained.
