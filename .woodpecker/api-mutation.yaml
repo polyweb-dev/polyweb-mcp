@@ -24,4 +24,4 @@ steps:
         echo "=========================================================="
       - test -f .env || cp .env.example .env
       - uv sync --frozen
-      - uv run pytest --gremlins --gremlin-workers=auto --gremlin-targets=src/freesearch --gremlin-report=console,json --gremlin-cache
+      - uv run pytest --gremlins -n auto --gremlin-workers=auto --gremlin-targets=src/freesearch --gremlin-report=console,json --gremlin-cache
