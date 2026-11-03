@@ -1,8 +1,0 @@
-# Insert inside the existing Woodpecker hostname block before its default proxy.
-@artifacts path /artifacts /artifacts/*
-handle @artifacts {
-    reverse_proxy 127.0.0.1:9080
-}
-handle {
-    reverse_proxy 127.0.0.1:8000
-}
