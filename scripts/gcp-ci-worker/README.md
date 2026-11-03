@@ -86,6 +86,23 @@ The request required 64 vCPUs. The mutation suite did not start.
 A sufficient global CPU quota is required before another attempt.
 No second allocation attempt or pipeline restart occurred.
 
+## Global CPU quota request
+
+The quota preference `woodpecker-global-cpus-64` requests exactly 64 CPUs for `CPUS-ALL-REGIONS-per-project`.
+The Cloud Quotas API accepted the request on 2026-11-03.
+Google approved it at 02:00:47 UTC. Compute project-info confirmed an effective global CPU limit of 64.
+Use the project as the API quota consumer to avoid the CLI consumer project request limit.
+
+```bash
+gcloud quotas preferences describe woodpecker-global-cpus-64 \
+  --project=polyweb-513423 --billing-project=polyweb-513423 --format=json
+gcloud compute project-info describe --project=polyweb-513423 --format=json
+```
+
+Check `quotaConfig.grantedValue` and `reconciling` in the preference response.
+Check the effective `CPUS_ALL_REGIONS` quota in the Compute response before another allocation.
+The requested value does not mean that Google approved the increase.
+
 ## Standard worker capacity fallback
 
 Set `GCP_FALLBACK_ZONES="us-central1-b,us-central1-c,us-central1-f"` in the private `.env`.
