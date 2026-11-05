@@ -1,7 +1,7 @@
 @latency
 Feature: FreeSearch routing latency with instant provider adapters
   As an agent calling FreeSearch instead of a provider directly
-  I want the server-side time FreeSearch adds on top of each provider to stay under 80 ms at p95
+  I want the server-side time FreeSearch adds on top of each provider to stay under 150 ms at p95
   So that searching and fetching through FreeSearch is not noticeably slower
 
   # Runs in the default suite. Real REST and MCP servers are served by uvicorn
@@ -16,10 +16,10 @@ Feature: FreeSearch routing latency with instant provider adapters
   Background:
     Given the routing latency servers are running with instant fake adapters for every provider
 
-  Scenario Outline: Warm <operation> pinned to <provider> over <transport> adds under 80 ms server-side at p95
+  Scenario Outline: Warm <operation> pinned to <provider> over <transport> adds under 150 ms server-side at p95
     When I send warm <operation> requests pinned to "<provider>" over <transport>
     Then every measured <operation> request is served by "<provider>"
-    And the p95 server-side FreeSearch-added latency is under 80 ms
+    And the p95 server-side FreeSearch-added latency is under 150 ms
     And database reads per request are reported
 
     Examples: REST

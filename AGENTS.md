@@ -20,6 +20,16 @@ These rules for the orchestrator that are distilled from prior agent runs. Follo
 - **Run Behave only when it matters.** Run it when BDD features or steps change, or at the final gate. Leave out the `@latency` scenarios in routine runs: `uv run --no-sync behave --tags="not @live and not @latency"`. Passing `--tags` replaces the default `not @live`, so keep it in the expression. Run them only when the request path changes and at the card's latency gate.
 - **Batch feedback.** Review a whole agent round, then send all defects and rulings in one handoff. Ask agents for exact failing test IDs so the next round can run only those tests first.
 
+## Cloud test runs (Woodpecker CI)
+
+- **Local vs cloud**: run **unit tests locally**. All other suites (integration, BDD, latency, live, mutation) must run on Woodpecker CI — they execute on autoscaled GCP Spot workers so the VPS stays free.
+- **Triggering**: the `executor` MCP server exposes a `woodpecker` integration. Discover tools inside `execute` with `tools.search({ namespace: "woodpecker", query: "..." })` and inspect shapes via `tools.describe.tool({ path })` before calling.
+- **Single workflow**: `tools.woodpecker.org.agent.trigger_pipeline({ repo_id: 1, branch: "<branch>", workflow: "<name>" })` where `<name>` is a `.woodpecker/*.yaml` basename (e.g. `api-latency`). Omitting `workflow` runs ALL manual workflows — expensive (live provider calls, long mutation runs).
+- The branch must be **pushed to origin**; local-only branches cannot be triggered. Monitor with `get_pipeline`, debug with `get_step_logs`, stop with `cancel_pipeline`.
+- **Artifacts**: each workflow uploads `reports.zip` (log + `test_reports/`) to Gitea as generic package `freesearch-<workflow>` versioned `pipeline-<N>-r<reruns>-<ns>`. Download with `python3 scripts/gitea_packages.py download <pkg> <version> reports.zip` (lands in `.gitea-packages/`; `python` is unavailable — use `python3`).
+- **Live suite**: CI has no provider secrets, so `@live` scenarios skip there. Run them locally and sparingly (they spend API credits): `FREESEARCH_RUN_LIVE=1 uv run --no-sync --env-file .env behave --tags="@live"`. The harness reads keys from the process env only. Tinyfish reads `FREESEARCH_TINYFISH_API_KEY` (legacy `TINYFISH_API_KEY` also accepted); blank values count as absent. Keyless Keenable scenarios always run without a key; keyed ones need `FREESEARCH_KEENABLE_API_KEY`.
+- **api-latency step order**: the workflow runs the Behave latency feature before `pytest tests/integration/latency` under `set -e`, so the pytest gate only runs when every Behave scenario passes. The gate is p95 added latency under 150 ms; reports also record mean, p90, and p99. Offline added latency on CI is about 65–85 ms p50 and varies by spot agent.
+
 ## UI unit tests
 - We only support desktop view, not the mobile view.
 - In `freesearch-ui/src`, colocate each unit/component test with its source as `<basename>.test.ts` or `<basename>.test.tsx`; keep one canonical test file per source and never add suffix variants.

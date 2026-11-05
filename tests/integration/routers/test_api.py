@@ -293,14 +293,14 @@ async def test_stale_first_snapshot_then_new_snapshot(
     entered = asyncio.Event()
     release = asyncio.Event()
     planned_quotas: list[list[Decimal | None]] = []
-    original_plan = ExecutionService._health_and_quota
+    original_quota = ExecutionService._leg_quota
 
-    async def capture_plan(self: ExecutionService, legs: Any) -> Any:
-        health, quotas = await original_plan(self, legs)
-        planned_quotas.append([snapshot.remaining for snapshot in quotas.values()])
-        return health, quotas
+    async def capture_plan(self: ExecutionService, leg: Any) -> Any:
+        snapshot = await original_quota(self, leg)
+        planned_quotas.append([] if snapshot is None else [snapshot.remaining])
+        return snapshot
 
-    monkeypatch.setattr(ExecutionService, "_health_and_quota", capture_plan)
+    monkeypatch.setattr(ExecutionService, "_leg_quota", capture_plan)
     try:
         positive = QuotaSnapshot(
             provider="exa",
@@ -393,7 +393,10 @@ async def test_stale_first_snapshot_then_new_snapshot(
 async def test_auto_route_plan_read_budget(
     tmp_path: Path, auth_secret: str, monkeypatch: Any
 ) -> None:
-    """M6: AUTO plans batch health and read quota only for bound legs.
+    """M6: AUTO batches health once and reads quota only for prepared legs.
+
+    The leg chain prepares the first leg and, while it runs, the next one, so
+    a successful AUTO request reads exactly two scoped quotas.
 
     The warm SELECT count is printed as a diagnostic report, never asserted:
     routing latency (not a fixed read count) is the acceptance measure.
@@ -452,7 +455,7 @@ async def test_auto_route_plan_read_budget(
         orig_health = SQLiteRepository.latest_health_batch
         orig_quota = SQLiteRepository.latest_quota
         orig_quota_batch = SQLiteRepository.latest_quota_batch
-        orig_plan = ExecutionService._health_and_quota
+        orig_plan = ExecutionService._leg_quota
 
         async def _count_health(self: SQLiteRepository, providers: Any) -> Any:
             health_calls.append(list(providers))
@@ -468,17 +471,17 @@ async def test_auto_route_plan_read_budget(
                 quota_batch_calls.append(list(providers))
             return await orig_quota_batch(self, providers)
 
-        async def _count_plan(self: ExecutionService, legs: Any) -> Any:
+        async def _count_plan(self: ExecutionService, leg: Any) -> Any:
             token = in_plan.set(True)
             try:
-                return await orig_plan(self, legs)
+                return await orig_plan(self, leg)
             finally:
                 in_plan.reset(token)
 
         SQLiteRepository.latest_health_batch = _count_health  # type: ignore[method-assign]
         SQLiteRepository.latest_quota = _count_quota  # type: ignore[method-assign]
         SQLiteRepository.latest_quota_batch = _count_quota_batch  # type: ignore[method-assign]
-        ExecutionService._health_and_quota = _count_plan  # type: ignore[method-assign]
+        ExecutionService._leg_quota = _count_plan  # type: ignore[method-assign]
         select_counts: list[int] = [0]
 
         def _before_cursor(
@@ -576,16 +579,16 @@ async def test_auto_route_plan_read_budget(
                     assert set(health_calls[0]) == set(SEVEN_PROVIDERS)
                     expected_reads = {(name, bindings[name][0], None) for name in SEVEN_PROVIDERS}
                     assert not quota_batch_calls
-                    assert len(quota_calls) == len(expected_reads)
-                    assert set(quota_calls) == expected_reads
+                    assert len(quota_calls) == 2
+                    assert set(quota_calls) <= expected_reads
                     assert cold_health >= 1
-                    assert len(cold_quota) == len(expected_reads)
-                    assert set(cold_quota) == expected_reads
+                    assert len(cold_quota) == 2
+                    assert set(cold_quota) <= expected_reads
         finally:
             SQLiteRepository.latest_health_batch = orig_health  # type: ignore[method-assign]
             SQLiteRepository.latest_quota = orig_quota  # type: ignore[method-assign]
             SQLiteRepository.latest_quota_batch = orig_quota_batch  # type: ignore[method-assign]
-            ExecutionService._health_and_quota = orig_plan  # type: ignore[method-assign]
+            ExecutionService._leg_quota = orig_plan  # type: ignore[method-assign]
             if listened and sync_engine is not None:
                 with suppress(Exception):
                     sa_event.remove(sync_engine, "before_cursor_execute", _before_cursor)

@@ -17,8 +17,13 @@ from freesearch.adapters.firecrawl import FirecrawlAdapter
 from freesearch.adapters.keenable import KeenableAdapter
 from freesearch.adapters.parallel import ParallelAdapter
 from freesearch.adapters.tavily import TavilyAdapter
+from freesearch.adapters.tinyfish import TinyfishAdapter
 from freesearch.infrastructure.http import create_async_client
-from freesearch.infrastructure.secrets import PROVIDER_ENV_VARS, ProviderName
+from freesearch.infrastructure.secrets import (
+    PROVIDER_ENV_VARS,
+    ProviderName,
+    provider_env_var_names,
+)
 
 _LIVE_GATE = "FREESEARCH_RUN_LIVE"
 
@@ -29,10 +34,15 @@ def _harness_env_key(provider: ProviderName) -> str | None:
     This is explicitly NOT production resolution: vault-only production code
     never reads ``FREESEARCH_*`` at runtime. The harness reads the env only
     to decide whether a ``@live`` scenario can run and to inject the key
-    explicitly via the adapter ``api_key`` seam.
+    explicitly via the adapter ``api_key`` seam. The canonical variable wins
+    over legacy spellings, and a blank value counts as absent.
     """
 
-    return os.environ.get(PROVIDER_ENV_VARS[provider])
+    for name in provider_env_var_names(provider):
+        value = os.environ.get(name)
+        if value and value.strip():
+            return value.strip()
+    return None
 
 
 def before_all(context: Any) -> None:
@@ -44,6 +54,7 @@ def before_all(context: Any) -> None:
     context.has_parallel_key = _harness_env_key(ProviderName.PARALLEL) is not None
     context.has_youcom_key = _harness_env_key(ProviderName.YOU) is not None
     context.has_keenable_key = _harness_env_key(ProviderName.KEENABLE) is not None
+    context.has_tinyfish_key = _harness_env_key(ProviderName.TINYFISH) is not None
 
 
 def before_scenario(context: Any, scenario: Any) -> None:
@@ -145,8 +156,12 @@ def _adapter_for(client: Any, scenario: Any) -> Any:
         return ParallelAdapter(client, api_key=_explicit_api_key(ProviderName.PARALLEL))
     if _has_firecrawl_tag(scenario):
         return FirecrawlAdapter(client, api_key=_explicit_api_key(ProviderName.FIRECRAWL))
-    if _has_keenable_tag(scenario) or _has_keenable_keyed_tag(scenario):
+    if _has_keenable_keyed_tag(scenario):
         return KeenableAdapter(client, api_key=_explicit_api_key(ProviderName.KEENABLE))
+    if _has_keenable_tag(scenario):
+        return KeenableAdapter(client, api_key=None)
+    if _has_tinyfish_live_tag(scenario):
+        return TinyfishAdapter(client, api_key=_explicit_api_key(ProviderName.TINYFISH))
     if _has_brave_tag(scenario):
         return BraveAdapter(client, api_key=_explicit_api_key(ProviderName.BRAVE))
     if _is_exa_scenario(scenario):
@@ -189,6 +204,8 @@ def _missing_live_key_reason(context: Any, scenario: Any) -> str | None:
         return _absent_key_reason(
             context, "has_keenable_key", ProviderName.KEENABLE, "Keenable keyed"
         )
+    if _has_tinyfish_live_tag(scenario):
+        return _absent_key_reason(context, "has_tinyfish_key", ProviderName.TINYFISH, "Tinyfish")
     if _has_brave_tag(scenario):
         return _absent_key_reason(context, "has_brave_key", ProviderName.BRAVE, "Brave")
     if _is_tavily_scenario(scenario):
@@ -208,7 +225,7 @@ def _is_tavily_scenario(scenario: Any) -> bool:
     ``@quota``) carry no provider tag, so a tag check alone cannot gate them.
     Instead, for a ``@live`` scenario this predicate is the exact complement of
     every other provider selection in ``_adapter_for`` - parallel, firecrawl,
-    keenable, keenable-keyed, brave - plus the Exa feature check and the
+    keenable, keenable-keyed, tinyfish-live, brave - plus the Exa feature check and the
     separately gated ``@youcom`` path.
 
     The ``@live`` requirement is what keeps the gate live-only: an ordinary
@@ -223,6 +240,7 @@ def _is_tavily_scenario(scenario: Any) -> bool:
         or _has_firecrawl_tag(scenario)
         or _has_keenable_tag(scenario)
         or _has_keenable_keyed_tag(scenario)
+        or _has_tinyfish_live_tag(scenario)
         or _has_brave_tag(scenario)
         or _is_exa_scenario(scenario)
         or _has_youcom_tag(scenario)
@@ -472,6 +490,16 @@ def _has_keenable_keyed_tag(scenario: Any) -> bool:
     if not tags:
         return False
     return any(str(getattr(tag, "name", tag)).lstrip("@") == "keenable-keyed" for tag in tags)
+
+
+def _has_tinyfish_live_tag(scenario: Any) -> bool:
+    """Identify live Tinyfish scenarios, including feature-level tags."""
+    tags = getattr(scenario, "tags", None) or ()
+    feature_tags = getattr(getattr(scenario, "feature", None), "tags", None) or ()
+    return any(
+        str(getattr(tag, "name", tag)).lstrip("@") == "tinyfish-live"
+        for tag in (*tags, *feature_tags)
+    )
 
 
 def _has_tinyfish_tag(scenario: Any) -> bool:

@@ -490,6 +490,9 @@ async def test_zero_share_project_is_explicit_best_effort_and_only_served_on_idl
         guaranteed_b = world.submit("B", *(f"b{i}" for i in range(4)))
         guaranteed = list(guaranteed_a) + list(guaranteed_b)
         submitted_guaranteed = len(guaranteed)
+        await world.wait_starts(2)
+        await world.wait_queued("A", 3)
+        await world.wait_queued("B", 3)
         best_effort = world.submit("C", *(f"c{i}" for i in range(4)))
 
         def never_while_guaranteed_demand() -> None:

@@ -695,23 +695,29 @@ class CredentialService:
         *,
         operation: CredentialOperation,
         expected_generation: int | None = None,
+        usable: CredentialInstanceRead | None = None,
     ) -> ResolvedCredential | None:
         """Load one credential's secret inside the caller's read snapshot.
 
         Execution resolution shares its binding snapshot with this read, so a
         burst of concurrent requests never nests a second pooled connection
-        per attempt (which could deadlock a bounded SQLite pool).
+        per attempt (which could deadlock a bounded SQLite pool). A caller
+        that already ran :meth:`usable_credential_in_session` for this
+        credential and operation in the same read snapshot passes its result
+        as ``usable``; the snapshot guarantees an identical re-read, so it is
+        not repeated.
         """
 
         self._rollout.require_management()
         if context.account_id != self._account_id:
             raise ValueError("project context account does not match the installation account")
-        usable = await self.usable_credential_in_session(
-            session,
-            project_id=context.project_id,
-            credential_id=credential_id,
-            operation=operation,
-        )
+        if usable is None or usable.id != credential_id:
+            usable = await self.usable_credential_in_session(
+                session,
+                project_id=context.project_id,
+                credential_id=credential_id,
+                operation=operation,
+            )
         if usable is None:
             return None
         if expected_generation is not None and usable.generation != expected_generation:

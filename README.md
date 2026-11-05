@@ -73,6 +73,12 @@ This installs both core runtime and development dependencies (FastAPI, Alembic, 
 
 FreeSearch uses SQLite for telemetry, quota snapshots, runtime settings, and provider health. The default database path is `freesearch.db` (override with the `FREESEARCH_DB` environment variable).
 
+For manual project testing, `uv run python scripts/seed_dev.py` creates a disposable
+`freesearch.dev.db` with five users, three projects, and encrypted provider credentials
+imported from `.env`. Set `FREESEARCH_DB=freesearch.dev.db` and restart the backend.
+See [the development database guide](docs/development-database.md) for accounts,
+memberships, provider-key variables, and recreation instructions.
+
 FreeSearch includes a dedicated database management CLI tool (`freesearch-db`):
 
 - **Check migration & schema status:**
