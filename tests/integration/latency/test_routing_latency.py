@@ -52,7 +52,7 @@ from tests.fixtures.latency import (
     seed_repository,
     warm_route_caches,
 )
-from tests.fixtures.latency_servers import ProviderClock
+from tests.fixtures.latency_servers import ProviderClock, lift_repository_rate_windows
 
 SEVEN_PROVIDERS = ["exa", "firecrawl", "tavily", "parallel", "you", "brave", "keenable"]
 
@@ -580,6 +580,7 @@ async def test_rest_search_latency(
     detach: Callable[[], None] | None = None
     try:
         await seed_repository(repository, SEVEN_PROVIDERS)
+        await lift_repository_rate_windows(repository, SEVEN_PROVIDERS)
         detach = attach_select_counter(repository, selects, _READS_UNAVAILABLE_REASONS)
         measured_selects = selects if detach is not None else None
         adapters = [OfflineAdapter(name) for name in SEVEN_PROVIDERS]
@@ -699,6 +700,7 @@ async def test_rest_fetch_latency(
     detach: Callable[[], None] | None = None
     try:
         await seed_repository(repository, SEVEN_PROVIDERS)
+        await lift_repository_rate_windows(repository, SEVEN_PROVIDERS)
         detach = attach_select_counter(repository, selects, _READS_UNAVAILABLE_REASONS)
         measured_selects = selects if detach is not None else None
         adapters = [OfflineAdapter(name) for name in SEVEN_PROVIDERS]
@@ -787,6 +789,7 @@ async def test_mcp_search_latency(
     detach: Callable[[], None] | None = None
     try:
         await seed_repository(repository, SEVEN_PROVIDERS)
+        await lift_repository_rate_windows(repository, SEVEN_PROVIDERS)
         detach = attach_select_counter(repository, selects, _READS_UNAVAILABLE_REASONS)
         measured_selects = selects if detach is not None else None
         adapters = [OfflineAdapter(name) for name in SEVEN_PROVIDERS]
@@ -887,6 +890,7 @@ async def test_mcp_fetch_latency(
     detach: Callable[[], None] | None = None
     try:
         await seed_repository(repository, SEVEN_PROVIDERS)
+        await lift_repository_rate_windows(repository, SEVEN_PROVIDERS)
         detach = attach_select_counter(repository, selects, _READS_UNAVAILABLE_REASONS)
         measured_selects = selects if detach is not None else None
         adapters = [OfflineAdapter(name) for name in SEVEN_PROVIDERS]

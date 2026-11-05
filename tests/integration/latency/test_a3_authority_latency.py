@@ -61,7 +61,7 @@ from tests.fixtures.latency import (
     seed_repository,
     warm_route_caches,
 )
-from tests.fixtures.latency_servers import ProviderClock
+from tests.fixtures.latency_servers import ProviderClock, lift_repository_rate_windows
 
 SEVEN_PROVIDERS = ["exa", "firecrawl", "tavily", "parallel", "you", "brave", "keenable"]
 
@@ -367,6 +367,7 @@ async def test_a3_rest_and_mcp_authority_latency(
     adapters = [OfflineAdapter(name) for name in SEVEN_PROVIDERS]
     try:
         await seed_repository(repository, SEVEN_PROVIDERS)
+        await lift_repository_rate_windows(repository, SEVEN_PROVIDERS)
         store = _latency_store(repository)
         app = create_app(adapters, repository=repository, secret_store=store)
         commit = git_commit()

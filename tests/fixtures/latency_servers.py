@@ -484,11 +484,7 @@ class RoutingLatencyHarness:
         target.repository = repository
         await seed_repository(repository, self.providers)
         if self._lift_rate_windows:
-            # The served app's limit service loads these stored records when
-            # its lifespan (REST) or first MCP session initializes the catalog.
-            limits = ProviderLimitsService(repository.limits)
-            await limits.initialize()
-            await lift_rate_windows(limits, self.providers)
+            await lift_repository_rate_windows(repository, self.providers)
         return repository
 
     async def _serve(self, target: _Target, app: ASGIApp) -> None:
@@ -883,6 +879,21 @@ async def lift_rate_windows(limits: ProviderLimitsService, providers: Iterable[s
                 rate=RateBlock(windows=windows, published=record.rate.published),
             )
         )
+
+
+async def lift_repository_rate_windows(
+    repository: SQLiteRepository, providers: Iterable[str]
+) -> None:
+    """Persist lifted catalog rate windows before any served app loads them.
+
+    The app's limit service reads these stored records when its lifespan
+    (REST) or first MCP session initializes the catalog, so call this before
+    composing either transport over ``repository``.
+    """
+
+    limits = ProviderLimitsService(repository.limits)
+    await limits.initialize()
+    await lift_rate_windows(limits, providers)
 
 
 def minimum_request_intervals(providers: Iterable[str]) -> dict[str, float]:
