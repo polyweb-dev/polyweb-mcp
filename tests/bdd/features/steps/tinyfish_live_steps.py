@@ -55,12 +55,12 @@ def step_then_live_tinyfish_results_valid_url(context: Any) -> None:
         )
 
 
-@then("the live Tinyfish search total should match the result count")
+@then("the live Tinyfish search total should cover the result count")
 def step_then_live_tinyfish_total(context: Any) -> None:
-    """Verify the reported total equals the number of normalized results."""
+    """Verify the vendor total (passed through by the adapter) covers the page."""
     response = context.search_response
-    assert response.total_results == len(response.results), (
-        f"Total {response.total_results} does not match {len(response.results)} results"
+    assert response.total_results >= len(response.results), (
+        f"Total {response.total_results} is below {len(response.results)} results"
     )
 
 

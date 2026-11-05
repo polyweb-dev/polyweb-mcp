@@ -13,7 +13,7 @@ Feature: Live Tinyfish search and fetch
     When a live Tinyfish search runs for "python programming language" with limit 1
     Then the live Tinyfish search response should be provider tinyfish
     And each live Tinyfish result should have a valid URL
-    And the live Tinyfish search total should match the result count
+    And the live Tinyfish search total should cover the result count
 
   @fetch
   Scenario: Live Tinyfish fetch extracts bounded content
