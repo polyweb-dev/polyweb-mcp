@@ -13,7 +13,7 @@ Feature: Live provider search smoke coverage
     When I open the projects list
     And I choose the live e2e project in the project selector
     And I follow the "Playground" link of the Project navigation
-    Then I should see the "Search Playground" heading
+    Then I should see the "Playground" heading
 
   @live @search
   Scenario Outline: Live search via <provider> renders results on retry without API failure

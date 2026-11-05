@@ -114,7 +114,7 @@ describe("DashboardShell project scope", () => {
     const user = userEvent.setup()
     renderWithAccess(`/p/${PROJECT_ALPHA_ID}/api-keys`)
 
-    expect(await screen.findByRole("heading", { level: 1, name: "API keys" })).toBeInTheDocument()
+    expect(await screen.findByRole("heading", { name: "API keys" })).toBeInTheDocument()
     await user.click(screen.getByRole("button", { name: "Select project (current: Alpha)" }))
     await user.click(screen.getByRole("menuitem", { name: /Beta/ }))
 
@@ -132,13 +132,13 @@ describe("DashboardShell project scope", () => {
         "Members",
       ])
     )
-    expect(screen.queryByRole("heading", { level: 1, name: "API keys" })).toBeNull()
+    expect(screen.queryByRole("heading", { name: "API keys" })).toBeNull()
   })
 })
 
 describe("DashboardShell former global sections", () => {
   it.each([
-    ["/playground", "playground", "Search Playground"],
+    ["/playground", "playground", "Playground"],
     ["/activity", "activity", "Activity"],
   ])("redirects %s to the same section of the last project", async (path, segment, heading) => {
     writeLastProject(adminAccountFixture().id, PROJECT_BETA_ID)
@@ -157,12 +157,12 @@ describe("DashboardShell former global sections", () => {
     const user = userEvent.setup()
     renderWithAccess(`/p/${PROJECT_ALPHA_ID}/playground`)
 
-    expect(await screen.findByRole("heading", { name: "Search Playground" })).toBeInTheDocument()
+    expect(await screen.findByRole("heading", { name: "Playground" })).toBeInTheDocument()
     await user.click(screen.getByRole("button", { name: "Select project (current: Alpha)" }))
     await user.click(screen.getByRole("menuitem", { name: /Beta/ }))
 
     await waitFor(() => expect(location()).toBe(`/p/${PROJECT_BETA_ID}/playground`))
-    expect(await screen.findByRole("heading", { name: "Search Playground" })).toBeInTheDocument()
+    expect(await screen.findByRole("heading", { name: "Playground" })).toBeInTheDocument()
   })
 })
 
@@ -201,7 +201,7 @@ describe("DashboardShell access states", () => {
     ["/system/capacity", "Capacity"],
   ])("opens %s for the system administrator", async (path, heading) => {
     renderWithAccess(path)
-    expect(await within(await screen.findByRole("main")).findByRole("heading", { level: 1, name: heading })).toBeInTheDocument()
+    expect(await within(await screen.findByRole("main")).findByRole("heading", { name: heading })).toBeInTheDocument()
     expect(location()).toBe(path)
   })
 

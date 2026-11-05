@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { render, screen, waitFor } from "@testing-library/react"
+import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { MemoryRouter } from "react-router"
 import { err, installFetchStub, ok } from "@/test/fetchMock"
@@ -44,16 +44,20 @@ describe("ProjectMembersPage", () => {
     await screen.findByText("admin@example.com")
     expect(screen.getByText("Project admin")).toBeInTheDocument()
     expect(screen.queryByRole("form", { name: "Add member" })).toBeNull()
-    expect(screen.queryByRole("button", { name: "Suspend" })).toBeNull()
+    expect(screen.queryByRole("button", { name: /Actions for / })).toBeNull()
   })
 
   it("renders manage and role controls from effective permissions", async () => {
     renderPage(["members.read", "members.manage", "roles.assign"])
     await screen.findByText("admin@example.com")
     expect(screen.getByLabelText("Account email")).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: "Suspend" })).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: "Remove" })).toBeInTheDocument()
-    expect(screen.getByLabelText("Add role to admin@example.com")).toBeInTheDocument()
+    const user = userEvent.setup()
+    await user.click(
+      screen.getByRole("button", { name: "Actions for admin@example.com" })
+    )
+    expect(await screen.findByRole("button", { name: "Suspend" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Remove from project" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Remove Project admin role" })).toBeInTheDocument()
   })
 
   it("shows the last-admin message on the 409 conflict", async () => {
@@ -75,8 +79,11 @@ describe("ProjectMembersPage", () => {
       </MemoryRouter>
     )
     const user = userEvent.setup()
+    await user.click(await screen.findByRole("button", { name: "Actions for admin@example.com" }))
     await user.click(await screen.findByRole("button", { name: "Suspend" }))
-    const alert = await screen.findByRole("alert")
+    const dialog = await screen.findByRole("dialog")
+    await user.click(within(dialog).getByRole("button", { name: "Suspend" }))
+    const alert = await within(dialog).findByRole("alert")
     expect(alert).toHaveTextContent(
       "A project must keep at least one active administrator. Make another active member a project admin first."
     )
@@ -101,8 +108,11 @@ describe("ProjectMembersPage", () => {
       </MemoryRouter>
     )
     const user = userEvent.setup()
+    await user.click(await screen.findByRole("button", { name: "Actions for admin@example.com" }))
     await user.click(await screen.findByRole("button", { name: "Suspend" }))
-    expect(await screen.findByRole("alert")).toHaveTextContent(
+    const dialog = await screen.findByRole("dialog")
+    await user.click(within(dialog).getByRole("button", { name: "Suspend" }))
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
       "An archived project cannot change its members."
     )
   })
@@ -128,13 +138,97 @@ describe("ProjectMembersPage", () => {
     const user = userEvent.setup()
     await user.type(await screen.findByLabelText("Account email"), "ghost@example.com")
     await user.click(screen.getByRole("button", { name: "Add member" }))
-    expect(await screen.findByRole("alert")).toHaveTextContent("No active account uses that email address.")
-
-    await user.click(screen.getByRole("button", { name: "Suspend" }))
     await waitFor(() =>
-      expect(screen.getByRole("alert")).toHaveTextContent("The change could not be saved.")
+      expect(document.getElementById("member-add-email-error")).toHaveTextContent("No active account uses that email address.")
     )
-    expect(screen.getByRole("alert")).not.toHaveTextContent("email")
+    expect(screen.getByLabelText("Account email")).toHaveAttribute("aria-invalid", "true")
+
+    await user.click(screen.getByRole("button", { name: "Actions for admin@example.com" }))
+    await user.click(await screen.findByRole("button", { name: "Suspend" }))
+    const dialog = await screen.findByRole("dialog")
+    await user.click(within(dialog).getByRole("button", { name: "Suspend" }))
+    await waitFor(() =>
+      expect(within(dialog).getByRole("alert")).toHaveTextContent(
+        "The change could not be saved."
+      )
+    )
+    expect(within(dialog).getByRole("alert")).not.toHaveTextContent("email")
+  })
+
+  it("returns focus to the row menu button on Cancel and on Escape", async () => {
+    const user = userEvent.setup()
+    renderPage(["members.read", "members.manage"])
+    await screen.findByText("admin@example.com")
+    const menu = await screen.findByRole("button", { name: "Actions for admin@example.com" })
+    await user.click(menu)
+    await user.click(await screen.findByRole("button", { name: "Suspend" }))
+    const dialog = await screen.findByRole("dialog")
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }))
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
+    expect(menu).toHaveFocus()
+
+    await user.click(menu)
+    await user.click(await screen.findByRole("button", { name: "Suspend" }))
+    await screen.findByRole("dialog")
+    await user.keyboard("{Escape}")
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
+    expect(menu).toHaveFocus()
+  })
+
+  it("associates the email error with the field and focuses it after a failure", async () => {
+    installFetchStub((req) => {
+      if (req.url === "/api/v1/system/access") return ok({ rollout_state: "preview", permissions: [] })
+      if (req.url === "/api/v1/projects?include_archived=true") return ok([])
+      if (req.url === "/api/v1/projects/p1/access") return ok(access(["members.read", "members.manage"]))
+      if (req.url === "/api/v1/projects/p1/members" && req.method === "GET") return ok([MEMBER])
+      if (req.method === "POST") return err(400, null)
+      return err(404, null)
+    })
+    render(
+      <MemoryRouter>
+        <ProjectsProvider accountId="acc">
+          <ProjectScopeProvider accountId="acc" projectId="p1">
+            <ProjectMembersPage accountId="acc" />
+          </ProjectScopeProvider>
+        </ProjectsProvider>
+      </MemoryRouter>
+    )
+    const user = userEvent.setup()
+    const email = await screen.findByLabelText("Account email")
+    await user.type(email, "ghost@example.com")
+    await user.click(screen.getByRole("button", { name: "Add member" }))
+    const error = await screen.findByText("No active account uses that email address.")
+    expect(email).toHaveAttribute("aria-invalid", "true")
+    expect(email.getAttribute("aria-describedby")).toBe(error.id)
+    await waitFor(() => expect(email).toHaveFocus())
+  })
+
+  it("clears the field and focuses it after a successful add", async () => {
+    const stub = installFetchStub((req) => {
+      if (req.url === "/api/v1/system/access") return ok({ rollout_state: "preview", permissions: [] })
+      if (req.url === "/api/v1/projects?include_archived=true") return ok([])
+      if (req.url === "/api/v1/projects/p1/access") return ok(access(["members.read", "members.manage"]))
+      if (req.url === "/api/v1/projects/p1/members" && req.method === "GET") return ok([MEMBER])
+      if (req.method === "POST") return ok({ ...MEMBER, user_id: "u2", email: "new@example.com", roles: ["project_member"] })
+      return err(404, null)
+    })
+    render(
+      <MemoryRouter>
+        <ProjectsProvider accountId="acc">
+          <ProjectScopeProvider accountId="acc" projectId="p1">
+            <ProjectMembersPage accountId="acc" />
+          </ProjectScopeProvider>
+        </ProjectsProvider>
+      </MemoryRouter>
+    )
+    const user = userEvent.setup()
+    const email = await screen.findByLabelText("Account email")
+    await user.type(email, "new@example.com")
+    await user.click(screen.getByRole("button", { name: "Add member" }))
+    await waitFor(() => expect(stub.requests.some((req) => req.method === "POST")).toBe(true))
+    await waitFor(() => expect(email).toHaveValue(""))
+    await waitFor(() => expect(email).toHaveFocus())
+    expect(document.activeElement?.tagName).not.toBe("BODY")
   })
 
   it("keeps the add draft under the project-scoped key", async () => {

@@ -64,7 +64,7 @@ describe("ProjectSelector", () => {
     const nav = await screen.findByRole("navigation", { name: "Projects" })
     expect(nav).toBeInTheDocument()
     expect(screen.getByText("Alpha")).toBeInTheDocument()
-    expect(screen.getByText("Preview")).toBeInTheDocument()
+    expect(screen.getByText("Project · Preview")).toBeInTheDocument()
 
     await user.click(screen.getByRole("button", { name: /Select project/ }))
     await user.click(screen.getByRole("menuitem", { name: /Beta/ }))

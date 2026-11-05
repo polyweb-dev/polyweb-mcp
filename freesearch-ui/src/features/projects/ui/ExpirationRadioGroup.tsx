@@ -39,10 +39,14 @@ export function ExpirationRadioGroup({
 
   return (
     <div className="space-y-2">
-      <div role="radiogroup" aria-labelledby={legendId} className="space-y-1.5">
-        <p id={legendId} className="text-[12px] text-[var(--muted)]">
-          Expiration
-        </p>
+      <p id={legendId} className="text-[12px] text-[var(--muted)]">
+        Expiration
+      </p>
+      <div
+        role="radiogroup"
+        aria-labelledby={legendId}
+        className="flex flex-wrap items-center gap-x-4 gap-y-1.5"
+      >
         {options.map((option) => (
           <label key={option.value} className={RADIO_ROW}>
             <input
@@ -57,23 +61,23 @@ export function ExpirationRadioGroup({
             <span>{option.label}</span>
           </label>
         ))}
+        {choice === "custom" && (
+          <span className="flex items-center gap-2">
+            <label htmlFor={dateId} className="sr-only">
+              Expiration date
+            </label>
+            <input
+              id={dateId}
+              type="date"
+              min={todayInputValue()}
+              value={customDate}
+              disabled={disabled}
+              onChange={(event) => onCustomDateChange(event.target.value)}
+              className="rounded border border-[var(--border-subtle)] bg-[var(--surface)] px-2 py-1 text-[13px] text-[var(--text)] outline-none focus-visible:border-[var(--signal)] disabled:opacity-60"
+            />
+          </span>
+        )}
       </div>
-      {choice === "custom" && (
-        <div>
-          <label htmlFor={dateId} className="mb-1 block text-[12px] text-[var(--muted)]">
-            Expiration date
-          </label>
-          <input
-            id={dateId}
-            type="date"
-            min={todayInputValue()}
-            value={customDate}
-            disabled={disabled}
-            onChange={(event) => onCustomDateChange(event.target.value)}
-            className="rounded border border-[var(--border-subtle)] bg-[var(--surface)] px-2 py-1.5 text-[13px] text-[var(--text)] outline-none focus-visible:border-[var(--signal)] disabled:opacity-60"
-          />
-        </div>
-      )}
     </div>
   )
 }

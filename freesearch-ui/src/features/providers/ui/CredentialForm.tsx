@@ -99,7 +99,7 @@ export function CredentialForm(props: CredentialFormProps) {
         <Button type="button" variant="outline" onClick={onCancel}>
           Cancel
         </Button>
-        <Button type="submit" disabled={pending || !ready}>
+        <Button type="submit" size="form" disabled={pending || !ready}>
           Save key
         </Button>
       </div>

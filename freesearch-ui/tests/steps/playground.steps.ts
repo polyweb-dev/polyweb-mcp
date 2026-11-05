@@ -16,7 +16,7 @@ import {
  */
 When("I submit the playground search query {string}", async ({ page }, query: string) => {
   await page
-    .getByPlaceholder(/Search across all providers/i)
+    .getByPlaceholder(/Search the web/i)
     .fill(query)
   await page.getByRole("button", { name: "Search", exact: true }).click()
 })
@@ -66,7 +66,7 @@ When(
 )
 
 When("I submit the playground fetch URL {string}", async ({ page }, url: string) => {
-  await page.getByPlaceholder(/Enter a URL to fetch/i).fill(url)
+  await page.getByPlaceholder(/URL to fetch/i).fill(url)
   await page.getByRole("button", { name: "Fetch", exact: true }).click()
 })
 

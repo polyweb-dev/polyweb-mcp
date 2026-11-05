@@ -4,7 +4,8 @@ import {
   useProjectScope,
 } from "@/domains/projects"
 import type { ProjectRoleKey } from "@/domains/projects"
-import { useProjectMembersController } from "../model/useProjectMembersController"
+import { PageHeader } from "@/shared/ui/PageHeader"
+import { isEmailFieldMessage, useProjectMembersController } from "../model/useProjectMembersController"
 import { AddMemberForm } from "./AddMemberForm"
 import { MemberRowActions } from "./MemberRowActions"
 
@@ -20,7 +21,7 @@ function roleLabel(role: string): string {
  * membership changes, `roles.assign` for role edits — never from a role name.
  */
 export function ProjectMembersPage({ accountId }: { accountId: string }) {
-  const { projectId, accessState, refreshAccess } = useProjectScope()
+  const { projectId, project, accessState, refreshAccess } = useProjectScope()
   const controller = useProjectMembersController({ accountId, projectId, refreshAccess })
   const access = accessState.status === "ready" ? accessState.data : null
   const canManage = hasPermission(access, "members.manage")
@@ -29,11 +30,9 @@ export function ProjectMembersPage({ accountId }: { accountId: string }) {
 
   return (
     <section className="flex flex-1 flex-col space-y-6">
-      <header className="border-b border-[var(--border-subtle)] pb-2">
-        <h2 className="text-[var(--text-strong)]">Members</h2>
-      </header>
+      <PageHeader title="Members" description={`People and roles of ${project?.name ?? "this project"}.`} />
 
-      {controller.message !== null && (
+      {controller.message !== null && !isEmailFieldMessage(controller.message) && (
         <p role="alert" className="text-[13px] text-[var(--status-danger)]">
           {controller.message}
         </p>
@@ -85,6 +84,7 @@ export function ProjectMembersPage({ accountId }: { accountId: string }) {
                 {showActions && (
                   <td className="py-2">
                     <MemberRowActions
+                      projectName={project?.name ?? "this project"}
                       member={member}
                       canManage={canManage}
                       canAssign={canAssign}

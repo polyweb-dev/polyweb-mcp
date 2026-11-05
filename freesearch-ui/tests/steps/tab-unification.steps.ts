@@ -150,7 +150,7 @@ Then("the playground should show the {string} panel", async ({ page }, label: st
 
 Then("the fetch URL input should be visible", async ({ page }) => {
   await expect(
-    main(page).getByPlaceholder(/Enter a URL to fetch/i)
+    main(page).getByPlaceholder(/URL to fetch/i)
   ).toBeVisible()
   await expect(
     main(page).getByRole("button", { name: "Fetch", exact: true })

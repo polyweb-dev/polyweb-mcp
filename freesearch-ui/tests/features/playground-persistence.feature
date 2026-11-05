@@ -9,7 +9,7 @@ Feature: Playground persistence across navigation and reload
   Background:
     Given the stubbed session works in project Alpha
     When I open the "playground" section of project Alpha
-    Then I should see the "Search Playground" heading
+    Then I should see the "Playground" heading
 
   Scenario: Search and fetch drafts with results survive navigation and reload without refetching
     Given the persisted playground state is cleared
@@ -21,14 +21,14 @@ Feature: Playground persistence across navigation and reload
     When I follow the "Members" link of the Project navigation
     Then I should see the "Members" heading
     When I follow the "Playground" link of the Project navigation
-    Then I should see the "Search Playground" heading
+    Then I should see the "Playground" heading
     And the persisted fetch URL should be "https://example.com/persisted-doc"
     And the persisted fetch document should show "Parsed Markdown Document"
     When I open the playground tab "Search"
     Then the persisted search draft should be "persistence probe query"
     And the persisted search results should show "Live backend result one"
     When I reload the page
-    Then I should see the "Search Playground" heading
+    Then I should see the "Playground" heading
     And the persisted search draft should be "persistence probe query"
     And the persisted search results should show "Live backend result one"
     When I open the playground tab "Fetch"
@@ -48,7 +48,7 @@ Feature: Playground persistence across navigation and reload
     When I follow the "Members" link of the Project navigation
     Then I should see the "Members" heading
     When I follow the "Playground" link of the Project navigation
-    Then I should see the "Search Playground" heading
+    Then I should see the "Playground" heading
     And the playground search button should read "Executing..."
     When I release the persisted search response
     Then the persisted search results should show "Live backend result one"
@@ -62,11 +62,11 @@ Feature: Playground persistence across navigation and reload
     And I follow the "Members" link of the Project navigation
     Then I should see the "Members" heading
     When I follow the "Playground" link of the Project navigation
-    Then I should see the "Search Playground" heading
+    Then I should see the "Playground" heading
     And the persisted search draft should be "doomed query"
     And the persisted search error should contain "stubbed provider unavailable"
     When I reload the page
-    Then I should see the "Search Playground" heading
+    Then I should see the "Playground" heading
     And the persisted search draft should be "doomed query"
     And the persisted search error should contain "stubbed provider unavailable"
     And the persisted search request count should not have increased

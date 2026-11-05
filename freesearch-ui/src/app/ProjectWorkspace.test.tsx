@@ -101,12 +101,12 @@ describe("ProjectWorkspace", () => {
 
   it("renders the API keys section with tokens.manage", async () => {
     renderWorkspace(`/p/${PROJECT.id}/api-keys`, 200, PROJECT_ADMIN_PERMISSIONS)
-    expect(await screen.findByRole("heading", { level: 1, name: "API keys" })).toBeInTheDocument()
+    expect(await screen.findByRole("heading", { name: "API keys" })).toBeInTheDocument()
     expect(screen.getByTestId("path").textContent).toBe(`/p/${PROJECT.id}/api-keys`)
   })
 
   it.each([
-    ["playground", ["project.read", "fetch.execute"], "Search Playground"],
+    ["playground", ["project.read", "fetch.execute"], "Playground"],
     ["activity", ["project.read", "traces.read"], "Activity"],
     ["usage", ["project.read", "usage.read"], "Usage"],
     ["providers", ["project.read", "providers.read"], "Providers"],

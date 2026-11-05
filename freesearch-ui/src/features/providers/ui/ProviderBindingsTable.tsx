@@ -1,7 +1,10 @@
+import { useState } from "react"
 import { CREDENTIAL_OPERATIONS } from "@/domains/providers"
 import type { ProviderBinding, ProviderOperation, ProviderTypeView } from "@/domains/providers"
 import { Button } from "@/shared/ui/button"
+import { OperationTags } from "@/shared/ui/OperationTags"
 import { Switch } from "@/shared/ui/Switch"
+import { ConfirmDialog } from "./ConfirmDialog"
 import { CELL_CLASS, HEAD_CLASS } from "./formStyles"
 
 const COLUMNS = ["Route label", "Credential", "Priority", "Search", "Fetch", "Effective"]
@@ -18,7 +21,9 @@ interface ProviderBindingsTableProps {
 export function ProviderBindingsTable(props: ProviderBindingsTableProps) {
   const { provider, canConfigure, pending, onToggle, onRemove } = props
   const labels = new Map(provider.credentials.map((credential) => [credential.id, credential.label]))
+  const [removing, setRemoving] = useState<ProviderBinding | null>(null)
   return (
+    <>
     <table aria-label={`${provider.name} bindings`} className="w-full text-left text-[13px]">
       <thead>
         <tr className="border-b border-[var(--border-subtle)] text-[var(--muted)]">
@@ -55,15 +60,17 @@ export function ProviderBindingsTable(props: ProviderBindingsTableProps) {
                 />
               </td>
             ))}
-            <td className={CELL_CLASS}>{binding.effectiveOperations.join(", ") || "none"}</td>
+            <td className={CELL_CLASS}>
+              <OperationTags operations={binding.effectiveOperations} />
+            </td>
             <td className="py-2 align-top">
               {canConfigure && (
                 <Button
-                  size="sm"
-                  variant="destructive"
+                  variant="outline"
+                  className="text-[var(--status-danger)]"
                   aria-label={`Remove binding ${binding.routeLabel}`}
                   disabled={pending}
-                  onClick={() => onRemove(binding)}
+                  onClick={() => setRemoving(binding)}
                 >
                   Remove
                 </Button>
@@ -73,5 +80,18 @@ export function ProviderBindingsTable(props: ProviderBindingsTableProps) {
         ))}
       </tbody>
     </table>
+    <ConfirmDialog
+      open={removing !== null}
+      title={`Remove binding ${removing?.routeLabel ?? ""}`}
+      message={`The ${removing?.routeLabel ?? ""} route stops running through this key. The key itself stays.`}
+      confirmLabel="Remove binding"
+      pending={pending}
+      onConfirm={() => {
+        if (removing !== null) onRemove(removing)
+        setRemoving(null)
+      }}
+      onClose={() => setRemoving(null)}
+    />
+    </>
   )
 }

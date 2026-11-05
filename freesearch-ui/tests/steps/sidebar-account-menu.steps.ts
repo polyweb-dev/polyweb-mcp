@@ -289,9 +289,9 @@ const ALL_PRIMARY_LINKS: Array<[string, string]> = [
   ["System credentials", "/system/credentials"],
   ["Capacity", "/system/capacity"],
   ["Provider settings", "/settings"],
+  ["Admin", "/admin/users"],
   ["Projects", "/projects"],
   ["Account", "/account"],
-  ["Admin", "/admin/users"],
 ]
 
 async function expectPrimaryLinks(page: Page, labels: string[]): Promise<void> {
@@ -447,7 +447,7 @@ Then("each permitted sidebar link keeps its route and view", async ({ page }) =>
  */
 const PROJECT_MEMBER_LINKS: Array<{ link: string; heading: string; segment: string }> = [
   { link: "Overview", heading: "Alpha", segment: "" },
-  { link: "Playground", heading: "Search Playground", segment: "/playground" },
+  { link: "Playground", heading: "Playground", segment: "/playground" },
   { link: "Activity", heading: "Activity", segment: "/activity" },
   { link: "Usage", heading: "Usage", segment: "/usage" },
   { link: "Providers", heading: "Providers", segment: "/providers" },

@@ -81,7 +81,7 @@ export function AddBindingForm({ idPrefix, credentials, pending, onSubmit, onCan
         />
       </div>
       <div className="flex gap-2">
-        <Button type="submit" disabled={pending || !valid}>
+        <Button type="submit" size="form" disabled={pending || !valid}>
           Create binding
         </Button>
         <Button type="button" variant="outline" onClick={onCancel}>

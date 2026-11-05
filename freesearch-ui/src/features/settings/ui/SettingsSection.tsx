@@ -29,7 +29,7 @@ export function SettingsSection(props: SettingsSectionProps) {
         </h2>
         {editable && (
           <Button
-            size="sm"
+            size="form"
             disabled={controller.pending || !controller.hasChanges(section)}
             onClick={() => void controller.save(section)}
           >

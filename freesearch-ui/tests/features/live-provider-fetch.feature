@@ -12,7 +12,7 @@ Feature: Live provider fetch smoke coverage
     When I open the projects list
     And I choose the live e2e project in the project selector
     And I follow the "Playground" link of the Project navigation
-    Then I should see the "Search Playground" heading
+    Then I should see the "Playground" heading
 
   @live @fetch
   Scenario Outline: Live fetch via <provider> renders content on retry without API failure

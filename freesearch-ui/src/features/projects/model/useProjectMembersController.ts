@@ -67,6 +67,14 @@ export interface ProjectMembersController {
 }
 
 /**
+ * Server copy that belongs under the add-form email field rather than in the
+ * page alert above the table — unknown-account and invalid-email refusals.
+ */
+export function isEmailFieldMessage(message: string): boolean {
+  return /email/i.test(message)
+}
+
+/**
  * Membership controller of one project.
  *
  * Every mutation reloads the member list and refreshes the caller's access:

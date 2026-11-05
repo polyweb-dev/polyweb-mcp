@@ -1,5 +1,6 @@
 import { PillTabsList } from "@/shared/ui/PillTabsList"
 import { ProviderSelect } from "@/shared/ui/ProviderSelect"
+import { Button } from "@/shared/ui/button"
 import type { PlaygroundController } from "../model/usePlaygroundController"
 
 const quickQueries = [
@@ -42,6 +43,19 @@ export function SearchOptions({ controller }: { controller: PlaygroundController
 
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div className="flex flex-wrap items-center gap-4">
+          {controller.providersError && (
+            <span role="alert" className="flex items-center gap-2 text-[var(--status-danger)]">
+              Couldn't load this project's providers.
+              <Button
+                type="button"
+                size="form"
+                variant="outline"
+                onClick={() => controller.retryProviders()}
+              >
+                Retry
+              </Button>
+            </span>
+          )}
           <div className="flex items-center gap-2">
             <label htmlFor="playground-search-provider">Provider:</label>
             <ProviderSelect

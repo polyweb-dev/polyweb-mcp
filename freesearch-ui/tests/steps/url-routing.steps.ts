@@ -79,9 +79,9 @@ const SYSTEM_ADMINISTRATOR_LINKS = [
   "System credentials",
   "Capacity",
   "Provider settings",
+  "Admin",
   "Projects",
   "Account",
-  "Admin",
 ]
 
 Then(

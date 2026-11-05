@@ -5,11 +5,12 @@ import {
   expiresLabel,
   formatKeyDate,
   lastUsedLabel,
-  scopesLabel,
+  scopeOperations,
   sortNewestFirst,
   statusLabel,
 } from "../model/apiKeyView"
 import type { ProjectApiKeysController } from "../model/useProjectApiKeysController"
+import { OperationTags } from "@/shared/ui/OperationTags"
 import { ApiKeyRowActions } from "./ApiKeyRowActions"
 
 const COLUMNS = ["Label", "Prefix", "Scopes", "Created by", "Created", "Expires", "Last used", "Status"]
@@ -51,7 +52,9 @@ export function ApiKeysTable({ keys, controller, archived }: ApiKeysTableProps) 
             <tr key={key.id} className="border-b border-[var(--border-subtle)] text-[var(--text)]">
               <td className={CELL}>{key.label}</td>
               <td className={`${CELL} font-mono text-[12px]`}>{key.prefix}</td>
-              <td className={CELL}>{scopesLabel(key.scopes)}</td>
+              <td className={CELL}>
+                <OperationTags operations={scopeOperations(key.scopes)} />
+              </td>
               <td className={CELL}>{creatorLabel(key.created_by, controller.emailsByUserId)}</td>
               <td className={`${CELL} tnum`}>{formatKeyDate(key.created_at)}</td>
               <td className={`${CELL} tnum`}>{expiresLabel(key)}</td>

@@ -88,7 +88,7 @@ export function ProjectCreateForm({ defaultAdminEmail }: { defaultAdminEmail: st
         disabled={pending}
         autoComplete="email"
       />
-      <Button type="submit" disabled={pending}>
+      <Button type="submit" size="form" disabled={pending}>
         Create project
       </Button>
     </form>

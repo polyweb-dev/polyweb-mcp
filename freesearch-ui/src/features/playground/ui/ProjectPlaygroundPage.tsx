@@ -28,12 +28,18 @@ export function ProjectPlaygroundPage({ accountId }: { accountId: string }) {
 
   const scope = useMemo<PlaygroundScope>(
     () => ({
+      projectId,
       providers: view.status === "ready" && canReadProviders ? view.data : NO_PROVIDERS,
       providersLoading: canReadProviders && view.status === "loading",
+      providersReady: canReadProviders && view.status === "ready",
+      providersError: canReadProviders && view.status === "error",
+      retryProviders: () => {
+        void view.reload()
+      },
       canSearch: hasPermission(access, PROJECT_PERMISSIONS.searchExecute),
       canFetch: hasPermission(access, PROJECT_PERMISSIONS.fetchExecute),
     }),
-    [view, canReadProviders, access]
+    [view, canReadProviders, access, projectId]
   )
 
   return (

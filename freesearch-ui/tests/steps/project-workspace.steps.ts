@@ -101,7 +101,7 @@ Then(
 // --- Playground: project id, human session, browser storage --------------------
 
 function searchInput(page: Page): Locator {
-  return page.getByPlaceholder(/Search across all providers/i)
+  return page.getByPlaceholder(/Search the web/i)
 }
 
 Then(
@@ -198,7 +198,7 @@ Then("the playground should not show the result {string}", async ({ page }, titl
 })
 
 Then("the playground should show no search results", async ({ page }) => {
-  await expect(page.getByRole("heading", { name: "Search Playground", exact: true })).toBeVisible({
+  await expect(page.getByRole("heading", { name: "Playground", exact: true })).toBeVisible({
     timeout: 15_000,
   })
   await expect(page.locator("main").getByText(/% match/i)).toHaveCount(0)

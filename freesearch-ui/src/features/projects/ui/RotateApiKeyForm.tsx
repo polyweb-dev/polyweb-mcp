@@ -80,7 +80,7 @@ export function RotateApiKeyForm({
         <Button type="button" variant="outline" onClick={() => controller.openRotate(null)}>
           Cancel
         </Button>
-        <Button type="submit" disabled={controller.pending}>
+        <Button type="submit" size="form" disabled={controller.pending}>
           Rotate key
         </Button>
       </div>

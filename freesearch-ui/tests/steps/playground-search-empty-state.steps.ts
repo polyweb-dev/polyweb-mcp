@@ -39,7 +39,7 @@ Then(
   "the search form should be present with no search results",
   async ({ page }) => {
     await expect(
-      page.getByPlaceholder(/Search across all providers/i)
+      page.getByPlaceholder(/Search the web/i)
     ).toBeVisible()
     await expect(page.getByTestId("search-layout")).toBeVisible()
     // No result cards and no telemetry bar on the empty/error-first surface.
@@ -51,7 +51,7 @@ Then(
 Then(
   "the search results should render below the search form",
   async ({ page }) => {
-    const form = page.getByPlaceholder(/Search across all providers/i)
+    const form = page.getByPlaceholder(/Search the web/i)
     const resultsHeading = page.getByText(/Returned results|% match/i).first()
     await expect(resultsHeading).toBeVisible()
     const formBox = await form.boundingBox()
@@ -76,7 +76,7 @@ Then(
   "the search form should keep its value {string}",
   async ({ page }, value: string) => {
     await expect(
-      page.getByPlaceholder(/Search across all providers/i)
+      page.getByPlaceholder(/Search the web/i)
     ).toHaveValue(value)
   }
 )

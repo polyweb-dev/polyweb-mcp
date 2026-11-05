@@ -65,7 +65,7 @@ function renderWithBackend(
 
 async function submitQuery(query: string) {
   const input = screen.getByPlaceholderText(
-    /Search across all providers/i
+    /Search the web/i
   ) as HTMLInputElement
   fireEvent.change(input, { target: { value: query } })
   fireEvent.submit(input.closest("form")!)
@@ -79,7 +79,7 @@ describe("SearchPlayground (live backend)", () => {
   it("renders mode toggles and search form", async () => {
     renderWithBackend()
     await waitFor(() => {
-      expect(screen.getByPlaceholderText(/Search across all providers/i)).toBeInTheDocument()
+      expect(screen.getByPlaceholderText(/Search the web/i)).toBeInTheDocument()
     })
     expect(screen.getAllByText("Search").length).toBeGreaterThanOrEqual(1)
     expect(screen.getByText("Fetch")).toBeInTheDocument()
@@ -88,7 +88,7 @@ describe("SearchPlayground (live backend)", () => {
   it("executes search and displays the real mapped results", async () => {
     renderWithBackend()
     await waitFor(() => {
-      expect(screen.getByPlaceholderText(/Search across all providers/i)).toBeInTheDocument()
+      expect(screen.getByPlaceholderText(/Search the web/i)).toBeInTheDocument()
     })
 
     await submitQuery("live backend query")
@@ -104,7 +104,7 @@ describe("SearchPlayground (live backend)", () => {
   it("renders exactly ONE waterfall entry with no trace-unavailable note", async () => {
     renderWithBackend()
     await waitFor(() => {
-      expect(screen.getByPlaceholderText(/Search across all providers/i)).toBeInTheDocument()
+      expect(screen.getByPlaceholderText(/Search the web/i)).toBeInTheDocument()
     })
 
     await submitQuery("live backend query")
@@ -142,13 +142,13 @@ describe("SearchPlayground (live backend)", () => {
   it("shows an error banner on search failure", async () => {
     renderWithBackend(() => err(503, { detail: "no provider is configured" }))
     await waitFor(() => {
-      expect(screen.getByPlaceholderText(/Search across all providers/i)).toBeInTheDocument()
+      expect(screen.getByPlaceholderText(/Search the web/i)).toBeInTheDocument()
     })
 
     await submitQuery("live backend query")
 
     await waitFor(() => {
-      expect(screen.getByText(/no provider is configured/i)).toBeInTheDocument()
+      expect(screen.getByText(/No provider is set up for this project/)).toBeInTheDocument()
     })
     expect(screen.queryByText("Live backend result one")).not.toBeInTheDocument()
   })
@@ -159,7 +159,7 @@ describe("SearchPlayground (live backend)", () => {
       shouldFail ? err(503, { detail: "backend went away" }) : ok(searchResponseFixture())
     )
     await waitFor(() => {
-      expect(screen.getByPlaceholderText(/Search across all providers/i)).toBeInTheDocument()
+      expect(screen.getByPlaceholderText(/Search the web/i)).toBeInTheDocument()
     })
 
     await submitQuery("first query")
@@ -179,7 +179,7 @@ describe("SearchPlayground (live backend)", () => {
   it("resets an ineligible search-only provider when switching to Fetch", async () => {
     const { stub } = renderWithBackend()
     await waitFor(() => {
-      expect(screen.getByPlaceholderText(/Search across all providers/i)).toBeInTheDocument()
+      expect(screen.getByPlaceholderText(/Search the web/i)).toBeInTheDocument()
     })
 
     // Brave is search-only: pick it in the search provider filter. The
@@ -195,7 +195,7 @@ describe("SearchPlayground (live backend)", () => {
     expect(fetchTrigger.textContent).toContain("Auto")
 
     const urlInput = screen.getByPlaceholderText(
-      /Enter a URL to fetch/i
+      /URL to fetch/i
     ) as HTMLInputElement
     fireEvent.change(urlInput, { target: { value: "https://example.com/doc" } })
     fireEvent.submit(urlInput.closest("form")!)
@@ -214,7 +214,7 @@ describe("SearchPlayground (live backend)", () => {
   it("labels telemetry in Credits, never Cost", async () => {
     renderWithBackend()
     await waitFor(() => {
-      expect(screen.getByPlaceholderText(/Search across all providers/i)).toBeInTheDocument()
+      expect(screen.getByPlaceholderText(/Search the web/i)).toBeInTheDocument()
     })
 
     await submitQuery("live backend query")
@@ -249,13 +249,13 @@ describe("SearchPlayground (live backend)", () => {
         )
     )
     await waitFor(() => {
-      expect(screen.getByPlaceholderText(/Search across all providers/i)).toBeInTheDocument()
+      expect(screen.getByPlaceholderText(/Search the web/i)).toBeInTheDocument()
     })
 
     fireEvent.click(screen.getByRole("tab", { name: "Fetch", exact: true }))
 
     const urlInput = screen.getByPlaceholderText(
-      /Enter a URL to fetch/i
+      /URL to fetch/i
     ) as HTMLInputElement
     fireEvent.change(urlInput, { target: { value: "https://example.com/doc" } })
     fireEvent.submit(urlInput.closest("form")!)
@@ -293,7 +293,7 @@ describe("SearchPlayground (live backend)", () => {
     })
 
     await waitFor(() => {
-      expect(screen.getByPlaceholderText(/Search across all providers/i)).toBeInTheDocument()
+      expect(screen.getByPlaceholderText(/Search the web/i)).toBeInTheDocument()
     })
 
     const searchTrigger = await pinProvider(
@@ -334,7 +334,7 @@ describe("SearchPlayground inspector contract (characterization)", () => {
   it("shows the empty inspector prompt before a result is selected", async () => {
     renderWithBackend()
     await waitFor(() => {
-      expect(screen.getByPlaceholderText(/Search across all providers/i)).toBeInTheDocument()
+      expect(screen.getByPlaceholderText(/Search the web/i)).toBeInTheDocument()
     })
 
     await submitQuery("live backend query")
@@ -352,7 +352,7 @@ describe("SearchPlayground inspector contract (characterization)", () => {
   it("selects a result into the side inspector on click", async () => {
     renderWithBackend()
     await waitFor(() => {
-      expect(screen.getByPlaceholderText(/Search across all providers/i)).toBeInTheDocument()
+      expect(screen.getByPlaceholderText(/Search the web/i)).toBeInTheDocument()
     })
 
     await submitQuery("live backend query")
@@ -373,7 +373,7 @@ describe("SearchPlayground inspector contract (characterization)", () => {
   it("toggles the raw JSON inspector without losing results", async () => {
     renderWithBackend()
     await waitFor(() => {
-      expect(screen.getByPlaceholderText(/Search across all providers/i)).toBeInTheDocument()
+      expect(screen.getByPlaceholderText(/Search the web/i)).toBeInTheDocument()
     })
 
     await submitQuery("live backend query")
@@ -443,7 +443,7 @@ function renderPlayground() {
 async function ready() {
   await waitFor(() => {
     expect(
-      screen.getByPlaceholderText(/Search across all providers/i)
+      screen.getByPlaceholderText(/Search the web/i)
     ).toBeInTheDocument()
   })
 }
@@ -525,7 +525,7 @@ describe("C2-REWORK AC-C2R-1/AC-C2R-3: SearchPlayground view-switcher is canonic
       "false"
     )
     expect(
-      screen.getByPlaceholderText(/Enter a URL to fetch/i)
+      screen.getByPlaceholderText(/URL to fetch/i)
     ).toBeInTheDocument()
     expect(
       screen.getByRole("button", { name: "Fetch", exact: true })
@@ -551,7 +551,7 @@ describe("C2-REWORK AC-C2R-1/AC-C2R-3: SearchPlayground view-switcher is canonic
     // Swap back: the Search panel remounts, the Fetch panel unmounts.
     await user.click(screen.getByRole("tab", { name: "Search" }))
     expect(
-      screen.getByPlaceholderText(/Search across all providers/i)
+      screen.getByPlaceholderText(/Search the web/i)
     ).toBeInTheDocument()
     const searchPanels = screen.getAllByRole("tabpanel")
     expect(searchPanels).toHaveLength(1)
@@ -848,7 +848,7 @@ function renderWithBackend(
 async function readyForSearch() {
   await waitFor(() => {
     expect(
-      screen.getByPlaceholderText(/Search across all providers/i)
+      screen.getByPlaceholderText(/Search the web/i)
     ).toBeInTheDocument()
   })
 }
@@ -857,7 +857,7 @@ async function gotoFetch() {
   fireEvent.click(screen.getByRole("tab", { name: "Fetch", exact: true }))
   await waitFor(() => {
     expect(
-      screen.getByPlaceholderText(/Enter a URL to fetch/i)
+      screen.getByPlaceholderText(/URL to fetch/i)
     ).toBeInTheDocument()
   })
 }
@@ -869,7 +869,7 @@ async function readyForFetch() {
 
 function submitFetchUrl(url: string) {
   const input = screen.getByPlaceholderText(
-    /Enter a URL to fetch/i
+    /URL to fetch/i
   ) as HTMLInputElement
   fireEvent.change(input, { target: { value: url } })
   fireEvent.submit(input.closest("form")!)
@@ -915,7 +915,7 @@ describe("PG-F1 AC-PG-F1-1: idle Fetch is a centered hero (Fetch analogue of PG-
     await readyForFetch()
 
     expect(
-      screen.getByPlaceholderText(/Enter a URL to fetch/i)
+      screen.getByPlaceholderText(/URL to fetch/i)
     ).toBeInTheDocument()
     expect(screen.queryByText("Live document title")).not.toBeInTheDocument()
     expect(screen.queryByText(/Fetched markdown body/i)).not.toBeInTheDocument()
@@ -925,7 +925,7 @@ describe("PG-F1 AC-PG-F1-1: idle Fetch is a centered hero (Fetch analogue of PG-
     expectHeroGeometry(wrapper)
     expectTransitionClasses(wrapper)
     expect(
-      wrapper.querySelector('input[placeholder*="Enter a URL to fetch"]')
+      wrapper.querySelector('input[placeholder*="URL to fetch"]')
     ).not.toBeNull()
     expect(wrapper.className).not.toContain("top-docked")
   })
@@ -992,7 +992,7 @@ describe("PG-F1 AC-PG-F1-2: submit docks Fetch and keeps it docked while loading
     expect(
       screen.getByRole("button", { name: /Executing/i })
     ).toBeInTheDocument()
-    expect(screen.getByPlaceholderText(/Enter a URL to fetch/i)).toHaveValue(
+    expect(screen.getByPlaceholderText(/URL to fetch/i)).toHaveValue(
       "https://example.com/doc"
     )
 
@@ -1008,7 +1008,7 @@ describe("PG-F1 AC-PG-F1-2: submit docks Fetch and keeps it docked while loading
     expectTransitionClasses(dockedWrapper)
 
     const form = screen
-      .getByPlaceholderText(/Enter a URL to fetch/i)
+      .getByPlaceholderText(/URL to fetch/i)
       .closest("form")!
     const docTitle = screen.getByText("Live document title")
      
@@ -1062,10 +1062,10 @@ describe("PG-F1 AC-PG-F1-3: Fetch errors pin docked-top; start-clear wipes stale
     expect(wrapper.className).toContain("top-docked")
     expectTransitionClasses(wrapper)
     expect(
-      screen.getByPlaceholderText(/Enter a URL to fetch/i)
+      screen.getByPlaceholderText(/URL to fetch/i)
     ).toBeInTheDocument()
     expect(
-      screen.getByPlaceholderText(/Enter a URL to fetch/i) as HTMLInputElement
+      screen.getByPlaceholderText(/URL to fetch/i) as HTMLInputElement
     ).toHaveValue("https://example.com/doc")
     expect(screen.queryByText("Live document title")).not.toBeInTheDocument()
     expect(
@@ -1108,7 +1108,7 @@ describe("PG-F1 AC-PG-F1-3: Fetch errors pin docked-top; start-clear wipes stale
     // Start-clear: prior doc A is GONE while B pends (production clears
     // activeFetch at runFetch START — covers pending + terminal).
     expect(
-      screen.getByPlaceholderText(/Enter a URL to fetch/i) as HTMLInputElement
+      screen.getByPlaceholderText(/URL to fetch/i) as HTMLInputElement
     ).toHaveValue("https://example.com/other")
     expect(screen.queryByText("Live document title")).not.toBeInTheDocument()
     expect(
@@ -1128,7 +1128,7 @@ describe("PG-F1 AC-PG-F1-3: Fetch errors pin docked-top; start-clear wipes stale
       "true"
     )
     expect(
-      screen.getByPlaceholderText(/Enter a URL to fetch/i) as HTMLInputElement
+      screen.getByPlaceholderText(/URL to fetch/i) as HTMLInputElement
     ).toHaveValue("https://example.com/other")
     expect(screen.queryByText("Live document title")).not.toBeInTheDocument()
     expect(
@@ -1151,7 +1151,7 @@ describe("PG-F1 AC-PG-F1-4: smooth same-element Fetch transition retains focus a
     await readyForFetch()
 
     const inputBefore = screen.getByPlaceholderText(
-      /Enter a URL to fetch/i
+      /URL to fetch/i
     ) as HTMLInputElement
     const formBefore = inputBefore.closest("form")!
     const wrapperBefore = screen.getByTestId("fetch-layout")
@@ -1169,7 +1169,7 @@ describe("PG-F1 AC-PG-F1-4: smooth same-element Fetch transition retains focus a
     })
 
     const inputAfter = screen.getByPlaceholderText(
-      /Enter a URL to fetch/i
+      /URL to fetch/i
     ) as HTMLInputElement
     const formAfter = inputAfter.closest("form")!
     expect(formAfter).toBe(formBefore)
@@ -1202,7 +1202,7 @@ describe("PG-F1 AC-PG-F1-5: Fetch composer via shared ComposerShell (Fetch ONLY)
     expect(composer.className).toContain("focus-within:border-[var(--signal)]/60")
     expect(composer.className).toContain("motion-reduce:transition-none")
 
-    const input = screen.getByPlaceholderText(/Enter a URL to fetch/i)
+    const input = screen.getByPlaceholderText(/URL to fetch/i)
     expect(composer.contains(input)).toBe(true)
     const inputEl = input as HTMLInputElement
     expect(inputEl.getAttribute("type")).toBe("url")
@@ -1265,7 +1265,7 @@ describe("PG-F1 AC-PG-F1-5: Fetch composer via shared ComposerShell (Fetch ONLY)
     expect(tokens(button.className)).toContain("py-2")
     expect(tokens(button.className)).toContain("inline-flex")
     const input = screen.getByPlaceholderText(
-      /Enter a URL to fetch/i
+      /URL to fetch/i
     ) as HTMLInputElement
     expect(tokens(input.className).some((t) => t === "pr-32" || t === "pr-36")).toBe(
       true
@@ -1344,7 +1344,7 @@ describe("PG-F1 AC-PG-F1-6 regressions: PG-S1..S5 + header + Simulator + logic u
     }
 
     const inputBefore = screen.getByPlaceholderText(
-      /Search across all providers/i
+      /Search the web/i
     ) as HTMLInputElement
     const formBefore = inputBefore.closest("form")!
     fireEvent.change(inputBefore, { target: { value: "s1 lock query" } })
@@ -1361,12 +1361,12 @@ describe("PG-F1 AC-PG-F1-6 regressions: PG-S1..S5 + header + Simulator + logic u
       "top-docked"
     )
     const inputAfter = screen.getByPlaceholderText(
-      /Search across all providers/i
+      /Search the web/i
     ) as HTMLInputElement
     expect(inputAfter.closest("form")).toBe(formBefore)
     expect(inputAfter).toHaveValue("s1 lock query")
     expect(
-      screen.getByRole("heading", { name: "Search Playground" })
+      screen.getByRole("heading", { name: "Playground" })
     ).toBeInTheDocument()
   })
 
@@ -1390,7 +1390,7 @@ describe("PG-F1 AC-PG-F1-6 regressions: PG-S1..S5 + header + Simulator + logic u
     expect(names).not.toContain("py-1.5")
 
     const input = screen.getByPlaceholderText(
-      /Search across all providers/i
+      /Search the web/i
     ) as HTMLInputElement
     expect(tokens(input.className).some((t) => t === "pr-32" || t === "pr-36")).toBe(
       true
@@ -1414,7 +1414,7 @@ describe("PG-F1 AC-PG-F1-6 regressions: PG-S1..S5 + header + Simulator + logic u
     expect(tokens(composer.className)).toContain("rounded-xl")
     expect(composer.className).toContain("focus-within:")
     expect(
-      composer.contains(screen.getByPlaceholderText(/Search across all providers/i))
+      composer.contains(screen.getByPlaceholderText(/Search the web/i))
     ).toBe(true)
     const footer = screen.getByTestId("search-composer-footer")
     expect(composer.contains(footer)).toBe(true)
@@ -1439,7 +1439,7 @@ describe("PG-F1 AC-PG-F1-6 regressions: PG-S1..S5 + header + Simulator + logic u
     await readyForSearch()
 
     const input = screen.getByPlaceholderText(
-      /Search across all providers/i
+      /Search the web/i
     ) as HTMLInputElement
     fireEvent.change(input, { target: { value: "per-result fetch query" } })
     fireEvent.submit(input.closest("form")!)
@@ -1465,7 +1465,7 @@ describe("PG-F1 AC-PG-F1-6 regressions: PG-S1..S5 + header + Simulator + logic u
       )
     })
     expect(
-      screen.getByPlaceholderText(/Enter a URL to fetch/i) as HTMLInputElement
+      screen.getByPlaceholderText(/URL to fetch/i) as HTMLInputElement
     ).toHaveValue("https://example.com/one")
 
     await waitFor(() => {
@@ -1501,7 +1501,7 @@ describe("PG-F1 AC-PG-F1-6 regressions: PG-S1..S5 + header + Simulator + logic u
     expect(screen.queryByRole("group", { name: /search depth/i })).toBeNull()
 
     const input = screen.getByPlaceholderText(
-      /Search across all providers/i
+      /Search the web/i
     ) as HTMLInputElement
     fireEvent.change(input, { target: { value: "pg-s5 guard query" } })
     fireEvent.click(screen.getByRole("button", { name: "Search", exact: true }))
@@ -1524,12 +1524,12 @@ describe("PG-F1 AC-PG-F1-6 regressions: PG-S1..S5 + header + Simulator + logic u
     renderWithBackend()
     await readyForSearch()
     expect(
-      screen.getByRole("heading", { name: "Search Playground" })
+      screen.getByRole("heading", { name: "Playground" })
     ).toBeInTheDocument()
     await gotoFetch()
     // Header persists across the Fetch hero/docked states.
     expect(
-      screen.getByRole("heading", { name: "Search Playground" })
+      screen.getByRole("heading", { name: "Playground" })
     ).toBeInTheDocument()
 
     // R-Strategy + R-Sim (blessed churn, NOT a regression): the Simulator
@@ -1644,14 +1644,14 @@ function renderWithBackend(
 async function readyForSearch() {
   await waitFor(() => {
     expect(
-      screen.getByPlaceholderText(/Search across all providers/i)
+      screen.getByPlaceholderText(/Search the web/i)
     ).toBeInTheDocument()
   })
 }
 
 function submitQuery(query: string) {
   const input = screen.getByPlaceholderText(
-    /Search across all providers/i
+    /Search the web/i
   ) as HTMLInputElement
   fireEvent.change(input, { target: { value: query } })
   fireEvent.submit(input.closest("form")!)
@@ -1677,7 +1677,7 @@ describe("PG-S1 AC-PG-S1-1: idle search is a centered hero", () => {
 
     // Form is present and empty-state shows no results or error.
     expect(
-      screen.getByPlaceholderText(/Search across all providers/i)
+      screen.getByPlaceholderText(/Search the web/i)
     ).toBeInTheDocument()
     expect(screen.queryByText("Live backend result one")).not.toBeInTheDocument()
     expect(screen.queryByText(/no provider is configured/i)).not.toBeInTheDocument()
@@ -1690,7 +1690,7 @@ describe("PG-S1 AC-PG-S1-1: idle search is a centered hero", () => {
     expectTransitionClasses(wrapper)
     // The request form is the wrapped content — same element, not a copy.
     expect(
-      wrapper.querySelector('input[placeholder*="Search across all providers"]')
+      wrapper.querySelector('input[placeholder*="Search the web"]')
     ).not.toBeNull()
     // Hero must not carry the docked marker.
     expect(wrapper.className).not.toContain("top-docked")
@@ -1729,7 +1729,7 @@ describe("PG-S1 AC-PG-S1-2: submit docks the form and keeps it docked while load
       screen.getByRole("button", { name: /Executing/i })
     ).toBeInTheDocument()
     expect(
-      screen.getByPlaceholderText(/Search across all providers/i)
+      screen.getByPlaceholderText(/Search the web/i)
     ).toHaveValue("docking query")
 
     gate.resolve(ok(searchResponseFixture()))
@@ -1744,7 +1744,7 @@ describe("PG-S1 AC-PG-S1-2: submit docks the form and keeps it docked while load
 
     // Results render BELOW the docked form in document order.
     const form = screen
-      .getByPlaceholderText(/Search across all providers/i)
+      .getByPlaceholderText(/Search the web/i)
       .closest("form")!
     const firstResult = screen.getByText("Live backend result one")
     expect(
@@ -1767,7 +1767,7 @@ describe("PG-S1 AC-PG-S1-3: errors pin docked-top; last-good results survive fai
     submitQuery("doomed query")
 
     await waitFor(() => {
-      expect(screen.getByText(/no provider is configured/i)).toBeInTheDocument()
+      expect(screen.getByText(/No provider is set up for this project/)).toBeInTheDocument()
     })
     // Error counts as content: the hero must be gone.
     const wrapper = screen.getByTestId("search-layout")
@@ -1776,7 +1776,7 @@ describe("PG-S1 AC-PG-S1-3: errors pin docked-top; last-good results survive fai
     expectTransitionClasses(wrapper)
     // Form survives the failure; results stay absent.
     expect(
-      screen.getByPlaceholderText(/Search across all providers/i)
+      screen.getByPlaceholderText(/Search the web/i)
     ).toBeInTheDocument()
     expect(screen.queryByText("Live backend result one")).not.toBeInTheDocument()
   })
@@ -1825,7 +1825,7 @@ describe("PG-S1 AC-PG-S1-4: smooth same-element transition retains focus and val
     await readyForSearch()
 
     const inputBefore = screen.getByPlaceholderText(
-      /Search across all providers/i
+      /Search the web/i
     ) as HTMLInputElement
     const formBefore = inputBefore.closest("form")!
     const wrapperBefore = screen.getByTestId("search-layout")
@@ -1841,7 +1841,7 @@ describe("PG-S1 AC-PG-S1-4: smooth same-element transition retains focus and val
     })
 
     const inputAfter = screen.getByPlaceholderText(
-      /Search across all providers/i
+      /Search the web/i
     ) as HTMLInputElement
     const formAfter = inputAfter.closest("form")!
     // No remount: the form node identity is stable across the transition.
@@ -1868,7 +1868,7 @@ describe("PG-S1 Fetch regression: header, button, and fetching flow are untouche
 
     // Header untouched.
     expect(
-      screen.getByRole("heading", { name: "Search Playground" })
+      screen.getByRole("heading", { name: "Playground" })
     ).toBeInTheDocument()
     // Search submit button untouched (idle label).
     expect(
@@ -1878,7 +1878,7 @@ describe("PG-S1 Fetch regression: header, button, and fetching flow are untouche
     // Fetching flow untouched end-to-end.
     fireEvent.click(screen.getByRole("tab", { name: "Fetch", exact: true }))
     const urlInput = screen.getByPlaceholderText(
-      /Enter a URL to fetch/i
+      /URL to fetch/i
     ) as HTMLInputElement
     fireEvent.change(urlInput, { target: { value: "https://example.com/doc" } })
     fireEvent.submit(urlInput.closest("form")!)
@@ -2007,14 +2007,14 @@ function renderWithBackend(
 async function readyForSearch() {
   await waitFor(() => {
     expect(
-      screen.getByPlaceholderText(/Search across all providers/i)
+      screen.getByPlaceholderText(/Search the web/i)
     ).toBeInTheDocument()
   })
 }
 
 function submitQuery(query: string) {
   const input = screen.getByPlaceholderText(
-    /Search across all providers/i
+    /Search the web/i
   ) as HTMLInputElement
   fireEvent.change(input, { target: { value: query } })
   fireEvent.submit(input.closest("form")!)
@@ -2131,7 +2131,7 @@ describe("PG-S2 AC-PG-S2-4: input floor raised pr-32/36 with a no-overlap struct
     await readyForSearch()
 
     const input = screen.getByPlaceholderText(
-      /Search across all providers/i
+      /Search the web/i
     ) as HTMLInputElement
     const names = tokens(input.className)
     expect(names.some((t) => t === "pr-32" || t === "pr-36")).toBe(true)
@@ -2143,7 +2143,7 @@ describe("PG-S2 AC-PG-S2-4: input floor raised pr-32/36 with a no-overlap struct
     await readyForSearch()
 
     const input = screen.getByPlaceholderText(
-      /Search across all providers/i
+      /Search the web/i
     ) as HTMLInputElement
     // Full-bleed input inside a positioning context ...
     expect(tokens(input.className)).toContain("w-full")
@@ -2229,7 +2229,7 @@ describe("PG-S2 AC-PG-S2-6 regressions: PG-S1 hero/dock, header, Fetch flow, dis
     })
     // Header copy untouched.
     expect(
-      screen.getByRole("heading", { name: "Search Playground" })
+      screen.getByRole("heading", { name: "Playground" })
     ).toBeInTheDocument()
   })
 
@@ -2239,7 +2239,7 @@ describe("PG-S2 AC-PG-S2-6 regressions: PG-S1 hero/dock, header, Fetch flow, dis
 
     fireEvent.click(screen.getByRole("tab", { name: "Fetch", exact: true }))
     const urlInput = screen.getByPlaceholderText(
-      /Enter a URL to fetch/i
+      /URL to fetch/i
     ) as HTMLInputElement
     fireEvent.change(urlInput, { target: { value: "https://example.com/doc" } })
     fireEvent.submit(urlInput.closest("form")!)
@@ -2434,14 +2434,14 @@ function renderWithBackend(
 async function readyForSearch() {
   await waitFor(() => {
     expect(
-      screen.getByPlaceholderText(/Search across all providers/i)
+      screen.getByPlaceholderText(/Search the web/i)
     ).toBeInTheDocument()
   })
 }
 
 function submitQuery(query: string) {
   const input = screen.getByPlaceholderText(
-    /Search across all providers/i
+    /Search the web/i
   ) as HTMLInputElement
   fireEvent.change(input, { target: { value: query } })
   fireEvent.submit(input.closest("form")!)
@@ -2483,7 +2483,7 @@ describe("PG-S3 AC-PG-S3-1: Search-mode composer box, Fetch stays bare, seams na
     expect(composer).not.toBeNull()
     expectComposerBoxClasses(composer!)
     // The search input lives INSIDE the box (division aesthetic).
-    const input = screen.getByPlaceholderText(/Search across all providers/i)
+    const input = screen.getByPlaceholderText(/Search the web/i)
     expect(composer!.contains(input)).toBe(true)
     // Inside the box the input is borderless -- the box owns the border.
     // Current bare code styles the input itself with a bottom border.
@@ -2500,7 +2500,7 @@ describe("PG-S3 AC-PG-S3-1: Search-mode composer box, Fetch stays bare, seams na
 
     fireEvent.click(screen.getByRole("tab", { name: "Fetch", exact: true }))
 
-    const fetchInput = screen.getByPlaceholderText(/Enter a URL to fetch/i)
+    const fetchInput = screen.getByPlaceholderText(/URL to fetch/i)
     expect(fetchInput).toBeInTheDocument()
     // Fetch does NOT adopt the search box (reusable pattern later, bare now).
     expect(screen.queryByTestId("search-composer")).toBeNull()
@@ -2638,7 +2638,7 @@ describe("PG-S3 AC-PG-S3-3: internal divider + footer tray owns suggestions/prov
 
     // Nothing leaks outside: the composer owns every instance.
     expect(
-      screen.getByPlaceholderText(/Search across all providers/i).closest("form")
+      screen.getByPlaceholderText(/Search the web/i).closest("form")
     ).not.toBeNull()
     const outsideSuggestions = Array.from(
       document.querySelectorAll("body *")
@@ -2700,7 +2700,7 @@ describe("PG-S3 AC-PG-S3-5 regressions: docked-top + same-form + PG-S1 contract 
     expect(composerBefore).not.toBeNull()
 
     const inputBefore = screen.getByPlaceholderText(
-      /Search across all providers/i
+      /Search the web/i
     ) as HTMLInputElement
     const formBefore = inputBefore.closest("form")!
     fireEvent.change(inputBefore, { target: { value: "s1 lock query" } })
@@ -2715,7 +2715,7 @@ describe("PG-S3 AC-PG-S3-5 regressions: docked-top + same-form + PG-S1 contract 
     expect(docked.className).toContain("top-docked")
     // Same form element, value + focus survive (no remount for the box).
     const inputAfter = screen.getByPlaceholderText(
-      /Search across all providers/i
+      /Search the web/i
     ) as HTMLInputElement
     expect(inputAfter.closest("form")).toBe(formBefore)
     expect(inputAfter).toHaveValue("s1 lock query")
@@ -2728,12 +2728,12 @@ describe("PG-S3 AC-PG-S3-5 regressions: docked-top + same-form + PG-S1 contract 
     await readyForSearch()
 
     expect(
-      screen.getByRole("heading", { name: "Search Playground" })
+      screen.getByRole("heading", { name: "Playground" })
     ).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole("tab", { name: "Fetch", exact: true }))
     const urlInput = screen.getByPlaceholderText(
-      /Enter a URL to fetch/i
+      /URL to fetch/i
     ) as HTMLInputElement
     fireEvent.change(urlInput, { target: { value: "https://example.com/doc" } })
     fireEvent.submit(urlInput.closest("form")!)
@@ -2777,7 +2777,7 @@ describe("PG-S3 AC-PG-S3-6 regressions: PG-S2 button lock intact inside the box"
     expect(names).toContain("inline-flex")
 
     const input = screen.getByPlaceholderText(
-      /Search across all providers/i
+      /Search the web/i
     ) as HTMLInputElement
     const inputNames = tokens(input.className)
     expect(inputNames.some((t) => t === "pr-32" || t === "pr-36")).toBe(true)
@@ -2956,14 +2956,14 @@ function renderWithBackend(
 async function readyForSearch() {
   await waitFor(() => {
     expect(
-      screen.getByPlaceholderText(/Search across all providers/i)
+      screen.getByPlaceholderText(/Search the web/i)
     ).toBeInTheDocument()
   })
 }
 
 function submitQuery(query: string) {
   const input = screen.getByPlaceholderText(
-    /Search across all providers/i
+    /Search the web/i
   ) as HTMLInputElement
   fireEvent.change(input, { target: { value: query } })
   fireEvent.submit(input.closest("form")!)
@@ -3099,7 +3099,7 @@ describe("PG-S4 AC-PG-S4-2: click navigates to Fetch tab + prefills URL (exact m
     // Input prefilled with the result URL exact modulo surrounding-whitespace
     // strip (consistent manual+context trim; clean fixture URLs stay identical).
     const urlInput = screen.getByPlaceholderText(
-      /Enter a URL to fetch/i
+      /URL to fetch/i
     ) as HTMLInputElement
     expect(urlInput).toHaveValue("https://example.com/one")
 
@@ -3116,7 +3116,7 @@ describe("PG-S4 AC-PG-S4-2: click navigates to Fetch tab + prefills URL (exact m
       )
     })
     expect(
-      screen.getByPlaceholderText(/Enter a URL to fetch/i) as HTMLInputElement
+      screen.getByPlaceholderText(/URL to fetch/i) as HTMLInputElement
     ).toHaveValue("https://example.com/two")
   })
 })
@@ -3151,7 +3151,7 @@ describe("PG-S4 AC-PG-S4-3: auto-fetch POST + Executing + result render", () => 
     expect(screen.getByText(/Fetched markdown body/i)).toBeInTheDocument()
     // URL retained in the input after success.
     expect(
-      screen.getByPlaceholderText(/Enter a URL to fetch/i) as HTMLInputElement
+      screen.getByPlaceholderText(/URL to fetch/i) as HTMLInputElement
     ).toHaveValue("https://example.com/one")
   })
 
@@ -3176,7 +3176,7 @@ describe("PG-S4 AC-PG-S4-3: auto-fetch POST + Executing + result render", () => 
       screen.getByRole("button", { name: "Executing...", exact: true })
     ).toBeDisabled()
     expect(
-      screen.getByPlaceholderText(/Enter a URL to fetch/i) as HTMLInputElement
+      screen.getByPlaceholderText(/URL to fetch/i) as HTMLInputElement
     ).toHaveValue("https://example.com/one")
 
     gate.resolve(ok(fetchResponseFixture()))
@@ -3221,7 +3221,7 @@ describe("PG-S4 AC-PG-S4-4: error banner + URL retained, no stale doc (+ clearin
       "true"
     )
     expect(
-      screen.getByPlaceholderText(/Enter a URL to fetch/i) as HTMLInputElement
+      screen.getByPlaceholderText(/URL to fetch/i) as HTMLInputElement
     ).toHaveValue("https://example.com/two")
     // No stale document renders.
     expect(screen.queryByText("Live document title")).not.toBeInTheDocument()
@@ -3248,7 +3248,7 @@ describe("PG-S4 AC-PG-S4-4: error banner + URL retained, no stale doc (+ clearin
       expect(screen.getByText("Live document title")).toBeInTheDocument()
     })
     expect(
-      screen.getByPlaceholderText(/Enter a URL to fetch/i) as HTMLInputElement
+      screen.getByPlaceholderText(/URL to fetch/i) as HTMLInputElement
     ).toHaveValue("https://example.com/one")
 
     // Back to Search, then per-card fetch B (deferred failure).
@@ -3272,7 +3272,7 @@ describe("PG-S4 AC-PG-S4-4: error banner + URL retained, no stale doc (+ clearin
       ).toBeInTheDocument()
     })
     expect(
-      screen.getByPlaceholderText(/Enter a URL to fetch/i) as HTMLInputElement
+      screen.getByPlaceholderText(/URL to fetch/i) as HTMLInputElement
     ).toHaveValue("https://example.com/two")
     expect(screen.queryByText("Live document title")).not.toBeInTheDocument()
     expect(
@@ -3291,7 +3291,7 @@ describe("PG-S4 AC-PG-S4-4: error banner + URL retained, no stale doc (+ clearin
       "true"
     )
     expect(
-      screen.getByPlaceholderText(/Enter a URL to fetch/i) as HTMLInputElement
+      screen.getByPlaceholderText(/URL to fetch/i) as HTMLInputElement
     ).toHaveValue("https://example.com/two")
     expect(screen.queryByText("Live document title")).not.toBeInTheDocument()
     expect(
@@ -3350,7 +3350,7 @@ describe("PG-S4 AC-PG-S4-4: error banner + URL retained, no stale doc (+ clearin
       url: trimmedUrl,
     })
     expect(
-      screen.getByPlaceholderText(/Enter a URL to fetch/i) as HTMLInputElement
+      screen.getByPlaceholderText(/URL to fetch/i) as HTMLInputElement
     ).toHaveValue(trimmedUrl)
 
     await waitFor(() => {
@@ -3528,7 +3528,7 @@ describe("PG-S4 AC-PG-S4-7 regressions: PG-S1/S2/S3 guards + composer gating + f
     }
 
     const inputBefore = screen.getByPlaceholderText(
-      /Search across all providers/i
+      /Search the web/i
     ) as HTMLInputElement
     const formBefore = inputBefore.closest("form")!
     fireEvent.change(inputBefore, { target: { value: "s1 lock query" } })
@@ -3545,12 +3545,12 @@ describe("PG-S4 AC-PG-S4-7 regressions: PG-S1/S2/S3 guards + composer gating + f
       "top-docked"
     )
     const inputAfter = screen.getByPlaceholderText(
-      /Search across all providers/i
+      /Search the web/i
     ) as HTMLInputElement
     expect(inputAfter.closest("form")).toBe(formBefore)
     expect(inputAfter).toHaveValue("s1 lock query")
     expect(
-      screen.getByRole("heading", { name: "Search Playground" })
+      screen.getByRole("heading", { name: "Playground" })
     ).toBeInTheDocument()
   })
 
@@ -3577,7 +3577,7 @@ describe("PG-S4 AC-PG-S4-7 regressions: PG-S1/S2/S3 guards + composer gating + f
     expect(names).toContain("inline-flex")
 
     const input = screen.getByPlaceholderText(
-      /Search across all providers/i
+      /Search the web/i
     ) as HTMLInputElement
     const inputNames = tokens(input.className)
     expect(inputNames.some((t) => t === "pr-32" || t === "pr-36")).toBe(true)
@@ -3614,7 +3614,7 @@ describe("PG-S4 AC-PG-S4-7 regressions: PG-S1/S2/S3 guards + composer gating + f
     expect(composer!.className).toContain("bg-[var(--elevated)]")
     expect(tokens(composer!.className)).toContain("rounded-xl")
     expect(composer!.className).toContain("focus-within:")
-    const input = screen.getByPlaceholderText(/Search across all providers/i)
+    const input = screen.getByPlaceholderText(/Search the web/i)
     expect(composer!.contains(input)).toBe(true)
     const footer = screen.queryByTestId("search-composer-footer")
     expect(footer).not.toBeNull()
@@ -3642,7 +3642,7 @@ describe("PG-S4 AC-PG-S4-7 regressions: PG-S1/S2/S3 guards + composer gating + f
 
     // Fetch mode stays bare (reusable pattern later, no composer now).
     fireEvent.click(screen.getByRole("tab", { name: "Fetch", exact: true }))
-    expect(screen.getByPlaceholderText(/Enter a URL to fetch/i)).toBeInTheDocument()
+    expect(screen.getByPlaceholderText(/URL to fetch/i)).toBeInTheDocument()
     expect(screen.queryByTestId("search-composer")).toBeNull()
     expect(screen.queryByTestId("search-composer-footer")).toBeNull()
   })
@@ -3666,7 +3666,7 @@ describe("PG-S4 AC-PG-S4-7 regressions: PG-S1/S2/S3 guards + composer gating + f
     await readyForSearch()
     fireEvent.click(screen.getByRole("tab", { name: "Fetch", exact: true }))
     const urlInput = screen.getByPlaceholderText(
-      /Enter a URL to fetch/i
+      /URL to fetch/i
     ) as HTMLInputElement
     fireEvent.change(urlInput, { target: { value: "https://example.com/doc" } })
     fireEvent.submit(urlInput.closest("form")!)
@@ -3877,7 +3877,7 @@ function renderWithBackend(
 async function readyForSearch() {
   await waitFor(() => {
     expect(
-      screen.getByPlaceholderText(/Search across all providers/i)
+      screen.getByPlaceholderText(/Search the web/i)
     ).toBeInTheDocument()
   })
 }
@@ -3889,7 +3889,7 @@ async function clickSearchButton(): Promise<void> {
 
 async function submitQueryViaClick(query: string) {
   const input = screen.getByPlaceholderText(
-    /Search across all providers/i
+    /Search the web/i
   ) as HTMLInputElement
   fireEvent.change(input, { target: { value: query } })
   await clickSearchButton()
@@ -3899,7 +3899,7 @@ async function submitQueryViaClick(query: string) {
 async function submitQueryViaEnter(query: string) {
   const user = userEvent.setup()
   const input = screen.getByPlaceholderText(
-    /Search across all providers/i
+    /Search the web/i
   ) as HTMLInputElement
   await user.clear(input)
   await user.type(input, `${query}{Enter}`)
@@ -3989,7 +3989,7 @@ describe("PG-S5 AC-PG-S5-1: footer Results number input replaces Depth", () => {
     fireEvent.click(screen.getByRole("tab", { name: "Fetch", exact: true }))
 
     expect(
-      screen.getByPlaceholderText(/Enter a URL to fetch/i)
+      screen.getByPlaceholderText(/URL to fetch/i)
     ).toBeInTheDocument()
     expect(screen.queryByTestId("search-composer")).toBeNull()
     expect(screen.queryByTestId("search-composer-footer")).toBeNull()
@@ -4277,7 +4277,7 @@ describe("PG-S5 AC-PG-S5-4 regressions: per-card fetch + composer + 422", () => 
       )
     })
     expect(
-      screen.getByPlaceholderText(/Enter a URL to fetch/i) as HTMLInputElement
+      screen.getByPlaceholderText(/URL to fetch/i) as HTMLInputElement
     ).toHaveValue("https://example.com/one")
 
     await waitFor(() => {
@@ -4320,7 +4320,7 @@ describe("PG-S5 AC-PG-S5-4 regressions: per-card fetch + composer + 422", () => 
     expect(within(footer).getByRole("combobox")).toBeInTheDocument()
 
     expect(
-      screen.getByRole("heading", { name: "Search Playground" })
+      screen.getByRole("heading", { name: "Playground" })
     ).toBeInTheDocument()
   })
 
@@ -4463,18 +4463,18 @@ function refuseNetwork(): FetchStub {
 }
 
 async function submitSearch(query: string): Promise<void> {
-  const input = await screen.findByPlaceholderText(/Search across all providers/i)
+  const input = await screen.findByPlaceholderText(/Search the web/i)
   fireEvent.change(input, { target: { value: query } })
   fireEvent.submit(input.closest("form")!)
 }
 
 async function openFetchTab(): Promise<void> {
   fireEvent.click(screen.getByRole("tab", { name: "Fetch", exact: true }))
-  await screen.findByPlaceholderText(/Enter a URL to fetch/i)
+  await screen.findByPlaceholderText(/URL to fetch/i)
 }
 
 async function submitFetch(url: string): Promise<void> {
-  const input = await screen.findByPlaceholderText(/Enter a URL to fetch/i)
+  const input = await screen.findByPlaceholderText(/URL to fetch/i)
   fireEvent.change(input, { target: { value: url } })
   fireEvent.submit(input.closest("form")!)
 }
@@ -4504,7 +4504,7 @@ describe("PlaygroundPage persistence", () => {
     )
 
     // Search tab: rehydrated draft, options, and mapped result.
-    expect(await screen.findByPlaceholderText(/Search across all providers/i)).toHaveValue(
+    expect(await screen.findByPlaceholderText(/Search the web/i)).toHaveValue(
       "seeded query"
     )
     expect(screen.getByRole("spinbutton", { name: "Number of results" })).toHaveValue(25)
@@ -4522,7 +4522,7 @@ describe("PlaygroundPage persistence", () => {
 
     // Fetch tab: rehydrated URL draft and the persisted error banner.
     await openFetchTab()
-    expect(screen.getByPlaceholderText(/Enter a URL to fetch/i)).toHaveValue(
+    expect(screen.getByPlaceholderText(/URL to fetch/i)).toHaveValue(
       "https://example.com/seeded-doc"
     )
     expect(await screen.findByText("seeded fetch boom")).toBeInTheDocument()
@@ -4554,14 +4554,14 @@ describe("PlaygroundPage persistence", () => {
     )
 
     // Fetch tab state survived (mode persisted as fetch).
-    expect(await screen.findByPlaceholderText(/Enter a URL to fetch/i)).toHaveValue(
+    expect(await screen.findByPlaceholderText(/URL to fetch/i)).toHaveValue(
       "https://example.com/remount-doc"
     )
     expect(await screen.findByText("Parsed Markdown Document")).toBeInTheDocument()
 
     // Search tab state survived too.
     fireEvent.click(screen.getByRole("tab", { name: "Search", exact: true }))
-    expect(await screen.findByPlaceholderText(/Search across all providers/i)).toHaveValue(
+    expect(await screen.findByPlaceholderText(/Search the web/i)).toHaveValue(
       "remount probe"
     )
     expect(await screen.findByText("Live backend result one")).toBeInTheDocument()
@@ -4597,7 +4597,7 @@ describe("PlaygroundPage persistence", () => {
     render(
       <PlaygroundHarness />
     )
-    expect(await screen.findByPlaceholderText(/Search across all providers/i)).toHaveValue(
+    expect(await screen.findByPlaceholderText(/Search the web/i)).toHaveValue(
       "reload probe"
     )
     expect(await screen.findByText("Live backend result one")).toBeInTheDocument()

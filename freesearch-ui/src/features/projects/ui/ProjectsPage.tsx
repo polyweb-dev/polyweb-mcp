@@ -1,3 +1,4 @@
+import { useEffect } from "react"
 import { Link } from "react-router"
 import { Button } from "@/shared/ui/button"
 import { canCreateProjects, resolveLastProject, useProjects } from "@/domains/projects"
@@ -15,6 +16,11 @@ import { ProjectCreateForm } from "./ProjectCreateForm"
 export function ProjectsPage({ defaultAdminEmail }: { defaultAdminEmail: string }) {
   const { accountId, availability, systemAccess, projects, reloadProjects } = useProjects()
   const lastProjectId = resolveLastProject(accountId, projects)
+
+  // Refresh the list on entry so membership changes made elsewhere appear.
+  useEffect(() => {
+    void reloadProjects()
+  }, [reloadProjects])
   const lastProject = projects.find((project) => project.id === lastProjectId) ?? null
 
   if (availability === "loading") {

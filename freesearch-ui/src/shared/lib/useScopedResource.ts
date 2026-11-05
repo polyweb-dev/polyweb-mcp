@@ -24,6 +24,11 @@ export interface UseScopedResourceOptions<T> {
   pollMs?: number
   /** Gate the load without unmounting the hook. */
   enabled?: boolean
+  /**
+   * Keep the ready data when a re-load of the same scope fails. A first-load
+   * failure still surfaces as `error`; only a refresh after success retains.
+   */
+  retainOnRefreshError?: boolean
 }
 
 /** Scoped resource: the discriminated state plus a manual reload. */
@@ -50,15 +55,18 @@ interface Snapshot<T> {
  * `loading` immediately without a cascading render.
  */
 export function useScopedResource<T>(options: UseScopedResourceOptions<T>): ScopedResource<T> {
-  const { scopeKey, load, pollMs, enabled = true } = options
+  const { scopeKey, load, pollMs, enabled = true, retainOnRefreshError = false } = options
   const [snapshot, setSnapshot] = useState<Snapshot<T>>({ scopeKey, inner: LOADING })
   const generationRef = useRef(0)
   const activeRef = useRef<{ generation: number; scopeKey: string } | null>(null)
   const controllerRef = useRef<AbortController | null>(null)
   const loadRef = useRef(load)
+  const retainRef = useRef(retainOnRefreshError)
+  const snapshotRef = useRef<Snapshot<T>>({ scopeKey, inner: LOADING })
 
   useEffect(() => {
     loadRef.current = load
+    retainRef.current = retainOnRefreshError
   })
 
   const run = useCallback(
@@ -72,13 +80,22 @@ export function useScopedResource<T>(options: UseScopedResourceOptions<T>): Scop
         if (generationRef.current !== generation || controller.signal.aborted) {
           return undefined
         }
-        setSnapshot({ scopeKey: activeScope, inner: { status: "ready", data } })
+        const next: Snapshot<T> = { scopeKey: activeScope, inner: { status: "ready", data } }
+        snapshotRef.current = next
+        setSnapshot(next)
         return data
       } catch (error) {
         if (generationRef.current !== generation || controller.signal.aborted) {
           return undefined
         }
-        setSnapshot({ scopeKey: activeScope, inner: { status: "error", error } })
+        const retained =
+          retainRef.current &&
+          snapshotRef.current.scopeKey === activeScope &&
+          snapshotRef.current.inner.status === "ready"
+        if (retained) return undefined
+        const next: Snapshot<T> = { scopeKey: activeScope, inner: { status: "error", error } }
+        snapshotRef.current = next
+        setSnapshot(next)
         return undefined
       }
     },

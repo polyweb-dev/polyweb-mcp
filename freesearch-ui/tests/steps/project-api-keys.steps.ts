@@ -298,6 +298,32 @@ Then(
 )
 
 Then(
+  "the project selector shows {string} without clipping",
+  async ({ page }, name: string) => {
+    const trigger = page.getByRole("button", {
+      name: `Select project (current: ${name})`,
+      exact: true,
+    })
+    await expect(trigger).toBeVisible({ timeout: 15_000 })
+    await expect(trigger).toContainText(name)
+    const label = trigger.locator("span").first()
+    const fits = await label.evaluate(
+      (element) => element.scrollWidth <= element.clientWidth
+    )
+    expect(fits).toBe(true)
+  }
+)
+
+Then("the Back link {string} is visible", async ({ page }, name: string) => {
+  const link = page.getByRole("navigation", { name: "Project" }).getByRole("link", {
+    name: `Back to ${name}`,
+    exact: true,
+  })
+  await expect(link).toBeVisible({ timeout: 15_000 })
+  await expect(link).toHaveAttribute("title", `Back to ${name}`)
+})
+
+Then(
   "the active Project link {string} is current within the viewport",
   async ({ page }, label: string) => {
     const link = page

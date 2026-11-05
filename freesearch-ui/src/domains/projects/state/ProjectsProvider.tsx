@@ -6,6 +6,9 @@ import type { Project, SystemAccess } from "../model/types"
 import { ProjectsContext } from "./context"
 import type { ProjectsContextValue } from "./context"
 
+/** Live re-check cadence of the project list: every 30 seconds and on focus. */
+const PROJECTS_POLL_MS = 30_000
+
 interface ProjectsSnapshot {
   system: SystemAccess
   list: Project[]
@@ -35,6 +38,8 @@ export function ProjectsProvider({
   const resource = useScopedResource<ProjectsSnapshot>({
     scopeKey: accountId,
     load: loadSnapshot,
+    pollMs: PROJECTS_POLL_MS,
+    retainOnRefreshError: true,
   })
 
   const reloadProjects = useCallback(async (): Promise<Project[] | null> => {

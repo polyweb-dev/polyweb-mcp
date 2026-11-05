@@ -1,4 +1,6 @@
 import type { PlaygroundController } from "../model/usePlaygroundController"
+import { isNoProviderConfigured } from "./noProviderConfigured"
+import { ProviderSetupNotice } from "./ProviderSetupNotice"
 import { SearchComposer } from "./SearchComposer"
 import { SearchResults } from "./SearchResults"
 
@@ -16,11 +18,16 @@ export function SearchSection({ controller }: { controller: PlaygroundController
         <SearchComposer controller={controller} />
       </div>
 
-      {controller.searchError && (
-        <p className="text-[13px]" style={{ color: "var(--status-danger)" }}>
-          {controller.searchError}
-        </p>
-      )}
+      {controller.noProviderForMode && <ProviderSetupNotice projectId={controller.projectId} />}
+
+      {controller.searchError !== null &&
+        (isNoProviderConfigured(controller.searchError) ? (
+          <ProviderSetupNotice projectId={controller.projectId} />
+        ) : (
+          <p className="text-[13px]" style={{ color: "var(--status-danger)" }}>
+            {controller.searchError}
+          </p>
+        ))}
 
       {/* Widescreen Results Layout: Results List + Inspector Pane */}
       {controller.activeSearch && (

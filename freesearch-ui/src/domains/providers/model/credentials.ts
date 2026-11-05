@@ -143,11 +143,6 @@ export function oauthStatusText(status: OAuthGrantStatus): string {
   return OAUTH_STATUS_TEXT[status]
 }
 
-/** "Runs: search, fetch" or "Runs: nothing yet". */
-export function runsText(operations: readonly ProviderOperation[]): string {
-  return operations.length === 0 ? "Runs: nothing yet" : `Runs: ${operations.join(", ")}`
-}
-
 /** User-facing auth mode label. */
 export function authModeLabel(authMode: string): string {
   return authMode === "oauth" ? "OAuth" : "API key"

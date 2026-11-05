@@ -32,8 +32,12 @@ vi.mock("@/domains/execution/state/useProjectExecution", () => ({
 
 function scopeOf(overrides: Partial<PlaygroundScope> = {}): PlaygroundScope {
   return {
+    projectId: PROJECT_ALPHA_ID,
     providers: currentProviders,
     providersLoading: false,
+    providersReady: true,
+    providersError: false,
+    retryProviders: () => {},
     canSearch: true,
     canFetch: true,
     ...overrides,
