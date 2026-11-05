@@ -27,6 +27,8 @@ These rules for the orchestrator that are distilled from prior agent runs. Follo
 - **Single workflow**: `tools.woodpecker.org.agent.trigger_pipeline({ repo_id: 1, branch: "<branch>", workflow: "<name>" })` where `<name>` is a `.woodpecker/*.yaml` basename (e.g. `api-latency`). Omitting `workflow` runs ALL manual workflows — expensive (live provider calls, long mutation runs).
 - The branch must be **pushed to origin**; local-only branches cannot be triggered. Monitor with `get_pipeline`, debug with `get_step_logs`, stop with `cancel_pipeline`.
 - **Artifacts**: each workflow uploads `reports.zip` (log + `test_reports/`) to Gitea as generic package `freesearch-<workflow>` versioned `pipeline-<N>-r<reruns>-<ns>`. Download with `python3 scripts/gitea_packages.py download <pkg> <version> reports.zip` (lands in `.gitea-packages/`; `python` is unavailable — use `python3`).
+- **Live suite**: CI has no provider secrets, so `@live` scenarios skip there. Run them locally and sparingly (they spend API credits): `FREESEARCH_RUN_LIVE=1 uv run --no-sync --env-file .env behave --tags="@live"`. The harness reads keys from the process env only. Tinyfish live latency reads `TINYFISH_API_KEY`, not `FREESEARCH_TINYFISH_API_KEY`.
+- **api-latency step order**: the workflow runs the Behave latency feature before `pytest tests/integration/latency` under `set -e`, so the pytest gate only runs when every Behave scenario passes. Offline added latency sits near the 80 ms gate on CI and varies by spot agent (about 65–80 ms p50).
 
 ## UI unit tests
 - We only support desktop view, not the mobile view.
