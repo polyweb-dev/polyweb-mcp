@@ -45,6 +45,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar
 
 import httpx
+import pytest
 import uvicorn
 from mcp.client.session import ClientSession
 from mcp.client.streamable_http import streamable_http_client
@@ -58,7 +59,11 @@ from tests.fixtures.auth import (
     install_process_auth_secret,
     temp_email,
 )
-from tests.fixtures.execution import seed_member_project
+from tests.fixtures.execution import (
+    install_adapter_map,
+    seed_member_project,
+    seed_provider_bindings,
+)
 from tests.fixtures.latency import (
     FETCH_URL,
     attach_select_counter,
@@ -74,7 +79,9 @@ from tests.fixtures.latency import (
 from tests.fixtures.latency_reports import ComboOutcome, LatencySample
 
 from freesearch.adapters.base import ProviderAdapter
+from freesearch.configuration.config import get_settings
 from freesearch.configuration.provider_limits import provider_limit_defaults
+from freesearch.infrastructure.encrypted_store import EncryptedDbSecretStore, load_secret_codec
 from freesearch.mcp.auth import STREAMABLE_HTTP_PATH, build_http_app
 from freesearch.mcp.server import create_server, shutdown_injected_observability
 from freesearch.models.provider_limits import LimitRecordUpdate, RateBlock, RateWindowName
@@ -342,6 +349,7 @@ class _Target:
     loop: BackgroundLoop
     clock: ProviderClock
     adapters: dict[str, ProviderAdapter] = field(default_factory=dict)
+    secrets: dict[str, str] = field(default_factory=dict)
     selects: list[int] = field(default_factory=lambda: [0])
     reads_available: bool = False
     timer: ServerTimer | None = None
@@ -405,6 +413,7 @@ class RoutingLatencyHarness:
         self._mcp_holder: concurrent.futures.Future[None] | None = None
         self._tempdir: str | None = None
         self._restore_secret: Callable[[], None] | None = None
+        self._adapter_patch: pytest.MonkeyPatch | None = None
         self._started = False
 
     # ------------------------------------------------------------- lifecycle
@@ -429,6 +438,7 @@ class RoutingLatencyHarness:
     def _start(self) -> None:
         self._started = True
         _secret, self._restore_secret = install_process_auth_secret()
+        self._adapter_patch = pytest.MonkeyPatch()
         self._tempdir = tempfile.mkdtemp(prefix="freesearch-latency-")
         self._client_loop = BackgroundLoop("latency-client")
         self._client_loop.run(self._open_rest_client())
@@ -446,6 +456,12 @@ class RoutingLatencyHarness:
             else:
                 token = target.loop.run(self._start_mcp(target, database), _STARTUP_TIMEOUT_S)
                 self._open_mcp_session(target, token)
+            # Execution builds an adapter only for an enabled project binding
+            # and hands it the binding's staged secret; this target's fakes are
+            # returned only for exactly those fixture secrets.
+            install_adapter_map(
+                self._adapter_patch, list(target.adapters.values()), secrets=target.secrets
+            )
             repository = target.repository
             assert repository is not None
             detach = attach_select_counter(repository, target.selects)
@@ -481,9 +497,27 @@ class RoutingLatencyHarness:
         port = await target.served.start()
         target.base_url = f"http://127.0.0.1:{port}"
 
+    async def _bind_providers(self, target: _Target, project_id: Any, actor_id: Any) -> None:
+        """Seed one enabled project binding with a staged secret per adapter."""
+
+        repository = target.repository
+        assert repository is not None
+        await seed_provider_bindings(
+            repository,
+            project_id=project_id,
+            actor_id=actor_id,
+            store=_secret_store(repository),
+            providers=tuple(target.adapters),
+            secrets=target.secrets,
+        )
+
     async def _start_rest(self, target: _Target, database: Path) -> None:
         repository = await self._open_repository(target, database)
-        app = create_app(self._build_adapters(target), repository=repository)
+        app = create_app(
+            self._build_adapters(target),
+            repository=repository,
+            secret_store=_secret_store(repository),
+        )
         await self._serve(target, app)
 
     async def _login_rest(self, target: _Target) -> None:
@@ -508,6 +542,11 @@ class RoutingLatencyHarness:
             target.loop.submit(seed_member_project(repository, self._rest_headers))
         )
         target.project_id = str(attribution.project_id)
+        await asyncio.wrap_future(
+            target.loop.submit(
+                self._bind_providers(target, attribution.project_id, attribution.actor_id)
+            )
+        )
 
     async def _start_mcp(self, target: _Target, database: Path) -> str:
         repository = await self._open_repository(target, database)
@@ -516,6 +555,7 @@ class RoutingLatencyHarness:
         server = create_server(
             self._build_adapters(target), repository=repository, auth_service=service
         )
+        await self._bind_providers(target, project_key.project_id, project_key.owner.id)
         target.mcp_server = server
         await self._serve(
             target, build_http_app(server, auth_service=service, settings=service.settings)
@@ -591,6 +631,9 @@ class RoutingLatencyHarness:
             except Exception as error:
                 _report_error(errors, "client loop close", error)
             self._client_loop = None
+        if self._adapter_patch is not None:
+            self._adapter_patch.undo()
+            self._adapter_patch = None
         if self._restore_secret is not None:
             self._restore_secret()
             self._restore_secret = None
@@ -807,6 +850,12 @@ class RoutingLatencyHarness:
             combined.save(str(session_path))
             written += [html_path, text_path, session_path]
         return written
+
+
+def _secret_store(repository: SQLiteRepository) -> EncryptedDbSecretStore:
+    """Return the encrypted runtime store both transports build for this database."""
+
+    return EncryptedDbSecretStore(repository, load_secret_codec(get_settings()))
 
 
 async def lift_rate_windows(limits: ProviderLimitsService, providers: Iterable[str]) -> None:
