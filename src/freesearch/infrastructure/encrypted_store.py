@@ -93,10 +93,19 @@ class EncryptedDbSecretStore:
         with a value-free warning.
         """
 
-        tombstone = await session.get(RuntimeSettingRow, self._tombstone_key(name))
+        tombstone_key, key = self._tombstone_key(name), self._key(name)
+        rows = {
+            row.key: row
+            for row in (
+                await session.execute(
+                    select(RuntimeSettingRow).where(RuntimeSettingRow.key.in_((tombstone_key, key)))
+                )
+            ).scalars()
+        }
+        tombstone = rows.get(tombstone_key)
         if tombstone is not None and _decode_row(tombstone) is not None:
             return None
-        row = await session.get(RuntimeSettingRow, self._key(name))
+        row = rows.get(key)
         if row is None:
             return None
         value = _decode_row(row)

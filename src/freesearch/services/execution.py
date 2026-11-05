@@ -1118,6 +1118,7 @@ class ExecutionService:
                 usable.id,
                 operation=operation,
                 expected_generation=usable.generation,
+                usable=usable,
             )
         if credential is None:
             return None
@@ -2191,6 +2192,7 @@ class _AttemptSeam:
                     usable.id,
                     operation=operation,
                     expected_generation=usable.generation,
+                    usable=usable,
                 )
                 if (
                     material is None
