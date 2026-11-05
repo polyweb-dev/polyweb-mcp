@@ -2054,7 +2054,7 @@ async def test_tavily_env_switch_keeps_shared_bucket_with_zero_vendor_calls(
 ) -> None:
     """Dev-to-prod and prod-to-dev keep bucket/pool/caps/terminal with zero vendor I/O."""
 
-    from datetime import date
+    from datetime import timedelta
 
     import httpx
 
@@ -2126,12 +2126,14 @@ async def test_tavily_env_switch_keeps_shared_bucket_with_zero_vendor_calls(
             source="vendor_402",
         )
     )
+    period_start = datetime.now(UTC).date().replace(day=1)
+    period_end = (period_start + timedelta(days=32)).replace(day=1)
     await seed.save_grant(
         "tavily",
         CRDGrantPayload(
             version=0,
-            period_start=date(2026, 10, 1),
-            period_end=date(2026, 11, 1),
+            period_start=period_start,
+            period_end=period_end,
             search_crd=Decimal("10"),
             fetch_crd=Decimal("4"),
         ),
