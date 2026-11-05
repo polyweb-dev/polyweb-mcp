@@ -18,7 +18,7 @@ def step_given_keenable_adapter(context: Any) -> None:
     assert context.adapter.name == "keenable", (
         f"Expected Keenable adapter, got '{context.adapter.name}'"
     )
-    assert os.environ.get(PROVIDER_ENV_VARS[ProviderName.KEENABLE]) is None, (
+    assert not (os.environ.get(PROVIDER_ENV_VARS[ProviderName.KEENABLE]) or "").strip(), (
         "Keyless live scenario requires FREESEARCH_KEENABLE_API_KEY to be absent."
     )
 
