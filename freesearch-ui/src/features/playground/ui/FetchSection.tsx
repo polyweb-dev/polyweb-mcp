@@ -2,6 +2,8 @@ import type { PlaygroundController } from "../model/usePlaygroundController"
 import { FetchComposer } from "./FetchComposer"
 import { FetchErrorBanner } from "./FetchErrorBanner"
 import { FetchResult } from "./FetchResult"
+import { isNoProviderConfigured } from "./noProviderConfigured"
+import { ProviderSetupNotice } from "./ProviderSetupNotice"
 
 /** Fetch panel: hero/docked composer wrapper, error banner, document. */
 export function FetchSection({ controller }: { controller: PlaygroundController }) {
@@ -16,9 +18,14 @@ export function FetchSection({ controller }: { controller: PlaygroundController 
       >
         <FetchComposer controller={controller} />
       </div>
-      {controller.fetchError && (
-        <FetchErrorBanner error={controller.fetchError} />
-      )}
+      {controller.noProviderForMode && <ProviderSetupNotice projectId={controller.projectId} />}
+
+      {controller.fetchError !== null &&
+        (isNoProviderConfigured(controller.fetchError) ? (
+          <ProviderSetupNotice projectId={controller.projectId} />
+        ) : (
+          <FetchErrorBanner error={controller.fetchError} />
+        ))}
 
       {/* Fetch result — Widescreen 2-column layout */}
       {controller.activeFetch && (

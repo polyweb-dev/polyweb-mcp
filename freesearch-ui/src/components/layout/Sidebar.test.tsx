@@ -101,9 +101,9 @@ const EXPECTED_NAV: Array<{ label: string; id: TabId; href: string }> = [
   { label: "System credentials", id: "systemCredentials", href: "/system/credentials" },
   { label: "Capacity", id: "systemCapacity", href: "/system/capacity" },
   { label: "Provider settings", id: "settings", href: "/settings" },
+  { label: "Admin", id: "adminUsers", href: "/admin/users" },
   { label: "Projects", id: "projects", href: "/projects" },
   { label: "Account", id: "account", href: "/account" },
-  { label: "Admin", id: "adminUsers", href: "/admin/users" },
 ]
 
 const ADMIN_LINK_LABELS = [
@@ -112,9 +112,9 @@ const ADMIN_LINK_LABELS = [
   "System credentials",
   "Capacity",
   "Provider settings",
+  "Admin",
   "Projects",
   "Account",
-  "Admin",
 ]
 
 const DEVELOPER_LINK_LABELS = [
@@ -228,7 +228,7 @@ describe("AC-SB-1: Sidebar module contract", () => {
   })
 
   it("declares navItems with all six tab ids (P1-FINAL: no providers; R-UI: Account + Admin in scope; U1: Projects)", () => {
-    expect(sidebarNavSource).toMatch(/navItems/)
+    expect(sidebarNavSource).toMatch(/systemItems|workspaceItems/)
     for (const { id } of EXPECTED_NAV) {
       expect(sidebarNavSource).toContain(`"${id}"`)
     }
@@ -384,9 +384,9 @@ describe("AC-SB-2 (C4, P1-FINAL, R-UI, U1, U2): landmark + six router links, URL
       "/system/credentials",
       "/system/capacity",
       "/settings",
+      "/admin/users",
       "/projects",
       "/account",
-      "/admin/users",
     ])
   })
 
@@ -533,9 +533,9 @@ describe("AC-SB-5: collapsed w-16 icon rail", () => {
       "System credentials",
       "Capacity",
       "Provider settings",
+      "Admin",
       "Projects",
       "Account",
-      "Admin",
     ])
   })
 

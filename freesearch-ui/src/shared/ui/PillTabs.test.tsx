@@ -152,7 +152,7 @@ describe("C2-REWORK AC-C2R-1/2/3: SearchPlayground pill switcher", () => {
     renderWithBackend(<PlaygroundHarness />)
     await waitFor(() => {
       expect(
-        screen.getByPlaceholderText(/Search across all providers/i)
+        screen.getByPlaceholderText(/Search the web/i)
       ).toBeInTheDocument()
     })
   }
@@ -351,7 +351,7 @@ describe("C2-REWORK AC-C2R-4: no filter/Header regression", () => {
     renderWithBackend(<PlaygroundHarness />)
     await waitFor(() => {
       expect(
-        screen.getByPlaceholderText(/Search across all providers/i)
+        screen.getByPlaceholderText(/Search the web/i)
       ).toBeInTheDocument()
     })
     cleanup()

@@ -14,9 +14,9 @@ const ADMIN_LABELS = [
   "System credentials",
   "Capacity",
   "Provider settings",
+  "Admin",
   "Projects",
   "Account",
-  "Admin",
 ]
 
 const ADMIN_HREFS = [
@@ -25,9 +25,9 @@ const ADMIN_HREFS = [
   "/system/credentials",
   "/system/capacity",
   "/settings",
+  "/admin/users",
   "/projects",
   "/account",
-  "/admin/users",
 ]
 
 function navLinks(): HTMLElement[] {
@@ -104,7 +104,7 @@ describe("NavList permission filter", () => {
   it("shows Admin with system.settings.write alone, without the settings links", () => {
     renderNav(["system.settings.write"])
 
-    expect(ariaLabels(navLinks())).toEqual(["Projects", "Account", "Admin"])
+    expect(ariaLabels(navLinks())).toEqual(["Admin", "Projects", "Account"])
   })
 
   it("shows System credentials and Capacity only with their system permissions", () => {

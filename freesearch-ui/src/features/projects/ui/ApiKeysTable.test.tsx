@@ -48,11 +48,11 @@ describe("ApiKeysTable", () => {
     const rows = screen.getAllByRole("row")
     expect(rows[1]).toHaveTextContent("Newer")
     expect(rows[1]).toHaveTextContent("fs_live_abcd")
-    expect(rows[1]).toHaveTextContent("Fetch")
+    expect(rows[1]).toHaveTextContent(/fetch/i)
     expect(rows[1]).toHaveTextContent("lead@example.com")
     expect(rows[1]).toHaveTextContent("Never")
     expect(rows[2]).toHaveTextContent("Older")
-    expect(rows[2]).toHaveTextContent("Search, Fetch")
+    expect(rows[2]).toHaveTextContent(/search.*fetch/i)
     expect(rows[2]).toHaveTextContent("No expiration")
   })
 

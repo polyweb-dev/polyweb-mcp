@@ -37,9 +37,16 @@ export type { PlaygroundMode }
  * execution permissions of the caller in the URL project.
  */
 export interface PlaygroundScope {
+  /** URL project id, used to build the provider setup link. */
+  projectId: string
   /** Project provider view; empty without `providers.read`. */
   providers: readonly ProjectProvider[]
   providersLoading: boolean
+  /** The provider view read settled successfully at least once. */
+  providersReady: boolean
+  /** The provider view read failed; a retry is offered. */
+  providersError: boolean
+  retryProviders: () => void
   canSearch: boolean
   canFetch: boolean
 }
@@ -50,7 +57,12 @@ export interface PlaygroundController {
   fetchUrl: string
   selectedProviderId: string
   resultCount: number
+  projectId: string
   eligibleProviders: ProjectProvider[]
+  /** Ready view with no provider that can run the active mode. */
+  noProviderForMode: boolean
+  providersError: boolean
+  retryProviders: () => void
   canSearch: boolean
   canFetch: boolean
   hasSearchContent: boolean
@@ -202,7 +214,11 @@ export function usePlaygroundController(scope: PlaygroundScope): PlaygroundContr
 
   return {
     ...fields,
+    projectId: scope.projectId,
     eligibleProviders,
+    noProviderForMode: scope.providersReady && eligibleProviders.length === 0,
+    providersError: scope.providersError,
+    retryProviders: scope.retryProviders,
     canSearch: scope.canSearch,
     canFetch: scope.canFetch,
     selectedProviderId: effectiveSelectedProviderId,

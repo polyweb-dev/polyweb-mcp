@@ -95,3 +95,21 @@ Feature: Project shell and membership UX
       | width | height |
       | 1280  | 800    |
       | 1440  | 900    |
+
+  @stub
+  Scenario Outline: A long project name wraps in the selector at <width> by <height>
+    Given the projects backend is stubbed for a system administrator
+    And I am a member of project Alpha with role project_admin
+    And project Alpha is renamed to "Customer Research — Shared Workspace"
+    When I open the workspace page "/projects" at <width> by <height>
+    And I select project "Customer Research — Shared Workspace" from the project selector
+    Then the project selector shows "Customer Research — Shared Workspace" without clipping
+    And the heading "Customer Research — Shared Workspace" is within the viewport
+    When I open the workspace page "/routing" at <width> by <height>
+    Then the project selector shows "Customer Research — Shared Workspace" without clipping
+    And the Back link "Customer Research — Shared Workspace" is visible
+
+    Examples:
+      | width | height |
+      | 1280  | 800    |
+      | 1440  | 900    |

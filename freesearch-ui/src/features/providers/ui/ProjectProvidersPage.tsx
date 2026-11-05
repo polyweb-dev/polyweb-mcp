@@ -1,6 +1,7 @@
 import { PROJECT_PERMISSIONS, hasPermission, useProjectScope } from "@/domains/projects"
 import { credentialProviderTypes } from "@/domains/providers"
 import { Button } from "@/shared/ui/button"
+import { PageHeader } from "@/shared/ui/PageHeader"
 import { useProjectProvidersController } from "../model/useProjectProvidersController"
 import { CredentialDialogs } from "./CredentialDialogs"
 import { ProjectAllocations } from "./ProjectAllocations"
@@ -28,17 +29,15 @@ export function ProjectProvidersPage({ accountId }: { accountId: string }) {
 
   return (
     <section className="flex flex-1 flex-col space-y-6">
-      <header className="flex items-end justify-between gap-4 border-b border-[var(--border-subtle)] pb-2">
-        <div>
-          <h1 className="text-[var(--text-strong)]">Providers</h1>
-          <p className="mt-0.5 text-[13px] text-[var(--muted)]">
-            Which providers this project runs, with which keys.
-          </p>
-        </div>
-        {canManagePrivate && (
-          <Button onClick={() => credentialActions.openAdd(true)}>Add provider key</Button>
-        )}
-      </header>
+      <PageHeader
+        title="Providers"
+        description="Which providers this project runs, with which keys."
+        actions={
+          canManagePrivate ? (
+            <Button size="form" onClick={() => credentialActions.openAdd(true)}>Add provider key</Button>
+          ) : undefined
+        }
+      />
 
       {!canConfigure && <p role="note" className={NOTE_CLASS}>{READ_ONLY_NOTE}</p>}
       {message !== null && <p role="alert" className={ALERT_CLASS}>{message}</p>}

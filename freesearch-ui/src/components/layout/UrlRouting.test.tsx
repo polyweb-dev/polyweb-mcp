@@ -330,7 +330,7 @@ describe("C4-6: PillTabs switching leaves the URL unchanged", () => {
     await renderAt(playgroundPath)
     await waitFor(() => {
       expect(
-        within(screen.getByRole("main")).getByRole("heading", { name: "Search Playground" })
+        within(screen.getByRole("main")).getByRole("heading", { name: "Playground" })
       ).toBeInTheDocument()
     })
     expect(

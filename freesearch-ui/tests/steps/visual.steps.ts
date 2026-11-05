@@ -96,9 +96,9 @@ When("I walk from the header through Routing with keyboard only", async ({ page 
     "System credentials",
     "Capacity",
     "Provider settings",
+    "Admin",
     "Projects",
     "Account",
-    "Admin",
   ]) {
     await page.keyboard.press("Tab")
     await expectFocusVisible(page.getByRole("link", { name: label, exact: true }))

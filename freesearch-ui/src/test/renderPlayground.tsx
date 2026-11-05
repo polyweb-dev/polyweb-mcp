@@ -1,4 +1,5 @@
 import type { ReactNode } from "react"
+import { MemoryRouter } from "react-router"
 import { ProjectScopeContext } from "@/domains/projects/state/context"
 import { ProjectPlaygroundPage } from "@/features/playground/ui/ProjectPlaygroundPage"
 import { ProjectPlaygroundScope } from "@/features/playground/ui/ProjectPlaygroundScope"
@@ -31,7 +32,8 @@ export function PlaygroundHarness({
 }: PlaygroundHarnessProps) {
   return (
     <NotificationsProvider>
-      <ProjectScopeContext.Provider value={projectScopeValue(projectId, permissions)}>
+      <MemoryRouter>
+        <ProjectScopeContext.Provider value={projectScopeValue(projectId, permissions)}>
         <ProjectPlaygroundScope
           key={`${accountId}:${projectId}`}
           accountId={accountId}
@@ -44,7 +46,8 @@ export function PlaygroundHarness({
           )}
           {children}
         </ProjectPlaygroundScope>
-      </ProjectScopeContext.Provider>
+        </ProjectScopeContext.Provider>
+      </MemoryRouter>
     </NotificationsProvider>
   )
 }

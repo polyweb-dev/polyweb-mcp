@@ -41,14 +41,14 @@ export function FetchComposer({ controller }: { controller: PlaygroundController
               type="url"
               value={fetchUrl}
               onChange={(e) => setFetchUrl(e.target.value)}
-              placeholder="Enter a URL to fetch and convert..."
+              placeholder="URL to fetch"
               className="w-full bg-transparent py-3 pl-9 pr-32 text-[15px] font-mono outline-none placeholder:text-[var(--muted)]"
               style={{ color: "var(--text-strong)" }}
             />
             <div className="absolute right-0 top-1/2 -translate-y-1/2">
               <Button
                 type="submit"
-                disabled={isSearching || isFetching}
+                disabled={isSearching || isFetching || controller.noProviderForMode}
                 className="inline-flex items-center gap-2 rounded-md px-5 py-2 text-[13px] font-medium text-white"
                 style={{ background: "var(--signal)" }}
               >
@@ -61,6 +61,19 @@ export function FetchComposer({ controller }: { controller: PlaygroundController
         footer={
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div className="flex items-center gap-2">
+              {controller.providersError && (
+                <span role="alert" className="flex items-center gap-2 text-[var(--status-danger)]">
+                  Couldn't load this project's providers.
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="px-2.5 py-1 text-[13px]"
+                    onClick={() => controller.retryProviders()}
+                  >
+                    Retry
+                  </Button>
+                </span>
+              )}
               <label htmlFor="playground-fetch-provider">Provider:</label>
               <ProviderSelect
                 id="playground-fetch-provider"

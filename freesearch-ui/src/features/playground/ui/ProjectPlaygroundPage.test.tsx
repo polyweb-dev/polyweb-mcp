@@ -39,7 +39,7 @@ async function openPicker(testId: string): Promise<string[]> {
 }
 
 async function submitSearch(query: string) {
-  const input = (await screen.findByPlaceholderText(/Search across all providers/i)) as HTMLInputElement
+  const input = (await screen.findByPlaceholderText(/Search the web/i)) as HTMLInputElement
   fireEvent.change(input, { target: { value: query } })
   fireEvent.submit(input.closest("form") as HTMLFormElement)
 }
@@ -91,6 +91,83 @@ describe("ProjectPlaygroundPage provider picker", () => {
     const fetchTab = await screen.findByRole("tab", { name: "Fetch" })
     expect(fetchTab).toHaveAttribute("aria-disabled", "true")
     expect(screen.getByRole("tab", { name: "Search" })).not.toHaveAttribute("aria-disabled", "true")
+  })
+})
+
+describe("ProjectPlaygroundPage provider read states", () => {
+  it("shows the setup notice and disables submit while no provider can run the mode", async () => {
+    stub((req) =>
+      req.url === projectProvidersUrl()
+        ? ok(projectProvidersFixture(PLAYGROUND_PROJECT_ID, [projectProviderType("brave", [])]))
+        : null
+    )
+    render(<PlaygroundHarness />)
+
+    expect(
+      await screen.findByText(/No provider is set up for this project/)
+    ).toBeInTheDocument()
+    const setupLink = screen.getByRole("link", { name: "Set up providers" })
+    expect(setupLink).toHaveAttribute("href", `/p/${PLAYGROUND_PROJECT_ID}/providers`)
+    expect(await screen.findByRole("button", { name: "Search" })).toBeDisabled()
+  })
+
+  it("shows an error with a working Retry when the provider read fails", async () => {
+    let calls = 0
+    const fetchStub = stub((req) => {
+      if (req.url !== projectProvidersUrl()) return null
+      calls += 1
+      return calls === 1
+        ? err(503, { detail: "provider view down" })
+        : ok(
+            projectProvidersFixture(PLAYGROUND_PROJECT_ID, [
+              projectProviderType("brave"),
+              projectProviderType("you"),
+            ])
+          )
+    })
+    render(<PlaygroundHarness />)
+
+    expect(
+      await screen.findByText(/Couldn't load this project's providers/)
+    ).toBeInTheDocument()
+    fireEvent.click(await screen.findByRole("button", { name: "Retry" }))
+
+    await waitFor(async () => {
+      expect(await openPicker("playground-search-provider")).toEqual([
+        "Auto",
+        "All providers",
+        "Brave Search",
+        "You.com",
+      ])
+    })
+    expect(fetchStub.requestsTo(projectProvidersUrl()).length).toBeGreaterThanOrEqual(2)
+    expect(screen.queryByText(/Couldn't load this project's providers/)).toBeNull()
+  })
+
+  it("shows no setup notice and keeps submit enabled without providers.read", async () => {
+    const fetchStub = stub()
+    const permissions = PROJECT_MEMBER_PERMISSIONS.filter((p) => p !== "providers.read")
+    render(<PlaygroundHarness permissions={permissions} />)
+
+    expect(await screen.findByRole("button", { name: "Search" })).toBeEnabled()
+    expect(fetchStub.requestsTo(projectProvidersUrl())).toHaveLength(0)
+    expect(screen.queryByText(/No provider is set up for this project/)).toBeNull()
+    expect(screen.queryByRole("link", { name: "Set up providers" })).toBeNull()
+  })
+
+  it("maps a backend no-provider 503 to the setup notice instead of the raw message", async () => {
+    stub((req) =>
+      req.url === "/search" && req.method === "POST"
+        ? err(503, { detail: "no provider is configured for this project" })
+        : null
+    )
+    render(<PlaygroundHarness />)
+
+    await submitSearch("anything")
+    expect(
+      await screen.findByText(/No provider is set up for this project/)
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/API temporarily unavailable/)).toBeNull()
   })
 })
 
@@ -171,7 +248,7 @@ describe("ProjectPlaygroundPage project execution", () => {
     })
 
     const input = (await screen.findByPlaceholderText(
-      /Search across all providers/i
+      /Search the web/i
     )) as HTMLInputElement
     expect(input.value).toBe("")
     expect(screen.queryByText("Live backend result one")).not.toBeInTheDocument()

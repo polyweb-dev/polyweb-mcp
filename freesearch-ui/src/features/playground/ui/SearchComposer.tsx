@@ -29,7 +29,7 @@ export function SearchComposer({ controller }: { controller: PlaygroundControlle
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search across all providers..."
+            placeholder="Search the web"
             className="w-full bg-transparent py-3 pl-9 pr-32 text-[15px] font-mono outline-none placeholder:text-[var(--muted)]"
             style={{ color: "var(--text-strong)" }}
           />
@@ -37,7 +37,7 @@ export function SearchComposer({ controller }: { controller: PlaygroundControlle
             <Button
               type="submit"
               formNoValidate
-              disabled={isSearching || isFetching}
+              disabled={isSearching || isFetching || controller.noProviderForMode}
               className="inline-flex items-center gap-2 rounded-md px-5 py-2 text-[13px] font-medium text-white"
               style={{ background: "var(--signal)" }}
             >

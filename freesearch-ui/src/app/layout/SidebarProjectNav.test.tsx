@@ -1,8 +1,11 @@
-import { describe, expect, it } from "vitest"
-import { render, screen, within } from "@testing-library/react"
+import { afterEach, describe, expect, it, vi } from "vitest"
+import { render, screen, waitFor, within } from "@testing-library/react"
 import { MemoryRouter } from "react-router"
 import { ProjectScopeContext } from "@/domains/projects/state/context"
-import type { ProjectScopeContextValue } from "@/domains/projects"
+import { ProjectsContext } from "@/domains/projects/state/context"
+import type { ProjectScopeContextValue, ProjectsContextValue } from "@/domains/projects"
+import { writeLastProject } from "@/domains/projects"
+import { err, installFetchStub, ok } from "@/test/fetchMock"
 import {
   PROJECT_ADMIN_PERMISSIONS,
   PROJECT_ALPHA_ID,
@@ -35,6 +38,11 @@ function links(): HTMLElement[] {
 }
 
 describe("ProjectNav", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    window.localStorage.clear()
+  })
+
   it("renders nothing on a global route", () => {
     renderNav(undefined, "/projects")
     expect(screen.queryByRole("navigation", { name: "Project" })).toBeNull()
@@ -103,5 +111,67 @@ describe("ProjectNav", () => {
     const apiKeys = screen.getByRole("link", { name: "API keys" })
     expect(apiKeys).toHaveAttribute("title", "API keys")
     expect(apiKeys.textContent).toBe("")
+  })
+})
+
+describe("ProjectNav on global routes", () => {
+  const project = projectFixture({ name: "Customer Research — Shared Workspace" })
+
+  function projectsValue(): ProjectsContextValue {
+    return {
+      accountId: "acc",
+      availability: "available",
+      rolloutState: "preview",
+      systemAccess: null,
+      projects: [project],
+      reloadProjects: async () => [project],
+    }
+  }
+
+  function renderGlobalNav(access: "ok" | "error" | "slow") {
+    installFetchStub((req) => {
+      if (req.url === `/api/v1/projects/${PROJECT_ALPHA_ID}/access`) {
+        if (access === "error") return err(500, null)
+        if (access === "slow") return new Promise(() => {})
+        return ok(projectAccessFixture(PROJECT_ALPHA_ID, ["project.read", "members.read"]))
+      }
+      return err(404, null)
+    })
+    writeLastProject("acc", PROJECT_ALPHA_ID)
+    return render(
+      <MemoryRouter initialEntries={["/routing"]}>
+        <ProjectsContext.Provider value={projectsValue()}>
+          <ProjectScopeContext.Provider value={undefined}>
+            <ProjectNav collapsed={false} />
+          </ProjectScopeContext.Provider>
+        </ProjectsContext.Provider>
+      </MemoryRouter>
+    )
+  }
+
+  it("shows the Back link and only the sections the access permits", async () => {
+    renderGlobalNav("ok")
+    const back = await screen.findByRole("link", {
+      name: `Back to ${project.name}`,
+    })
+    expect(back).toHaveAttribute("href", `/p/${PROJECT_ALPHA_ID}`)
+    await waitFor(() =>
+      expect(links().map((link) => link.getAttribute("aria-label"))).toEqual([
+        `Back to ${project.name}`,
+        "Overview",
+        "Members",
+      ])
+    )
+    expect(screen.queryByRole("link", { name: "Providers" })).toBeNull()
+  })
+
+  it("shows only the Back link while the access loads or fails", async () => {
+    renderGlobalNav("error")
+    const back = await screen.findByRole("link", {
+      name: `Back to ${project.name}`,
+    })
+    expect(back).toHaveAttribute("href", `/p/${PROJECT_ALPHA_ID}`)
+    await waitFor(() => expect(links()).toHaveLength(1))
+    expect(links()[0].getAttribute("aria-label")).toBe(`Back to ${project.name}`)
   })
 })

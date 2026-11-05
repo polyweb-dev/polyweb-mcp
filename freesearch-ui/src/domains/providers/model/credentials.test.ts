@@ -4,17 +4,12 @@ import {
   credentialProviderTypes,
   oauthStatusText,
   providerTypeName,
-  runsText,
+
   supportedOperationsOf,
   supportsOAuth,
 } from "./credentials"
 
 describe("credential model helpers", () => {
-  it("formats the effective operations", () => {
-    expect(runsText(["search", "fetch"])).toBe("Runs: search, fetch")
-    expect(runsText([])).toBe("Runs: nothing yet")
-  })
-
   it("names the OAuth statuses", () => {
     expect(oauthStatusText("pending")).toBe("Waiting for approval…")
     expect(oauthStatusText("connected")).toBe("Connected")

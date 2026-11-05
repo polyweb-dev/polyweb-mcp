@@ -45,6 +45,11 @@ export function scopesLabel(scopes: readonly string[]): string {
   return scopes.map((scope) => (isApiKeyScope(scope) ? API_KEY_SCOPE_LABELS[scope] : scope)).join(", ")
 }
 
+/** Operation tag text of one scope list: `search.execute` → `search`. */
+export function scopeOperations(scopes: readonly string[]): readonly string[] {
+  return scopes.map((scope) => scope.replace(/\.execute$/, ""))
+}
+
 /**
  * Created by column text: the member email when the member list is readable
  * and holds the creator, else a short id.

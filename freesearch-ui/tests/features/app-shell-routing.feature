@@ -112,7 +112,7 @@ Feature: App-shell URL routing (C4)
   Scenario: C4-7 shell keeps the sidebar shell with no legacy header topbar
     Given the stubbed session works in project Alpha
     When I open the "playground" section of project Alpha
-    Then I should see the "Search Playground" heading
+    Then I should see the "Playground" heading
     And the shell should expose no header element
     And the sidebar navigation should expose the system administrator links
     When I open the "activity" section of project Alpha

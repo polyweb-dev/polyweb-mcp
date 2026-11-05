@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react"
 import { useNavigate } from "react-router"
-import { useProjectsOptional, writeLastProject } from "@/domains/projects"
+import { resolveLastProject, useProjectsOptional, writeLastProject } from "@/domains/projects"
 import { ProjectSelectorMenu } from "./ProjectSelectorMenu"
 import { ProjectSelectorTrigger } from "./ProjectSelectorTrigger"
 
@@ -49,9 +49,11 @@ export function ProjectSelector({
   if (availability !== "available") return null
 
   const current = projects.find((project) => project.id === currentProjectId) ?? null
-  const label = current?.name ?? "Select project"
+  const lastId = resolveLastProject(accountId, projects)
+  const shown = current ?? projects.find((project) => project.id === lastId) ?? null
+  const label = shown?.name ?? "Select project"
   const accessibleName =
-    current !== null ? `Select project (current: ${current.name})` : "Select project"
+    shown !== null ? `Select project (current: ${shown.name})` : "Select project"
 
   const dismiss = () => {
     setOpen(false)
@@ -77,13 +79,17 @@ export function ProjectSelector({
       aria-label="Projects"
       className="relative shrink-0 border-b border-[var(--border-subtle)] px-2 py-3"
     >
+      {!collapsed && (
+        <p className="px-3 pb-2 text-[12px] text-[var(--muted)]">
+          {rolloutState === "preview" ? "Project · Preview" : "Project"}
+        </p>
+      )}
       <ProjectSelectorTrigger
         ref={triggerRef}
         collapsed={collapsed}
         open={open}
         label={label}
         accessibleName={accessibleName}
-        showPreviewBadge={rolloutState === "preview"}
         onToggle={() => setOpen((previous) => !previous)}
       />
       {open && (

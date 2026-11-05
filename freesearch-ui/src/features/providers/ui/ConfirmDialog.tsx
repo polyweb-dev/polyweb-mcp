@@ -16,13 +16,13 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
   const { open, title, message, confirmLabel, pending, onConfirm, onClose } = props
   return (
     <Modal isOpen={open} onClose={onClose} title={title} maxWidth="md">
-      <div className="space-y-4 text-[13px]">
+      <div className="text-[13px]">
         <p className="text-[var(--text)]">{message}</p>
-        <div className="flex justify-end gap-2">
-          <Button type="button" variant="outline" onClick={onClose}>
+        <div className="mt-5 flex justify-end gap-2">
+          <Button type="button" size="form" variant="outline" onClick={onClose}>
             Cancel
           </Button>
-          <Button type="button" variant="destructive" disabled={pending} onClick={onConfirm}>
+          <Button type="button" size="form" variant="destructive" disabled={pending} onClick={onConfirm}>
             {confirmLabel}
           </Button>
         </div>

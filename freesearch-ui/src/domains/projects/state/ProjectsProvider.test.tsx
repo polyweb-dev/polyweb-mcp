@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { render, screen, waitFor } from "@testing-library/react"
+import { act, render, screen, waitFor } from "@testing-library/react"
 import { err, installFetchStub, ok } from "@/test/fetchMock"
 import { ProjectsProvider } from "./ProjectsProvider"
 import { useProjects } from "./useProjects"
@@ -15,6 +15,7 @@ const PROJECT = {
   created_at: "t",
   version: 1,
 }
+const PROJECT_TWO = { ...PROJECT, id: "22222222-2222-4222-8222-222222222222", name: "Beta" }
 
 function Probe() {
   const { availability, rolloutState, projects } = useProjects()
@@ -77,5 +78,53 @@ describe("ProjectsProvider", () => {
       expect(screen.getByTestId("availability").textContent).toBe("available")
     )
     expect(stub.requestsTo("/api/v1/system/access").length).toBe(1)
+  })
+
+  it("picks up a new project on window focus refresh", async () => {
+    const listBodies = [[PROJECT], [PROJECT, PROJECT_TWO]]
+    let listCall = 0
+    installFetchStub((req) => {
+      if (req.url === "/api/v1/system/access") return ok(SYSTEM_ACCESS)
+      if (req.url === "/api/v1/projects?include_archived=true") {
+        const body = listBodies[Math.min(listCall, listBodies.length - 1)]
+        listCall += 1
+        return ok(body)
+      }
+      return err(404, { detail: "unhandled" })
+    })
+    render(
+      <ProjectsProvider accountId="acc">
+        <Probe />
+      </ProjectsProvider>
+    )
+    await waitFor(() => expect(screen.getByTestId("count").textContent).toBe("1"))
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"))
+    })
+    await waitFor(() => expect(screen.getByTestId("count").textContent).toBe("2"))
+  })
+
+  it("keeps the loaded list when a refresh fails", async () => {
+    let listCall = 0
+    installFetchStub((req) => {
+      if (req.url === "/api/v1/system/access") return ok(SYSTEM_ACCESS)
+      if (req.url === "/api/v1/projects?include_archived=true") {
+        listCall += 1
+        return listCall === 1 ? ok([PROJECT]) : err(503, { detail: "boom" })
+      }
+      return err(404, { detail: "unhandled" })
+    })
+    render(
+      <ProjectsProvider accountId="acc">
+        <Probe />
+      </ProjectsProvider>
+    )
+    await waitFor(() => expect(screen.getByTestId("count").textContent).toBe("1"))
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"))
+    })
+    await waitFor(() => expect(listCall).toBeGreaterThanOrEqual(2))
+    expect(screen.getByTestId("availability").textContent).toBe("available")
+    expect(screen.getByTestId("count").textContent).toBe("1")
   })
 })

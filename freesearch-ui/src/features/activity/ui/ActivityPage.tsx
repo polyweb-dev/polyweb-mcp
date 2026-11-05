@@ -52,10 +52,10 @@ export function ActivityPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-4 border-b border-[var(--border-subtle)] pb-2 sm:flex-row sm:items-baseline sm:justify-between">
-        <div>
-          <h2 className="text-[var(--text-strong)]">Activity</h2>
-          <p className="mt-0.5 text-[13px] text-[var(--muted)]">
+      <div className="flex flex-col gap-4 border-b border-[var(--border-subtle)] pb-3 mb-6 sm:flex-row sm:items-end sm:justify-between">
+        <div className="min-w-0">
+          <h2 className="text-xl font-medium text-[var(--text-strong)]">Activity</h2>
+          <p className="mt-0.5 truncate text-[13px] text-[var(--muted)]">
             This project's recorded search and fetch traces, stage by stage.
           </p>
         </div>
@@ -96,7 +96,7 @@ export function ActivityPage() {
           <p role="alert" className="text-[13px]" style={{ color: "var(--status-danger)" }}>
             Activity traces unavailable — {controller.listError}
           </p>
-          <Button variant="outline" size="sm" onClick={controller.refresh}>
+          <Button variant="outline" size="form" onClick={controller.refresh}>
             Retry
           </Button>
         </div>

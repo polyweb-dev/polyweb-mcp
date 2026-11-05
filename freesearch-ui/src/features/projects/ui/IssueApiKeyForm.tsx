@@ -55,7 +55,7 @@ export function IssueApiKeyForm({ controller, permittedScopes }: IssueApiKeyForm
   return (
     <section
       aria-labelledby="issue-api-key-heading"
-      className="space-y-4 rounded border border-[var(--border-subtle)] p-4"
+      className="max-w-[480px] space-y-4 rounded border border-[var(--border-subtle)] p-4"
     >
       <h2 id="issue-api-key-heading" className="text-[13px] font-medium text-[var(--text-strong)]">
         Issue an API key
@@ -70,8 +70,8 @@ export function IssueApiKeyForm({ controller, permittedScopes }: IssueApiKeyForm
           disabled={controller.pending}
           autoComplete="off"
         />
-        <fieldset className="space-y-1.5">
-          <legend className="mb-1 text-[12px] text-[var(--muted)]">Scopes</legend>
+        <fieldset className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
+          <legend className="mb-1 w-full text-[12px] text-[var(--muted)]">Scopes</legend>
           {API_KEY_SCOPES.map((scope) => (
             <label key={scope} className="flex items-center gap-2 text-[13px] text-[var(--text)]">
               <input
@@ -94,7 +94,7 @@ export function IssueApiKeyForm({ controller, permittedScopes }: IssueApiKeyForm
           onChoiceChange={setChoice}
           onCustomDateChange={setCustomDate}
         />
-        <Button type="submit" disabled={controller.pending}>
+        <Button type="submit" size="form" disabled={controller.pending}>
           Issue key
         </Button>
       </form>

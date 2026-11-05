@@ -1,6 +1,7 @@
 import { useProjectScope, useProjects } from "@/domains/projects"
 import { errorMessage } from "@/shared/api/http"
 import { Button } from "@/shared/ui/button"
+import { PageHeader } from "@/shared/ui/PageHeader"
 import { useProjectUsage } from "../model/useProjectUsage"
 import { RecentUsageTable } from "./RecentUsageTable"
 import { UsageTotalsTable } from "./UsageTotalsTable"
@@ -17,12 +18,10 @@ export function ProjectUsagePage() {
 
   return (
     <section className="flex flex-1 flex-col space-y-6">
-      <header className="border-b border-[var(--border-subtle)] pb-2">
-        <h2 className="text-[var(--text-strong)]">Usage</h2>
-        <p className="mt-0.5 text-[13px] text-[var(--muted)]">
-          This project's usage only. Shared provider quota and health are not shown here.
-        </p>
-      </header>
+      <PageHeader
+        title="Usage"
+        description="This project's usage only. Shared provider quota and health are not shown here."
+      />
 
       {usage.status === "loading" && (
         <p role="status" className="text-[13px] text-[var(--muted)]">
@@ -35,7 +34,7 @@ export function ProjectUsagePage() {
           <p role="alert" className="text-[13px]" style={{ color: "var(--status-danger)" }}>
             Usage unavailable — {errorMessage(usage.error, "Usage unavailable")}
           </p>
-          <Button variant="outline" size="sm" onClick={() => void usage.reload()}>
+          <Button variant="outline" size="form" onClick={() => void usage.reload()}>
             Retry
           </Button>
         </div>

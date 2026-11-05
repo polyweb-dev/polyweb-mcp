@@ -1,4 +1,4 @@
-import { Link } from "react-router"
+import { useCallback } from "react"
 import {
   PROJECT_PERMISSIONS,
   PROJECT_ROLE_LABELS,
@@ -7,10 +7,31 @@ import {
   useProjects,
 } from "@/domains/projects"
 import type { ProjectRoleKey } from "@/domains/projects"
+import { getProjectProviders } from "@/domains/providers"
+import { useScopedResource } from "@/shared/lib/useScopedResource"
+import { PageHeader } from "@/shared/ui/PageHeader"
+import { ProjectSetupChecklist } from "./ProjectSetupChecklist"
 import { ProjectUsageSummary } from "./ProjectUsageSummary"
 
 function roleLabel(role: string): string {
   return PROJECT_ROLE_LABELS[role as ProjectRoleKey] ?? role
+}
+
+/** Provider view of the overview page; loads only with providers.read. */
+function useSetupView(accountId: string, projectId: string, enabled: boolean) {
+  const load = useCallback(
+    (signal: AbortSignal) => getProjectProviders(projectId, signal),
+    [projectId]
+  )
+  const view = useScopedResource({
+    scopeKey: `overview:${accountId}:${projectId}`,
+    load,
+    enabled,
+  })
+  const providers = view.status === "ready" ? view.data : []
+  const hasCredential = providers.some((provider) => provider.available)
+  const hasEffective = providers.some((provider) => provider.effectiveOperations.length > 0)
+  return { showSetup: enabled && view.status === "ready" && !hasEffective, hasCredential, hasEffective }
 }
 
 /**
@@ -25,18 +46,22 @@ export function ProjectOverviewPage() {
   const access = accessState.status === "ready" ? accessState.data : null
   const roles = access?.roles ?? []
 
+  const canReadProviders = hasPermission(access, PROJECT_PERMISSIONS.providersRead)
+  const canConfigureProviders = hasPermission(access, PROJECT_PERMISSIONS.providersConfigure)
+  const { showSetup, hasCredential, hasEffective } = useSetupView(
+    accountId,
+    projectId,
+    canReadProviders
+  )
+
   return (
     <section className="flex flex-1 flex-col space-y-6">
-      <header className="border-b border-[var(--border-subtle)] pb-2">
-        <h2 className="text-[var(--text-strong)]">{project?.name ?? "Project"}</h2>
-        {project !== null && (
-          <p className="mt-0.5 text-[13px] text-[var(--muted)]">
-            Status: {project.status === "archived" ? "Archived" : "Active"}
-          </p>
-        )}
-      </header>
+      <PageHeader
+        title={project?.name ?? "Project"}
+        description={project === null ? undefined : project.status === "archived" ? "Archived project" : "Active project"}
+      />
 
-      <div className="space-y-1">
+      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <h3 className="text-[13px] font-medium text-[var(--text-strong)]">Your roles</h3>
         {roles.length === 0 ? (
           <p className="text-[13px] text-[var(--muted)]">No project roles.</p>
@@ -54,15 +79,13 @@ export function ProjectOverviewPage() {
         )}
       </div>
 
-      {hasPermission(access, PROJECT_PERMISSIONS.membersRead) && (
-        <p className="text-[13px]">
-          <Link
-            to={`/p/${projectId}/members`}
-            className="text-[var(--signal)] hover:underline"
-          >
-            Members
-          </Link>
-        </p>
+      {showSetup && (
+        <ProjectSetupChecklist
+          projectId={projectId}
+          canConfigure={canConfigureProviders}
+          hasCredential={hasCredential}
+          hasEffective={hasEffective}
+        />
       )}
 
       {hasPermission(access, PROJECT_PERMISSIONS.usageRead) && (

@@ -1,8 +1,13 @@
 import { authModeLabel } from "@/domains/providers"
 import type { AvailableCredential, ProjectCredential } from "@/domains/providers"
+import { OperationTags } from "@/shared/ui/OperationTags"
 import type { CredentialActions } from "../model/useCredentialActions"
 import { CredentialRowActions } from "./CredentialRowActions"
 import { CELL_CLASS, HEAD_CLASS } from "./formStyles"
+
+function sentenceCase(value: string): string {
+  return value.length === 0 ? value : value[0].toUpperCase() + value.slice(1)
+}
 
 const COLUMNS = ["Label", "Owner", "Auth", "Status", "Health", "Operations"]
 
@@ -48,9 +53,11 @@ export function ProviderCredentialsTable(props: ProviderCredentialsTableProps) {
               <td className={CELL_CLASS}>{credential.label}</td>
               <td className={CELL_CLASS}>{credential.owner === "project" ? "Project" : "System (granted)"}</td>
               <td className={CELL_CLASS}>{authModeLabel(credential.authMode)}</td>
-              <td className={CELL_CLASS}>{credential.status}</td>
-              <td className={CELL_CLASS}>{credential.health ?? "unknown"}</td>
-              <td className={CELL_CLASS}>{credential.grantedOperations.join(", ") || "none"}</td>
+              <td className={CELL_CLASS}>{sentenceCase(credential.status)}</td>
+              <td className={CELL_CLASS}>{sentenceCase(credential.health ?? "unknown")}</td>
+              <td className={CELL_CLASS}>
+                <OperationTags operations={credential.grantedOperations} />
+              </td>
               <td className="py-2 align-top">
                 {canManage && (
                   <CredentialRowActions

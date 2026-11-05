@@ -13,7 +13,7 @@ Feature: Dashboard application shell
     Given the stubbed session works in project Alpha
     When I open the "overview" section of project Alpha
     And I follow the "Playground" link of the Project navigation
-    Then I should see the "Search Playground" heading
+    Then I should see the "Playground" heading
     And the page URL path should be the "playground" section of project Alpha
     When I follow the "Activity" link of the Project navigation
     Then I should see the "Activity" heading

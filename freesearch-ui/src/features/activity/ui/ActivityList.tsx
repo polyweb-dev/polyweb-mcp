@@ -12,6 +12,7 @@ import {
 import { Button } from "@/shared/ui/button"
 import type { TraceSummary } from "@/domains/activity"
 import { providerIdentity } from "@/domains/providers"
+import { OperationTags } from "@/shared/ui/OperationTags"
 import { ProviderBadge } from "@/shared/ui/ProviderBadge"
 import type { TraceLoadState } from "../model/useActivityController"
 import { ActivityProviderRows } from "./ActivityProviderRows"
@@ -103,8 +104,8 @@ function traceRow(options: TraceRowOptions): ReactNode {
       className="cursor-pointer border-b border-[var(--border-subtle)] last:border-b-0"
     >
       <TableCell className={`${CELL} text-[var(--muted)] tnum`}>{time}</TableCell>
-      <TableCell className={`${CELL} capitalize text-[var(--text)]`}>
-        {summary.operation ?? "—"}
+      <TableCell className={`${CELL} text-[var(--text)]`}>
+        <OperationTags operations={summary.operation ? [summary.operation] : []} />
       </TableCell>
       <TableCell className={`${CELL} font-medium text-[var(--text-strong)]`}>
         <span className="inline-flex items-center gap-1.5">

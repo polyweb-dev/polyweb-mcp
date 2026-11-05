@@ -9,6 +9,8 @@ import {
   holdProjectStubMembers,
   installProjectStub,
   releaseProjectStubMembers,
+  removeProjectStubMember,
+  renameProjectStub,
   resetProjectStub,
   setProjectStubRoles,
   setProjectStubAccount,
@@ -110,6 +112,15 @@ When("I select project {word} from the project selector", async ({ page }, name:
   await page.getByRole("menuitem", { name, exact: false }).first().click()
 })
 
+When("I select project {string} from the project selector", async ({ page }, name: string) => {
+  await page.getByRole("button", { name: "Select project" }).first().click()
+  await page.getByRole("menuitem", { name, exact: false }).first().click()
+})
+
+Given("project {word} is renamed to {string}", async ({ page: _page }, name: string, newName: string) => {
+  renameProjectStub(name, newName)
+})
+
 When("I open a second tab on the workspace page {string}", async ({ page }, path: string) => {
   const context = page.context()
   const tab = await context.newPage()
@@ -122,6 +133,21 @@ When("I open a second tab on the workspace page {string}", async ({ page }, path
 
 When("the project role in {word} is revoked", async ({ page: _page }, name: string) => {
   setProjectStubRoles(name, ["project_member"])
+})
+
+When(
+  "the membership in project {word} is revoked",
+  async ({ page: _page }, name: string) => {
+    removeProjectStubMember(name, USER_EMAIL)
+  }
+)
+
+When("the window regains focus", async ({ page }) => {
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")))
+})
+
+When("I follow the {string} link", async ({ page }, label: string) => {
+  await page.getByRole("link", { name: label }).first().click()
 })
 
 When("the delayed Alpha members request has settled", async ({ page: _page }) => {

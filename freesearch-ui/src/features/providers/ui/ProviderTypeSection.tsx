@@ -1,7 +1,7 @@
 import { useState } from "react"
-import { runsText } from "@/domains/providers"
 import type { ProviderTypeView } from "@/domains/providers"
 import { Button } from "@/shared/ui/button"
+import { OperationTags } from "@/shared/ui/OperationTags"
 import type { ProjectProvidersController } from "../model/useProjectProvidersController"
 import { AddBindingForm } from "./AddBindingForm"
 import { ProviderBindingsTable } from "./ProviderBindingsTable"
@@ -19,7 +19,6 @@ export function ProviderTypeSection(props: ProviderTypeSectionProps) {
   const { provider, controller, canConfigure, canManagePrivate } = props
   const [adding, setAdding] = useState(false)
   const pending = controller.bindingStatus.pending
-  const systemOps = provider.systemEnabledOperations.join(", ") || "none"
 
   return (
     <section
@@ -34,10 +33,11 @@ export function ProviderTypeSection(props: ProviderTypeSectionProps) {
             Disabled by system
           </span>
         )}
-        <span className="text-[13px] text-[var(--text)]">{runsText(provider.effectiveOperations)}</span>
+        <span className="text-[12px] text-[var(--muted)]">Runs: <OperationTags operations={provider.effectiveOperations} /></span>
       </header>
       <p className="text-[12px] text-[var(--muted)]">
-        Supports: {provider.capability.join(", ") || "nothing"} · Allowed by system: {systemOps}
+        Supports {provider.capability.join(", ") || "nothing"} · Allowed by system{" "}
+        {provider.systemEnabledOperations.join(", ") || "none"}
       </p>
       <ProviderCredentialsTable
         name={provider.name}
@@ -54,7 +54,7 @@ export function ProviderTypeSection(props: ProviderTypeSectionProps) {
         onRemove={(binding) => void controller.removeBinding(binding)}
       />
       {canConfigure && !adding && (
-        <Button size="sm" variant="outline" disabled={provider.credentials.length === 0} onClick={() => setAdding(true)}>
+        <Button variant="outline" disabled={provider.credentials.length === 0} onClick={() => setAdding(true)}>
           Add binding
         </Button>
       )}

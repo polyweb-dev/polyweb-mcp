@@ -38,7 +38,7 @@ describe("ProjectSettingsPage view", () => {
   it("shows sections, provenance, system default and limit", async () => {
     installSettingsStub()
     renderInProject(<ProjectSettingsPage accountId="acc" />)
-    expect(await screen.findByRole("heading", { level: 1, name: "Settings" })).toBeInTheDocument()
+    expect(await screen.findByRole("heading", { name: "Settings" })).toBeInTheDocument()
     for (const name of ["Routing", "Execution", "Trace policy"]) {
       expect(await screen.findByRole("heading", { level: 2, name })).toBeInTheDocument()
     }

@@ -18,11 +18,30 @@ const DASHBOARD = {
   generated_at: "2026-10-30T10:00:00Z",
 }
 
-function renderPage(permissions: string[] = ["project.read", "members.read"]) {
+function providersView(effectiveOperations: string[] = [], available = false) {
+  return {
+    project_id: "p1",
+    providers: [
+      {
+        provider_type: "brave",
+        available,
+        enabled: effectiveOperations.length > 0,
+        effective_operations: effectiveOperations,
+      },
+    ],
+    allocations: [],
+  }
+}
+
+function renderPage(
+  permissions: string[] = ["project.read", "members.read"],
+  providerResponse: Response = ok(providersView(["search"]))
+) {
   return installFetchStub((req) => {
     if (req.url === "/api/v1/projects/p1/dashboard") return ok(DASHBOARD)
     if (req.url === "/api/v1/system/access") return ok({ rollout_state: "preview", permissions: [] })
     if (req.url === "/api/v1/projects?include_archived=true") return ok([PROJECT])
+    if (req.url === "/api/v1/projects/p1/providers") return providerResponse
     if (req.url === "/api/v1/projects/p1/access") {
       return ok({ project_id: "p1", permissions, roles: ["project_member", "routing_editor"], policy_revision: 2 })
     }
@@ -30,8 +49,8 @@ function renderPage(permissions: string[] = ["project.read", "members.read"]) {
   })
 }
 
-function renderOverview(permissions?: string[]) {
-  const stub = renderPage(permissions)
+function renderOverview(permissions?: string[], providerResponse?: Response) {
+  const stub = renderPage(permissions, providerResponse)
   render(
     <MemoryRouter>
       <ProjectsProvider accountId="acc">
@@ -50,10 +69,10 @@ describe("ProjectOverviewPage", () => {
   it("shows the project name, status, and role labels without execution data", async () => {
     renderOverview()
     await screen.findByRole("heading", { name: "Alpha" })
-    expect(screen.getByText("Status: Active")).toBeInTheDocument()
+    expect(screen.getByText("Active project")).toBeInTheDocument()
     expect(screen.getByText("Project member")).toBeInTheDocument()
     expect(screen.getByText("Routing editor")).toBeInTheDocument()
-    expect(screen.getByRole("link", { name: "Members" })).toBeInTheDocument()
+    expect(screen.queryByRole("link", { name: "Members" })).toBeNull()
     expect(screen.queryByText(/results|queries/i)).toBeNull()
   })
 
@@ -79,5 +98,40 @@ describe("ProjectOverviewPage", () => {
     await screen.findByRole("heading", { name: "Alpha" })
     expect(screen.queryByRole("region", { name: "Usage summary" })).toBeNull()
     expect(stub.requestsTo("/api/v1/projects/p1/dashboard")).toHaveLength(0)
+  })
+
+  it("shows the setup checklist while no provider can execute", async () => {
+    renderOverview(["project.read", "providers.read", "providers.configure"], ok(providersView([])))
+    expect(
+      await screen.findByRole("heading", { name: "Set up this project" })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole("link", { name: "Add a provider key" })
+    ).toHaveAttribute("href", "/p/p1/providers")
+    expect(
+      screen.getByRole("link", { name: "Turn on search or fetch for a provider" })
+    ).toHaveAttribute("href", "/p/p1/providers")
+    expect(screen.getByRole("link", { name: "Run a first search" })).toHaveAttribute(
+      "href",
+      "/p/p1/playground"
+    )
+  })
+
+  it("hides the setup checklist once a provider can execute", async () => {
+    renderOverview(
+      ["project.read", "providers.read", "providers.configure"],
+      ok(providersView(["search"]))
+    )
+    await screen.findByRole("heading", { name: "Alpha" })
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(screen.queryByRole("heading", { name: "Set up this project" })).toBeNull()
+  })
+
+  it("asks a project admin instead of linking actions without providers.configure", async () => {
+    renderOverview(["project.read", "providers.read"], ok(providersView([])))
+    expect(
+      await screen.findByText("Ask a project admin to set up a provider.")
+    ).toBeInTheDocument()
+    expect(screen.queryByRole("link", { name: "Add a provider key" })).toBeNull()
   })
 })

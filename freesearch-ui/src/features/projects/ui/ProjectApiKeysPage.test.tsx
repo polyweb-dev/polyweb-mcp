@@ -104,7 +104,7 @@ describe("ProjectApiKeysPage issue and reveal", () => {
   it("renders the heading, the issue form defaults and the empty table", async () => {
     installKeysStub()
     renderPage()
-    expect(await screen.findByRole("heading", { level: 1, name: "API keys" })).toBeInTheDocument()
+    expect(await screen.findByRole("heading", { name: "API keys" })).toBeInTheDocument()
     const form = screen.getByRole("region", { name: "Issue an API key" })
     expect(within(form).getByRole("checkbox", { name: "Search" })).toBeChecked()
     expect(within(form).getByRole("checkbox", { name: "Fetch" })).toBeChecked()

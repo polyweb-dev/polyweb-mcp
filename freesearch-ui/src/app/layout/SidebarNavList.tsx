@@ -20,15 +20,18 @@ interface NavItem {
   icon: LucideIcon
 }
 
-const navItems: NavItem[] = [
+const systemItems: NavItem[] = [
   { id: "routing", label: "Routing", icon: Route },
   { id: "quotas", label: "Provider usage", icon: Gauge },
   { id: "systemCredentials", label: "System credentials", icon: KeyRound },
   { id: "systemCapacity", label: "Capacity", icon: Layers },
   { id: "settings", label: "Provider settings", icon: Settings },
+  { id: "adminUsers", label: "Admin", icon: ShieldCheck },
+]
+
+const workspaceItems: NavItem[] = [
   { id: "projects", label: "Projects", icon: FolderKanban },
   { id: "account", label: "Account", icon: UserRound },
-  { id: "adminUsers", label: "Admin", icon: ShieldCheck },
 ]
 
 interface NavListProps {
@@ -44,26 +47,36 @@ interface NavListProps {
  */
 export function NavList({ collapsed, onNavigate }: NavListProps) {
   const { systemAccess } = useProjectsOptional()
-  const visibleItems = navItems.filter((item) => canAccessRoute(item.id, systemAccess))
+  const visibleSystem = systemItems.filter((item) => canAccessRoute(item.id, systemAccess))
+  const visibleWorkspace = workspaceItems.filter((item) => canAccessRoute(item.id, systemAccess))
+
+  const row = ({ id, label, icon: Icon }: NavItem) => (
+    <NavLink
+      key={id}
+      to={TAB_PATHS[id]}
+      aria-label={label}
+      title={collapsed ? label : undefined}
+      onClick={onNavigate}
+      className={({ isActive }) => navLinkClass(collapsed, isActive)}
+    >
+      <Icon aria-hidden="true" className="size-[18px] shrink-0" strokeWidth={1.8} />
+      {!collapsed && <span>{label}</span>}
+    </NavLink>
+  )
 
   return (
     <nav
       aria-label="Primary"
       className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto px-2 py-3"
     >
-      {visibleItems.map(({ id, label, icon: Icon }) => (
-        <NavLink
-          key={id}
-          to={TAB_PATHS[id]}
-          aria-label={label}
-          title={collapsed ? label : undefined}
-          onClick={onNavigate}
-          className={({ isActive }) => navLinkClass(collapsed, isActive)}
-        >
-          <Icon aria-hidden="true" className="size-[18px] shrink-0" strokeWidth={1.8} />
-          {!collapsed && <span>{label}</span>}
-        </NavLink>
-      ))}
+      {visibleSystem.length > 0 && (
+        <>
+          {!collapsed && <p className="mb-2 px-3 text-[12px] text-[var(--muted)]">System</p>}
+          {visibleSystem.map(row)}
+          <hr className="mx-1 my-2 border-[var(--border-subtle)]" />
+        </>
+      )}
+      {visibleWorkspace.map(row)}
     </nav>
   )
 }

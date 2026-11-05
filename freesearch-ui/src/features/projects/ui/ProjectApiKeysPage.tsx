@@ -4,6 +4,7 @@ import {
   hasPermission,
   useProjectScope,
 } from "@/domains/projects"
+import { PageHeader } from "@/shared/ui/PageHeader"
 import { useProjectApiKeysController } from "../model/useProjectApiKeysController"
 import { ApiKeyRevealDialog } from "./ApiKeyRevealDialog"
 import { ApiKeysTable } from "./ApiKeysTable"
@@ -36,12 +37,10 @@ export function ProjectApiKeysPage({ accountId }: { accountId: string }) {
 
   return (
     <section className="flex flex-1 flex-col space-y-6">
-      <header className="border-b border-[var(--border-subtle)] pb-2">
-        <h1 className="text-[var(--text-strong)]">API keys</h1>
-        <p className="mt-0.5 text-[13px] text-[var(--muted)]">
-          Keys let programs call search and fetch in {project?.name ?? "this project"}.
-        </p>
-      </header>
+      <PageHeader
+        title="API keys"
+        description={`Keys let programs call search and fetch in ${project?.name ?? "this project"}.`}
+      />
 
       {showPageMessage && (
         <p role="alert" className="text-[13px] text-[var(--status-danger)]">

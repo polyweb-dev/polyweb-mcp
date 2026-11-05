@@ -256,6 +256,20 @@ export function clearProjectStubMemberships(email: string): void {
   }
 }
 
+/** Rename one stub project (long-name visual scenarios). */
+export function renameProjectStub(projectName: string, newName: string): void {
+  const project = state.projects.find((p) => p.name === projectName)
+  if (project === undefined) throw new Error(`unknown stub project ${projectName}`)
+  project.name = newName
+}
+
+/** Remove the signed-in account's membership of one project. */
+export function removeProjectStubMember(projectName: string, email: string): void {
+  const project = state.projects.find((p) => p.name === projectName)
+  if (project === undefined) return
+  project.members = project.members.filter((m) => m.email !== email)
+}
+
 function nextKeyMaterial(): { id: string; prefix: string; raw: string; seq: number } {
   state.apiKeySeq += 1
   const seq = state.apiKeySeq

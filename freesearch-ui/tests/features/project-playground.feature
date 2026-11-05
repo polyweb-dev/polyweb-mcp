@@ -15,7 +15,7 @@ Feature: Project playground
   Scenario: A playground search runs for the URL project on the human session
     Given project Alpha has an API key labelled "Deploy bot"
     When I open the workspace page "/p/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/playground"
-    Then I should see the "Search Playground" heading
+    Then I should see the "Playground" heading
     When I submit the playground search query "alpha isolation probe"
     Then the playground should show the result "Alpha isolation result"
     And the last search request should name project Alpha
@@ -67,7 +67,7 @@ Feature: Project playground
     Then the page URL path should be "/p/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
     When I open the workspace page "/playground"
     Then the page URL path should be "/p/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/playground"
-    And I should see the "Search Playground" heading
+    And I should see the "Playground" heading
     When I open the workspace page "/activity"
     Then the page URL path should be "/p/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/activity"
     And I should see the "Activity" heading

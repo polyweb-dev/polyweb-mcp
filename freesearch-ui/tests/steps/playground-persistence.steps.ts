@@ -72,7 +72,7 @@ Given("the persisted playground state is cleared", async ({ page }) => {
 })
 
 Then("the persisted search draft should be {string}", async ({ page }, draft: string) => {
-  await expect(page.getByPlaceholder(/Search across all providers/i)).toHaveValue(draft)
+  await expect(page.getByPlaceholder(/Search the web/i)).toHaveValue(draft)
 })
 
 Then("the persisted search results should show {string}", async ({ page }, text: string) => {
@@ -80,7 +80,7 @@ Then("the persisted search results should show {string}", async ({ page }, text:
 })
 
 Then("the persisted fetch URL should be {string}", async ({ page }, url: string) => {
-  await expect(page.getByPlaceholder(/Enter a URL to fetch/i)).toHaveValue(url)
+  await expect(page.getByPlaceholder(/URL to fetch/i)).toHaveValue(url)
 })
 
 Then("the persisted fetch document should show {string}", async ({ page }, text: string) => {

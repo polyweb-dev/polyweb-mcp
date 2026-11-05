@@ -37,19 +37,19 @@ export function ProjectSettingsPage({ accountId }: { accountId: string }) {
 
   return (
     <section className="flex flex-1 flex-col space-y-6">
-      <header className="flex items-end justify-between gap-4 border-b border-[var(--border-subtle)] pb-2">
-        <div>
-          <h1 className="text-[var(--text-strong)]">Settings</h1>
-          <p className="mt-0.5 text-[13px] text-[var(--muted)]">Routing, execution and trace policy of this project.</p>
+      <div className="mb-6 flex items-end justify-between gap-4 border-b border-[var(--border-subtle)] pb-3">
+        <div className="min-w-0">
+          <h2 className="text-xl font-medium text-[var(--text-strong)]">Settings</h2>
+          <p className="mt-0.5 truncate text-[13px] text-[var(--muted)]">Routing, execution and trace policy of this project.</p>
         </div>
-        {canCopy && <Button variant="outline" onClick={() => setCopying(true)}>Copy from another project</Button>}
-      </header>
+        {canCopy && <Button size="form" variant="outline" onClick={() => setCopying(true)}>Copy from another project</Button>}
+      </div>
 
       {!canWrite && <p role="note" className={NOTE_CLASS}>{READ_ONLY_NOTE}</p>}
       {controller.conflict && (
         <div role="alert" className="flex items-center gap-3 text-[13px] text-[var(--status-danger)]">
           <span>{SETTINGS_CONFLICT}</span>
-          <Button size="sm" variant="outline" onClick={controller.reload}>Reload settings</Button>
+          <Button size="form" variant="outline" onClick={controller.reload}>Reload settings</Button>
         </div>
       )}
       {controller.message !== null && <p role="alert" className="text-[13px] text-[var(--status-danger)]">{controller.message}</p>}

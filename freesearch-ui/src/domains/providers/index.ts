@@ -47,7 +47,6 @@ export {
   credentialProviderTypes,
   oauthStatusText,
   providerTypeName,
-  runsText,
   supportedOperationsOf,
   supportsOAuth,
 } from "./model/credentials";

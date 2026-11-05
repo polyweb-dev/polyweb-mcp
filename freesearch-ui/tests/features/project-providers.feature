@@ -18,7 +18,7 @@ Feature: Project providers
     When I open the Providers page of project Alpha
     Then I see the heading "Providers"
     And the "Brave Search" provider shows "Runs: search"
-    And the "Tavily" provider shows "Runs: nothing yet"
+    And the "Tavily" provider shows "Runs: —"
     And the "Exa" provider shows "Disabled by system"
     And the "Tavily" credentials table lists "Shared Tavily" with "System (granted)" and "API key"
     And the "Tavily" credentials table lists "Alpha Tavily key" with "Project" and "API key"
@@ -36,14 +36,14 @@ Feature: Project providers
     And I see "New bindings start turned off. Turn on search or fetch to use it."
     And the search toggle of binding "tavily-main" is off
     And the fetch toggle of binding "tavily-main" is off
-    And the "Tavily" provider shows "Runs: nothing yet"
+    And the "Tavily" provider shows "Runs: —"
     When I turn on search for binding "tavily-main"
     Then the last binding update enabled exactly "search"
     And the search toggle of binding "tavily-main" is on
     And the "Tavily" provider shows "Runs: search"
     When I remove the binding "brave-primary"
     Then the binding "brave-primary" is removed
-    And the "Brave Search" provider shows "Runs: nothing yet"
+    And the "Brave Search" provider shows "Runs: —"
 
   Scenario: Saving a private key sends the secret once and keeps it out of the browser
     Given I am a member of project Alpha with role project_admin
