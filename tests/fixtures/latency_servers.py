@@ -414,6 +414,7 @@ class RoutingLatencyHarness:
         self._tempdir: str | None = None
         self._restore_secret: Callable[[], None] | None = None
         self._adapter_patch: pytest.MonkeyPatch | None = None
+        self._gc_frozen = False
         self._started = False
 
     # ------------------------------------------------------------- lifecycle
@@ -456,9 +457,6 @@ class RoutingLatencyHarness:
             else:
                 token = target.loop.run(self._start_mcp(target, database), _STARTUP_TIMEOUT_S)
                 self._open_mcp_session(target, token)
-            # Execution builds an adapter only for an enabled project binding
-            # and hands it the binding's staged secret; this target's fakes are
-            # returned only for exactly those fixture secrets.
             install_adapter_map(
                 self._adapter_patch, list(target.adapters.values()), secrets=target.secrets
             )
@@ -467,6 +465,9 @@ class RoutingLatencyHarness:
             detach = attach_select_counter(repository, target.selects)
             target.detach = detach
             target.reads_available = detach is not None
+        gc.collect()
+        gc.freeze()
+        self._gc_frozen = True
 
     async def _open_rest_client(self) -> None:
         self._rest_client = httpx.AsyncClient(timeout=_REQUEST_TIMEOUT_S)
@@ -604,6 +605,9 @@ class RoutingLatencyHarness:
         if not self._started:
             return
         self._started = False
+        if self._gc_frozen:
+            gc.unfreeze()
+            self._gc_frozen = False
         errors: list[BaseException] = []
         client_loop = self._client_loop
         if client_loop is not None:

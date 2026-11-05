@@ -77,6 +77,10 @@ _REPORT_NOTES: dict[str, tuple[str, ...]] = {
         "Before the servers start, every catalog rate window in each server repository is "
         "lifted through the limit service's update_record seam: REST and MCP admission still "
         "run on every request, but vendor rate windows cannot deny instant fakes.",
+        "Behave, the client loop, and both servers share one process, so after startup the "
+        "harness freezes that heap (gc.freeze): a full collection would otherwise scan objects "
+        "no single server owns and stall one measured request. Request garbage is still "
+        "collected.",
     ),
     LIVE: (
         "Real adapters with explicit harness-env keys; providers without a key are skipped.",
