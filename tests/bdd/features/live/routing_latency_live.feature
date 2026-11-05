@@ -8,7 +8,7 @@ Feature: FreeSearch routing latency against live providers
   # [tool.behave] default_tags). Run with:
   #   uv run behave --tags="@live and @latency"
   # Each provider runs only when its harness env key is set (FREESEARCH_*_API_KEY,
-  # TINYFISH_API_KEY); keyless Keenable runs only with FREESEARCH_RUN_LIVE=1.
+  # FREESEARCH_TINYFISH_API_KEY); keyless Keenable runs only with FREESEARCH_RUN_LIVE=1.
   # Otherwise the scenario is skipped with a reason naming the env var, never
   # its value. Sample counts default to 1 warmup + 5 measured requests per row,
   # overridable with FREESEARCH_LATENCY_LIVE_WARMUP and

@@ -40,6 +40,7 @@ from freesearch.models.contracts import (
     UsageEvent,
     UsageOperation,
 )
+from freesearch.models.provider_limits import AuthMode
 
 # ``features`` is an uninstalled namespace package at the repo root; make it
 # importable regardless of pytest's sys.path manipulation.
@@ -300,7 +301,7 @@ def test_valid_keenable_response_passes_all_assertions() -> None:
     """A minimal live Keenable search response satisfies the whole AC-L3 contract."""
     response = _response([_result()])
     context = SimpleNamespace(
-        adapter=SimpleNamespace(name="keenable"),
+        adapter=SimpleNamespace(name="keenable", limit_auth_mode=AuthMode.KEYLESS),
         search_response=response,
     )
 

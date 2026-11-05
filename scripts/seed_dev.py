@@ -22,7 +22,11 @@ from pydantic import SecretStr
 
 from freesearch.configuration.config import Settings
 from freesearch.infrastructure.encrypted_store import EncryptedDbSecretStore, load_secret_codec
-from freesearch.infrastructure.secrets import PROVIDER_ENV_VARS, ProviderName
+from freesearch.infrastructure.secrets import (
+    PROVIDER_ENV_VARS,
+    ProviderName,
+    provider_env_var_names,
+)
 from freesearch.models.credentials import CredentialCreate, CredentialGrantUpsert
 from freesearch.models.projects import BuiltinRole, ProjectCreate, ProjectMemberAdd, ProjectRead
 from freesearch.models.providers import BindingCreate, BindingUpdate
@@ -56,11 +60,8 @@ def read_provider_keys(env_file: Path) -> dict[ProviderName, SecretStr]:
 
     values = dotenv_values(env_file, interpolate=False)
     keys: dict[ProviderName, SecretStr] = {}
-    for provider, variable in PROVIDER_ENV_VARS.items():
-        names: tuple[str, ...] = (variable,)
-        if provider is ProviderName.TINYFISH:
-            names = ("FREESEARCH_TINYFISH_API_KEY", variable)
-        for name in names:
+    for provider in PROVIDER_ENV_VARS:
+        for name in provider_env_var_names(provider):
             value = os.environ.get(name, values.get(name))
             if value and value.strip():
                 keys[provider] = SecretStr(value.strip())

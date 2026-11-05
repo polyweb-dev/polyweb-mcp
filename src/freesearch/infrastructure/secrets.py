@@ -27,8 +27,19 @@ PROVIDER_ENV_VARS: dict[ProviderName, str] = {
     ProviderName.YOU: "FREESEARCH_YOU_API_KEY",
     ProviderName.BRAVE: "FREESEARCH_BRAVE_SEARCH_API_KEY",
     ProviderName.KEENABLE: "FREESEARCH_KEENABLE_API_KEY",
-    ProviderName.TINYFISH: "TINYFISH_API_KEY",
+    ProviderName.TINYFISH: "FREESEARCH_TINYFISH_API_KEY",
 }
+
+#: Older import spellings still accepted after the canonical variable.
+LEGACY_PROVIDER_ENV_VARS: dict[ProviderName, tuple[str, ...]] = {
+    ProviderName.TINYFISH: ("TINYFISH_API_KEY",),
+}
+
+
+def provider_env_var_names(provider: ProviderName) -> tuple[str, ...]:
+    """Return the canonical key variable, then any accepted legacy spellings."""
+
+    return (PROVIDER_ENV_VARS[provider], *LEGACY_PROVIDER_ENV_VARS.get(provider, ()))
 
 
 class AsyncSecretStore(Protocol):

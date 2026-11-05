@@ -76,7 +76,7 @@ provider; Brave supports Search only. All three projects use the same upstream
 credentials and balances. The fixture does not invent quota pools or allocations.
 
 Missing or blank keys are reported by provider name and skipped. The Tinyfish
-import accepts `FREESEARCH_TINYFISH_API_KEY` or the existing `TINYFISH_API_KEY`
+import accepts `FREESEARCH_TINYFISH_API_KEY` or the legacy `TINYFISH_API_KEY`
 spelling. `FREESEARCH_BRAVE_SEARCH_API_KEY` supplies Brave; the separate legacy
 Answers key has no adapter in this runtime and is not imported. The normal app
 continues to resolve credentials from its vault, not from these import variables.

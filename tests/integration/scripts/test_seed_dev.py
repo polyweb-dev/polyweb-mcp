@@ -119,7 +119,7 @@ async def test_fresh_seed_accounts_memberships_and_encrypted_bindings(tmp_path: 
 def test_env_key_import_is_explicit_and_never_prints_values(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    for variable in (*PROVIDER_ENV_VARS.values(), "FREESEARCH_TINYFISH_API_KEY"):
+    for variable in (*PROVIDER_ENV_VARS.values(), "TINYFISH_API_KEY"):
         monkeypatch.delenv(variable, raising=False)
     env_file = tmp_path / ".env"
     env_file.write_text(

@@ -19,6 +19,7 @@ from freesearch.infrastructure.secrets import (
     PROVIDER_ENV_VARS,
     ProviderName,
     ProviderSecretResolver,
+    provider_env_var_names,
 )
 from tests.encrypted_secrets_helpers import maybe_await
 
@@ -50,7 +51,12 @@ async def _resolve(resolver: ProviderSecretResolver, provider: ProviderName):  #
 def test_all_providers_have_explicit_environment_names() -> None:
     assert set(PROVIDER_ENV_VARS) == set(ProviderName)
     assert PROVIDER_ENV_VARS[ProviderName.YOU] == "FREESEARCH_YOU_API_KEY"
-    assert PROVIDER_ENV_VARS[ProviderName.TINYFISH] == "TINYFISH_API_KEY"
+    assert PROVIDER_ENV_VARS[ProviderName.TINYFISH] == "FREESEARCH_TINYFISH_API_KEY"
+    assert provider_env_var_names(ProviderName.TINYFISH) == (
+        "FREESEARCH_TINYFISH_API_KEY",
+        "TINYFISH_API_KEY",
+    )
+    assert provider_env_var_names(ProviderName.EXA) == ("FREESEARCH_EXA_API_KEY",)
 
 
 def test_resolver_exposes_vault_only_aget_set_delete() -> None:
