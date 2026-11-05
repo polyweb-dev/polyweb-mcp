@@ -20,6 +20,14 @@ These rules for the orchestrator that are distilled from prior agent runs. Follo
 - **Run Behave only when it matters.** Run it when BDD features or steps change, or at the final gate. Leave out the `@latency` scenarios in routine runs: `uv run --no-sync behave --tags="not @live and not @latency"`. Passing `--tags` replaces the default `not @live`, so keep it in the expression. Run them only when the request path changes and at the card's latency gate.
 - **Batch feedback.** Review a whole agent round, then send all defects and rulings in one handoff. Ask agents for exact failing test IDs so the next round can run only those tests first.
 
+## Cloud test runs (Woodpecker CI)
+
+- **Local vs cloud**: run **unit tests locally**. All other suites (integration, BDD, latency, live, mutation) must run on Woodpecker CI — they execute on autoscaled GCP Spot workers so the VPS stays free.
+- **Triggering**: the `executor` MCP server exposes a `woodpecker` integration. Discover tools inside `execute` with `tools.search({ namespace: "woodpecker", query: "..." })` and inspect shapes via `tools.describe.tool({ path })` before calling.
+- **Single workflow**: `tools.woodpecker.org.agent.trigger_pipeline({ repo_id: 1, branch: "<branch>", workflow: "<name>" })` where `<name>` is a `.woodpecker/*.yaml` basename (e.g. `api-latency`). Omitting `workflow` runs ALL manual workflows — expensive (live provider calls, long mutation runs).
+- The branch must be **pushed to origin**; local-only branches cannot be triggered. Monitor with `get_pipeline`, debug with `get_step_logs`, stop with `cancel_pipeline`.
+- **Artifacts**: each workflow uploads `reports.zip` (log + `test_reports/`) to Gitea as generic package `freesearch-<workflow>` versioned `pipeline-<N>-r<reruns>-<ns>`. Download with `python3 scripts/gitea_packages.py download <pkg> <version> reports.zip` (lands in `.gitea-packages/`; `python` is unavailable — use `python3`).
+
 ## UI unit tests
 - We only support desktop view, not the mobile view.
 - In `freesearch-ui/src`, colocate each unit/component test with its source as `<basename>.test.ts` or `<basename>.test.tsx`; keep one canonical test file per source and never add suffix variants.
