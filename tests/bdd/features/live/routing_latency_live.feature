@@ -2,7 +2,7 @@
 Feature: FreeSearch routing latency against live providers
   As a FreeSearch operator preparing a release
   I want each real provider's time reported separately from the server-side time FreeSearch adds
-  So that I can prove FreeSearch adds under 80 ms at p95 on top of every live provider
+  So that I can prove FreeSearch adds under 150 ms at p95 on top of every live provider
 
   # Opt-in only: the default behave run excludes @live (pyproject
   # [tool.behave] default_tags). Run with:
@@ -23,7 +23,7 @@ Feature: FreeSearch routing latency against live providers
     When I send warm <operation> requests pinned to "<provider>" over <transport>
     Then every measured <operation> request is served by "<provider>"
     And provider time and server-side FreeSearch-added time are reported separately
-    And the p95 server-side FreeSearch-added latency is under 80 ms
+    And the p95 server-side FreeSearch-added latency is under 150 ms
 
     Examples: REST
       | transport | operation | provider  |

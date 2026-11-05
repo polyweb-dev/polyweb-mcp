@@ -255,7 +255,10 @@ def test_reports_list_measured_rows_and_not_applicable_rows(tmp_path: Path) -> N
     assert "| rest | search | exa | fake | 3/3 |" in markdown
     assert "n/a: brave does not support fetch" in markdown
     assert "- rate windows lifted for instant fakes" in markdown
-    assert "server-added p50=20.00ms p95=29.00ms" in summary_line(measured)
+    assert (
+        "server-added mean=20.00ms p50=20.00ms p90=28.00ms p95=29.00ms p99=29.80ms"
+        in summary_line(measured)
+    )
     assert "client-overhead p50=2.00ms" in summary_line(measured)
     assert "reads p50=12" in summary_line(measured)
 
