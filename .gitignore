@@ -18,6 +18,7 @@ coverage/
 *.db*
 *.pnpm-store/
 .runtime-tmp/
+/.gitea-packages/
 FEEDBACK/
 .tmp/
 .secret_key
