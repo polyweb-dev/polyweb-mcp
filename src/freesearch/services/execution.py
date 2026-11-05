@@ -975,6 +975,8 @@ class ExecutionService:
 
     async def _schedule_quotas(self, legs: Sequence[_Leg]) -> None:
         """Keep adapters leased for the entire scoped background refresh."""
+        if self._closed:
+            return
         leases: list[_AdapterLease] = []
         task: asyncio.Task[Any] | None = None
         try:
@@ -1141,6 +1143,8 @@ class ExecutionService:
     ) -> _AdapterLease:
         """Lease the cached adapter of one credential and configuration."""
 
+        if self._closed:
+            raise ExecutionAuthorityUnavailable("the execution authority is stopped")
         fingerprint = _config_fingerprint(config)
         token_generation = credential.token_generation or 0
         key = (
