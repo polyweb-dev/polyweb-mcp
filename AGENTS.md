@@ -50,6 +50,7 @@ Each workspace/worktree has fixed, isolated ports defined in its root `.env` to 
 | **WT 4** | `freesearch_wt_4` | `8040` | `8041` | `5178` |
 
 - **Zero hardcoding**: Always launch servers without hardcoded ports (e.g. `uv run freesearch-api`, `uv run freesearch-mcp`, `pnpm dev`). They automatically read from the local `.env`.
+- **Landing app** (`landing/`): the marketing site's Vite dev server reads `FREESEARCH_LANDING_PORT` from the root `.env` and defaults to `5274` when unset.
 - **Zero merge conflicts**: Port configurations live in the local `.env` (gitignored), keeping committed files identical across all branches.
 
 ### Creating worktrees
