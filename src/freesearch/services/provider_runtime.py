@@ -553,10 +553,11 @@ async def routing_policy(repository: SQLiteRepository | None) -> RoutingConfigRe
 async def persist_routing_config(
     repository: SQLiteRepository | None, policy: RoutingConfigResponse
 ) -> None:
-    """Persist the routing policy; ``max_attempts`` is stored-validated-deferred.
+    """Persist the routing policy.
 
-    The value is validated (``ge=1``) and stored for the future resilience
-    wiring; runner construction is deliberately untouched this round.
+    ``max_attempts`` (validated ``ge=1``) is the execution hop limit: a
+    chained request attempts at most that many distinct provider legs.
+    Runner construction is untouched.
     """
 
     if repository is None:

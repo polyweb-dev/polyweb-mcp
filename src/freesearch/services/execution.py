@@ -84,6 +84,7 @@ from freesearch.models.contracts import (
     ProviderHealth,
     ProviderTraceItem,
     QuotaSnapshot,
+    RoutingConfigResponse,
     RoutingMode,
     SearchRequest,
     SearchResponse,
@@ -402,6 +403,127 @@ class _Leg:
     @property
     def supports_fetch(self) -> bool:
         return self.adapter.capabilities.fetch
+
+
+@dataclass(frozen=True)
+class _Candidate:
+    """One enabled, usable binding ranked before its credential material loads."""
+
+    binding: StoredBinding
+    provider: str
+    credential_id: UUID
+    config: ProviderConfig
+    health: ProviderHealth | None
+
+
+class _LegChain:
+    """Resolve ranked candidates into dispatchable legs one at a time.
+
+    The chain is a daisy chain: while one attempt runs, :meth:`prefetch`
+    resolves the next qualifying candidate, so a fallback is ready the moment
+    the attempt fails. Only one resolution runs at a time. Candidates that do
+    not qualify are released immediately; the counters keep the facts the
+    original all-legs planner used to choose its refusal message.
+    """
+
+    def __init__(
+        self,
+        service: ExecutionService,
+        candidates: Sequence[_Candidate],
+        request: SearchRequest | FetchRequest,
+        operation: UsageOperation,
+        context: ProjectContext,
+        project_max_concurrency: int | None,
+    ) -> None:
+        self._service = service
+        self._candidates = list(candidates)
+        self._next_index = 0
+        self._request = request
+        self._operation = operation
+        self._context = context
+        self._project_max_concurrency = project_max_concurrency
+        self._legs: list[_Leg] = []
+        self._prefetch: asyncio.Task[_Leg | None] | None = None
+        self.resolved = 0
+        self.capable = 0
+        self.pinned_capable = 0
+
+    @property
+    def exhausted(self) -> bool:
+        return self._next_index >= len(self._candidates)
+
+    async def next(self) -> _Leg | None:
+        """Return the next qualifying leg in rank order, or ``None``."""
+
+        service = self._service
+        pinned = self._request.routing.binding_id
+        while not self.exhausted:
+            candidate = self._candidates[self._next_index]
+            self._next_index += 1
+            leg = await service._resolve_leg(
+                self._context,
+                candidate.binding,
+                _operation_code(self._operation),
+                project_max_concurrency=self._project_max_concurrency,
+            )
+            if leg is None:
+                continue
+            self.resolved += 1
+            if not service._leg_allows(leg, self._request, self._operation):
+                leg.lease.release()
+                continue
+            self.capable += 1
+            if pinned is not None and leg.binding.id != pinned:
+                leg.lease.release()
+                continue
+            self.pinned_capable += 1
+            if await service._candidate_blocked(leg, candidate.health):
+                leg.lease.release()
+                continue
+            self._legs.append(leg)
+            return leg
+        return None
+
+    def prefetch(self) -> None:
+        """Start resolving the next qualifying leg in the background."""
+
+        if self._prefetch is None and not self.exhausted:
+            self._prefetch = asyncio.create_task(self.next())
+
+    async def following(self) -> _Leg | None:
+        """Return the prefetched leg, or ``None`` when no prefetch was started."""
+
+        task, self._prefetch = self._prefetch, None
+        return None if task is None else await task
+
+    def missing_error(self) -> ExecutionBindingMissing:
+        """Rebuild the original planner's refusal once every candidate failed."""
+
+        preference = self._request.routing
+        required = preference.mode is RoutingMode.REQUIRE and bool(preference.providers)
+        if self.resolved == 0:
+            return ExecutionBindingMissing(
+                "no required provider is configured for this project"
+                if required
+                else "no provider is configured for this project"
+            )
+        if preference.binding_id is not None and self.capable and not self.pinned_capable:
+            return ExecutionBindingMissing(
+                "the pinned binding is not enabled and usable for this project"
+            )
+        return ExecutionBindingMissing(
+            "no required provider is eligible: " + ", ".join(sorted(preference.providers))
+            if required
+            else f"no eligible provider is available for {self._operation.value}"
+        )
+
+    async def aclose(self) -> None:
+        """Finish any prefetch, then return every resolved adapter lease."""
+
+        task, self._prefetch = self._prefetch, None
+        if task is not None:
+            await asyncio.gather(task, return_exceptions=True)
+        _release_legs(self._legs)
 
 
 class _AdapterLease:
@@ -1284,9 +1406,23 @@ class ExecutionService:
         observation never blocks its siblings; reads degrade to no snapshot.
         """
 
-        health: dict[UUID, ProviderHealth] = {}
+        health = await self._health_snapshots(
+            [(leg.binding_id, leg.provider, leg.credential.credential_id) for leg in legs]
+        )
         quotas: dict[UUID, QuotaSnapshot] = {}
-        providers = sorted({leg.provider for leg in legs})
+        for leg in legs:
+            quota = await self._leg_quota(leg)
+            if quota is not None:
+                quotas[leg.binding_id] = quota
+        return health, quotas
+
+    async def _health_snapshots(
+        self, entries: Sequence[tuple[UUID, str, UUID]]
+    ) -> dict[UUID, ProviderHealth]:
+        """Read health per ``(binding_id, provider, credential_id)``; reads degrade."""
+
+        health: dict[UUID, ProviderHealth] = {}
+        providers = sorted({provider for _binding_id, provider, _credential_id in entries})
         shared_health: dict[str, ProviderHealth] = {}
         if providers:
             try:
@@ -1295,28 +1431,31 @@ class ExecutionService:
                     shared_health = await health_batch(providers)
             except Exception:
                 shared_health = {}
-        for leg in legs:
+        for binding_id, provider, credential_id in entries:
             try:
                 observation = await self._repository.latest_health(
-                    leg.provider, credential_id=leg.credential.credential_id
+                    provider, credential_id=credential_id
                 )
                 if observation is None:
-                    observation = shared_health.get(leg.provider)
+                    observation = shared_health.get(provider)
                 if observation is not None:
-                    health[leg.binding_id] = observation
+                    health[binding_id] = observation
             except Exception:
                 pass
-            try:
-                latest_quota = await self._repository.latest_quota(
-                    leg.provider,
-                    credential_id=leg.credential.credential_id,
-                    pool_id=leg.pool.id if leg.pool is not None else None,
-                )
-                if latest_quota is not None:
-                    quotas[leg.binding_id] = normalize_degenerate_quota(latest_quota)
-            except Exception:
-                pass
-        return health, quotas
+        return health
+
+    async def _leg_quota(self, leg: _Leg) -> QuotaSnapshot | None:
+        """Read one leg's credential- or pool-scoped quota; reads degrade to None."""
+
+        try:
+            latest_quota = await self._repository.latest_quota(
+                leg.provider,
+                credential_id=leg.credential.credential_id,
+                pool_id=leg.pool.id if leg.pool is not None else None,
+            )
+        except Exception:
+            return None
+        return None if latest_quota is None else normalize_degenerate_quota(latest_quota)
 
     @staticmethod
     def _leg_blocked(
@@ -1360,27 +1499,41 @@ class ExecutionService:
         credentials of one provider are both addressable.
         """
 
-        health_order = (
-            HealthStatus.HEALTHY,
-            HealthStatus.DEGRADED,
-            HealthStatus.UNKNOWN,
-        )
         pin_free_first = policy.cost_optimization_preset is CostPreset.FREE_FIRST
+        return sorted(
+            all_legs,
+            key=lambda leg: ExecutionService._rank_key(
+                health.get(leg.binding_id),
+                leg.provider,
+                leg.config,
+                leg.binding,
+                preference,
+                pin_free_first,
+            ),
+        )
 
-        def _key(leg: _Leg) -> tuple[int, int, int, int, int, str, str]:
-            observation = health.get(leg.binding_id)
-            rank = HealthStatus.UNKNOWN if observation is None else observation.status
-            return (
-                health_order.index(rank),
-                0 if leg.provider in preference else 1,
-                0 if pin_free_first and leg.provider == "keenable" else 1,
-                leg.config.priority,
-                leg.binding.priority,
-                leg.binding.route_label,
-                str(leg.binding.id),
-            )
+    @staticmethod
+    def _rank_key(
+        observation: ProviderHealth | None,
+        provider: str,
+        config: ProviderConfig,
+        binding: StoredBinding,
+        preference: tuple[str, ...],
+        pin_free_first: bool,
+    ) -> tuple[int, int, int, int, int, str, str]:
+        """Return the deterministic rank key shared by planning and the leg chain."""
 
-        return sorted(all_legs, key=_key)
+        status = HealthStatus.UNKNOWN if observation is None else observation.status
+        health_order = (HealthStatus.HEALTHY, HealthStatus.DEGRADED, HealthStatus.UNKNOWN)
+        return (
+            health_order.index(status) if status in health_order else len(health_order),
+            0 if provider in preference else 1,
+            0 if pin_free_first and provider == "keenable" else 1,
+            config.priority,
+            binding.priority,
+            binding.route_label,
+            str(binding.id),
+        )
 
     # ------------------------------------------------------------ attempts
 
@@ -1618,110 +1771,256 @@ class ExecutionService:
     ) -> SearchResponse | FetchResponse:
         """Run one dispatched attempt chain over the project's bindings.
 
-        The chain applies provider masks, capability, health, and the fallback
-        policy; each leg reserves its own strict capacity and passes through
-        the shared telemetry wrapper. Per-attempt failure shapes mirror the
-        pre-binding transport: a ProviderOperationError on the last leg re-raises
-        unchanged after failure telemetry.
+        The enabled, usable bindings are ranked first without loading any
+        credential material. Legs are then resolved in rank order as a daisy
+        chain: the first qualifying leg is dispatched while the next one is
+        prepared, and at most the routing hop limit (``max_attempts``) of legs
+        are attempted. Each leg reserves its own strict capacity and passes
+        through the shared telemetry wrapper. Per-attempt failure shapes mirror
+        the pre-binding transport: a ProviderOperationError on the last leg
+        re-raises unchanged after failure telemetry.
         """
 
-        legs = await self._usable_legs(
-            context, _operation_code(operation), providers=self._provider_subset(request)
+        policy = await routing_policy(self._repository)
+        context, project_cap, candidates = await self._ranked_candidates(
+            context, request, operation, policy
         )
-        if not legs:
+        if not candidates:
             if request.routing.mode is RoutingMode.REQUIRE and request.routing.providers:
                 raise ExecutionBindingMissing("no required provider is configured for this project")
             raise ExecutionBindingMissing("no provider is configured for this project")
+        hop_limit = self._hop_limit(request, policy, len(candidates))
+        chain = _LegChain(self, candidates, request, operation, context, project_cap)
         try:
             observable = current_observability()
             with observable.span(TraceSpanName.ROUTE, attributes=_request_attributes(request)):
-                chain = await self._plan(request, operation, legs)
-            last_error: ProviderOperationError | None = None
-            # One logical retry budget is shared by service retries, adapter
-            # runners, fallback legs, and fanout siblings. A request that has
-            # already retried once never gets another free retry downstream.
-            for index, (leg, _adapter) in enumerate(chain):
-                is_last = index == len(chain) - 1
-                retried = False
-                while True:
-                    try:
-                        response = await self._invoke_attempt(
-                            leg,
-                            request,
-                            operation,
-                            attribution=attribution,
-                            candidates=len(chain),
-                            deadline=deadline,
-                        )
-                    except ProviderOperationError as error:
-                        if (
-                            not retried
-                            and self._retry_allowed(error)
-                            and not self._deadline_passed(deadline)
-                        ):
-                            delay, announced = self._retry_delay(error)
-                            remaining = self._remaining_before_deadline(deadline)
-                            if announced and remaining is not None and delay >= remaining:
-                                # The vendor's own delay would outlive the
-                                # logical request: refuse the retry instead of
-                                # shortening Retry-After.
-                                last_error = error
-                                if is_last:
-                                    _annotate_root_error(observable, error)
-                                    _annotate_attempt_identity(
-                                        observable, request, leg, _operation_name(request).value
-                                    )
-                                    raise
-                                break
-                            if not consume_retry_budget():
-                                last_error = error
-                                if is_last:
-                                    _annotate_root_error(observable, error)
-                                    _annotate_attempt_identity(
-                                        observable, request, leg, _operation_name(request).value
-                                    )
-                                    raise
-                                break
-                            retried = True
-                            await self._defer_retry(leg, delay, announced)
-                            continue
-                        last_error = error
-                        if is_last:
-                            _annotate_root_error(observable, error)
-                            _annotate_attempt_identity(
-                                observable, request, leg, _operation_name(request).value
-                            )
-                            raise
-                        break
-                    except Exception as error:
-                        # Only a normalized provider failure is a routing candidate
-                        # for the next binding. An unexpected crash (for example a
-                        # local programming error) propagates immediately: silently
-                        # treating it as a failed leg could turn a broken primary
-                        # into a successful fallback answer.
+                leg = await chain.next()
+            if leg is None:
+                raise chain.missing_error()
+            hops = 1
+            while True:
+                if hops < hop_limit:
+                    chain.prefetch()
+                try:
+                    response = await self._attempt_leg(
+                        leg,
+                        request,
+                        operation,
+                        attribution=attribution,
+                        candidates=hop_limit,
+                        deadline=deadline,
+                        observable=observable,
+                    )
+                except ProviderOperationError as error:
+                    following = await chain.following()
+                    if following is None:
                         _annotate_root_error(observable, error)
                         _annotate_attempt_identity(
                             observable, request, leg, _operation_name(request).value
                         )
                         raise
-                    with observable.span(
-                        TraceSpanName.RESULTS,
-                        attributes={
-                            TraceAttribute.OPERATION: _operation_name(request).value,
-                            TraceAttribute.RESPONSE_RESULT_COUNT: (
-                                len(response.results) if isinstance(response, SearchResponse) else 1
-                            ),
-                        },
-                    ):
-                        _annotate_root(observable, request, response)
-                    return response
-                continue
-            # The chain guarantees at least one attempt, so this is unreachable.
-            if last_error is not None:
-                raise last_error
-            raise ExecutionError("route planning produced zero attempts")
+                    leg = following
+                    hops += 1
+                    continue
+                with observable.span(
+                    TraceSpanName.RESULTS,
+                    attributes={
+                        TraceAttribute.OPERATION: _operation_name(request).value,
+                        TraceAttribute.RESPONSE_RESULT_COUNT: (
+                            len(response.results) if isinstance(response, SearchResponse) else 1
+                        ),
+                    },
+                ):
+                    _annotate_root(observable, request, response)
+                return response
         finally:
-            _release_legs(legs)
+            await chain.aclose()
+
+    async def _attempt_leg(
+        self,
+        leg: _Leg,
+        request: SearchRequest | FetchRequest,
+        operation: UsageOperation,
+        *,
+        attribution: ExecutionAttribution,
+        candidates: int,
+        deadline: float | None,
+        observable: ObservabilityRuntime,
+    ) -> SearchResponse | FetchResponse:
+        """Run one leg with at most one retry; raise its final provider error."""
+
+        # One logical retry budget is shared by service retries, adapter
+        # runners, fallback legs, and fanout siblings. A request that has
+        # already retried once never gets another free retry downstream.
+        retried = False
+        while True:
+            try:
+                return await self._invoke_attempt(
+                    leg,
+                    request,
+                    operation,
+                    attribution=attribution,
+                    candidates=candidates,
+                    deadline=deadline,
+                )
+            except ProviderOperationError as error:
+                if retried or not self._retry_allowed(error) or self._deadline_passed(deadline):
+                    raise
+                delay, announced = self._retry_delay(error)
+                remaining = self._remaining_before_deadline(deadline)
+                if announced and remaining is not None and delay >= remaining:
+                    # The vendor's own delay would outlive the
+                    # logical request: refuse the retry instead of
+                    # shortening Retry-After.
+                    raise
+                if not consume_retry_budget():
+                    raise
+                retried = True
+                await self._defer_retry(leg, delay, announced)
+            except Exception as error:
+                # Only a normalized provider failure is a routing candidate
+                # for the next binding. An unexpected crash (for example a
+                # local programming error) propagates immediately: silently
+                # treating it as a failed leg could turn a broken primary
+                # into a successful fallback answer.
+                _annotate_root_error(observable, error)
+                _annotate_attempt_identity(observable, request, leg, _operation_name(request).value)
+                raise
+
+    @staticmethod
+    def _hop_limit(
+        request: SearchRequest | FetchRequest, policy: RoutingConfigResponse, candidates: int
+    ) -> int:
+        """Return how many legs one logical request may attempt.
+
+        ``allow_fallback=False`` and the first-only policy attempt one leg; a
+        chained policy attempts at most ``max_attempts`` distinct legs.
+        """
+
+        if request.routing.mode is RoutingMode.FANOUT:
+            return max(1, candidates)
+        if not request.routing.allow_fallback or (
+            policy.fallback_policy is FallbackPolicy.FIRST_ONLY
+        ):
+            return 1
+        return max(1, min(policy.max_attempts, candidates))
+
+    async def _ranked_candidates(
+        self,
+        context: ProjectContext,
+        request: SearchRequest | FetchRequest,
+        operation: UsageOperation,
+        policy: RoutingConfigResponse,
+    ) -> tuple[ProjectContext, int | None, list[_Candidate]]:
+        """Rank the enabled, usable bindings without loading credential material.
+
+        One read snapshot re-authorizes the actor, then reads the bindings,
+        the project allocations, and each binding's usable credential. Ranking
+        needs only the provider, its configuration, the binding order, and the
+        credential health, so secrets, pool links, and adapters are left to
+        per-leg resolution.
+        """
+
+        code = _operation_code(operation)
+        providers = self._provider_subset(request)
+        usable: list[tuple[StoredBinding, str, UUID]] = []
+        try:
+            async with self._repository.session() as session:
+                await begin_read_snapshot(session)
+                context = await self._live_context_in_session(session, context, code)
+                bindings = await ProjectBindingRepository(session).list_for_project(
+                    project_id=context.project_id
+                )
+                allocations = await PoolAllocationRepository(session).list_for_project(
+                    project_id=context.project_id
+                )
+                for binding in bindings:
+                    if code not in binding.enabled_operations:
+                        continue
+                    credential = await self._credentials.usable_credential_in_session(
+                        session,
+                        project_id=context.project_id,
+                        credential_id=binding.credential_id,
+                        operation=code,
+                    )
+                    if credential is None:
+                        continue
+                    if providers is not None and credential.provider_type not in providers:
+                        continue
+                    if adapter_factory(credential.provider_type) is None:
+                        continue
+                    usable.append((binding, credential.provider_type, credential.id))
+        except (CredentialStorageUnavailable, ProjectStorageUnavailable, OperationalError) as error:
+            raise ExecutionStorageUnavailable("the credential store is unavailable") from error
+        caps = [
+            allocation.max_concurrency
+            for allocation in allocations
+            if allocation.max_concurrency is not None
+        ]
+        configs: dict[str, ProviderConfig] = {}
+        for _binding, provider, _credential_id in usable:
+            if provider in configs:
+                continue
+            try:
+                configs[provider] = await effective_config_for_name(
+                    self._repository, provider, strict=True
+                )
+            except ProviderConfigError as error:
+                raise ExecutionError(str(error)) from error
+        health = await self._health_snapshots(
+            [(binding.id, provider, credential_id) for binding, provider, credential_id in usable]
+        )
+        candidates = [
+            _Candidate(
+                binding=binding,
+                provider=provider,
+                credential_id=credential_id,
+                config=configs[provider],
+                health=health.get(binding.id),
+            )
+            for binding, provider, credential_id in usable
+        ]
+        pin_free_first = policy.cost_optimization_preset is CostPreset.FREE_FIRST
+        candidates.sort(
+            key=lambda candidate: self._rank_key(
+                candidate.health,
+                candidate.provider,
+                candidate.config,
+                candidate.binding,
+                request.routing.providers,
+                pin_free_first,
+            )
+        )
+        return context, (min(caps) if caps else None), candidates
+
+    async def _resolve_leg(
+        self,
+        context: ProjectContext,
+        binding: StoredBinding,
+        operation: CredentialOperation,
+        *,
+        project_max_concurrency: int | None,
+    ) -> _Leg | None:
+        """Resolve one ranked binding; store failures answer 503 like planning."""
+
+        try:
+            return await self._resolve_binding(
+                context,
+                binding,
+                operation,
+                providers=None,
+                project_max_concurrency=project_max_concurrency,
+            )
+        except (CredentialStorageUnavailable, ProjectStorageUnavailable, OperationalError) as error:
+            raise ExecutionStorageUnavailable("the credential store is unavailable") from error
+
+    async def _candidate_blocked(self, leg: _Leg, health: ProviderHealth | None) -> bool:
+        """Return whether credential health or a hard quota zero blocks one leg."""
+
+        if health is not None and health.status is HealthStatus.UNAVAILABLE:
+            return True
+        quota = await self._leg_quota(leg)
+        return quota is not None and self._leg_quota_blocked(leg, {leg.binding_id: quota})
 
     # ------------------------------------------------------ fanout semantics
 

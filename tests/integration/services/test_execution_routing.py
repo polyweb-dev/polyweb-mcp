@@ -439,3 +439,129 @@ async def test_denied_requests_never_schedule_vendor_quota_io(tmp_path, monkeypa
         assert polls == [] and not world.service._quota_tasks
     finally:
         await world.aclose()
+
+
+_CHAIN_LABELS = ("a1", "a2", "a3", "a4")
+
+
+@pytest.mark.parametrize("operation", ["search", "fetch"])
+@pytest.mark.parametrize("max_attempts", [1, 2, 3, 4, 5])
+async def test_chained_fallback_attempts_at_most_the_hop_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, max_attempts: int, operation: str
+) -> None:
+    """Every failing leg falls through until ``max_attempts`` distinct legs ran."""
+    world = await build_execution_world(tmp_path, monkeypatch, labels=_CHAIN_LABELS, limits=False)
+    errors = [
+        provider_error("exa", code="bot_blocked", status=403, message=f"leg {index}")
+        for index in range(len(_CHAIN_LABELS))
+    ]
+    try:
+        await persist_routing_config(
+            world.repository,
+            RoutingConfigResponse(
+                fallback_policy=FallbackPolicy.CHAINED, max_attempts=max_attempts
+            ),
+        )
+        for label, error in zip(_CHAIN_LABELS, errors, strict=True):
+
+            async def denied(_adapter: Any, _request: Any, error: Any = error) -> Any:
+                raise error
+
+            setattr(world.adapters[label], f"{operation}_handler", denied)
+        with pytest.raises(ProviderOperationError) as caught:
+            await getattr(world.service, operation)(
+                (search_request if operation == "search" else fetch_request)(world),
+                attribution=world.project,
+                context=world.context,
+            )
+        attempted = min(max_attempts, len(_CHAIN_LABELS))
+        calls = [getattr(world.adapters[label], f"{operation}_calls") for label in _CHAIN_LABELS]
+        assert calls == [1] * attempted + [0] * (len(_CHAIN_LABELS) - attempted)
+        assert caught.value is errors[attempted - 1]
+    finally:
+        await world.aclose()
+
+
+@pytest.mark.parametrize("max_attempts", [1, 2, 3, 4])
+@pytest.mark.parametrize("succeeds_at", [1, 2, 3, 4])
+async def test_chained_fallback_returns_the_first_success_inside_the_hop_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, max_attempts: int, succeeds_at: int
+) -> None:
+    """A success at leg N returns when N fits the limit; later legs never run."""
+    world = await build_execution_world(tmp_path, monkeypatch, labels=_CHAIN_LABELS, limits=False)
+    try:
+        await persist_routing_config(
+            world.repository, RoutingConfigResponse(max_attempts=max_attempts)
+        )
+        for label in _CHAIN_LABELS[: succeeds_at - 1]:
+
+            async def denied(_adapter: Any, _request: Any, label: str = label) -> Any:
+                raise provider_error("exa", code="bot_blocked", status=403, message=label)
+
+            world.adapters[label].search_handler = denied
+        call = world.service.search(
+            search_request(world), attribution=world.project, context=world.context
+        )
+        if succeeds_at <= max_attempts:
+            response = await call
+            assert response.provider == "exa"
+            expected = [1] * succeeds_at + [0] * (len(_CHAIN_LABELS) - succeeds_at)
+        else:
+            with pytest.raises(ProviderOperationError):
+                await call
+            expected = [1] * max_attempts + [0] * (len(_CHAIN_LABELS) - max_attempts)
+        assert [world.adapters[label].search_calls for label in _CHAIN_LABELS] == expected
+    finally:
+        await world.aclose()
+
+
+async def test_leg_chain_prepares_only_the_next_leg_while_one_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Daisy chain: the next leg resolves during an attempt, never two ahead."""
+    from freesearch.services.execution import ExecutionService
+
+    world = await build_execution_world(tmp_path, monkeypatch, labels=_CHAIN_LABELS, limits=False)
+    events: list[str] = []
+    labels_by_binding = {item.binding_id: label for label, item in world.credentials.items()}
+    real_resolve = ExecutionService._resolve_leg
+
+    async def recording_resolve(self: Any, context: Any, binding: Any, *args: Any, **kwargs: Any):
+        leg = await real_resolve(self, context, binding, *args, **kwargs)
+        events.append(f"resolved:{labels_by_binding[binding.id]}")
+        return leg
+
+    monkeypatch.setattr(ExecutionService, "_resolve_leg", recording_resolve)
+    try:
+        await persist_routing_config(
+            world.repository, RoutingConfigResponse(max_attempts=len(_CHAIN_LABELS))
+        )
+        for label in _CHAIN_LABELS[:2]:
+
+            async def denied(_adapter: Any, _request: Any, label: str = label) -> Any:
+                events.append(f"called:{label}")
+                # Hold the attempt until the next leg is ready (bounded).
+                index = _CHAIN_LABELS.index(label)
+                for _ in range(500):
+                    if f"resolved:{_CHAIN_LABELS[index + 1]}" in events:
+                        break
+                    await asyncio.sleep(0.01)
+                raise provider_error("exa", code="bot_blocked", status=403, message=label)
+
+            world.adapters[label].search_handler = denied
+
+        response = await world.service.search(
+            search_request(world), attribution=world.project, context=world.context
+        )
+        assert response.provider == "exa"
+        assert [world.adapters[label].search_calls for label in _CHAIN_LABELS] == [1, 1, 1, 0]
+        assert events.index("resolved:a2") < events.index("called:a2")
+        assert events.index("called:a1") < events.index("resolved:a3")
+        assert events.count("resolved:a4") == 1, "the success leg's successor is prepared once"
+        for position, event in enumerate(events):
+            if event.startswith("called:"):
+                attempted = sum(1 for item in events[: position + 1] if item.startswith("called:"))
+                resolved = sum(1 for item in events[:position] if item.startswith("resolved:"))
+                assert resolved <= attempted + 1, f"more than one leg ahead at {events}"
+    finally:
+        await world.aclose()
