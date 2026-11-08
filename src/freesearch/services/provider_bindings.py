@@ -60,6 +60,7 @@ from freesearch.models.providers import (
 from freesearch.models.users import UserPrincipal
 from freesearch.persistence.bindings import ProjectBindingRepository, StoredBinding
 from freesearch.persistence.credentials import CredentialRepository
+from freesearch.persistence.key_pools import KeyPoolRepository
 from freesearch.persistence.pools import (
     CredentialPoolLinkRow,
     PoolAllocationRepository,
@@ -359,14 +360,17 @@ class ProviderBindingService:
             )
         )
         bindings = await ProjectBindingRepository(session).list_for_project(project_id=project_id)
-        bound_ids = {binding.credential_id for binding in bindings}
+        assigned_ids = {
+            pool.credential_id
+            for pool in await KeyPoolRepository(session).list_for_project(project_id)
+        }
         owned = await credentials.list_for_owner(owner_id)
         owned_ids = {key.credential.id for key in owned}
         available = [
             item
             for item in available
             if item.credential.id in owned_ids
-            or item.credential.id in bound_ids
+            or item.credential.id in assigned_ids
             or item.credential.auth_mode == "keyless"
         ]
         credential_ids = {item.credential.id for item in available}

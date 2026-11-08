@@ -398,6 +398,8 @@ def test_ac5_provider_view_hides_secrets_other_projects_usage_and_balances(world
     for provider in view["providers"]:
         assert set(provider) == {
             "provider_type",
+            "call_cost_usd",
+            "keyless_call_cost_usd",
             "capability",
             "kill_switch",
             "system_enabled_operations",

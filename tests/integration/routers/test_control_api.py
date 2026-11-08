@@ -318,7 +318,7 @@ async def test_get_providers_enumerates_canonical_status_contract(
 
 @pytest.mark.asyncio
 async def test_get_providers_reports_the_newest_credential_scoped_health(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, auth_secret: str
 ) -> None:
     """A call through a live credential is the last real result; an unbacked wide fact is not."""
     from freesearch.models.projects import CredentialOwnerScope

@@ -253,10 +253,12 @@ async def test_same_jwt_permits_rest_and_direct_tool_calls(
 
     adapter = _RecordingAdapter("stubby")
     key = await issue_project_key(repository, prefix="mcp-same")
-    await bind_existing_project(repository, key.project_id, key.owner.id, [adapter], monkeypatch)
     pid = str(key.project_id)
     app = create_app([adapter], repository=repository)
     with TestClient(app) as client:
+        await bind_existing_project(
+            repository, key.project_id, key.owner.id, [adapter], monkeypatch
+        )
         rest = client.post(
             "/search", json=_search(pid, "same key")["request"], headers=key.headers()
         )
@@ -586,6 +588,7 @@ async def test_creator_demotion_and_removal_neither_kill_nor_widen_the_key(
         key.project_id,
         ProjectMemberAdd(user_id=successor.id, initial_role=BuiltinRole.PROJECT_ADMIN.value),
     )
+    await projects.transfer_provider_owner(key.owner, key.project_id, successor.id)
     await projects.remove_role(
         successor, key.project_id, key.owner.id, BuiltinRole.PROJECT_ADMIN.value
     )
